@@ -1,10 +1,11 @@
 from django.db import models
-from django.contrib.auth.models import AbstractBaseUser, UserManager, Permission
+from django.contrib.auth.models import AbstractBaseUser, UserManager
 from phonenumber_field.modelfields import PhoneNumberField
 from django.core.exceptions import ValidationError
 from django.core.files.images import get_image_dimensions
 from django.utils.deconstruct import deconstructible
 from django.utils.translation import gettext_lazy as _
+from django.contrib.postgres.fields import ArrayField
 from django.utils import timezone
 import uuid
 import random
@@ -31,8 +32,7 @@ class PermissionMixin(models.Model):
         _("superuser status"),
         default=False,
         help_text=_(
-            "User has all permission without"
-            " explicitly assigning them."
+          "User has all permissions without explicitly assigning them."
         )
     )
     
@@ -70,15 +70,15 @@ class User(AbstractBaseUser, PermissionMixin):
         DARK  = "dark",  _("Dark")
         LIGHT = "light", _("Light")
 
-    uuid = models.CharField(max_length=255, editable=False, null=False, blank=False, unique=True, default=get_uuid)
-    username = models.CharField(_("username"), unique=True, max_length=255, 
+    uuid = models.CharField(max_length=32, editable=False, null=False, blank=False, unique=True, default=get_uuid)
+    username = models.CharField(_("username"), unique=True, max_length=32, 
         help_text=_("Required. 32 characters or fewer. Include numbers, letters and ./-/_ characters."),
     )
     email = models.EmailField(_("email address"), max_length=255, null=True, blank=True, unique=True)
     email_verified = models.BooleanField(_("email verified"), default=False)
     phone_number = PhoneNumberField(_("phone number"), null=True, blank=True, unique=True)
     phone_number_verified = models.BooleanField(_("phone number verified"), default=False)
-    theme = models.CharField(_("theme"), choices=ThemeChoices.choices, default=ThemeChoices.LIGHT)
+    theme = models.CharField(_("theme"), choices=ThemeChoices.choices, default=ThemeChoices.LIGHT, max_length=7)
     color = models.PositiveSmallIntegerField(_("color"), choices=COLOR_CHOICES, default=get_color)    
     birthdate = models.DateField(_("birth date"),null=True, blank=True)
 
@@ -125,3 +125,16 @@ class Profile(models.Model):
 
     def __str__(self):
         return f"{self.user}-{self.order}"
+
+
+class Rule(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, verbose_name= _("user rule"), related_name="rule")
+    rules = ArrayField(
+        base_field=models.CharField(max_length=100),
+        blank=True,
+        default=list
+    )
+    
+    def __str__(self):
+        return f"{self.user.username}"
+    
