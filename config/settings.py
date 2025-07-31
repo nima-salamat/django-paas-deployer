@@ -129,3 +129,6 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # String formatting of phone numbers
 PHONENUMBER_DEFAULT_REGION = "IR" 
 PHONENUMBER_DEFAULT_FORMAT = "INTERNATIONAL"
+
+# Custom User model 
+AUTH_USER_MODEL = "users.User"
