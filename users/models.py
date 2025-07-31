@@ -134,6 +134,8 @@ class Rule(models.Model):
         blank=True,
         default=list
     )
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(default=timezone.now)
     
     def __str__(self):
         return f"{self.user.username}"
