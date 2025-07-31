@@ -2,3 +2,5 @@ django
 python-dotenv
 django-phonenumber-field[phonenumbers]
 psycopg2
+gunicorn
+Pillow
