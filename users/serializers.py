@@ -88,16 +88,29 @@ class GetUserSerializer(serializers.ModelSerializer):
 class SetPasswordSerializer(serializers.Serializer):
     password = serializers.CharField(write_only = True, min_length=8)
     confirm_password = serializers.CharField(write_only = True, min_length=8)
+    new_password = serializers.CharField(write_only = True, min_length=8)
+    new_confirm_password = serializers.CharField(write_only = True, min_length=8)
 
+    def is_valid(self, *, raise_exception=False, user=None):
+        self.user = user
+        return super().is_valid(raise_exception=raise_exception)
+    
     def validate(self, data):
         if data["password"] != data["confirm_password"]:
             raise serializers.ValidationError("Password do not match")
+        
+        if data["new_password"] != data["new_confirm_password"]:
+            raise serializers.ValidationError("Password do not match")
+        
+        if self.user.check_password(data["password"]):
+            raise serializers.ValidationError("Password is not correct")
+
         return data
 
-    def save(self, user):
-        user.set_password(self.validated_data["password"])
-        user.save()
-        return user
+    def save(self):
+        self.user.set_password(self.validated_data["new_password"])
+        self.user.save()
+        return self.user
 
 class UpdateUserSerializer(serializers.Serializer):
     email = serializers.EmailField(required=False, allow_blank=False)
@@ -203,3 +216,29 @@ class ProfileImagerSerializer(serializers.ModelSerializer):
         if obj.image and request and hasattr(obj.image, "url"):
             return request.build_absolute_uri(obj.image.url) if request else obj.image.url
         return None
+    
+    
+class DeletePasswordSerializer(serializers.Serializer):
+    password = serializers.CharField(write_only = True, min_length=8)
+    confirm_password = serializers.CharField(write_only = True, min_length=8)
+
+    def is_valid(self, *, raise_exception=False, user=None):
+        self.user = user
+        return super().is_valid(raise_exception=raise_exception)
+    
+    def validate(self, data):
+        
+        if data["password"] != data["confirm_password"]:
+            raise serializers.ValidationError("Password do not match")
+        
+        if self.user.check_password(data["password"]):
+            raise serializers.ValidationError("Password is not correct")
+
+        return data
+
+    def save(self):
+
+        self.user.password = ""
+        self.user.save()
+        return self.user
+    

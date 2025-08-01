@@ -5,10 +5,11 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework import status
 from django.contrib.auth import get_user_model
 from .serializers import (
-    CreateUserSerializer,
     GetUserSerializer, SetPasswordSerializer,
     UpdateUserSerializer, AddImageProfileSerializer,
-    OrderImageProfileSerializer,ProfileImagerSerializer)
+    OrderImageProfileSerializer,ProfileImagerSerializer,
+    DeletePasswordSerializer
+)
 
 from .models import User, Profile
 from rest_framework.permissions import IsAuthenticated
@@ -87,10 +88,32 @@ class ProfileViewSet(ViewSet):
     def set(self, request):
 
         user = request.user
-        serializer = AddImageProfileSerializer(data=self.request.data)
+        serializer = AddImageProfileSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(user)
             return Response(data={"message":"success::profile added."}, status=status.HTTP_200_OK)
         return Response({"message":"error::cant add profile.", "errors": serializer.errors},status=status.HTTP_400_BAD_REQUEST)
                 
         
+class PasswordViewSet(ViewSet):
+    authentication_classes = [JWTAuthentication]
+    permission_classes     = [IsAuthenticated]
+    def set(self, request):
+        user = request.user
+        serializer = SetPasswordSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(user)
+            return Response(data={"message":"success::password changed."}, status=status.HTTP_200_OK)
+        
+        return Response({"message":"error::cant set password.", "errors": serializer.errors},status=status.HTTP_400_BAD_REQUEST)
+            
+    def delete(self, request):
+        user = request.user
+        
+        serializer = DeletePasswordSerializer(data=request.data)
+        
+        if serializer.is_valid(user=user):
+            serializer.save()
+            return Response(data={"message":"success::password deleted."}, status=status.HTTP_200_OK)
+            
+        return Response({"message":"error::cant set password.", "errors": serializer.errors},status=status.HTTP_400_BAD_REQUEST)
