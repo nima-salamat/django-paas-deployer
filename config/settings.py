@@ -32,7 +32,6 @@ INSTALLED_APPS = [
 
     # apps
     "users",
-
     "auth_users",
     "plans"
 ]
@@ -65,7 +64,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'wsgi.application'
-
+DEFAULT_MAX_APPS = 2
 
 # Database
 

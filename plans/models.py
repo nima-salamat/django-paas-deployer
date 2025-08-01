@@ -1,10 +1,10 @@
 from django.db import models
 from django.utils.translation import gettext_lazy as _
-
+from django.conf import settings
 
 class Plan(models.Model):
     name = models.CharField(_("Name"), max_length=50)
-    max_apps = models.IntegerField(_("Maximum Applications"))
+    max_apps = models.IntegerField(_("Maximum Applications"), default=getattr(settings, "DEFAULT_MAX_APPS"))
     max_cpu = models.IntegerField(_("Maximum CPU (vCPU)"))
     max_ram = models.IntegerField(_("Maximum RAM (MB)"))
     max_storage = models.IntegerField(_("Maximum Storage (GB)"))
