@@ -32,6 +32,7 @@ class PrivateNetwork(models.Model):
     class Meta:
         verbose_name = _("Private Network")
         verbose_name_plural = _("Private Networks")
+
     def combined_plan(self):
         plans = self.plans.all()
         total_max_apps = sum(plan.max_apps for plan in plans)
@@ -45,6 +46,7 @@ class PrivateNetwork(models.Model):
             "max_ram": total_max_ram,
             "max_storage": total_max_storage,
         }
+    
     def __str__(self):
         status = _("Enabled") if self.enabled else _("Disabled")
         plan_names = [plan.name for plan in self.plans.all()[:3]]
