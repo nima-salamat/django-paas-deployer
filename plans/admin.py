@@ -7,7 +7,6 @@ class PlanAdmin(admin.ModelAdmin):
     list_display = (
         "id",
         "name",
-        "max_apps",
         "max_cpu",
         "max_ram",
         "max_storage",
