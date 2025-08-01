@@ -50,10 +50,6 @@ class PrivateNetwork(models.Model):
             "max_storage": total_max_storage,
         }
     
-    @classmethod
-    def for_user(cls, user):
-        return cls.objects.filter(plans__user=user).distinct()
-    
     def __str__(self):
         status = _("Enabled") if self.enabled else _("Disabled")
         plan_names = [plan.name for plan in self.plans.all()[:3]]
