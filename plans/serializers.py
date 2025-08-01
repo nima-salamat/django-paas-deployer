@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Plan
+from .models import Plan, PrivateNetwork
 
 class PlanSerializer(serializers.ModelSerializer):
     class Meta:

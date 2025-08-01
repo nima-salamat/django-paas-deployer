@@ -56,3 +56,21 @@ class PrivateNetwork(models.Model):
         plan_names = [plan.name for plan in self.plans.all()[:3]]
         display_names = ", ".join(plan_names) + ("..." if self.plans.count() > 3 else "")
         return f"{status} Private Network for Plans: {display_names or 'None'}"
+
+# class PrivateNetworkSerializer(serializers.ModelSerializer):
+#     plans = PlanSerializer(many=True, read_only=True)
+#     combined = serializers.SerializerMethodField()
+
+#     class Meta:
+#         model = PrivateNetwork
+#         fields = [
+#             "id",
+#             "name",
+#             "plans",
+#             "enabled",
+#             "description",
+#             "combined"
+#         ]
+
+#     def get_combined(self, obj):
+#         return obj.combined_plan()
