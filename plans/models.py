@@ -6,7 +6,7 @@ from users.models import User
 
 class Plan(models.Model):
     name = models.CharField(_("Name"), max_length=50)
-    user = models.models.ForeignKey(User, verbose_name=_("User"), on_delete=models.CASCADE)
+    user = models.ForeignKey(User, verbose_name=_("User"), on_delete=models.CASCADE)
     max_apps = models.IntegerField(_("Maximum Applications"), default=getattr(settings, "DEFAULT_MAX_APPS"))
     max_cpu = models.IntegerField(_("Maximum CPU (vCPU)"))
     max_ram = models.IntegerField(_("Maximum RAM (MB)"))
