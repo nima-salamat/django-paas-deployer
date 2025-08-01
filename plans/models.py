@@ -2,12 +2,11 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.conf import settings
 from users.models import User
-
+from uuid import uuid4
 
 class Plan(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
     name = models.CharField(_("Name"), max_length=50)
-    user = models.ForeignKey(User, verbose_name=_("User"), on_delete=models.CASCADE)
-    max_apps = models.IntegerField(_("Maximum Applications"), default=getattr(settings, "DEFAULT_MAX_APPS"))
     max_cpu = models.IntegerField(_("Maximum CPU (vCPU)"))
     max_ram = models.IntegerField(_("Maximum RAM (MB)"))
     max_storage = models.IntegerField(_("Maximum Storage (GB)"))
@@ -23,6 +22,8 @@ class Plan(models.Model):
 
 
 class PrivateNetwork(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    name = models.CharField(_("Name"), max_length=50)
     plans = models.ManyToManyField(
         Plan,
         verbose_name=_("Related Plans"),
@@ -55,3 +56,21 @@ class PrivateNetwork(models.Model):
         plan_names = [plan.name for plan in self.plans.all()[:3]]
         display_names = ", ".join(plan_names) + ("..." if self.plans.count() > 3 else "")
         return f"{status} Private Network for Plans: {display_names or 'None'}"
+
+# class PrivateNetworkSerializer(serializers.ModelSerializer):
+#     plans = PlanSerializer(many=True, read_only=True)
+#     combined = serializers.SerializerMethodField()
+
+#     class Meta:
+#         model = PrivateNetwork
+#         fields = [
+#             "id",
+#             "name",
+#             "plans",
+#             "enabled",
+#             "description",
+#             "combined"
+#         ]
+
+#     def get_combined(self, obj):
+#         return obj.combined_plan()
