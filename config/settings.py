@@ -32,7 +32,7 @@ INSTALLED_APPS = [
 
     # apps
     "users",
-
+    "Plans"
 ]
 
 MIDDLEWARE = [
