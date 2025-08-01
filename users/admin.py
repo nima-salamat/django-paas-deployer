@@ -3,7 +3,7 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from users.models import User, Profile, Rule
 from django.contrib.auth.models import Group
 
-@admin.site.unregister(Group)
+admin.site.unregister(Group)
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):

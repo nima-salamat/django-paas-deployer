@@ -4,3 +4,4 @@ django-phonenumber-field[phonenumbers]
 psycopg2
 gunicorn
 Pillow
+djangorestframework
