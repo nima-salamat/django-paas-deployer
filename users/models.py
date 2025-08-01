@@ -107,7 +107,6 @@ class User(AbstractBaseUser, PermissionMixin):
         verbose_name = "user"
         verbose_name_plural = "users"
 
-    
 
 class Profile(models.Model):
     order = models.IntegerField(default=0)
