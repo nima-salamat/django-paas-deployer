@@ -36,7 +36,8 @@ INSTALLED_APPS = [
     # apps
     "users",
     "auth_users",
-    "plans"
+    "plans",
+    "deployments",
 ]
 
 MIDDLEWARE = [
