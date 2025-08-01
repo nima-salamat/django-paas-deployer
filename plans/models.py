@@ -23,6 +23,7 @@ class Plan(models.Model):
 
 class PrivateNetwork(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    name = models.CharField(_("Name"), max_length=50)
     plans = models.ManyToManyField(
         Plan,
         verbose_name=_("Related Plans"),
