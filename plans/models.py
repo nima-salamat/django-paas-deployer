@@ -7,8 +7,6 @@ from uuid import uuid4
 class Plan(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
     name = models.CharField(_("Name"), max_length=50)
-    user = models.ForeignKey(User, verbose_name=_("User"), on_delete=models.CASCADE)
-    max_apps = models.IntegerField(_("Maximum Applications"), default=getattr(settings, "DEFAULT_MAX_APPS"))
     max_cpu = models.IntegerField(_("Maximum CPU (vCPU)"))
     max_ram = models.IntegerField(_("Maximum RAM (MB)"))
     max_storage = models.IntegerField(_("Maximum Storage (GB)"))
