@@ -10,6 +10,13 @@ class Plan(models.Model):
     max_cpu = models.IntegerField(_("Maximum CPU (vCPU)"))
     max_ram = models.IntegerField(_("Maximum RAM (MB)"))
     max_storage = models.IntegerField(_("Maximum Storage (GB)"))
+    price = models.DecimalField(
+        _("Price"),
+        max_digits=10,
+        decimal_places=2,
+        default=0.00,
+        help_text=_("Toman")
+    )
     created_at = models.DateTimeField(_("Created At"), auto_now_add=True)
     updated_at = models.DateTimeField(_("Updated At"), auto_now=True)
 
@@ -20,22 +27,3 @@ class Plan(models.Model):
     def __str__(self):
         return self.name
 
-
-
-# class PrivateNetworkSerializer(serializers.ModelSerializer):
-#     plans = PlanSerializer(many=True, read_only=True)
-#     combined = serializers.SerializerMethodField()
-
-#     class Meta:
-#         model = PrivateNetwork
-#         fields = [
-#             "id",
-#             "name",
-#             "plans",
-#             "enabled",
-#             "description",
-#             "combined"
-#         ]
-
-#     def get_combined(self, obj):
-#         return obj.combined_plan()
