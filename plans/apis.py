@@ -1,5 +1,5 @@
-from .models import Plan, PrivateNetwork
-from .serializers import PlanSerializer, PrivateNetworkSerializer
+from .models import Plan
+from .serializers import PlanSerializer
 from rest_framework.viewsets import ViewSet
 from rest_framework.response import Response
 from rest_framework import status
