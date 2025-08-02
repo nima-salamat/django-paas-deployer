@@ -1,17 +1,13 @@
 from django.db import models
 from django.utils.translation import gettext_lazy as _
-from uuid import uuid4
 from plans.models import Plan
 from users.models import User
+from config.BaseModel import BaseModel
 
-
-class PrivateNetwork(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+class PrivateNetwork(BaseModel):
     name = models.CharField(_("Name"), max_length=50, unique=True)
     enabled = models.BooleanField(_("Enabled"), default=False)
     description = models.TextField(_("Description"), blank=True)
-    created_at = models.DateTimeField(_("Created At"), auto_now_add=True)
-    updated_at = models.DateTimeField(_("Updated At"), auto_now=True)
 
     class Meta:
         verbose_name = _("Private Network")
@@ -40,10 +36,8 @@ class PrivateNetwork(models.Model):
         return f"{status} Private Network with Services: {display or 'None'}"
 
 
-class Service(models.Model):
-    id = models.UUIDField(_("ID"), primary_key=True, default=uuid4, editable=False)
+class Service(BaseModel):
     name = models.CharField(_("Name"), max_length=30, unique=True)
-
     user = models.ForeignKey(
         User,
         verbose_name=_("User"),
@@ -51,13 +45,11 @@ class Service(models.Model):
         null=True,
         blank=True,
     )
-
     plan = models.ForeignKey(
         Plan,
         verbose_name=_("Plan"),
         on_delete=models.CASCADE,
     )
-
     network = models.ForeignKey(
         PrivateNetwork,
         verbose_name=_("Private Network"),
@@ -66,13 +58,9 @@ class Service(models.Model):
         blank=True,
         related_name="services"
     )
-
     previous_user_email = models.EmailField(_("Previous User Email"), blank=True, editable=False)
     previous_user_username = models.CharField(_("Previous User Username"), max_length=50, blank=True, editable=False)
     previous_network_name = models.CharField(_("Previous Network Name"), max_length=50, blank=True, editable=False)
-
-    created_at = models.DateTimeField(_("Created At"), auto_now_add=True)
-    updated_at = models.DateTimeField(_("Updated At"), auto_now=True)
 
     def save(self, *args, **kwargs):
         if self.user:
