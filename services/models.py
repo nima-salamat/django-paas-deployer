@@ -58,18 +58,18 @@ class Service(BaseModel):
         blank=True,
         related_name="services"
     )
-    previous_user_email = models.EmailField(_("Previous User Email"), blank=True, editable=False)
-    previous_user_username = models.CharField(_("Previous User Username"), max_length=50, blank=True, editable=False)
-    previous_network_name = models.CharField(_("Previous Network Name"), max_length=50, blank=True, editable=False)
+    user_email = models.EmailField(_("User Email"), blank=True, editable=False)
+    user_username = models.CharField(_("User Username"), max_length=50, blank=True, editable=False)
+    network_name = models.CharField(_("Network Name"), max_length=50, blank=True, editable=False)
 
     def save(self, *args, **kwargs):
         if self.user:
             if self.user.email:
-                self.previous_user_email = self.user.email
+                self.user_email = self.user.email
             if self.user.username:
-                self.previous_user_username = self.user.username
+                self.user_username = self.user.username
         if self.network:
-            self.previous_network_name = self.network.name
+            self.network_name = self.network.name
         super().save(*args, **kwargs)
 
     def __str__(self):
