@@ -2,9 +2,9 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.conf import settings
 from uuid import uuid4
+from config.BaseModel import BaseModel
 
-class Plan(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+class Plan(BaseModel):
     name = models.CharField(_("Name"), max_length=50)
     platform = models.CharField(_("Platform"), max_length=20, choices=getattr(settings, "TECH_STACK_CHOICES", []))
     max_cpu = models.IntegerField(_("Maximum CPU (vCPU)"))
@@ -17,8 +17,6 @@ class Plan(models.Model):
         default=0.00,
         help_text=_("Toman")
     )
-    created_at = models.DateTimeField(_("Created At"), auto_now_add=True)
-    updated_at = models.DateTimeField(_("Updated At"), auto_now=True)
 
     class Meta:
         verbose_name = _("Plan")
