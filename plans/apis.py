@@ -58,7 +58,7 @@ class PlanAdminViewSet(ViewSet):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     
-class PlatformPlans(APIView):
+class PlatformPlansAPIView(APIView):
     def get(self, request):
         return Response(data=config.PLATFORM_CHOICES, status=status.HTTP_200_OK)
 
