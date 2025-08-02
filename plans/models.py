@@ -31,13 +31,6 @@ class Plan(BaseModel):
     price_per_hour = models.FloatField(_("Price Per Hour (Toman)"), default=0.0)
     storage_type = models.CharField(_("Storage Type"), max_length=10, choices=StorageTypeChoices.choices)
     plan_type = models.CharField(_("Plan Type"), max_length=10, choices=PlanTypeChoices.choices)
-    price = models.DecimalField(
-        _("Total Price"),
-        max_digits=10,
-        decimal_places=2,
-        default=0.00,
-        help_text=_("Total price in Toman")
-    )
 
     class Meta:
         verbose_name = _("Plan")
