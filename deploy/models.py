@@ -30,15 +30,6 @@ class Deploy(BaseModel):
                 "zip_file": _(f"ZIP file size must be under {self.MAX_ZIP_SIZE_MB} MB.")
             })
 
-    def save(self, *args, **kwargs):
-        self.full_clean()
-        if self.running and not self.started_at:
-            from django.utils.timezone import now
-            self.started_at = now()
-        if not self.running:
-            self.started_at = None
-        super().save(*args, **kwargs)
-
     def __str__(self):
         return f"{self.name} (v{self.version})"
 
