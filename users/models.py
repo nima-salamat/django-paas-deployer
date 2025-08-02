@@ -1,4 +1,4 @@
-from django.db import models
+from django.db import models, transaction
 from django.contrib.auth.models import AbstractBaseUser, UserManager
 from phonenumber_field.modelfields import PhoneNumberField
 from django.core.exceptions import ValidationError
@@ -81,7 +81,7 @@ class User(AbstractBaseUser, PermissionMixin):
     theme = models.CharField(_("theme"), choices=ThemeChoices.choices, default=ThemeChoices.LIGHT, max_length=7)
     color = models.PositiveSmallIntegerField(_("color"), choices=COLOR_CHOICES, default=get_color)    
     birthdate = models.DateField(_("birth date"),null=True, blank=True)
-
+    balance = models.DecimalField(max_digits=11, decimal_places=3, default=0)
     is_staff = models.BooleanField(
         _("staff status"),
         default=False,
@@ -96,7 +96,7 @@ class User(AbstractBaseUser, PermissionMixin):
         ),
     )
     date_joined = models.DateTimeField(_("date joined"), default=timezone.now)
-
+    national_id = models.CharField(_("National Id"), max_length=11, blank=True, null=True)
 
     USERNAME_FIELD = "username"
     REQUIRED_FIELDS = ["email"]
@@ -107,16 +107,36 @@ class User(AbstractBaseUser, PermissionMixin):
         verbose_name = "user"
         verbose_name_plural = "users"
 
+class PaymentChoices(models.TextChoices):
+    PAYED = "PAYED"
+    NOT_PAYED = "NOT_PAYED"
+    CANCELED = "CANCELED"
+
+class Receipt(models.Model):
+    user = models.ForeignKey(User, verbose_name=_("User Receipt"),on_delete=models.CASCADE, related_name="receipts", related_query_name="receipt")
+    amount = models.DecimalField(_("Amount"), max_digits=11, decimal_places=3)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    status = models.CharField(_("Payment Status"), max_length=10, choices=PaymentChoices.choices, default=PaymentChoices.NOT_PAYED)
+    
+    @classmethod
+    def change_balance(cls, receipt):
+        with transaction.atomic():
+            user = receipt.user
+            user.balance += receipt.amount
+            receipt.status = PaymentChoices.PAYED
+            user.save()
+            receipt.save()
     
 
 class Profile(models.Model):
-    order = models.IntegerField(default=0)
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    image = models.ImageField(upload_to="images", validators=[ImageValidator(size_kb=2048, max_w=2560, max_h=1440)])
+    order = models.IntegerField(_("Order"), default=0)
+    user = models.ForeignKey(User,verbose_name=_("User Profile"), on_delete=models.CASCADE)
+    image = models.ImageField(upload_to="images",verbose_name=_("Profile Image"), validators=[ImageValidator(size_kb=2048, max_w=2560, max_h=1440)])
     created_at = models.DateTimeField(default=timezone.now)
     def clean(self):
         if self.pk is None:
-            if Profile.objects.filter(user=self.user).count() >=5:
+            if Profile.objects.filter(user=self.user).count() >= 5:
                 raise ValidationError(_("A user can have at most 5 profiles."))
             
     def save(self, *args, **kwargs):
