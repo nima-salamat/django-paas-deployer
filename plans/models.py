@@ -9,34 +9,34 @@ class PlanTypeChoices(models.TextChoices):
     DB = "DB", _("DB")
     APP = "APP", _("APP")
     READY = "READY", _("READY")
-    
-    
+
+
 class StorageTypeChoices(models.TextChoices):
-    SSD = "SSD"
-    HDD = "HDD"
-  
-    
+    SSD = "SSD", _("SSD")
+    HDD = "HDD", _("HDD")
+
+
 class NameChoices(models.TextChoices):
     BRONZE = "Bronze", _("Bronze")
     SILVER = "Silver", _("Silver")
     GOLD = "Gold", _("Gold")
-    
-    
+
+
 class Plan(BaseModel):
     name = models.CharField(_("Name"), max_length=50, choices=NameChoices.choices)
     platform = models.CharField(_("Platform"), max_length=20, choices=getattr(config, "PLATFORM_CHOICES", []))
     max_cpu = models.IntegerField(_("Maximum CPU (vCPU)"))
     max_ram = models.IntegerField(_("Maximum RAM (MB)"))
     max_storage = models.IntegerField(_("Maximum Storage (GB)"))
-    price_per_hour = models.FloatField(_("price per hour in Toman"), default=0)
-    storage_type = models.CharField(_("Storage Type"), choices=StorageTypeChoices.choices)
-    plan_type = models.CharField(_("Plan Type"), choices=PlanTypeChoices.choices)
+    price_per_hour = models.FloatField(_("Price Per Hour (Toman)"), default=0.0)
+    storage_type = models.CharField(_("Storage Type"), max_length=10, choices=StorageTypeChoices.choices)
+    plan_type = models.CharField(_("Plan Type"), max_length=10, choices=PlanTypeChoices.choices)
     price = models.DecimalField(
-        _("Price"),
+        _("Total Price"),
         max_digits=10,
         decimal_places=2,
         default=0.00,
-        help_text=_("Toman")
+        help_text=_("Total price in Toman")
     )
 
     class Meta:
