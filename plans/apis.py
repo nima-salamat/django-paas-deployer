@@ -1,11 +1,12 @@
 from .models import Plan
 from .serializers import PlanSerializer
 from rest_framework.viewsets import ViewSet
+from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework_simplejwt.authentication import JWTAuthentication
-
+from core.global_settings import config
 
 class PlanViewSet(ViewSet):
     authentication_classes = [JWTAuthentication]
@@ -55,3 +56,27 @@ class PlanViewSet(ViewSet):
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         plan.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+    
+    
+class PlatformPlans(APIView):
+    def get(self, request):
+        return Response(data=config.PLATFORM_CHOICES, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        data = request.data
+        platform = data["platform"]
+        query_argument = ""
+        for i,j in config.PLATFORM_CHOICES:
+            if platform in (i,j):
+                query_argument = i
+                
+        if not query_argument:
+            return Response(data={"error":"Incorrect platform."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        plans = Plan.objects.filter(platform=query_argument)
+        if not plans.exists():
+            return Response(data={"error":"There is not such plans."}, status=status.HTTP_404_NOT_FOUND)
+        
+        serializer = PlanSerializer(plans, many=True)
+        
+        return Response(data=serializer.data, status=status.HTTP_200_OK)
