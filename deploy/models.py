@@ -29,7 +29,11 @@ class Deploy(BaseModel):
             raise ValidationError({
                 "zip_file": _(f"ZIP file size must be under {self.MAX_ZIP_SIZE_MB} MB.")
             })
-
+    
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+    
     def __str__(self):
         return f"{self.name} (v{self.version})"
 
