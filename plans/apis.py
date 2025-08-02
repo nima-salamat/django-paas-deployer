@@ -81,3 +81,39 @@ class PlatformPlansAPIView(APIView):
         serializer = UnauthorizedPlanSerializer(plans, many=True)
         
         return Response(data=serializer.data, status=status.HTTP_200_OK)
+
+
+class PlansApiView(APIView):
+    def get(self, request):
+        ids = request.query_params.get("id", "")
+        if not ids:
+            data = Plan.objects.all()
+            serializer = UnauthorizedPlanSerializer(data, many=True)
+        else:
+            if "," in ids:
+                all_ids = []
+                for i in ids.split(","):
+                    if i.isdigit():
+                        all_ids.append(i)
+                        
+                if not all_ids:
+                    return Response({"error": "Invalid IDs provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+                data = Plan.objects.filter(pk__in=all_ids)
+                if not data.exists():
+                    return Response(data={"error":"There is not such plans."}, status=status.HTTP_404_NOT_FOUND)
+
+                serializer = UnauthorizedPlanSerializer(data, many=True)
+                
+            else:
+                if ids.isdigit():
+                    try:
+                        data = Plan.objects.get(pk=ids)
+                    except Plan.DoesNotExist:
+                        return Response(data={"error":"There is not such plans."}, status=status.HTTP_404_NOT_FOUND)
+            
+                    serializer = UnauthorizedPlanSerializer(data)
+                else:
+                    return Response({"error": "Invalid ID format."}, status=status.HTTP_400_BAD_REQUEST)
+    
+            return Response(data=serializer.data, status=status.HTTP_200_OK)
