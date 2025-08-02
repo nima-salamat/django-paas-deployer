@@ -28,6 +28,7 @@ class Plan(BaseModel):
     max_cpu = models.IntegerField(_("Maximum CPU (vCPU)"))
     max_ram = models.IntegerField(_("Maximum RAM (MB)"))
     max_storage = models.IntegerField(_("Maximum Storage (GB)"))
+    price_per_hour = models.FloatField(_("price per hour in Toman"), default=0)
     storage_type = models.CharField(_("Storage Type"), choices=StorageTypeChoices.choices)
     plan_type = models.CharField(_("Plan Type"), choices=PlanTypeChoices.choices)
     price = models.DecimalField(
