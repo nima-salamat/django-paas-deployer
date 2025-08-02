@@ -5,8 +5,9 @@ from users.models import User
 from core.base.BaseModel import BaseModel
 
 class PrivateNetwork(BaseModel):
-    name = models.CharField(_("Name"), max_length=50, unique=True)
-    enabled = models.BooleanField(_("Enabled"), default=False)
+    name = models.CharField(_("Name"), max_length=50)
+    user = models.ForeignKey(User, verbose_name=_("User Network"), on_delete=models.CASCADE)
+    # enabled = models.BooleanField(_("Enabled"), default=False)
     description = models.TextField(_("Description"), blank=True)
 
     class Meta:
@@ -25,15 +26,17 @@ class PrivateNetwork(BaseModel):
         }
     
     def __str__(self):
-        status = _("Enabled") if self.enabled else _("Disabled")
-        services = self.services.select_related("plan").all()
-        display_names = [
-            f"{s.name}({s.plan.name})" for s in services[:3]
-        ]
-        display = ", ".join(display_names)
-        if services.count() > 3:
-            display += "..."
-        return f"{status} Private Network with Services: {display or 'None'}"
+        # status = _("Enabled") if self.enabled else _("Disabled")
+        # services = self.services.select_related("plan").all()
+        # display_names = [
+        #     f"{s.name}({s.plan.name})" for s in services[:3]
+        # ]
+        # display = ", ".join(display_names)
+        # if services.count() > 3:
+        #     display += "..."
+        # return f"{status} Private Network with Services: {display or 'None'}"
+        return self.name
+
 
 
 class Service(BaseModel):
@@ -41,9 +44,9 @@ class Service(BaseModel):
     user = models.ForeignKey(
         User,
         verbose_name=_("User"),
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
+        on_delete=models.CASCADE,
+        # null=True,
+        # blank=True,
     )
     plan = models.ForeignKey(
         Plan,
@@ -54,22 +57,22 @@ class Service(BaseModel):
         PrivateNetwork,
         verbose_name=_("Private Network"),
         on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
+        # null=True,
+        # blank=True,
         related_name="services"
     )
-    user_email = models.EmailField(_("User Email"), blank=True, editable=False)
-    user_username = models.CharField(_("User Username"), max_length=50, blank=True, editable=False)
-    network_name = models.CharField(_("Network Name"), max_length=50, blank=True, editable=False)
+    # user_email = models.EmailField(_("User Email"), blank=True, editable=False)
+    # user_username = models.CharField(_("User Username"), max_length=50, blank=True, editable=False)
+    # network_name = models.CharField(_("Network Name"), max_length=50, blank=True, editable=False)
 
     def save(self, *args, **kwargs):
-        if self.user:
-            if self.user.email:
-                self.user_email = self.user.email
-            if self.user.username:
-                self.user_username = self.user.username
-        if self.network:
-            self.network_name = self.network.name
+        # if self.user:
+        #     if self.user.email:
+        #         self.user_email = self.user.email
+        #     if self.user.username:
+        #         self.user_username = self.user.username
+        # if self.network:
+        #     self.network_name = self.network.name
         super().save(*args, **kwargs)
 
     def __str__(self):
