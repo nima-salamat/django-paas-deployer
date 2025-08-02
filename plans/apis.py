@@ -10,7 +10,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 class PlanViewSet(ViewSet):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
-    
+
     def get_permissions(self):
         if self.request.method in ['POST', 'PUT', 'PATCH', 'DELETE']:
             # Only admin users can create, update, delete
@@ -18,7 +18,7 @@ class PlanViewSet(ViewSet):
         return [IsAuthenticated()]
     
     def list(self, request):
-        plan = Plan.objects.get()
+        plan = Plan.objects.all()
         serializer = PlanSerializer(plan, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
