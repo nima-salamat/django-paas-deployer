@@ -20,6 +20,7 @@ class NameChoices(models.TextChoices):
     BRONZE = "Bronze", _("Bronze")
     SILVER = "Silver", _("Silver")
     GOLD = "Gold", _("Gold")
+    Diamond = "Diamond", _("Diamond")
 
 
 class Plan(BaseModel):
