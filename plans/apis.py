@@ -1,5 +1,5 @@
 from .models import Plan
-from .serializers import PlanSerializer
+from .serializers import PlanSerializer, UnauthorizedPlanSerializer
 from rest_framework.viewsets import ViewSet
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -8,15 +8,15 @@ from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from core.global_settings import config
 
-class PlanViewSet(ViewSet):
+class PlanAdminViewSet(ViewSet):
     authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsAdminUser]
 
-    def get_permissions(self):
-        if self.request.method in ['POST', 'PUT', 'PATCH', 'DELETE']:
-            # Only admin users can create, update, delete
-            return [IsAuthenticated(), IsAdminUser()]
-        return [IsAuthenticated()]
+    # def get_permissions(self):
+    #     if self.request.method in ['POST', 'PUT', 'PATCH', 'DELETE']:
+    #         # Only admin users can create, update, delete
+    #         return [IsAuthenticated(), IsAdminUser()]
+    #     return [IsAuthenticated()]
     
     def list(self, request):
         plan = Plan.objects.all()
@@ -77,6 +77,6 @@ class PlatformPlans(APIView):
         if not plans.exists():
             return Response(data={"error":"There is not such plans."}, status=status.HTTP_404_NOT_FOUND)
         
-        serializer = PlanSerializer(plans, many=True)
+        serializer = UnauthorizedPlanSerializer(plans, many=True)
         
         return Response(data=serializer.data, status=status.HTTP_200_OK)
