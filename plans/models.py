@@ -35,9 +35,9 @@ class Plan(BaseModel):
         choices=getattr(config, "PLATFORM_CHOICES", []),
         help_text=_("Technology platform this plan supports")
     )
-    max_cpu = models.IntegerField(_("Maximum CPU (vCPU)"))
-    max_ram = models.IntegerField(_("Maximum RAM (MB)"))
-    max_storage = models.IntegerField(_("Maximum Storage (GB)"))
+    max_cpu = models.PositiveIntegerField(_("Maximum CPU (vCPU)"))
+    max_ram = models.PositiveIntegerField(_("Maximum RAM (MB)"))
+    max_storage = models.PositiveIntegerField(_("Maximum Storage (GB)"))
     price_per_hour = models.FloatField(
         _("Price Per Hour (Toman)"),
         default=0.0,
@@ -71,13 +71,3 @@ class Plan(BaseModel):
     @property
     def price_per_month(self):
         return round(self.price_per_hour * 24 * 30, 2)
-
-    def clean(self):
-        if self.max_cpu < 1:
-            raise ValueError(_("CPU count must be at least 1"))
-        if self.max_ram < 256:
-            raise ValueError(_("RAM must be at least 256 MB"))
-        if self.max_storage < 1:
-            raise ValueError(_("Storage must be at least 1 GB"))
-        if self.price_per_hour < 0:
-            raise ValueError(_("Price per hour cannot be negative"))
