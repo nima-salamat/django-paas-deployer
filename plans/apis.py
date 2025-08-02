@@ -56,7 +56,7 @@ class PlanAdminViewSet(ViewSet):
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         plan.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
-    
+
     
 class PlatformPlans(APIView):
     def get(self, request):
@@ -66,10 +66,11 @@ class PlatformPlans(APIView):
         data = request.data
         platform = data["platform"]
         query_argument = ""
-        for i,j in config.PLATFORM_CHOICES:
-            if platform in (i,j):
-                query_argument = i
-                
+        if platform:
+            for i,j in config.PLATFORM_CHOICES:
+                if platform in (i,j):
+                    query_argument = i
+                    
         if not query_argument:
             return Response(data={"error":"Incorrect platform."}, status=status.HTTP_400_BAD_REQUEST)
             
