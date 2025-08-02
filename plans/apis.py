@@ -3,14 +3,20 @@ from .serializers import PlanSerializer, PrivateNetworkSerializer
 from rest_framework.viewsets import ViewSet
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 
 class PlanViewSet(ViewSet):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
-
+    
+    def get_permissions(self):
+        if self.request.method in ['POST', 'PUT', 'PATCH', 'DELETE']:
+            # Only admin users can create, update, delete
+            return [IsAuthenticated(), IsAdminUser()]
+        return [IsAuthenticated()]
+    
     def list(self, request):
         plan = Plan.objects.get()
         serializer = PlanSerializer(plan, many=True)
