@@ -1,8 +1,8 @@
 from django.db import models
 from django.utils.translation import gettext_lazy as _
-from django.conf import settings
+from core.global_settings import config
 from uuid import uuid4
-from config.BaseModel import BaseModel
+from core.base.BaseModel import BaseModel
 
 
 class PlanTypeChoices(models.TextChoices):
@@ -24,7 +24,7 @@ class NameChoices(models.TextChoices):
     
 class Plan(BaseModel):
     name = models.CharField(_("Name"), max_length=50, choices=NameChoices.choices)
-    platform = models.CharField(_("Platform"), max_length=20, choices=getattr(settings, "TECH_STACK_CHOICES", []))
+    platform = models.CharField(_("Platform"), max_length=20, choices=getattr(config, "PLATFORM_CHOICES", []))
     max_cpu = models.IntegerField(_("Maximum CPU (vCPU)"))
     max_ram = models.IntegerField(_("Maximum RAM (MB)"))
     max_storage = models.IntegerField(_("Maximum Storage (GB)"))

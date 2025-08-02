@@ -1,11 +1,12 @@
 from django.db import models
 from django.core.exceptions import ValidationError
-from config.BaseModel import BaseModel
+from core.base.BaseModel import BaseModel
 from services.models import Service
 from django.utils.translation import gettext_lazy as _
+import os
 
-def zip_file_path(obj, filename):
-    return f'deployments/{obj.name}/{filename}'
+def zip_file_path(instance, filename):
+    return f'deployments/{instance.name}/{filename}'
 
 class Deploy(BaseModel):
     name = models.CharField(verbose_name=_("Name"), max_length=50, unique=True)
@@ -20,11 +21,14 @@ class Deploy(BaseModel):
 
     def clean(self):
         super().clean()
-        if self.zip_file:
-            if self.zip_file.size > self.MAX_ZIP_SIZE_MB * 1024 * 1024:
-                raise ValidationError(
-                    {"zip_file": _(f"ZIP file size must be under {self.MAX_ZIP_SIZE_MB} MB.")}
-                )
+        if self.zip_file and self.zip_file.size > self.MAX_ZIP_SIZE_MB * 1024 * 1024:
+            raise ValidationError({
+                "zip_file": _(f"ZIP file size must be under {self.MAX_ZIP_SIZE_MB} MB.")
+            })
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.name} (v{self.version})"

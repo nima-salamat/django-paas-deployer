@@ -2,7 +2,7 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 from plans.models import Plan
 from users.models import User
-from config.BaseModel import BaseModel
+from core.base.BaseModel import BaseModel
 
 class PrivateNetwork(BaseModel):
     name = models.CharField(_("Name"), max_length=50, unique=True)
