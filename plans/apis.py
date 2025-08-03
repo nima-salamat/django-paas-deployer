@@ -86,6 +86,11 @@ class PlatformPlansAPIView(APIView):
 
 class PlansApiView(APIView):
     def get(self, request):
+        """
+        GET /plans/ 
+        GET /plans/?id=1,2,3 
+        GET /plans/?id=1   
+        """
         ids = request.query_params.get("id", "")
         if not ids:
             plans = Plan.objects.all().order_by("platform")
