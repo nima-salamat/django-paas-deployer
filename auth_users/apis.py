@@ -6,7 +6,10 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from users.models import User
 from users.serializers import CreateUserSerializer
 from .models import AuthCode
+from core.tasks.email import send_code_via_email
+import logging
 
+logger = logging.getLogger("auth_users.apis")
 
 def get_tokens_for_user(user):
     if not user.is_active:
@@ -55,7 +58,7 @@ class AuthAPIView(APIView):
             if phone_number:
                 user.phone_number_verified = True
             user.save()
-            AuthCode.objects.delete(user=user)
+            AuthCode.objects.filter(user=user).delete()
                 
         except User.DoesNotExist:
             return Response({"message": "error::user not found"}, status=status.HTTP_404_NOT_FOUND)
@@ -126,18 +129,15 @@ class LoginAPIView(APIView):
         else:
             sent_to="phone_number"
             data["phone_number"] = phone_number
-            
-            
-            
+ 
         try:
             user = User.objects.get(**data)
             code = AuthCode.create_code(user)
             if sent_to == "email":
-                pass # send email
+                send_code_via_email.delay(user.id)
             else:
-                pass # send sms
-                
-            print(code)
+                logger.info(f"Sms is not implemented yet. user:{user.username}, code: {code}")
+            
         except User.DoesNotExist:
             return Response({"message":"error::such username does not exist"},status=status.HTTP_404_NOT_FOUND)
         
