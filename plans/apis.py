@@ -4,6 +4,7 @@ from rest_framework.viewsets import ViewSet
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from core.global_settings import config
@@ -87,33 +88,31 @@ class PlansApiView(APIView):
     def get(self, request):
         ids = request.query_params.get("id", "")
         if not ids:
-            data = Plan.objects.all()
-            serializer = UnauthorizedPlanSerializer(data, many=True)
+            plans = Plan.objects.all().order_by("platform")
         else:
             if "," in ids:
-                all_ids = []
-                for i in ids.split(","):
-                    if i.isdigit():
-                        all_ids.append(i)
+                all_ids = [int(i) for i in ids.split(",") if i.strip().isdigit()]
                         
                 if not all_ids:
                     return Response({"error": "Invalid IDs provided."}, status=status.HTTP_400_BAD_REQUEST)
 
-                data = Plan.objects.filter(pk__in=all_ids)
-                if not data.exists():
-                    return Response(data={"error":"There is not such plans."}, status=status.HTTP_404_NOT_FOUND)
+                plans = Plan.objects.filter(pk__in=all_ids).order_by("platform")
+                if not plans.exists():
+                    return Response(data={"error":"Plan not found."}, status=status.HTTP_404_NOT_FOUND)
 
-                serializer = UnauthorizedPlanSerializer(data, many=True)
-                
             else:
                 if ids.isdigit():
                     try:
-                        data = Plan.objects.get(pk=ids)
+                        plan = Plan.objects.get(pk=int(ids))
                     except Plan.DoesNotExist:
-                        return Response(data={"error":"There is not such plans."}, status=status.HTTP_404_NOT_FOUND)
+                        return Response(data={"error":"Plan not found."}, status=status.HTTP_404_NOT_FOUND)
             
-                    serializer = UnauthorizedPlanSerializer(data)
-                else:
-                    return Response({"error": "Invalid ID format."}, status=status.HTTP_400_BAD_REQUEST)
-    
-            return Response(data=serializer.data, status=status.HTTP_200_OK)
+                    serializer = UnauthorizedPlanSerializer(plan)
+                    return Response(data=serializer.data, status=status.HTTP_200_OK)
+                
+                return Response({"error": "Invalid ID format."}, status=status.HTTP_400_BAD_REQUEST)
+
+        paginator = PageNumberPagination()
+        paginated_plans = paginator.paginate_queryset(plans, request)
+        serializer = UnauthorizedPlanSerializer(paginated_plans, many=True)
+        return paginator.get_paginated_response(serializer.data)
