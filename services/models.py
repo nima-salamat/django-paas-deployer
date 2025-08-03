@@ -57,7 +57,7 @@ class Service(BaseModel):
         PrivateNetwork,
         verbose_name=_("Private Network"),
         on_delete=models.SET_NULL,
-        # null=True,
+        null=True,
         # blank=True,
         related_name="services"
     )
