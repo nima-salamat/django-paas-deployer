@@ -1,0 +1,29 @@
+{% extends "core/base.html" %}
+
+{% block content %}
+<h2>Available Plans</h2>
+
+{% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+{% endif %}
+
+<div class="row">
+  {% for plan in plans %}
+    <div class="col-md-4">
+      <div class="card mb-3 shadow-sm">
+        <div class="card-body">
+          <h5 class="card-title">{{ plan.name }}</h5>
+          <p class="card-text">
+            Platform: {{ plan.platform }}<br>
+            CPU: {{ plan.max_cpu }} vCPU<br>
+            RAM: {{ plan.max_ram }} MB<br>
+            Storage: {{ plan.max_storage }} GB<br>
+            Daily Price: {{ plan.price_per_day }} Toman<br>
+            Monthly Price: {{ plan.price_per_month }} Toman
+          </p>
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+</div>
+{% endblock %}
