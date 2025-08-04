@@ -39,7 +39,7 @@ class ServiceViewSet(ModelViewSet):
             request.data["user"] = request.user.id
   
             network_id = request.data.get("network", None)
-            if not network_id and not PrivateNetwork.objects.filter(id=network_id,user=request.user).exists():
+            if not network_id or not PrivateNetwork.objects.filter(id=network_id,user=request.user).exists():
                 return Response({"error": "You must create a Private Network first."}, status=status.HTTP_400_BAD_REQUEST)
             
         serializer = self.get_serializer(data=request.data)
