@@ -91,6 +91,9 @@ class ValidateAPIView(APIView):
             data["phone_number"] = phone_number
         try:
             user = User.objects.get(**data)
+            _2fa=False
+            if user.password:
+                _2fa=True
             if not AuthCode.code_is_valid(user, code):
                 return Response({"message": _("error::code is incorrect")}, status=status.HTTP_400_BAD_REQUEST)
             user.is_active = True
@@ -104,8 +107,13 @@ class ValidateAPIView(APIView):
         except User.DoesNotExist:
             return Response({"message": _("error::user not found")}, status=status.HTTP_404_NOT_FOUND)
 
-        
-        return Response({"is_valid": True, "message": _("success::user is valid")})
+        data = {"is_valid": True, "message": _("success::user is valid"), "2fa": _2fa}
+
+        if not _2fa:
+            data = {"is_valid": True, **get_tokens_for_user(user) ,"message": _("success::user is valid"), "2fa": _2fa}
+
+        return Response(data, status=status.HTTP_200_OK)
+    
 
 
 
