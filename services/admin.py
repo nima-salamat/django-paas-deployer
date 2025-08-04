@@ -2,32 +2,31 @@ from django.contrib import admin
 from .models import Service, PrivateNetwork
 
 
-# @admin.register(PrivateNetwork)
-# class PrivateNetworkAdmin(admin.ModelAdmin):
-#     list_display = ("id", "enabled", "short_description", "plans_count")
-#     list_display_links = ("id", "short_description")
-#     search_fields = ("description",)
-#     list_filter = ("enabled",)
-#     filter_horizontal = ("plans",)
-#     ordering = ("-enabled", "id")
-#     list_per_page = 25
+@admin.register(PrivateNetwork)
+class PrivateNetworkAdmin(admin.ModelAdmin):
+    list_display = ("id", "name", "user", "description_short", "services_count")
+    list_display_links = ("id", "name")
+    search_fields = ("name", "description", "user__username", "user__email")
+    list_filter = ("user",)
+    ordering = ("id",)
+    list_per_page = 25
 
-#     fieldsets = (
-#         (None, {
-#             "fields": (
-#                 "enabled",
-#                 "plans",
-#                 "description",
-#             )
-#         }),
-#     )
+    def description_short(self, obj):
+        if obj.description:
+            return (obj.description[:75] + "...") if len(obj.description) > 75 else obj.description
+        return "-"
+    description_short.short_description = "Description"
 
-#     def short_description(self, obj):
-#         if obj.description:
-#             return (obj.description[:75] + "...") if len(obj.description) > 75 else obj.description
-#         return "-"
-#     short_description.short_description = "Description"
+    def services_count(self, obj):
+        return obj.services.count()
+    services_count.short_description = "Number of Services"
 
-#     def plans_count(self, obj):
-#         return obj.plans.count()
-#     plans_count.short_description = "Number of Related Plans"
+
+@admin.register(Service)
+class ServiceAdmin(admin.ModelAdmin):
+    list_display = ("id", "name", "user", "plan", "network")
+    list_display_links = ("id", "name")
+    search_fields = ("name", "user__username", "user__email", "plan__name", "network__name")
+    list_filter = ("plan", "network")
+    ordering = ("id",)
+    list_per_page = 25
