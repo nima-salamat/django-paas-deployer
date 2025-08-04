@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
+from django.utils.translation import gettext as _
 from .models import Deploy
 from .serializers import DeploySerializer
 from services.models import Service
@@ -39,24 +40,24 @@ class DeployViewSet(ModelViewSet):
             service_id = request.data.get("service")
             if not service_id or not Service.objects.filter(id=service_id, user=request.user).exists():
                 return Response(
-                    {"error": "Service must belong to the authenticated user."},
+                    {"error": _("Service must belong to the authenticated user.")},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         serializer = self.get_serializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
-            return Response({"success": "Deploy created."}, status=status.HTTP_201_CREATED)
-        return Response({"error": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"success": _("Deploy created.")}, status=status.HTTP_201_CREATED)
+        return Response({"error": _("Can not deploy."), "errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
     def update(self, request, pk=None, *args, **kwargs):
         deploy = get_object_or_404(self.get_queryset(), pk=pk)
         serializer = self.get_serializer(deploy, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            return Response({"success": "Deploy updated."}, status=status.HTTP_200_OK)
-        return Response({"error": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"success": _("Deploy updated.")}, status=status.HTTP_200_OK)
+        return Response({"error": _("Can not update deploy."), "errors":serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
     def destroy(self, request, pk=None, *args, **kwargs):
         deploy = get_object_or_404(self.get_queryset(), pk=pk)
         deploy.delete()
-        return Response({"success": "Deploy deleted."}, status=status.HTTP_200_OK)
+        return Response({"success": _("Deploy deleted.")}, status=status.HTTP_200_OK)

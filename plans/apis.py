@@ -8,6 +8,8 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from core.global_settings import config
+from django.utils.translation import gettext as _
+
 
 class PlanAdminViewSet(ViewSet):
     authentication_classes = [JWTAuthentication]
@@ -28,7 +30,7 @@ class PlanAdminViewSet(ViewSet):
         try:
             plan = Plan.objects.get(pk=pk)
         except Plan.DoesNotExist:
-            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"error": _("Not found.")}, status=status.HTTP_404_NOT_FOUND)
         serializer = PlanSerializer(plan)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -43,7 +45,7 @@ class PlanAdminViewSet(ViewSet):
         try:
             plan = Plan.objects.get(pk=pk)
         except Plan.DoesNotExist:
-            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"error": _("Not found.")}, status=status.HTTP_404_NOT_FOUND)
         serializer = PlanSerializer(plan, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
@@ -54,7 +56,7 @@ class PlanAdminViewSet(ViewSet):
         try:
             plan = Plan.objects.get(pk=pk)
         except Plan.DoesNotExist:
-            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"error": _("Not found.")}, status=status.HTTP_404_NOT_FOUND)
         plan.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -73,11 +75,11 @@ class PlatformPlansAPIView(APIView):
                     query_argument = i
                     
         if not query_argument:
-            return Response(data={"error":"Incorrect platform."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(data={"error":_("Incorrect platform.")}, status=status.HTTP_400_BAD_REQUEST)
             
         plans = Plan.objects.filter(platform=query_argument)
         if not plans.exists():
-            return Response(data={"error":"There is not such plans."}, status=status.HTTP_404_NOT_FOUND)
+            return Response(data={"error":_("There is not such plans.")}, status=status.HTTP_404_NOT_FOUND)
         
         serializer = UnauthorizedPlanSerializer(plans, many=True)
         
@@ -99,23 +101,23 @@ class PlansApiView(APIView):
                 all_ids = [int(i) for i in ids.split(",") if i.strip().isdigit()]
                         
                 if not all_ids:
-                    return Response({"error": "Invalid IDs provided."}, status=status.HTTP_400_BAD_REQUEST)
+                    return Response({"error": _("Invalid IDs provided.")}, status=status.HTTP_400_BAD_REQUEST)
 
                 plans = Plan.objects.filter(pk__in=all_ids).order_by("platform")
                 if not plans.exists():
-                    return Response(data={"error":"Plan not found."}, status=status.HTTP_404_NOT_FOUND)
+                    return Response(data={"error": _("Plan not found.")}, status=status.HTTP_404_NOT_FOUND)
 
             else:
                 if ids.isdigit():
                     try:
                         plan = Plan.objects.get(pk=int(ids))
                     except Plan.DoesNotExist:
-                        return Response(data={"error":"Plan not found."}, status=status.HTTP_404_NOT_FOUND)
+                        return Response(data={_("error"): _("Plan not found.")}, status=status.HTTP_404_NOT_FOUND)
             
                     serializer = UnauthorizedPlanSerializer(plan)
                     return Response(data=serializer.data, status=status.HTTP_200_OK)
                 
-                return Response({"error": "Invalid ID format."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"error": _("Invalid ID format.")}, status=status.HTTP_400_BAD_REQUEST)
 
         paginator = PageNumberPagination()
         paginated_plans = paginator.paginate_queryset(plans, request)

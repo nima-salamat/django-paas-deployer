@@ -7,6 +7,7 @@ from users.models import User
 from users.serializers import CreateUserSerializer
 from .models import AuthCode
 from core.tasks.email import send_code_via_email
+from django.utils.translation import gettext as _
 import logging
 
 logger = logging.getLogger("auth_users.apis")
@@ -31,10 +32,10 @@ class AuthAPIView(APIView):
         code = request.data.get("code", "")
 
         if not username:
-            return Response({"message": "error::username is required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"message": _("error::username is required")}, status=status.HTTP_400_BAD_REQUEST)
   
         if not any([email, phone_number]):
-            return Response({"message": "error::email or phone number is required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"message": _("error::email or phone number is required")}, status=status.HTTP_400_BAD_REQUEST)
 
         data = {"username":username}
 
@@ -46,11 +47,11 @@ class AuthAPIView(APIView):
             user = User.objects.get(**data)
             if user.password:
                 if not user.check_password(password):
-                    return Response({"message": "error::password is incorrect"}, status=status.HTTP_400_BAD_REQUEST)
+                    return Response({"message": _("error::password is incorrect")}, status=status.HTTP_400_BAD_REQUEST)
  
                 
             if not AuthCode.code_is_valid(user, code):
-                return Response({"message": "error::code is incorrect"}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"message": _("error::code is incorrect")}, status=status.HTTP_400_BAD_REQUEST)
 
             user.is_active = True
             if email:
@@ -61,10 +62,10 @@ class AuthAPIView(APIView):
             AuthCode.objects.filter(user=user).delete()
                 
         except User.DoesNotExist:
-            return Response({"message": "error::user not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"message": _("error::user not found")}, status=status.HTTP_404_NOT_FOUND)
 
         
-        return Response({**get_tokens_for_user(user), "message":"success::user logged in"})
+        return Response({**get_tokens_for_user(user), "message": _("success::user logged in")})
 
 
 class ValidateAPIView(APIView):
@@ -75,10 +76,10 @@ class ValidateAPIView(APIView):
         code = request.data.get("code", "")
 
         if not username:
-            return Response({"message": "error::username is required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"message": _("error::username is required")}, status=status.HTTP_400_BAD_REQUEST)
   
         if not any([email, phone_number]):
-            return Response({"message": "error::email or phone number is required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"message": _("error::email or phone number is required")}, status=status.HTTP_400_BAD_REQUEST)
 
         data = {"username":username}
         
@@ -91,7 +92,7 @@ class ValidateAPIView(APIView):
         try:
             user = User.objects.get(**data)
             if not AuthCode.code_is_valid(user, code):
-                return Response({"message": "error::code is incorrect"}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"message": _("error::code is incorrect")}, status=status.HTTP_400_BAD_REQUEST)
             user.is_active = True
             if email:
             
@@ -101,10 +102,10 @@ class ValidateAPIView(APIView):
             user.save()
              
         except User.DoesNotExist:
-            return Response({"message": "error::user not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"message": _("error::user not found")}, status=status.HTTP_404_NOT_FOUND)
 
         
-        return Response({"is_valid": True, "message":"success::user is valid"})
+        return Response({"is_valid": True, "message": _("success::user is valid")})
 
 
 

@@ -15,6 +15,9 @@ from .models import User, Profile
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
+from django.utils.translation import gettext as _
+
+
 class UserAPIView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes     = [IsAuthenticated]
@@ -24,7 +27,7 @@ class UserAPIView(APIView):
         
         serializer = GetUserSerializer(user)
         return Response(
-            {"user": serializer.data, "message": "success::user found."},
+            {"user": serializer.data, "message": _("success::user found.")},
             status=status.HTTP_200_OK
         )
     
@@ -38,12 +41,12 @@ class UserAPIView(APIView):
         if serializer.is_valid():
             serializer.update(user, serializer.validated_data)
             return Response(
-                {"user": serializer.data, "message": "success::user updated."},
+                {"user": serializer.data, "message": _("success::user updated.")},
                 status=status.HTTP_200_OK
             )
 
         return Response(
-            {"user": {}, "message": "error::user not updated!", "errors": serializer.errors},
+            {"user": {}, "message": _("error::user not updated!"), "errors": serializer.errors},
             status=status.HTTP_400_BAD_REQUEST
     )
 
@@ -68,8 +71,8 @@ class ProfileViewSet(ViewSet):
         serializer = OrderImageProfileSerializer(data=lst_order)
         if serializer.is_valid():
             serializer.save(user)
-            return Response(data={"message":"success::order change."}, status=status.HTTP_200_OK)
-        return Response({"message":"error::cant change order.", "errors": serializer.errors},status=status.HTTP_400_BAD_REQUEST)
+            return Response(data={"message": _("success::order change.")}, status=status.HTTP_200_OK)
+        return Response({"message": _("error::cant change order."), "errors": serializer.errors},status=status.HTTP_400_BAD_REQUEST)
         
     def delete(self, request):
         user = request.user
@@ -78,12 +81,12 @@ class ProfileViewSet(ViewSet):
             profile.delete()
         except Profile.DoesNotExist:
             return Response(
-                {"message": "error::profile not found!"},
+                {"message": _("error::profile not found!")},
                 status=status.HTTP_404_NOT_FOUND
             )
         
         
-        return Response(data={"message":"success::profile deleted."}, status=status.HTTP_200_OK)
+        return Response(data={"message": _("success::profile deleted.")}, status=status.HTTP_200_OK)
         
     def set(self, request):
 
@@ -91,8 +94,8 @@ class ProfileViewSet(ViewSet):
         serializer = AddImageProfileSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(user)
-            return Response(data={"message":"success::profile added."}, status=status.HTTP_200_OK)
-        return Response({"message":"error::cant add profile.", "errors": serializer.errors},status=status.HTTP_400_BAD_REQUEST)
+            return Response(data={"message": _("success::profile added.")}, status=status.HTTP_200_OK)
+        return Response({"message": _("error::cant add profile."), "errors": serializer.errors},status=status.HTTP_400_BAD_REQUEST)
                 
         
 class PasswordViewSet(ViewSet):
@@ -103,9 +106,9 @@ class PasswordViewSet(ViewSet):
         serializer = SetPasswordSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(user)
-            return Response(data={"message":"success::password changed."}, status=status.HTTP_200_OK)
+            return Response(data={"message": _("success::password changed.")}, status=status.HTTP_200_OK)
         
-        return Response({"message":"error::cant set password.", "errors": serializer.errors},status=status.HTTP_400_BAD_REQUEST)
+        return Response({"message": _("error::cant set password."), "errors": serializer.errors},status=status.HTTP_400_BAD_REQUEST)
             
     def delete(self, request):
         user = request.user
@@ -114,6 +117,6 @@ class PasswordViewSet(ViewSet):
         
         if serializer.is_valid(user=user):
             serializer.save()
-            return Response(data={"message":"success::password deleted."}, status=status.HTTP_200_OK)
+            return Response(data={"message": _("success::password deleted.")}, status=status.HTTP_200_OK)
             
-        return Response({"message":"error::cant set password.", "errors": serializer.errors},status=status.HTTP_400_BAD_REQUEST)
+        return Response({"message": _("error::cant set password."), "errors": serializer.errors},status=status.HTTP_400_BAD_REQUEST)

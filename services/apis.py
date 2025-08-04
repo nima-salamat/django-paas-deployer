@@ -8,7 +8,7 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.pagination import PageNumberPagination
-
+from django.utils.translation import gettext_lazy as _
 
 class ServiceAdminPagination(PageNumberPagination):
     page_size = 10
@@ -40,12 +40,12 @@ class ServiceViewSet(ModelViewSet):
   
             network_id = request.data.get("network", None)
             if not network_id or not PrivateNetwork.objects.filter(id=network_id,user=request.user).exists():
-                return Response({"error": "You must create a Private Network first."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"error": _("You must create a Private Network first.")}, status=status.HTTP_400_BAD_REQUEST)
             
         serializer = self.get_serializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
-            return Response({"success": "Service created."}, status=status.HTTP_201_CREATED)
+            return Response({"success": _("Service created.")}, status=status.HTTP_201_CREATED)
         return Response({"error": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
     def update(self, request, pk=None, *args, **kwargs):
@@ -53,13 +53,13 @@ class ServiceViewSet(ModelViewSet):
         serializer = self.get_serializer(service, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            return Response({"success": "Service updated."}, status=status.HTTP_200_OK)
-        return Response({"error": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"success": _("Service updated.")}, status=status.HTTP_200_OK)
+        return Response({"error": _("Can not update service."),"errors":serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
     def destroy(self, request, pk=None, *args, **kwargs):
         service = get_object_or_404(self.get_queryset(), pk=pk)
         service.delete()
-        return Response({"success": "Service deleted."}, status=status.HTTP_200_OK)
+        return Response({"success": ("Service deleted.")}, status=status.HTTP_200_OK)
 
 
 class PrivateNetworkViewSet(ModelViewSet):
@@ -85,18 +85,18 @@ class PrivateNetworkViewSet(ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         if serializer.is_valid():
             serializer.save(user=request.user)
-            return Response({"success": "Private Network created."}, status=status.HTTP_201_CREATED)
-        return Response({"error": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"success": _("Private Network created.")}, status=status.HTTP_201_CREATED)
+        return Response({"error": _("Can not create network."), "errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
     def update(self, request, pk=None, *args, **kwargs):
         network = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
         serializer = self.get_serializer(network, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            return Response({"success": "Private Network updated."}, status=status.HTTP_200_OK)
-        return Response({"error": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"success": _("Private Network updated.")}, status=status.HTTP_200_OK)
+        return Response({"error": _("Can not update network"), "errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
     
     def destroy(self, request, pk=None, *args, **kwargs):
         network = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
         network.delete()
-        return Response({"success": "Private Network deleted."}, status=status.HTTP_200_OK)
+        return Response({"success": _("Private Network deleted.")}, status=status.HTTP_200_OK)
