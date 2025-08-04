@@ -1,7 +1,8 @@
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 from .models import Deploy
-from .tasks import unzip_files, handle_deploy_start, handle_deploy_stop
+from .tasks import handle_deploy_start, handle_deploy_stop
+from core.tasks.zip_utils import unzip_files
 import os
 
 @receiver(signal=post_delete, sender=Deploy)
@@ -26,4 +27,4 @@ def deploy_task_triggered(sender, instance, created, **kwargs):
             handle_deploy_start.delay(instance.id)
         else:
             # stop the server
-            handle_deploy_stop.delay(instance.id)        
+            handle_deploy_stop.delay(instance.id)
