@@ -4,4 +4,3 @@ __pycache__/*
 .env
 env/
 media/*
-static/*
