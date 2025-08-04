@@ -7,6 +7,8 @@ urlpatterns = [
     path("auth/", include("auth_users.urls")),
     path("plans/", include("plans.urls")),
     path("services/", include("services.urls")),
+    path("deploy/", include("deploy.urls")),
+    
 ]
 
 # ===DENUG TRUE===
