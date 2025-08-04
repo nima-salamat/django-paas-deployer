@@ -51,7 +51,7 @@ class Plan(BaseModel):
     plan_type = models.CharField(
         _("Plan Type"),
         max_length=10,
-        choices=PlanTypeChoices.choices
+        choices=PlanTypeChoices.choices,
     )
 
     class Meta:

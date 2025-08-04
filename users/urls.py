@@ -9,5 +9,6 @@ urlpatterns = [
     path("api/profile/set/", ProfileViewSet.as_view({"post":"set"}), name="profile_order"),
     path("api/password/set/", PasswordViewSet.as_view({"post", "set"}), name="set_password"),
     path("api/password/delete/", PasswordViewSet.as_view({"post", "delete"}), name="delete_password"),
-    path("api/plans/", include('plans.urls'), name="plans_api")
+    path("api/plans/", include('plans.urls'), name="plans_api"),
+    path("plans/", include("plans.html_urls"), name="plans_html")
 ]
