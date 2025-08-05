@@ -107,11 +107,11 @@ class ValidateAPIView(APIView):
         except User.DoesNotExist:
             return Response({"message": _("error::user not found")}, status=status.HTTP_404_NOT_FOUND)
 
-        data = {"is_valid": True, "message": _("success::user is valid"), "2fa": _2fa}
+        data = {"is_valid": True, "message": _("success::user is valid"), "twofactor": _2fa}
 
         if not _2fa:
-            data = {"is_valid": True, **get_tokens_for_user(user) ,"message": _("success::user is valid"), "2fa": _2fa}
-
+            data = {"is_valid": True, **get_tokens_for_user(user) ,"message": _("success::user is valid"), "twofactor": _2fa}
+        print(data)
         return Response(data, status=status.HTTP_200_OK)
     
 
@@ -141,26 +141,30 @@ class LoginAPIView(APIView):
  
         try:
             user = User.objects.get(**data)
+            print(user)
             code = AuthCode.create_code(user)
+            
+            print(code)
             if sent_to == "email":
+                # print(code)
                 send_code_via_email.delay(user.id)
             else:
                 logger.info(f"Sms is not implemented yet. user:{user.username}, code: {code}")
             
         except User.DoesNotExist:
             return Response({"message":"error::such username does not exist"},status=status.HTTP_404_NOT_FOUND)
-        
+        print(sent_to, code)
         return Response({"message":f"success:code sent to your {sent_to}"},status=status.HTTP_200_OK)
 
 
 
 
-class SignupView(APIView):
+class SigninView(APIView):
     def post(self, request):
         username = request.data.get("username", "")
         email = request.data.get("email", "")
         phone_number = request.data.get("phone_number", "")
- 
+        print(username, email, phone_number)
         if not username:
             return Response({"message":"error::username is required"},status=status.HTTP_400_BAD_REQUEST)
         if not any([email, phone_number]):
@@ -175,7 +179,7 @@ class SignupView(APIView):
                 {"user": serializer.data, "message": "success::user created."},
                 status=status.HTTP_201_CREATED
             )
-        
+        print(serializer.errors)
         return Response(
             {"user": {}, "message": "error::user not created!", "errors": serializer.errors},
             status=status.HTTP_400_BAD_REQUEST
