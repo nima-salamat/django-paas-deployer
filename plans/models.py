@@ -27,6 +27,7 @@ class Plan(BaseModel):
         _("Name"),
         max_length=50,
         choices=NameChoices.choices,
+        default=NameChoices.BRONZE,
         help_text=_("Plan level name (e.g. Bronze, Silver, etc.)")
     )
     platform = models.CharField(
@@ -46,12 +47,14 @@ class Plan(BaseModel):
     storage_type = models.CharField(
         _("Storage Type"),
         max_length=10,
-        choices=StorageTypeChoices.choices
+        choices=StorageTypeChoices.choices,
+        default=StorageTypeChoices.HDD
     )
     plan_type = models.CharField(
         _("Plan Type"),
         max_length=10,
         choices=PlanTypeChoices.choices,
+        default= PlanTypeChoices.APP
     )
 
     class Meta:
