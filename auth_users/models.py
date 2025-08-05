@@ -13,13 +13,14 @@ def get_random_code(n):
 
 class AuthCode(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
-    code = models.CharField(max_length=8)
+    code = models.CharField(max_length=8, default=lambda : get_random_code(8))
     created_at = models.DateTimeField(auto_now=True)
 
     @classmethod
     def create_code(cls, user):
         instance, _ = cls.objects.get_or_create(user=user)
         length = cls._meta.get_field("code").max_length
+        print(instance)
         if instance.is_expired():
             instance.update_code()
         return instance.code
