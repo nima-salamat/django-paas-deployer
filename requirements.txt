@@ -11,3 +11,4 @@ django-celery-results
 django-redis
 django-celery-beat
 django-bootstrap5
+django-cors-headers
