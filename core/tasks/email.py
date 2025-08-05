@@ -26,6 +26,7 @@ def send_code_via_email(id):
         recipient_list = [user.email]
 
         if settings.DEBUG:
+            
             logger.info(f"[DEBUG MODE] Email to {user.email}:\n{message}")
         else:
             send_mail(
