@@ -23,7 +23,7 @@ class CreateUserSerializer(serializers.ModelSerializer):
         }
 
     def validate(self, data):
-        if data.get("email") or data.get("phone_number"):
+        if not data.get("email") and not data.get("phone_number"):
             raise serializers.ValidationError("Either email or phone number must be set.")
 
         # email = data.get("email")
@@ -51,11 +51,15 @@ class CreateUserSerializer(serializers.ModelSerializer):
         username = validated_data.get("username", "")
         email = validated_data.get("email", "")
         phone_number = validated_data.get("phone_number", "")
-
+        data = {}
+        if username:
+            data["username"] = username
+        if email:
+            data["email"] = email
+        if phone_number:
+            data["phone_number"] = phone_number
         user = User(
-            username=username,
-            email=email,
-            phone_number=phone_number,
+            **data,
             is_active=False
         )
         
