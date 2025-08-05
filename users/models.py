@@ -74,6 +74,7 @@ class User(AbstractBaseUser, PermissionMixin):
     username = models.CharField(_("username"), unique=True, max_length=32, 
         help_text=_("Required. 32 characters or fewer. Include numbers, letters and ./-/_ characters."),
     )
+    password = models.CharField(_("password"), max_length=128, blank=True, null=True)
     email = models.EmailField(_("email address"), max_length=255, null=True, blank=True, unique=True)
     email_verified = models.BooleanField(_("email verified"), default=False)
     phone_number = PhoneNumberField(_("phone number"), null=True, blank=True, unique=True)
