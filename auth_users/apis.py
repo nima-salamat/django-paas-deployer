@@ -157,7 +157,7 @@ class LoginAPIView(APIView):
         return Response({"message":f"success:code sent to your {sent_to}"},status=status.HTTP_200_OK)
 
 
-class SigninView(APIView):
+class SignupView(APIView):
     def post(self, request):
         username = request.data.get("username", "")
         email = request.data.get("email", "")
@@ -184,7 +184,7 @@ class SigninView(APIView):
         )
 
 
-class SigninOrLoginAPIView(APIView):
+class SignupOrLoginAPIView(APIView):
     def post(self, request):
         username = request.data.get("username", "")
         email = request.data.get("email", "")
