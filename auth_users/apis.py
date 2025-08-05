@@ -157,8 +157,6 @@ class LoginAPIView(APIView):
         return Response({"message":f"success:code sent to your {sent_to}"},status=status.HTTP_200_OK)
 
 
-
-
 class SigninView(APIView):
     def post(self, request):
         username = request.data.get("username", "")
@@ -173,6 +171,60 @@ class SigninView(APIView):
         user = request.data
         serializer = CreateUserSerializer(data=user)
         
+        if serializer.is_valid():
+            serializer.save()
+            return Response(
+                {"user": serializer.data, "message": "success::user created."},
+                status=status.HTTP_201_CREATED
+            )
+        print(serializer.errors)
+        return Response(
+            {"user": {}, "message": "error::user not created!", "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+
+class SigninOrLoginAPIView(APIView):
+    def post(self, request):
+        username = request.data.get("username", "")
+        email = request.data.get("email", "")
+        phone_number = request.data.get("phone_number", "")
+        print(username, email, phone_number)
+        if not username:
+            return Response({"message":"error::username is required"},status=status.HTTP_400_BAD_REQUEST)
+        if not any([email, phone_number]):
+            return Response({"message":"error::email or phone_number is required"},status=status.HTTP_400_BAD_REQUEST)
+        
+        data={}
+        data["username"] = username
+        sent_to = ""
+        if email:
+            sent_to="email"
+            data["email"] = email     
+        else:
+            sent_to="phone_number"
+            data["phone_number"] = phone_number
+ 
+        try:
+            user = User.objects.get(**data)
+            print(user)
+            code = AuthCode.create_code(user)
+            
+            print(code)
+            if sent_to == "email":
+                # print(code)
+                send_code_via_email.delay(user.id)
+            else:
+                logger.info(f"Sms is not implemented yet. user:{user.username}, code: {code}")
+            
+            return Response({"message":f"success:code sent to your {sent_to}"},status=status.HTTP_200_OK)
+
+        except User.DoesNotExist:
+            pass
+
+        user = request.data
+        serializer = CreateUserSerializer(data=user)
+
         if serializer.is_valid():
             serializer.save()
             return Response(
