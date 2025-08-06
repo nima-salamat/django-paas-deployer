@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import PrivateNetwork, Service
+from .models import PrivateNetwork, Container
 
 class PrivateNetworkSerializer(serializers.ModelSerializer):
     class Meta:
@@ -7,8 +7,8 @@ class PrivateNetworkSerializer(serializers.ModelSerializer):
         fields = "__all__"
         read_only_fields = ["id", "created_at", "updated_at"]
 
-class ServiceSerializer(serializers.ModelSerializer):
+class ContainerSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Service
+        model = Container
         fields = "__all__"
         read_only_fields = ["id", "created_at", "updated_at"]

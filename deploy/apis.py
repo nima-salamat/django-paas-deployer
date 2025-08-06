@@ -8,7 +8,7 @@ from django.shortcuts import get_object_or_404
 from django.utils.translation import gettext as _
 from .models import Deploy
 from .serializers import DeploySerializer
-from services.models import Service
+from services.models import Container
 
 
 class DeployPagination(PageNumberPagination):

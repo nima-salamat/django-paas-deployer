@@ -14,9 +14,9 @@ class PrivateNetwork(BaseModel):
         verbose_name = _("Private Network")
         verbose_name_plural = _("Private Networks")
 
-    def all_services_summary(self):
-        services = self.services.select_related("plan").all()
-        plans = [service.plan for service in services]
+    def all_containers_summary(self):
+        containers = self.container.select_related("plan").all()
+        plans = [container.plan for container in containers]
 
         return {
             "total_max_apps": sum(plan.max_apps for plan in plans),
@@ -27,19 +27,19 @@ class PrivateNetwork(BaseModel):
     
     def __str__(self):
         # status = _("Enabled") if self.enabled else _("Disabled")
-        # services = self.services.select_related("plan").all()
+        # containers = self.containers.select_related("plan").all()
         # display_names = [
-        #     f"{s.name}({s.plan.name})" for s in services[:3]
+        #     f"{s.name}({s.plan.name})" for s in containers[:3]
         # ]
         # display = ", ".join(display_names)
-        # if services.count() > 3:
+        # if containers.count() > 3:
         #     display += "..."
-        # return f"{status} Private Network with Services: {display or 'None'}"
+        # return f"{status} Private Network with Container: {display or 'None'}"
         return self.name
 
 
 
-class Service(BaseModel):
+class Container(BaseModel):
     name = models.CharField(_("Name"), max_length=30, unique=True)
     user = models.ForeignKey(
         User,
@@ -59,7 +59,7 @@ class Service(BaseModel):
         on_delete=models.SET_NULL,
         null=True,
         # blank=True,
-        related_name="services"
+        related_name="Container"
     )
     # user_email = models.EmailField(_("User Email"), blank=True, editable=False)
     # user_username = models.CharField(_("User Username"), max_length=50, blank=True, editable=False)
