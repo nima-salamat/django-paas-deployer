@@ -1,7 +1,7 @@
 from django.db import models
 from django.core.exceptions import ValidationError
 from core.base.BaseModel import BaseModel
-from services.models import Service
+from services.models import Container
 from django.utils.translation import gettext_lazy as _
 import os
 
@@ -10,7 +10,7 @@ def zip_file_path(instance, filename):
 
 class Deploy(BaseModel):
     name = models.CharField(verbose_name=_("Name"), max_length=50, unique=True)
-    service = models.ForeignKey(Service, verbose_name=_("Service"), on_delete=models.CASCADE)
+    service = models.ForeignKey(Container, verbose_name=_("Service"), on_delete=models.CASCADE)
     version = models.DecimalField(_("Version"), max_digits=5, decimal_places=2, default=0.00, help_text=_("Deployment version, e.g., 1.0"))
     zip_file = models.FileField(verbose_name=_("ZIP File"), upload_to=zip_file_path, blank=True, null=True)
     config = models.JSONField(verbose_name=_("Configuration"), blank=True, null=True)

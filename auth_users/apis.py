@@ -3,6 +3,7 @@ from rest_framework.views import APIView
 from rest_framework import status
 from rest_framework_simplejwt.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework.permissions import IsAuthenticated
 from users.models import User
 from users.serializers import CreateUserSerializer
 from .models import AuthCode
@@ -236,3 +237,10 @@ class SignupOrLoginAPIView(APIView):
             {"user": {}, "message": "error::user not created!", "errors": serializer.errors},
             status=status.HTTP_400_BAD_REQUEST
         )
+
+
+class ValidateToken(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        return Response({status: "valid access token"}, status=status.HTTP_200_OK)

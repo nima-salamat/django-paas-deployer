@@ -1,10 +1,10 @@
 from django.contrib import admin
-from .models import Service, PrivateNetwork
+from .models import Container, PrivateNetwork
 
 
 @admin.register(PrivateNetwork)
 class PrivateNetworkAdmin(admin.ModelAdmin):
-    list_display = ("id", "name", "user", "description_short", "services_count")
+    list_display = ("id", "name", "user", "description_short", "Container_count")
     list_display_links = ("id", "name")
     search_fields = ("name", "description", "user__username", "user__email")
     list_filter = ("user",)
@@ -17,12 +17,12 @@ class PrivateNetworkAdmin(admin.ModelAdmin):
         return "-"
     description_short.short_description = "Description"
 
-    def services_count(self, obj):
-        return obj.services.count()
-    services_count.short_description = "Number of Services"
+    def Container_count(self, obj):
+        return obj.Container.count()
+    Container_count.short_description = "Number of Container"
 
 
-@admin.register(Service)
+@admin.register(Container)
 class ServiceAdmin(admin.ModelAdmin):
     list_display = ("id", "name", "user", "plan", "network")
     list_display_links = ("id", "name")
