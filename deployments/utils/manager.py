@@ -1,7 +1,9 @@
 import docker
 import logging
 from .converter import convert_zip_to_tar, merge_tar_streams, create_dockerfile_tar
-import socket
+import io
+from docker.errors import NotFound
+
 logger = logging.getLogger(__name__)
 
 class ClientManager:
@@ -168,6 +170,30 @@ class ContainerManager(ClientManager):
             return result.output.decode()
         return None
 
+    def connect_to_nginx_network(self, nginx_network_name="central_proxy_net"):
+
+        client = docker.from_env()
+        try:
+            container = client.containers.get(self.name)
+        except NotFound:
+            return False
+
+        networks = container.attrs['NetworkSettings']['Networks'].keys()
+        if nginx_network_name in networks:
+            return True
+
+        try:
+            network = client.networks.get(nginx_network_name)
+        except NotFound:
+            network = client.networks.create(nginx_network_name, driver="bridge")
+
+        try:
+            network.connect(container)
+            return True
+        except Exception as e:
+            print(f"Failed to connect container to network: {e}")
+            return False
+
 
 class ImageManager(ClientManager):
     def __init__(self, project_path, tag, dockerfile_text):
@@ -181,7 +207,6 @@ class ImageManager(ClientManager):
             logger.error("Docker client not initialized.")
             return None
 
-        # حذف ایمیج قبلی اگر delete=True است
         if delete:
             try:
                 existing_image = self.client.images.get(self.tag)
@@ -215,7 +240,6 @@ class ImageManager(ClientManager):
             return image
 
         except docker.errors.BuildError as build_error:
-            # اگر ایمیجی ساخته شده ولی خطا داده، ایمیج ناقص حذف شود
             try:
                 images = self.client.images.list(name=self.tag)
                 for img in images:
@@ -362,3 +386,100 @@ class NetworkManager(ClientManager):
         except docker.errors.APIError as e:
             logger.error(f"Failed to get network: {e}")
             return None
+
+
+class NginxManager(ClientManager):
+    def __init__(self, container_name: str, sub_domain: str, upstream_host: str, upstream_port: int, config_name: str = None):
+        super().__init__()
+        self.container_name = container_name
+        self.sub_domain = sub_domain
+        self.upstream_host = upstream_host  
+        self.upstream_port = upstream_port
+        self.config_name = config_name or f"{sub_domain}.conf"
+        
+        if self.client:
+            try:
+                self.container = self.client.containers.get(container_name)
+                logger.info(f"Nginx container '{container_name}' found.")
+            except docker.errors.NotFound:
+                self.container = None
+                logger.error(f"Nginx container '{container_name}' not found.")
+
+    def generate_config(self) -> str:
+        return f"""
+server {{
+    listen 80;
+    server_name {self.sub_domain};
+
+    location / {{
+        proxy_pass http://{self.upstream_host}:{self.upstream_port};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }}
+}}
+""".strip()
+
+    def write_config(self):
+        if not self.container:
+            logger.error("Nginx container not available.")
+            return False
+        
+        config_content = self.generate_config()
+        config_bytes = config_content.encode("utf-8")
+
+        try:
+            tarstream = io.BytesIO()
+            import tarfile
+
+            with tarfile.open(fileobj=tarstream, mode='w') as tar:
+                info = tarfile.TarInfo(name=self.config_name)
+                info.size = len(config_bytes)
+                tar.addfile(tarinfo=info, fileobj=io.BytesIO(config_bytes))
+
+            tarstream.seek(0)
+            self.container.put_archive("/etc/nginx/conf.d/", tarstream)
+            logger.info(f"Nginx config '{self.config_name}' copied successfully.")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to copy config: {e}")
+            return False
+
+    def reload(self):
+        if not self.container:
+            logger.error("Nginx container not available.")
+            return False
+        try:
+            result = self.container.exec_run("nginx -s reload")
+            if result.exit_code == 0:
+                logger.info("Nginx reloaded successfully.")
+                return True
+            else:
+                logger.error(f"Nginx reload failed: {result.output.decode()}")
+                return False
+        except Exception as e:
+            logger.error(f"Error while reloading Nginx: {e}")
+            return False
+
+    def update_config(self):
+        if self.write_config():
+            return self.reload()
+        return False
+
+    def remove_config(self):
+        if not self.container:
+            logger.error("Nginx container not available.")
+            return False
+        try:
+            result = self.container.exec_run(f"rm -f /etc/nginx/conf.d/{self.config_name}")
+            if result.exit_code == 0:
+                logger.info(f"Config '{self.config_name}' removed.")
+                return self.reload()
+            else:
+                logger.error(f"Failed to remove config: {result.output.decode()}")
+                return False
+        except Exception as e:
+            logger.error(f"Error while removing config: {e}")
+            return False
