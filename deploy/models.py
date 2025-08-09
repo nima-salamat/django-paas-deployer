@@ -8,6 +8,15 @@ import os
 def zip_file_path(instance, filename):
     return f'deployments/{instance.name}/{filename}'
 
+class DEPLOY_STATUS_CHOICES(models.TextChoices):
+    CREATED = "created", _("created")
+    QUEUED = "queued", _("queued")
+    DEPLOYING = "deploying", _("deploying")
+    FAILED = "failed", _("failed")
+    SUCCEEDED = "succeeded", _("succeeded")
+    
+
+
 class Deploy(BaseModel):
     name = models.CharField(verbose_name=_("Name"), max_length=50, unique=True)
     service = models.ForeignKey(Container, verbose_name=_("Service"), on_delete=models.CASCADE)
@@ -15,6 +24,7 @@ class Deploy(BaseModel):
     zip_file = models.FileField(verbose_name=_("ZIP File"), upload_to=zip_file_path, blank=True, null=True)
     config = models.JSONField(verbose_name=_("Configuration"), blank=True, null=True)
     running = models.BooleanField(verbose_name=_("Running"), default=False)
+    status = models.CharField(_("Deploy Status"), choices=DEPLOY_STATUS_CHOICES.choices, default=DEPLOY_STATUS_CHOICES.CREATED)
     started_at = models.DateTimeField(verbose_name=_("Start Time"), blank=True, null=True, editable=False)
 
     MAX_ZIP_SIZE_MB = 10
