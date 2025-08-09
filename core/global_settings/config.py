@@ -13,7 +13,7 @@ PLATFORM_CHOICES = [
     ("vue", "Vue.js"),
     ("angular", "Angular"),
     ("react", "React"),
-    (".net", ".NET"),
+    ("dotnet", ".NET"),
 ]
 
 # defauld max apps for a service
