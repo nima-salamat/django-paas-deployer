@@ -88,7 +88,7 @@ class ContainerManager(ClientManager):
             ports=self.ports,
             detach=True,
             network=self.network,
-            environment=self.enviorment,
+            environment=self.environment,
             mem_limit=self.mem_limit,
             cpu_count=self.cpu_count,
             cpu_quota=self.cpu_quota,
