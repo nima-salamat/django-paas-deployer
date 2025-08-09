@@ -61,6 +61,7 @@ class Container(BaseModel):
         # blank=True,
         related_name="Container"
     )
+    volumes = models.ManyToManyField("services.Volume", related_name="volumes", related_query_name="containers")
     # user_email = models.EmailField(_("User Email"), blank=True, editable=False)
     # user_username = models.CharField(_("User Username"), max_length=50, blank=True, editable=False)
     # network_name = models.CharField(_("Network Name"), max_length=50, blank=True, editable=False)
@@ -77,3 +78,16 @@ class Container(BaseModel):
 
     def __str__(self):
         return f"Service: {self.name}"
+
+
+class Volume(BaseModel):
+    # {"bind": "/data", "mode": "rw"}
+    user = models.ForeignKey(
+        User,
+        verbose_name=_("User"),
+        on_delete=models.CASCADE,
+    )
+    bind = models.CharField(_("Bind Directory"), max=255)
+    mode = models.CharField(_("Mode Directory"), max=255)
+    size_mb = models.PositiveIntegerField()
+    
