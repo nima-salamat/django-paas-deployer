@@ -20,7 +20,6 @@ APPLICATIONS = [
 DBS = [    
     'mysql',
     'postgresql',
-    'sqlite',
     'mariadb', 
     'mongodb', 
     'redis', 
@@ -44,12 +43,34 @@ PLATFORM_CHOICES = [
     ('dotnet', '.NET'),
     ('mysql', 'MySQL'),
     ('postgresql', 'PostgreSQL'),
-    ('sqlite', 'SQLite'),
     ('mariadb', 'MariaDB'),
     ('mongodb', 'MongoDB'),
     ('redis', 'Redis'),
     ('oracle', 'Oracle'),
 ]
+
+default_ports = {
+    'php': 80,            
+    'python': None,    
+    'django': 8000,       
+    'nextjs': 3000,  
+    'nodejs': 3000,     
+    'flask': 5000,       
+    'docker': None,      
+    'go': None,         
+    'statichtmlcss': None, 
+    'vuejs': 8080,      
+    'angular': 4200,     
+    'react': 3000,      
+    'dotnet': 5000,   
+    
+    'mysql': 3306,
+    'postgresql': 5432,
+    'mariadb': 3306,    
+    'mongodb': 27017,
+    'redis': 6379,
+    'oracle': 1521,
+}
 
 
 # defauld max apps for a service
