@@ -88,8 +88,14 @@ class Volume(BaseModel):
         verbose_name=_("User"),
         on_delete=models.CASCADE,
     )
-    container = models.ForeignKey(verbose_name=_("Container"), related_name="container", on_delete=models.CASCADE)
+    container = models.ForeignKey(Container, verbose_name=_("Container"), related_name="container", on_delete=models.CASCADE)
     bind = models.CharField(_("Bind Directory"), max_length=255)
     mode = models.CharField(_("Mode Directory"), max_length=255)
     size_mb = models.PositiveIntegerField()
     
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=["bind", "container"], name="unique_bind_per_container"
+            )
+        ]
+        

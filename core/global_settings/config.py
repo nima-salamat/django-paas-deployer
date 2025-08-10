@@ -1,27 +1,59 @@
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
+APPLICATIONS = [
+    'php',
+    'python',
+    'django', 
+    'nextjs', 
+    'nodejs', 
+    'flask', 
+    'docker', 
+    'go',
+    'statichtmlcss', 
+    'vuejs', 
+    'angular', 
+    'react', 
+    'dotnet', 
+]
+
+DBS = [    
+    'mysql',
+    'postgresql',
+    'sqlite',
+    'mariadb', 
+    'mongodb', 
+    'redis', 
+    'oracle',
+]
 
 # Platform choices
 PLATFORM_CHOICES = [
-    ("php", "PHP"),
-    ("python", "Python"),
-    ("django", "Django"),
-    ("nextjs", "Next.js"),
-    ("nodejs", "Node.js"),
-    ("flask", "Flask"),
-    ("docker", "Docker"),
-    ("go", "Go"),
-    ("static", "Static HTML/CSS"),
-    ("vue", "Vue.js"),
-    ("angular", "Angular"),
-    ("react", "React"),
-    ("dotnet", ".NET"),
+    ('php', 'PHP'),
+    ('python', 'Python'),
+    ('django', 'Django'),
+    ('nextjs', 'Next.js'),
+    ('nodejs', 'Node.js'),
+    ('flask', 'Flask'),
+    ('docker', 'Docker'),
+    ('go', 'Go'),
+    ('statichtmlcss', 'Static HTML/CSS'),
+    ('vuejs', 'Vue.js'),
+    ('angular', 'Angular'),
+    ('react', 'React'),
+    ('dotnet', '.NET'),
+    ('mysql', 'MySQL'),
+    ('postgresql', 'PostgreSQL'),
+    ('sqlite', 'SQLite'),
+    ('mariadb', 'MariaDB'),
+    ('mongodb', 'MongoDB'),
+    ('redis', 'Redis'),
+    ('oracle', 'Oracle'),
 ]
+
 
 # defauld max apps for a service
 DEFAULT_MAX_APPS = 2
-
 
 
 class PlanTypeChoices(models.TextChoices):
