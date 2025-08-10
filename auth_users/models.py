@@ -10,10 +10,12 @@ TEXT = string.ascii_letters + string.digits
 def get_random_code(n):
     return "".join(random.choices(TEXT, k=n))
 
+def get_random_code_8():
+    return get_random_code(8)
 
 class AuthCode(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
-    code = models.CharField(max_length=8, default=lambda : get_random_code(8))
+    code = models.CharField(max_length=8, default=get_random_code_8)
     created_at = models.DateTimeField(auto_now=True)
 
     @classmethod
