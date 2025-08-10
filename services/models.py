@@ -82,6 +82,7 @@ class Container(BaseModel):
 
 class Volume(BaseModel):
     # {"bind": "/data", "mode": "rw"}
+    name = models.CharField(unique=True ,max_length=32)
     user = models.ForeignKey(
         User,
         verbose_name=_("User"),
