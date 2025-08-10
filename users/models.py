@@ -2,31 +2,15 @@ from django.db import models, transaction
 from django.contrib.auth.models import AbstractBaseUser, UserManager
 from phonenumber_field.modelfields import PhoneNumberField
 from django.core.exceptions import ValidationError
-from django.core.files.images import get_image_dimensions
-from django.utils.deconstruct import deconstructible
 from django.utils.translation import gettext_lazy as _
 from django.contrib.postgres.fields import ArrayField
 from django.utils import timezone
 from core.global_settings.config import COLOR_CHOICES, PaymentChoices
+from users.validators import ImageValidator
 import uuid
 import random
 
 
-@deconstructible
-class ImageValidator:
-    def __init__(self, size_kb, max_w, max_h):
-        self.size_kb = size_kb
-        self.max_w = max_w
-        self.max_h = max_h
-
-    def __call__(self, pic):
-        w, h = get_image_dimensions(pic)
-        size_kb = pic.size // 1024
-        if w <= self.max_w and h <= self.max_h and size_kb <= self.size_kb:
-            return
-        raise ValidationError(
-            _(f"Image file size must be ≤ {self.size_kb} KB and dimensions ≤ {self.max_w}×{self.max_h}px.")
-        )
 
 class PermissionMixin(models.Model):
     is_superuser = models.BooleanField(
