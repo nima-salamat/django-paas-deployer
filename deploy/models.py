@@ -4,17 +4,12 @@ from core.base.BaseModel import BaseModel
 from services.models import Container
 from django.utils.translation import gettext_lazy as _
 import os
+from core.global_settings.config import DEPLOY_STATUS_CHOICES
+
 
 def zip_file_path(instance, filename):
     return f'deployments/{instance.name}/{filename}'
 
-class DEPLOY_STATUS_CHOICES(models.TextChoices):
-    CREATED = "created", _("created")
-    QUEUED = "queued", _("queued")
-    DEPLOYING = "deploying", _("deploying")
-    FAILED = "failed", _("failed")
-    SUCCEEDED = "succeeded", _("succeeded")
-    
 
 
 class Deploy(BaseModel):

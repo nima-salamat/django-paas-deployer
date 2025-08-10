@@ -7,6 +7,7 @@ from django.utils.deconstruct import deconstructible
 from django.utils.translation import gettext_lazy as _
 from django.contrib.postgres.fields import ArrayField
 from django.utils import timezone
+from core.global_settings.config import COLOR_CHOICES, PaymentChoices
 import uuid
 import random
 
@@ -50,14 +51,6 @@ class PermissionMixin(models.Model):
 def get_uuid():
     return uuid.uuid4().hex
 
-COLORS = [
-        "#1abc9c","#2ecc71","#3498db", "#9b59b6","#34495e",
-        "#16a085", "#27ae60", "#2980b9", "#8e44ad", "#2c3e50",
-        "#f1c40f", "#e67e22", "#e74c3c", "#ecf0f1", "#95a5a6",
-        "#f39c12", "#d35400", "#c0392b", "#bdc3c7", "#7f8c8d",
-        
-    ]
-COLOR_CHOICES = [(i,j) for i, j in enumerate(COLORS, 0)]
 
 
 def get_color():
@@ -108,10 +101,7 @@ class User(AbstractBaseUser, PermissionMixin):
         verbose_name = "user"
         verbose_name_plural = "users"
 
-class PaymentChoices(models.TextChoices):
-    PAYED = "PAYED"
-    NOT_PAYED = "NOT_PAYED"
-    CANCELED = "CANCELED"
+
 
 class Receipt(models.Model):
     user = models.ForeignKey(User, verbose_name=_("User Receipt"),on_delete=models.CASCADE, related_name="receipts", related_query_name="receipt")

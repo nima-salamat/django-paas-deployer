@@ -1,25 +1,7 @@
 from django.db import models
 from django.utils.translation import gettext_lazy as _
-from core.global_settings import config
+from core.global_settings.config import NameChoices, PlanTypeChoices, PLATFORM_CHOICES, StorageTypeChoices
 from core.base.BaseModel import BaseModel
-
-
-class PlanTypeChoices(models.TextChoices):
-    DB = "DB", _("Database")
-    APP = "APP", _("Application")
-    READY = "READY", _("Ready-made")
-
-
-class StorageTypeChoices(models.TextChoices):
-    SSD = "SSD", _("SSD")
-    HDD = "HDD", _("HDD")
-
-
-class NameChoices(models.TextChoices):
-    BRONZE = "Bronze", _("Bronze")
-    SILVER = "Silver", _("Silver")
-    GOLD = "Gold", _("Gold")
-    DIAMOND = "Diamond", _("Diamond")
 
 
 class Plan(BaseModel):
@@ -33,7 +15,7 @@ class Plan(BaseModel):
     platform = models.CharField(
         _("Platform"),
         max_length=20,
-        choices=getattr(config, "PLATFORM_CHOICES", []),
+        choices=PLATFORM_CHOICES,
         help_text=_("Technology platform this plan supports")
     )
     max_cpu = models.PositiveIntegerField(_("Maximum CPU (vCPU)"))
