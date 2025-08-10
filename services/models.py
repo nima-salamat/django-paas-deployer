@@ -93,3 +93,9 @@ class Volume(BaseModel):
     mode = models.CharField(_("Mode Directory"), max_length=255)
     size_mb = models.PositiveIntegerField()
     
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=["bind", "container"], name="unique_bind_per_container"
+            )
+        ]
+        
