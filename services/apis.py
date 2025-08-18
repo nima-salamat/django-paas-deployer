@@ -1,7 +1,9 @@
-from .models import Container, PrivateNetwork
+from django.core.serializers import serialize
+
+from .models import Container, PrivateNetwork, Volume
 from plans.models import Plan
 from django.shortcuts import get_object_or_404
-from .serializers import PrivateNetworkSerializer, ContainerSerializer
+from .serializers import PrivateNetworkSerializer, ContainerSerializer, VolumeSerializer
 from rest_framework.viewsets import ViewSet, ModelViewSet
 from rest_framework.response import Response
 from rest_framework import status
@@ -100,3 +102,41 @@ class PrivateNetworkViewSet(ModelViewSet):
         network = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
         network.delete()
         return Response({"success": _("Private Network deleted.")}, status=status.HTTP_200_OK)
+
+class VolumeViewSet(ModelViewSet):
+    queryset = Volume.objects.all()
+    serializer_class = VolumeSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    pagination_class = ContainerAdminPagination
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if self.request.user.is_superuser:
+            return queryset
+        return queryset.filter(user=self.request.user)
+
+    def list(self, request, *args, **kwargs):
+        page = self.paginate_queryset(self.get_queryset())
+        serializer = self.get_serializer(page, many=True)
+        return self.get_paginated_response(serializer.data)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid:
+            serializer.save()
+            return Response({"success": _("Volume created.")}, status=status.HTTP_201_CREATED)
+        return Response({"error": _("Can not create Volume."), "errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    def update(self, request, pk=None, *args, **kwargs):
+        volume = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
+        serializer = self.get_serializer(volume, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({"success": _("Volume updated.")}, status=status.HTTP_200_OK)
+        return Response({"error": _("Can not update Volume"), "errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    def destroy(self, request, pk=None, *args, **kwargs):
+        volume = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
+        volume.delete()
+        return Response({"success": _("Volume deleted.")}, status=status.HTTP_200_OK)
