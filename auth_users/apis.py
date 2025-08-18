@@ -243,4 +243,6 @@ class ValidateToken(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        return Response({status: "valid access token"}, status=status.HTTP_200_OK)
+        return Response({"status": "valid access token"}, status=status.HTTP_200_OK)
+    def get(self, request):
+        return Response({"status": "valid access token"}, status=status.HTTP_200_OK)
