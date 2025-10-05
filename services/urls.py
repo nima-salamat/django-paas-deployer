@@ -1,9 +1,9 @@
-from django.urls import path
-from .apis import ContainerViewSet, PrivateNetworkViewSet
+from rest_framework.routers import DefaultRouter
+from .apis import ContainerViewSet, PrivateNetworkViewSet, VolumeViewSet
 
-urlpatterns = [
-    path('', ContainerViewSet.as_view({"get": "list", "post": "create"}), name='service-list'),
-    path('<pk>/', ContainerViewSet.as_view({"patch": "update", "delete": "destroy"}), name='service-detail'),
-    path('networks/', PrivateNetworkViewSet.as_view({"get": "list", "post": "create"}), name='private-network-list'),
-    path('networks/<pk>/', PrivateNetworkViewSet.as_view({"patch": "update", "delete": "destroy"}), name='private-network-detail'),
-]
+router = DefaultRouter()
+router.register(r'service', ContainerViewSet, basename='service')
+router.register(r'networks', PrivateNetworkViewSet, basename='private-network')
+router.register(r'networks', VolumeViewSet, basename='private-network')
+
+urlpatterns = router.urls
