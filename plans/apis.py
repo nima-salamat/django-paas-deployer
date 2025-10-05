@@ -114,12 +114,12 @@ class PlansApiView(APIView):
                     except Plan.DoesNotExist:
                         return Response(data={_("error"): _("Plan not found.")}, status=status.HTTP_404_NOT_FOUND)
             
-                    serializer = UnauthorizedPlanSerializer(plan)
+                    serializer = PlanSerializer(plan)
                     return Response(data=serializer.data, status=status.HTTP_200_OK)
                 
                 return Response({"error": _("Invalid ID format.")}, status=status.HTTP_400_BAD_REQUEST)
 
         paginator = PageNumberPagination()
         paginated_plans = paginator.paginate_queryset(plans, request)
-        serializer = UnauthorizedPlanSerializer(paginated_plans, many=True)
+        serializer = PlanSerializer(paginated_plans, many=True)
         return paginator.get_paginated_response(serializer.data)
