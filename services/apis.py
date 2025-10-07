@@ -32,7 +32,14 @@ class ContainerViewSet(ModelViewSet):
         return queryset.filter(user=self.request.user)
 
     def list(self, request, *args, **kwargs):
-        page = self.paginate_queryset(self.get_queryset())
+        query = self.get_queryset()
+        # ?q_search = ddfdf
+        print(request.query_params)
+        q_search_param =  request.query_params.get("q_search")
+        if q_search_param:
+            query = query.filter(name__contains=q_search_param)
+
+        page = self.paginate_queryset(query)
         serializer = self.get_serializer(page, many=True)
         return self.get_paginated_response(serializer.data)
 
