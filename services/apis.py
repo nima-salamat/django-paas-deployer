@@ -27,8 +27,8 @@ class ContainerViewSet(ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        if self.request.user.is_superuser:
-            return queryset
+        # if self.request.user.is_superuser:
+            # return queryset
         return queryset.filter(user=self.request.user)
 
     def list(self, request, *args, **kwargs):
@@ -37,12 +37,12 @@ class ContainerViewSet(ModelViewSet):
         return self.get_paginated_response(serializer.data)
 
     def create(self, request, *args, **kwargs):
-        if not request.user.is_superuser:
-            request.data["user"] = request.user.id
-  
-            network_id = request.data.get("network", None)
-            if not network_id or not PrivateNetwork.objects.filter(id=network_id,user=request.user).exists():
-                return Response({"error": _("You must create a Private Network first.")}, status=status.HTTP_400_BAD_REQUEST)
+        # if not request.user.is_superuser:
+        request.data["user"] = request.user.id
+
+        network_id = request.data.get("network", None)
+        if not network_id or not PrivateNetwork.objects.filter(id=network_id,user=request.user).exists():
+            return Response({"error": _("You must create a Private Network first.")}, status=status.HTTP_400_BAD_REQUEST)
             
         serializer = self.get_serializer(data=request.data)
         if serializer.is_valid():
@@ -72,8 +72,8 @@ class PrivateNetworkViewSet(ModelViewSet):
     pagination_class = ContainerAdminPagination
 
     def get_queryset(self):
-        if self.request.user.is_superuser:
-            return super().get_queryset()
+        # if self.request.user.is_superuser:
+            # return super().get_queryset()
         return super().get_queryset().filter(user=self.request.user)
 
     def list(self, request, *args, **kwargs):
@@ -82,8 +82,8 @@ class PrivateNetworkViewSet(ModelViewSet):
         return self.get_paginated_response(serializer.data)
 
     def create(self, request, *args, **kwargs):
-        if not request.user.is_superuser:
-            request.data["user"] = request.user.id
+        # if not request.user.is_superuser:
+        request.data["user"] = request.user.id
         serializer = self.get_serializer(data=request.data)
         if serializer.is_valid():
             serializer.save(user=request.user)
