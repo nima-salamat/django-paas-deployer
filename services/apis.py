@@ -3,7 +3,7 @@ from django.core.serializers import serialize
 from .models import Container, PrivateNetwork, Volume
 from plans.models import Plan
 from django.shortcuts import get_object_or_404
-from .serializers import PrivateNetworkSerializer, ContainerSerializer, VolumeSerializer
+from .serializers import PrivateNetworkSerializer, ContainerSerializer, VolumeSerializer, GetContainerSerializer
 from rest_framework.viewsets import ViewSet, ModelViewSet
 from rest_framework.response import Response
 from rest_framework import status
@@ -26,6 +26,7 @@ class ContainerViewSet(ModelViewSet):
     pagination_class = ContainerAdminPagination
 
     def get_queryset(self):
+        
         queryset = super().get_queryset()
         # if self.request.user.is_superuser:
             # return queryset
@@ -40,7 +41,7 @@ class ContainerViewSet(ModelViewSet):
             query = query.filter(name__contains=q_search_param)
 
         page = self.paginate_queryset(query)
-        serializer = self.get_serializer(page, many=True)
+        serializer = GetContainerSerializer(page, many=True)
         return self.get_paginated_response(serializer.data)
 
     def create(self, request, *args, **kwargs):

@@ -9,6 +9,12 @@ class PrivateNetworkSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at"]
 
 class ContainerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Container
+        fields = "__all__"
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+class GetContainerSerializer(serializers.ModelSerializer):
     id = serializers.CharField(source="pk", read_only=True)
     network = PrivateNetworkSerializer()
     plan = PlanSerializer()
@@ -16,6 +22,8 @@ class ContainerSerializer(serializers.ModelSerializer):
         model = Container
         fields = "__all__"
         read_only_fields = ["id", "created_at", "updated_at"]
+
+
 
 class VolumeSerializer(serializers.ModelSerializer):
     id = serializers.CharField(source="pk", read_only=True)
