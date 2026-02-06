@@ -7,10 +7,29 @@ from .manager.client_manager import Client
 import docker
 from config import Config
 import os
+import re
+
+
+
+def django_read_settings_module_from_tar(tar):
+    DJANGO_RE = re.compile(
+        r"DJANGO_SETTINGS_MODULE\s*['\"]\s*,\s*['\"]([\w\.]+)['\"]"
+    )
+    for m in tar.getmembers():
+        if m.name.endswith("manage.py"):
+            f = tar.extractfile(m)
+            if not f:
+                continue
+
+            text = f.read().decode("utf-8", errors="ignore")
+            match = DJANGO_RE.search(text)
+            if match:
+                return match.group(1).rsplit(".", 1)[0]
+    return None
 
 
 class Deploy:
-    def __init__(self,name, tag, zip_filename, dockerfile_text, max_cpu, max_ram, networks, volumes, port, read_only):
+    def __init__(self,name, tag, zip_filename, dockerfile_text, max_cpu, max_ram, networks, volumes, port, read_only, platform):
         self.name = name
         self.tag = tag
         self.zip_filename = zip_filename
@@ -21,12 +40,20 @@ class Deploy:
         self.volumes = volumes
         self.port = port
         self.read_only = read_only
+        self.platform = platform
         
     
 
 
     def deploy(self):
         tarfile = convert_zip_to_tar(self.zip_filename)
+        
+        if self.platform == "django":
+            project_name=django_read_settings_module_from_tar(tarfile)
+            if project_name is None:
+                return
+            self.dockerfile_text = self.dockerfile_text.format(project_name)
+        
         image_name = f"{self.name}:{self.tag}"
         image = Image(self.name, self.tag, self.dockerfile_text, tarfile)
         container = Container(self.name, image_name, self.max_cpu, self.max_ram, [i[0] for i in self.networks], self.volumes, self.read_only)
@@ -49,7 +76,6 @@ class Deploy:
             if not Network.network_exists(network_name):
                 network = Network(network_name, driver)
                 network.create()
-        
         
         try:
             container.create()
