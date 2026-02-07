@@ -3,7 +3,7 @@ from .client_manager import Client
 import logging
 logger = logging.getLogger(__name__)
 
-class Service(Client):
+class Container(Client):
     def __init__(self, name: str, image_name: str, max_cpu: float, max_ram: int, networks: list,
                  volumes: dict = None, read_only: bool = True, command: str = None, environment: dict = None,
                  exposed_ports: dict = None, port_bindings: dict = None):
