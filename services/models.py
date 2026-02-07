@@ -64,7 +64,7 @@ class Volume(BaseModel):
     
     class Meta:
         constraints = [models.UniqueConstraint(
-            fields=["bind", "container"], name="unique_bind_per_container"
+            fields=["bind", "service"], name="unique_bind_per_service"
             )
         ]
         
