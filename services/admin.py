@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Service, PrivateNetwork
+from .models import Service, PrivateNetwork, Volume
 
 
 @admin.register(PrivateNetwork)
@@ -30,3 +30,13 @@ class ServiceAdmin(admin.ModelAdmin):
     list_filter = ("plan", "network")
     ordering = ("id",)
     list_per_page = 25
+
+
+@admin.register(Volume)
+class VolumeAdmin(admin.ModelAdmin):
+    list_display = ("id", "name", "user", "service", "bind", "mode", "size_mb")
+    list_display_links = ("id", "name")
+    search_fields = ("name", "user__username", "user__email", "service__name")
+    ordering = ("id",)
+    list_per_page = 25
+
