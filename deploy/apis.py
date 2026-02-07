@@ -33,7 +33,11 @@ class DeployViewSet(ModelViewSet):
         return qs.filter(service__user=self.request.user)
 
     def list(self, request, *args, **kwargs):
-        page = self.paginate_queryset(self.get_queryset())
+        service_id = request.query_params.get("service_id","")
+        queryset = self.get_queryset()
+        if service_id:
+            queryset = queryset.filter(service = service_id)
+        page = self.paginate_queryset(queryset = queryset)
         serializer = self.get_serializer(page, many=True)
         return self.get_paginated_response(serializer.data)
 
