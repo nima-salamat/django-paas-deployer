@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import PrivateNetwork, Container, Volume
+from .models import PrivateNetwork, Service, Volume
 from plans.serializers import PlanSerializer
 class PrivateNetworkSerializer(serializers.ModelSerializer):
     id = serializers.CharField(source="pk", read_only=True)
@@ -8,18 +8,18 @@ class PrivateNetworkSerializer(serializers.ModelSerializer):
         fields = "__all__"
         read_only_fields = ["id", "created_at", "updated_at"]
 
-class ContainerSerializer(serializers.ModelSerializer):
+class ServiceSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Container
+        model = Service
         fields = "__all__"
         read_only_fields = ["id", "created_at", "updated_at"]
 
-class GetContainerSerializer(serializers.ModelSerializer):
+class GetServiceSerializer(serializers.ModelSerializer):
     id = serializers.CharField(source="pk", read_only=True)
     network = PrivateNetworkSerializer()
     plan = PlanSerializer()
     class Meta:
-        model = Container
+        model = Service
         fields = "__all__"
         read_only_fields = ["id", "created_at", "updated_at"]
 

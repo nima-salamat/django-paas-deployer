@@ -1,9 +1,9 @@
 from django.core.serializers import serialize
 
-from .models import Container, PrivateNetwork, Volume
+from .models import Service, PrivateNetwork, Volume
 from plans.models import Plan
 from django.shortcuts import get_object_or_404
-from .serializers import PrivateNetworkSerializer, ContainerSerializer, VolumeSerializer, GetContainerSerializer
+from .serializers import PrivateNetworkSerializer, ServiceSerializer, VolumeSerializer, GetServiceSerializer
 from rest_framework.viewsets import ViewSet, ModelViewSet
 from rest_framework.response import Response
 from rest_framework import status
@@ -12,18 +12,18 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.pagination import PageNumberPagination
 from django.utils.translation import gettext_lazy as _
 
-class ContainerAdminPagination(PageNumberPagination):
+class ServiceAdminPagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = "page_size"
     max_page_size = 50
 
 
-class ContainerViewSet(ModelViewSet):
-    queryset = Container.objects.all()
-    serializer_class = ContainerSerializer
+class ServiceViewSet(ModelViewSet):
+    queryset = Service.objects.all()
+    serializer_class = ServiceSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
-    pagination_class = ContainerAdminPagination
+    pagination_class = ServiceAdminPagination
 
     def get_queryset(self):
         
@@ -41,7 +41,7 @@ class ContainerViewSet(ModelViewSet):
             query = query.filter(name__contains=q_search_param)
 
         page = self.paginate_queryset(query)
-        serializer = GetContainerSerializer(page, many=True)
+        serializer = GetServiceSerializer(page, many=True)
         return self.get_paginated_response(serializer.data)
 
     def create(self, request, *args, **kwargs):
@@ -77,7 +77,7 @@ class PrivateNetworkViewSet(ModelViewSet):
     serializer_class = PrivateNetworkSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
-    pagination_class = ContainerAdminPagination
+    pagination_class = ServiceAdminPagination
 
     def get_queryset(self):
         # if self.request.user.is_superuser:
@@ -116,7 +116,7 @@ class VolumeViewSet(ModelViewSet):
     serializer_class = VolumeSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
-    pagination_class = ContainerAdminPagination
+    pagination_class = ServiceAdminPagination
 
     def get_queryset(self):
         queryset = super().get_queryset()

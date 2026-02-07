@@ -3,7 +3,7 @@ from .client_manager import Client
 import logging
 logger = logging.getLogger(__name__)
 
-class Container(Client):
+class Service(Client):
     def __init__(self, name: str, image_name: str, max_cpu: float, max_ram: int, networks: list,
                  volumes: dict = None, read_only: bool = True, command: str = None, environment: dict = None,
                  exposed_ports: dict = None, port_bindings: dict = None):
@@ -44,7 +44,7 @@ class Container(Client):
                 ports=self.exposed_ports, 
                 read_only=self.read_only,
             )
-            logger.info(f"Container '{self.name}' created from image '{self.image_name}' on networks {self.networks}")
+            logger.info(f"Service '{self.name}' created from image '{self.image_name}' on networks {self.networks}")
             return container
         except Exception as e:
             logger.error(f"Failed to create container '{self.name}': {e}")
@@ -54,7 +54,7 @@ class Container(Client):
         try:
             container = self.client.containers.get(self.name)
             container.start()
-            logger.info(f"Container '{self.name}' started successfully")
+            logger.info(f"Service '{self.name}' started successfully")
         except Exception as e:
             logger.error(f"Failed to start container '{self.name}': {e}")
             raise
@@ -64,15 +64,15 @@ class Container(Client):
             container = self.client.containers.get(self.name)
 
             if container.status != "running":
-                logger.info(f"Container '{self.name}' is not running (status={container.status})")
+                logger.info(f"Service '{self.name}' is not running (status={container.status})")
                 return
 
             container.stop(timeout=timeout)
-            logger.info(f"Container '{self.name}' stopped successfully")
+            logger.info(f"Service '{self.name}' stopped successfully")
 
         except docker.errors.NotFound:
             # idempotent behavior
-            logger.info(f"Container '{self.name}' does not exist, nothing to stop")
+            logger.info(f"Service '{self.name}' does not exist, nothing to stop")
 
         except docker.errors.APIError as e:
             logger.error(f"Docker API error while stopping container '{self.name}': {e}")
@@ -89,7 +89,7 @@ class Container(Client):
             container = client.containers.get(container_name)
             return container.status == "running"
         except docker.errors.NotFound:
-            # Container not found
+            # Service not found
             return False
         except Exception as e:
             # Log unexpected errors
@@ -100,9 +100,9 @@ class Container(Client):
         try:
             if container := self.client.containers.get(self.name):
                 container.remove(force=True)
-                logger.info(f"Container '{self.name}' deleted successfully")
+                logger.info(f"Service '{self.name}' deleted successfully")
             else:
-                logger.info(f"Container '{self.name}' not found")
+                logger.info(f"Service '{self.name}' not found")
             return True
         except Exception as e:
             logger.error(f"Failed to remove container '{self.name}': {e}")

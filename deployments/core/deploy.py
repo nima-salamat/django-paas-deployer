@@ -1,7 +1,7 @@
 import tarfile
 from .converter import convert_zip_to_tar
 from .manager.image_manager import Image
-from .manager.container_manager import Container
+from .manager.container_manager import Service
 from .manager.network_manager import Network
 from .manager.client_manager import Client
 import docker
@@ -56,10 +56,10 @@ class Deploy:
         
         image_name = f"{self.name}:{self.tag}"
         image = Image(self.name, self.tag, self.dockerfile_text, tarfile)
-        container = Container(self.name, image_name, self.max_cpu, self.max_ram, [i[0] for i in self.networks], self.volumes, self.read_only)
+        container = Service(self.name, image_name, self.max_cpu, self.max_ram, [i[0] for i in self.networks], self.volumes, self.read_only)
         
-        if Container.container_is_running(self.name):
-            if Container.container_is_running(self.name):
+        if Service.container_is_running(self.name):
+            if Service.container_is_running(self.name):
                 container.stop()
             container.remove()
         if image.check_exists(image_name):
@@ -178,7 +178,7 @@ class Deploy:
             try:
                 network = client.networks.get(proxy_network)
                 network.disconnect(self.name)
-                print(f"Container '{self.name}' disconnected from network '{proxy_network}'")
+                print(f"Service '{self.name}' disconnected from network '{proxy_network}'")
             except docker.errors.NotFound:
                 print(f"Network '{proxy_network}' not found, skipping disconnect.")
             except Exception as e:
