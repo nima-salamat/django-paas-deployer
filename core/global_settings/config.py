@@ -149,7 +149,7 @@ RUN pip install --upgrade pip setuptools wheel \
 
 COPY . /app
 
-CMD ["gunicorn", "{}.wsgi:application", "--bind", "0.0.0.0:8000"]
+CMD ["gunicorn", "{}:application", "--bind", "0.0.0.0:8000"]
 '''
 
     nextjs = '''

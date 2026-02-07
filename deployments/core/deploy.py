@@ -1,20 +1,15 @@
 import tarfile
-from .converter import convert_zip_to_tar
-from .manager.image_manager import Image
-from .manager.container_manager import Service
-from .manager.network_manager import Network
-from .manager.client_manager import Client
+from deployments.core.converter import convert_zip_to_tar
+from deployments.core.manager.image_manager import Image
+from deployments.core.manager.container_manager import Container
+from deployments.core.manager.network_manager import Network
+from deployments.core.manager.client_manager import Client
 import docker
-from config import Config
 import os
 import re
 
 
-
 def django_read_settings_module_from_tar(tar):
-    DJANGO_RE = re.compile(
-        r"DJANGO_SETTINGS_MODULE\s*['\"]\s*,\s*['\"]([\w\.]+)['\"]"
-    )
     for m in tar.getmembers():
         if m.name.endswith("manage.py"):
             f = tar.extractfile(m)
@@ -22,9 +17,64 @@ def django_read_settings_module_from_tar(tar):
                 continue
 
             text = f.read().decode("utf-8", errors="ignore")
-            match = DJANGO_RE.search(text)
+            text = re.sub(r"#.*", "", text)
+            match = re.search(
+                r"os\.environ\.setdefault\s*\(\s*['\"]DJANGO_SETTINGS_MODULE['\"]\s*,\s*['\"]([\w\.]+)['\"]\s*\)",
+                text,
+                re.S
+            )
             if match:
-                return match.group(1).rsplit(".", 1)[0]
+                return match.group(1)
+            match = re.search(
+                r"DJANGO_SETTINGS_MODULE\s*=\s*['\"]([\w\.]+)['\"]",
+                text
+            )
+            if match:
+                return match.group(1)
+
+    return None
+
+
+def django_find_entrypoint_from_settings(tar):
+    """
+    tar: tarfile.TarFile (already opened)
+    returns {"type":"asgi"|"wsgi", "module":"config.asgi"} or None
+    """
+    settings_module = django_read_settings_module_from_tar(tar)
+    if not settings_module:
+        return None
+
+    settings_path = settings_module.replace(".", "/") + ".py"
+
+    # find member by endswith (handles subdirs like project/config/settings.py)
+    member = None
+    for m in tar.getmembers():
+        if m.name.endswith(settings_path):
+            member = m
+            break
+    if not member:
+        return None
+
+    f = tar.extractfile(member)
+    if not f:
+        return None
+    text = f.read().decode("utf-8", errors="ignore")
+
+    asgi_re = re.compile(r'(?<!\w)ASGI_APPLICATION\s*=\s*[\'"]([\w\.]+)[\'"]')
+    wsgi_re = re.compile(r'(?<!\w)WSGI_APPLICATION\s*=\s*[\'"]([\w\.]+)[\'"]')
+
+    asgi_match = asgi_re.search(text)
+    if asgi_match:
+        full = asgi_match.group(1)
+        module = full.rsplit(".", 1)[0]
+        return {"type": "asgi", "module": module}
+
+    wsgi_match = wsgi_re.search(text)
+    if wsgi_match:
+        full = wsgi_match.group(1)
+        module = full.rsplit(".", 1)[0]
+        return {"type": "wsgi", "module": module}
+
     return None
 
 
@@ -41,25 +91,29 @@ class Deploy:
         self.port = port
         self.read_only = read_only
         self.platform = platform
-        
-    
-
 
     def deploy(self):
-        tarfile = convert_zip_to_tar(self.zip_filename)
+        tar_stream = convert_zip_to_tar(self.zip_filename)
+        tar_stream.seek(0)
         
         if self.platform == "django":
-            project_name=django_read_settings_module_from_tar(tarfile)
-            if project_name is None:
+            entrypoint = None
+            with tarfile.open(fileobj=tar_stream, mode="r:*") as tar:
+                entrypoint = django_find_entrypoint_from_settings(tar)
+            if not entrypoint:
+                print("project name (entrypoint) not found")
                 return
-            self.dockerfile_text = self.dockerfile_text.format(project_name)
+            project_module = entrypoint["module"]
+            self.dockerfile_text = self.dockerfile_text.format(project_module)
+
+        print(self.dockerfile_text)
         
         image_name = f"{self.name}:{self.tag}"
-        image = Image(self.name, self.tag, self.dockerfile_text, tarfile)
-        container = Service(self.name, image_name, self.max_cpu, self.max_ram, [i[0] for i in self.networks], self.volumes, self.read_only)
+        image = Image(self.name, self.tag, self.dockerfile_text, tar_stream)
+        container = Container(self.name, image_name, self.max_cpu, self.max_ram, [i[0] for i in self.networks], self.volumes, self.read_only)
         
-        if Service.container_is_running(self.name):
-            if Service.container_is_running(self.name):
+        if Container.container_is_running(self.name):
+            if Container.container_is_running(self.name):
                 container.stop()
             container.remove()
         if image.check_exists(image_name):
@@ -70,13 +124,11 @@ class Deploy:
             image.remove()
             return
         
-        
-        for network_name, driver in self.networks:
-            
+        for network_name, driver in self.networks:            
             if not Network.network_exists(network_name):
                 network = Network(network_name, driver)
                 network.create()
-        
+    
         try:
             container.create()
         except:
@@ -90,8 +142,7 @@ class Deploy:
         except:
             self.remove_nginx_setup()
             container.remove()
-        
-        
+
     def setup_nginx(self):
         """
         Connect deployed container to nginx network if needed,
@@ -178,7 +229,7 @@ class Deploy:
             try:
                 network = client.networks.get(proxy_network)
                 network.disconnect(self.name)
-                print(f"Service '{self.name}' disconnected from network '{proxy_network}'")
+                print(f"Container '{self.name}' disconnected from network '{proxy_network}'")
             except docker.errors.NotFound:
                 print(f"Network '{proxy_network}' not found, skipping disconnect.")
             except Exception as e:
@@ -186,4 +237,3 @@ class Deploy:
 
         except Exception as e:
             print(f"Failed to remove nginx setup for '{self.name}': {e}")
-
