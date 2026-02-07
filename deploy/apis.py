@@ -2,6 +2,7 @@ from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.response import Response
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
@@ -62,3 +63,16 @@ class DeployViewSet(ModelViewSet):
         deploy = get_object_or_404(self.get_queryset(), pk=pk)
         deploy.delete()
         return Response({"success": _("Deploy deleted.")}, status=status.HTTP_200_OK)
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def deploy_name_is_available(request):
+    name = request.query_params.get("name", "")
+    if len(name) < 4:
+        return Response({"result": False, "detail": _("The length should be at least 4.")})
+        
+    if Deploy.objects.filter(name=name).exists():
+        return Response({"result": False, "detail": _("The name has been taken.")})
+    return Response({"result": True, "detail": _("The name is free.")})
+
