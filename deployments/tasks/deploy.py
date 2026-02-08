@@ -1,20 +1,34 @@
 from celery import shared_task
 from deploy.models import Deploy
 from deployments.core.deploy import Deploy as Deployer
+from django.db import transaction
 from core.global_settings.config import Config, default_ports
 from django.conf import settings
-import zipfile
 
 @shared_task
 def deploy(deploy_id):
     try:
-        deploy_item = (
-            Deploy.objects
-            .select_related("service", "service__plan", "service__network")
-            .get(pk=deploy_id)
-        )
-    except:
+        with transaction.atomic():
+            deploy_item_ = (
+                Deploy.objects
+                .select_for_update()
+                .get(pk=deploy_id)
+            )
+            deploy_item = (
+                Deploy.objects
+                .select_related("service", "service__plan", "service__network")
+                .get(pk=deploy_id)
+            )
+
+            if deploy_item_.running:
+                print(f"Deploy {deploy_id} already running, skipping.")
+                return
+
+            deploy_item_.running = True
+            deploy_item_.save()
+    except Deploy.DoesNotExist:
         return
+
     platform = deploy_item.service.plan.platform
     port = default_ports[platform]
     django_debug = settings.DEBUG
@@ -36,4 +50,9 @@ def deploy(deploy_id):
         platform = platform
     )
     
-    deployer.deploy()
+    try:
+        deployer.deploy()
+    except:
+        Deployer.remove_all(deploy_item.service.name)
+        deploy_item_.running = False
+        deploy_item_.save()
