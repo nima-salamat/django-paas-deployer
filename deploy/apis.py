@@ -10,7 +10,7 @@ from django.utils.translation import gettext as _
 from .models import Deploy
 from services.models import Service
 from .serializers import DeploySerializer
-from deployments.tasks.deploy import deploy
+from deployments.tasks.deploy import deploy, stop
 
 
 
@@ -99,7 +99,7 @@ def start_container(request):
                     
                     
             deploy.delay(deploy_id)
-            return Response({"result": "sucess", "detail": _("Deploy started.")})
+            return Response({"result": "success", "detail": _("Deploy started.")})
     return Response({"result": "error", "detail": _("The deploy_id is invalid.")})
     
 
@@ -107,6 +107,11 @@ def start_container(request):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def stop_container(request):
-    return Response({"result": "not implemented", "detail": _("Not implemented.")})
+    deploy_id = request.data.get("deploy_id", "")
+    if Deploy.objects.filter(id=deploy_id).exists():
+            stop.delay(deploy_id)
+            return Response({"result": "success", "detail": _("Deploy stopped.")})
+    return Response({"result": "error", "detail": _("The deploy_id is invalid.")})
+    
     
 

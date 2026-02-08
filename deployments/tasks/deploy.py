@@ -56,3 +56,17 @@ def deploy(deploy_id):
         Deployer.remove_all(deploy_item.service.name)
         deploy_item_.running = False
         deploy_item_.save()
+
+@shared_task
+def stop(deploy_id):
+    try:
+        deploy_item = (
+            Deploy.objects
+            .select_related("service")
+            .get(pk=deploy_id)
+        )
+    except:
+        return
+    Deployer.stop_container(deploy_item.service.name)
+    deploy_item.running = False
+    deploy_item.save()

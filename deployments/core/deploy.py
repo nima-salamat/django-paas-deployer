@@ -259,3 +259,8 @@ class Deploy:
         i.remove_all(force=True)
         
         cls(name, *([None]*10)).remove_nginx_setup()
+    
+    @classmethod
+    def stop_container(cls, name):
+        c=Container(name, None, None, None, [(None, None)])
+        c.stop()
