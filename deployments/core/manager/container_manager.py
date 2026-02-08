@@ -110,3 +110,15 @@ class Container(Client):
             logger.error(f"Failed to remove container '{self.name}': {e}")
             raise
         
+    def exists(self) -> bool:
+        """
+        Check if a container with this name exists (running or stopped).
+        """
+        try:
+            self.client.containers.get(self.name)
+            return True
+        except docker.errors.NotFound:
+            return False
+        except Exception as e:
+            logger.error(f"Error checking existence of container '{self.name}': {e}")
+            raise
