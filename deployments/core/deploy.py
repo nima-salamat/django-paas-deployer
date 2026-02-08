@@ -237,3 +237,13 @@ class Deploy:
 
         except Exception as e:
             print(f"Failed to remove nginx setup for '{self.name}': {e}")
+
+    @classmethod
+    def remove_all(cls,name):
+        c=Container(name, None, None, None, [(None, None)])
+        c.stop()
+        c.remove()
+        i=Image(name, None)
+        i.remove_all(force=True)
+        
+        cls(name, *([None]*10)).remove_nginx_setup()
