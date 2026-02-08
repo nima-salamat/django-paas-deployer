@@ -7,6 +7,8 @@ from deployments.core.manager.client_manager import Client
 import docker
 import os
 import re
+import time
+
 
 
 def django_read_settings_module_from_tar(tar):
@@ -112,12 +114,23 @@ class Deploy:
         image = Image(self.name, self.tag, self.dockerfile_text, tar_stream)
         container = Container(self.name, image_name, self.max_cpu, self.max_ram, [i[0] for i in self.networks], self.volumes, self.read_only)
         
-        if Container.container_is_running(self.name):
-            container.stop()
+
+        TIMEOUT = 10
+        INTERVAL = 0.2 
+        if container.exists():
+            if Container.container_is_running(self.name):
+                container.stop()
+
+                start = time.time()
+                while Container.container_is_running(self.name):
+                    if time.time() - start > TIMEOUT:
+                        raise TimeoutError("Container did not stop within 3 seconds")
+                    time.sleep(INTERVAL)
+
             container.remove()
 
-        if image.check_exists(image_name):
-            image.remove()
+        if image.exists():
+            image.remove_all()
         try:
             image.create()
         except:
@@ -136,7 +149,6 @@ class Deploy:
             return 
         
         container.start()
-
         try:
             self.setup_nginx()
         except:
