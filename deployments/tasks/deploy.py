@@ -23,7 +23,7 @@ def deploy(deploy_id):
         return
   
     deployer = Deployer(
-        name = deploy_item.name,
+        name = deploy_item.service.name,
         tag = deploy_item.version,
         zip_filename = deploy_item.zip_file.path,
         dockerfile_text = dockerfile_text,
