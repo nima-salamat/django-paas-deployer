@@ -1,16 +1,15 @@
-from django.db.models.signals import post_delete, post_save
+from django.db.models.signals import pre_delete, post_save
 from django.dispatch import receiver
 from .models import Deploy
 from .tasks import handle_deploy_start, handle_deploy_stop
 from core.tasks.zip_utils import unzip_files
 import os
 
-@receiver(signal=post_delete, sender=Deploy)
+@receiver(signal=pre_delete, sender=Deploy)
 def delete_file_after_delete(sender, instance, **kwargs):
-    # if instance.zip_file and instance.zip_file.path:
-    #     if os.path.isfile(instance.zip_file.path):
-    #         os.remove(instance.zip_file.path)
-    pass
+    if instance.zip_file and instance.zip_file.path:
+        if os.path.isfile(instance.zip_file.path):
+            os.remove(instance.zip_file.path)
     
 @receiver(signal=post_save, sender=Deploy)
 def deploy_task_triggered(sender, instance, created, **kwargs):
