@@ -1,6 +1,7 @@
 from os import read
 from .client_manager import Client
 import logging
+import docker
 logger = logging.getLogger(__name__)
 
 class Container(Client):
@@ -28,7 +29,9 @@ class Container(Client):
                 cpu_quota=int(self.max_cpu * 100000),
                 mem_limit=f"{self.max_ram}m",
                 binds=self.volumes,
-                port_bindings=self.port_bindings
+                port_bindings=self.port_bindings,
+                read_only=self.read_only,
+                
             )
             # Networking
             endpoints_config = {net: {} for net in self.networks}
@@ -42,7 +45,6 @@ class Container(Client):
                 host_config=host_config,
                 networking_config=networking_config,
                 ports=self.exposed_ports, 
-                read_only=self.read_only,
             )
             logger.info(f"Service '{self.name}' created from image '{self.image_name}' on networks {self.networks}")
             return container
