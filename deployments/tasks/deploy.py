@@ -18,7 +18,7 @@ def deploy(deploy_id):
     platform = deploy_item.service.plan.platform
     port = default_ports[platform]
     django_debug = settings.DEBUG
-    dockerfile_text = Config.get(platform, None)
+    dockerfile_text = getattr(Config, platform, "")
     if dockerfile_text is None: 
         return
   
@@ -29,7 +29,7 @@ def deploy(deploy_id):
         dockerfile_text = dockerfile_text,
         max_cpu = deploy_item.service.plan.max_cpu,
         max_ram = deploy_item.service.plan.max_ram,
-        networks = [deploy_item.service.network.name],
+        networks = [(deploy_item.service.network.name, "bridge")],
         volumes = [],
         port = port,
         read_only= not django_debug,
