@@ -10,6 +10,7 @@ from django.utils.translation import gettext as _
 from .models import Deploy
 from services.models import Service
 from .serializers import DeploySerializer
+from deployments.tasks.deploy import deploy
 
 
 
@@ -34,7 +35,7 @@ class DeployViewSet(ModelViewSet):
 
     def list(self, request, *args, **kwargs):
         service_id = request.query_params.get("service_id","")
-        queryset = self.get_queryset()
+        queryset = self.get_queryset().order_by("created_at")
         if service_id:
             queryset = queryset.filter(service = service_id)
         page = self.paginate_queryset(queryset = queryset)
@@ -79,4 +80,33 @@ def deploy_name_is_available(request):
     if Deploy.objects.filter(name=name).exists():
         return Response({"result": False, "detail": _("The name has been taken.")})
     return Response({"result": True, "detail": _("The name is free.")})
+
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def start_container(request):
+    deploy_id = request.data.get("deploy_id", "")
+    
+
+    
+    if Deploy.objects.filter(id=deploy_id).exists():
+            deploy_item = Deploy.objects.get(id=deploy_id)
+            for item in Deploy.objects.filter(service=deploy_item.service):
+                if item.running:
+                    return Response({"result": "error", "detail": _("Only one container can be in running mode.")})
+                    
+                    
+            deploy.delay(deploy_id)
+            return Response({"result": "sucess", "detail": _("Deploy started.")})
+    return Response({"result": "error", "detail": _("The deploy_id is invalid.")})
+    
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def stop_container(request):
+    return Response({"result": "not implemented", "detail": _("Not implemented.")})
+    
 
