@@ -1,3 +1,4 @@
+import docker.errors
 from .client_manager import Client
 import logging
 import tarfile
@@ -95,6 +96,8 @@ class Image(Client):
         self.tag = tag
         self.dockerfile_text = dockerfile_text
         self.tarfile = tarfile
+        self.image_ref = f"{self.name}:{self.tag}" if tag else self.name
+
         
         
     def _iter_build_stream(self, stream):
@@ -310,20 +313,196 @@ class Image(Client):
             raise
 
 
-    def remove(self):
+    
+    def remove(self, force: bool = False) -> bool:
+      
         try:
-            image_ref = f"{self.name}:{self.tag}"
             try:
-                image = self.client.images.get(image_ref)
+                image = self.client.images.get(self.image_ref)
             except ImageNotFound:
-                logger.info(f"Image '{image_ref}' not found")
-                return False
-
-            # attempt remove
-            image.remove()
-            logger.info(f"Image '{image_ref}' deleted successfully")
-            return True
-
+                logger.debug(f"Image '{self.image_ref}' not found (nothing to remove)")
+                return True  
+            
+            image_id_short = image.id[:12] if hasattr(image, 'id') else 'unknown'
+            
+            try:
+                self.client.images.remove(self.image_ref, force=force)
+                logger.info(f"Image '{self.image_ref}' (ID: {image_id_short}) removed successfully")
+                return True
+                
+            except docker.errors.APIError as e:
+                if "referenced in multiple repositories" in str(e):
+                    logger.warning(f"Image '{self.image_ref}' has multiple tags ({image.tags})")
+                    
+                    if force:
+                        self.client.images.remove(self.image_ref, force=True)
+                        logger.info(f"Image '{self.image_ref}' force removed")
+                        return True
+                    else:
+                        logger.info(f"Only removing tag '{self.image_ref}' from image")
+                        self.client.images.remove(self.image_ref)
+                        return True
+                
+                logger.error(f"Docker API error removing '{self.image_ref}': {e}")
+                raise
+            
         except Exception as e:
-            logger.error(f"Failed to remove image '{self.name}' : {e}")
-            raise
+            logger.error(f"Unexpected error removing image '{self.image_ref}': {e}")
+            return False
+    
+    def remove_all(self, 
+                   force: bool = False, 
+                   keep_latest: bool = False,
+                   keep_tags= None) -> dict:
+      
+        stats = {
+            'total_found': 0,
+            'removed': 0,
+            'skipped': 0,
+            'failed': 0,
+            'kept': []
+        }
+        
+        try:
+            try:
+                images = self.client.images.list(name=self.name)
+                
+                if not images:
+                    all_images = self.client.images.list()
+                    images = [img for img in all_images 
+                             if any(self.name in tag for tag in img.tags)]
+                
+                stats['total_found'] = len(images)
+                
+                if not images:
+                    logger.info(f"No images found with name '{self.name}'")
+                    return stats
+                    
+            except Exception as e:
+                logger.error(f"Error listing images: {e}")
+                return stats
+            
+            images_sorted = sorted(
+                images,
+                key=lambda x: x.attrs.get('Created', ''),
+                reverse=True
+            )
+            
+            keep_tags = keep_tags or []
+            if keep_latest and images_sorted:
+                latest_tags = images_sorted[0].tags
+                keep_tags.extend(latest_tags)
+            
+            for i, image in enumerate(images_sorted):
+                should_keep = False
+                
+                for tag in image.tags:
+                    if tag in keep_tags:
+                        should_keep = True
+                        stats['kept'].append(tag)
+                        break
+                
+                if should_keep:
+                    stats['skipped'] += 1
+                    logger.debug(f"Skipping image with tags: {image.tags}")
+                    continue
+                
+                image_removed = self._remove_image_with_tags(image, force)
+                
+                if image_removed:
+                    stats['removed'] += 1
+                else:
+                    stats['failed'] += 1
+            
+            logger.info(f"Remove all completed for '{self.name}': "
+                       f"{stats['removed']} removed, "
+                       f"{stats['skipped']} skipped, "
+                       f"{stats['failed']} failed, "
+                       f"{len(stats['kept'])} kept")
+            
+            return stats
+            
+        except Exception as e:
+            logger.error(f"Error in remove_all for '{self.name}': {e}")
+            return stats
+    
+    def _remove_image_with_tags(self, image, force: bool = False) -> bool:
+
+        image_id = image.id[:12] if hasattr(image, 'id') else 'unknown'
+        
+        try:
+            for tag in image.tags:
+                try:
+                    self.client.images.remove(tag, force=force)
+                    logger.debug(f"Removed tag: {tag}")
+                except docker.errors.APIError as e:
+                    if "referenced in multiple repositories" in str(e):
+                        self.client.images.remove(tag, force=True)
+                        logger.debug(f"Force removed tag: {tag}")
+                    else:
+                        logger.warning(f"Could not remove tag '{tag}': {e}")
+            
+            try:
+                self.client.images.remove(image.id, force=True)
+                logger.debug(f"Removed image ID: {image_id}")
+            except Exception as e:
+                logger.debug(f"Image ID {image_id} might already be removed: {e}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to remove image with ID {image_id}: {e}")
+            return False
+    
+    def list_all(self):
+       
+        try:
+            images = self.client.images.list(name=self.name)
+            
+            result = []
+            for img in images:
+                result.append({
+                    'id': img.id[:12],
+                    'tags': img.tags,
+                    'created': img.attrs.get('Created', ''),
+                    'size': img.attrs.get('Size', 0),
+                    'virtual_size': img.attrs.get('VirtualSize', 0)
+                })
+            
+            result.sort(key=lambda x: x['created'], reverse=True)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error listing images for '{self.name}': {e}")
+            return []
+    
+    def exists(self) -> bool:
+        try:
+            if self.tag:
+                self.client.images.get(f"{self.name}:{self.tag}")
+            else:
+                images = self.client.images.list(name=self.name)
+                return len(images) > 0
+            return True
+        except ImageNotFound:
+            return False
+    
+    def get_image_info(self):
+        try:
+            if not self.tag:
+                return None
+                
+            image = self.client.images.get(f"{self.name}:{self.tag}")
+            return {
+                'id': image.id,
+                'tags': image.tags,
+                'created': image.attrs.get('Created', ''),
+                'size': image.attrs.get('Size', 0),
+                'virtual_size': image.attrs.get('VirtualSize', 0),
+                'labels': image.attrs.get('Labels', {}),
+                'architecture': image.attrs.get('Architecture', '')
+            }
+        except ImageNotFound:
+            return None
+    
