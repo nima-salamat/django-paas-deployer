@@ -113,9 +113,9 @@ class Deploy:
         container = Container(self.name, image_name, self.max_cpu, self.max_ram, [i[0] for i in self.networks], self.volumes, self.read_only)
         
         if Container.container_is_running(self.name):
-            if Container.container_is_running(self.name):
-                container.stop()
+            container.stop()
             container.remove()
+
         if image.check_exists(image_name):
             image.remove()
         try:
