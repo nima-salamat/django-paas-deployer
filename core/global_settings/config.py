@@ -110,8 +110,8 @@ class PaymentChoices(models.TextChoices):
     CANCELED = "CANCELED"
     
     
-class DEPLOY_STATUS_CHOICES(models.TextChoices):
-    CREATED = "created", _("created")
+class SERVICE_STATUS_CHOICES(models.TextChoices):
+    STOPPED = "stopped", _("stopped")
     QUEUED = "queued", _("queued")
     DEPLOYING = "deploying", _("deploying")
     FAILED = "failed", _("failed")

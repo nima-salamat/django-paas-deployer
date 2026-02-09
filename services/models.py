@@ -3,6 +3,8 @@ from django.utils.translation import gettext_lazy as _
 from plans.models import Plan
 from users.models import User
 from core.base.BaseModel import BaseModel
+from core.global_settings.config import SERVICE_STATUS_CHOICES
+
 
 class PrivateNetwork(BaseModel):
     name = models.CharField(_("Name"), max_length=50)
@@ -41,6 +43,7 @@ class Service(BaseModel):
     )
     
     selected_deploy = models.OneToOneField("deploy.Deploy", verbose_name=_("Selected Deploy"), on_delete=models.SET_NULL, null=True, related_name='+')
+    status = models.CharField(_("Deploy Status"), choices=SERVICE_STATUS_CHOICES.choices, default=SERVICE_STATUS_CHOICES.STOPPED)
 
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)

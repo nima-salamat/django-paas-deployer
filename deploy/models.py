@@ -4,7 +4,6 @@ from core.base.BaseModel import BaseModel
 from services.models import Service
 from django.utils.translation import gettext_lazy as _
 import os
-from core.global_settings.config import DEPLOY_STATUS_CHOICES
 
 
 def zip_file_path(instance, filename):
@@ -18,7 +17,6 @@ class Deploy(BaseModel):
     version = models.DecimalField(_("Version"), max_digits=5, decimal_places=2, default=0.00, help_text=_("Deployment version, e.g., 1.0"))
     zip_file = models.FileField(verbose_name=_("ZIP File"), upload_to=zip_file_path, blank=True, null=True)
     config = models.JSONField(verbose_name=_("Configuration"), blank=True, null=True)
-    status = models.CharField(_("Deploy Status"), choices=DEPLOY_STATUS_CHOICES.choices, default=DEPLOY_STATUS_CHOICES.CREATED)
     started_at = models.DateTimeField(verbose_name=_("Start Time"), blank=True, null=True, editable=False)
 
     MAX_ZIP_SIZE_MB = 10
