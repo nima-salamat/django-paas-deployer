@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 class Container(Client):
     def __init__(self, name: str, image_name: str, max_cpu: float, max_ram: int, networks: list,
                  volumes: dict = None, read_only: bool = True, command: str = None, environment: dict = None,
-                 exposed_ports: dict = None, port_bindings: dict = None):
+                 exposed_ports: dict = None, port_bindings: dict = None, entry_port=None):
         super().__init__()
         self.name = name
         self.image_name = image_name
@@ -20,6 +20,7 @@ class Container(Client):
         self.environment = environment or {}
         self.exposed_ports = exposed_ports or {}
         self.port_bindings = port_bindings or {}
+        self.entry_port = entry_port
         if not self.networks:
             raise ValueError("At least one network is required to create a container.")
 
@@ -37,6 +38,20 @@ class Container(Client):
             endpoints_config = {net: {} for net in self.networks}
             networking_config = self.client.api.create_networking_config(endpoints_config)
             # Create container
+            labels = {
+                "traefik.enable": "true",
+                "traefik.docker.network": "proxy_net",
+                # Router
+                f"traefik.http.routers.{self.name}.rule":
+                    f"Host(`{self.name}.local`)",
+                f"traefik.http.routers.{self.name}.entrypoints": "web",
+                f"traefik.http.routers.{self.name}.service": self.name,
+
+                # Service
+                f"traefik.http.services.{self.name}.loadbalancer.server.port":
+                    str(self.entry_port),
+            }
+
             container = self.client.api.create_container(
                 name=self.name,
                 image=self.image_name,
@@ -45,6 +60,8 @@ class Container(Client):
                 host_config=host_config,
                 networking_config=networking_config,
                 ports=self.exposed_ports, 
+                labels=labels,
+                
             )
             logger.info(f"Service '{self.name}' created from image '{self.image_name}' on networks {self.networks}")
             return container
@@ -56,33 +73,34 @@ class Container(Client):
         try:
             container = self.client.containers.get(self.name)
             container.start()
-            logger.info(f"Service '{self.name}' started successfully")
-        except Exception as e:
-            logger.error(f"Failed to start container '{self.name}': {e}")
+            container.reload()
+            logger.info("Service '%s' started; status=%s", self.name, container.status)
+        except docker.errors.NotFound:
+            logger.error("Container %s not found on start()", self.name)
             raise
-        
+        except Exception:
+            logger.exception("Failed to start container %s", self.name)
+            raise
+
     def stop(self, timeout=5):
         try:
             container = self.client.containers.get(self.name)
-
-            if container.status != "running":
-                logger.info(f"Service '{self.name}' is not running (status={container.status})")
-                return
-
-            container.stop(timeout=timeout)
-            logger.info(f"Service '{self.name}' stopped successfully")
-
         except docker.errors.NotFound:
-            # idempotent behavior
-            logger.info(f"Service '{self.name}' does not exist, nothing to stop")
+            logger.info("Service '%s' does not exist, nothing to stop", self.name)
+            return
 
-        except docker.errors.APIError as e:
-            logger.error(f"Docker API error while stopping container '{self.name}': {e}")
+        try:
+            if container.status != "running":
+                logger.info("Service '%s' is not running (status=%s)", self.name, container.status)
+                return
+            container.stop(timeout=timeout)
+            logger.info("Service '%s' stopped successfully", self.name)
+        except docker.errors.APIError:
+            logger.exception("Docker API error while stopping container '%s'", self.name)
             raise
 
-        except Exception as e:
-            logger.exception(f"Unexpected error while stopping container '{self.name}'")
-            raise
+    
+
         
     @classmethod
     def container_is_running(cls, container_name: str) -> bool:
@@ -100,15 +118,17 @@ class Container(Client):
 
     def remove(self):
         try:
-            if container := self.client.containers.get(self.name):
-                container.remove(force=True)
-                logger.info(f"Service '{self.name}' deleted successfully")
-            else:
-                logger.info(f"Service '{self.name}' not found")
+            container = self.client.containers.get(self.name)
+        except docker.errors.NotFound:
+            logger.info("Service '%s' not found (nothing to remove)", self.name)
             return True
-        except Exception as e:
-            logger.error(f"Failed to remove container '{self.name}': {e}")
-            raise
+        try:
+            container.remove(force=True)
+            logger.info("Service '%s' deleted successfully", self.name)
+            return True
+        except Exception:
+            logger.exception("Failed to remove container '%s'", self.name)
+            return False
         
     def exists(self) -> bool:
         """
