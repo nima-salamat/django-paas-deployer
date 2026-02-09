@@ -11,7 +11,6 @@ class DeploySerializer(serializers.ModelSerializer):
             "version",
             "zip_file",
             "config",
-            "running",
             "started_at",
             "created_at",
             "updated_at",

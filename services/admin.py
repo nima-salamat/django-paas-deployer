@@ -24,7 +24,7 @@ class PrivateNetworkAdmin(admin.ModelAdmin):
 
 @admin.register(Service)
 class ServiceAdmin(admin.ModelAdmin):
-    list_display = ("id", "name", "user", "plan", "network")
+    list_display = ("id", "name", "user", "plan", "network", "selected_deploy")
     list_display_links = ("id", "name")
     search_fields = ("name", "user__username", "user__email", "plan__name", "network__name")
     list_filter = ("plan", "network")

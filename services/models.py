@@ -17,7 +17,6 @@ class PrivateNetwork(BaseModel):
         return self.name
 
 
-
 class Service(BaseModel):
     name = models.CharField(_("Name"), max_length=30, unique=True)
     user = models.ForeignKey(
@@ -40,7 +39,8 @@ class Service(BaseModel):
         # blank=True,
         related_name="Service"
     )
-
+    
+    selected_deploy = models.OneToOneField("deploy.Deploy", verbose_name=_("Selected Deploy"), on_delete=models.SET_NULL, null=True, related_name='+')
 
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
