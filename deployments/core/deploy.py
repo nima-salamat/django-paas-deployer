@@ -1,14 +1,17 @@
 import tarfile
+import logging
 from deployments.core.converter import convert_zip_to_tar
 from deployments.core.manager.image_manager import Image
 from deployments.core.manager.container_manager import Container
 from deployments.core.manager.network_manager import Network
 from deployments.core.manager.client_manager import Client
-import docker
+from docker.errors import NotFound, APIError, DockerException
+
 import os
 import re
 import time
-
+import tempfile
+logger = logging.getLogger()
 
 
 def django_read_settings_module_from_tar(tar):
@@ -79,6 +82,13 @@ def django_find_entrypoint_from_settings(tar):
 
     return None
 
+def _get_docker_client():
+    try:
+        return Client()()
+    except DockerException:
+        logger.exception("Failed to create docker client from environment.")
+        raise
+
 
 class Deploy:
     def __init__(self,name, tag, zip_filename, dockerfile_text, max_cpu, max_ram, networks, volumes, port, read_only, platform):
@@ -112,8 +122,7 @@ class Deploy:
         
         image_name = f"{self.name}:{self.tag}"
         image = Image(self.name, self.tag, self.dockerfile_text, tar_stream)
-        container = Container(self.name, image_name, self.max_cpu, self.max_ram, [i[0] for i in self.networks], self.volumes, self.read_only)
-        
+        container = Container(self.name, image_name, self.max_cpu, self.max_ram, [i[0] for i in self.networks], self.volumes, self.read_only, entry_port=self.port)
 
         TIMEOUT = 10
         INTERVAL = 0.2 
@@ -136,7 +145,6 @@ class Deploy:
         except:
             image.remove()
             return
-        
         for network_name, driver in self.networks:            
             if not Network.network_exists(network_name):
                 network = Network(network_name, driver)
@@ -150,115 +158,135 @@ class Deploy:
         
         container.start()
         try:
-            self.setup_nginx()
+            self.connect_proxy_net()
         except:
-            self.remove_nginx_setup()
+            self.disconnect_proxy_net()
             container.remove()
 
-    def setup_nginx(self):
+    def connect_proxy_net(self, proxy_network: str = "proxy_net", create_if_missing: bool = False) -> None:
         """
-        Connect deployed container to nginx network if needed,
-        create nginx conf, and reload nginx.
+        Connect self.name (container name or id) to proxy_network if not already connected.
+        If create_if_missing is True, attempt to create the network when missing.
         """
-        client = Client()()
-        nginx_container_name = "nginx"
-        proxy_network = "proxy_net"
-        conf_dir = "/etc/nginx/conf.d" 
-
-        # Connect container to proxy network if not already
-        for network_name, _ in self.networks:
-            if network_name == proxy_network:
-                break
-        else:
-            # Connect container to proxy_net
-            try:
-                network = client.networks.get(proxy_network)
-                network.connect(self.name)
-                print(f"Connected container '{self.name}' to network '{proxy_network}'")
-            except docker.errors.NotFound:
-                print(f"Network '{proxy_network}' not found, skipping connection.")
-            except Exception as e:
-                print(f"Failed to connect container to network: {e}")
-
-        # Create nginx conf for this app
-        conf_filename = f"{self.name}.conf"
-        conf_content = f"""
-            server {{
-                listen 80;
-                server_name {self.name}.local;
-
-                location / {{
-                    proxy_pass http://{self.name}:{self.port};
-                    proxy_set_header Host $host;
-                    proxy_set_header X-Real-IP $remote_addr;
-                }}
-            }}
-            """
         try:
-            # Copy conf into nginx container
-            container = client.containers.get(nginx_container_name)
-            tmpfile = f"/tmp/{conf_filename}"
-            with open(tmpfile, "w") as f:
-                f.write(conf_content)
+            client = _get_docker_client()
+        except Exception:
+            # client creation failed and already logged
+            return
 
-            # Use docker cp to copy into nginx
-            os.system(f"docker cp {tmpfile} {nginx_container_name}:{conf_dir}/{conf_filename}")
-            os.remove(tmpfile)
-
-            # Reload nginx
-            container.exec_run("nginx -t && nginx -s reload")
-            print(f"Nginx config for '{self.name}' created and nginx reloaded.")
-        except Exception as e:
-            print(f"Failed to setup nginx: {e}")
-                
-    
-    def remove_nginx_setup(self):
-        """
-        Remove nginx configuration for this deployed container
-        and reload nginx.
-        """
-        client = Client()()
-        nginx_container_name = "nginx"
-        proxy_network = "proxy_net"
-        conf_dir = "/etc/nginx/conf.d"
-        conf_filename = f"{self.name}.conf"
-
+        # ensure container exists
         try:
-            container = client.containers.get(nginx_container_name)
+            container = client.containers.get(self.name)
+        except NotFound:
+            logger.warning("Container '%s' not found locally; skipping network connect.", self.name)
+            return
+        except APIError as e:
+            logger.exception("Docker API error while getting container '%s': %s", self.name, e)
+            return
 
-            # Remove the nginx conf file
-            exit_code, _ = container.exec_run(f"rm -f {conf_dir}/{conf_filename}")
-            if exit_code == 0:
-                print(f"Nginx config for '{self.name}' removed.")
+        # ensure network exists (or create if requested)
+        try:
+            network = client.networks.get(proxy_network)
+        except NotFound:
+            if create_if_missing:
+                try:
+                    network = client.networks.create(proxy_network, check_duplicate=True)
+                    logger.info("Created network '%s'.", proxy_network)
+                except APIError as e:
+                    logger.exception("Failed to create network '%s': %s", proxy_network, e)
+                    return
             else:
-                print(f"Failed to remove nginx config for '{self.name}'")
+                logger.info("Network '%s' not found, skipping connection.", proxy_network)
+                return
+        except APIError as e:
+            logger.exception("Docker API error while getting network '%s': %s", proxy_network, e)
+            return
 
-            # Reload nginx
-            container.exec_run("nginx -t && nginx -s reload")
-            print("Nginx reloaded after removing config.")
+        # check membership using inspect (more robust)
+        try:
+            # network.attrs sometimes stale; use low-level inspect for consistent structure
+            net_info = client.api.inspect_network(network.id if hasattr(network, "id") else proxy_network)
+            containers_in_net = net_info.get("Containers") or {}
+            already_connected = False
+            for cid, info in containers_in_net.items():
+                # compare by id (full or short) or by name
+                if cid == container.id or info.get("Name") in (container.name, self.name):
+                    already_connected = True
+                    break
 
-            # Disconnect container from proxy network
+            if already_connected:
+                logger.info("Container '%s' already connected to network '%s'.", self.name, proxy_network)
+                return
+
+            # not connected -> try to connect
             try:
-                network = client.networks.get(proxy_network)
-                network.disconnect(self.name)
-                print(f"Container '{self.name}' disconnected from network '{proxy_network}'")
-            except docker.errors.NotFound:
-                print(f"Network '{proxy_network}' not found, skipping disconnect.")
-            except Exception as e:
-                print(f"Failed to disconnect container from network: {e}")
-
+                # network.connect accepts container id/name
+                network.connect(container.id)
+                logger.info("Connected container '%s' to network '%s'.", self.name, proxy_network)
+            except APIError as e:
+                # 409 or similar may indicate already-connected race; log and continue
+                logger.exception("Failed to connect container '%s' to network '%s': %s", self.name, proxy_network, e)
+        except APIError as e:
+            logger.exception("Error inspecting network '%s' before connect: %s", proxy_network, e)
         except Exception as e:
-            print(f"Failed to remove nginx setup for '{self.name}': {e}")
+            logger.exception("Unexpected error during connect_proxy_net: %s", e)
+
+
+    def disconnect_proxy_net(self, proxy_network: str = "proxy_net", force: bool = False) -> None:
+        """
+        Disconnect self.name (container name or id) from proxy_network.
+        If force=True, attempt forced disconnect.
+        """
+        try:
+            client = _get_docker_client()
+        except Exception:
+            return
+
+        # get network
+        try:
+            network = client.networks.get(proxy_network)
+        except NotFound:
+            logger.info("Network '%s' not found, skipping disconnect.", proxy_network)
+            return
+        except APIError as e:
+            logger.exception("Docker API error while getting network '%s': %s", proxy_network, e)
+            return
+
+        # try to disconnect; network.disconnect accepts name/id even if the container object isn't local
+        try:
+            network.disconnect(self.name, force=force)
+            logger.info("Container '%s' disconnected from network '%s'.", self.name, proxy_network)
+        except APIError as e:
+            # if container not attached this can raise; just log
+            logger.exception("Could not disconnect '%s' from '%s': %s", self.name, proxy_network, e)
+        except Exception as e:
+            logger.exception("Unexpected error during disconnect_proxy_net: %s", e)
 
     @classmethod
-    def remove_all(cls,name):
-        c=Container(name, None, None, None, [(None, None)])
-        c.stop()
-        c.remove()
-        i=Image(name, None)
-        i.remove_all(force=True)
-        
-        cls(name, *([None]*10)).remove_nginx_setup()
+    def remove_all(cls, name):
+        # prefer using safe defaults
+        c = Container(name)  # rely on Container default args
+        try:
+            c.stop()
+        except Exception:
+            logger.exception("Error stopping container %s during remove_all", name)
+        try:
+            c.remove()
+        except Exception:
+            logger.exception("Error removing container %s during remove_all", name)
+
+        i = Image(name, tag=None)
+        try:
+            i.remove_all(force=True)
+        except Exception:
+            logger.exception("Error removing images for %s", name)
+
+        # disconnect proxy network safely
+        try:
+            cls(name, tag=None, zip_filename=None, dockerfile_text=None, max_cpu=None, max_ram=None, networks=[], volumes=None, port=None, read_only=None, platform=None).disconnect_proxy_net()
+        except Exception:
+            logger.exception("Error disconnecting proxy_net for %s", name)
+
     
     @classmethod
     def stop_container(cls, name):
