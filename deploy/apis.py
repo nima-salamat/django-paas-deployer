@@ -89,14 +89,14 @@ def deploy_name_is_available(request):
 def start_container(request):
     deploy_id = request.data.get("deploy_id", "")
     
-
-    
     if Deploy.objects.filter(id=deploy_id).exists():
-            deploy_item = Deploy.objects.get(id=deploy_id)
+            deploy_item = Deploy.objects.prefetch_related("service").get(id=deploy_id)
+            if deploy_item.service.user != request.user:
+                    return Response({"result": "error", "detail": _("Only owner can run the service.")})
+                
             for item in Deploy.objects.filter(service=deploy_item.service):
                 if item.running:
                     return Response({"result": "error", "detail": _("Only one container can be in running mode.")})
-                    
                     
             deploy.delay(deploy_id)
             return Response({"result": "success", "detail": _("Deploy started.")})
@@ -109,6 +109,9 @@ def start_container(request):
 def stop_container(request):
     deploy_id = request.data.get("deploy_id", "")
     if Deploy.objects.filter(id=deploy_id).exists():
+            deploy_item = Deploy.objects.prefetch_related("service").get(id=deploy_id)
+            if deploy_item.service.user != request.user:
+                    return Response({"result": "error", "detail": _("Only owner can stop the service.")})
             stop.delay(deploy_id)
             return Response({"result": "success", "detail": _("Deploy stopped.")})
     return Response({"result": "error", "detail": _("The deploy_id is invalid.")})
