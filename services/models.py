@@ -3,6 +3,7 @@ from django.utils.translation import gettext_lazy as _
 from plans.models import Plan
 from users.models import User
 from core.base.BaseModel import BaseModel
+from core.global_settings.config import VOLUME_MODE_CHOICES
 
 class PrivateNetwork(BaseModel):
     name = models.CharField(_("Name"), max_length=50)
@@ -59,7 +60,7 @@ class Volume(BaseModel):
     )
     service = models.ForeignKey(Service, verbose_name=_("Service"), related_name="volumes", on_delete=models.CASCADE)
     bind = models.CharField(_("Bind Directory"), max_length=255)
-    mode = models.CharField(_("Mode Directory"), max_length=255)
+    mode = models.CharField(_("Mode Directory"), max_length=255, choices=VOLUME_MODE_CHOICES.choices, default=VOLUME_MODE_CHOICES.READ_WRITE)
     size_mb = models.PositiveIntegerField()
     
     class Meta:
