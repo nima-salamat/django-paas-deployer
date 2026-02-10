@@ -116,6 +116,7 @@ class SERVICE_STATUS_CHOICES(models.TextChoices):
     DEPLOYING = "deploying", _("deploying")
     FAILED = "failed", _("failed")
     SUCCEEDED = "succeeded", _("succeeded")
+    STOPPING = "stopping", _("stopping")
     
 
 
