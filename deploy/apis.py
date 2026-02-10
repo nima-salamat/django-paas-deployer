@@ -7,11 +7,13 @@ from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
 from django.utils.translation import gettext as _
+from django.db import transaction
 from .models import Deploy
 from services.models import Service
 from .serializers import DeploySerializer
-from deployments.tasks.deploy import deploy, stop
-
+from deployments.tasks.deploy import deploy as start_service
+from deployments.tasks.deploy import deploy as stop_service
+from core.global_settings.config import SERVICE_STATUS_CHOICES
 
 
 class DeployPagination(PageNumberPagination):
@@ -86,35 +88,143 @@ def deploy_name_is_available(request):
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
-def start_container(request):
-    deploy_id = request.data.get("deploy_id", "")
-    
-    if Deploy.objects.filter(id=deploy_id).exists():
-            deploy_item = Deploy.objects.prefetch_related("service").get(id=deploy_id)
+def set_deploy_apiview(request):
+    deploy_id = request.data.get("deploy_id")
+    service_id = request.data.get("service_id")
+
+    try:
+        with transaction.atomic():
+            service_item = Service.objects.select_for_update().get(
+                id=service_id,
+                user=request.user
+            )
+
+            if service_item.status in (
+                SERVICE_STATUS_CHOICES.QUEUED,
+                SERVICE_STATUS_CHOICES.DEPLOYING,
+                SERVICE_STATUS_CHOICES.STOPPING,
+            ):
+                return Response(
+                    {
+                        "result": "error",
+                        "detail": _("You can't select deploy in (queued, deploying, stopping) modes."),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            deploy_item = Deploy.objects.select_related("service").get(id=deploy_id)
+
             if deploy_item.service.user != request.user:
-                    return Response({"result": "error", "detail": _("Only owner can run the service.")})
-                
-            for item in Deploy.objects.filter(service=deploy_item.service):
-                if item.running:
-                    return Response({"result": "error", "detail": _("Only one container can be in running mode.")})
-                    
-            deploy.delay(deploy_id)
-            return Response({"result": "success", "detail": _("Deploy started.")})
-    return Response({"result": "error", "detail": _("The deploy_id is invalid.")})
-    
+                return Response(
+                    {
+                        "result": "error",
+                        "detail": _("Only owner can select deploy."),
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            service_item.selected_deploy = deploy_item
+            service_item.save()
+
+    except Service.DoesNotExist:
+        return Response(
+            {
+                "result": "error",
+                "detail": _("Service not found."),
+            },
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    except Deploy.DoesNotExist:
+        return Response(
+            {
+                "result": "error",
+                "detail": _("Deploy not found."),
+            },
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    return Response(
+        {
+            "result": "success",
+            "detail": _(f"Deploy {deploy_item.name} selected."),
+        },
+        status=status.HTTP_200_OK,
+    )
+
 
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
-def stop_container(request):
-    deploy_id = request.data.get("deploy_id", "")
-    if Deploy.objects.filter(id=deploy_id).exists():
-            deploy_item = Deploy.objects.prefetch_related("service").get(id=deploy_id)
-            if deploy_item.service.user != request.user:
-                    return Response({"result": "error", "detail": _("Only owner can stop the service.")})
-            stop.delay(deploy_id)
-            return Response({"result": "success", "detail": _("Deploy stopped.")})
-    return Response({"result": "error", "detail": _("The deploy_id is invalid.")})
-    
-    
+def unset_deploy_apiview(request):
+    deploy_id = request.data.get("deploy_id")
+    service_id = request.data.get("service_id")
 
+    try:
+        with transaction.atomic():
+            service_item = Service.objects.select_for_update().get(
+                id=service_id,
+                user=request.user
+            )
+
+            if service_item.status in (
+                SERVICE_STATUS_CHOICES.QUEUED,
+                SERVICE_STATUS_CHOICES.DEPLOYING,
+                SERVICE_STATUS_CHOICES.STOPPING,
+            ):
+                return Response(
+                    {
+                        "result": "error",
+                        "detail": _("You can't unselect deploy in (queued, deploying, stopping) modes."),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            deploy_item = Deploy.objects.select_related("service").get(id=deploy_id)
+
+            if deploy_item.service.user != request.user:
+                return Response(
+                    {
+                        "result": "error",
+                        "detail": _("Only owner can unselect deploy."),
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            if service_item.selected_deploy_id != deploy_item.id:
+                return Response(
+                    {
+                        "result": "error",
+                        "detail": _("This deploy is not selected for the service."),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            service_item.selected_deploy = None
+            service_item.save()
+
+    except Service.DoesNotExist:
+        return Response(
+            {
+                "result": "error",
+                "detail": _("Service not found."),
+            },
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    except Deploy.DoesNotExist:
+        return Response(
+            {
+                "result": "error",
+                "detail": _("Deploy not found."),
+            },
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    return Response(
+        {
+            "result": "success",
+            "detail": _(f"Deploy {deploy_item.name} unselected."),
+        },
+        status=status.HTTP_200_OK,
+    )
