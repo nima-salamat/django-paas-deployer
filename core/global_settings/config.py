@@ -94,6 +94,13 @@ class NameChoices(models.TextChoices):
     GOLD = "Gold", _("Gold")
     DIAMOND = "Diamond", _("Diamond")
 
+
+class VOLUME_MODE_CHOICES(models.TextChoices):
+    READ = "read", _("Read-only")
+    WRITE = "write", _("Write-only")
+    READ_WRITE = "readwrite", _("Read & Write")
+
+    
 COLORS = [
         "#1abc9c","#2ecc71","#3498db", "#9b59b6","#34495e",
         "#16a085", "#27ae60", "#2980b9", "#8e44ad", "#2c3e50",
