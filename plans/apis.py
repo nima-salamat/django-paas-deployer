@@ -8,8 +8,8 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from core.global_settings import config
+from core.utils import is_valid_uuid4
 from django.utils.translation import gettext as _
-import uuid
 
 
 class PlanAdminViewSet(ViewSet):
@@ -85,17 +85,6 @@ class PlatformPlansAPIView(APIView):
         serializer = UnauthorizedPlanSerializer(plans, many=True)
         
         return Response(data=serializer.data, status=status.HTTP_200_OK)
-
-def is_valid_uuid4(text):
-    try:
-        # Convert string to UUID
-        val = uuid.UUID(text, version=4)
-        
-        # Check if it's version 4 (UUID v4 has specific bit pattern)
-        # The version is stored in the 4 most significant bits of byte 6
-        return val.version == 4 and str(val) == text
-    except ValueError:
-        return False
 
 class PlansApiView(APIView):
     def get(self, request):
