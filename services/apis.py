@@ -14,8 +14,10 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from django.utils.translation import gettext_lazy as _
 from deployments.tasks.deploy import deploy as start_service
-from deployments.tasks.deploy import deploy as stop_service
+from deployments.tasks.deploy import stop as stop_service
 from core.global_settings.config import SERVICE_STATUS_CHOICES
+from deployments.core.manager.container_manager import Container
+
 
 
 class ServiceAdminPagination(PageNumberPagination):
@@ -248,7 +250,7 @@ def stop_service_apiview(request):
             
             service_item.status = SERVICE_STATUS_CHOICES.QUEUED
             service_item.save()
-            transaction.on_commit(functools.partial(stop_service.delay, (deploy_item.id)))
+            transaction.on_commit(functools.partial(stop_service.delay, str(deploy_item.id)))
             
     except Service.DoesNotExist:
         return Response(
@@ -265,6 +267,41 @@ def stop_service_apiview(request):
             "detail": _("Service stopped.")
         }, 
         status=status.HTTP_202_ACCEPTED
+    )
+    
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def service_status_apiview(request):
+    service_id = request.data.get("service_id", "")
+    
+    try:
+        service_item = Service.objects.get(
+            id=service_id,
+            user=request.user
+        )
+    except Service.DoesNotExist:
+        return Response(
+            { 
+                "result": "error",
+                "running": False,
+                "detail": _("Service with the ID not found.")
+            }, 
+            status=status.HTTP_404_NOT_FOUND
+        )
+    try:
+        running = Container.container_is_running(service_item.name)
+    
+    except Exception:
+        running = False    
+    detail = _("service is running.") if running else _("service is not running.")
+    return Response(
+        {   "result": "success",
+            "running": running,
+            "detail": detail
+        }, 
+        status=status.HTTP_200_OK
     )
     
     

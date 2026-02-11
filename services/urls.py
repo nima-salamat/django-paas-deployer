@@ -5,7 +5,9 @@ from services.apis import (
     PrivateNetworkViewSet,
     VolumeViewSet,
     start_service_apiview,
-    stop_service_apiview
+    stop_service_apiview,
+    service_status_apiview
+    
 )
 router = DefaultRouter()
 router.register(r'service', ServiceViewSet, basename='service')
@@ -14,6 +16,6 @@ router.register(r'volume', VolumeViewSet, basename='volume')
 
 urlpatterns = router.urls + [
     path("start_service/", start_service_apiview, name="start_service"),
-    path("stop_service/", stop_service_apiview, name="stop_service")
-    
+    path("stop_service/", stop_service_apiview, name="stop_service"),
+    path("service_status/", service_status_apiview, name="service_status"),
 ]
