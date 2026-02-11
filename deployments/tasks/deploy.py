@@ -33,7 +33,7 @@ def deploy(deploy_id):
     except Deploy.DoesNotExist:
         return
 
-    name = deploy_item.service.name
+    name = deploy_item.service.get_docker_service_name()
     platform = deploy_item.service.plan.platform
     port = default_ports.get(platform)
     dockerfile_text = getattr(Config, platform, None)
@@ -88,7 +88,7 @@ def stop(service_id):
     with transaction.atomic():
         service_item = Service.objects.select_for_update().get(id=service_id)
         service_item.status = SERVICE_STATUS_CHOICES.STOPPING
-        name = service_item.name
+        name = service_item.get_docker_service_name()
 
         if Container.container_is_running(name):
             Deployer.stop_container(name)

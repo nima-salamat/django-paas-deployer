@@ -282,7 +282,8 @@ def service_status_apiview(request):
             status=status.HTTP_404_NOT_FOUND
         )
     try:
-        running = Container.container_is_running(service_item.name)
+        name = service_item.get_docker_service_name()
+        running = Container.container_is_running(name)
     
     except Exception:
         running = False    

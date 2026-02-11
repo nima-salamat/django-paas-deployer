@@ -25,8 +25,6 @@ class Service(BaseModel):
         User,
         verbose_name=_("User"),
         on_delete=models.CASCADE,
-        # null=True,
-        # blank=True,
     )
     plan = models.ForeignKey(
         Plan,
@@ -38,7 +36,6 @@ class Service(BaseModel):
         verbose_name=_("Private Network"),
         on_delete=models.SET_NULL,
         null=True,
-        # blank=True,
         related_name="Service"
     )
     
@@ -47,7 +44,10 @@ class Service(BaseModel):
 
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
-
+    
+    def get_docker_service_name(self):
+        return f"local/{self.id.hex[:8]}-{self.name.lower()}"
+    
     def __str__(self):
         return f"Service: {self.name}"
 
