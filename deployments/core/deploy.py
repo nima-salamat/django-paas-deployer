@@ -259,6 +259,9 @@ class Deploy:
         except APIError as e:
             # if container not attached this can raise; just log
             logger.exception("Could not disconnect '%s' from '%s': %s", self.name, proxy_network, e)
+        except NotFound:
+            logger.exception("Could not found container '%s' from '%s': %s", self.name, proxy_network, e)
+            
         except Exception as e:
             logger.exception("Unexpected error during disconnect_proxy_net: %s", e)
 
@@ -270,6 +273,7 @@ class Deploy:
             c.stop()
         except Exception:
             logger.exception("Error stopping container %s during remove_all", name)
+    
         try:
             c.remove()
         except Exception:
@@ -280,12 +284,6 @@ class Deploy:
             i.remove_all(force=True)
         except Exception:
             logger.exception("Error removing images for %s", name)
-
-        # disconnect proxy network safely
-        try:
-            cls(name, tag=None, zip_filename=None, dockerfile_text=None, max_cpu=None, max_ram=None, networks=[], volumes=None, port=None, read_only=None, platform=None).disconnect_proxy_net()
-        except Exception:
-            logger.exception("Error disconnecting proxy_net for %s", name)
 
     
     @classmethod
