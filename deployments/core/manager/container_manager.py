@@ -5,7 +5,7 @@ import docker
 logger = logging.getLogger(__name__)
 
 class Container(Client):
-    def __init__(self, name: str, image_name: str, max_cpu: float, max_ram: int, networks: list,
+    def __init__(self, name: str, image_name: str=None, max_cpu: float=None, max_ram: int=None, networks: list=None,
                  volumes: dict = None, read_only: bool = True, command: str = None, environment: dict = None,
                  exposed_ports: dict = None, port_bindings: dict = None, entry_port=None):
         super().__init__()
@@ -21,8 +21,7 @@ class Container(Client):
         self.exposed_ports = exposed_ports or {}
         self.port_bindings = port_bindings or {}
         self.entry_port = entry_port
-        if not self.networks:
-            raise ValueError("At least one network is required to create a container.")
+        
 
     def create(self):
         try:
