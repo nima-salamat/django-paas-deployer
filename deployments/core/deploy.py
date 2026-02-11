@@ -11,6 +11,7 @@ import os
 import re
 import time
 import tempfile
+import functools
 logger = logging.getLogger()
 
 
@@ -89,6 +90,8 @@ def _get_docker_client():
         logger.exception("Failed to create docker client from environment.")
         raise
 
+class DeployException(Exception):
+    pass
 
 class Deploy:
     def __init__(self,name, tag, zip_filename, dockerfile_text, max_cpu, max_ram, networks, volumes, port, read_only, platform):
@@ -103,65 +106,87 @@ class Deploy:
         self.port = port
         self.read_only = read_only
         self.platform = platform
-
+        self.errors = []
+        
+    @staticmethod
+    def safe_run(func, errors):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                errors.append(e)
+                raise DeployException from e
+        return wrapper
+                
+        
     def deploy(self):
-        tar_stream = convert_zip_to_tar(self.zip_filename)
-        tar_stream.seek(0)
-        
-        if self.platform == "django":
-            entrypoint = None
-            with tarfile.open(fileobj=tar_stream, mode="r:*") as tar:
-                entrypoint = django_find_entrypoint_from_settings(tar)
-            if not entrypoint:
-                print("project name (entrypoint) not found")
-                return
-            project_module = entrypoint["module"]
-            self.dockerfile_text = self.dockerfile_text.format(project_module)
-
-        print(self.dockerfile_text)
-        
-        image_name = f"{self.name}:{self.tag}"
-        image = Image(self.name, self.tag, self.dockerfile_text, tar_stream)
-        container = Container(self.name, image_name, self.max_cpu, self.max_ram, [i[0] for i in self.networks], self.volumes, self.read_only, entry_port=self.port)
-
-        TIMEOUT = 10
-        INTERVAL = 0.2 
-        if container.exists():
-            if Container.container_is_running(self.name):
-                container.stop()
-
-                start = time.time()
-                while Container.container_is_running(self.name):
-                    if time.time() - start > TIMEOUT:
-                        raise TimeoutError("Container did not stop within 3 seconds")
-                    time.sleep(INTERVAL)
-
-            container.remove()
-
-        if image.exists():
-            image.remove_all()
         try:
-            image.create()
-        except:
-            image.remove()
-            return
-        for network_name, driver in self.networks:            
-            if not Network.network_exists(network_name):
-                network = Network(network_name, driver)
-                network.create()
-    
-        try:
-            container.create()
-        except:
-            container.remove()
-            return 
+            _ = lambda func, errors=self.errors: self.safe_run(func,errors)
+            
+            tar_stream = _(convert_zip_to_tar)(self.zip_filename)
+            
+            tar_stream.seek(0)
+            
+            if self.platform == "django":
+                entrypoint = None
+                with tarfile.open(fileobj=tar_stream, mode="r:*") as tar:
+                    entrypoint = django_find_entrypoint_from_settings(tar)
+                if not entrypoint:
+                    logging.info("project name (entrypoint) not found")
+                    raise ValueError("Django project name (entrypoint) not found")
+                project_module = entrypoint["module"]
+                self.dockerfile_text = self.dockerfile_text.format(project_module)
+
+            logging.info(self.dockerfile_text)
+            
+            image_name = f"{self.name}:{self.tag}"
+            image = Image(self.name, self.tag, self.dockerfile_text, tar_stream)
+            container = Container(self.name, image_name, self.max_cpu, self.max_ram, [i[0] for i in self.networks], self.volumes, self.read_only, entry_port=self.port)
+
+            TIMEOUT = 10
+            INTERVAL = 0.2 
+            if _(container.exists)():
+                if _(Container.container_is_running)(self.name):
+                    _(container.stop)()
+
+                    start = time.time()
+                    while _(Container.container_is_running)(self.name):
+                        if time.time() - start > TIMEOUT:
+                            raise TimeoutError("Container did not stop within 3 seconds")
+                        time.sleep(INTERVAL)
+
+                _(container.remove)()
+
+            if _(image.exists)():
+                image.remove_all()
+            
+            _(image.create)()
         
-        container.start()
-        try:
-            self.connect_proxy_net()
-        except:
-            self.disconnect_proxy_net()
-            container.remove()
+            for network_name, driver in self.networks:            
+                if not Network.network_exists(network_name):
+                    network = Network(network_name, driver)
+                    _(network.create)()
+        
+            _(container.create)()
+            
+            _(container.start)()
+            
+            _(self.connect_proxy_net)()
+            
+        except DeployException:
+            pass
+        except Exception as e:
+            self.errors.append(e)
+        finally:
+            if self.errors:
+                self.rollback()
+            return self.errors
+        
+    def rollback(self):
+        Deploy.remove_all(self.name)
+                  
 
     def connect_proxy_net(self, proxy_network: str = "proxy_net", create_if_missing: bool = False) -> None:
         """

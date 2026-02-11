@@ -58,7 +58,9 @@ def deploy(deploy_id):
     )
 
     try:
-        deployer.deploy()
+        errors = deployer.deploy()
+        if errors:
+            raise 
     except Exception as e:
         Deployer.remove_all(name)
         deploy_item.service.status = SERVICE_STATUS_CHOICES.FAILED
