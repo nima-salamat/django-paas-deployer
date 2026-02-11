@@ -226,15 +226,6 @@ def stop_service_apiview(request):
                 id=service_id,
                 user=request.user
             )
-            deploy_item = service_item.selected_deploy
-            if deploy_item is None:
-                return Response(
-                    {
-                        "result": "error",
-                        "detail": _("First select a deploy.")
-                    },
-                    status=status.HTTP_409_CONFLICT
-                )
             
             if service_item.status in (
                 SERVICE_STATUS_CHOICES.QUEUED, 
@@ -250,7 +241,7 @@ def stop_service_apiview(request):
             
             service_item.status = SERVICE_STATUS_CHOICES.QUEUED
             service_item.save()
-            transaction.on_commit(functools.partial(stop_service.delay, str(deploy_item.id)))
+            transaction.on_commit(functools.partial(stop_service.delay, str(service_id)))
             
     except Service.DoesNotExist:
         return Response(

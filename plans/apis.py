@@ -9,6 +9,7 @@ from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from core.global_settings import config
 from django.utils.translation import gettext as _
+import uuid
 
 
 class PlanAdminViewSet(ViewSet):
@@ -85,6 +86,16 @@ class PlatformPlansAPIView(APIView):
         
         return Response(data=serializer.data, status=status.HTTP_200_OK)
 
+def is_valid_uuid4(text):
+    try:
+        # Convert string to UUID
+        val = uuid.UUID(text, version=4)
+        
+        # Check if it's version 4 (UUID v4 has specific bit pattern)
+        # The version is stored in the 4 most significant bits of byte 6
+        return val.version == 4 and str(val) == text
+    except ValueError:
+        return False
 
 class PlansApiView(APIView):
     def get(self, request):
@@ -98,26 +109,30 @@ class PlansApiView(APIView):
             plans = Plan.objects.all().order_by("platform")
         else:
             if "," in ids:
-                all_ids = [int(i) for i in ids.split(",") if i.strip().isdigit()]
+                all_ids = [i for i in ids.split(",") if i and is_valid_uuid4(i)]
                         
-                if not all_ids:
-                    return Response({"error": _("Invalid IDs provided.")}, status=status.HTTP_400_BAD_REQUEST)
-
                 plans = Plan.objects.filter(pk__in=all_ids).order_by("platform")
                 if not plans.exists():
                     return Response(data={"error": _("Plan not found.")}, status=status.HTTP_404_NOT_FOUND)
 
             else:
-                if ids.isdigit():
-                    try:
-                        plan = Plan.objects.get(pk=int(ids))
-                    except Plan.DoesNotExist:
-                        return Response(data={_("error"): _("Plan not found.")}, status=status.HTTP_404_NOT_FOUND)
-            
-                    serializer = PlanSerializer(plan)
-                    return Response(data=serializer.data, status=status.HTTP_200_OK)
+                if not is_valid_uuid4(ids):
+                    return Response(
+                        data={
+                            "error": _("Invalid UUID format."),
+                            "details": _("Please provide a valid UUID v4 format."),
+                            "received_id": ids
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                try:
+                    plan = Plan.objects.get(pk=ids)
+                except Plan.DoesNotExist:
+                    return Response(data={_("error"): _("Plan not found.")}, status=status.HTTP_404_NOT_FOUND)
+        
+                serializer = PlanSerializer(plan)
+                return Response(data=serializer.data, status=status.HTTP_200_OK)
                 
-                return Response({"error": _("Invalid ID format.")}, status=status.HTTP_400_BAD_REQUEST)
 
         paginator = PageNumberPagination()
         paginated_plans = paginator.paginate_queryset(plans, request)
