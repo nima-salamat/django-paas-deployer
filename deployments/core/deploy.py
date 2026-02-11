@@ -109,7 +109,7 @@ class Deploy:
         self.errors = []
         
     @staticmethod
-    def safe_run(func, errors):
+    def safe_run(func, errors, with_raise, custom_exception):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             
@@ -117,13 +117,14 @@ class Deploy:
                 return func(*args, **kwargs)
             except Exception as e:
                 errors.append(e)
-                raise DeployException from e
+                if with_raise:
+                    raise custom_exception from e
         return wrapper
                 
         
     def deploy(self):
         try:
-            _ = lambda func, errors=self.errors: self.safe_run(func,errors)
+            _ = lambda func, errors=self.errors, with_raise=True, custom_exception=DeployException: self.safe_run(func,errors, with_raise, custom_exception)
             
             tar_stream = _(convert_zip_to_tar)(self.zip_filename)
             
@@ -180,6 +181,7 @@ class Deploy:
         except Exception as e:
             self.errors.append(e)
         finally:
+            _(Image.prune_dangline_images, with_raise=False)()
             if self.errors:
                 self.rollback()
             return self.errors

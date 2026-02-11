@@ -506,3 +506,7 @@ class Image(Client):
         except ImageNotFound:
             return None
     
+    @classmethod
+    def prune_dangling_images(cls):
+        client = Client()()
+        client.images.prune(filters={"dangling": True})
