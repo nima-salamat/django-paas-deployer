@@ -46,7 +46,7 @@ class Service(BaseModel):
         super().save(*args, **kwargs)
     
     def get_docker_service_name(self):
-        return f"local/{self.id.hex[:8]}-{self.name.lower()}"
+        return f"{self.id.hex[:8]}-{self.name.lower()}"
     
     def __str__(self):
         return f"Service: {self.name}"
