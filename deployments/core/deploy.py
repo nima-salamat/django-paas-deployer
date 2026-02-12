@@ -181,7 +181,7 @@ class Deploy:
         except Exception as e:
             self.errors.append(e)
         finally:
-            _(Image.prune_dangline_images, with_raise=False)()
+            _(Image.prune_dangling_images, with_raise=False)()
             if self.errors:
                 self.rollback()
             return self.errors
