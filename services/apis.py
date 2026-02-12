@@ -123,8 +123,19 @@ class PrivateNetworkViewSet(ModelViewSet):
     
     def destroy(self, request, pk=None, *args, **kwargs):
         network = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
+        
+        if Service.objects.filter(network=network).exists():
+            return Response(
+                {"result": "error", "detail": _("Cannot delete network with active services.")},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
         network.delete()
-        return Response({"success": _("Private Network deleted.")}, status=status.HTTP_200_OK)
+        return Response(
+            {"success": _("Private Network deleted.")},
+            status=status.HTTP_200_OK
+        )
+
 
 class VolumeViewSet(ModelViewSet):
     queryset = Volume.objects.all()

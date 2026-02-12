@@ -8,7 +8,7 @@ class PrivateNetworkSerializer(serializers.ModelSerializer):
     class Meta:
         model = PrivateNetwork
         fields = "__all__"
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "name", "created_at", "updated_at"]
 
 
 class ServiceSerializer(serializers.ModelSerializer):
