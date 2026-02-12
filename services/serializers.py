@@ -8,15 +8,34 @@ class PrivateNetworkSerializer(serializers.ModelSerializer):
     class Meta:
         model = PrivateNetwork
         fields = "__all__"
-        read_only_fields = ["id", "name", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at"]
+        extra_kwargs = {
+            "name" : {"required": True, "allow_blank": False},
+        }
 
+    def get_fields(self):
+            fields = super().get_fields()
+            if self.instance:
+                fields["name"].read_only = True
 
+            return fields   
+        
 class ServiceSerializer(serializers.ModelSerializer):
+
     class Meta:
         model = Service
         fields = "__all__"
-        read_only_fields = ["id", "name", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at"]
+        extra_kwargs = {
+            "name": {"required": True, "allow_blank": False},
+        }
 
+    def get_fields(self):
+        fields = super().get_fields()
+        if self.instance:
+            fields["name"].read_only = True
+
+        return fields
 
 class GetServiceSerializer(serializers.ModelSerializer):
     id = serializers.CharField(source="pk", read_only=True)
@@ -33,5 +52,14 @@ class VolumeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Volume
         fields = "__all__"
-        read_only_fields = ["id", "name", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at"]
+        extra_kwargs = {
+            "name" : {"required": True, "allow_blank": False},
+        }
         
+    def get_fields(self):
+        fields = super().get_fields()
+        if self.instance:
+            fields["name"].read_only = True
+
+        return fields
