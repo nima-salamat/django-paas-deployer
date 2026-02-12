@@ -76,8 +76,15 @@ class ServiceViewSet(ModelViewSet):
 
     def destroy(self, request, pk=None, *args, **kwargs):
         service = get_object_or_404(self.get_queryset(), pk=pk)
+        if service.status in (
+            SERVICE_STATUS_CHOICES.QUEUED,
+            SERVICE_STATUS_CHOICES.DEPLOYING,
+            SERVICE_STATUS_CHOICES.STOPPING
+        ):
+            return Response({"result":"error", "detail":_(f"Service is in '{service.status}' mode.")}, status=status.HTTP_409_CONFLICT)
+        
         service.delete()
-        return Response({"success": ("Service deleted.")}, status=status.HTTP_200_OK)
+        return Response({"success": _("Service deleted.")}, status=status.HTTP_200_OK)
 
 
 class PrivateNetworkViewSet(ModelViewSet):
