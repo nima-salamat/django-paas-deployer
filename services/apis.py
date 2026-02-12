@@ -170,10 +170,11 @@ class VolumeViewSet(ModelViewSet):
             return Response({"success": _("Volume updated.")}, status=status.HTTP_200_OK)
         return Response({"error": _("Can not update Volume"), "errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
-    def destroy(self, request, pk=None, *args, **kwargs):
-        volume = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
-        volume.delete()
-        return Response({"success": _("Volume deleted.")}, status=status.HTTP_200_OK)
+    # def destroy(self, request, pk=None, *args, **kwargs):
+        
+    #     volume = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
+    #     volume.delete()
+    #     return Response({"success": _("Volume deleted.")}, status=status.HTTP_200_OK)
 
 
 @api_view(["POST"])
