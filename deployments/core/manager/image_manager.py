@@ -97,8 +97,9 @@ class Image(Client):
         self.dockerfile_text = dockerfile_text
         self.tarfile = tarfile
         self.image_ref = f"{self.name}:{self.tag}" if tag else self.name
+        if not self.name or not isinstance(self.name, str):
+            raise ValueError("Image name must not be empty")
 
-        
         
     def _iter_build_stream(self, stream):
         """
