@@ -20,25 +20,29 @@ ALLOWED_HOSTS = ["*", "localhost", "127.0.0.1"]
 
 
 # Application definition
-
 INSTALLED_APPS = [
-    'corsheaders',
+    # ASGI
+    "daphne",
+    "channels",
 
-    'django.contrib.admin',
-    'django.contrib.auth',
-    'django.contrib.contenttypes',
-    'django.contrib.sessions',
-    'django.contrib.messages',
-    'django.contrib.staticfiles',
+    # Django core
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
 
-    # third parties
+    # Third party
+    "corsheaders",
     "phonenumber_field",
     "rest_framework",
     "rest_framework_simplejwt",
     "django_celery_results",
     "django_celery_beat",
+    "django_bootstrap5",
 
-    # apps
+    # Local apps
     "users",
     "auth_users",
     "plans",
@@ -46,8 +50,8 @@ INSTALLED_APPS = [
     "deployments",
     "services",
     "core",
-    'django_bootstrap5',
-    ]
+]
+
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
@@ -79,8 +83,8 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'wsgi.application'
-
+# WSGI_APPLICATION = 'wsgi.application'
+ASGI_APPLICATION = "asgi.application"
 
 # Database
 
