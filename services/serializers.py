@@ -21,7 +21,7 @@ class PrivateNetworkSerializer(serializers.ModelSerializer):
             return fields   
         
 class ServiceSerializer(serializers.ModelSerializer):
-
+    service_name = serializers.ReadOnlyField(source="get_service_name")
     class Meta:
         model = Service
         fields = "__all__"
@@ -29,7 +29,7 @@ class ServiceSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             "name": {"required": True, "allow_blank": False},
         }
-
+    
     def get_fields(self):
         fields = super().get_fields()
         if self.instance:

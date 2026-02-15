@@ -47,7 +47,9 @@ class Service(BaseModel):
     
     def get_docker_service_name(self):
         return f"app-{self.id.hex[:8]}-{self.name.lower()}"
-    
+    @property
+    def get_service_name(self):
+        return self.get_docker_service_name()
     def __str__(self):
         return f"Service: {self.name}"
 
