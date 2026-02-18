@@ -1,19 +1,18 @@
+import re
+import time
+import functools
 import tarfile
 import logging
+from docker.errors import NotFound, APIError, DockerException
 from deployments.core.converter import convert_zip_to_tar
 from deployments.core.manager.image_manager import Image
 from deployments.core.manager.container_manager import Container
 from deployments.core.manager.network_manager import Network
 from deployments.core.manager.client_manager import Client
-from docker.errors import NotFound, APIError, DockerException
+from core.global_settings.config import PlanTypeChoices
 
-import os
-import re
-import time
-import tempfile
-import functools
+
 logger = logging.getLogger()
-
 
 def django_read_settings_module_from_tar(tar):
     for m in tar.getmembers():
@@ -94,7 +93,7 @@ class DeployException(Exception):
     pass
 
 class Deploy:
-    def __init__(self,name, tag, zip_filename, dockerfile_text, max_cpu, max_ram, networks, volumes, port, read_only, platform):
+    def __init__(self,name, tag, zip_filename, dockerfile_text, max_cpu, max_ram, networks, volumes, port, read_only, platform, platform_type):
         self.name = name
         self.tag = tag
         self.zip_filename = zip_filename
@@ -106,6 +105,7 @@ class Deploy:
         self.port = port
         self.read_only = read_only
         self.platform = platform
+        self.platform_type = platform_type
         self.errors = []
         
     @staticmethod
@@ -144,6 +144,8 @@ class Deploy:
             
             image_name = f"{self.name}:{self.tag}"
             image = Image(self.name, self.tag, self.dockerfile_text, tar_stream)
+            if self.platform_type == PlanTypeChoices.APP:
+                self.networks.append(("proxy_net", None))
             container = Container(self.name, image_name, self.max_cpu, self.max_ram, [i[0] for i in self.networks], self.volumes, self.read_only, entry_port=self.port)
 
             TIMEOUT = 10
@@ -173,9 +175,7 @@ class Deploy:
             _(container.create)()
             
             _(container.start)()
-            
-            _(self.connect_proxy_net)()
-            
+                        
         except DeployException:
             pass
         except Exception as e:
@@ -191,17 +191,11 @@ class Deploy:
                   
 
     def connect_proxy_net(self, proxy_network: str = "proxy_net", create_if_missing: bool = False) -> None:
-        """
-        Connect self.name (container name or id) to proxy_network if not already connected.
-        If create_if_missing is True, attempt to create the network when missing.
-        """
         try:
             client = _get_docker_client()
         except Exception:
-            # client creation failed and already logged
             return
 
-        # ensure container exists
         try:
             container = client.containers.get(self.name)
         except NotFound:
@@ -211,7 +205,6 @@ class Deploy:
             logger.exception("Docker API error while getting container '%s': %s", self.name, e)
             return
 
-        # ensure network exists (or create if requested)
         try:
             network = client.networks.get(proxy_network)
         except NotFound:
@@ -229,15 +222,13 @@ class Deploy:
             logger.exception("Docker API error while getting network '%s': %s", proxy_network, e)
             return
 
-        # check membership using inspect (more robust)
         try:
-            # network.attrs sometimes stale; use low-level inspect for consistent structure
-            net_info = client.api.inspect_network(network.id if hasattr(network, "id") else proxy_network)
+            net_info = client.api.inspect_network(network.id)
             containers_in_net = net_info.get("Containers") or {}
             already_connected = False
             for cid, info in containers_in_net.items():
-                # compare by id (full or short) or by name
-                if cid == container.id or info.get("Name") in (container.name, self.name):
+                name_in_net = info.get("Name")
+                if cid == container.id or cid.startswith(container.id[:12]) or name_in_net in (container.name, self.name):
                     already_connected = True
                     break
 
@@ -245,14 +236,16 @@ class Deploy:
                 logger.info("Container '%s' already connected to network '%s'.", self.name, proxy_network)
                 return
 
-            # not connected -> try to connect
             try:
-                # network.connect accepts container id/name
                 network.connect(container.id)
                 logger.info("Connected container '%s' to network '%s'.", self.name, proxy_network)
             except APIError as e:
-                # 409 or similar may indicate already-connected race; log and continue
-                logger.exception("Failed to connect container '%s' to network '%s': %s", self.name, proxy_network, e)
+                # 409 may indicate already-connected race
+                msg = str(e)
+                if "already exists" in msg or getattr(e, 'status_code', None) == 409:
+                    logger.debug("Race: container already connected: %s", msg)
+                else:
+                    logger.exception("Failed to connect container '%s' to network '%s': %s", self.name, proxy_network, e)
         except APIError as e:
             logger.exception("Error inspecting network '%s' before connect: %s", proxy_network, e)
         except Exception as e:

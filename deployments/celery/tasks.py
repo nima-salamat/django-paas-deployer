@@ -37,6 +37,7 @@ def deploy(deploy_id):
 
     name = deploy_item.service.get_docker_service_name()
     platform = deploy_item.service.plan.platform
+    platform_type = deploy_item.service.plan.plan_type
     port = default_ports.get(platform)
     dockerfile_text = getattr(Config, platform, None)
 
@@ -56,7 +57,8 @@ def deploy(deploy_id):
         volumes=[],
         port=port,
         read_only=not settings.DEBUG,
-        platform=platform
+        platform=platform,
+        platform_type=platform_type
     )
 
     try:
