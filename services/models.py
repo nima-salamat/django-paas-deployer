@@ -42,6 +42,8 @@ class Service(BaseModel):
     selected_deploy = models.OneToOneField("deploy.Deploy", verbose_name=_("Selected Deploy"), on_delete=models.SET_NULL, null=True, related_name='+')
     status = models.CharField(_("Deploy Status"), choices=SERVICE_STATUS_CHOICES.choices, default=SERVICE_STATUS_CHOICES.STOPPED)
 
+    task_id = models.CharField(_("Task ID"), max_length=64, unique=True, null=True)
+
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
     
