@@ -13,9 +13,10 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from django.utils.translation import gettext_lazy as _
-from deployments.tasks.deploy import deploy as start_service
-from deployments.tasks.deploy import stop as stop_service
+from deployments.celery.tasks import deploy as start_service
+from deployments.celery.tasks import stop as stop_service
 from core.global_settings.config import SERVICE_STATUS_CHOICES
+from core.utils import make_uuid4
 from deployments.core.manager.container_manager import Container
 
 
@@ -258,9 +259,19 @@ def stop_service_apiview(request):
                     status=status.HTTP_409_CONFLICT 
                 )
             
+            custom_task_id = make_uuid4()
+            
             service_item.status = SERVICE_STATUS_CHOICES.QUEUED
+            service_item.task_id = custom_task_id
             service_item.save()
-            transaction.on_commit(functools.partial(stop_service.delay, str(service_id)))
+
+            transaction.on_commit(
+                lambda: stop_service.apply_async(
+                    args=[str(service_id)],
+                    task_id = custom_task_id
+                )
+            )
+            
             
     except Service.DoesNotExist:
         return Response(

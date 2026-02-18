@@ -12,3 +12,5 @@ def is_valid_uuid4(text):
         return False
 
 
+def make_uuid4():
+    return str(uuid.uuid4())
