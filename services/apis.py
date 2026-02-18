@@ -296,7 +296,7 @@ def stop_service_apiview(request):
 @permission_classes([IsAuthenticated])
 def service_status_apiview(request):
     service_id = request.data.get("service_id", "")
-    
+
     try:
         service_item = Service.objects.get(
             id=service_id,
@@ -304,26 +304,39 @@ def service_status_apiview(request):
         )
     except Service.DoesNotExist:
         return Response(
-            { 
+            {
                 "result": "error",
                 "running": False,
+                "cpu": 0,
+                "ram": 0,
                 "detail": _("Service with the ID not found.")
-            }, 
+            },
             status=status.HTTP_404_NOT_FOUND
         )
+
+    name = service_item.get_docker_service_name()
+    print(name)
     try:
-        name = service_item.get_docker_service_name()
-        running = Container.container_is_running(name)
-    
-    except Exception:
-        running = False    
-    detail = _("service is running.") if running else _("service is not running.")
+        container = Container(name=name)
+        stats = container.get_container_stats()
+        print(stats)
+        running = stats.get("running", 0) == 1
+        cpu = stats.get("cpu", 0.0)
+        ram = stats.get("memory", 0.0)
+        detail = _("Service is running.") if running else _("Service is not running.")
+    except Exception as e:
+        running = False
+        cpu = 0.0
+        ram = 0.0
+        detail = _("Failed to get service stats.")
+
     return Response(
-        {   "result": "success",
+        {
+            "result": "success",
             "running": running,
+            "cpu": cpu,
+            "ram": ram,
             "detail": detail
-        }, 
+        },
         status=status.HTTP_200_OK
     )
-    
-    
