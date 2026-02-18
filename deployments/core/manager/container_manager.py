@@ -97,9 +97,6 @@ class Container(Client):
         except docker.errors.APIError:
             logger.exception("Docker API error while stopping container '%s'", self.name)
             raise
-
-    
-
         
     @classmethod
     def container_is_running(cls, container_name: str) -> bool:
@@ -115,6 +112,27 @@ class Container(Client):
             logger.error(f"Error while checking container '{container_name}': {e}")
             raise
 
+    def is_running(self):
+        
+        return Container.container_is_running(self.name)
+
+    def get_exit_code(self):
+        try:
+            container = self.client.containers.get(self.name)
+            container.reload()
+
+            state = container.attrs.get("State", {})
+
+            if state.get("Running"):
+                return None
+
+            return state.get("ExitCode")
+
+        except docker.errors.NotFound:
+            return None
+        except Exception:
+            return None
+    
     def remove(self):
         try:
             container = self.client.containers.get(self.name)

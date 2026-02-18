@@ -7,6 +7,8 @@ from django.db import transaction
 from core.global_settings.config import Config, default_ports, SERVICE_STATUS_CHOICES
 from django.conf import settings
 import time
+from deployments.celery.schedules import monitor_services
+
 
 
 

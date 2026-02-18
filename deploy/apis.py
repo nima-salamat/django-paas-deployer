@@ -11,8 +11,8 @@ from django.db import transaction
 from .models import Deploy
 from services.models import Service
 from .serializers import DeploySerializer
-from deployments.tasks.deploy import deploy as start_service
-from deployments.tasks.deploy import deploy as stop_service
+from deployments.celery.tasks import deploy as start_service
+from deployments.celery.tasks import deploy as stop_service
 from core.global_settings.config import SERVICE_STATUS_CHOICES
 
 
