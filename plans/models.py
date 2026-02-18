@@ -18,8 +18,8 @@ class Plan(BaseModel):
         choices=PLATFORM_CHOICES,
         help_text=_("Technology platform this plan supports")
     )
-    max_cpu = models.PositiveIntegerField(_("Maximum CPU (vCPU)"))
-    max_ram = models.PositiveIntegerField(_("Maximum RAM (MB)"))
+    max_cpu = models.FloatField(_("Maximum CPU (vCPU)"))
+    max_ram = models.FloatField(_("Maximum RAM (MB)"))
     max_storage = models.PositiveIntegerField(_("Maximum Storage (GB)"))
     price_per_hour = models.FloatField(
         _("Price Per Hour (Toman)"),
