@@ -1,5 +1,6 @@
 from django.db import models
 from django.utils.translation import gettext_lazy as _
+from django.utils import timezone
 from plans.models import Plan
 from users.models import User
 from core.base.BaseModel import BaseModel
@@ -39,13 +40,29 @@ class Service(BaseModel):
         related_name="Service"
     )
     
-    selected_deploy = models.OneToOneField("deploy.Deploy", verbose_name=_("Selected Deploy"), on_delete=models.SET_NULL, null=True, related_name='+')
+    selected_deploy = models.OneToOneField("deploy.Deploy", verbose_name=_("Selected Deploy"), on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    selected_deploy_at = models.DateTimeField(blank=True, null=True)
+    deployed_at = models.DateTimeField(blank=True, null=True)
     status = models.CharField(_("Deploy Status"), choices=SERVICE_STATUS_CHOICES.choices, default=SERVICE_STATUS_CHOICES.STOPPED)
 
-    task_id = models.CharField(_("Task ID"), max_length=64, unique=True, null=True)
+    task_id = models.CharField(_("Task ID"), max_length=64, unique=True, null=True, blank=True)
 
     def save(self, *args, **kwargs):
+        self.full_clean()
+        
+        selected_deploy_changed = False
+
+        if self.pk and Service.objects.filter(pk=self.pk).exists():
+            old = Service.objects.get(pk=self.pk)
+            if old.selected_deploy != self.selected_deploy:
+                selected_deploy_changed = True
+        else:
+            selected_deploy_changed = bool(self.selected_deploy)
+
+        if selected_deploy_changed:
+            self.selected_deploy_at = timezone.now()
         super().save(*args, **kwargs)
+    
     
     def get_docker_service_name(self):
         return f"app-{self.id.hex[:8]}-{self.name.lower()}"
