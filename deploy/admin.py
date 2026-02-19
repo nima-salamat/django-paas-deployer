@@ -7,8 +7,4 @@ class DeployAdmin(admin.ModelAdmin):
     list_filter = ("service", "started_at")
     search_fields = ("name", "service__name")
     readonly_fields = ("started_at",)
-    fieldsets = (
-        (None, {
-            "fields": ("name", "service", "version", "zip_file", "config", "started_at")
-        }),
-    )
+    
