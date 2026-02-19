@@ -15,4 +15,4 @@ class DeploySerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["started_at", "created_at", "updated_at"]
+        read_only_fields = ["started_at", "created_at", "updated_at", "updated_file_at"]
