@@ -289,21 +289,23 @@ class Deploy:
     def remove_all(cls, name):
         # prefer using safe defaults
         c = Container(name)  # rely on Container default args
-        try:
-            c.stop()
-        except Exception:
-            logger.exception("Error stopping container %s during remove_all", name)
-    
-        try:
-            c.remove()
-        except Exception:
-            logger.exception("Error removing container %s during remove_all", name)
 
+        TIMEOUT = 10
+        INTERVAL = 0.2 
+        if c.exists():
+            if Container.container_is_running(name):
+                c.stop()
+                start = time.time()
+                while Container.container_is_running(name):
+                    if time.time() - start > TIMEOUT:
+                        raise TimeoutError("Container did not stop within 3 seconds")
+                    time.sleep(INTERVAL)
+
+            c.remove()
+        
         i = Image(name, tag=None)
-        try:
-            i.remove_all(force=True)
-        except Exception:
-            logger.exception("Error removing images for %s", name)
+        i.remove_all(force=True)
+       
 
     
     @classmethod
