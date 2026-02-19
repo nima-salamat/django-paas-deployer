@@ -6,6 +6,7 @@ from deployments.core.manager.container_manager import Container
 from django.db import transaction
 from core.global_settings.config import Config, default_ports, SERVICE_STATUS_CHOICES
 from django.conf import settings
+from django.utils import timezone
 import time
 from deployments.celery.schedules import monitor_services
 
@@ -30,6 +31,7 @@ def deploy(deploy_id):
                 return
 
             deploy_item.service.status = SERVICE_STATUS_CHOICES.DEPLOYING
+            
             deploy_item.service.save()
 
     except Deploy.DoesNotExist:
@@ -40,12 +42,32 @@ def deploy(deploy_id):
     platform_type = deploy_item.service.plan.plan_type
     port = default_ports.get(platform)
     dockerfile_text = getattr(Config, platform, None)
+    deployed_at = deploy_item.service.deployed_at
+    updated_file_at = deploy_item.updated_file_at
+    selected_deploy_at = deploy_item.service.selected_deploy_at
 
     if not dockerfile_text:
         deploy_item.service.status = SERVICE_STATUS_CHOICES.FAILED
         deploy_item.service.save()
         return
+    
+    just_start = deployed_at is not None
 
+    if just_start:
+        if (selected_deploy_at and selected_deploy_at > deployed_at) or \
+            (updated_file_at and updated_file_at > deployed_at):
+            just_start = False
+
+
+    just_start = Container(name).exists() and just_start
+    
+    if just_start:
+        Container(name).start()
+        deploy_item.service.status = SERVICE_STATUS_CHOICES.SUCCEEDED
+        deploy_item.service.deployed_at = timezone.now()
+        deploy_item.service.save()
+        return
+    
     deployer = Deployer(
         name=name,
         tag=deploy_item.version,
@@ -60,6 +82,7 @@ def deploy(deploy_id):
         platform=platform,
         platform_type=platform_type
     )
+    
 
     try:
         errors = deployer.deploy()
@@ -83,6 +106,7 @@ def deploy(deploy_id):
         return
 
     deploy_item.service.status = SERVICE_STATUS_CHOICES.SUCCEEDED
+    deploy_item.service.deployed_at = timezone.now()
     deploy_item.service.save()
 
 
