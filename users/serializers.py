@@ -106,7 +106,7 @@ class SetPasswordSerializer(serializers.Serializer):
         if data["new_password"] != data["new_confirm_password"]:
             raise serializers.ValidationError("Password do not match")
         
-        if self.user.check_password(data["password"]):
+        if not self.user.check_password(data["password"]):
             raise serializers.ValidationError("Password is not correct")
 
         return data
@@ -125,35 +125,35 @@ class UpdateUserSerializer(serializers.Serializer):
         required=False
     )
     
-    birthdate = serializers.DateField(required=False)
+    birthdate = serializers.DateField(required=False, allow_null=True)
     theme = serializers.ChoiceField(choices=User.ThemeChoices.choices)
     color = serializers.ChoiceField(choices=COLOR_CHOICES)
 
     def validate(self, data):
         return CreateUserSerializer.validate(self, data)
     def update(self, user, data):
-        username = data.get("username", "")
-        phone_number = data.get("phone_number", "")
-        email = data.get("email", "")
-        birthdate = data.get("birthdate", "")
-        theme = data.get("theme", "")
-        color = data.get("color", "")
+        username = data.get("username", None)
+        phone_number = data.get("phone_number", None)
+        email = data.get("email", None)
+        birthdate = data.get("birthdate", None)
+        theme = data.get("theme", None)
+        color = data.get("color", None)
         
-        if username:
+        if username is not None:
             user.username = username
-        if phone_number:
+        if phone_number is not None:
             user.phone_number = phone_number
             user.phone_number_verified=False
             
-        if email:
+        if email is not None:
             user.email = email
             user.email_verified=False
-        if birthdate:
+        if birthdate is not None:
             user.birthdate = birthdate
-        if color:
-            user.theme = theme
-        if theme:
+        if color is not None:
             user.color = color
+        if theme is not None:
+            user.theme = theme
    
         try:
             user.full_clean() 
@@ -235,7 +235,7 @@ class DeletePasswordSerializer(serializers.Serializer):
         if data["password"] != data["confirm_password"]:
             raise serializers.ValidationError("Password do not match")
         
-        if self.user.check_password(data["password"]):
+        if not self.user.check_password(data["password"]):
             raise serializers.ValidationError("Password is not correct")
 
         return data
