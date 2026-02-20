@@ -1,7 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.viewsets import ViewSet
 from rest_framework.response import Response
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework import status
 from django.contrib.auth import get_user_model
 from .serializers import (
@@ -44,7 +44,6 @@ class UserAPIView(APIView):
                 {"user": serializer.data, "message": _("success::user updated.")},
                 status=status.HTTP_200_OK
             )
-
         return Response(
             {"user": {}, "message": _("error::user not updated!"), "errors": serializer.errors},
             status=status.HTTP_400_BAD_REQUEST
@@ -54,7 +53,12 @@ class UserAPIView(APIView):
 class ProfileViewSet(ViewSet):
     authentication_classes = [JWTAuthentication]
     permission_classes     = [IsAuthenticated]
-    parser_classes = [MultiPartParser, FormParser]
+    # parser_classes = [MultiPartParser, FormParser]
+    
+    def get_parser_classes(self):
+        if self.action == "order":
+            return [JSONParser]
+        return [MultiPartParser, FormParser]
     
     def list(self, request):
         user = request.user
@@ -76,6 +80,7 @@ class ProfileViewSet(ViewSet):
         
     def delete(self, request):
         user = request.user
+        id = request.data.get("id", "")
         try:
             profile = Profile.objects.get(pk=id, user=user)
             profile.delete()
@@ -96,7 +101,8 @@ class ProfileViewSet(ViewSet):
             serializer.save(user)
             return Response(data={"message": _("success::profile added.")}, status=status.HTTP_200_OK)
         return Response({"message": _("error::cant add profile."), "errors": serializer.errors},status=status.HTTP_400_BAD_REQUEST)
-                
+
+
         
 class PasswordViewSet(ViewSet):
     authentication_classes = [JWTAuthentication]
@@ -112,11 +118,11 @@ class PasswordViewSet(ViewSet):
             
     def delete(self, request):
         user = request.user
-        
+        print(request.data)
         serializer = DeletePasswordSerializer(data=request.data)
         
         if serializer.is_valid(user=user):
             serializer.save()
             return Response(data={"message": _("success::password deleted.")}, status=status.HTTP_200_OK)
-            
+        print(serializer.errors)
         return Response({"message": _("error::cant set password."), "errors": serializer.errors},status=status.HTTP_400_BAD_REQUEST)
