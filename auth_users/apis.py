@@ -206,18 +206,18 @@ class SignupOrLoginAPIView(APIView):
             sent_to="phone_number"
             data["phone_number"] = phone_number
  
-        try:
+        def send_email_or_sms():
             user = User.objects.get(**data)
             print(user)
             code = AuthCode.create_code(user)
             
-            print(code)
             if sent_to == "email":
-                # print(code)
                 send_code_via_email.delay(user.id)
             else:
                 logger.info(f"Sms is not implemented yet. user:{user.username}, code: {code}")
             
+        try:
+            send_email_or_sms()
             return Response({"message":f"success:code sent to your {sent_to}"},status=status.HTTP_200_OK)
 
         except User.DoesNotExist:
@@ -228,11 +228,11 @@ class SignupOrLoginAPIView(APIView):
 
         if serializer.is_valid():
             serializer.save()
+            send_email_or_sms()
             return Response(
                 {"user": serializer.data, "message": "success::user created."},
                 status=status.HTTP_201_CREATED
             )
-        print(serializer.errors)
         return Response(
             {"user": {}, "message": "error::user not created!", "errors": serializer.errors},
             status=status.HTTP_400_BAD_REQUEST
