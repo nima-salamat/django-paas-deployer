@@ -4,6 +4,7 @@ from django.utils import timezone
 from plans.models import Plan
 from users.models import User
 from core.base.BaseModel import BaseModel
+from django.conf import settings
 
 from core.global_settings.config import SERVICE_STATUS_CHOICES, VOLUME_MODE_CHOICES
 
@@ -39,6 +40,8 @@ class Service(BaseModel):
         null=True,
         related_name="Service"
     )
+    
+    read_only = models.BooleanField(_("Read only"), default=not(settings.DEBUG))
     
     selected_deploy = models.OneToOneField("deploy.Deploy", verbose_name=_("Selected Deploy"), on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
     selected_deploy_at = models.DateTimeField(blank=True, null=True)

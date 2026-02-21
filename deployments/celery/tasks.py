@@ -45,6 +45,7 @@ def deploy(deploy_id):
     deployed_at = deploy_item.service.deployed_at
     updated_file_at = deploy_item.updated_file_at
     selected_deploy_at = deploy_item.service.selected_deploy_at
+    read_only = deploy_item.service.read_only
 
     if not dockerfile_text:
         deploy_item.service.status = SERVICE_STATUS_CHOICES.FAILED
@@ -78,7 +79,7 @@ def deploy(deploy_id):
         networks=[(deploy_item.service.network.name, "bridge")],
         volumes=[],
         port=port,
-        read_only=not settings.DEBUG,
+        read_only=read_only,
         platform=platform,
         platform_type=platform_type
     )
