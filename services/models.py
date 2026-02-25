@@ -45,6 +45,7 @@ class Service(BaseModel):
     
     selected_deploy = models.OneToOneField("deploy.Deploy", verbose_name=_("Selected Deploy"), on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
     selected_deploy_at = models.DateTimeField(blank=True, null=True)
+    deploy_started = models.DateTimeField(blank=True, null=True)
     deployed_at = models.DateTimeField(blank=True, null=True)
     status = models.CharField(_("Deploy Status"), choices=SERVICE_STATUS_CHOICES.choices, default=SERVICE_STATUS_CHOICES.STOPPED)
 
