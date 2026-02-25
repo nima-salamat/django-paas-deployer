@@ -22,8 +22,8 @@ class Deploy(BaseModel):
     MAX_ZIP_SIZE_MB = 10
 
     class Meta:
-        verbose_name = _("Deployment")
-        verbose_name_plural = _("Deployments")
+        verbose_name = _("Deploy")
+        verbose_name_plural = _("Deploy")
     
     def clean(self):
         super().clean()
