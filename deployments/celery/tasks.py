@@ -9,12 +9,6 @@ from django.conf import settings
 from django.utils import timezone
 import time
 from deployments.celery.schedules import monitor_services
-
-
-
-
-
-import time
 from celery import shared_task
 from django.db import transaction
 
@@ -31,13 +25,14 @@ def deploy(deploy_id):
                 return
 
             deploy_item.service.status = SERVICE_STATUS_CHOICES.DEPLOYING
-            
+            deploy_item.service.deploy_started = timezone.now();            
             deploy_item.service.save()
 
     except Deploy.DoesNotExist:
         return
-
+    
     name = deploy_item.service.get_docker_service_name()
+    deploy_tag = deploy_item.version
     platform = deploy_item.service.plan.platform
     platform_type = deploy_item.service.plan.plan_type
     port = default_ports.get(platform)
@@ -46,7 +41,24 @@ def deploy(deploy_id):
     updated_file_at = deploy_item.updated_file_at
     selected_deploy_at = deploy_item.service.selected_deploy_at
     read_only = deploy_item.service.read_only
+    
+    if not deploy_item.zip_file:
+        deploy_item.service.status = SERVICE_STATUS_CHOICES.FAILED
+        deploy_item.service.save()
+        return 
+    else:        
+        zip_file_path = deploy_item.zip_file.path
+    
+    if selected_deploy_at is None:
+        deploy_item.service.status = SERVICE_STATUS_CHOICES.FAILED
+        deploy_item.service.save()
+        return 
 
+    if deploy_item.service.selected_deploy.id != deploy_item.id:
+        deploy_item.service.status = SERVICE_STATUS_CHOICES.FAILED
+        deploy_item.service.save()
+        return 
+    
     if not dockerfile_text:
         deploy_item.service.status = SERVICE_STATUS_CHOICES.FAILED
         deploy_item.service.save()
@@ -71,8 +83,8 @@ def deploy(deploy_id):
     
     deployer = Deployer(
         name=name,
-        tag=deploy_item.version,
-        zip_filename=deploy_item.zip_file.path,
+        tag=deploy_tag,
+        zip_filename=zip_file_path,
         dockerfile_text=dockerfile_text,
         max_cpu=deploy_item.service.plan.max_cpu,
         max_ram=deploy_item.service.plan.max_ram,
@@ -83,7 +95,6 @@ def deploy(deploy_id):
         platform=platform,
         platform_type=platform_type
     )
-    
 
     try:
         errors = deployer.deploy()
@@ -109,7 +120,6 @@ def deploy(deploy_id):
     deploy_item.service.status = SERVICE_STATUS_CHOICES.SUCCEEDED
     deploy_item.service.deployed_at = timezone.now()
     deploy_item.service.save()
-
 
 
 @shared_task
