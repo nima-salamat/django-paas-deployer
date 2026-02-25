@@ -268,3 +268,6 @@ COPY --from=build /app/publish .
 ENTRYPOINT ["dotnet", "YourAppName.dll"]
 '''
 
+
+# Limit Deploy time
+MAX_DEPLOY_TIME_MINUTE =  10
