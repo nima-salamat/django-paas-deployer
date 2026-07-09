@@ -10,6 +10,7 @@ import traceback
 import io
 import docker
 from docker.errors import BuildError, ImageNotFound
+from deployments.core.exceptions import ImageBuildError, CleanupError
 
 logger = logging.getLogger(__name__)
 
@@ -178,12 +179,10 @@ class Image(Client):
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
                 
-                if isinstance(self.tarfile, (bytes, bytearray)):
-                    tar_stream = io.BytesIO(self.tarfile)
-                else:
-                    tar_stream = self.tarfile
+                tar_stream = io.BytesIO(self.tarfile) if isinstance(self.tarfile, (bytes, bytearray)) else self.tarfile
+
                 # extract TAR from memory (safe)
-                self.tarfile.seek(0)
+                tar_stream.seek(0)
                 with tarfile.open(fileobj=tar_stream, mode="r:*") as tar:
                     safe_extract(tar, tmpdir, max_bytes=500*1024*1024)
 
@@ -196,7 +195,7 @@ class Image(Client):
                     build_path = app_dir
                 else:
                     # otherwise write Dockerfile to root if needed
-                    with open(os.path.join(tmpdir, "Dockerfile"), "w") as f:
+                    with open(os.path.join(tmpdir, "Dockerfile"), "w", encoding="utf-8") as f:
                         f.write(self.dockerfile_text)
 
                 # run build
@@ -213,13 +212,20 @@ class Image(Client):
                 # return built image object
                 return self.client.images.get(f"{self.name}:{self.tag}")
 
-        except BuildError:
-            # build errors already logged in _handle_build_stream
+        except BuildError as exc:
+            raise ImageBuildError(
+                "Docker image build failed.",
+                details={"image": f"{self.name}:{self.tag}", "error": str(exc)},
+            ) from exc
+        except ImageBuildError:
             raise
-        except Exception:
+        except Exception as exc:
             logger.error("Unexpected error while building Docker image")
             logger.error(traceback.format_exc())
-            raise
+            raise ImageBuildError(
+                "Unexpected error while building Docker image.",
+                details={"image": f"{self.name}:{self.tag}", "error": str(exc)},
+            ) from exc
 
     # ---------- image-inspection helpers ----------
     def inspect(self):
@@ -509,5 +515,8 @@ class Image(Client):
     
     @classmethod
     def prune_dangling_images(cls):
-        client = Client()()
-        client.images.prune(filters={"dangling": True})
+        try:
+            client = Client()()
+            client.images.prune(filters={"dangling": True})
+        except Exception as exc:
+            raise CleanupError("Failed to prune dangling Docker images.") from exc

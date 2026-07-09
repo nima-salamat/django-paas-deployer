@@ -10,6 +10,22 @@ def zip_file_path(instance, filename):
     return f'deployments/{instance.name}/{filename}'
 
 
+class DeploymentStatusChoices(models.TextChoices):
+    PENDING = "pending", _("Pending")
+    RUNNING = "running", _("Running")
+    SUCCEEDED = "succeeded", _("Succeeded")
+    FAILED = "failed", _("Failed")
+    ROLLING_BACK = "rolling_back", _("Rolling back")
+    ROLLED_BACK = "rolled_back", _("Rolled back")
+
+
+class RollbackStatusChoices(models.TextChoices):
+    NOT_REQUIRED = "not_required", _("Not required")
+    PENDING = "pending", _("Pending")
+    SUCCEEDED = "succeeded", _("Succeeded")
+    FAILED = "failed", _("Failed")
+
+
 
 class Deploy(BaseModel):
     name = models.CharField(verbose_name=_("Name"), max_length=50, unique=True)
@@ -18,7 +34,29 @@ class Deploy(BaseModel):
     zip_file = models.FileField(verbose_name=_("ZIP File"), upload_to=zip_file_path, blank=True, null=True)
     config = models.JSONField(verbose_name=_("Configuration"), blank=True, null=True)
     started_at = models.DateTimeField(verbose_name=_("Start Time"), blank=True, null=True, editable=False)
+    completed_at = models.DateTimeField(verbose_name=_("Completion Time"), blank=True, null=True, editable=False)
     updated_file_at = models.DateTimeField(blank=True, null=True)
+    status = models.CharField(
+        _("Deployment Status"),
+        max_length=32,
+        choices=DeploymentStatusChoices.choices,
+        default=DeploymentStatusChoices.PENDING,
+    )
+    stage = models.CharField(_("Deployment Stage"), max_length=64, blank=True, default="idle")
+    progress = models.PositiveSmallIntegerField(_("Deployment Progress"), default=0)
+    status_message = models.TextField(_("Status Message"), blank=True, default="")
+    error_message = models.TextField(_("Error Message"), blank=True, default="")
+    rollback_status = models.CharField(
+        _("Rollback Status"),
+        max_length=32,
+        choices=RollbackStatusChoices.choices,
+        default=RollbackStatusChoices.NOT_REQUIRED,
+    )
+    health_status = models.CharField(_("Health Status"), max_length=64, blank=True, default="")
+    container_status = models.CharField(_("Container Status"), max_length=64, blank=True, default="")
+    image_status = models.CharField(_("Image Status"), max_length=64, blank=True, default="")
+    volume_status = models.CharField(_("Volume Status"), max_length=64, blank=True, default="")
+    network_status = models.CharField(_("Network Status"), max_length=64, blank=True, default="")
     MAX_ZIP_SIZE_MB = 10
 
     class Meta:
@@ -49,4 +87,22 @@ class Deploy(BaseModel):
     
     def __str__(self):
         return f"{self.name} (v{self.version})"
+
+
+class DeployLog(BaseModel):
+    deploy = models.ForeignKey(Deploy, verbose_name=_("Deploy"), related_name="logs", on_delete=models.CASCADE)
+    service = models.ForeignKey(Service, verbose_name=_("Service"), related_name="deployment_logs", on_delete=models.CASCADE)
+    stage = models.CharField(_("Stage"), max_length=64)
+    level = models.CharField(_("Level"), max_length=16, default="info")
+    message = models.TextField(_("Message"))
+    progress = models.PositiveSmallIntegerField(_("Progress"), blank=True, null=True)
+    details = models.JSONField(_("Details"), blank=True, null=True)
+
+    class Meta:
+        verbose_name = _("Deploy Log")
+        verbose_name_plural = _("Deploy Logs")
+        ordering = ("created_at",)
+
+    def __str__(self):
+        return f"{self.deploy.name}: {self.stage} - {self.level}"
 

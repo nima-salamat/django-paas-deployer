@@ -1,141 +1,33 @@
+import logging
 from celery import shared_task
-from deploy.models import Deploy
-from services.models import Service
-from deployments.core.deploy import Deploy as Deployer
-from deployments.core.manager.container_manager import Container
-from django.db import transaction
-from core.global_settings.config import Config, default_ports, SERVICE_STATUS_CHOICES
-from django.conf import settings
-from django.utils import timezone
-import time
-from deployments.celery.schedules import monitor_services
-from celery import shared_task
-from django.db import transaction
+from .services.deploy_service import DeployService
+from .services.stop_service import StopService
+from .exceptions import InvalidServiceStateError
 
-@shared_task
-def deploy(deploy_id):
+logger = logging.getLogger(__name__)
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=15)
+def deploy(self, deploy_id: int) -> None:
+    logger.info("Initializing background processing block for deploy_id: %s", deploy_id)
     try:
-        with transaction.atomic():
-            _deploy_item = Deploy.objects.select_for_update().get(pk=deploy_id)
-            deploy_item = Deploy.objects.select_related(
-                "service", "service__plan", "service__network"
-            ).get(pk=deploy_id)
-
-            if deploy_item.service.status != SERVICE_STATUS_CHOICES.QUEUED:
-                return
-
-            deploy_item.service.status = SERVICE_STATUS_CHOICES.DEPLOYING
-            deploy_item.service.deploy_started = timezone.now();            
-            deploy_item.service.save()
-
-    except Deploy.DoesNotExist:
-        return
-    
-    name = deploy_item.service.get_docker_service_name()
-    deploy_tag = deploy_item.version
-    platform = deploy_item.service.plan.platform
-    platform_type = deploy_item.service.plan.plan_type
-    port = default_ports.get(platform)
-    dockerfile_text = getattr(Config, platform, None)
-    deployed_at = deploy_item.service.deployed_at
-    updated_file_at = deploy_item.updated_file_at
-    selected_deploy_at = deploy_item.service.selected_deploy_at
-    read_only = deploy_item.service.read_only
-    
-    if not deploy_item.zip_file:
-        deploy_item.service.status = SERVICE_STATUS_CHOICES.FAILED
-        deploy_item.service.save()
-        return 
-    else:        
-        zip_file_path = deploy_item.zip_file.path
-    
-    if selected_deploy_at is None:
-        deploy_item.service.status = SERVICE_STATUS_CHOICES.FAILED
-        deploy_item.service.save()
-        return 
-
-    if deploy_item.service.selected_deploy.id != deploy_item.id:
-        deploy_item.service.status = SERVICE_STATUS_CHOICES.FAILED
-        deploy_item.service.save()
-        return 
-    
-    if not dockerfile_text:
-        deploy_item.service.status = SERVICE_STATUS_CHOICES.FAILED
-        deploy_item.service.save()
-        return
-    
-    just_start = deployed_at is not None
-
-    if just_start:
-        if (selected_deploy_at and selected_deploy_at > deployed_at) or \
-            (updated_file_at and updated_file_at > deployed_at):
-            just_start = False
+        DeployService().execute(deploy_id)
+    except InvalidServiceStateError:
+        # Pre-execution checks failed (e.g. status was not QUEUED); skip retries entirely
+        pass
+    except Exception as exc:
+        logger.warning("Deploy execution encountered an exception. Re-enqueueing task... (ID: %s)", deploy_id)
+        raise self.retry(exc=exc)
 
 
-    just_start = Container(name).exists() and just_start
-    
-    if just_start:
-        Container(name).start()
-        deploy_item.service.status = SERVICE_STATUS_CHOICES.SUCCEEDED
-        deploy_item.service.deployed_at = timezone.now()
-        deploy_item.service.save()
-        return
-    
-    deployer = Deployer(
-        name=name,
-        tag=deploy_tag,
-        zip_filename=zip_file_path,
-        dockerfile_text=dockerfile_text,
-        max_cpu=deploy_item.service.plan.max_cpu,
-        max_ram=deploy_item.service.plan.max_ram,
-        networks=[(deploy_item.service.network.name, "bridge")],
-        volumes=[],
-        port=port,
-        read_only=read_only,
-        platform=platform,
-        platform_type=platform_type
-    )
-
+@shared_task(bind=True, max_retries=3, default_retry_delay=10)
+def stop(self, service_id: int) -> None:
+    logger.info("Initializing background processing block for stop request on service_id: %s", service_id)
     try:
-        errors = deployer.deploy()
-        if errors:
-            raise 
-    except Exception as e:
-        Deployer.remove_all(name)
-        deploy_item.service.status = SERVICE_STATUS_CHOICES.FAILED
-        deploy_item.service.save()
-        return
-
-    for _ in range(20):
-        if Container.container_is_running(name):
-            break
-        time.sleep(0.5)
-
-    if not Container.container_is_running(name):
-        Deployer.remove_all(name)
-        deploy_item.service.status = SERVICE_STATUS_CHOICES.FAILED
-        deploy_item.service.save()
-        return
-
-    deploy_item.service.status = SERVICE_STATUS_CHOICES.SUCCEEDED
-    deploy_item.service.deployed_at = timezone.now()
-    deploy_item.service.save()
-
-
-@shared_task
-def stop(service_id):
-    with transaction.atomic():
-        service_item = Service.objects.select_for_update().get(id=service_id)
-        service_item.status = SERVICE_STATUS_CHOICES.STOPPING
-        name = service_item.get_docker_service_name()
-
-        if Container.container_is_running(name):
-            Deployer.stop_container(name)
-
-        for _ in range(10):
-            if not Container.container_is_running(name):
-                break
-            time.sleep(0.5)
-
-        service_item.status = SERVICE_STATUS_CHOICES.STOPPED
-        service_item.save()
+        StopService().execute(service_id)
+    except InvalidServiceStateError:
+        # Service configuration or existence checks failed; skip retries entirely
+        pass
+    except Exception as exc:
+        logger.warning("Stop execution encountered an exception. Re-enqueueing task... (ID: %s)", service_id)
+        raise self.retry(exc=exc)

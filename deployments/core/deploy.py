@@ -1,194 +1,162 @@
-import re
-import time
-import functools
-import tarfile
 import logging
-from docker.errors import NotFound, APIError, DockerException
-from deployments.core.converter import convert_zip_to_tar
-from deployments.core.manager.image_manager import Image
-from deployments.core.manager.container_manager import Container
-from deployments.core.manager.network_manager import Network
-from deployments.core.manager.client_manager import Client
+
+import docker
+from docker.errors import APIError, NotFound
+
 from core.global_settings.config import PlanTypeChoices
+from deployments.core.entrypoints import (
+    django_find_entrypoint_from_settings,
+    django_read_settings_module_from_tar,
+)
+from deployments.core.exceptions import DeploymentError
+from deployments.core.manager.client_manager import Client
+from deployments.core.manager.container_manager import Container
+from deployments.core.manager.image_manager import Image
+from deployments.core.orchestrator import DeploymentOrchestrator
+from deployments.core.types import DeploymentConfig, NetworkSpec, VolumeSpec
 
 
-logger = logging.getLogger()
+logger = logging.getLogger(__name__)
 
-def django_read_settings_module_from_tar(tar):
-    for m in tar.getmembers():
-        if m.name.endswith("manage.py"):
-            f = tar.extractfile(m)
-            if not f:
-                continue
-
-            text = f.read().decode("utf-8", errors="ignore")
-            text = re.sub(r"#.*", "", text)
-            match = re.search(
-                r"os\.environ\.setdefault\s*\(\s*['\"]DJANGO_SETTINGS_MODULE['\"]\s*,\s*['\"]([\w\.]+)['\"]\s*\)",
-                text,
-                re.S
-            )
-            if match:
-                return match.group(1)
-            match = re.search(
-                r"DJANGO_SETTINGS_MODULE\s*=\s*['\"]([\w\.]+)['\"]",
-                text
-            )
-            if match:
-                return match.group(1)
-
-    return None
-
-
-def django_find_entrypoint_from_settings(tar):
-    """
-    tar: tarfile.TarFile (already opened)
-    returns {"type":"asgi"|"wsgi", "module":"config.asgi"} or None
-    """
-    settings_module = django_read_settings_module_from_tar(tar)
-    if not settings_module:
-        return None
-
-    settings_path = settings_module.replace(".", "/") + ".py"
-
-    # find member by endswith (handles subdirs like project/config/settings.py)
-    member = None
-    for m in tar.getmembers():
-        if m.name.endswith(settings_path):
-            member = m
-            break
-    if not member:
-        return None
-
-    f = tar.extractfile(member)
-    if not f:
-        return None
-    text = f.read().decode("utf-8", errors="ignore")
-
-    asgi_re = re.compile(r'(?<!\w)ASGI_APPLICATION\s*=\s*[\'"]([\w\.]+)[\'"]')
-    wsgi_re = re.compile(r'(?<!\w)WSGI_APPLICATION\s*=\s*[\'"]([\w\.]+)[\'"]')
-
-    asgi_match = asgi_re.search(text)
-    if asgi_match:
-        full = asgi_match.group(1)
-        module = full.rsplit(".", 1)[0]
-        return {"type": "asgi", "module": module}
-
-    wsgi_match = wsgi_re.search(text)
-    if wsgi_match:
-        full = wsgi_match.group(1)
-        module = full.rsplit(".", 1)[0]
-        return {"type": "wsgi", "module": module}
-
-    return None
 
 def _get_docker_client():
     try:
         return Client()()
-    except DockerException:
-        logger.exception("Failed to create docker client from environment.")
+    except docker.errors.DockerException:
+        logger.exception("Failed to create Docker client from environment.")
         raise
 
-class DeployException(Exception):
+
+class DeployException(DeploymentError):
     pass
 
+
 class Deploy:
-    def __init__(self,name, tag, zip_filename, dockerfile_text, max_cpu, max_ram, networks, volumes, port, read_only, platform, platform_type):
+    """Backward-compatible facade for the deployment orchestrator."""
+
+    def __init__(
+        self,
+        name,
+        tag,
+        zip_filename,
+        dockerfile_text,
+        max_cpu,
+        max_ram,
+        networks,
+        volumes,
+        port,
+        read_only,
+        platform,
+        platform_type,
+        event_sink=None,
+        deployment_id=None,
+    ):
         self.name = name
-        self.tag = tag
+        self.tag = str(tag)
         self.zip_filename = zip_filename
         self.dockerfile_text = dockerfile_text
         self.max_cpu = max_cpu
         self.max_ram = max_ram
-        self.networks = networks
-        self.volumes = volumes
+        self.networks = list(networks or [])
+        self.volumes = list(volumes or [])
         self.port = port
         self.read_only = read_only
         self.platform = platform
         self.platform_type = platform_type
+        self.event_sink = event_sink
+        self.deployment_id = deployment_id
         self.errors = []
-        
-    @staticmethod
-    def safe_run(func, errors, with_raise, custom_exception):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                errors.append(e)
-                if with_raise:
-                    raise custom_exception from e
-        return wrapper
-                
-        
+        self.result = None
+
+    def _network_specs(self):
+        specs = []
+        seen = set()
+
+        for item in self.networks:
+            if isinstance(item, NetworkSpec):
+                spec = item
+            else:
+                name, driver = item
+                spec = NetworkSpec(name=name, driver=driver or "bridge", internal=True, attachable=True)
+
+            if spec.name not in seen:
+                specs.append(spec)
+                seen.add(spec.name)
+
+        if str(self.platform_type) == str(PlanTypeChoices.APP) and "proxy_net" not in seen:
+            specs.append(NetworkSpec(name="proxy_net", driver="bridge", internal=False, attachable=True))
+
+        return specs
+
+    def _volume_specs(self):
+        specs = []
+        for item in self.volumes:
+            if isinstance(item, VolumeSpec):
+                specs.append(item)
+                continue
+
+            if isinstance(item, dict):
+                specs.append(
+                    VolumeSpec(
+                        source=item.get("source") or item.get("name"),
+                        target=item.get("target") or item.get("bind"),
+                        mode=item.get("mode", "rw"),
+                        mount_type=item.get("mount_type") or item.get("type", "volume"),
+                        driver=item.get("driver", "local"),
+                        driver_opts=item.get("driver_opts") or {},
+                        create=item.get("create", True),
+                        size_mb=item.get("size_mb"),
+                    )
+                )
+                continue
+
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                specs.append(
+                    VolumeSpec(
+                        source=item[0],
+                        target=item[1],
+                        mode=item[2] if len(item) > 2 else "rw",
+                        mount_type=item[3] if len(item) > 3 else "volume",
+                    )
+                )
+
+        return specs
+
+    def _config(self):
+        return DeploymentConfig(
+            name=self.name,
+            tag=self.tag,
+            zip_path=self.zip_filename,
+            dockerfile_template=self.dockerfile_text,
+            max_cpu=self.max_cpu,
+            max_ram=self.max_ram,
+            networks=self._network_specs(),
+            volumes=self._volume_specs(),
+            port=self.port,
+            read_only=self.read_only,
+            platform=self.platform,
+            platform_type=self.platform_type,
+        )
+
     def deploy(self):
-        try:
-            _ = lambda func, errors=self.errors, with_raise=True, custom_exception=DeployException: self.safe_run(func,errors, with_raise, custom_exception)
-            
-            tar_stream = _(convert_zip_to_tar)(self.zip_filename)
-            
-            tar_stream.seek(0)
-            
-            if self.platform == "django":
-                entrypoint = None
-                with tarfile.open(fileobj=tar_stream, mode="r:*") as tar:
-                    entrypoint = django_find_entrypoint_from_settings(tar)
-                if not entrypoint:
-                    logging.info("project name (entrypoint) not found")
-                    raise ValueError("Django project name (entrypoint) not found")
-                project_module = entrypoint["module"]
-                self.dockerfile_text = self.dockerfile_text.format(project_module)
+        orchestrator = DeploymentOrchestrator(
+            event_sink=self.event_sink,
+            deployment_id=self.deployment_id,
+        )
+        self.result = orchestrator.deploy(self._config())
+        self.errors = [] if self.result.success else [DeployException(self.result.message, stage=self.result.stage)]
+        return self.errors
 
-            logging.info(self.dockerfile_text)
-            
-            image_name = f"{self.name}:{self.tag}"
-            image = Image(self.name, self.tag, self.dockerfile_text, tar_stream)
-            if self.platform_type == PlanTypeChoices.APP:
-                self.networks.append(("proxy_net", None))
-            container = Container(self.name, image_name, self.max_cpu, self.max_ram, [i[0] for i in self.networks], self.volumes, self.read_only, entry_port=self.port)
+    def deploy_result(self):
+        orchestrator = DeploymentOrchestrator(
+            event_sink=self.event_sink,
+            deployment_id=self.deployment_id,
+        )
+        self.result = orchestrator.deploy(self._config())
+        return self.result
 
-            TIMEOUT = 10
-            INTERVAL = 0.2 
-            if _(container.exists)():
-                if _(Container.container_is_running)(self.name):
-                    _(container.stop)()
-
-                    start = time.time()
-                    while _(Container.container_is_running)(self.name):
-                        if time.time() - start > TIMEOUT:
-                            raise TimeoutError("Container did not stop within 3 seconds")
-                        time.sleep(INTERVAL)
-
-                _(container.remove)()
-
-            if _(image.exists)():
-                image.remove_all()
-            
-            _(image.create)()
-        
-            for network_name, driver in self.networks:            
-                if not Network.network_exists(network_name):
-                    network = Network(network_name, driver)
-                    _(network.create)()
-        
-            _(container.create)()
-            
-            _(container.start)()
-                        
-        except DeployException:
-            pass
-        except Exception as e:
-            self.errors.append(e)
-        finally:
-            _(Image.prune_dangling_images, with_raise=False)()
-            if self.errors:
-                self.rollback()
-            return self.errors
-        
     def rollback(self):
         Deploy.remove_all(self.name)
-                  
 
     def connect_proxy_net(self, proxy_network: str = "proxy_net", create_if_missing: bool = False) -> None:
         try:
@@ -201,114 +169,68 @@ class Deploy:
         except NotFound:
             logger.warning("Container '%s' not found locally; skipping network connect.", self.name)
             return
-        except APIError as e:
-            logger.exception("Docker API error while getting container '%s': %s", self.name, e)
+        except APIError as exc:
+            logger.exception("Docker API error while getting container '%s': %s", self.name, exc)
             return
 
         try:
             network = client.networks.get(proxy_network)
         except NotFound:
-            if create_if_missing:
-                try:
-                    network = client.networks.create(proxy_network, check_duplicate=True)
-                    logger.info("Created network '%s'.", proxy_network)
-                except APIError as e:
-                    logger.exception("Failed to create network '%s': %s", proxy_network, e)
-                    return
-            else:
+            if not create_if_missing:
                 logger.info("Network '%s' not found, skipping connection.", proxy_network)
                 return
-        except APIError as e:
-            logger.exception("Docker API error while getting network '%s': %s", proxy_network, e)
+            try:
+                network = client.networks.create(proxy_network, check_duplicate=True, internal=False)
+                logger.info("Created network '%s'.", proxy_network)
+            except APIError as exc:
+                logger.exception("Failed to create network '%s': %s", proxy_network, exc)
+                return
+        except APIError as exc:
+            logger.exception("Docker API error while getting network '%s': %s", proxy_network, exc)
             return
 
         try:
-            net_info = client.api.inspect_network(network.id)
-            containers_in_net = net_info.get("Containers") or {}
-            already_connected = False
-            for cid, info in containers_in_net.items():
-                name_in_net = info.get("Name")
-                if cid == container.id or cid.startswith(container.id[:12]) or name_in_net in (container.name, self.name):
-                    already_connected = True
-                    break
-
-            if already_connected:
-                logger.info("Container '%s' already connected to network '%s'.", self.name, proxy_network)
-                return
-
-            try:
-                network.connect(container.id)
-                logger.info("Connected container '%s' to network '%s'.", self.name, proxy_network)
-            except APIError as e:
-                # 409 may indicate already-connected race
-                msg = str(e)
-                if "already exists" in msg or getattr(e, 'status_code', None) == 409:
-                    logger.debug("Race: container already connected: %s", msg)
-                else:
-                    logger.exception("Failed to connect container '%s' to network '%s': %s", self.name, proxy_network, e)
-        except APIError as e:
-            logger.exception("Error inspecting network '%s' before connect: %s", proxy_network, e)
-        except Exception as e:
-            logger.exception("Unexpected error during connect_proxy_net: %s", e)
-
+            network.connect(container.id)
+            logger.info("Connected container '%s' to network '%s'.", self.name, proxy_network)
+        except APIError as exc:
+            if "already exists" in str(exc) or getattr(exc, "status_code", None) == 409:
+                logger.debug("Container '%s' is already connected to '%s'.", self.name, proxy_network)
+            else:
+                logger.exception("Failed to connect container '%s' to network '%s': %s", self.name, proxy_network, exc)
 
     def disconnect_proxy_net(self, proxy_network: str = "proxy_net", force: bool = False) -> None:
-        """
-        Disconnect self.name (container name or id) from proxy_network.
-        If force=True, attempt forced disconnect.
-        """
         try:
             client = _get_docker_client()
         except Exception:
             return
 
-        # get network
         try:
             network = client.networks.get(proxy_network)
         except NotFound:
             logger.info("Network '%s' not found, skipping disconnect.", proxy_network)
             return
-        except APIError as e:
-            logger.exception("Docker API error while getting network '%s': %s", proxy_network, e)
+        except APIError as exc:
+            logger.exception("Docker API error while getting network '%s': %s", proxy_network, exc)
             return
 
-        # try to disconnect; network.disconnect accepts name/id even if the container object isn't local
         try:
             network.disconnect(self.name, force=force)
             logger.info("Container '%s' disconnected from network '%s'.", self.name, proxy_network)
-        except APIError as e:
-            # if container not attached this can raise; just log
-            logger.exception("Could not disconnect '%s' from '%s': %s", self.name, proxy_network, e)
         except NotFound:
-            logger.exception("Could not found container '%s' from '%s': %s", self.name, proxy_network, e)
-            
-        except Exception as e:
-            logger.exception("Unexpected error during disconnect_proxy_net: %s", e)
+            logger.info("Container '%s' was not connected to network '%s'.", self.name, proxy_network)
+        except APIError as exc:
+            logger.exception("Could not disconnect '%s' from '%s': %s", self.name, proxy_network, exc)
 
     @classmethod
     def remove_all(cls, name):
-        # prefer using safe defaults
-        c = Container(name)  # rely on Container default args
+        container = Container(name)
+        if container.exists():
+            container.stop()
+            container.remove()
 
-        TIMEOUT = 10
-        INTERVAL = 0.2 
-        if c.exists():
-            if Container.container_is_running(name):
-                c.stop()
-                start = time.time()
-                while Container.container_is_running(name):
-                    if time.time() - start > TIMEOUT:
-                        raise TimeoutError("Container did not stop within 3 seconds")
-                    time.sleep(INTERVAL)
+        image = Image(name, tag=None)
+        image.remove_all(force=True)
 
-            c.remove()
-        
-        i = Image(name, tag=None)
-        i.remove_all(force=True)
-       
-
-    
     @classmethod
     def stop_container(cls, name):
-        c=Container(name, None, None, None, [(None, None)])
-        c.stop()
+        Container(name).stop()

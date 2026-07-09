@@ -8,11 +8,10 @@ from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
 from django.utils.translation import gettext as _
 from django.db import transaction
-from .models import Deploy
+from .models import Deploy, DeployLog
 from services.models import Service
-from .serializers import DeploySerializer
-from deployments.celery.tasks import deploy as start_service
-from deployments.celery.tasks import deploy as stop_service
+from .serializers import DeployLogSerializer, DeploySerializer
+
 from core.global_settings.config import SERVICE_STATUS_CHOICES
 
 
@@ -31,6 +30,7 @@ class DeployViewSet(ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        qs = qs.select_related("service", "service__user").prefetch_related("logs")
         if self.request.user.is_superuser:
             return qs
         return qs.filter(service__user=self.request.user)
@@ -54,16 +54,22 @@ class DeployViewSet(ModelViewSet):
                 )
         serializer = self.get_serializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
-            return Response({"success": _("Deploy created.")}, status=status.HTTP_201_CREATED)
+            deploy = serializer.save()
+            return Response(
+                {"success": _("Deploy created."), "deploy": self.get_serializer(deploy).data},
+                status=status.HTTP_201_CREATED,
+            )
         return Response({"error": _("Can not deploy."), "errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
     def update(self, request, pk=None, *args, **kwargs):
         deploy = get_object_or_404(self.get_queryset(), pk=pk)
         serializer = self.get_serializer(deploy, data=request.data, partial=True)
         if serializer.is_valid():
-            serializer.save()
-            return Response({"success": _("Deploy updated.")}, status=status.HTTP_200_OK)
+            deploy = serializer.save()
+            return Response(
+                {"success": _("Deploy updated."), "deploy": self.get_serializer(deploy).data},
+                status=status.HTTP_200_OK,
+            )
         return Response({"error": _("Can not update deploy."), "errors":serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
     def destroy(self, request, pk=None, *args, **kwargs):
@@ -82,6 +88,41 @@ def deploy_name_is_available(request):
     if Deploy.objects.filter(name=name).exists():
         return Response({"result": False, "detail": _("The name has been taken.")})
     return Response({"result": True, "detail": _("The name is free.")})
+
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def deploy_logs_apiview(request, pk):
+    deploy = get_object_or_404(
+        Deploy.objects.select_related("service", "service__user"),
+        pk=pk,
+    )
+    if not request.user.is_superuser and deploy.service.user_id != request.user.id:
+        return Response(
+            {"result": "error", "detail": _("Only owner can view deployment logs.")},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    try:
+        limit = min(max(int(request.query_params.get("limit", 100)), 1), 500)
+    except ValueError:
+        limit = 100
+
+    after = request.query_params.get("after")
+    queryset = DeployLog.objects.filter(deploy=deploy).order_by("created_at")
+    if after:
+        queryset = queryset.filter(created_at__gt=after)
+
+    logs = list(queryset[:limit])
+    return Response(
+        {
+            "result": "success",
+            "deploy": DeploySerializer(deploy).data,
+            "logs": DeployLogSerializer(logs, many=True).data,
+        },
+        status=status.HTTP_200_OK,
+    )
 
 
 
