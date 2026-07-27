@@ -2,17 +2,20 @@ from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.response import Response
-from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes, action
 from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
 from django.utils.translation import gettext as _
 from django.db import transaction
+from django.utils import timezone
+from uuid import uuid4
 from .models import Deploy, DeployLog
 from services.models import Service
 from .serializers import DeployLogSerializer, DeploySerializer
 
 from core.global_settings.config import SERVICE_STATUS_CHOICES
+from deployments.celery.tasks import deploy as deploy_task
 
 
 class DeployPagination(PageNumberPagination):
@@ -60,6 +63,73 @@ class DeployViewSet(ModelViewSet):
                 status=status.HTTP_201_CREATED,
             )
         return Response({"error": _("Can not deploy."), "errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=["post"])  # POST /deploy/<pk>/start/
+    def start(self, request, pk=None):
+        deploy = get_object_or_404(self.get_queryset(), pk=pk)
+        # permission check
+        if not request.user.is_superuser and deploy.service.user_id != request.user.id:
+            return Response({"result": "error", "detail": _("Only owner can start deploy.")}, status=status.HTTP_403_FORBIDDEN)
+
+        task_id = str(uuid4())
+        with transaction.atomic():
+            service = Service.objects.select_for_update().get(pk=deploy.service_id)
+            if service.status in (SERVICE_STATUS_CHOICES.QUEUED, SERVICE_STATUS_CHOICES.DEPLOYING, SERVICE_STATUS_CHOICES.STOPPING):
+                return Response(
+                    {"result": "error", "detail": _("This service already has an active operation.")},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            service.selected_deploy = deploy
+            service.status = SERVICE_STATUS_CHOICES.QUEUED
+            service.deploy_started = timezone.now()
+            service.task_id = task_id
+            service.save()
+            Deploy.objects.filter(pk=deploy.pk).update(
+                status="pending",
+                stage="queued",
+                progress=0,
+                status_message="Deployment queued.",
+                error_message="",
+                cancel_requested=False,
+            )
+            transaction.on_commit(lambda: deploy_task.apply_async(args=[str(deploy.pk)], task_id=task_id))
+        return Response({"result": "success", "task_id": task_id}, status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, pk=None):
+        deploy = get_object_or_404(self.get_queryset(), pk=pk)
+        if not request.user.is_superuser and deploy.service.user_id != request.user.id:
+            return Response({"result": "error", "detail": _("Only owner can cancel deploy.")}, status=status.HTTP_403_FORBIDDEN)
+        deploy.cancel_requested = True
+        if deploy.status == "pending":
+            deploy.status = "cancelled"
+            deploy.stage = "cancelled"
+            deploy.status_message = "Deployment cancelled before execution."
+            deploy.completed_at = timezone.now()
+            deploy.save(update_fields=["cancel_requested", "status", "stage", "status_message", "completed_at"])
+        else:
+            deploy.save(update_fields=["cancel_requested"])
+        return Response({"result": "success", "detail": _(f"Cancel requested for {deploy.name}.")}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"])
+    def redeploy(self, request, pk=None):
+        # simply call start again — clients can bump version in body if needed
+        return self.start(request, pk)
+
+    @action(detail=True, methods=["post"])
+    def logs(self, request, pk=None):
+        # proxy to existing deploy_logs_apiview
+        return deploy_logs_apiview(request, pk)
+
+    @action(detail=True, methods=["post"])
+    def rollback(self, request, pk=None):
+        deploy = get_object_or_404(self.get_queryset(), pk=pk)
+        if not request.user.is_superuser and deploy.service.user_id != request.user.id:
+            return Response({"result": "error", "detail": _("Only owner can rollback deploy.")}, status=status.HTTP_403_FORBIDDEN)
+        # For now: mark rollback requested; orchestrator handles rollback on failure
+        deploy.rollback_status = "pending"
+        deploy.save(update_fields=["rollback_status"]) 
+        return Response({"result": "success", "detail": _(f"Rollback requested for {deploy.name}.")}, status=status.HTTP_200_OK)
 
     def update(self, request, pk=None, *args, **kwargs):
         deploy = get_object_or_404(self.get_queryset(), pk=pk)

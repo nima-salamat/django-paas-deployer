@@ -16,6 +16,9 @@ class DeploymentValidator:
         if deploy_item.service.selected_deploy_id != deploy_item.id:
             raise DeploymentValidationError("Deploy item is not the currently selected deployment for this service.")
 
+        if deploy_item.service.network_id is None:
+            raise DeploymentValidationError("Service must have a private network before deployment.")
+
         if not dockerfile_text:
             raise DeploymentValidationError(
                 f"Missing dockerfile configuration for platform: {deploy_item.service.plan.platform}"

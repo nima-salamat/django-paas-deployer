@@ -1,5 +1,6 @@
 import logging
 from django.db import transaction
+from django.utils import timezone
 from deploy.models import Deploy
 from services.models import Service
 from core.global_settings.config import SERVICE_STATUS_CHOICES
@@ -42,7 +43,17 @@ class ServiceStateManager:
         """Locks the service and transitions its state to STOPPING."""
         with transaction.atomic():
             try:
-                service = Service.objects.select_for_update().select_related("selected_deploy").get(pk=service_id)
+                service = (
+                    Service.objects
+                    .select_for_update()
+                    .get(pk=service_id)
+                )
+
+                service = (
+                    Service.objects
+                    .select_related("selected_deploy")
+                    .get(pk=service.id)
+                )
             except Service.DoesNotExist as exc:
                 raise InvalidServiceStateError(f"Service ID {service_id} does not exist.") from exc
 
@@ -54,19 +65,25 @@ class ServiceStateManager:
     def sync_legacy_success(cls, service_id: int) -> None:
         """Synchronizes legacy service tracking fields upon successful completion."""
         Service.objects.filter(pk=service_id).update(
-            status=SERVICE_STATUS_CHOICES.SUCCEEDED
+            status=SERVICE_STATUS_CHOICES.SUCCEEDED,
+            deployed_at=timezone.now(),
+            deploy_started=None,
+            task_id=None,
         )
 
     @classmethod
     def sync_legacy_failure(cls, service_id: int) -> None:
         """Synchronizes legacy service tracking fields upon a failure path."""
         Service.objects.filter(pk=service_id).update(
-            status=SERVICE_STATUS_CHOICES.FAILED
+            status=SERVICE_STATUS_CHOICES.FAILED,
+            deploy_started=None,
+            task_id=None,
         )
 
     @classmethod
     def sync_legacy_stopped(cls, service_id: int) -> None:
         """Synchronizes legacy service tracking fields upon a successful stop."""
         Service.objects.filter(pk=service_id).update(
-            status=SERVICE_STATUS_CHOICES.STOPPED
+            status=SERVICE_STATUS_CHOICES.STOPPED,
+            task_id=None,
         )

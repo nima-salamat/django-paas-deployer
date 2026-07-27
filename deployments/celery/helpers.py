@@ -12,6 +12,7 @@ class MockOrchestratorResult:
     message: str
     error: str = ""
     rollback_performed: bool = False
+    status: str = ""
 
 
 class DeploymentHelper:

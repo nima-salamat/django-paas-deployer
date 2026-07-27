@@ -17,6 +17,7 @@ class DeploymentStatusChoices(models.TextChoices):
     FAILED = "failed", _("Failed")
     ROLLING_BACK = "rolling_back", _("Rolling back")
     ROLLED_BACK = "rolled_back", _("Rolled back")
+    CANCELLED = "cancelled", _("Cancelled")
 
 
 class RollbackStatusChoices(models.TextChoices):
@@ -57,7 +58,8 @@ class Deploy(BaseModel):
     image_status = models.CharField(_("Image Status"), max_length=64, blank=True, default="")
     volume_status = models.CharField(_("Volume Status"), max_length=64, blank=True, default="")
     network_status = models.CharField(_("Network Status"), max_length=64, blank=True, default="")
-    MAX_ZIP_SIZE_MB = 10
+    cancel_requested = models.BooleanField(_("Cancel Requested"), default=False)
+    MAX_ZIP_SIZE_MB = 100
 
     class Meta:
         verbose_name = _("Deploy")

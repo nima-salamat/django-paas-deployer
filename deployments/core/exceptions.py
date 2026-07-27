@@ -56,3 +56,8 @@ class CleanupError(DeploymentError):
 
 class DeploymentLockError(DeploymentError):
     default_stage = "deployment_lock"
+
+
+class DeploymentCancelled(DeploymentError):
+    default_stage = "cancelled"
+    recoverable = True

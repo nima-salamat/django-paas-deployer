@@ -2,6 +2,7 @@ import logging
 from typing import Optional
 
 from .types import DeploymentEvent, EventSink
+from .exceptions import DeploymentCancelled
 
 
 class DeploymentLogger:
@@ -37,6 +38,8 @@ class DeploymentLogger:
         if self.sink:
             try:
                 self.sink(event)
+            except DeploymentCancelled:
+                raise
             except Exception:
                 self.logger.exception("Deployment event sink failed.")
 

@@ -6,8 +6,10 @@ from services.apis import (
     VolumeViewSet,
     start_service_apiview,
     stop_service_apiview,
-    service_status_apiview
-    
+    service_status_apiview,
+    service_logs_apiview,
+    volume_files_apiview,
+    volume_download_apiview,
 )
 router = DefaultRouter()
 router.register(r'service', ServiceViewSet, basename='service')
@@ -18,4 +20,7 @@ urlpatterns = router.urls + [
     path("start_service/", start_service_apiview, name="start_service"),
     path("stop_service/", stop_service_apiview, name="stop_service"),
     path("service_status/", service_status_apiview, name="service_status"),
+    path("service/<uuid:pk>/logs/", service_logs_apiview, name="service_logs"),
+    path("volume/<uuid:pk>/files/", volume_files_apiview, name="volume_files"),
+    path("volume/<uuid:pk>/download/", volume_download_apiview, name="volume_download"),
 ]

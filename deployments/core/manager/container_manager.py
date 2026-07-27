@@ -113,13 +113,29 @@ class Container(Client):
             container = self.client.containers.get(self.name)
             container.start()
             container.reload()
+
+            
+            
             logger.info("Container '%s' started; status=%s", self.name, container.status)
             return container
         except docker.errors.NotFound as exc:
             raise ContainerError(f"Container '{self.name}' was not found during start.") from exc
         except docker.errors.DockerException as exc:
-            raise ContainerError(f"Failed to start container '{self.name}'.") from exc
+            logs = container.logs(tail=200).decode(errors="ignore")
 
+            print("=" * 80)
+            print(logs)
+            print("=" * 80)
+
+            raise ContainerError(
+                f"Container '{self.name}' exited immediately.",
+                details={
+                    "status": container.status,
+                    "exit_code": container.attrs["State"]["ExitCode"],
+                    "logs": logs,
+                },
+            )
+            
     def stop(self, timeout=5):
         try:
             container = self.client.containers.get(self.name)

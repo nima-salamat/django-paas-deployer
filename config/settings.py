@@ -14,7 +14,10 @@ import os
 SECRET_KEY=os.environ.get("SECRET_KEY")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG =  int(os.environ.get("DEBUG"))
+DEBUG = int(os.environ.get("DEBUG", "0")) if os.environ.get("DEBUG") is not None else False
+# Allow DEBUG to be boolean-like strings; default False
+if isinstance(DEBUG, int):
+    DEBUG = bool(DEBUG)
 
 ALLOWED_HOSTS = ["*", "localhost", "127.0.0.1"]
 
@@ -87,6 +90,20 @@ TEMPLATES = [
 # WSGI_APPLICATION = 'wsgi.application'
 ASGI_APPLICATION = "asgi.application"
 
+# Channel layers: prefer REDIS if available, else fallback to in-memory for local dev
+if os.environ.get("CHANNEL_REDIS_URL") or os.environ.get("REDIS_URL"):
+    channel_redis_url = os.environ.get("CHANNEL_REDIS_URL") or os.environ.get("REDIS_URL")
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {"hosts": [channel_redis_url]},
+        }
+    }
+else:
+    CHANNEL_LAYERS = {
+        "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}
+    }
+
 # Database
 
 # DATABASES = {
@@ -101,7 +118,7 @@ DB_NAME = os.environ.get("DB_NAME")
 DB_USER = os.environ.get("DB_USER")
 DB_PASSWORD = os.environ.get("DB_PASSWORD")
 DB_HOST = os.environ.get("DB_HOST")
-DB_PORT = int(os.environ.get("DB_PORT"))
+DB_PORT = int(os.environ.get("DB_PORT", "5432")) if os.environ.get("DB_PORT") is not None else 5432
 
 DATABASES = {
     'default': {
@@ -178,22 +195,23 @@ AUTH_USER_MODEL = "users.User"
 
 
 # Celery settings
-CELERY_BROKER_URL = 'redis://localhost:6379/0'            
-CELERY_RESULT_BACKEND = 'redis://localhost:6379/1'
+# Celery settings (use REDIS_URL if provided by environment)
+REDIS_URL = os.environ.get("REDIS_URL") or os.environ.get("CELERY_BROKER_URL") or "redis://127.0.0.1:6379"
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", f"{REDIS_URL}/0")
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", f"{REDIS_URL}/1")
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers.DatabaseScheduler'
 CELERY_BEAT_SCHEDULE = {
     "monitor_services_every_minute": {
         "task": "deployments.celery.schedules.monitor_services",
-        "schedule": 20.0, 
+        "schedule": 20.0,
     },
 }
-
 CACHES = {
     'default': {
         'BACKEND': 'django_redis.cache.RedisCache',
-        'LOCATION': 'redis://localhost:6379/2',  
+        'LOCATION': f'{REDIS_URL}/2',
         'OPTIONS': {
             'CLIENT_CLASS': 'django_redis.client.DefaultClient',
         }

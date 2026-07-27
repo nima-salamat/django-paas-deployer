@@ -3,6 +3,7 @@ from deploy.models import Deploy
 from deploy.deployment_state import DjangoDeploymentState
 from core.global_settings.config import default_ports
 from deployments.core.deploy import Deploy as DeployFacade
+from deployments.core.types import VolumeSpec
 from deployments.core.manager.container_manager import Container
 from ..service_status import ServiceStateManager
 from ..validators import DeploymentValidator
@@ -25,23 +26,46 @@ class DeployService:
 
         service_id = deploy_item.service.id
         container_name = deploy_item.service.get_docker_service_name()
-        
-        # Initialize domain lifecycle tracker
         state_tracker = DjangoDeploymentState(deploy_item)
+
+        if deploy_item.cancel_requested:
+            state_tracker.finish(
+                MockOrchestratorResult(
+                    success=False,
+                    stage="cancelled",
+                    message="Deployment cancelled before execution.",
+                    status="cancelled",
+                )
+            )
+            ServiceStateManager.sync_legacy_stopped(service_id)
+            return
+
+        # Initialize the persisted and live deployment lifecycle.
         state_tracker.start()
 
         try:
-            self._process_deployment(deploy_item, container_name, state_tracker)
-            ServiceStateManager.sync_legacy_success(service_id)
+            result = self._process_deployment(deploy_item, container_name, state_tracker)
+            if getattr(result, "status", None) == "cancelled":
+                ServiceStateManager.sync_legacy_stopped(service_id)
+            else:
+                ServiceStateManager.sync_legacy_success(service_id)
             logger.info("Successfully executed deploy cycle for container: %s", container_name)
 
         except Exception as exc:
             logger.error("Deployment critical failure on %s: %s", container_name, str(exc), exc_info=True)
-            self._rollback(container_name, state_tracker)
+            if state_tracker.deploy.status not in {"failed", "cancelled"}:
+                state_tracker.finish(
+                    MockOrchestratorResult(
+                        success=False,
+                        stage=getattr(exc, "stage", "deployment_failed"),
+                        message=str(exc) or "Deployment failed.",
+                        error=str(exc),
+                    )
+                )
             ServiceStateManager.sync_legacy_failure(service_id)
             raise
 
-    def _process_deployment(self, deploy_item: Deploy, container_name: str, state_tracker: DjangoDeploymentState) -> None:
+    def _process_deployment(self, deploy_item: Deploy, container_name: str, state_tracker: DjangoDeploymentState):
         platform = deploy_item.service.plan.platform
         dockerfile_text = DeploymentHelper.get_dockerfile_text(platform)
 
@@ -58,11 +82,14 @@ class DeployService:
                 message="Existing container containerized instance restarted successfully."
             )
             state_tracker.finish(restart_result)
+            result = restart_result
         else:
             logger.info("Full orchestration required. Building image for: %s", container_name)
-            self._execute_orchestrator(deploy_item, container_name, platform, dockerfile_text, state_tracker)
+            result = self._execute_orchestrator(deploy_item, container_name, platform, dockerfile_text, state_tracker)
 
-        ContainerWaiter.wait_until_running(container_name, timeout=10)
+        if getattr(result, "status", None) != "cancelled":
+            ContainerWaiter.wait_until_running(container_name, timeout=10)
+        return result
 
     def _execute_orchestrator(
         self, 
@@ -82,7 +109,7 @@ class DeployService:
             max_cpu=deploy_item.service.plan.max_cpu,
             max_ram=deploy_item.service.plan.max_ram,
             networks=[(deploy_item.service.network.name, "bridge")],
-            volumes=[],
+            volumes=self._volume_specs(deploy_item),
             port=port,
             read_only=deploy_item.service.read_only,
             platform=platform,
@@ -94,19 +121,20 @@ class DeployService:
         result = deployer.deploy_result()
         state_tracker.finish(result)
 
-        if not result.success:
+        if not result.success and result.status != "cancelled":
             raise OrchestratorDeploymentError(f"Orchestrator compilation failed: {result.message}")
+        return result
 
-    def _rollback(self, container_name: str, state_tracker: DjangoDeploymentState) -> None:
-        logger.info("Executing failure teardown for container: %s", container_name)
-        try:
-            DeployFacade.remove_all(container_name)
-            failure_result = MockOrchestratorResult(
-                success=False,
-                stage="deployment_failed",
-                message="Deployment failed. Operational environments reverted.",
-                rollback_performed=True
+    @staticmethod
+    def _volume_specs(deploy_item: Deploy) -> list[VolumeSpec]:
+        """Convert service-owned volume records into typed Docker-managed mounts."""
+        return [
+            VolumeSpec(
+                source=volume.name,
+                target=volume.bind,
+                mode=volume.mode,
+                mount_type="volume",
+                size_mb=volume.size_mb,
             )
-            state_tracker.finish(failure_result)
-        except Exception as exc:
-            logger.critical("Teardown sub-failure occurred during rollback for %s: %s", container_name, str(exc))
+            for volume in deploy_item.service.volumes.all()
+        ]

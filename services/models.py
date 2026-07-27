@@ -85,7 +85,7 @@ class Volume(BaseModel):
         verbose_name=_("User"),
         on_delete=models.CASCADE,
     )
-    service = models.ForeignKey(Service, verbose_name=_("Service"), related_name="volumes", on_delete=models.CASCADE)
+    service = models.ForeignKey(Service, verbose_name=_("Service"), related_name="volumes", on_delete=models.SET_NULL, null=True, blank=True)
     bind = models.CharField(_("Bind Directory"), max_length=255)
     mode = models.CharField(_("Mode Directory"), max_length=255, choices=VOLUME_MODE_CHOICES.choices, default=VOLUME_MODE_CHOICES.READ_WRITE)
     size_mb = models.PositiveIntegerField()

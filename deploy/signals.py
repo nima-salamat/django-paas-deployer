@@ -1,7 +1,6 @@
 from django.db.models.signals import pre_delete
 from django.dispatch import receiver
 from .models import Deploy
-from .tasks import handle_deploy_start, handle_deploy_stop
 from core.tasks.zip_utils import unzip_files
 import os
 

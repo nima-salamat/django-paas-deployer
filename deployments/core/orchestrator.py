@@ -2,7 +2,7 @@ from .cleanup import CleanupManager
 from .converter import convert_zip_to_tar
 from .deployment_logger import DeploymentLogger
 from .dockerfile import DockerfileGenerator
-from .exceptions import DeploymentError
+from .exceptions import DeploymentCancelled, DeploymentError
 from .health import DockerHealthChecker
 from .manager.container_manager import Container
 from .manager.image_manager import Image
@@ -133,6 +133,15 @@ class DeploymentOrchestrator:
                 },
             )
 
+        except DeploymentCancelled as exc:
+            return self._handle_cancellation(
+                config,
+                exc,
+                previous_image_ref=previous_image_ref,
+                old_container_removed=old_container_removed,
+                image_built=image_built,
+                volume_binds=volume_binds,
+            )
         except DeploymentError as exc:
             return self._handle_failure(
                 config,
@@ -156,6 +165,43 @@ class DeploymentOrchestrator:
                 image_built=image_built,
                 volume_binds=volume_binds,
             )
+
+    def _handle_cancellation(
+        self,
+        config: DeploymentConfig,
+        exc: DeploymentCancelled,
+        *,
+        previous_image_ref,
+        old_container_removed,
+        image_built,
+        volume_binds,
+    ) -> DeploymentResult:
+        rollback_performed = False
+        if old_container_removed:
+            try:
+                rollback_performed = self.rollback_manager.restore_previous_container(
+                    config,
+                    previous_image_ref=previous_image_ref,
+                    volume_binds=volume_binds,
+                )
+            except DeploymentError:
+                pass
+        if image_built:
+            try:
+                self.cleanup_manager.remove_failed_image(config)
+            except DeploymentError:
+                pass
+        return DeploymentResult(
+            success=False,
+            status="cancelled",
+            message=exc.message,
+            image_ref=config.image_ref,
+            container_name=config.name,
+            previous_image_ref=previous_image_ref,
+            rollback_performed=rollback_performed,
+            error=exc.message,
+            stage="cancelled",
+        )
 
     def _ensure_networks(self, config: DeploymentConfig):
         self.logger.info("network_creation", "Ensuring Docker networks exist.", progress=36)
