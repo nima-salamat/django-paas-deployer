@@ -8,6 +8,7 @@ from .exceptions import (
     InvalidServiceStateError,
     OrchestratorDeploymentError,
 )
+from .schedules import monitor_services
 
 logger = logging.getLogger(__name__)
 
