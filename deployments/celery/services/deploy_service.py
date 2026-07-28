@@ -1,4 +1,5 @@
 import logging
+import traceback
 from deploy.models import Deploy
 from deploy.deployment_state import DjangoDeploymentState
 from core.global_settings.config import default_ports
@@ -53,6 +54,7 @@ class DeployService:
 
         except Exception as exc:
             logger.error("Deployment critical failure on %s: %s", container_name, str(exc), exc_info=True)
+            state_tracker.record_exception(exc, traceback.format_exc())
             if state_tracker.deploy.status not in {"failed", "cancelled"}:
                 state_tracker.finish(
                     MockOrchestratorResult(

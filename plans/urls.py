@@ -1,5 +1,5 @@
 from django.urls import path
-from .apis import PlanAdminViewSet, PlatformPlansAPIView, PlansApiView
+from .apis import PlanAdminViewSet, PlatformPlansAPIView, PlansApiView, PlanApplyAPIView
 
 
 urlpatterns = [
@@ -7,4 +7,5 @@ urlpatterns = [
     path('plans/admin/<uuid:pk>/', PlanAdminViewSet.as_view({'get': 'retrieve', 'put': 'update', 'patch': 'update', 'delete': 'destroy'}), name='plan-detail'),
     path("platforms/", PlatformPlansAPIView.as_view(), name="platform_plans"),
     path("", PlansApiView.as_view(), name="plans_api"),
+    path('plans/<uuid:planId>/apply/', PlanApplyAPIView.as_view(), name='plan-apply'),
 ]

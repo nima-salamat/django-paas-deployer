@@ -118,6 +118,7 @@ class Migration(migrations.Migration):
                 (
                     "deploy",
                     models.ForeignKey(
+                        db_constraint=False,
                         on_delete=django.db.models.deletion.CASCADE,
                         related_name="logs",
                         to="deploy.deploy",
@@ -127,6 +128,7 @@ class Migration(migrations.Migration):
                 (
                     "service",
                     models.ForeignKey(
+                        db_constraint=False,
                         on_delete=django.db.models.deletion.CASCADE,
                         related_name="deployment_logs",
                         to="services.service",

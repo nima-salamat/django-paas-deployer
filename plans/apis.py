@@ -127,3 +127,61 @@ class PlansApiView(APIView):
         paginated_plans = paginator.paginate_queryset(plans, request)
         serializer = PlanSerializer(paginated_plans, many=True)
         return paginator.get_paginated_response(serializer.data)
+
+
+class PlanApplyAPIView(APIView):
+    """
+    POST /plans/<planId>/apply
+    Body: { "target_type": "service", "target_id": "<uuid>", "applyImmediately": true }
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, planId=None):
+        from django.shortcuts import get_object_or_404
+        from services.models import Service
+        from deployments.celery.tasks import deploy as start_service
+        from core.global_settings.config import SERVICE_STATUS_CHOICES
+        from django.db import transaction
+
+        try:
+            plan = Plan.objects.get(pk=planId)
+        except Plan.DoesNotExist:
+            return Response({"error": _('Plan not found.')}, status=status.HTTP_404_NOT_FOUND)
+
+        data = request.data or {}
+        target_type = data.get('target_type')
+        target_id = data.get('target_id')
+        apply_immediately = bool(data.get('applyImmediately'))
+
+        if target_type != 'service' or not target_id:
+            return Response({"error": _('Invalid target_type or missing target_id.')}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with transaction.atomic():
+                service = Service.objects.select_for_update().get(pk=target_id, user=request.user)
+                # Assign the plan
+                service.plan = plan
+                service.save()
+
+                # Optionally trigger redeploy if requested and a deploy is selected
+                if apply_immediately:
+                    deploy_item = service.selected_deploy
+                    if deploy_item is None:
+                        return Response({"result": "error", "detail": _('Service has no selected deploy to apply.')}, status=status.HTTP_409_CONFLICT)
+
+                    if service.status in (
+                        SERVICE_STATUS_CHOICES.QUEUED,
+                        SERVICE_STATUS_CHOICES.DEPLOYING,
+                        SERVICE_STATUS_CHOICES.STOPPING,
+                    ):
+                        return Response({"result": "error", "detail": _('Service cannot be redeployed in its current status.')}, status=status.HTTP_409_CONFLICT)
+
+                    service.status = SERVICE_STATUS_CHOICES.QUEUED
+                    service.save()
+                    transaction.on_commit(lambda: start_service.delay(str(deploy_item.id)))
+
+        except Service.DoesNotExist:
+            return Response({"error": _('Service not found or not owned by user.')}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response({"result": "success", "detail": _('Plan applied to target.')}, status=status.HTTP_202_ACCEPTED)

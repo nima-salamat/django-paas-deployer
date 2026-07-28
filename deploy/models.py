@@ -92,13 +92,18 @@ class Deploy(BaseModel):
 
 
 class DeployLog(BaseModel):
-    deploy = models.ForeignKey(Deploy, verbose_name=_("Deploy"), related_name="logs", on_delete=models.CASCADE)
-    service = models.ForeignKey(Service, verbose_name=_("Service"), related_name="deployment_logs", on_delete=models.CASCADE)
+    # The event store lives in a separate database, so these identifiers must
+    # not create cross-database foreign-key constraints.
+    deploy = models.ForeignKey(Deploy, verbose_name=_("Deploy"), related_name="logs", on_delete=models.CASCADE, db_constraint=False)
+    service = models.ForeignKey(Service, verbose_name=_("Service"), related_name="deployment_logs", on_delete=models.CASCADE, db_constraint=False)
     stage = models.CharField(_("Stage"), max_length=64)
+    event_type = models.CharField(_("Event Type"), max_length=96, default="deployment.event")
     level = models.CharField(_("Level"), max_length=16, default="info")
     message = models.TextField(_("Message"))
     progress = models.PositiveSmallIntegerField(_("Progress"), blank=True, null=True)
     details = models.JSONField(_("Details"), blank=True, null=True)
+    exception_type = models.CharField(_("Exception Type"), max_length=128, blank=True, default="")
+    traceback = models.TextField(_("Traceback"), blank=True, default="")
 
     class Meta:
         verbose_name = _("Deploy Log")
@@ -106,5 +111,5 @@ class DeployLog(BaseModel):
         ordering = ("created_at",)
 
     def __str__(self):
-        return f"{self.deploy.name}: {self.stage} - {self.level}"
+        return f"Deployment {self.deploy_id}: {self.stage} - {self.level}"
 

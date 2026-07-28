@@ -25,8 +25,35 @@ class DeployAdmin(admin.ModelAdmin):
 
 @admin.register(DeployLog)
 class DeployLogAdmin(admin.ModelAdmin):
-    list_display = ("deploy", "service", "stage", "level", "progress", "created_at")
+    list_display = ("deploy_id", "service_id", "stage", "event_type", "level", "progress", "created_at")
     list_filter = ("stage", "level", "created_at")
-    search_fields = ("deploy__name", "service__name", "message")
-    readonly_fields = ("deploy", "service", "stage", "level", "message", "progress", "details", "created_at", "updated_at")
+    search_fields = ("message", "event_type")
+    fields = (
+        "deploy_identifier",
+        "service_identifier",
+        "stage",
+        "event_type",
+        "level",
+        "message",
+        "progress",
+        "details",
+        "exception_type",
+        "traceback",
+        "created_at",
+        "updated_at",
+    )
+    readonly_fields = fields
+
+    def get_queryset(self, request):
+        from django.conf import settings
+
+        return super().get_queryset(request).using(settings.DEPLOYMENT_LOG_DB_ALIAS)
+
+    @admin.display(description="Deploy")
+    def deploy_identifier(self, obj):
+        return obj.deploy_id
+
+    @admin.display(description="Service")
+    def service_identifier(self, obj):
+        return obj.service_id
     

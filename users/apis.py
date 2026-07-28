@@ -5,10 +5,14 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework import status
 from django.contrib.auth import get_user_model
 from .serializers import (
-    GetUserSerializer, SetPasswordSerializer,
-    UpdateUserSerializer, AddImageProfileSerializer,
-    OrderImageProfileSerializer,ProfileImagerSerializer,
-    DeletePasswordSerializer
+    GetUserSerializer,
+    SetPasswordSerializer,
+    ChangePasswordSerializer,
+    RemovePasswordSerializer,
+    UpdateUserSerializer,
+    AddImageProfileSerializer,
+    OrderImageProfileSerializer,
+    ProfileImagerSerializer,
 )
 
 from .models import User, Profile
@@ -104,25 +108,51 @@ class ProfileViewSet(ViewSet):
 
 
         
-class PasswordViewSet(ViewSet):
+class PasswordStatusAPIView(APIView):
     authentication_classes = [JWTAuthentication]
-    permission_classes     = [IsAuthenticated]
-    def set(self, request):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
         user = request.user
+        return Response(
+            {
+                "has_password": user.has_usable_password(),
+                "message": _("success::password status retrieved."),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class SetPasswordAPIView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
         serializer = SetPasswordSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save(user)
-            return Response(data={"message": _("success::password changed.")}, status=status.HTTP_200_OK)
-        
-        return Response({"message": _("error::cant set password."), "errors": serializer.errors},status=status.HTTP_400_BAD_REQUEST)
+            serializer.save(request.user)
+            return Response({"message": _("success::password set.")}, status=status.HTTP_200_OK)
+        return Response({"message": _("error::cannot set password."), "errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
             
-    def delete(self, request):
-        user = request.user
-        print(request.data)
-        serializer = DeletePasswordSerializer(data=request.data)
-        
-        if serializer.is_valid(user=user):
+class ChangePasswordAPIView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = ChangePasswordSerializer(data=request.data, user=request.user)
+        if serializer.is_valid():
             serializer.save()
-            return Response(data={"message": _("success::password deleted.")}, status=status.HTTP_200_OK)
-        print(serializer.errors)
-        return Response({"message": _("error::cant set password."), "errors": serializer.errors},status=status.HTTP_400_BAD_REQUEST)
+            return Response({"message": _("success::password changed.")}, status=status.HTTP_200_OK)
+        return Response({"message": _("error::cannot change password."), "errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class RemovePasswordAPIView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request):
+        serializer = RemovePasswordSerializer(data=request.data, user=request.user)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({"message": _("success::password removed.")}, status=status.HTTP_200_OK)
+        return Response({"message": _("error::cannot remove password."), "errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)

@@ -2,11 +2,10 @@ from django.db import transaction
 from django.utils import timezone
 import logging
 
-from asgiref.sync import async_to_sync
-from channels.layers import get_channel_layer
-
-from .models import Deploy, DeployLog, DeploymentStatusChoices, RollbackStatusChoices
+from .event_pipeline import DeploymentEventPipeline
+from .models import Deploy, DeploymentStatusChoices, RollbackStatusChoices
 from deployments.core.exceptions import DeploymentCancelled
+from deployments.core.types import DeploymentEvent
 
 
 RESOURCE_STATUS_FIELDS = {
@@ -41,11 +40,9 @@ STAGE_STATUS_MESSAGES = {
 class DjangoDeploymentState:
     def __init__(self, deploy: Deploy):
         self.deploy = deploy
-        self.channel_layer = get_channel_layer()
-        self.group_name = f"deploy_{deploy.pk}"
+        self.events = DeploymentEventPipeline(deploy)
 
     def start(self):
-        DeployLog.objects.filter(deploy=self.deploy).delete()
         self._update_deploy(
             status=DeploymentStatusChoices.RUNNING,
             stage="deployment_started",
@@ -62,20 +59,17 @@ class DjangoDeploymentState:
             completed_at=None,
             cancel_requested=False,
         )
+        self.events.record(
+            DeploymentEvent(
+                stage="deployment_started",
+                message="Deployment started.",
+                progress=0,
+            )
+        )
 
     def event_sink(self, event):
         if Deploy.objects.filter(pk=self.deploy.pk, cancel_requested=True).exists():
             raise DeploymentCancelled("Deployment was cancelled by the user.")
-
-        DeployLog.objects.create(
-            deploy=self.deploy,
-            service=self.deploy.service,
-            stage=event.stage,
-            level=event.level,
-            message=event.message,
-            progress=event.progress,
-            details=event.details,
-        )
 
         update = {
             "stage": event.stage,
@@ -123,7 +117,7 @@ class DjangoDeploymentState:
                 update["rollback_status"] = RollbackStatusChoices.FAILED
 
         self._update_deploy(**update)
-        self._publish(event)
+        self.events.record(event)
 
     def finish(self, result):
         update = {
@@ -162,6 +156,27 @@ class DjangoDeploymentState:
             )
 
         self._update_deploy(**update)
+        final_stage = "deployment_completed" if result.success else update["stage"]
+        final_level = "info" if result.success else "error"
+        self.events.record(
+            DeploymentEvent(
+                stage=final_stage,
+                message=update["status_message"],
+                level=final_level,
+                progress=100,
+                details={"rollback_performed": result.rollback_performed},
+            )
+        )
+
+    def record_exception(self, exception: Exception, traceback_text: str):
+        event = DeploymentEvent(
+            stage=getattr(exception, "stage", "deployment_failed"),
+            message=str(exception) or "Deployment failed.",
+            level="error",
+            progress=self.deploy.progress,
+            details={"recoverable": getattr(exception, "recoverable", False)},
+        )
+        self.events.record(event, exception=exception, traceback_text=traceback_text)
 
     def _resource_value(self, event, default):
         if event.stage == "health_check" and event.details.get("container_status"):
@@ -173,26 +188,3 @@ class DjangoDeploymentState:
             Deploy.objects.filter(pk=self.deploy.pk).update(**fields)
             for key, value in fields.items():
                 setattr(self.deploy, key, value)
-
-    def _publish(self, event):
-        """Send the same event stored in the database to subscribed UI clients."""
-        if not self.channel_layer:
-            return
-
-        payload = {
-            "type": "deployment.event",
-            "deployment_id": str(self.deploy.pk),
-            "stage": event.stage,
-            "message": event.message,
-            "level": event.level,
-            "progress": event.progress,
-            "details": event.details or {},
-        }
-        try:
-            async_to_sync(self.channel_layer.group_send)(
-                self.group_name,
-                {"type": "deployment.message", "payload": payload},
-            )
-        except Exception:
-            # Live delivery is optional; the persisted event remains available via the API.
-            logger.exception("Unable to publish deployment event to websocket clients.")

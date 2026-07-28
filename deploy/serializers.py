@@ -11,10 +11,13 @@ class DeployLogSerializer(serializers.ModelSerializer):
             "deploy",
             "service",
             "stage",
+            "event_type",
             "level",
             "message",
             "progress",
             "details",
+            "exception_type",
+            "traceback",
             "created_at",
         ]
         read_only_fields = fields
@@ -70,5 +73,7 @@ class DeploySerializer(serializers.ModelSerializer):
         ]
 
     def get_recent_logs(self, obj):
-        logs = obj.logs.order_by("-created_at")[:20]
+        from django.conf import settings
+
+        logs = DeployLog.objects.using(settings.DEPLOYMENT_LOG_DB_ALIAS).filter(deploy_id=obj.pk).order_by("-created_at")[:20]
         return DeployLogSerializer(reversed(list(logs)), many=True).data

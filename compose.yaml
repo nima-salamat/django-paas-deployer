@@ -3,13 +3,35 @@ version: '3.8'
 services:
   db:
     image: postgres:15
-    restart: always
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: mydb
-      POSTGRES_USER: myuser
-      POSTGRES_PASSWORD: mypassword
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  deployment-log-db:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DEPLOYMENT_LOG_DB_NAME}
+      POSTGRES_USER: ${DEPLOYMENT_LOG_DB_USER}
+      POSTGRES_PASSWORD: ${DEPLOYMENT_LOG_DB_PASSWORD}
+    volumes:
+      - deployment_log_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - app-network
 
@@ -18,7 +40,8 @@ services:
     command: >
       sh -c "python manage.py collectstatic --noinput &&
              python manage.py migrate &&
-             gunicorn wsgi:application --bind 0.0.0.0:8000"
+             python manage.py migrate --database=deployment_logs &&
+             daphne -b 0.0.0.0 -p 8000 config.asgi:application"
     volumes:
       - .:/app
       - static_volume:/app/static
@@ -26,18 +49,32 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      deployment-log-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     env_file:
       - .env
+    environment:
+      DB_HOST: db
+      DEPLOYMENT_LOG_DB_HOST: deployment-log-db
+      REDIS_URL: redis://redis:6379
+      CHANNEL_REDIS_URL: redis://redis:6379
     networks:
       - app-network
 
   redis:
     image: redis:7
-    restart: always
+    restart: unless-stopped
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - app-network
 
@@ -47,10 +84,19 @@ services:
     volumes:
       - .:/app
     depends_on:
-      - redis
-      - db
+      db:
+        condition: service_healthy
+      deployment-log-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     env_file:
       - .env
+    environment:
+      DB_HOST: db
+      DEPLOYMENT_LOG_DB_HOST: deployment-log-db
+      REDIS_URL: redis://redis:6379
+      CHANNEL_REDIS_URL: redis://redis:6379
     networks:
       - app-network
 
@@ -60,18 +106,28 @@ services:
     volumes:
       - .:/app
     depends_on:
-      - redis
-      - db
-      - celery
+      db:
+        condition: service_healthy
+      deployment-log-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      celery:
+        condition: service_started
     env_file:
       - .env
+    environment:
+      DB_HOST: db
+      DEPLOYMENT_LOG_DB_HOST: deployment-log-db
+      REDIS_URL: redis://redis:6379
+      CHANNEL_REDIS_URL: redis://redis:6379
     networks:
       - app-network
 
   nginx:
     container_name: nginx_deployer
     image: nginx:latest
-    restart: always
+    restart: unless-stopped
     ports:
       - "80:80"
     volumes:
@@ -85,6 +141,7 @@ services:
 
 volumes:
   postgres_data:
+  deployment_log_data:
   static_volume:
   media_volume:
 

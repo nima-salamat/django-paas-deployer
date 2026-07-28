@@ -1,27 +1,54 @@
-from rest_framework.viewsets import ModelViewSet
-from rest_framework.permissions import IsAuthenticated
-from rest_framework_simplejwt.authentication import JWTAuthentication
-from rest_framework.response import Response
-from rest_framework.decorators import api_view, authentication_classes, permission_classes, action
-from rest_framework import status
-from rest_framework.pagination import PageNumberPagination
-from django.shortcuts import get_object_or_404
-from django.utils.translation import gettext as _
-from django.db import transaction
-from django.utils import timezone
+# deploy/apis.py
+import functools
+import os
+import tarfile
+import tempfile
 from uuid import uuid4
-from .models import Deploy, DeployLog
-from services.models import Service
-from .serializers import DeployLogSerializer, DeploySerializer
+
+from django.conf import settings
+from django.db import transaction
+from django.http import FileResponse
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
+from django.utils.translation import gettext as _
+
+from rest_framework import status
+from rest_framework.decorators import api_view, authentication_classes, permission_classes, action
+from rest_framework.pagination import PageNumberPagination
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework.viewsets import ModelViewSet
 
 from core.global_settings.config import SERVICE_STATUS_CHOICES
 from deployments.celery.tasks import deploy as deploy_task
+from deployments.celery.tasks import stop as stop_service
+from deployments.core.manager.client_manager import Client
+from deployments.core.manager.container_manager import Container
+from docker.errors import APIError, NotFound as DockerNotFound
+
+from .models import Deploy, DeployLog
+from .serializers import DeployLogSerializer, DeploySerializer
+from services.models import Service
+from core.utils import make_uuid4
 
 
 class DeployPagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = "page_size"
     max_page_size = 50
+
+
+def _parse_cursor(value):
+    if not value:
+        return None
+    dt = parse_datetime(value)
+    if dt is None:
+        return None
+    if timezone.is_naive(dt):
+        dt = timezone.make_aware(dt, timezone.get_current_timezone())
+    return dt
 
 
 class DeployViewSet(ModelViewSet):
@@ -32,18 +59,18 @@ class DeployViewSet(ModelViewSet):
     pagination_class = DeployPagination
 
     def get_queryset(self):
-        qs = super().get_queryset()
-        qs = qs.select_related("service", "service__user").prefetch_related("logs")
+        qs = super().get_queryset().select_related("service", "service__user")
         if self.request.user.is_superuser:
             return qs
         return qs.filter(service__user=self.request.user)
 
     def list(self, request, *args, **kwargs):
-        service_id = request.query_params.get("service_id","")
-        queryset = self.get_queryset().order_by("created_at")
+        service_id = request.query_params.get("service_id", "")
+        queryset = self.get_queryset().order_by("-created_at")
         if service_id:
-            queryset = queryset.filter(service = service_id)
-        page = self.paginate_queryset(queryset = queryset)
+            queryset = queryset.filter(service=service_id)
+
+        page = self.paginate_queryset(queryset=queryset)
         serializer = self.get_serializer(page, many=True)
         return self.get_paginated_response(serializer.data)
 
@@ -55,6 +82,7 @@ class DeployViewSet(ModelViewSet):
                     {"error": _("Service must belong to the authenticated user.")},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+
         serializer = self.get_serializer(data=request.data)
         if serializer.is_valid():
             deploy = serializer.save()
@@ -62,28 +90,41 @@ class DeployViewSet(ModelViewSet):
                 {"success": _("Deploy created."), "deploy": self.get_serializer(deploy).data},
                 status=status.HTTP_201_CREATED,
             )
-        return Response({"error": _("Can not deploy."), "errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(
+            {"error": _("Can not deploy."), "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     @action(detail=True, methods=["post"])  # POST /deploy/<pk>/start/
     def start(self, request, pk=None):
         deploy = get_object_or_404(self.get_queryset(), pk=pk)
-        # permission check
         if not request.user.is_superuser and deploy.service.user_id != request.user.id:
-            return Response({"result": "error", "detail": _("Only owner can start deploy.")}, status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"result": "error", "detail": _("Only owner can start deploy.")},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         task_id = str(uuid4())
+
         with transaction.atomic():
             service = Service.objects.select_for_update().get(pk=deploy.service_id)
-            if service.status in (SERVICE_STATUS_CHOICES.QUEUED, SERVICE_STATUS_CHOICES.DEPLOYING, SERVICE_STATUS_CHOICES.STOPPING):
+            if service.status in (
+                SERVICE_STATUS_CHOICES.QUEUED,
+                SERVICE_STATUS_CHOICES.DEPLOYING,
+                SERVICE_STATUS_CHOICES.STOPPING,
+            ):
                 return Response(
                     {"result": "error", "detail": _("This service already has an active operation.")},
                     status=status.HTTP_409_CONFLICT,
                 )
+
             service.selected_deploy = deploy
             service.status = SERVICE_STATUS_CHOICES.QUEUED
             service.deploy_started = timezone.now()
             service.task_id = task_id
             service.save()
+
             Deploy.objects.filter(pk=deploy.pk).update(
                 status="pending",
                 stage="queued",
@@ -92,14 +133,20 @@ class DeployViewSet(ModelViewSet):
                 error_message="",
                 cancel_requested=False,
             )
+
             transaction.on_commit(lambda: deploy_task.apply_async(args=[str(deploy.pk)], task_id=task_id))
+
         return Response({"result": "success", "task_id": task_id}, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
         deploy = get_object_or_404(self.get_queryset(), pk=pk)
         if not request.user.is_superuser and deploy.service.user_id != request.user.id:
-            return Response({"result": "error", "detail": _("Only owner can cancel deploy.")}, status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"result": "error", "detail": _("Only owner can cancel deploy.")},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         deploy.cancel_requested = True
         if deploy.status == "pending":
             deploy.status = "cancelled"
@@ -109,27 +156,35 @@ class DeployViewSet(ModelViewSet):
             deploy.save(update_fields=["cancel_requested", "status", "stage", "status_message", "completed_at"])
         else:
             deploy.save(update_fields=["cancel_requested"])
-        return Response({"result": "success", "detail": _(f"Cancel requested for {deploy.name}.")}, status=status.HTTP_200_OK)
+
+        return Response(
+            {"result": "success", "detail": _(f"Cancel requested for {deploy.name}.")},
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=True, methods=["post"])
     def redeploy(self, request, pk=None):
-        # simply call start again — clients can bump version in body if needed
         return self.start(request, pk)
 
-    @action(detail=True, methods=["post"])
+    @action(detail=True, methods=["get"])
     def logs(self, request, pk=None):
-        # proxy to existing deploy_logs_apiview
         return deploy_logs_apiview(request, pk)
 
     @action(detail=True, methods=["post"])
     def rollback(self, request, pk=None):
         deploy = get_object_or_404(self.get_queryset(), pk=pk)
         if not request.user.is_superuser and deploy.service.user_id != request.user.id:
-            return Response({"result": "error", "detail": _("Only owner can rollback deploy.")}, status=status.HTTP_403_FORBIDDEN)
-        # For now: mark rollback requested; orchestrator handles rollback on failure
+            return Response(
+                {"result": "error", "detail": _("Only owner can rollback deploy.")},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         deploy.rollback_status = "pending"
-        deploy.save(update_fields=["rollback_status"]) 
-        return Response({"result": "success", "detail": _(f"Rollback requested for {deploy.name}.")}, status=status.HTTP_200_OK)
+        deploy.save(update_fields=["rollback_status"])
+        return Response(
+            {"result": "success", "detail": _(f"Rollback requested for {deploy.name}.")},
+            status=status.HTTP_200_OK,
+        )
 
     def update(self, request, pk=None, *args, **kwargs):
         deploy = get_object_or_404(self.get_queryset(), pk=pk)
@@ -140,12 +195,16 @@ class DeployViewSet(ModelViewSet):
                 {"success": _("Deploy updated."), "deploy": self.get_serializer(deploy).data},
                 status=status.HTTP_200_OK,
             )
-        return Response({"error": _("Can not update deploy."), "errors":serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"error": _("Can not update deploy."), "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     def destroy(self, request, pk=None, *args, **kwargs):
         deploy = get_object_or_404(self.get_queryset(), pk=pk)
         deploy.delete()
         return Response({"success": _("Deploy deleted.")}, status=status.HTTP_200_OK)
+
 
 @api_view(["GET"])
 @authentication_classes([JWTAuthentication])
@@ -154,7 +213,7 @@ def deploy_name_is_available(request):
     name = request.query_params.get("name", "")
     if len(name) < 4:
         return Response({"result": False, "detail": _("The length should be at least 4.")})
-        
+
     if Deploy.objects.filter(name=name).exists():
         return Response({"result": False, "detail": _("The name has been taken.")})
     return Response({"result": True, "detail": _("The name is free.")})
@@ -175,39 +234,110 @@ def deploy_logs_apiview(request, pk):
         )
 
     try:
-        limit = min(max(int(request.query_params.get("limit", 100)), 1), 500)
+        limit = min(max(int(request.query_params.get("limit", 10)), 1), 200)
     except ValueError:
-        limit = 100
+        limit = 10
 
+    before = request.query_params.get("before")
     after = request.query_params.get("after")
-    queryset = DeployLog.objects.filter(deploy=deploy).order_by("created_at")
-    if after:
-        queryset = queryset.filter(created_at__gt=after)
 
-    logs = list(queryset[:limit])
+    base_qs = DeployLog.objects.using(settings.DEPLOYMENT_LOG_DB_ALIAS).filter(deploy_id=deploy.pk)
+
+    if after:
+        after_dt = _parse_cursor(after)
+        if after_dt is None:
+            return Response(
+                {"result": "error", "detail": _("Invalid after timestamp.")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        rows = list(base_qs.filter(created_at__gt=after_dt).order_by("created_at")[:limit])
+        next_after = rows[-1].created_at.isoformat() if rows else after
+        return Response(
+            {
+                "result": "success",
+                "deploy": DeploySerializer(deploy).data,
+                "logs": DeployLogSerializer(rows, many=True).data,
+                "next_after": next_after,
+                "has_more_newer": len(rows) == limit,
+                "direction": "forward",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    if before:
+        before_dt = _parse_cursor(before)
+        if before_dt is None:
+            return Response(
+                {"result": "error", "detail": _("Invalid before timestamp.")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        queryset = base_qs.filter(created_at__lt=before_dt)
+    else:
+        queryset = base_qs
+
+    rows_desc = list(queryset.order_by("-created_at")[: limit + 1])
+    has_more_older = len(rows_desc) > limit
+    rows_desc = rows_desc[:limit]
+    rows = list(reversed(rows_desc))
+
+    next_before = rows[0].created_at.isoformat() if rows else before
+    latest_after = rows[-1].created_at.isoformat() if rows else before
+
     return Response(
         {
             "result": "success",
             "deploy": DeploySerializer(deploy).data,
-            "logs": DeployLogSerializer(logs, many=True).data,
+            "logs": DeployLogSerializer(rows, many=True).data,
+            "next_before": next_before,
+            "latest_after": latest_after,
+            "has_more_older": has_more_older,
+            "direction": "backward",
         },
         status=status.HTTP_200_OK,
     )
 
 
 
+def _extract_id(value):
+    """Accept raw UUID string, int, or a dict/object with an 'id' field."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        value = value.get("id") or value.get("pk")
+    # stringified dict from buggy clients: "{'id': 'uuid-...'}"
+    if isinstance(value, str):
+        value = value.strip()
+        if value.startswith("{") and "'id'" in value:
+            import ast
+            try:
+                parsed = ast.literal_eval(value)
+                if isinstance(parsed, dict):
+                    value = parsed.get("id") or parsed.get("pk")
+            except (ValueError, SyntaxError):
+                pass
+        return value or None
+    return value
+
+
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def set_deploy_apiview(request):
-    deploy_id = request.data.get("deploy_id")
-    service_id = request.data.get("service_id")
+    deploy_id = _extract_id(request.data.get("deploy_id"))
+    service_id = _extract_id(request.data.get("service_id"))
+
+    if not deploy_id or not service_id:
+        return Response(
+            {"result": "error", "detail": _("deploy_id and service_id are required.")},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     try:
         with transaction.atomic():
             service_item = Service.objects.select_for_update().get(
                 id=service_id,
-                user=request.user
+                user=request.user,
             )
 
             if service_item.status in (
@@ -225,7 +355,16 @@ def set_deploy_apiview(request):
 
             deploy_item = Deploy.objects.select_related("service").get(id=deploy_id)
 
-            if deploy_item.service.user != request.user:
+            if deploy_item.service_id != service_item.id:
+                return Response(
+                    {
+                        "result": "error",
+                        "detail": _("Deploy does not belong to this service."),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if deploy_item.service.user_id != request.user.id:
                 return Response(
                     {
                         "result": "error",
@@ -235,30 +374,29 @@ def set_deploy_apiview(request):
                 )
 
             service_item.selected_deploy = deploy_item
-            service_item.save()
+            service_item.save(update_fields=["selected_deploy"])
 
     except Service.DoesNotExist:
         return Response(
-            {
-                "result": "error",
-                "detail": _("Service not found."),
-            },
+            {"result": "error", "detail": _("Service not found.")},
             status=status.HTTP_404_NOT_FOUND,
         )
-
     except Deploy.DoesNotExist:
         return Response(
-            {
-                "result": "error",
-                "detail": _("Deploy not found."),
-            },
+            {"result": "error", "detail": _("Deploy not found.")},
             status=status.HTTP_404_NOT_FOUND,
+        )
+    except (ValueError, ValidationError):
+        return Response(
+            {"result": "error", "detail": _("Invalid deploy_id or service_id.")},
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
     return Response(
         {
             "result": "success",
             "detail": _(f"Deploy {deploy_item.name} selected."),
+            "selected_deploy": str(deploy_item.id),
         },
         status=status.HTTP_200_OK,
     )
@@ -268,14 +406,20 @@ def set_deploy_apiview(request):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def unset_deploy_apiview(request):
-    deploy_id = request.data.get("deploy_id")
-    service_id = request.data.get("service_id")
+    deploy_id = _extract_id(request.data.get("deploy_id"))
+    service_id = _extract_id(request.data.get("service_id"))
+
+    if not deploy_id or not service_id:
+        return Response(
+            {"result": "error", "detail": _("deploy_id and service_id are required.")},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     try:
         with transaction.atomic():
             service_item = Service.objects.select_for_update().get(
                 id=service_id,
-                user=request.user
+                user=request.user,
             )
 
             if service_item.status in (
@@ -293,7 +437,7 @@ def unset_deploy_apiview(request):
 
             deploy_item = Deploy.objects.select_related("service").get(id=deploy_id)
 
-            if deploy_item.service.user != request.user:
+            if deploy_item.service.user_id != request.user.id:
                 return Response(
                     {
                         "result": "error",
@@ -312,24 +456,22 @@ def unset_deploy_apiview(request):
                 )
 
             service_item.selected_deploy = None
-            service_item.save()
+            service_item.save(update_fields=["selected_deploy"])
 
     except Service.DoesNotExist:
         return Response(
-            {
-                "result": "error",
-                "detail": _("Service not found."),
-            },
+            {"result": "error", "detail": _("Service not found.")},
             status=status.HTTP_404_NOT_FOUND,
         )
-
     except Deploy.DoesNotExist:
         return Response(
-            {
-                "result": "error",
-                "detail": _("Deploy not found."),
-            },
+            {"result": "error", "detail": _("Deploy not found.")},
             status=status.HTTP_404_NOT_FOUND,
+        )
+    except (ValueError, ValidationError):
+        return Response(
+            {"result": "error", "detail": _("Invalid deploy_id or service_id.")},
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
     return Response(

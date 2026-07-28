@@ -1,5 +1,6 @@
 from rest_framework import serializers,  exceptions
 from .models import User, Profile, Rule, COLOR_CHOICES
+from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 import json
 import string
@@ -74,9 +75,11 @@ class CreateUserSerializer(serializers.ModelSerializer):
         return user
         
 class GetUserSerializer(serializers.ModelSerializer):
+    has_password = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = User
-        fields = ["id", "username", "email", "phone_number", "theme", "email_verified", "phone_number_verified", "color", "birthdate"]
+        fields = ["id", "username", "email", "phone_number", "theme", "email_verified", "phone_number_verified", "color", "birthdate", "has_password"]
         extra_kwargs = {
             "id" : {"read_only": True},
             "username": {"read_only": True},
@@ -89,30 +92,64 @@ class GetUserSerializer(serializers.ModelSerializer):
             "birthdate": {"read_only": True},
         }
 
+    def get_has_password(self, obj):
+        return obj.has_usable_password()
+
 class SetPasswordSerializer(serializers.Serializer):
-    password = serializers.CharField(write_only = True, min_length=8)
-    confirm_password = serializers.CharField(write_only = True, min_length=8)
-    new_password = serializers.CharField(write_only = True, min_length=8)
-    new_confirm_password = serializers.CharField(write_only = True, min_length=8)
+    new_password = serializers.CharField(write_only=True, min_length=8)
+    new_confirm_password = serializers.CharField(write_only=True, min_length=8)
 
-    def is_valid(self, *, raise_exception=False, user=None):
-        self.user = user
-        return super().is_valid(raise_exception=raise_exception)
-    
     def validate(self, data):
-        if data["password"] != data["confirm_password"]:
-            raise serializers.ValidationError("Password do not match")
-        
         if data["new_password"] != data["new_confirm_password"]:
-            raise serializers.ValidationError("Password do not match")
-        
-        if not self.user.check_password(data["password"]):
-            raise serializers.ValidationError("Password is not correct")
+            raise serializers.ValidationError("Passwords do not match.")
+        validate_password(data["new_password"])
+        return data
 
+    def save(self, user):
+        if user.has_usable_password():
+            raise serializers.ValidationError("Password already set. Use change password instead.")
+        user.set_password(self.validated_data["new_password"])
+        user.save()
+        return user
+
+class ChangePasswordSerializer(serializers.Serializer):
+    current_password = serializers.CharField(write_only=True, min_length=8)
+    new_password = serializers.CharField(write_only=True, min_length=8)
+    new_confirm_password = serializers.CharField(write_only=True, min_length=8)
+
+    def __init__(self, *args, **kwargs):
+        self.user = kwargs.pop("user", None)
+        super().__init__(*args, **kwargs)
+
+    def validate(self, data):
+        if data["new_password"] != data["new_confirm_password"]:
+            raise serializers.ValidationError("Passwords do not match.")
+        if not self.user or not self.user.check_password(data["current_password"]):
+            raise serializers.ValidationError("Current password is incorrect.")
+        validate_password(data["new_password"], user=self.user)
         return data
 
     def save(self):
         self.user.set_password(self.validated_data["new_password"])
+        self.user.save()
+        return self.user
+
+class RemovePasswordSerializer(serializers.Serializer):
+    current_password = serializers.CharField(write_only=True, min_length=8)
+
+    def __init__(self, *args, **kwargs):
+        self.user = kwargs.pop("user", None)
+        super().__init__(*args, **kwargs)
+
+    def validate(self, data):
+        if not self.user or not self.user.check_password(data["current_password"]):
+            raise serializers.ValidationError("Current password is incorrect.")
+        if not self.user.has_usable_password():
+            raise serializers.ValidationError("No password is configured for this account.")
+        return data
+
+    def save(self):
+        self.user.set_unusable_password()
         self.user.save()
         return self.user
 
