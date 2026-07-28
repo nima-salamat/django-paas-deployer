@@ -4,7 +4,7 @@ import docker
 
 from .client_manager import Client
 from deployments.core.exceptions import ContainerError
-
+from django.conf import settings
 logger = logging.getLogger(__name__)
 
 
@@ -75,7 +75,7 @@ class Container(Client):
             {
                 "traefik.enable": "true",
                 "traefik.docker.network": "proxy_net",
-                f"traefik.http.routers.{self.route_name}.rule": f"Host(`{self.route_name}.local`)",
+                f"traefik.http.routers.{self.route_name}.rule": f"Host(`{self.route_name}.{settings.DEPLOYMENT_DOMAIN}`)",
                 f"traefik.http.routers.{self.route_name}.entrypoints": "web",
                 f"traefik.http.routers.{self.route_name}.service": self.route_name,
                 f"traefik.http.services.{self.route_name}.loadbalancer.server.port": str(self.entry_port),

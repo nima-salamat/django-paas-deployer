@@ -251,3 +251,4 @@ CORS_ALLOW_ALL_ORIGINS = True
 
 # setting domain name
 DOMAIN_NAME = os.environ.get("DOMAIN_NAME", "")
+DEPLOYMENT_DOMAIN = os.environ.get("DEPLOYMENT_DOMAIN", "local")

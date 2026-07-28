@@ -1,150 +1,318 @@
-version: '3.8'
-
 services:
+
+  # ============================================================
+  # TRAEFIK
+  # ============================================================
+  traefik:
+    image: traefik:v3.6
+    container_name: deploy-traefik
+    restart: unless-stopped
+
+    command:
+      # Docker provider
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=proxy_net
+      - --providers.docker.endpoint=unix:///var/run/docker.sock
+
+      # Traefik receives HTTP from the HOST Nginx.
+      # SSL is terminated by HOST Nginx.
+      - --entrypoints.web.address=:80
+
+      # Logs
+      - --log.level=INFO
+      - --accesslog=true
+
+    ports:
+      # DO NOT expose Traefik publicly.
+      # Only Nginx on this VPS can access it.
+      - "127.0.0.1:8081:80"
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    networks:
+      - proxy_net
+
+
+  # ============================================================
+  # MAIN POSTGRES DATABASE
+  # ============================================================
   db:
     image: postgres:15
+    container_name: deploy-db
     restart: unless-stopped
+
     environment:
       POSTGRES_DB: ${DB_NAME}
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
+
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
+
     networks:
       - app-network
 
+
+  # ============================================================
+  # DEPLOYMENT LOG POSTGRES DATABASE
+  # ============================================================
   deployment-log-db:
     image: postgres:15
+    container_name: deploy-log-db
     restart: unless-stopped
+
     environment:
       POSTGRES_DB: ${DEPLOYMENT_LOG_DB_NAME}
       POSTGRES_USER: ${DEPLOYMENT_LOG_DB_USER}
       POSTGRES_PASSWORD: ${DEPLOYMENT_LOG_DB_PASSWORD}
+
     volumes:
       - deployment_log_data:/var/lib/postgresql/data
+
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
+
     networks:
       - app-network
 
+
+  # ============================================================
+  # DJANGO / DAPHNE
+  # ============================================================
   web:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: deploy-web
+    restart: unless-stopped
+
     command: >
-      sh -c "python manage.py collectstatic --noinput &&
-             python manage.py migrate &&
-             python manage.py migrate --database=deployment_logs &&
-             daphne -b 0.0.0.0 -p 8000 config.asgi:application"
+      sh -c "
+        python manage.py collectstatic --noinput &&
+        python manage.py migrate &&
+        python manage.py migrate --database=deployment_logs &&
+        daphne -b 0.0.0.0 -p 8000 config.asgi:application
+      "
+
     volumes:
       - .:/app
       - static_volume:/app/static
       - media_volume:/app/media
+
     ports:
-      - "8000:8000"
+      # Host Nginx -> Django
+      #
+      # IMPORTANT:
+      # Only localhost can access Django directly.
+      # It is NOT exposed to the Internet.
+      - "127.0.0.1:8000:8000"
+
     depends_on:
       db:
         condition: service_healthy
+
       deployment-log-db:
         condition: service_healthy
+
       redis:
         condition: service_healthy
+
     env_file:
       - .env
+
     environment:
+      # Docker service names, NOT 127.0.0.1
       DB_HOST: db
+      DB_PORT: 5432
+
       DEPLOYMENT_LOG_DB_HOST: deployment-log-db
+      DEPLOYMENT_LOG_DB_PORT: 5432
+
       REDIS_URL: redis://redis:6379
       CHANNEL_REDIS_URL: redis://redis:6379
+
+      DOMAIN_NAME: ${DOMAIN_NAME}
+      DEPLOYMENT_DOMAIN: ${DEPLOYMENT_DOMAIN}
+
     networks:
       - app-network
 
+
+  # ============================================================
+  # REDIS
+  # ============================================================
   redis:
     image: redis:7
+    container_name: deploy-redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+
+    command:
+      - redis-server
+      - --appendonly
+      - yes
+
+    volumes:
+      - redis_data:/data
+
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test:
+        [
+          "CMD",
+          "redis-cli",
+          "ping"
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 5s
+
     networks:
       - app-network
 
+
+  # ============================================================
+  # CELERY WORKER
+  # ============================================================
   celery:
-    build: .
-    command: celery -A config worker --loglevel=info
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: deploy-celery
+    restart: unless-stopped
+
+    command:
+      celery -A config worker --loglevel=info
+
     volumes:
       - .:/app
+
     depends_on:
       db:
         condition: service_healthy
+
       deployment-log-db:
         condition: service_healthy
+
       redis:
         condition: service_healthy
+
     env_file:
       - .env
+
     environment:
       DB_HOST: db
+      DB_PORT: 5432
+
       DEPLOYMENT_LOG_DB_HOST: deployment-log-db
+      DEPLOYMENT_LOG_DB_PORT: 5432
+
       REDIS_URL: redis://redis:6379
       CHANNEL_REDIS_URL: redis://redis:6379
+
+      DOMAIN_NAME: ${DOMAIN_NAME}
+      DEPLOYMENT_DOMAIN: ${DEPLOYMENT_DOMAIN}
+
     networks:
       - app-network
 
+
+  # ============================================================
+  # CELERY BEAT
+  # ============================================================
   celery-beat:
-    build: .
-    command: celery -A config beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: deploy-celery-beat
+    restart: unless-stopped
+
+    command:
+      celery -A config beat
+      --loglevel=info
+      --scheduler=django_celery_beat.schedulers:DatabaseScheduler
+
     volumes:
       - .:/app
+
     depends_on:
       db:
         condition: service_healthy
+
       deployment-log-db:
         condition: service_healthy
+
       redis:
         condition: service_healthy
+
       celery:
         condition: service_started
+
     env_file:
       - .env
+
     environment:
       DB_HOST: db
+      DB_PORT: 5432
+
       DEPLOYMENT_LOG_DB_HOST: deployment-log-db
+      DEPLOYMENT_LOG_DB_PORT: 5432
+
       REDIS_URL: redis://redis:6379
       CHANNEL_REDIS_URL: redis://redis:6379
+
+      DOMAIN_NAME: ${DOMAIN_NAME}
+      DEPLOYMENT_DOMAIN: ${DEPLOYMENT_DOMAIN}
+
     networks:
       - app-network
 
-  nginx:
-    container_name: nginx_deployer
-    image: nginx:latest
-    restart: unless-stopped
-    ports:
-      - "80:80"
-    volumes:
-      - static_volume:/usr/share/nginx/html/static
-      - media_volume:/usr/share/nginx/html/media
-      - ./config/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-    depends_on:
-      - web
-    networks:
-      - app-network
 
+# ==============================================================
+# VOLUMES
+# ==============================================================
 volumes:
   postgres_data:
   deployment_log_data:
+  redis_data:
   static_volume:
   media_volume:
 
+
+# ==============================================================
+# NETWORKS
+# ==============================================================
 networks:
+
+  # Django platform internal network
   app-network:
+    name: deploy_app_network
+    driver: bridge
+
+  # Network used by Traefik and dynamically-created deployments
+  proxy_net:
+    name: proxy_net
     driver: bridge
