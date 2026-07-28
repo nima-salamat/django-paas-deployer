@@ -19,7 +19,13 @@ DEBUG = int(os.environ.get("DEBUG", "0")) if os.environ.get("DEBUG") is not None
 if isinstance(DEBUG, int):
     DEBUG = bool(DEBUG)
 
-ALLOWED_HOSTS = ["*", "localhost", "127.0.0.1"]
+# setting domain name
+DOMAIN_NAME = os.environ.get("DOMAIN_NAME", "")
+DEPLOYMENT_DOMAIN = os.environ.get("DEPLOYMENT_DOMAIN", "local")
+API_DOMAIN_NAME = os.environ.get("API_DOMAIN_NAME", "")
+
+
+ALLOWED_HOSTS = ["*", "localhost", "127.0.0.1", API_DOMAIN_NAME]
 
 
 # Application definition
@@ -249,6 +255,6 @@ CORS_ALLOW_ALL_ORIGINS = True
 # ]
 
 
-# setting domain name
-DOMAIN_NAME = os.environ.get("DOMAIN_NAME", "")
-DEPLOYMENT_DOMAIN = os.environ.get("DEPLOYMENT_DOMAIN", "local")
+
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
+EMAIL_ADDR = os.getenv("EMAIL_ADDR", "onboarding@resend.dev")

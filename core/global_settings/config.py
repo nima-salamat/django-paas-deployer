@@ -126,17 +126,18 @@ class SERVICE_STATUS_CHOICES(models.TextChoices):
     STOPPING = "stopping", _("stopping")
     
 
+MIRROR_DOCKER = "docker.arvancloud.ir"
 
 class Config:
     php = '''
-FROM php:8.2-apache
+FROM {MIRROR_DOCKER}/php:8.2-apache
 COPY . /var/www/html/
 RUN docker-php-ext-install mysqli pdo pdo_mysql
 EXPOSE 80
 '''
 
     python = '''
-FROM python:3.11-slim
+FROM {MIRROR_DOCKER}/python:3.11-slim
 WORKDIR /app
 COPY . /app
 RUN pip install --no-cache-dir -r requirements.txt
@@ -144,33 +145,50 @@ CMD ["python", "app.py"]
 '''
 
     django = '''
-FROM python:3.11-slim
+FROM {MIRROR_DOCKER}/python:3.10-slim
 
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential gcc libpq-dev python3-venv \
-    --fix-missing
+# Debian 13 (Trixie) - IUT Mirror
+RUN rm -f /etc/apt/sources.list.d/*.sources \
+    && rm -f /etc/apt/sources.list.d/*.list \
+    && printf '%s\n' \
+        'deb http://repo.iut.ac.ir/debian/ trixie main' \
+        'deb http://repo.iut.ac.ir/debian/ trixie-updates main' \
+        > /etc/apt/sources.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+        python3-dev \
+        libjpeg-dev \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
 
+# Python dependencies
 COPY requirements.txt /app/
+
 RUN pip install --no-cache-dir --upgrade pip "setuptools<81" wheel \
     && pip install --no-cache-dir -r requirements.txt
 
+# Application
 COPY . /app
+
+EXPOSE 8000
 
 CMD ["gunicorn", "{}:application", "--bind", "0.0.0.0:8000"]
 '''
 
     nextjs = '''
-FROM node:20-alpine as builder
+FROM {MIRROR_DOCKER}/node:20-alpine as builder
 WORKDIR /app
 COPY . .
 RUN npm install && npm run build
 
-FROM node:20-alpine
+FROM {MIRROR_DOCKER}/node:20-alpine
 WORKDIR /app
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
@@ -181,7 +199,7 @@ CMD ["npm", "start"]
 '''
 
     nodejs = '''
-FROM node:20-alpine
+FROM {MIRROR_DOCKER}/node:20-alpine
 WORKDIR /app
 COPY . .
 RUN npm install
@@ -190,7 +208,7 @@ CMD ["npm", "start"]
 '''
 
     flask = '''
-FROM python:3.11-slim
+FROM {MIRROR_DOCKER}/python:3.11-slim
 WORKDIR /app
 COPY . /app
 RUN pip install --no-cache-dir -r requirements.txt
@@ -205,7 +223,7 @@ CMD ["dockerd"]
 '''
 
     go = '''
-FROM golang:1.21-alpine
+FROM {MIRROR_DOCKER}/golang:1.21-alpine
 WORKDIR /app
 COPY . .
 RUN go build -o main .
@@ -214,40 +232,40 @@ CMD ["./main"]
 '''
 
     static = '''
-FROM nginx:alpine
+FROM {MIRROR_DOCKER}/nginx:alpine
 COPY . /usr/share/nginx/html
 EXPOSE 80
 '''
 
     vue = '''
-FROM node:20-alpine as builder
+FROM {MIRROR_DOCKER}/node:20-alpine as builder
 WORKDIR /app
 COPY . .
 RUN npm install && npm run build
 
-FROM nginx:alpine
+FROM {MIRROR_DOCKER}/nginx:alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
 EXPOSE 80
 '''
 
     angular = '''
-FROM node:20-alpine as builder
+FROM {MIRROR_DOCKER}/node:20-alpine as builder
 WORKDIR /app
 COPY . .
 RUN npm install && npm run build
 
-FROM nginx:alpine
+FROM {MIRROR_DOCKER}/nginx:alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
 EXPOSE 80
 '''
 
     react = '''
-FROM node:20-alpine as builder
+FROM {MIRROR_DOCKER}/node:20-alpine as builder
 WORKDIR /app
 COPY . .
 RUN npm install && npm run build
 
-FROM nginx:alpine
+FROM {MIRROR_DOCKER}/nginx:alpine
 COPY --from=builder /app/build /usr/share/nginx/html
 EXPOSE 80
 '''
