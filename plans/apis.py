@@ -68,7 +68,7 @@ class PlatformPlansAPIView(APIView):
 
     def post(self, request):
         data = request.data
-        platform = data["platform"]
+        platform = data.get("platform")
         query_argument = ""
         if platform:
             for i,j in config.PLATFORM_CHOICES:
@@ -82,7 +82,7 @@ class PlatformPlansAPIView(APIView):
         if not plans.exists():
             return Response(data={"error":_("There is not such plans.")}, status=status.HTTP_404_NOT_FOUND)
         
-        serializer = UnauthorizedPlanSerializer(plans, many=True)
+        serializer = PlanSerializer(plans, many=True)
         
         return Response(data=serializer.data, status=status.HTTP_200_OK)
 
