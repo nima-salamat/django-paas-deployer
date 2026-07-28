@@ -113,13 +113,13 @@ services:
         python manage.py collectstatic --noinput &&
         python manage.py migrate &&
         python manage.py migrate --database=deployment_logs &&
-        daphne -b 0.0.0.0 -p 8000 config.asgi:application
+        daphne -b 0.0.0.0 -p 8000 asgi:application
       "
 
     volumes:
       - .:/app
-      - static_volume:/app/static
-      - media_volume:/app/media
+      - ./staticfiles:/app/staticfiles
+      - ./media:/app/media
 
     ports:
       # Host Nginx -> Django

@@ -27,6 +27,9 @@ API_DOMAIN_NAME = os.environ.get("API_DOMAIN_NAME", "")
 
 ALLOWED_HOSTS = ["*", "localhost", "127.0.0.1", API_DOMAIN_NAME]
 
+CSRF_TRUSTED_ORIGINS = [
+    "https://{API_DOMAIN_NAME}",
+]
 
 # Application definition
 INSTALLED_APPS = [
@@ -147,8 +150,10 @@ DATABASES[DEPLOYMENT_LOG_DB_ALIAS] = {
     "PORT": int(os.environ.get("DEPLOYMENT_LOG_DB_PORT", "5432")),
     "CONN_MAX_AGE": 60,
 }
-DATABASE_ROUTERS = ["deploy.db_router.DeploymentLogRouter"]
+# DATABASE_ROUTERS = ["deploy.db_router.DeploymentLogRouter"]
+DATABASE_ROUTERS = []
 # Password validation
+
 
 AUTH_PASSWORD_VALIDATORS = [
     {
