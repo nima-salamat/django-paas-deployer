@@ -28,7 +28,9 @@ API_DOMAIN_NAME = os.environ.get("API_DOMAIN_NAME", "")
 ALLOWED_HOSTS = ["*", "localhost", "127.0.0.1", API_DOMAIN_NAME]
 
 CSRF_TRUSTED_ORIGINS = [
-    "https://{API_DOMAIN_NAME}",
+    f"https://{API_DOMAIN_NAME}",
+    f"https://{DOMAIN_NAME}",
+
 ]
 
 # Application definition
