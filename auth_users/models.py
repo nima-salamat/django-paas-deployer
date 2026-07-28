@@ -15,7 +15,7 @@ def get_random_code_8():
 
 class AuthCode(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
-    code = models.CharField(max_length=8)
+    code = models.CharField(max_length=8, default=get_random_code_8)
     created_at = models.DateTimeField(auto_now=True)
 
     @classmethod
