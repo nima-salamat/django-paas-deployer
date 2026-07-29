@@ -5,18 +5,6 @@ from core.global_settings.config import MIRROR_DOCKER
 
 
 class DockerfileGenerator:
-    """
-    Render platform Dockerfiles from uploaded project context.
-
-    Django templates support:
-
-        {module}
-        {MIRROR_DOCKER}
-
-    Example:
-
-        CMD ["gunicorn", "{module}:application", "--bind", "0.0.0.0:8000"]
-    """
 
     def render(
         self,

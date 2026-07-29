@@ -1,5 +1,6 @@
 import logging
 
+from django.db import transaction
 from django.utils import timezone
 
 from deploy.models import Deploy, DeploymentStatusChoices
@@ -20,9 +21,8 @@ class ServiceStateManager:
     - All state-changing operations use select_for_update().
     - Related objects that are needed are loaded with select_related()
       in the same query.
-    - These methods do NOT open their own transaction.atomic().
-      The caller MUST wrap them in transaction.atomic() if the lock
-      needs to be held across subsequent operations.
+    - transaction.atomic() is inside the methods so existing callers
+      (DeployService / StopService) continue to work without changes.
     """
 
     @classmethod
@@ -35,72 +35,73 @@ class ServiceStateManager:
           - Service.status  → DEPLOYING
           - Deploy.status   → RUNNING (and sets started_at)
         """
-        try:
-            deploy_item = (
-                Deploy.objects
-                .select_related(
-                    "service",
-                    "service__plan",
-                    "service__network",
+        with transaction.atomic():
+            try:
+                deploy_item = (
+                    Deploy.objects
+                    .select_related(
+                        "service",
+                        "service__plan",
+                        "service__network",
+                    )
+                    .select_for_update(
+                        of=("self", "service"),
+                    )
+                    .get(pk=deploy_id)
                 )
-                .select_for_update(
-                    of=("self", "service"),
+            except Deploy.DoesNotExist as exc:
+                raise InvalidServiceStateError(
+                    f"Deploy ID {deploy_id} does not exist."
+                ) from exc
+
+            service = deploy_item.service
+
+            if service.status != SERVICE_STATUS_CHOICES.QUEUED:
+                raise InvalidServiceStateError(
+                    f"Deploy aborted. "
+                    f"Service status is {service.status}, "
+                    f"expected QUEUED."
                 )
-                .get(pk=deploy_id)
+
+            # Service side
+            service.status = SERVICE_STATUS_CHOICES.DEPLOYING
+            service.deploy_started = timezone.now()
+            service.save(update_fields=["status", "deploy_started"])
+
+            # Deploy side
+            deploy_item.status = DeploymentStatusChoices.RUNNING
+            deploy_item.started_at = timezone.now()
+            deploy_item.stage = "starting"
+            deploy_item.progress = 0
+            deploy_item.save(
+                update_fields=["status", "started_at", "stage", "progress"]
             )
-        except Deploy.DoesNotExist as exc:
-            raise InvalidServiceStateError(
-                f"Deploy ID {deploy_id} does not exist."
-            ) from exc
 
-        service = deploy_item.service
-
-        if service.status != SERVICE_STATUS_CHOICES.QUEUED:
-            raise InvalidServiceStateError(
-                f"Deploy aborted. "
-                f"Service status is {service.status}, "
-                f"expected QUEUED."
-            )
-
-        # Service side
-        service.status = SERVICE_STATUS_CHOICES.DEPLOYING
-        service.deploy_started = timezone.now()
-        service.save(update_fields=["status", "deploy_started"])
-
-        # Deploy side (only existing fields)
-        deploy_item.status = DeploymentStatusChoices.RUNNING
-        deploy_item.started_at = timezone.now()
-        deploy_item.stage = "starting"
-        deploy_item.progress = 0
-        deploy_item.save(
-            update_fields=["status", "started_at", "stage", "progress"]
-        )
-
-        return deploy_item
+            return deploy_item
 
     @classmethod
     def lock_and_start_stopping(cls, service_id: int) -> Service:
         """
         Locks the Service row and loads selected_deploy in the same query.
-
         The service is transitioned to STOPPING while the row is locked.
         """
-        try:
-            service = (
-                Service.objects
-                .select_related("selected_deploy")
-                .select_for_update()
-                .get(pk=service_id)
-            )
-        except Service.DoesNotExist as exc:
-            raise InvalidServiceStateError(
-                f"Service ID {service_id} does not exist."
-            ) from exc
+        with transaction.atomic():
+            try:
+                service = (
+                    Service.objects
+                    .select_related("selected_deploy")
+                    .select_for_update()
+                    .get(pk=service_id)
+                )
+            except Service.DoesNotExist as exc:
+                raise InvalidServiceStateError(
+                    f"Service ID {service_id} does not exist."
+                ) from exc
 
-        service.status = SERVICE_STATUS_CHOICES.STOPPING
-        service.save(update_fields=["status"])
+            service.status = SERVICE_STATUS_CHOICES.STOPPING
+            service.save(update_fields=["status"])
 
-        return service
+            return service
 
     @classmethod
     def sync_legacy_success(
@@ -108,10 +109,6 @@ class ServiceStateManager:
         service_id: int,
         deploy_id: int | None = None,
     ) -> None:
-        """
-        Synchronizes legacy service tracking fields after successful deployment.
-        Optionally updates the related Deploy record as well.
-        """
         now = timezone.now()
 
         Service.objects.filter(pk=service_id).update(
@@ -135,9 +132,6 @@ class ServiceStateManager:
         service_id: int,
         deploy_id: int | None = None,
     ) -> None:
-        """
-        Synchronizes legacy service tracking fields after deployment failure.
-        """
         Service.objects.filter(pk=service_id).update(
             status=SERVICE_STATUS_CHOICES.FAILED,
             deploy_started=None,
@@ -152,9 +146,6 @@ class ServiceStateManager:
 
     @classmethod
     def sync_legacy_stopped(cls, service_id: int) -> None:
-        """
-        Synchronizes legacy service tracking fields after successful stop.
-        """
         Service.objects.filter(pk=service_id).update(
             status=SERVICE_STATUS_CHOICES.STOPPED,
             task_id=None,
