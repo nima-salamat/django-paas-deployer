@@ -10,32 +10,23 @@ services:
     restart: unless-stopped
 
     command:
-      # ----------------------------------------------------------
       # Docker provider
-      # ----------------------------------------------------------
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --providers.docker.network=proxy_net
       - --providers.docker.endpoint=unix:///var/run/docker.sock
 
-      # ----------------------------------------------------------
-      # HTTP entrypoint
-      #
-      # Host Nginx -> 127.0.0.1:8021 -> Traefik:80
-      #
-      # SSL is terminated by host Nginx.
-      # ----------------------------------------------------------
+      # Traefik receives HTTP from the HOST Nginx.
+      # SSL is terminated by HOST Nginx.
       - --entrypoints.web.address=:80
 
-      # ----------------------------------------------------------
       # Logs
-      # ----------------------------------------------------------
       - --log.level=INFO
       - --accesslog=true
 
     ports:
-      # Traefik is NOT publicly exposed.
-      # Only host Nginx can access it.
+      # DO NOT expose Traefik publicly.
+      # Only Nginx on this VPS can access it.
       - "127.0.0.1:8021:80"
 
     volumes:
@@ -78,6 +69,114 @@ services:
 
 
   # ============================================================
+  # DEPLOYMENT LOG POSTGRES DATABASE
+  # ============================================================
+  deployment-log-db:
+    image: ${DOCKER_MIRROR:-docker.io}/postgres:15
+
+    container_name: deploy-log-db
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: ${DEPLOYMENT_LOG_DB_NAME}
+      POSTGRES_USER: ${DEPLOYMENT_LOG_DB_USER}
+      POSTGRES_PASSWORD: ${DEPLOYMENT_LOG_DB_PASSWORD}
+
+    volumes:
+      - deployment_log_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+    networks:
+      - app-network
+
+
+  # ============================================================
+  # DJANGO / DAPHNE
+  # ============================================================
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: deploy-web
+    restart: unless-stopped
+
+    command: >
+      sh -c "
+        python manage.py collectstatic --noinput &&
+        python manage.py migrate &&
+        python manage.py migrate --database=deployment_logs &&
+        daphne -b 0.0.0.0 -p 8000 asgi:application
+      "
+
+    volumes:
+      - .:/app
+      - ./staticfiles:/app/staticfiles
+      - ./media:/app/media
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    ports:
+      # Host Nginx -> Django
+      #
+      # IMPORTANT:
+      # Only localhost can access Django directly.
+      # It is NOT exposed to the Internet.
+      - "127.0.0.1:8020:8000"
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+      deployment-log-db:
+        condition: service_healthy
+
+      redis:
+        condition: service_healthy
+
+    env_file:
+      - .env
+
+    environment:
+      # ----------------------------------------------------------
+      # Main PostgreSQL
+      # ----------------------------------------------------------
+      DB_HOST: db
+      DB_PORT: 5432
+
+      # ----------------------------------------------------------
+      # Deployment Logs PostgreSQL
+      # ----------------------------------------------------------
+      DEPLOYMENT_LOG_DB_HOST: deployment-log-db
+      DEPLOYMENT_LOG_DB_PORT: 5432
+
+      # ----------------------------------------------------------
+      # Redis
+      # ----------------------------------------------------------
+      REDIS_URL: redis://redis:6379
+      CHANNEL_REDIS_URL: redis://redis:6379
+
+      # ----------------------------------------------------------
+      # Domains
+      # ----------------------------------------------------------
+      API_DOMAIN_NAME: ${API_DOMAIN_NAME}
+      DEPLOYMENT_DOMAIN: ${DEPLOYMENT_DOMAIN}
+
+    networks:
+      - app-network
+      - proxy_net
+
+
+  # ============================================================
   # REDIS
   # ============================================================
   redis:
@@ -111,120 +210,6 @@ services:
 
 
   # ============================================================
-  # DJANGO / DAPHNE
-  # ============================================================
-  web:
-    build:
-      context: .
-      dockerfile: Dockerfile
-
-    container_name: deploy-web
-    restart: unless-stopped
-
-    command:
-      - sh
-      - -c
-      - |
-        set -e
-
-        echo "=========================================="
-        echo "Running collectstatic..."
-        echo "=========================================="
-
-        python manage.py collectstatic --noinput
-
-        echo "=========================================="
-        echo "Running main database migrations..."
-        echo "=========================================="
-
-        python manage.py migrate
-
-        echo "=========================================="
-        echo "Running deployment_logs migrations..."
-        echo "=========================================="
-
-        python manage.py migrate --database=deployment_logs
-
-        echo "=========================================="
-        echo "Starting Daphne..."
-        echo "=========================================="
-
-        exec daphne \
-          -b 0.0.0.0 \
-          -p 8000 \
-          asgi:application
-
-    volumes:
-      - .:/app
-      - ./staticfiles:/app/staticfiles
-      - ./media:/app/media
-
-      # Required because the deployer creates/manages Docker containers.
-      - /var/run/docker.sock:/var/run/docker.sock
-
-    ports:
-      # Host Nginx -> Django
-      #
-      # Django is NOT publicly exposed.
-      - "127.0.0.1:8020:8000"
-
-    depends_on:
-      db:
-        condition: service_healthy
-
-      redis:
-        condition: service_healthy
-
-    env_file:
-      - .env
-
-    environment:
-      # ----------------------------------------------------------
-      # PostgreSQL
-      # ----------------------------------------------------------
-      DB_HOST: db
-      DB_PORT: 5432
-
-      # ----------------------------------------------------------
-      # Redis
-      # ----------------------------------------------------------
-      REDIS_URL: redis://redis:6379
-      CHANNEL_REDIS_URL: redis://redis:6379
-
-      # ----------------------------------------------------------
-      # Domains
-      # ----------------------------------------------------------
-      API_DOMAIN_NAME: ${API_DOMAIN_NAME}
-      DEPLOYMENT_DOMAIN: ${DEPLOYMENT_DOMAIN}
-
-    # ==========================================================
-    # WEB HEALTHCHECK
-    #
-    # This checks that Daphne is actually listening on port 8000.
-    #
-    # We intentionally use Python instead of curl/wget so that
-    # the healthcheck does not depend on those packages existing
-    # inside the Docker image.
-    # ==========================================================
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',8000)); s.close()"
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-
-    networks:
-      - app-network
-      - proxy_net
-
-
-  # ============================================================
   # CELERY WORKER
   # ============================================================
   celery:
@@ -244,18 +229,13 @@ services:
 
     volumes:
       - .:/app
-
-      # Required for deployment/build tasks that use Docker.
       - /var/run/docker.sock:/var/run/docker.sock
 
     depends_on:
-      # ----------------------------------------------------------
-      # Celery MUST NOT start before Django is healthy.
-      # ----------------------------------------------------------
-      web:
+      db:
         condition: service_healthy
 
-      db:
+      deployment-log-db:
         condition: service_healthy
 
       redis:
@@ -266,10 +246,16 @@ services:
 
     environment:
       # ----------------------------------------------------------
-      # PostgreSQL
+      # Main PostgreSQL
       # ----------------------------------------------------------
       DB_HOST: db
       DB_PORT: 5432
+
+      # ----------------------------------------------------------
+      # Deployment Logs PostgreSQL
+      # ----------------------------------------------------------
+      DEPLOYMENT_LOG_DB_HOST: deployment-log-db
+      DEPLOYMENT_LOG_DB_PORT: 5432
 
       # ----------------------------------------------------------
       # Redis
@@ -309,36 +295,36 @@ services:
 
     volumes:
       - .:/app
+      - /var/run/docker.sock:/var/run/docker.sock
 
     depends_on:
-      # ----------------------------------------------------------
-      # Beat MUST NOT start before Django is healthy.
-      # ----------------------------------------------------------
-      web:
+      db:
         condition: service_healthy
 
-      # ----------------------------------------------------------
-      # Beat also waits until the Celery worker container has
-      # actually been started.
-      # ----------------------------------------------------------
-      celery:
-        condition: service_started
-
-      db:
+      deployment-log-db:
         condition: service_healthy
 
       redis:
         condition: service_healthy
+
+      celery:
+        condition: service_started
 
     env_file:
       - .env
 
     environment:
       # ----------------------------------------------------------
-      # PostgreSQL
+      # Main PostgreSQL
       # ----------------------------------------------------------
       DB_HOST: db
       DB_PORT: 5432
+
+      # ----------------------------------------------------------
+      # Deployment Logs PostgreSQL
+      # ----------------------------------------------------------
+      DEPLOYMENT_LOG_DB_HOST: deployment-log-db
+      DEPLOYMENT_LOG_DB_PORT: 5432
 
       # ----------------------------------------------------------
       # Redis
@@ -362,6 +348,7 @@ services:
 # ==============================================================
 volumes:
   postgres_data:
+  deployment_log_data:
   redis_data:
 
 
@@ -371,14 +358,14 @@ volumes:
 networks:
 
   # ------------------------------------------------------------
-  # Internal Django application network
+  # Django platform internal network
   # ------------------------------------------------------------
   app-network:
     name: deploy_app_network
     driver: bridge
 
   # ------------------------------------------------------------
-  # Traefik + dynamically-created deployment containers
+  # Network used by Traefik and dynamically-created deployments
   # ------------------------------------------------------------
   proxy_net:
     name: proxy_net
