@@ -142,18 +142,7 @@ DATABASES = {
     }
 }
 
-DEPLOYMENT_LOG_DB_ALIAS = "deployment_logs"
-DATABASES[DEPLOYMENT_LOG_DB_ALIAS] = {
-    "ENGINE": "django.db.backends.postgresql",
-    "NAME": os.environ.get("DEPLOYMENT_LOG_DB_NAME", "deployment_logs"),
-    "USER": os.environ.get("DEPLOYMENT_LOG_DB_USER", "deployment_logs"),
-    "PASSWORD": os.environ.get("DEPLOYMENT_LOG_DB_PASSWORD", ""),
-    "HOST": os.environ.get("DEPLOYMENT_LOG_DB_HOST", "127.0.0.1"),
-    "PORT": int(os.environ.get("DEPLOYMENT_LOG_DB_PORT", "5432")),
-    "CONN_MAX_AGE": 60,
-}
-# DATABASE_ROUTERS = ["deploy.db_router.DeploymentLogRouter"]
-DATABASE_ROUTERS = []
+
 # Password validation
 
 
@@ -252,16 +241,6 @@ CACHES = {
         }
     }
 }
-
-# Config Email settings 
-EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
-EMAIL_PORT = 587
-EMAIL_HOST_USER = os.environ.get("EMAIL_USERNAME", "")
-EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_PASSWORD", "")
-EMAIL_USE_TLS = True
-# email addr
-EMAIL_ADDR = os.environ.get("EMAIL_ADDR", "")
 
 
 # 
