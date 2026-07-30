@@ -234,47 +234,49 @@ class Container(Client):
         """
         Get current container resource usage.
 
-        CPU is returned as percentage of the configured CPU quota.
+        Returns:
+            cpu: percentage 0..100 relative to the container CPU quota
+                 (or host-relative if no quota is set)
+            memory: percentage 0..100 of the container memory limit
+            memory_limit: limit in bytes
+            running: 1 if container is running, else 0
         """
-
-        if not self.container:
-            return {
-                "cpu": 0.0,
-                "memory": 0.0,
-                "memory_limit": 0.0,
-                "running": 0,
-            }
+        zero = {
+            "cpu": 0.0,
+            "memory": 0.0,
+            "memory_limit": 0.0,
+            "running": 0,
+        }
 
         try:
-            self.container.reload()
+            # self.container is never set in __init__; always resolve by name
+            container = getattr(self, "container", None)
+            if container is None:
+                try:
+                    container = self.client.containers.get(self.name)
+                except docker.errors.NotFound:
+                    return zero
+                self.container = container
 
-            if self.container.status != "running":
-                return {
-                    "cpu": 0.0,
-                    "memory": 0.0,
-                    "memory_limit": 0.0,
-                    "running": 0,
-                }
+            container.reload()
 
-            stats = self.container.stats(stream=False)
+            if container.status != "running":
+                return zero
 
-            # ============================================================
-            # CPU
-            # ============================================================
-            cpu_stats = stats.get("cpu_stats", {})
-            precpu_stats = stats.get("precpu_stats", {})
+            stats = container.stats(stream=False)
 
-            cpu_usage = cpu_stats.get("cpu_usage", {})
-            precpu_usage = precpu_stats.get("cpu_usage", {})
+            # ---- CPU ----
+            cpu_stats = stats.get("cpu_stats", {}) or {}
+            precpu_stats = stats.get("precpu_stats", {}) or {}
 
-            cpu_delta = (
-                cpu_usage.get("total_usage", 0)
-                - precpu_usage.get("total_usage", 0)
+            cpu_usage = cpu_stats.get("cpu_usage", {}) or {}
+            precpu_usage = precpu_stats.get("cpu_usage", {}) or {}
+
+            cpu_delta = float(cpu_usage.get("total_usage", 0) or 0) - float(
+                precpu_usage.get("total_usage", 0) or 0
             )
-
-            system_delta = (
-                cpu_stats.get("system_cpu_usage", 0)
-                - precpu_stats.get("system_cpu_usage", 0)
+            system_delta = float(cpu_stats.get("system_cpu_usage", 0) or 0) - float(
+                precpu_stats.get("system_cpu_usage", 0) or 0
             )
 
             cpu_count = (
@@ -282,55 +284,52 @@ class Container(Client):
                 or len(cpu_usage.get("percpu_usage", []) or [])
                 or 1
             )
+            try:
+                cpu_count = max(int(cpu_count), 1)
+            except (TypeError, ValueError):
+                cpu_count = 1
 
-            # Docker's normal CPU percentage.
+            # Cores currently used by this container (host-relative)
             if cpu_delta > 0 and system_delta > 0:
-                docker_cpu_percent = (
-                    cpu_delta / system_delta
-                ) * cpu_count * 100.0
+                used_cores = (cpu_delta / system_delta) * cpu_count
             else:
-                docker_cpu_percent = 0.0
+                used_cores = 0.0
 
-            # ============================================================
-            # CPU LIMIT
-            # ============================================================
-            # CpuQuota/CpuPeriod are in HostConfig, NOT cpu_stats.
-            host_config = self.container.attrs.get("HostConfig", {})
-
-            cpu_quota = host_config.get("CpuQuota", 0)
-            cpu_period = host_config.get("CpuPeriod", 0)
+            # Percent of the configured quota (preferred), else host-relative %
+            host_config = (container.attrs or {}).get("HostConfig", {}) or {}
+            cpu_quota = float(host_config.get("CpuQuota", 0) or 0)
+            cpu_period = float(host_config.get("CpuPeriod", 0) or 0)
 
             if cpu_quota > 0 and cpu_period > 0:
                 cpu_limit_cores = cpu_quota / cpu_period
-
-                # Convert Docker's host-relative percentage back to
-                # actual CPU cores used, then compare with the quota.
-                used_cores = (
-                    docker_cpu_percent / 100.0
-                ) * cpu_count
-
-                cpu_percent = (
-                    used_cores / cpu_limit_cores
-                ) * 100.0
-
-                cpu_percent = min(max(cpu_percent, 0.0), 100.0)
+                if cpu_limit_cores > 0:
+                    cpu_percent = (used_cores / cpu_limit_cores) * 100.0
+                else:
+                    cpu_percent = 0.0
             else:
-                # No quota configured.
-                cpu_percent = max(docker_cpu_percent, 0.0)
+                # No quota: percent of total host CPUs
+                cpu_percent = used_cores * 100.0 / cpu_count
 
-            # ============================================================
-            # MEMORY
-            # ============================================================
-            memory_stats = stats.get("memory_stats", {})
+            cpu_percent = min(max(cpu_percent, 0.0), 100.0)
 
-            memory_usage = memory_stats.get("usage", 0)
-            memory_limit = memory_stats.get("limit", 0)
+            # ---- MEMORY ----
+            memory_stats = stats.get("memory_stats", {}) or {}
+            memory_usage = float(memory_stats.get("usage", 0) or 0)
+            memory_limit = float(memory_stats.get("limit", 0) or 0)
+
+            # Prefer the explicit mem limit from HostConfig when present
+            mem_limit_cfg = host_config.get("Memory") or 0
+            try:
+                mem_limit_cfg = float(mem_limit_cfg or 0)
+            except (TypeError, ValueError):
+                mem_limit_cfg = 0.0
+            if mem_limit_cfg > 0:
+                memory_limit = mem_limit_cfg
 
             memory_percent = (
-                (memory_usage / memory_limit) * 100.0
-                if memory_limit > 0
-                else 0.0
+                (memory_usage / memory_limit) * 100.0 if memory_limit > 0 else 0.0
             )
+            memory_percent = min(max(memory_percent, 0.0), 100.0)
 
             return {
                 "cpu": round(cpu_percent, 2),
@@ -339,15 +338,8 @@ class Container(Client):
                 "running": 1,
             }
 
+        except docker.errors.NotFound:
+            return zero
         except Exception as exc:
-            logger.exception(
-                "Failed to get container stats: %s",
-                exc,
-            )
-
-            return {
-                "cpu": 0.0,
-                "memory": 0.0,
-                "memory_limit": 0.0,
-                "running": 0,
-            }
+            logger.exception("Failed to get container stats for '%s': %s", self.name, exc)
+            return zero

@@ -459,13 +459,36 @@ def service_status_apiview(request):
     print(name)
     try:
         container = Container(name=name)
-        stats = container.get_container_stats()
+        stats = container.get_container_stats() or {}
         print(stats)
-        running = stats.get("running", 0) == 1
-        cpu = stats.get("cpu", 0.0)
-        ram = stats.get("memory", 0.0)
+
+        # Robust running flag (bool, 1/0, "1"/"true", etc.)
+        running_raw = stats.get("running", stats.get("is_running", 0))
+        if isinstance(running_raw, bool):
+            running = running_raw
+        elif isinstance(running_raw, (int, float)):
+            running = int(running_raw) == 1
+        elif isinstance(running_raw, str):
+            running = running_raw.strip().lower() in ("1", "true", "yes", "running")
+        else:
+            running = False
+
+        # container_manager.get_container_stats already returns 0..100 percent
+        def _as_percent(value):
+            try:
+                n = float(value if value is not None else 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+            if n < 0:
+                n = 0.0
+            return round(min(n, 100.0), 2)
+
+        cpu = _as_percent(stats.get("cpu", stats.get("cpu_percent", 0.0)))
+        ram = _as_percent(stats.get("memory", stats.get("mem_percent", stats.get("ram", 0.0))))
+
         detail = _("Service is running.") if running else _("Service is not running.")
     except Exception as e:
+        print(f"service_status error: {e}")
         running = False
         cpu = 0.0
         ram = 0.0
@@ -477,7 +500,7 @@ def service_status_apiview(request):
             "running": running,
             "cpu": cpu,
             "ram": ram,
-            "detail": detail
+            "detail": detail,
         },
         status=status.HTTP_200_OK
     )
