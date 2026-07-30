@@ -230,50 +230,130 @@ class Container(Client):
         except docker.errors.DockerException as exc:
             raise ContainerError(f"Failed to check container '{self.name}'.") from exc
 
-    def get_container_stats(self):
+    def get_container_stats(self) -> dict:
+        """
+        Get current container resource usage.
+
+        CPU is returned as percentage of the configured CPU limit.
+        Example:
+            limit = 0.5 CPU
+            usage = 0.25 CPU
+            cpu = 50.0
+        """
+
+        if not self.container:
+            return {
+                "cpu": 0.0,
+                "memory": 0.0,
+                "memory_limit": 0.0,
+            }
+
         try:
-            try:
-                info = self.client.api.inspect_container(self.name)
-            except docker.errors.NotFound:
-                return {"cpu": 0.0, "memory": 0.0, "running": 0}
+            stats = self.container.stats(stream=False)
 
-            state = info.get("State", {}) if isinstance(info, dict) else {}
-            if not state.get("Running", False):
-                return {"cpu": 0.0, "memory": 0.0, "running": 0}
+            # ============================================================
+            # CPU
+            # ============================================================
+            cpu_stats = stats.get("cpu_stats", {})
+            precpu_stats = stats.get("precpu_stats", {})
 
-            try:
-                container = self.client.containers.get(self.name)
-                stats = container.stats(stream=False)
-            except Exception as exc:
-                logger.error("Failed to get stats for %s: %s", self.name, exc)
-                return {"cpu": 0.0, "memory": 0.0, "running": 1}
+            cpu_usage = cpu_stats.get("cpu_usage", {})
+            precpu_usage = precpu_stats.get("cpu_usage", {})
 
-            mem_stats = stats.get("memory_stats", {}) or {}
-            mem_usage = mem_stats.get("usage") or mem_stats.get("stats", {}).get("rss") or 0
-            mem_limit = mem_stats.get("limit") or mem_stats.get("stats", {}).get("hierarchical_memory_limit") or 1
-            mem_percent = (mem_usage / mem_limit) * 100 if mem_limit and mem_limit > 0 else 0.0
+            cpu_total = cpu_usage.get("total_usage", 0)
+            precpu_total = precpu_usage.get("total_usage", 0)
 
-            cpu_percent = 0.0
-            cpu_stats = stats.get("cpu_stats", {}) or {}
-            precpu_stats = stats.get("precpu_stats", {}) or {}
-            total_usage = cpu_stats.get("cpu_usage", {}).get("total_usage", 0)
-            pre_total = precpu_stats.get("cpu_usage", {}).get("total_usage", 0)
+            cpu_delta = cpu_total - precpu_total
+
             system_cpu = cpu_stats.get("system_cpu_usage", 0)
-            pre_system = precpu_stats.get("system_cpu_usage", 0)
-            percpu = cpu_stats.get("cpu_usage", {}).get("percpu_usage") or []
-            cpu_count = len(percpu) if percpu else (stats.get("online_cpus") or cpu_stats.get("online_cpus") or 1)
-            cpu_delta = total_usage - pre_total
-            system_delta = system_cpu - pre_system
-            if system_delta > 0 and cpu_delta > 0:
-                cpu_percent = (cpu_delta / system_delta) * cpu_count * 100.0
+            previous_system_cpu = precpu_stats.get(
+                "system_cpu_usage",
+                0,
+            )
+
+            system_delta = system_cpu - previous_system_cpu
+
+            cpu_count = (
+                cpu_stats.get("online_cpus")
+                or len(cpu_usage.get("percpu_usage", []) or [])
+                or 1
+            )
+
+            # CPU usage as number of CPU cores.
+            #
+            # Docker CPU time is in nanoseconds.
+            # system_delta is total CPU time of the host.
+            #
+            # This gives us the fraction of the host CPU capacity
+            # consumed by the container.
+            if cpu_delta > 0 and system_delta > 0:
+                host_cpu_percent = (
+                    cpu_delta / system_delta
+                ) * cpu_count * 100.0
+            else:
+                host_cpu_percent = 0.0
+
+            # ============================================================
+            # CPU LIMIT
+            # ============================================================
+            cpu_limit_cores = None
+
+            cpu_quota = cpu_stats.get("cpu_quota")
+            cpu_period = cpu_stats.get("cpu_period")
+
+            if cpu_quota and cpu_quota > 0 and cpu_period and cpu_period > 0:
+                cpu_limit_cores = cpu_quota / cpu_period
+
+            # If no quota exists, container is effectively unlimited.
+            if cpu_limit_cores and cpu_limit_cores > 0:
+                # host_cpu_percent is percentage of the whole host.
+                #
+                # Convert it to number of CPU cores first.
+                used_cores = (
+                    host_cpu_percent / 100.0
+                ) * cpu_count
+
+                # Then calculate usage relative to container limit.
+                cpu_percent = (
+                    used_cores / cpu_limit_cores
+                ) * 100.0
+
+                # Don't report more than 100% of the configured limit.
+                cpu_percent = min(max(cpu_percent, 0.0), 100.0)
+            else:
+                # No CPU limit configured.
+                # Return normal Docker-style CPU percentage.
+                cpu_percent = max(host_cpu_percent, 0.0)
+
+            # ============================================================
+            # MEMORY
+            # ============================================================
+            memory_stats = stats.get("memory_stats", {})
+
+            memory_usage = memory_stats.get("usage", 0)
+            memory_limit = memory_stats.get("limit", 0)
+
+            if memory_limit > 0:
+                memory_percent = (
+                    memory_usage / memory_limit
+                ) * 100.0
+            else:
+                memory_percent = 0.0
 
             return {
-                "cpu": round(float(cpu_percent), 2),
-                "memory": round(float(mem_percent), 2),
-                "running": 1,
+                "cpu": round(cpu_percent, 2),
+                "memory": round(memory_percent, 2),
+                "memory_limit": memory_limit,
             }
-        except docker.errors.NotFound:
-            return {"cpu": 0.0, "memory": 0.0, "running": 0}
+
         except Exception as exc:
-            logger.exception("Unexpected error getting stats for %s: %s", self.name, exc)
-            return {"cpu": 0.0, "memory": 0.0, "running": 0}
+            logger.exception(
+                "Failed to get container stats: %s",
+                exc,
+            )
+
+            return {
+                "cpu": 0.0,
+                "memory": 0.0,
+                "memory_limit": 0.0,
+            }

@@ -82,14 +82,17 @@ class ServiceStateManager:
     @classmethod
     def lock_and_start_stopping(cls, service_id: int) -> Service:
         """
-        Locks the Service row and loads selected_deploy in the same query.
+        Locks the Service row.
         The service is transitioned to STOPPING while the row is locked.
+
+        selected_deploy is intentionally not loaded with select_related()
+        because it is nullable and would create a LEFT OUTER JOIN,
+        which PostgreSQL does not allow with FOR UPDATE.
         """
         with transaction.atomic():
             try:
                 service = (
                     Service.objects
-                    .select_related("selected_deploy")
                     .select_for_update()
                     .get(pk=service_id)
                 )
