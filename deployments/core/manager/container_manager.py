@@ -234,11 +234,7 @@ class Container(Client):
         """
         Get current container resource usage.
 
-        CPU is returned as percentage of the configured CPU limit.
-        Example:
-            limit = 0.5 CPU
-            usage = 0.25 CPU
-            cpu = 50.0
+        CPU is returned as percentage of the configured CPU quota.
         """
 
         if not self.container:
@@ -246,9 +242,20 @@ class Container(Client):
                 "cpu": 0.0,
                 "memory": 0.0,
                 "memory_limit": 0.0,
+                "running": 0,
             }
 
         try:
+            self.container.reload()
+
+            if self.container.status != "running":
+                return {
+                    "cpu": 0.0,
+                    "memory": 0.0,
+                    "memory_limit": 0.0,
+                    "running": 0,
+                }
+
             stats = self.container.stats(stream=False)
 
             # ============================================================
@@ -260,18 +267,15 @@ class Container(Client):
             cpu_usage = cpu_stats.get("cpu_usage", {})
             precpu_usage = precpu_stats.get("cpu_usage", {})
 
-            cpu_total = cpu_usage.get("total_usage", 0)
-            precpu_total = precpu_usage.get("total_usage", 0)
-
-            cpu_delta = cpu_total - precpu_total
-
-            system_cpu = cpu_stats.get("system_cpu_usage", 0)
-            previous_system_cpu = precpu_stats.get(
-                "system_cpu_usage",
-                0,
+            cpu_delta = (
+                cpu_usage.get("total_usage", 0)
+                - precpu_usage.get("total_usage", 0)
             )
 
-            system_delta = system_cpu - previous_system_cpu
+            system_delta = (
+                cpu_stats.get("system_cpu_usage", 0)
+                - precpu_stats.get("system_cpu_usage", 0)
+            )
 
             cpu_count = (
                 cpu_stats.get("online_cpus")
@@ -279,51 +283,40 @@ class Container(Client):
                 or 1
             )
 
-            # CPU usage as number of CPU cores.
-            #
-            # Docker CPU time is in nanoseconds.
-            # system_delta is total CPU time of the host.
-            #
-            # This gives us the fraction of the host CPU capacity
-            # consumed by the container.
+            # Docker's normal CPU percentage.
             if cpu_delta > 0 and system_delta > 0:
-                host_cpu_percent = (
+                docker_cpu_percent = (
                     cpu_delta / system_delta
                 ) * cpu_count * 100.0
             else:
-                host_cpu_percent = 0.0
+                docker_cpu_percent = 0.0
 
             # ============================================================
             # CPU LIMIT
             # ============================================================
-            cpu_limit_cores = None
+            # CpuQuota/CpuPeriod are in HostConfig, NOT cpu_stats.
+            host_config = self.container.attrs.get("HostConfig", {})
 
-            cpu_quota = cpu_stats.get("cpu_quota")
-            cpu_period = cpu_stats.get("cpu_period")
+            cpu_quota = host_config.get("CpuQuota", 0)
+            cpu_period = host_config.get("CpuPeriod", 0)
 
-            if cpu_quota and cpu_quota > 0 and cpu_period and cpu_period > 0:
+            if cpu_quota > 0 and cpu_period > 0:
                 cpu_limit_cores = cpu_quota / cpu_period
 
-            # If no quota exists, container is effectively unlimited.
-            if cpu_limit_cores and cpu_limit_cores > 0:
-                # host_cpu_percent is percentage of the whole host.
-                #
-                # Convert it to number of CPU cores first.
+                # Convert Docker's host-relative percentage back to
+                # actual CPU cores used, then compare with the quota.
                 used_cores = (
-                    host_cpu_percent / 100.0
+                    docker_cpu_percent / 100.0
                 ) * cpu_count
 
-                # Then calculate usage relative to container limit.
                 cpu_percent = (
                     used_cores / cpu_limit_cores
                 ) * 100.0
 
-                # Don't report more than 100% of the configured limit.
                 cpu_percent = min(max(cpu_percent, 0.0), 100.0)
             else:
-                # No CPU limit configured.
-                # Return normal Docker-style CPU percentage.
-                cpu_percent = max(host_cpu_percent, 0.0)
+                # No quota configured.
+                cpu_percent = max(docker_cpu_percent, 0.0)
 
             # ============================================================
             # MEMORY
@@ -333,17 +326,17 @@ class Container(Client):
             memory_usage = memory_stats.get("usage", 0)
             memory_limit = memory_stats.get("limit", 0)
 
-            if memory_limit > 0:
-                memory_percent = (
-                    memory_usage / memory_limit
-                ) * 100.0
-            else:
-                memory_percent = 0.0
+            memory_percent = (
+                (memory_usage / memory_limit) * 100.0
+                if memory_limit > 0
+                else 0.0
+            )
 
             return {
                 "cpu": round(cpu_percent, 2),
                 "memory": round(memory_percent, 2),
                 "memory_limit": memory_limit,
+                "running": 1,
             }
 
         except Exception as exc:
@@ -356,4 +349,5 @@ class Container(Client):
                 "cpu": 0.0,
                 "memory": 0.0,
                 "memory_limit": 0.0,
+                "running": 0,
             }
