@@ -27,16 +27,31 @@ class ServiceAdmin(admin.ModelAdmin):
     list_display = ("id", "name", "user", "plan", "network", "selected_deploy", "status")
     list_display_links = ("id", "name")
     search_fields = ("name", "user__username", "user__email", "plan__name", "network__name")
-    list_filter = ("plan", "network")
+    list_filter = ("plan", "network", "status")
     ordering = ("id",)
     list_per_page = 25
 
 
 @admin.register(Volume)
 class VolumeAdmin(admin.ModelAdmin):
-    list_display = ("id", "name", "user", "service", "bind", "mode", "size_mb")
+    list_display = (
+        "id",
+        "name",
+        "user",
+        "service",
+        "default_bind",
+        "default_mode",
+        "size_mb",
+        "attachment_count",
+    )
     list_display_links = ("id", "name")
     search_fields = ("name", "user__username", "user__email", "service__name")
+    list_filter = ("default_mode", "user")
     ordering = ("id",)
     list_per_page = 25
+    readonly_fields = ("service_attachments",)
 
+    def attachment_count(self, obj):
+        attachments = obj.service_attachments or {}
+        return len(attachments)
+    attachment_count.short_description = "Attachments"

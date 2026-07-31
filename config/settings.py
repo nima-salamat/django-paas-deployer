@@ -152,8 +152,8 @@ DATABASES[DEPLOYMENT_LOG_DB_ALIAS] = {
     "PORT": int(os.environ.get("DEPLOYMENT_LOG_DB_PORT", "5432")),
     "CONN_MAX_AGE": 60,
 }
-DATABASE_ROUTERS = ["deploy.db_router.DeploymentLogRouter"]
-# DATABASE_ROUTERS = []
+# DATABASE_ROUTERS = ["deploy.db_router.DeploymentLogRouter"]
+DATABASE_ROUTERS = []
 # Password validation
 
 
