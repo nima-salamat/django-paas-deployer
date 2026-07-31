@@ -26,6 +26,7 @@ from rest_framework.viewsets import ModelViewSet
 from core.global_settings.config import SERVICE_STATUS_CHOICES
 from deployments.celery.tasks import deploy as deploy_task
 from deployments.celery.tasks import stop as stop_service
+from deployments.celery.tasks import run_db_deploy  # DB platforms — NOT deploy.tasks
 from deployments.core.db_deployer import (
     DB_PLATFORMS,
     DBDeployer,
@@ -39,7 +40,6 @@ from docker.errors import APIError, NotFound as DockerNotFound
 
 from .models import Deploy, DeployLog
 from .serializers import DeployLogSerializer, DeploySerializer
-from .tasks import run_db_deploy
 from services.models import Service
 from core.utils import make_uuid4
 
