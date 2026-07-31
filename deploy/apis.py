@@ -7,6 +7,7 @@ import tempfile
 from uuid import uuid4
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
@@ -35,7 +36,6 @@ from deployments.core.deploy import Deploy as OrchestratorDeploy
 from deployments.core.manager.client_manager import Client
 from deployments.core.manager.container_manager import Container
 from docker.errors import APIError, NotFound as DockerNotFound
-from django.core.exceptions import ValidationError
 
 from .models import Deploy, DeployLog
 from .serializers import DeployLogSerializer, DeploySerializer
@@ -44,6 +44,47 @@ from services.models import Service
 from core.utils import make_uuid4
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_platform(deploy) -> str:
+    """
+    Resolve platform for routing DB vs app deploy tasks.
+
+    Order: deploy.config["platform"] → service.plan.platform → "docker".
+    """
+    cfg = deploy.config if isinstance(getattr(deploy, "config", None), dict) else {}
+    p = str(cfg.get("platform") or "").strip().lower()
+    if p:
+        return p
+
+    service = getattr(deploy, "service", None)
+    plan = getattr(service, "plan", None) if service is not None else None
+    if plan is not None and getattr(plan, "platform", None):
+        return str(plan.platform).strip().lower()
+
+    if service is not None and getattr(service, "plan_id", None):
+        try:
+            from plans.models import Plan
+            plat = (
+                Plan.objects.filter(pk=service.plan_id)
+                .values_list("platform", flat=True)
+                .first()
+            )
+            if plat:
+                return str(plat).strip().lower()
+        except Exception:
+            logger.exception("Failed to resolve plan.platform for deploy %s", getattr(deploy, "pk", None))
+
+    return "docker"
+
+
+def _ensure_config_platform(deploy, platform: str) -> dict:
+    """Persist platform onto deploy.config when missing so later starts stay correct."""
+    cfg = dict(deploy.config) if isinstance(deploy.config, dict) else {}
+    if cfg.get("platform") != platform:
+        cfg["platform"] = platform
+        Deploy.objects.filter(pk=deploy.pk).update(config=cfg)
+    return cfg
 
 
 class DeployPagination(PageNumberPagination):
@@ -71,7 +112,9 @@ class DeployViewSet(ModelViewSet):
     pagination_class = DeployPagination
 
     def get_queryset(self):
-        qs = super().get_queryset().select_related("service", "service__user")
+        qs = super().get_queryset().select_related(
+            "service", "service__user", "service__plan"
+        )
         if self.request.user.is_superuser:
             return qs
         return qs.filter(service__user=self.request.user)
@@ -95,7 +138,37 @@ class DeployViewSet(ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        serializer = self.get_serializer(data=request.data)
+        # If client omitted config.platform, inject it from the service plan
+        data = request.data
+        if hasattr(data, "copy"):
+            data = data.copy()
+        else:
+            data = dict(data)
+
+        service_id = data.get("service")
+        raw_config = data.get("config")
+        cfg = {}
+        if isinstance(raw_config, dict):
+            cfg = dict(raw_config)
+        elif isinstance(raw_config, str) and raw_config.strip():
+            import json
+            try:
+                parsed = json.loads(raw_config)
+                if isinstance(parsed, dict):
+                    cfg = parsed
+            except Exception:
+                pass
+
+        if not cfg.get("platform") and service_id:
+            try:
+                service = Service.objects.select_related("plan").get(pk=service_id)
+                if service.plan_id and getattr(service.plan, "platform", None):
+                    cfg["platform"] = str(service.plan.platform).strip().lower()
+                    data["config"] = cfg
+            except Service.DoesNotExist:
+                pass
+
+        serializer = self.get_serializer(data=data)
         if serializer.is_valid():
             deploy = serializer.save()
             return Response(
@@ -110,7 +183,10 @@ class DeployViewSet(ModelViewSet):
 
     @action(detail=True, methods=["post"])  # POST /deploy/<pk>/start/
     def start(self, request, pk=None):
-        deploy = get_object_or_404(self.get_queryset(), pk=pk)
+        deploy = get_object_or_404(
+            self.get_queryset().select_related("service", "service__plan"),
+            pk=pk,
+        )
         if not request.user.is_superuser and deploy.service.user_id != request.user.id:
             return Response(
                 {"result": "error", "detail": _("Only owner can start deploy.")},
@@ -118,9 +194,9 @@ class DeployViewSet(ModelViewSet):
             )
 
         task_id = str(uuid4())
-        cfg = deploy.config or {}
-        platform = cfg.get("platform") or "docker"
+        platform = _resolve_platform(deploy)
         is_db = platform in DB_PLATFORMS
+        _ensure_config_platform(deploy, platform)
 
         with transaction.atomic():
             service = Service.objects.select_for_update().get(pk=deploy.service_id)
@@ -149,13 +225,14 @@ class DeployViewSet(ModelViewSet):
                 cancel_requested=False,
             )
 
+            deploy_pk = str(deploy.pk)
             if is_db:
                 transaction.on_commit(
-                    lambda: run_db_deploy.apply_async(args=[str(deploy.pk)], task_id=task_id)
+                    lambda: run_db_deploy.apply_async(args=[deploy_pk], task_id=task_id)
                 )
             else:
                 transaction.on_commit(
-                    lambda: deploy_task.apply_async(args=[str(deploy.pk)], task_id=task_id)
+                    lambda: deploy_task.apply_async(args=[deploy_pk], task_id=task_id)
                 )
 
         return Response({"result": "success", "task_id": task_id}, status=status.HTTP_202_ACCEPTED)
@@ -214,17 +291,13 @@ class DeployViewSet(ModelViewSet):
         Force rebuild: tear down the existing container (and image for app
         platforms), then queue a fresh deploy.
 
-        For DB platforms     : removes the container and re-runs run_db_deploy
-                               with the current config.  Any named volumes are
-                               preserved so data survives the rebuild.
-        For app platforms    : removes container + built image then runs a full
-                               image build + deploy.
-
-        The service must not be in an active operation (queued/deploying/stopping).
-        This is the correct endpoint to call after update_db_config to apply
-        new credentials.
+        DB platforms: remove container only (volumes preserved), then run_db_deploy.
+        App platforms: remove container + image, then full rebuild from zip.
         """
-        deploy = get_object_or_404(self.get_queryset(), pk=pk)
+        deploy = get_object_or_404(
+            self.get_queryset().select_related("service", "service__plan"),
+            pk=pk,
+        )
         if not request.user.is_superuser and deploy.service.user_id != request.user.id:
             return Response(
                 {"result": "error", "detail": _("Only owner can rebuild.")},
@@ -232,9 +305,9 @@ class DeployViewSet(ModelViewSet):
             )
 
         task_id = str(uuid4())
-        cfg = deploy.config or {}
-        platform = cfg.get("platform") or "docker"
+        platform = _resolve_platform(deploy)
         is_db = platform in DB_PLATFORMS
+        _ensure_config_platform(deploy, platform)
 
         with transaction.atomic():
             service = Service.objects.select_for_update().get(pk=deploy.service_id)
@@ -248,20 +321,13 @@ class DeployViewSet(ModelViewSet):
                     status=status.HTTP_409_CONFLICT,
                 )
 
-            # --- Tear down existing container / image synchronously ---
-            # This runs inside the transaction so the service is locked
-            # while we clean up.  The deploy task will not see a stale container.
             container_name = service.get_docker_service_name()
             try:
                 if is_db:
                     DBDeployer().remove(container_name)
                 else:
-                    # Removes container AND the built image so the next deploy
-                    # performs a full fresh image build from the zip.
                     OrchestratorDeploy.remove_all(container_name)
             except Exception as exc:
-                # Non-fatal: log and continue.  The deploy task handles
-                # a missing container gracefully.
                 logger.warning(
                     "rebuild teardown warning for '%s': %s", container_name, exc
                 )
@@ -281,13 +347,14 @@ class DeployViewSet(ModelViewSet):
                 cancel_requested=False,
             )
 
+            deploy_pk = str(deploy.pk)
             if is_db:
                 transaction.on_commit(
-                    lambda: run_db_deploy.apply_async(args=[str(deploy.pk)], task_id=task_id)
+                    lambda: run_db_deploy.apply_async(args=[deploy_pk], task_id=task_id)
                 )
             else:
                 transaction.on_commit(
-                    lambda: deploy_task.apply_async(args=[str(deploy.pk)], task_id=task_id)
+                    lambda: deploy_task.apply_async(args=[deploy_pk], task_id=task_id)
                 )
 
         return Response(
@@ -298,34 +365,28 @@ class DeployViewSet(ModelViewSet):
     @action(detail=True, methods=["patch"])
     def update_db_config(self, request, pk=None):
         """
-        Safely update DB credentials / connection parameters in Deploy.config.
-
+        Safely update DB credentials in Deploy.config.
         Allowed keys: root_password, password, username, database, port, env.
-        All other keys in the request body are silently ignored so callers
-        cannot accidentally overwrite platform, networks, volumes, etc.
-
-        The deploy is NOT restarted automatically.  Call rebuild after this
-        endpoint to apply the new credentials to a running (or stopped) DB.
-
-        Returns 400 if the deploy is not a DB platform, or if the resulting
-        config would fail validation.
+        Does NOT restart — call /rebuild/ to apply.
         """
-        deploy = get_object_or_404(self.get_queryset(), pk=pk)
+        deploy = get_object_or_404(
+            self.get_queryset().select_related("service", "service__plan"),
+            pk=pk,
+        )
         if not request.user.is_superuser and deploy.service.user_id != request.user.id:
             return Response(
                 {"result": "error", "detail": _("Only owner can update DB config.")},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        cfg = deploy.config or {}
-        platform = cfg.get("platform") or ""
+        cfg = dict(deploy.config) if isinstance(deploy.config, dict) else {}
+        platform = _resolve_platform(deploy)
         if platform not in DB_PLATFORMS:
             return Response(
                 {"result": "error", "detail": _("This deploy is not a DB platform.")},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Accept only the mutable credential/connection keys
         updates = {k: v for k, v in request.data.items() if k in MUTABLE_DB_CONFIG_KEYS}
         if not updates:
             return Response(
@@ -339,8 +400,7 @@ class DeployViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Validate the merged config before saving
-        new_cfg = {**cfg, **updates}
+        new_cfg = {**cfg, **updates, "platform": platform}
         errors = validate_db_config(platform, new_cfg)
         if errors:
             return Response(
@@ -489,14 +549,12 @@ def deploy_logs_apiview(request, pk):
     )
 
 
-
 def _extract_id(value):
     """Accept raw UUID string, int, or a dict/object with an 'id' field."""
     if value is None:
         return None
     if isinstance(value, dict):
         value = value.get("id") or value.get("pk")
-    # stringified dict from buggy clients: "{'id': 'uuid-...'}"
     if isinstance(value, str):
         value = value.strip()
         if value.startswith("{") and "'id'" in value:

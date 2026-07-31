@@ -38,9 +38,12 @@ def run_deploy(self, deploy_id):
     # Determine dockerfile template: prefer deploy.config['dockerfile'] then global templates
     dockerfile_text = None
     try:
-        cfg = deploy.config or {}
-        dockerfile_text = cfg.get("dockerfile")
-        platform = cfg.get("platform") if cfg.get("platform") else "docker"
+        cfg = deploy.config if isinstance(deploy.config, dict) else {}
+        platform = _resolve_platform(deploy)
+        is_db = platform in DB_PLATFORMS
+        if is_db and not cfg.get("platform"):
+                cfg = {**cfg, "platform": platform}
+                Deploy.objects.filter(pk=deploy.pk).update(config=cfg)
     except Exception:
         platform = "docker"
 
@@ -48,7 +51,7 @@ def run_deploy(self, deploy_id):
     # called via the wrong task to avoid confusing failures.
     if platform in DB_PLATFORMS:
         return run_db_deploy.apply(args=[deploy_id]).get()
-
+    
     # If no dockerfile_text, try to pull from global templates
     if not dockerfile_text:
         try:

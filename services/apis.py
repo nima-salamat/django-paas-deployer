@@ -32,6 +32,31 @@ from docker.errors import APIError, NotFound as DockerNotFound
 logger = logging.getLogger(__name__)
 
 
+def _resolve_platform(deploy) -> str:
+    """config.platform → service.plan.platform → docker."""
+    cfg = deploy.config if isinstance(getattr(deploy, "config", None), dict) else {}
+    p = str(cfg.get("platform") or "").strip().lower()
+    if p:
+        return p
+    service = getattr(deploy, "service", None)
+    plan = getattr(service, "plan", None) if service is not None else None
+    if plan is not None and getattr(plan, "platform", None):
+        return str(plan.platform).strip().lower()
+    if service is not None and getattr(service, "plan_id", None):
+        try:
+            from plans.models import Plan
+            plat = (
+                Plan.objects.filter(pk=service.plan_id)
+                .values_list("platform", flat=True)
+                .first()
+            )
+            if plat:
+                return str(plat).strip().lower()
+        except Exception:
+            logger.exception("Failed to resolve plan.platform")
+    return "docker"
+
+
 
 class ServiceAdminPagination(PageNumberPagination):
     page_size = 10
@@ -385,9 +410,33 @@ def start_service_apiview(request):
                     status=status.HTTP_409_CONFLICT,
                 )
 
-            cfg = deploy_item.config or {}
-            platform = cfg.get("platform") or "docker"
+            # Prefer config.platform; fall back to the service plan (critical for DB).
+            # Need plan on deploy.service — refresh relation if missing.
+            if getattr(deploy_item, "service_id", None) and not getattr(
+                getattr(deploy_item, "service", None), "plan_id", None
+            ):
+                deploy_item = (
+                    Deploy.objects.select_related("service", "service__plan")
+                    .get(pk=deploy_item.pk)
+                )
+            else:
+                # Ensure plan is available for _resolve_platform
+                try:
+                    deploy_item = (
+                        Deploy.objects.select_related("service", "service__plan")
+                        .get(pk=deploy_item.pk)
+                    )
+                except Deploy.DoesNotExist:
+                    pass
+
+            platform = _resolve_platform(deploy_item)
             is_db = platform in DB_PLATFORMS
+
+            # Persist platform onto config so later rebuilds stay on the DB path
+            cfg = dict(deploy_item.config) if isinstance(deploy_item.config, dict) else {}
+            if cfg.get("platform") != platform:
+                cfg["platform"] = platform
+                Deploy.objects.filter(pk=deploy_item.pk).update(config=cfg)
 
             # ------------------------------------------------------------------
             # Force rebuild: tear down existing container / image first.
@@ -482,10 +531,12 @@ def stop_service_apiview(request):
                 )
             
             custom_task_id = make_uuid4()
-            
-            service_item.status = SERVICE_STATUS_CHOICES.QUEUED
+
+            # STOPPING is the correct transient state while the stop task runs.
+            service_item.status = SERVICE_STATUS_CHOICES.STOPPING
             service_item.task_id = custom_task_id
-            service_item.save()
+            service_item.deploy_started = timezone.now()
+            service_item.save(update_fields=["status", "task_id", "deploy_started"])
 
             transaction.on_commit(
                 lambda: stop_service.apply_async(

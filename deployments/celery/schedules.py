@@ -110,7 +110,12 @@ def monitor_services():
         except Exception:
             logger.exception("Monitor error for service %s", service.pk)
 
-    logger.info("monitor_tick", "Monitor tick completed", extra={"deployments": len(deployments), "services": len(services)})
+    logger.info(
+        "Monitor tick completed (deployments=%s, services=%s)",
+        len(deployments),
+        len(services),
+        extra={"event": "monitor_tick", "deployments": len(deployments), "services": len(services)},
+    )
 
 
 def _reconcile_active_deploy(deploy: Deploy) -> None:
@@ -251,9 +256,11 @@ def _reconcile_service_runtime(service: Service) -> None:
     deploy = service.selected_deploy  # may be None
 
     with transaction.atomic():
+        # Do NOT select_related("selected_deploy") with select_for_update:
+        # selected_deploy is nullable → LEFT OUTER JOIN → Postgres rejects
+        # FOR UPDATE on the nullable side of an outer join.
         locked = (
             Service.objects
-            .select_related("selected_deploy")
             .select_for_update()
             .filter(pk=service.pk)
             .first()
@@ -262,6 +269,9 @@ def _reconcile_service_runtime(service: Service) -> None:
             return
         if locked.status not in ACTIVE_SERVICE_STATUSES:
             return  # terminal or not monitored
+
+        # Load selected deploy separately (no FOR UPDATE on the join)
+        deploy = locked.selected_deploy  # may be None; simple FK access
 
         # ------------------------------------------------------------------
         # RUNNING (or SUCCEEDED legacy) → verify container is still up
