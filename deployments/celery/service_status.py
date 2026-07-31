@@ -114,8 +114,11 @@ class ServiceStateManager:
     ) -> None:
         now = timezone.now()
 
+        # Use RUNNING instead of SUCCEEDED so the service immediately reflects
+        # the live container state.  SUCCEEDED is kept in choices for backward
+        # compatibility but the runtime target state is RUNNING.
         Service.objects.filter(pk=service_id).update(
-            status=SERVICE_STATUS_CHOICES.SUCCEEDED,
+            status=SERVICE_STATUS_CHOICES.RUNNING,
             deployed_at=now,
             deploy_started=None,
             task_id=None,
@@ -153,3 +156,97 @@ class ServiceStateManager:
             status=SERVICE_STATUS_CHOICES.STOPPED,
             task_id=None,
         )
+
+    # ------------------------------------------------------------------
+    # Monitor-facing writers
+    # These are thin wrappers used by the monitoring subsystem so that
+    # the monitor never bypasses ServiceStateManager for state changes.
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def mark_running(cls, service_id: int, *, deployed_at=None) -> None:
+        """
+        Transition service to RUNNING and clear transient deploy fields.
+        Safe to call repeatedly (idempotent when already running).
+        """
+        now = deployed_at or timezone.now()
+        with transaction.atomic():
+            service = (
+                Service.objects
+                .select_for_update()
+                .filter(pk=service_id)
+                .first()
+            )
+            if service is None:
+                return
+            # Only advance from states that precede running; never overwrite
+            # a user-initiated stop that completed cleanly.
+            allowed_from = (
+                SERVICE_STATUS_CHOICES.QUEUED,
+                SERVICE_STATUS_CHOICES.DEPLOYING,
+                SERVICE_STATUS_CHOICES.SUCCEEDED,   # legacy value
+                SERVICE_STATUS_CHOICES.RUNNING,     # idempotent
+            )
+            if service.status not in allowed_from:
+                return
+            Service.objects.filter(pk=service_id).update(
+                status=SERVICE_STATUS_CHOICES.RUNNING,
+                deployed_at=now,
+                deploy_started=None,
+                task_id=None,
+            )
+            logger.info("ServiceStateManager: service %s → running", service_id)
+
+    @classmethod
+    def mark_stopped(cls, service_id: int) -> None:
+        """
+        Transition service to STOPPED and clear task_id.
+        Only applies from STOPPING; idempotent when already STOPPED.
+        """
+        with transaction.atomic():
+            service = (
+                Service.objects
+                .select_for_update()
+                .filter(pk=service_id)
+                .first()
+            )
+            if service is None:
+                return
+            if service.status == SERVICE_STATUS_CHOICES.STOPPED:
+                return  # already stopped — idempotent
+            if service.status != SERVICE_STATUS_CHOICES.STOPPING:
+                logger.warning(
+                    "ServiceStateManager.mark_stopped called on service %s "
+                    "with status=%s (expected stopping); skipping",
+                    service_id, service.status,
+                )
+                return
+            Service.objects.filter(pk=service_id).update(
+                status=SERVICE_STATUS_CHOICES.STOPPED,
+                task_id=None,
+            )
+            logger.info("ServiceStateManager: service %s → stopped", service_id)
+
+    @classmethod
+    def mark_failed(cls, service_id: int) -> None:
+        """
+        Transition service to FAILED and clear transient deploy fields.
+        Never overwrites a cleanly-stopped service.
+        """
+        with transaction.atomic():
+            service = (
+                Service.objects
+                .select_for_update()
+                .filter(pk=service_id)
+                .first()
+            )
+            if service is None:
+                return
+            if service.status == SERVICE_STATUS_CHOICES.STOPPED:
+                return  # do not overwrite a clean stop with failed
+            Service.objects.filter(pk=service_id).update(
+                status=SERVICE_STATUS_CHOICES.FAILED,
+                deploy_started=None,
+                task_id=None,
+            )
+            logger.info("ServiceStateManager: service %s → failed", service_id)

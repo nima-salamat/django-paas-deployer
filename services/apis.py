@@ -1,4 +1,5 @@
 import functools
+import logging
 import os
 import tarfile
 import tempfile
@@ -22,9 +23,13 @@ from deployments.celery.tasks import deploy as start_service
 from deployments.celery.tasks import stop as stop_service
 from core.global_settings.config import SERVICE_STATUS_CHOICES
 from core.utils import make_uuid4
+from deployments.core.db_deployer import DB_PLATFORMS, DBDeployer
+from deployments.core.deploy import Deploy as OrchestratorDeploy
 from deployments.core.manager.container_manager import Container
 from deployments.core.manager.client_manager import Client
 from docker.errors import APIError, NotFound as DockerNotFound
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -311,68 +316,125 @@ def service_logs_apiview(request, pk):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def start_service_apiview(request):
+    """
+    Queue a service start (or rebuild).
+
+    Body parameters
+    ---------------
+    service_id    : UUID  — required
+    force_rebuild : bool  — optional (default false)
+                    When true the existing container (and image for app
+                    platforms) is torn down before queuing, so the next run
+                    performs a full fresh deploy instead of reusing any cached
+                    state.  For DB platforms only the container is removed;
+                    volumes (data) are preserved.
+
+    Routing
+    -------
+    DB platforms  (mysql/mariadb/postgresql/mongodb/redis/oracle)
+                  → run_db_deploy Celery task
+    App platforms → deployments.celery.tasks.deploy Celery task
+    """
+    from deploy.tasks import run_db_deploy
+
     service_id = request.data.get("service_id", "")
-    
-    try:    
+    force_rebuild = str(request.data.get("force_rebuild", "")).lower() in ("1", "true", "yes")
+
+    try:
         with transaction.atomic():
             service_item = Service.objects.select_for_update().get(
-                id=service_id, 
-                user=request.user
+                id=service_id,
+                user=request.user,
             )
             deploy_item = service_item.selected_deploy
             if deploy_item is None:
                 return Response(
-                    {
-                        "result": "error",
-                        "detail": _("First select a deploy.")
-                    },
-                    status=status.HTTP_409_CONFLICT
+                    {"result": "error", "detail": _("First select a deploy.")},
+                    status=status.HTTP_409_CONFLICT,
                 )
-            
+
             if service_item.status in (
-                SERVICE_STATUS_CHOICES.QUEUED, 
+                SERVICE_STATUS_CHOICES.QUEUED,
                 SERVICE_STATUS_CHOICES.DEPLOYING,
-                SERVICE_STATUS_CHOICES.STOPPING
+                SERVICE_STATUS_CHOICES.STOPPING,
             ):
                 return Response(
                     {
                         "result": "error",
-                        "detail": _("You can't start service in (queued, deploying, stopping) modes.")
+                        "detail": _("You can't start service in (queued, deploying, stopping) modes."),
                     },
-                    status=status.HTTP_409_CONFLICT
+                    status=status.HTTP_409_CONFLICT,
                 )
-            
+
+            cfg = deploy_item.config or {}
+            platform = cfg.get("platform") or "docker"
+            is_db = platform in DB_PLATFORMS
+
+            # ------------------------------------------------------------------
+            # Force rebuild: tear down existing container / image first.
+            # This happens inside the transaction so the service row is locked
+            # while we clean up, preventing a concurrent start racing us.
+            # ------------------------------------------------------------------
+            if force_rebuild:
+                container_name = service_item.get_docker_service_name()
+                try:
+                    if is_db:
+                        DBDeployer().remove(container_name)
+                    else:
+                        # Removes container AND the built image so the task
+                        # performs a full image rebuild from the zip file.
+                        OrchestratorDeploy.remove_all(container_name)
+                except Exception as exc:
+                    # Non-fatal — log and continue.  The deploy task handles
+                    # a missing container / image gracefully.
+                    logger.warning(
+                        "start_service force_rebuild teardown warning "
+                        "for service '%s': %s",
+                        service_id, exc,
+                    )
+
+            task_id = make_uuid4()
             service_item.status = SERVICE_STATUS_CHOICES.QUEUED
             service_item.deploy_started = timezone.now()
-            service_item.task_id = make_uuid4()
+            service_item.task_id = task_id
             service_item.save()
+
             Deploy.objects.filter(pk=deploy_item.pk).update(
                 status="pending",
                 stage="queued",
                 progress=0,
-                status_message="Deployment queued.",
+                status_message="Rebuild queued." if force_rebuild else "Deployment queued.",
                 error_message="",
                 cancel_requested=False,
             )
-            transaction.on_commit(
-                functools.partial(start_service.apply_async, args=[str(deploy_item.id)], task_id=service_item.task_id)
-            )
-            
+
+            if is_db:
+                transaction.on_commit(
+                    functools.partial(
+                        run_db_deploy.apply_async,
+                        args=[str(deploy_item.id)],
+                        task_id=task_id,
+                    )
+                )
+            else:
+                transaction.on_commit(
+                    functools.partial(
+                        start_service.apply_async,
+                        args=[str(deploy_item.id)],
+                        task_id=task_id,
+                    )
+                )
+
     except Service.DoesNotExist:
         return Response(
-            {
-                "result": "error",
-                "detail": _(f"Service with this ID:{service_id} not found.")
-            },
-            status=status.HTTP_404_NOT_FOUND
+            {"result": "error", "detail": _(f"Service with this ID:{service_id} not found.")},
+            status=status.HTTP_404_NOT_FOUND,
         )
-    
+
+    action_word = "Rebuild" if force_rebuild else "Start"
     return Response(
-        {
-            "result": "success",
-            "detail": _("Service started.")
-        }, 
-        status=status.HTTP_202_ACCEPTED
+        {"result": "success", "detail": _(f"{action_word} queued."), "task_id": task_id},
+        status=status.HTTP_202_ACCEPTED,
     )
 
 @api_view(["POST"])

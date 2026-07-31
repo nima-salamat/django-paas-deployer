@@ -12,7 +12,7 @@ class ContainerWaiter:
     @classmethod
     def wait_for_status(cls, container_name: str, target_running: bool, timeout: int, interval: float = 0.5) -> None:
         iterations = int(timeout / interval)
-        
+
         for _ in range(iterations):
             is_running = Container.container_is_running(container_name)
             if is_running == target_running:
@@ -25,9 +25,10 @@ class ContainerWaiter:
         )
 
     @classmethod
-    def wait_until_running(cls, container_name: str, timeout: int = 10) -> None:
+    def wait_until_running(cls, container_name: str, timeout: int = 30) -> None:
+        """Wait longer for heavier platforms (Node builds, PHP-FPM, DB init)."""
         cls.wait_for_status(container_name, target_running=True, timeout=timeout)
 
     @classmethod
-    def wait_until_stopped(cls, container_name: str, timeout: int = 5) -> None:
+    def wait_until_stopped(cls, container_name: str, timeout: int = 15) -> None:
         cls.wait_for_status(container_name, target_running=False, timeout=timeout)

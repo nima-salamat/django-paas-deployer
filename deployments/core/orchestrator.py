@@ -46,6 +46,7 @@ class DeploymentOrchestrator:
                 platform=config.platform,
                 dockerfile_template=config.dockerfile_template,
                 tar_stream=tar_stream,
+                config=config,
                 logger=self.logger,
             )
 
@@ -90,6 +91,7 @@ class DeploymentOrchestrator:
                 volume_binds,
                 config.read_only,
                 entry_port=config.port,
+                environment=dict(config.environment) if config.environment else {},
             )
 
             if existing_container.exists():

@@ -39,9 +39,26 @@ class DeploymentConfig:
     read_only: bool
     platform: str
     platform_type: str
-    stop_timeout: int = 10
-    start_timeout: int = 30
-    health_timeout: int = 45
+    # --- new fields ---------------------------------------------------------
+    # Runtime environment variables injected at container start (not baked
+    # into the image).  Keys and values must both be strings.
+    environment: dict[str, str] = field(default_factory=dict)
+    # Override ASGI/WSGI detection for Django ("asgi" | "wsgi" | None).
+    # When None the entrypoint is auto-detected from the source code.
+    server_type: Optional[str] = None
+    # When True, a Celery worker process is added to the container via
+    # supervisord alongside the web server.
+    celery: bool = False
+    # When True (requires celery=True), a Celery beat scheduler process is
+    # also added to the supervisord configuration.
+    celery_beat: bool = False
+    # When non-empty, this fully replaces the auto-generated CMD instruction
+    # in the Dockerfile.  Use this as an escape hatch for custom entrypoints.
+    entry_point: Optional[str] = None
+    # ------------------------------------------------------------------------
+    stop_timeout: int = 15
+    start_timeout: int = 45
+    health_timeout: int = 60
     health_interval: float = 1.0
 
     @property

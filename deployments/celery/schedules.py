@@ -6,7 +6,7 @@ from celery.result import AsyncResult
 from django.db import transaction
 from django.utils import timezone
 
-from core.global_settings.config import MAX_DEPLOY_TIME_MINUTE
+from core.global_settings.config import MAX_DEPLOY_TIME_MINUTE, SERVICE_STATUS_CHOICES
 from deployments.core.manager.container_manager import Container
 from deploy.models import (
     Deploy,
@@ -15,6 +15,24 @@ from deploy.models import (
     RollbackStatusChoices,
 )
 from services.models import Service
+
+from .monitoring.policies import (
+    DEPLOY_TIMEOUT_MINUTES,
+    STUCK_QUEUED_MINUTES,
+    STOP_TIMEOUT_MINUTES,
+    UNEXPECTED_DEATH_GRACE_SECONDS,
+    ACTIVE_DEPLOY_STATUSES,
+    ACTIVE_SERVICE_STATUSES,
+)
+from .monitoring.actions import (
+    mark_service_running,
+    mark_service_stopped,
+    mark_service_failed,
+    mark_deploy_failed,
+    mark_deploy_timeout,
+    mark_rollback_complete,
+    mark_rollback_failed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,308 +72,262 @@ def create_deploy_log(
 @shared_task
 def monitor_services():
     """
-    Monitor active deployments and update their status based on
-    the Docker container state and deployment task state.
+    Dual-scan monitor reconciling three truths:
+      1) Deploy.status (DB)
+      2) Service.status (DB)
+      3) Docker container reality
+
+    Two independent scans:
+      A. Active deployments (pending, running, rolling_back)
+      B. Services needing runtime reconciliation (queued, deploying, running,
+         stopping, succeeded)
     """
-
-    active_statuses = [
-        DeploymentStatusChoices.PENDING,
-        DeploymentStatusChoices.RUNNING,
-        DeploymentStatusChoices.ROLLING_BACK,
-    ]
-
+    # ------------------------------------------------------------------
+    # 1. Active deployments (pipeline progress / timeout)
+    # ------------------------------------------------------------------
     deployments = (
         Deploy.objects
         .select_related("service")
-        .filter(status__in=active_statuses)
+        .filter(status__in=ACTIVE_DEPLOY_STATUSES)
     )
-
-    for deployment in deployments:
+    for deploy in deployments:
         try:
-            monitor_deployment(deployment)
-
+            _reconcile_active_deploy(deploy)
         except Exception:
-            logger.exception(
-                "Monitor error for deployment %s",
-                deployment.id,
-            )
+            logger.exception("Monitor error for deployment %s", deploy.pk)
+
+    # ------------------------------------------------------------------
+    # 2. Services that need runtime reconciliation
+    # ------------------------------------------------------------------
+    services = (
+        Service.objects
+        .select_related("selected_deploy")
+        .filter(status__in=ACTIVE_SERVICE_STATUSES)
+    )
+    for service in services:
+        try:
+            _reconcile_service_runtime(service)
+        except Exception:
+            logger.exception("Monitor error for service %s", service.pk)
+
+    logger.info("monitor_tick", "Monitor tick completed", extra={"deployments": len(deployments), "services": len(services)})
 
 
-def monitor_deployment(deployment):
+def _reconcile_active_deploy(deploy: Deploy) -> None:
     """
-    Monitor a single deployment.
+    Reconcile a single deployment in pipeline (pending/running/rolling_back).
+
+    Rules:
+      - pending + container running → running
+      - pending + timeout → failed (deploy + service)
+      - running + container missing → failed
+      - running + container not running → failed
+      - rolling_back + container running → rollback complete
+      - rolling_back + container missing → rollback failed
     """
+    container_name = deploy.service.get_docker_service_name()
+    container = Container(container_name)
+
+    try:
+        runtime = container.inspect_runtime()
+        exists = runtime.get("exists", False)
+        is_running = runtime.get("running", False)
+        status_raw = runtime.get("status", "missing")
+        exit_code = runtime.get("exit_code")
+    except Exception as exc:
+        logger.warning("Failed to inspect container '%s': %s", container_name, exc)
+        exists = False
+        is_running = False
+        status_raw = "error"
+
+    now = timezone.now()
 
     with transaction.atomic():
-        deploy = (
+        locked = (
             Deploy.objects
-            .select_for_update()
             .select_related("service")
-            .get(pk=deployment.pk)
+            .select_for_update()
+            .filter(pk=deploy.pk)
+            .first()
         )
+        if not locked:
+            return
+        if locked.status not in ACTIVE_DEPLOY_STATUSES:
+            return  # already terminal, skip
 
-        service = deploy.service
+        service = locked.service
 
-        container = Container(
-            service.get_docker_service_name()
-        )
+        # 1. Timeout check
+        if locked.status in ("pending", "running") and locked.started_at:
+            minutes_elapsed = (now - locked.started_at).total_seconds() / 60.0
+            if minutes_elapsed >= DEPLOY_TIMEOUT_MINUTES:
+                mark_deploy_timeout(
+                    deploy=locked,
+                    container_exists=exists,
+                    container_running=is_running,
+                )
+                return
 
-        exists = container.exists()
-        is_running = container.is_running() if exists else False
-
-        now = timezone.now()
-
-        # ---------------------------------------------------------
-        # 1. Deployment timeout
-        # ---------------------------------------------------------
-
-        if (
-            deploy.status in (
-                DeploymentStatusChoices.PENDING,
-                DeploymentStatusChoices.RUNNING,
-            )
-            and deploy.started_at is not None
-            and now - deploy.started_at
-            >= timedelta(minutes=MAX_DEPLOY_TIME_MINUTE)
-        ):
-            handle_deployment_timeout(
-                deploy=deploy,
-                container_exists=exists,
-                container_running=is_running,
-            )
+        # 2. Pending deployment
+        if locked.status == DeploymentStatusChoices.PENDING:
+            if is_running:
+                locked.status = DeploymentStatusChoices.RUNNING
+                locked.stage = "running"
+                locked.progress = max(locked.progress, 50)
+                locked.status_message = "Container is running."
+                locked.save(
+                    update_fields=["status", "stage", "progress", "status_message"]
+                )
+                create_deploy_log(
+                    locked,
+                    stage="running",
+                    message="Deployment container is running.",
+                    progress=locked.progress,
+                )
             return
 
-        # ---------------------------------------------------------
-        # 2. Running deployment
-        # ---------------------------------------------------------
-
-        if deploy.status == DeploymentStatusChoices.RUNNING:
-            monitor_running_deployment(
-                deploy=deploy,
-                container_exists=exists,
-                container_running=is_running,
-            )
+        # 3. Running deployment
+        if locked.status == DeploymentStatusChoices.RUNNING:
+            if not is_running:
+                stage = "container_missing" if not exists else "container_not_running"
+                message = (
+                    "Deployment container no longer exists."
+                    if not exists
+                    else f"Deployment container is not running (status: {status_raw})."
+                )
+                mark_deploy_failed(
+                    deploy=locked,
+                    message=message,
+                    stage=stage,
+                    details={
+                        "container_exists": exists,
+                        "container_status": status_raw,
+                        "exit_code": exit_code,
+                    },
+                )
             return
 
-        # ---------------------------------------------------------
-        # 3. Pending deployment
-        # ---------------------------------------------------------
-
-        if deploy.status == DeploymentStatusChoices.PENDING:
-            monitor_pending_deployment(
-                deploy=deploy,
-                container_exists=exists,
-                container_running=is_running,
-            )
-            return
-
-        # ---------------------------------------------------------
         # 4. Rollback
-        # ---------------------------------------------------------
-
-        if deploy.status == DeploymentStatusChoices.ROLLING_BACK:
-            monitor_rollback(
-                deploy=deploy,
-                container_exists=exists,
-                container_running=is_running,
-            )
+        if locked.status == DeploymentStatusChoices.ROLLING_BACK:
+            if is_running:
+                mark_rollback_complete(locked)
+            else:
+                mark_rollback_failed(locked)
+            return
 
 
-def monitor_pending_deployment(
-    deploy,
-    *,
-    container_exists,
-    container_running,
-):
+def _reconcile_service_runtime(service: Service) -> None:
     """
-    A pending deployment may not have a container yet.
-    """
+    Reconcile a service's DB status against the real container state.
 
-    if container_running:
-        deploy.status = DeploymentStatusChoices.RUNNING
-        deploy.stage = "running"
-        deploy.progress = max(deploy.progress, 50)
-        deploy.status_message = "Deployment container is running."
-        deploy.save(
-            update_fields=[
-                "status",
-                "stage",
-                "progress",
-                "status_message",
-            ]
+    This scan catches container death after deploy succeeded, stuck
+    queued/deploying/stopping services, and unexpected container loss.
+
+    Rules:
+      - succeeded + container running → running
+      - succeeded + container dead → failed (or stopped if user initiated)
+      - queued/deploying + container running → running
+      - queued/deploying + timeout → failed
+      - running + container not running → failed
+      - stopping + container not running → stopped
+      - stopping + timeout → failed (force stop/remove)
+    """
+    container_name = service.get_docker_service_name()
+    container = Container(container_name)
+
+    try:
+        runtime = container.inspect_runtime()
+        exists = runtime.get("exists", False)
+        is_running = runtime.get("running", False)
+        status_raw = runtime.get("status", "missing")
+        exit_code = runtime.get("exit_code")
+    except Exception as exc:
+        logger.warning("Failed to inspect container '%s': %s", container_name, exc)
+        exists = False
+        is_running = False
+        status_raw = "error"
+
+    now = timezone.now()
+    deploy = service.selected_deploy  # may be None
+
+    with transaction.atomic():
+        locked = (
+            Service.objects
+            .select_related("selected_deploy")
+            .select_for_update()
+            .filter(pk=service.pk)
+            .first()
         )
+        if not locked:
+            return
+        if locked.status not in ACTIVE_SERVICE_STATUSES:
+            return  # terminal or not monitored
 
-        create_deploy_log(
-            deploy,
-            "running",
-            "Deployment container is running.",
-            progress=deploy.progress,
-        )
+        # ------------------------------------------------------------------
+        # RUNNING (or SUCCEEDED legacy) → verify container is still up
+        # ------------------------------------------------------------------
+        if locked.status in (SERVICE_STATUS_CHOICES.RUNNING, SERVICE_STATUS_CHOICES.SUCCEEDED):
+            if not is_running:
+                message = f"Service container is not running (status: {status_raw})."
+                mark_service_failed(
+                    service=locked,
+                    message=message,
+                    deploy=deploy,
+                    details={
+                        "container_exists": exists,
+                        "container_status": status_raw,
+                        "exit_code": exit_code,
+                    },
+                )
+            elif locked.status == SERVICE_STATUS_CHOICES.SUCCEEDED:
+                # Legacy succeeded row — upgrade to running
+                mark_service_running(locked, deploy=deploy)
+            return
 
+        # ------------------------------------------------------------------
+        # QUEUED / DEPLOYING
+        # ------------------------------------------------------------------
+        if locked.status in (SERVICE_STATUS_CHOICES.QUEUED, SERVICE_STATUS_CHOICES.DEPLOYING):
+            # Stuck timeout
+            if locked.deploy_started:
+                minutes_elapsed = (now - locked.deploy_started).total_seconds() / 60.0
+                if minutes_elapsed >= STUCK_QUEUED_MINUTES:
+                    mark_service_failed(
+                        service=locked,
+                        message="Service stuck in queue/deploying beyond timeout.",
+                        deploy=deploy,
+                        details={
+                            "container_exists": exists,
+                            "container_running": is_running,
+                            "elapsed_minutes": round(minutes_elapsed, 1),
+                        },
+                    )
+                    return
 
-def monitor_running_deployment(
-    deploy,
-    *,
-    container_exists,
-    container_running,
-):
-    """
-    Determine whether a running deployment is still healthy.
-    """
+            # Container already running → transition to running
+            if is_running:
+                mark_service_running(locked, deploy=deploy)
+            return
 
-    if container_running:
-        return
+        # ------------------------------------------------------------------
+        # STOPPING
+        # ------------------------------------------------------------------
+        if locked.status == SERVICE_STATUS_CHOICES.STOPPING:
+            if not is_running:
+                mark_service_stopped(locked, deploy=deploy)
+                return
 
-    if not container_exists:
-        mark_deployment_failed(
-            deploy,
-            message="Deployment container no longer exists.",
-            stage="container",
-        )
-        return
-
-    mark_deployment_failed(
-        deploy,
-        message="Deployment container is not running.",
-        stage="container",
-    )
-
-
-def monitor_rollback(
-    deploy,
-    *,
-    container_exists,
-    container_running,
-):
-    """
-    Monitor rollback state.
-    """
-
-    if container_running:
-        deploy.rollback_status = RollbackStatusChoices.SUCCEEDED
-        deploy.status = DeploymentStatusChoices.ROLLED_BACK
-        deploy.stage = "rollback_completed"
-        deploy.progress = 100
-        deploy.status_message = "Rollback completed successfully."
-
-        deploy.save(
-            update_fields=[
-                "rollback_status",
-                "status",
-                "stage",
-                "progress",
-                "status_message",
-            ]
-        )
-
-        create_deploy_log(
-            deploy,
-            "rollback_completed",
-            "Rollback completed successfully.",
-            progress=100,
-        )
-
-        return
-
-    if not container_exists:
-        deploy.rollback_status = RollbackStatusChoices.FAILED
-        deploy.status = DeploymentStatusChoices.FAILED
-        deploy.stage = "rollback_failed"
-        deploy.error_message = (
-            "Rollback failed because the deployment container "
-            "does not exist."
-        )
-
-        deploy.save(
-            update_fields=[
-                "rollback_status",
-                "status",
-                "stage",
-                "error_message",
-            ]
-        )
-
-        create_deploy_log(
-            deploy,
-            "rollback_failed",
-            deploy.error_message,
-            level="error",
-        )
+            # Stop timeout — container still running after grace period
+            if locked.deploy_started:
+                minutes_elapsed = (now - locked.deploy_started).total_seconds() / 60.0
+                if minutes_elapsed >= STOP_TIMEOUT_MINUTES:
+                    try:
+                        container.stop(timeout=5)
+                        container.remove()
+                    except Exception as exc:
+                        logger.warning("Force stop failed for '%s': %s", container_name, exc)
+                    mark_service_stopped(locked, deploy=deploy)
+            return
 
 
-def handle_deployment_timeout(
-    deploy,
-    *,
-    container_exists,
-    container_running,
-):
-    """
-    Handle deployments that exceeded the maximum allowed time.
-    """
-
-    deploy.status = DeploymentStatusChoices.FAILED
-    deploy.stage = "timeout"
-    deploy.progress = min(deploy.progress, 99)
-    deploy.error_message = (
-        f"Deployment exceeded the maximum allowed time "
-        f"of {MAX_DEPLOY_TIME_MINUTE} minutes."
-    )
-    deploy.status_message = "Deployment timed out."
-
-    deploy.save(
-        update_fields=[
-            "status",
-            "stage",
-            "progress",
-            "error_message",
-            "status_message",
-        ]
-    )
-
-    create_deploy_log(
-        deploy,
-        "timeout",
-        deploy.error_message,
-        level="error",
-        event_type="deployment.timeout",
-        progress=deploy.progress,
-        details={
-            "container_exists": container_exists,
-            "container_running": container_running,
-            "max_deploy_time_minutes": MAX_DEPLOY_TIME_MINUTE,
-        },
-    )
-
-
-def mark_deployment_failed(
-    deploy,
-    *,
-    message,
-    stage,
-):
-    """
-    Mark deployment as failed and create a corresponding event log.
-    """
-
-    deploy.status = DeploymentStatusChoices.FAILED
-    deploy.stage = stage
-    deploy.error_message = message
-    deploy.status_message = "Deployment failed."
-
-    deploy.save(
-        update_fields=[
-            "status",
-            "stage",
-            "error_message",
-            "status_message",
-        ]
-    )
-
-    create_deploy_log(
-        deploy,
-        stage,
-        message,
-        level="error",
-        event_type="deployment.failed",
-        progress=deploy.progress,
-    )
+# ---- (removed old handlers, replaced by monitoring.actions) ----

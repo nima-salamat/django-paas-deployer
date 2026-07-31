@@ -60,14 +60,17 @@ class VolumeSerializer(serializers.ModelSerializer):
     service_name = serializers.SerializerMethodField(read_only=True)
     service_status = serializers.SerializerMethodField(read_only=True)
     is_unused = serializers.SerializerMethodField(read_only=True)
+    attached_services = serializers.SerializerMethodField(read_only=True)
+    attached_services_count = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Volume
         fields = "__all__"
-        read_only_fields = ["id", "created_at", "updated_at", "service_name", "service_status", "is_unused"]
+        read_only_fields = ["id", "created_at", "updated_at", "service_name", "service_status", "is_unused", "attached_services", "attached_services_count"]
         extra_kwargs = {
             "name" : {"required": True, "allow_blank": False},
             "service": {"required": False, "allow_null": True},
+            "service_attachments": {"read_only": True},  # Managed via attach/detach endpoints
         }
         
     def get_fields(self):
@@ -84,4 +87,21 @@ class VolumeSerializer(serializers.ModelSerializer):
         return obj.service.status if obj.service else "unused"
 
     def get_is_unused(self, obj):
-        return obj.service is None
+        return len(obj.service_attachments) == 0
+
+    def get_attached_services(self, obj):
+        from .models import Service
+        service_ids = list(obj.service_attachments.keys())
+        services = Service.objects.filter(id__in=service_ids)
+        return [
+            {
+                "id": str(s.id),
+                "name": s.name,
+                "bind": obj.service_attachments.get(str(s.id), {}).get("bind", ""),
+                "mode": obj.service_attachments.get(str(s.id), {}).get("mode", "rw"),
+            }
+            for s in services
+        ]
+    
+    def get_attached_services_count(self, obj):
+        return len(obj.service_attachments)

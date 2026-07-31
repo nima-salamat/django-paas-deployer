@@ -208,6 +208,94 @@ class Container(Client):
             return None
         return state.get("ExitCode")
 
+    def inspect_runtime(self) -> dict:
+        """
+        Single-call Docker inspection for the monitoring loop.
+
+        Returns a plain dict so callers never have to touch the Docker SDK
+        directly. A missing container is NOT an exception — it is represented
+        as ``exists=False``.
+
+        Keys
+        ----
+        exists        bool   – container exists in Docker
+        running       bool   – container state is "running"
+        status        str    – "running" | "exited" | "paused" | "missing" | ...
+        exit_code     int|None  – last exit code when not running; None if running
+        health        str|None  – "healthy" | "unhealthy" | "starting" | None
+        restart_count int|None  – number of automatic restarts recorded by Docker
+
+        Performance
+        -----------
+        One ``inspect_container`` call is made (same as existing ``inspect()``).
+        Container stats (CPU/RAM) are intentionally NOT fetched here — use
+        ``get_container_stats()`` for that (on-demand via service_status API).
+        """
+        try:
+            info = self.client.api.inspect_container(self.name)
+        except docker.errors.NotFound:
+            return {
+                "exists": False,
+                "running": False,
+                "status": "missing",
+                "exit_code": None,
+                "health": None,
+                "restart_count": None,
+            }
+        except docker.errors.DockerException as exc:
+            logger.warning(
+                "inspect_runtime: Docker error for container '%s': %s",
+                self.name, exc,
+            )
+            # Treat transient Docker errors as "unknown" rather than crashing
+            # the monitor loop for this container.
+            return {
+                "exists": False,
+                "running": False,
+                "status": "unknown",
+                "exit_code": None,
+                "health": None,
+                "restart_count": None,
+            }
+
+        state = info.get("State", {}) or {}
+        is_running = bool(state.get("Running", False))
+
+        # Raw Docker status string ("running", "exited", "paused", etc.)
+        raw_status = (state.get("Status") or "").lower() or ("running" if is_running else "exited")
+
+        # Exit code is only meaningful when the container is not running
+        exit_code: int | None = None
+        if not is_running:
+            ec = state.get("ExitCode")
+            if ec is not None:
+                try:
+                    exit_code = int(ec)
+                except (TypeError, ValueError):
+                    exit_code = None
+
+        # Health check status (present only when a HEALTHCHECK is configured)
+        health_info = state.get("Health") or {}
+        health: str | None = health_info.get("Status") or None
+
+        # Docker restart policy counter
+        restart_raw = info.get("RestartCount")
+        restart_count: int | None = None
+        if restart_raw is not None:
+            try:
+                restart_count = int(restart_raw)
+            except (TypeError, ValueError):
+                restart_count = None
+
+        return {
+            "exists": True,
+            "running": is_running,
+            "status": raw_status,
+            "exit_code": exit_code,
+            "health": health,
+            "restart_count": restart_count,
+        }
+
     def remove(self):
         try:
             container = self.client.containers.get(self.name)

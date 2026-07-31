@@ -1,5 +1,6 @@
 # deploy/apis.py
 import functools
+import logging
 import os
 import tarfile
 import tempfile
@@ -24,14 +25,24 @@ from rest_framework.viewsets import ModelViewSet
 from core.global_settings.config import SERVICE_STATUS_CHOICES
 from deployments.celery.tasks import deploy as deploy_task
 from deployments.celery.tasks import stop as stop_service
+from deployments.core.db_deployer import (
+    DB_PLATFORMS,
+    DBDeployer,
+    MUTABLE_DB_CONFIG_KEYS,
+    validate_db_config,
+)
+from deployments.core.deploy import Deploy as OrchestratorDeploy
 from deployments.core.manager.client_manager import Client
 from deployments.core.manager.container_manager import Container
 from docker.errors import APIError, NotFound as DockerNotFound
 
 from .models import Deploy, DeployLog
 from .serializers import DeployLogSerializer, DeploySerializer
+from .tasks import run_db_deploy
 from services.models import Service
 from core.utils import make_uuid4
+
+logger = logging.getLogger(__name__)
 
 
 class DeployPagination(PageNumberPagination):
@@ -106,6 +117,9 @@ class DeployViewSet(ModelViewSet):
             )
 
         task_id = str(uuid4())
+        cfg = deploy.config or {}
+        platform = cfg.get("platform") or "docker"
+        is_db = platform in DB_PLATFORMS
 
         with transaction.atomic():
             service = Service.objects.select_for_update().get(pk=deploy.service_id)
@@ -134,7 +148,14 @@ class DeployViewSet(ModelViewSet):
                 cancel_requested=False,
             )
 
-            transaction.on_commit(lambda: deploy_task.apply_async(args=[str(deploy.pk)], task_id=task_id))
+            if is_db:
+                transaction.on_commit(
+                    lambda: run_db_deploy.apply_async(args=[str(deploy.pk)], task_id=task_id)
+                )
+            else:
+                transaction.on_commit(
+                    lambda: deploy_task.apply_async(args=[str(deploy.pk)], task_id=task_id)
+                )
 
         return Response({"result": "success", "task_id": task_id}, status=status.HTTP_202_ACCEPTED)
 
@@ -183,6 +204,156 @@ class DeployViewSet(ModelViewSet):
         deploy.save(update_fields=["rollback_status"])
         return Response(
             {"result": "success", "detail": _(f"Rollback requested for {deploy.name}.")},
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"])
+    def rebuild(self, request, pk=None):
+        """
+        Force rebuild: tear down the existing container (and image for app
+        platforms), then queue a fresh deploy.
+
+        For DB platforms     : removes the container and re-runs run_db_deploy
+                               with the current config.  Any named volumes are
+                               preserved so data survives the rebuild.
+        For app platforms    : removes container + built image then runs a full
+                               image build + deploy.
+
+        The service must not be in an active operation (queued/deploying/stopping).
+        This is the correct endpoint to call after update_db_config to apply
+        new credentials.
+        """
+        deploy = get_object_or_404(self.get_queryset(), pk=pk)
+        if not request.user.is_superuser and deploy.service.user_id != request.user.id:
+            return Response(
+                {"result": "error", "detail": _("Only owner can rebuild.")},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        task_id = str(uuid4())
+        cfg = deploy.config or {}
+        platform = cfg.get("platform") or "docker"
+        is_db = platform in DB_PLATFORMS
+
+        with transaction.atomic():
+            service = Service.objects.select_for_update().get(pk=deploy.service_id)
+            if service.status in (
+                SERVICE_STATUS_CHOICES.QUEUED,
+                SERVICE_STATUS_CHOICES.DEPLOYING,
+                SERVICE_STATUS_CHOICES.STOPPING,
+            ):
+                return Response(
+                    {"result": "error", "detail": _("Service already has an active operation.")},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            # --- Tear down existing container / image synchronously ---
+            # This runs inside the transaction so the service is locked
+            # while we clean up.  The deploy task will not see a stale container.
+            container_name = service.get_docker_service_name()
+            try:
+                if is_db:
+                    DBDeployer().remove(container_name)
+                else:
+                    # Removes container AND the built image so the next deploy
+                    # performs a full fresh image build from the zip.
+                    OrchestratorDeploy.remove_all(container_name)
+            except Exception as exc:
+                # Non-fatal: log and continue.  The deploy task handles
+                # a missing container gracefully.
+                logger.warning(
+                    "rebuild teardown warning for '%s': %s", container_name, exc
+                )
+
+            service.selected_deploy = deploy
+            service.status = SERVICE_STATUS_CHOICES.QUEUED
+            service.deploy_started = timezone.now()
+            service.task_id = task_id
+            service.save()
+
+            Deploy.objects.filter(pk=deploy.pk).update(
+                status="pending",
+                stage="queued",
+                progress=0,
+                status_message="Rebuild queued.",
+                error_message="",
+                cancel_requested=False,
+            )
+
+            if is_db:
+                transaction.on_commit(
+                    lambda: run_db_deploy.apply_async(args=[str(deploy.pk)], task_id=task_id)
+                )
+            else:
+                transaction.on_commit(
+                    lambda: deploy_task.apply_async(args=[str(deploy.pk)], task_id=task_id)
+                )
+
+        return Response(
+            {"result": "success", "task_id": task_id, "detail": _("Rebuild queued.")},
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+    @action(detail=True, methods=["patch"])
+    def update_db_config(self, request, pk=None):
+        """
+        Safely update DB credentials / connection parameters in Deploy.config.
+
+        Allowed keys: root_password, password, username, database, port, env.
+        All other keys in the request body are silently ignored so callers
+        cannot accidentally overwrite platform, networks, volumes, etc.
+
+        The deploy is NOT restarted automatically.  Call rebuild after this
+        endpoint to apply the new credentials to a running (or stopped) DB.
+
+        Returns 400 if the deploy is not a DB platform, or if the resulting
+        config would fail validation.
+        """
+        deploy = get_object_or_404(self.get_queryset(), pk=pk)
+        if not request.user.is_superuser and deploy.service.user_id != request.user.id:
+            return Response(
+                {"result": "error", "detail": _("Only owner can update DB config.")},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        cfg = deploy.config or {}
+        platform = cfg.get("platform") or ""
+        if platform not in DB_PLATFORMS:
+            return Response(
+                {"result": "error", "detail": _("This deploy is not a DB platform.")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Accept only the mutable credential/connection keys
+        updates = {k: v for k, v in request.data.items() if k in MUTABLE_DB_CONFIG_KEYS}
+        if not updates:
+            return Response(
+                {
+                    "result": "error",
+                    "detail": _(
+                        "No valid fields provided. "
+                        f"Allowed: {', '.join(sorted(MUTABLE_DB_CONFIG_KEYS))}."
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Validate the merged config before saving
+        new_cfg = {**cfg, **updates}
+        errors = validate_db_config(platform, new_cfg)
+        if errors:
+            return Response(
+                {"result": "error", "detail": "; ".join(errors)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        deploy.config = new_cfg
+        deploy.save(update_fields=["config"])
+        return Response(
+            {
+                "result": "success",
+                "detail": _("DB config updated. Call /rebuild/ to apply the new credentials."),
+            },
             status=status.HTTP_200_OK,
         )
 

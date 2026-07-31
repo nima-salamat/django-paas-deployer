@@ -8,7 +8,21 @@ class DockerHealthChecker:
     def __init__(self, logger=None):
         self.logger = logger
 
-    def wait_until_healthy(self, container_name: str, *, timeout: int = 45, interval: float = 1.0):
+    def wait_until_healthy(
+        self,
+        container_name: str,
+        *,
+        timeout: int = 60,
+        interval: float = 1.0,
+        allow_running_without_healthcheck: bool = True,
+    ):
+        """
+        Poll until the container is healthy or (optionally) simply running.
+
+        Many platforms (Flask, Node, PHP, Go) do not ship a HEALTHCHECK
+        instruction. In that case a container that reaches "running" is
+        accepted so deployments do not fail spuriously.
+        """
         start = time.time()
         last_status = "unknown"
 
@@ -17,11 +31,21 @@ class DockerHealthChecker:
             status = container.status()
             last_status = status
 
-            if status in {"running", "healthy"}:
+            if status == "healthy":
                 if self.logger:
                     self.logger.info(
                         "health_check",
-                        f"Container '{container_name}' is {status}.",
+                        f"Container '{container_name}' is healthy.",
+                        progress=90,
+                        details={"container_status": status},
+                    )
+                return {"status": status}
+
+            if status == "running" and allow_running_without_healthcheck:
+                if self.logger:
+                    self.logger.info(
+                        "health_check",
+                        f"Container '{container_name}' is running.",
                         progress=90,
                         details={"container_status": status},
                     )
@@ -41,5 +65,9 @@ class DockerHealthChecker:
 
         raise HealthCheckError(
             f"Container '{container_name}' did not become healthy before timeout.",
-            details={"container": container_name, "last_status": last_status, "timeout": timeout},
+            details={
+                "container": container_name,
+                "last_status": last_status,
+                "timeout": timeout,
+            },
         )

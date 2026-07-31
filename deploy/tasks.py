@@ -2,6 +2,7 @@ from celery import shared_task, current_task
 from django.utils import timezone
 from deployments.core.deploy import Deploy as OrchestratorDeploy
 from deployments.core.sink import DBAndChannelEventSink
+from deployments.core.db_deployer import DBDeployer, DB_PLATFORMS
 from deploy.models import Deploy
 from django.db import transaction
 
@@ -43,6 +44,11 @@ def run_deploy(self, deploy_id):
     except Exception:
         platform = "docker"
 
+    # DB platforms must use run_db_deploy — redirect automatically if somehow
+    # called via the wrong task to avoid confusing failures.
+    if platform in DB_PLATFORMS:
+        return run_db_deploy.apply(args=[deploy_id]).get()
+
     # If no dockerfile_text, try to pull from global templates
     if not dockerfile_text:
         try:
@@ -60,6 +66,23 @@ def run_deploy(self, deploy_id):
     read_only = cfg.get("read_only", True)
     platform_type = cfg.get("platform_type") or "APP"
 
+    # --- New deploy config parameters ---
+    # env: dict of runtime environment variables, e.g. {"DEBUG": "0", "SECRET_KEY": "..."}
+    # Values must be strings; non-string values are coerced.
+    raw_env = cfg.get("env") or {}
+    environment = {str(k): str(v) for k, v in raw_env.items()} if isinstance(raw_env, dict) else {}
+
+    # server_type: "asgi" | "wsgi" | None  — overrides auto-detection for Django
+    server_type = cfg.get("server_type") or None
+
+    # entry_point: custom CMD string, e.g. "python manage.py runserver 0.0.0.0:8000"
+    entry_point = cfg.get("entry_point") or None
+
+    # celery: bool — add a Celery worker process via supervisord
+    # celery_beat: bool — also add Celery beat (only meaningful when celery=True)
+    celery = bool(cfg.get("celery", False))
+    celery_beat = bool(cfg.get("celery_beat", False))
+
     orchestrator_deploy = OrchestratorDeploy(
         name=name,
         tag=tag,
@@ -75,6 +98,11 @@ def run_deploy(self, deploy_id):
         platform_type=platform_type,
         event_sink=sink,
         deployment_id=str(deploy.id),
+        environment=environment,
+        server_type=server_type,
+        entry_point=entry_point,
+        celery=celery,
+        celery_beat=celery_beat,
     )
 
     try:
@@ -110,6 +138,67 @@ def cancel_deploy(self, deploy_id):
         return {"result": "cancel_requested"}
     except Deploy.DoesNotExist:
         return {"error": "not_found"}
+
+
+@shared_task(bind=True)
+def run_db_deploy(self, deploy_id):
+    """
+    Deploy a database container (MySQL, PostgreSQL, MariaDB, MongoDB, Redis,
+    Oracle) from credentials stored in Deploy.config.
+
+    No zip file is required.  The platform is read from cfg["platform"].
+    Credentials are injected at container runtime — never baked into an image.
+
+    This task is also triggered by rebuild actions to recreate the container
+    with updated credentials after an update_db_config call.
+    """
+    try:
+        deploy = Deploy.objects.select_related("service").get(pk=deploy_id)
+    except Deploy.DoesNotExist:
+        return {"error": "deploy_not_found"}
+
+    # Mark as running
+    try:
+        with transaction.atomic():
+            deploy.status = "pending"
+            deploy.started_at = timezone.now()
+            deploy.save(update_fields=["status", "started_at"])
+    except Exception:
+        pass
+
+    sink = DBAndChannelEventSink(deploy_id=deploy.id)
+    cfg = deploy.config or {}
+    platform = cfg.get("platform") or "mysql"
+    container_name = deploy.service.get_docker_service_name()
+
+    result = DBDeployer().deploy(
+        container_name=container_name,
+        platform=platform,
+        cfg=cfg,
+        event_sink=sink,
+        deployment_id=str(deploy.id),
+    )
+
+    if result.success:
+        try:
+            deploy.refresh_from_db()
+            if deploy.status != "succeeded":
+                deploy.status = "succeeded"
+                deploy.completed_at = timezone.now()
+                deploy.save(update_fields=["status", "completed_at"])
+        except Exception:
+            pass
+        return {"result": "ok", "port": result.port}
+    else:
+        try:
+            deploy.refresh_from_db()
+            deploy.status = "failed"
+            deploy.error_message = result.error or result.message
+            deploy.completed_at = timezone.now()
+            deploy.save(update_fields=["status", "error_message", "completed_at"])
+        except Exception:
+            pass
+        return {"error": result.message}
 
 
 # Backwards-compatible wrappers for older imports that expected

@@ -41,7 +41,6 @@ class DeployService:
             ServiceStateManager.sync_legacy_stopped(service_id)
             return
 
-        # Initialize the persisted and live deployment lifecycle.
         state_tracker.start()
 
         try:
@@ -76,11 +75,9 @@ class DeployService:
         if DeploymentHelper.is_restart_only(deploy_item, container_name):
             logger.info("Fast-path conditions met. Restarting existing container: %s", container_name)
             Container(container_name).start()
-            
-            # Finalize metrics using a structured value object
             restart_result = MockOrchestratorResult(
-                success=True, 
-                stage="deployment_completed", 
+                success=True,
+                stage="deployment_completed",
                 message="Existing container containerized instance restarted successfully."
             )
             state_tracker.finish(restart_result)
@@ -90,34 +87,66 @@ class DeployService:
             result = self._execute_orchestrator(deploy_item, container_name, platform, dockerfile_text, state_tracker)
 
         if getattr(result, "status", None) != "cancelled":
-            ContainerWaiter.wait_until_running(container_name, timeout=10)
+            ContainerWaiter.wait_until_running(container_name, timeout=30)
         return result
 
     def _execute_orchestrator(
-        self, 
-        deploy_item: Deploy, 
-        container_name: str, 
-        platform: str, 
-        dockerfile_text: str, 
+        self,
+        deploy_item: Deploy,
+        container_name: str,
+        platform: str,
+        dockerfile_text: str,
         state_tracker: DjangoDeploymentState
     ) -> None:
         port = default_ports.get(platform)
-        
+        service = deploy_item.service
+
+        cfg = getattr(deploy_item, "config", None) or {}
+        if not isinstance(cfg, dict):
+            cfg = {}
+
+        environment = dict(cfg.get("env") or cfg.get("environment") or {})
+        server_type = (
+            getattr(deploy_item, "server_type", None)
+            or cfg.get("server_type")
+            or getattr(service, "server_type", None)
+        )
+        entry_point = (
+            getattr(deploy_item, "entry_point", None)
+            or cfg.get("entry_point")
+            or getattr(service, "entry_point", None)
+        )
+        celery = bool(
+            getattr(deploy_item, "celery", False)
+            or cfg.get("celery")
+            or getattr(service, "celery", False)
+        )
+        celery_beat = bool(
+            getattr(deploy_item, "celery_beat", False)
+            or cfg.get("celery_beat")
+            or getattr(service, "celery_beat", False)
+        ) and celery
+
         deployer = DeployFacade(
             name=container_name,
             tag=deploy_item.version,
             zip_filename=deploy_item.zip_file.path,
             dockerfile_text=dockerfile_text,
-            max_cpu=deploy_item.service.plan.max_cpu,
-            max_ram=deploy_item.service.plan.max_ram,
-            networks=[(deploy_item.service.network.name, "bridge")],
+            max_cpu=service.plan.max_cpu,
+            max_ram=service.plan.max_ram,
+            networks=[(service.network.name, "bridge")],
             volumes=self._volume_specs(deploy_item),
             port=port,
-            read_only=deploy_item.service.read_only,
+            read_only=service.read_only,
             platform=platform,
-            platform_type=deploy_item.service.plan.plan_type,
-            event_sink=state_tracker.event_sink,  # Plugs tracker directly into Docker engine events
-            deployment_id=deploy_item.id
+            platform_type=service.plan.plan_type,
+            event_sink=state_tracker.event_sink,
+            deployment_id=deploy_item.id,
+            environment=environment,
+            server_type=server_type,
+            celery=celery,
+            celery_beat=celery_beat,
+            entry_point=entry_point,
         )
 
         result = deployer.deploy_result()
@@ -129,7 +158,6 @@ class DeployService:
 
     @staticmethod
     def _volume_specs(deploy_item: Deploy) -> list[VolumeSpec]:
-        """Convert service-owned volume records into typed Docker-managed mounts."""
         return [
             VolumeSpec(
                 source=volume.name,

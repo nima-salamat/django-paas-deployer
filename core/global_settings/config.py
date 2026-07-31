@@ -138,8 +138,9 @@ class SERVICE_STATUS_CHOICES(models.TextChoices):
     STOPPED = "stopped", _("stopped")
     QUEUED = "queued", _("queued")
     DEPLOYING = "deploying", _("deploying")
+    RUNNING = "running", _("running")      # container is confirmed up after deploy
     FAILED = "failed", _("failed")
-    SUCCEEDED = "succeeded", _("succeeded")
+    SUCCEEDED = "succeeded", _("succeeded")  # kept for backward compat; monitor maps → running
     STOPPING = "stopping", _("stopping")
 
 
@@ -151,24 +152,40 @@ class Config:
     php = """
 FROM {MIRROR_DOCKER}/php:8.2-apache
 
+ENV APACHE_DOCUMENT_ROOT=/var/www/html
+
 COPY . /var/www/html/
 
-RUN docker-php-ext-install mysqli pdo pdo_mysql
+RUN docker-php-ext-install mysqli pdo pdo_mysql opcache \\
+    && a2enmod rewrite headers \\
+    && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \\
+    && echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache.ini
 
 EXPOSE 80
+
+CMD ["apache2-foreground"]
 """
 
 
     python = """
 FROM {MIRROR_DOCKER}/python:3.11-slim
 
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
+
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir --upgrade pip \\
+    && pip install --no-cache-dir -r requirements.txt \\
+    && pip install --no-cache-dir gunicorn uvicorn[standard]
 
 COPY . /app
 
-RUN pip install --no-cache-dir -r requirements.txt
+EXPOSE 8000
 
-CMD ["python", "app.py"]
+# Production server – overridden smartly by DockerfileGenerator when possible
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "60"]
 """
 
 
@@ -200,14 +217,16 @@ RUN rm -f /etc/apt/sources.list.d/*.sources \\
 COPY requirements.txt /app/
 
 RUN pip install --no-cache-dir --upgrade pip "setuptools<81" wheel \\
-    && pip install --no-cache-dir -r requirements.txt
+    && pip install --no-cache-dir -r requirements.txt \\
+    && pip install --no-cache-dir gunicorn uvicorn[standard]
 
 # Application
 COPY . /app
 
 EXPOSE 8000
 
-CMD ["gunicorn", "{module}:application", "--bind", "0.0.0.0:8000"]
+# Production server – overridden by DockerfileGenerator (gunicorn / uvicorn + optional Celery)
+CMD ["gunicorn", "{module}:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "60"]
 """
 
 
@@ -216,20 +235,23 @@ FROM {MIRROR_DOCKER}/node:20-alpine AS builder
 
 WORKDIR /app
 
-COPY . .
+COPY package*.json ./
+RUN npm ci || npm install
 
-RUN npm install && npm run build
+COPY . .
+RUN npm run build
 
 
 FROM {MIRROR_DOCKER}/node:20-alpine
 
 WORKDIR /app
 
+ENV NODE_ENV=production
+
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/package.json ./package.json
-
-RUN npm install --omit=dev
+COPY --from=builder /app/node_modules ./node_modules
 
 EXPOSE 3000
 
@@ -242,9 +264,12 @@ FROM {MIRROR_DOCKER}/node:20-alpine
 
 WORKDIR /app
 
-COPY . .
+ENV NODE_ENV=production
 
-RUN npm install
+COPY package*.json ./
+RUN npm ci --omit=dev || npm install --omit=dev
+
+COPY . .
 
 EXPOSE 3000
 
@@ -255,15 +280,23 @@ CMD ["npm", "start"]
     flask = """
 FROM {MIRROR_DOCKER}/python:3.11-slim
 
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV FLASK_ENV=production
+
 WORKDIR /app
+
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir --upgrade pip \\
+    && pip install --no-cache-dir -r requirements.txt \\
+    && pip install --no-cache-dir gunicorn uvicorn[standard]
 
 COPY . /app
 
-RUN pip install --no-cache-dir -r requirements.txt
+EXPOSE 8000
 
-ENV FLASK_APP=app.py
-
-CMD ["flask", "run", "--host=0.0.0.0"]
+# Production server – overridden smartly by DockerfileGenerator when possible
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "60"]
 """
 
 
@@ -295,6 +328,8 @@ FROM {MIRROR_DOCKER}/nginx:alpine
 COPY . /usr/share/nginx/html
 
 EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
 """
 
 
@@ -303,9 +338,11 @@ FROM {MIRROR_DOCKER}/node:20-alpine AS builder
 
 WORKDIR /app
 
-COPY . .
+COPY package*.json ./
+RUN npm ci || npm install
 
-RUN npm install && npm run build
+COPY . .
+RUN npm run build
 
 
 FROM {MIRROR_DOCKER}/nginx:alpine
@@ -313,6 +350,8 @@ FROM {MIRROR_DOCKER}/nginx:alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
 """
 
 
@@ -321,9 +360,11 @@ FROM {MIRROR_DOCKER}/node:20-alpine AS builder
 
 WORKDIR /app
 
-COPY . .
+COPY package*.json ./
+RUN npm ci || npm install
 
-RUN npm install && npm run build
+COPY . .
+RUN npm run build
 
 
 FROM {MIRROR_DOCKER}/nginx:alpine
@@ -331,6 +372,8 @@ FROM {MIRROR_DOCKER}/nginx:alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
 """
 
 
@@ -339,9 +382,11 @@ FROM {MIRROR_DOCKER}/node:20-alpine AS builder
 
 WORKDIR /app
 
-COPY . .
+COPY package*.json ./
+RUN npm ci || npm install
 
-RUN npm install && npm run build
+COPY . .
+RUN npm run build
 
 
 FROM {MIRROR_DOCKER}/nginx:alpine
@@ -349,6 +394,8 @@ FROM {MIRROR_DOCKER}/nginx:alpine
 COPY --from=builder /app/build /usr/share/nginx/html
 
 EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
 """
 
 

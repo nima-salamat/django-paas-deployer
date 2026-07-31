@@ -50,6 +50,12 @@ class Deploy:
         platform_type,
         event_sink=None,
         deployment_id=None,
+        # --- new optional parameters (all default to safe values) ----------
+        environment=None,
+        server_type=None,
+        celery=False,
+        celery_beat=False,
+        entry_point=None,
     ):
         self.name = name
         self.tag = str(tag)
@@ -65,6 +71,12 @@ class Deploy:
         self.platform_type = platform_type
         self.event_sink = event_sink
         self.deployment_id = deployment_id
+        # new
+        self.environment = dict(environment) if environment else {}
+        self.server_type = server_type or None
+        self.celery = bool(celery)
+        self.celery_beat = bool(celery_beat) and self.celery
+        self.entry_point = (entry_point or "").strip() or None
         self.errors = []
         self.result = None
 
@@ -136,6 +148,11 @@ class Deploy:
             read_only=self.read_only,
             platform=self.platform,
             platform_type=self.platform_type,
+            environment=self.environment,
+            server_type=self.server_type,
+            celery=self.celery,
+            celery_beat=self.celery_beat,
+            entry_point=self.entry_point,
         )
 
     def deploy(self):
@@ -230,6 +247,14 @@ class Deploy:
 
         image = Image(name, tag=None)
         image.remove_all(force=True)
+
+    @classmethod
+    def remove_container_only(cls, name):
+        """Remove container only, preserving the image for rebuilds."""
+        container = Container(name)
+        if container.exists():
+            container.stop()
+            container.remove()
 
     @classmethod
     def stop_container(cls, name):
