@@ -164,16 +164,35 @@ class VolumeViewSet(ModelViewSet):
         return queryset.filter(user=self.request.user)
 
     def list(self, request, *args, **kwargs):
+        from django.db.models import Q
+
         queryset = self.get_queryset()
         service_id = request.query_params.get("service")
         unused = request.query_params.get("unused")
+
         if service_id:
-            queryset = queryset.filter(service_id=service_id)
+            queryset = queryset.filter(
+                Q(service_id=service_id)
+                | Q(service_attachments__has_key=str(service_id))
+            )
+
         if unused is not None and str(unused).lower() in ("1", "true", "yes"):
-            queryset = queryset.filter(service__isnull=True)
+            queryset = queryset.filter(service__isnull=True).filter(
+                Q(service_attachments={}) | Q(service_attachments__isnull=True)
+            )
+
         page = self.paginate_queryset(queryset)
         serializer = self.get_serializer(page, many=True)
-        return self.get_paginated_response(serializer.data)
+        data = list(serializer.data)
+
+        if service_id:
+            for row in data:
+                attachments = row.get("service_attachments") or {}
+                att = attachments.get(str(service_id)) or {}
+                row["bind"] = att.get("bind") or row.get("default_bind") or ""
+                row["mode"] = att.get("mode") or row.get("default_mode") or ""
+
+        return self.get_paginated_response(data)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)

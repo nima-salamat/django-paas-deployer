@@ -35,6 +35,7 @@ from deployments.core.deploy import Deploy as OrchestratorDeploy
 from deployments.core.manager.client_manager import Client
 from deployments.core.manager.container_manager import Container
 from docker.errors import APIError, NotFound as DockerNotFound
+from django.core.exceptions import ValidationError
 
 from .models import Deploy, DeployLog
 from .serializers import DeployLogSerializer, DeploySerializer
@@ -381,13 +382,32 @@ class DeployViewSet(ModelViewSet):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def deploy_name_is_available(request):
-    name = request.query_params.get("name", "")
-    if len(name) < 4:
-        return Response({"result": False, "detail": _("The length should be at least 4.")})
+    name = (request.query_params.get("name") or "").strip()
+    exclude_id = (
+        request.query_params.get("exclude_id")
+        or request.query_params.get("exclude")
+        or ""
+    ).strip() or None
 
-    if Deploy.objects.filter(name=name).exists():
-        return Response({"result": False, "detail": _("The name has been taken.")})
-    return Response({"result": True, "detail": _("The name is free.")})
+    if len(name) < 4:
+        return Response(
+            {"result": False, "detail": _("The length should be at least 4.")},
+            status=status.HTTP_200_OK,
+        )
+
+    qs = Deploy.objects.filter(name=name)
+    if exclude_id:
+        qs = qs.exclude(pk=exclude_id)
+
+    if qs.exists():
+        return Response(
+            {"result": False, "detail": _("The name has been taken.")},
+            status=status.HTTP_200_OK,
+        )
+    return Response(
+        {"result": True, "detail": _("The name is free.")},
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(["GET"])
