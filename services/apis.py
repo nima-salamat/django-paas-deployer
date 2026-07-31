@@ -33,9 +33,28 @@ from docker.errors import APIError, NotFound as DockerNotFound
 logger = logging.getLogger(__name__)
 
 
+def _parse_deploy_config(raw) -> dict:
+    """Normalize Deploy.config whether stored as dict or JSON string."""
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, str) and raw.strip():
+        import json
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+            if isinstance(parsed, str) and parsed.strip():
+                parsed2 = json.loads(parsed)
+                if isinstance(parsed2, dict):
+                    return parsed2
+        except Exception:
+            pass
+    return {}
+
+
 def _resolve_platform(deploy) -> str:
     """config.platform → service.plan.platform → docker."""
-    cfg = deploy.config if isinstance(getattr(deploy, "config", None), dict) else {}
+    cfg = _parse_deploy_config(getattr(deploy, "config", None))
     p = str(cfg.get("platform") or "").strip().lower()
     if p:
         return p
@@ -431,8 +450,9 @@ def start_service_apiview(request):
             platform = _resolve_platform(deploy_item)
             is_db = platform in DB_PLATFORMS
 
-            # Persist platform onto config so later rebuilds stay on the DB path
-            cfg = dict(deploy_item.config) if isinstance(deploy_item.config, dict) else {}
+            # Persist platform onto config so later rebuilds stay on the DB path.
+            # Must parse string configs — never replace a JSON-string blob with {}.
+            cfg = _parse_deploy_config(getattr(deploy_item, "config", None))
             if cfg.get("platform") != platform:
                 cfg["platform"] = platform
                 Deploy.objects.filter(pk=deploy_item.pk).update(config=cfg)

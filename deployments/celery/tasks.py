@@ -115,9 +115,35 @@ def stop(self, service_id) -> None:
 # DB deploy
 # ===========================================================================
 
+def _parse_config(raw) -> dict:
+    """
+    Normalize Deploy.config to a dict.
+
+    UI often sends JSON.stringify(...), so the value may be stored as a
+    JSON *string* inside a JSONField / TextField.  Treating a non-dict as
+    empty was wiping all credentials and causing false validation failures.
+    """
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, str) and raw.strip():
+        import json
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+            # double-encoded
+            if isinstance(parsed, str) and parsed.strip():
+                parsed2 = json.loads(parsed)
+                if isinstance(parsed2, dict):
+                    return parsed2
+        except Exception:
+            pass
+    return {}
+
+
 def _resolve_platform(deploy: Deploy) -> str:
     """config.platform → service.plan.platform → empty string."""
-    cfg = deploy.config if isinstance(getattr(deploy, "config", None), dict) else {}
+    cfg = _parse_config(getattr(deploy, "config", None))
     p = str(cfg.get("platform") or "").strip().lower()
     if p:
         return p
@@ -127,18 +153,88 @@ def _resolve_platform(deploy: Deploy) -> str:
     return ""
 
 
+def _collect_service_volumes(service: Service) -> list[dict]:
+    """
+    Resolve volumes attached to a service without assuming a reverse
+    relation named ``volumes`` exists on the Service model.
+
+    Supports:
+      - service.volumes (reverse FK) when present
+      - services.models.Volume filtered by service_id / service_attachments
+    """
+    volumes: list[dict] = []
+    seen: set[str] = set()
+
+    def _add(vol) -> None:
+        name = getattr(vol, "name", None)
+        if not name or name in seen:
+            return
+        bind = getattr(vol, "bind", None) or getattr(vol, "default_bind", None)
+        mode = (
+            getattr(vol, "mode", None)
+            or getattr(vol, "default_mode", None)
+            or "rw"
+        )
+        attachments = getattr(vol, "service_attachments", None) or {}
+        if isinstance(attachments, dict):
+            att = attachments.get(str(service.pk)) or {}
+            bind = att.get("bind") or bind
+            mode = att.get("mode") or mode
+        if not bind:
+            return
+        seen.add(name)
+        volumes.append({"source": name, "target": bind, "mode": mode or "rw"})
+
+    # Path A: reverse relation on Service (legacy / some deployments)
+    rel = getattr(service, "volumes", None)
+    if rel is not None and hasattr(rel, "all"):
+        try:
+            for vol in rel.all():
+                _add(vol)
+        except Exception:
+            logger.exception(
+                "service.volumes.all() failed for service %s", service.pk
+            )
+
+    # Path B: query Volume model directly
+    if not volumes:
+        try:
+            from django.db.models import Q
+            from services.models import Volume
+
+            qs = Volume.objects.filter(
+                Q(service_id=service.pk)
+                | Q(service_attachments__has_key=str(service.pk))
+            )
+            for vol in qs:
+                _add(vol)
+        except Exception:
+            logger.debug(
+                "Volume model query unavailable for service %s; skipping",
+                service.pk,
+                exc_info=True,
+            )
+
+    return volumes
+
+
 def _build_db_cfg(deploy: Deploy, service: Service) -> dict[str, Any]:
     """
     Merge Deploy.config credentials with live Service metadata
     (plan limits, volumes, network) so DBDeployer has everything it needs.
     """
     cfg: dict[str, Any] = {}
-    raw = deploy.config if isinstance(deploy.config, dict) else {}
-    cfg.update(raw)
+    cfg.update(_parse_config(getattr(deploy, "config", None)))
 
     platform = _resolve_platform(deploy)
     if platform:
         cfg["platform"] = platform
+
+    # MySQL/MariaDB: accept password as root_password alias so validation
+    # and the image env builder both see a value.
+    if platform in ("mysql", "mariadb"):
+        if not str(cfg.get("root_password") or "").strip() and str(cfg.get("password") or "").strip():
+            cfg["root_password"] = str(cfg["password"])
 
     plan = getattr(service, "plan", None)
     if plan is not None:
@@ -156,35 +252,9 @@ def _build_db_cfg(deploy: Deploy, service: Service) -> dict[str, Any]:
         cfg["networks"] = networks
 
     if not cfg.get("volumes"):
-        volumes: list[dict] = []
-        try:
-            for vol in service.volumes.all():
-                bind = getattr(vol, "bind", None) or getattr(vol, "default_bind", None)
-                mode = (
-                    getattr(vol, "mode", None)
-                    or getattr(vol, "default_mode", None)
-                    or "rw"
-                )
-                attachments = getattr(vol, "service_attachments", None) or {}
-                if isinstance(attachments, dict):
-                    att = attachments.get(str(service.pk)) or {}
-                    bind = att.get("bind") or bind
-                    mode = att.get("mode") or mode
-                if bind:
-                    volumes.append(
-                        {
-                            "source": vol.name,
-                            "target": bind,
-                            "mode": mode or "rw",
-                        }
-                    )
-        except Exception:
-            logger.exception(
-                "Failed to collect volumes for service %s; continuing without",
-                service.pk,
-            )
-        if volumes:
-            cfg["volumes"] = volumes
+        vols = _collect_service_volumes(service)
+        if vols:
+            cfg["volumes"] = vols
 
     return cfg
 
@@ -201,19 +271,34 @@ def _create_deploy_log(
     exception_type: str = "",
     traceback_str: str = "",
 ) -> None:
+    """
+    Write DeployLog on the dedicated log database.
+
+    DeployLog lives on DEPLOYMENT_LOG_DB_ALIAS (cross-db).  Assigning full
+    FK objects triggers the router error
+    "the current database router prevents this relation", so we pass raw
+    ids and use .using(alias).
+    """
     try:
-        DeployLog.objects.create(
-            deploy=deploy,
-            service=deploy.service,
-            stage=stage,
-            event_type=event_type,
-            level=level,
-            message=message,
-            progress=progress,
-            details=details or {},
-            exception_type=exception_type,
-            traceback=traceback_str,
-        )
+        from django.conf import settings
+
+        alias = getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", None) or "default"
+        kwargs = {
+            "deploy_id": deploy.pk,
+            "service_id": (
+                getattr(deploy, "service_id", None)
+                or (deploy.service.pk if getattr(deploy, "service", None) is not None else None)
+            ),
+            "stage": stage,
+            "event_type": event_type,
+            "level": level,
+            "message": message,
+            "progress": progress,
+            "details": details or {},
+            "exception_type": exception_type,
+            "traceback": traceback_str,
+        }
+        DeployLog.objects.using(alias).create(**kwargs)
     except Exception:
         logger.exception(
             "Failed to write DeployLog for deploy %s stage=%s", deploy.pk, stage
@@ -420,13 +505,22 @@ def run_db_deploy(self, deploy_id: str | int) -> None:
 
     errors = validate_db_config(platform, cfg)
     if errors:
+        # Log key names only (never secret values) to diagnose empty-config bugs
+        safe_keys = sorted(str(k) for k in cfg.keys())
+        logger.warning(
+            "DB validation failed for deploy=%s platform=%s config_keys=%s errors=%s",
+            deploy.pk,
+            platform,
+            safe_keys,
+            errors,
+        )
         msg = "DB config validation failed: " + "; ".join(errors)
         _mark_failure(
             deploy,
             service,
             msg,
             stage="validation",
-            details={"errors": errors},
+            details={"errors": errors, "config_keys": safe_keys},
         )
         return
 

@@ -46,13 +46,32 @@ from core.utils import make_uuid4
 logger = logging.getLogger(__name__)
 
 
+def _parse_deploy_config(raw) -> dict:
+    """Normalize Deploy.config whether stored as dict or JSON string."""
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, str) and raw.strip():
+        import json
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+            if isinstance(parsed, str) and parsed.strip():
+                parsed2 = json.loads(parsed)
+                if isinstance(parsed2, dict):
+                    return parsed2
+        except Exception:
+            pass
+    return {}
+
+
 def _resolve_platform(deploy) -> str:
     """
     Resolve platform for routing DB vs app deploy tasks.
 
     Order: deploy.config["platform"] → service.plan.platform → "docker".
     """
-    cfg = deploy.config if isinstance(getattr(deploy, "config", None), dict) else {}
+    cfg = _parse_deploy_config(getattr(deploy, "config", None))
     p = str(cfg.get("platform") or "").strip().lower()
     if p:
         return p
@@ -80,7 +99,7 @@ def _resolve_platform(deploy) -> str:
 
 def _ensure_config_platform(deploy, platform: str) -> dict:
     """Persist platform onto deploy.config when missing so later starts stay correct."""
-    cfg = dict(deploy.config) if isinstance(deploy.config, dict) else {}
+    cfg = _parse_deploy_config(getattr(deploy, "config", None))
     if cfg.get("platform") != platform:
         cfg["platform"] = platform
         Deploy.objects.filter(pk=deploy.pk).update(config=cfg)
@@ -379,7 +398,7 @@ class DeployViewSet(ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        cfg = dict(deploy.config) if isinstance(deploy.config, dict) else {}
+        cfg = _parse_deploy_config(getattr(deploy, "config", None))
         platform = _resolve_platform(deploy)
         if platform not in DB_PLATFORMS:
             return Response(
