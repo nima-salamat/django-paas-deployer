@@ -29,7 +29,7 @@ def run_deploy(self, deploy_id):
     except Exception:
         pass
 
-    sink = DBAndChannelEventSink(deploy_id=deploy.id)
+    sink = DBAndChannelEventSink(deployment_id=str(deploy.id))
 
     # Prepare parameters for Deploy facade
     name = deploy.name
@@ -169,8 +169,7 @@ def run_db_deploy(self, deploy_id):
     except Exception:
         pass
 
-    sink = DBAndChannelEventSink(deploy_id=deploy.id)
-    cfg = deploy.config or {}
+    sink = DBAndChannelEventSink(deployment_id=str(deploy.id))    cfg = deploy.config or {}
     platform = cfg.get("platform") or "mysql"
     container_name = deploy.service.get_docker_service_name()
 

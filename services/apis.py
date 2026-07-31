@@ -21,6 +21,7 @@ from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 from deployments.celery.tasks import deploy as start_service
 from deployments.celery.tasks import stop as stop_service
+from deployments.celery.tasks import run_db_deploy  # DB platforms
 from core.global_settings.config import SERVICE_STATUS_CHOICES
 from core.utils import make_uuid4
 from deployments.core.db_deployer import DB_PLATFORMS, DBDeployer
@@ -376,11 +377,9 @@ def start_service_apiview(request):
     Routing
     -------
     DB platforms  (mysql/mariadb/postgresql/mongodb/redis/oracle)
-                  → run_db_deploy Celery task
-    App platforms → deployments.celery.tasks.deploy Celery task
+                  → deployments.celery.tasks.run_db_deploy
+    App platforms → deployments.celery.tasks.deploy
     """
-    from deploy.tasks import run_db_deploy
-
     service_id = request.data.get("service_id", "")
     force_rebuild = str(request.data.get("force_rebuild", "")).lower() in ("1", "true", "yes")
 

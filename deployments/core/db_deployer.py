@@ -185,10 +185,17 @@ def validate_db_config(platform: str, cfg: dict) -> list[str]:
     """
     Return a list of human-readable validation error strings.
     An empty list means the config is valid.
+
+    MySQL/MariaDB accept ``password`` as an alias for ``root_password``
+    (``_mysql_env`` already falls back the same way).
     """
     errors: list[str] = []
 
-    required = _REQUIRED_FIELDS.get(platform, [])
+    required = list(_REQUIRED_FIELDS.get(platform, []))
+    if platform in ("mysql", "mariadb"):
+        if not str(cfg.get("root_password") or "").strip() and str(cfg.get("password") or "").strip():
+            required = [k for k in required if k != "root_password"]
+
     for key in required:
         val = cfg.get(key)
         if not val or not str(val).strip():
@@ -308,6 +315,11 @@ class DBDeployer:
         if isinstance(extra_env, dict):
             environment.update({str(k): str(v) for k, v in extra_env.items()})
 
+        # Official Redis image ignores REDIS_PASSWORD env; override CMD instead.
+        command = None
+        if platform == "redis" and cfg.get("password"):
+            command = ["redis-server", "--requirepass", str(cfg["password"])]
+
         # ------------------------------------------------------------------
         # 5. Port bindings
         # ------------------------------------------------------------------
@@ -340,6 +352,22 @@ class DBDeployer:
                 mode = vol.get("mode", "rw")
                 if src and tgt:
                     volume_binds[src] = {"bind": tgt, "mode": mode}
+                    # Ensure named Docker volumes exist (skip host bind paths)
+                    if not str(src).startswith("/"):
+                        try:
+                            client.volumes.get(src)
+                        except NotFound:
+                            try:
+                                client.volumes.create(name=src)
+                                log.info(
+                                    "volume_creation",
+                                    f"Created volume '{src}'.",
+                                    progress=28,
+                                )
+                            except (APIError, docker.errors.DockerException) as exc:
+                                logger.warning(
+                                    "Could not create volume '%s': %s", src, exc
+                                )
 
         # ------------------------------------------------------------------
         # 8. Remove existing container (safe to call on missing container)
@@ -416,6 +444,7 @@ class DBDeployer:
                 host_config=host_config,
                 networking_config=networking_config,
                 ports=list(exposed_ports.keys()) or None,
+                command=command,
                 labels={
                     "managed-by":    "django-paas-deployer",
                     "platform":      platform,
@@ -446,30 +475,53 @@ class DBDeployer:
             )
 
         # ------------------------------------------------------------------
-        # 13. Wait for running state (up to 12 seconds)
+        # 13. Wait for running state (platform-aware timeout)
         # ------------------------------------------------------------------
+        _HEALTH_WAIT = {
+            "mysql": 30, "mariadb": 30, "postgresql": 20,
+            "mongodb": 20, "redis": 10, "oracle": 90,
+        }
+        wait_secs = _HEALTH_WAIT.get(platform, 20)
         final_status = "unknown"
-        for _ in range(12):
+        for _ in range(wait_secs):
             try:
                 c = client.containers.get(container_name)
                 c.reload()
                 final_status = c.status
                 if final_status == "running":
                     break
+                if final_status in ("exited", "dead"):
+                    break
             except NotFound:
                 pass
             time.sleep(1)
-        else:
+
+        if final_status != "running":
+            log_tail = ""
+            try:
+                c = client.containers.get(container_name)
+                raw = c.logs(tail=30)
+                log_tail = (
+                    raw.decode("utf-8", "replace")
+                    if isinstance(raw, bytes)
+                    else str(raw)
+                )
+            except Exception:
+                pass
             msg = (
                 f"DB container did not reach running state "
                 f"(final status: '{final_status}')."
             )
-            log.error("health_check", msg, progress=100,
-                      details={"final_status": final_status})
+            log.error(
+                "health_check",
+                msg,
+                progress=100,
+                details={"final_status": final_status, "logs": log_tail[-2000:]},
+            )
             return DBDeployResult(
                 success=False, message=msg, container_name=container_name,
                 platform=platform, error=msg,
-                details={"final_status": final_status},
+                details={"final_status": final_status, "logs": log_tail[-2000:]},
             )
 
         log.info(
