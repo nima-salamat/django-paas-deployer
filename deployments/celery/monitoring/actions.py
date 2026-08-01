@@ -51,8 +51,8 @@ def _create_deploy_log(
     """
     try:
         DeployLog.objects.create(
-            deploy=deploy,
-            service=deploy.service,
+            deploy_id=deploy.pk,       
+            service_id=deploy.service.pk,  
             stage=stage,
             event_type=event_type,
             level=level,
@@ -64,8 +64,6 @@ def _create_deploy_log(
         logger.exception(
             "Failed to write DeployLog for deploy %s stage=%s", deploy.pk, stage
         )
-
-
 # ---------------------------------------------------------------------------
 # Service-level writers
 # ---------------------------------------------------------------------------
