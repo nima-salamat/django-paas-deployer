@@ -144,7 +144,7 @@ class SERVICE_STATUS_CHOICES(models.TextChoices):
     STOPPING = "stopping", _("stopping")
 
 
-MIRROR_DOCKER = "docker.arvancloud.ir"
+MIRROR_DOCKER = "docker.io"
 
 
 class Config:

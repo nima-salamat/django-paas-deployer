@@ -157,16 +157,12 @@ class DeployViewSet(ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        # If client omitted config.platform, inject it from the service plan
-        data = request.data
-        if hasattr(data, "copy"):
-            data = data.copy()
-        else:
-            data = dict(data)
-
+        data = dict(request.data.items())
+        
         service_id = data.get("service")
         raw_config = data.get("config")
         cfg = {}
+
         if isinstance(raw_config, dict):
             cfg = dict(raw_config)
         elif isinstance(raw_config, str) and raw_config.strip():
@@ -177,15 +173,24 @@ class DeployViewSet(ModelViewSet):
                     cfg = parsed
             except Exception:
                 pass
+                
+      
+        if not cfg:
+            for key, value in request.data.items():
+                key_str = str(key)
+                if key_str.startswith("config[") and key_str.endswith("]"):
+                    sub_key = key_str[7:-1]
+                    cfg[sub_key] = value
 
         if not cfg.get("platform") and service_id:
             try:
                 service = Service.objects.select_related("plan").get(pk=service_id)
-                if service.plan_id and getattr(service.plan, "platform", None):
+                if service.plan and getattr(service.plan, "platform", None):
                     cfg["platform"] = str(service.plan.platform).strip().lower()
-                    data["config"] = cfg
             except Service.DoesNotExist:
                 pass
+
+        data["config"] = cfg
 
         serializer = self.get_serializer(data=data)
         if serializer.is_valid():

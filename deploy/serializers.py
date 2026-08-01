@@ -1,77 +1,57 @@
 from rest_framework import serializers
 
+from deployments.core.db_deployer import DB_PLATFORMS, SENSITIVE_CONFIG_KEYS
 from .models import Deploy, DeployLog
+
+
+class MaskedDBConfigField(serializers.JSONField):
+    """JSONField that strips sensitive DB credentials on read, but accepts full dict on write."""
+    def to_representation(self, value):
+        # Call parent to get the normal dict representation
+        data = super().to_representation(value)
+        if not isinstance(data, dict):
+            return data
+        platform = data.get("platform") or ""
+        if platform in DB_PLATFORMS:
+            # Remove sensitive keys before sending to client
+            return {k: v for k, v in data.items() if k not in SENSITIVE_CONFIG_KEYS}
+        return data
 
 
 class DeployLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = DeployLog
         fields = [
-            "id",
-            "deploy",
-            "service",
-            "stage",
-            "event_type",
-            "level",
-            "message",
-            "progress",
-            "details",
-            "exception_type",
-            "traceback",
+            "id", "deploy", "service", "stage", "event_type", "level",
+            "message", "progress", "details", "exception_type", "traceback",
             "created_at",
         ]
         read_only_fields = fields
 
 
 class DeploySerializer(serializers.ModelSerializer):
+    # Use the writable field – no more SerializerMethodField
+    config = MaskedDBConfigField()
+
     recent_logs = serializers.SerializerMethodField()
-    # config is fully writable and fully readable (no sensitive-key stripping)
-    config = serializers.JSONField(required=False, allow_null=True)
 
     class Meta:
         model = Deploy
         fields = [
-            "id",
-            "name",
-            "service",
-            "version",
-            "zip_file",
+            "id", "name", "service", "version", "zip_file",
             "config",
-            "started_at",
-            "completed_at",
-            "status",
-            "stage",
-            "progress",
-            "status_message",
-            "error_message",
-            "rollback_status",
-            "health_status",
-            "container_status",
-            "image_status",
-            "volume_status",
-            "network_status",
-            "recent_logs",
-            "created_at",
-            "updated_at",
+            "started_at", "completed_at", "status", "stage", "progress",
+            "status_message", "error_message", "rollback_status",
+            "health_status", "container_status", "image_status",
+            "volume_status", "network_status",
+            "recent_logs", "created_at", "updated_at",
         ]
         read_only_fields = [
-            "started_at",
-            "completed_at",
-            "status",
-            "stage",
-            "progress",
-            "status_message",
-            "error_message",
-            "rollback_status",
-            "health_status",
-            "container_status",
-            "image_status",
-            "volume_status",
-            "network_status",
-            "recent_logs",
-            "created_at",
-            "updated_at",
-            "updated_file_at",
+            "started_at", "completed_at", "status", "stage", "progress",
+            "status_message", "error_message", "rollback_status",
+            "health_status", "container_status", "image_status",
+            "volume_status", "network_status",
+            "recent_logs", "created_at", "updated_at", "updated_file_at",
         ]
 
     def get_recent_logs(self, obj):

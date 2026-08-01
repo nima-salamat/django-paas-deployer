@@ -158,13 +158,16 @@ class DeployService:
 
     @staticmethod
     def _volume_specs(deploy_item: Deploy) -> list[VolumeSpec]:
-        return [
-            VolumeSpec(
+        specs = []
+        for volume in deploy_item.service.volumes.all():
+            attrs = deploy_item.service.service_attachments.get(str(volume.id), {})
+            bind = attrs.get('bind', volume.default_bind)   # fallback
+            mode = attrs.get('mode', volume.default_mode)
+            specs.append(VolumeSpec(
                 source=volume.name,
-                target=volume.bind,
-                mode=volume.mode,
+                target=bind,
+                mode=mode,
                 mount_type="volume",
                 size_mb=volume.size_mb,
-            )
-            for volume in deploy_item.service.volumes.all()
-        ]
+            ))
+        return specs
