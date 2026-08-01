@@ -1,11 +1,15 @@
 import logging
 import traceback
+
+from django.db.models import Q
+
 from deploy.models import Deploy
 from deploy.deployment_state import DjangoDeploymentState
 from core.global_settings.config import default_ports
 from deployments.core.deploy import Deploy as DeployFacade
 from deployments.core.types import VolumeSpec
 from deployments.core.manager.container_manager import Container
+from services.models import Volume
 from ..service_status import ServiceStateManager
 from ..validators import DeploymentValidator
 from ..helpers import DeploymentHelper, MockOrchestratorResult
@@ -97,7 +101,7 @@ class DeployService:
         platform: str,
         dockerfile_text: str,
         state_tracker: DjangoDeploymentState
-    ) -> None:
+    ):
         port = default_ports.get(platform)
         service = deploy_item.service
 
@@ -157,11 +161,19 @@ class DeployService:
         return result
 
     @staticmethod
+    def _get_volumes_for_service(service):
+        """Return all Volume objects attached to the given service."""
+        service_id = str(service.id)
+        q_legacy = Q(service=service)
+        q_json = Q(service_attachments__has_key=service_id)
+        return Volume.objects.filter(q_legacy | q_json).distinct()
+
+    @staticmethod
     def _volume_specs(deploy_item: Deploy) -> list[VolumeSpec]:
         specs = []
-        for volume in deploy_item.service.volumes.all():
+        for volume in DeployService._get_volumes_for_service(deploy_item.service):
             attrs = deploy_item.service.service_attachments.get(str(volume.id), {})
-            bind = attrs.get('bind', volume.default_bind)   # fallback
+            bind = attrs.get('bind', volume.default_bind)
             mode = attrs.get('mode', volume.default_mode)
             specs.append(VolumeSpec(
                 source=volume.name,
