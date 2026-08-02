@@ -113,24 +113,27 @@ def _runtime_pip_packages(
 
 def _inject_pip_install(dockerfile: str, packages: list[str]) -> str:
     """
-    Append a RUN pip install for runtime packages.
+    Append a RUN pip install for runtime packages at the END of the Dockerfile.
 
-    Uses `|| true` only as last resort so a mirror blip does not hard-fail
-    the whole build when packages are already present from requirements.txt.
+    Never insert in the middle of a multi-line RUN (lines ending with \\
+    continued with &&) — that produces `unknown instruction: &&`.
     """
     if not packages:
         return dockerfile
     pkgs = " ".join(packages)
     block = (
-        "\n# --- Runtime deps injected by deployer (from Deploy.config flags) ---\n"
+        "\n\n# --- Runtime deps injected by deployer (from Deploy.config flags) ---\n"
         f"RUN pip install --no-cache-dir {pkgs}\n"
     )
-    # Prefer inserting after the last existing pip install line
-    matches = list(re.finditer(r"^RUN pip install[^\n]*$", dockerfile, flags=re.MULTILINE))
-    if matches:
-        last = matches[-1]
-        return dockerfile[: last.end()] + "\n" + block.strip() + dockerfile[last.end() :]
-    return dockerfile.rstrip() + "\n" + block
+    # Remove any trailing CMD/ENTRYPOINT so we don't leave a stale final command
+    # before our install layer; callers re-add CMD / supervisord afterwards.
+    body = re.sub(
+        r"^\s*(CMD|ENTRYPOINT)\s+.*$",
+        "",
+        dockerfile,
+        flags=re.MULTILINE,
+    ).rstrip()
+    return body + block
 
 
 def _strip_cmd_entrypoint(dockerfile: str) -> str:
