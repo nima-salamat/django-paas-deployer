@@ -1,5 +1,6 @@
 import logging
 import traceback
+import json
 
 from django.db.models import Q
 
@@ -17,6 +18,34 @@ from ..waiters import ContainerWaiter
 from ..exceptions import InvalidServiceStateError, OrchestratorDeploymentError
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_config(raw) -> dict:
+    """Normalize Deploy.config whether stored as dict or JSON string."""
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+            if isinstance(parsed, str) and parsed.strip():
+                parsed2 = json.loads(parsed)
+                if isinstance(parsed2, dict):
+                    return parsed2
+        except Exception:
+            pass
+    return {}
+
+
+def _as_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
 
 
 class DeployService:
@@ -52,11 +81,16 @@ class DeployService:
             if getattr(result, "status", None) == "cancelled":
                 ServiceStateManager.sync_legacy_stopped(service_id)
             else:
-                ServiceStateManager.sync_legacy_success(service_id)
+                ServiceStateManager.sync_legacy_success(service_id, deploy_id=deploy_item.pk)
             logger.info("Successfully executed deploy cycle for container: %s", container_name)
 
         except Exception as exc:
-            logger.error("Deployment critical failure on %s: %s", container_name, str(exc), exc_info=True)
+            logger.error(
+                "Deployment critical failure on %s: %s",
+                container_name,
+                str(exc),
+                exc_info=True,
+            )
             state_tracker.record_exception(exc, traceback.format_exc())
             if state_tracker.deploy.status not in {"failed", "cancelled"}:
                 state_tracker.finish(
@@ -67,11 +101,12 @@ class DeployService:
                         error=str(exc),
                     )
                 )
-            ServiceStateManager.sync_legacy_failure(service_id)
+            ServiceStateManager.sync_legacy_failure(service_id, deploy_id=deploy_item.pk)
             raise
 
     def _process_deployment(self, deploy_item: Deploy, container_name: str, state_tracker: DjangoDeploymentState):
-        platform = deploy_item.service.plan.platform
+        platform = getattr(getattr(deploy_item.service, "plan", None), "platform", None) or "docker"
+        platform = str(platform).lower().strip()
         dockerfile_text = DeploymentHelper.get_dockerfile_text(platform)
 
         DeploymentValidator.validate_for_deploy(deploy_item, dockerfile_text)
@@ -82,16 +117,22 @@ class DeployService:
             restart_result = MockOrchestratorResult(
                 success=True,
                 stage="deployment_completed",
-                message="Existing container containerized instance restarted successfully."
+                message="Existing container instance restarted successfully.",
             )
             state_tracker.finish(restart_result)
             result = restart_result
         else:
             logger.info("Full orchestration required. Building image for: %s", container_name)
-            result = self._execute_orchestrator(deploy_item, container_name, platform, dockerfile_text, state_tracker)
+            result = self._execute_orchestrator(
+                deploy_item, container_name, platform, dockerfile_text, state_tracker
+            )
 
         if getattr(result, "status", None) != "cancelled":
-            ContainerWaiter.wait_until_running(container_name, timeout=30)
+            # Django + Celery/supervisord needs more time to come up
+            cfg = _parse_config(getattr(deploy_item, "config", None))
+            use_celery = _as_bool(cfg.get("celery"))
+            wait_timeout = 90 if use_celery or platform == "django" else 45
+            ContainerWaiter.wait_until_running(container_name, timeout=wait_timeout)
         return result
 
     def _execute_orchestrator(
@@ -100,16 +141,16 @@ class DeployService:
         container_name: str,
         platform: str,
         dockerfile_text: str,
-        state_tracker: DjangoDeploymentState
+        state_tracker: DjangoDeploymentState,
     ):
         port = default_ports.get(platform)
         service = deploy_item.service
-
-        cfg = getattr(deploy_item, "config", None) or {}
-        if not isinstance(cfg, dict):
-            cfg = {}
+        cfg = _parse_config(getattr(deploy_item, "config", None))
 
         environment = dict(cfg.get("env") or cfg.get("environment") or {})
+        # Ensure all env values are strings (Docker requirement)
+        environment = {str(k): str(v) for k, v in environment.items()}
+
         server_type = (
             getattr(deploy_item, "server_type", None)
             or cfg.get("server_type")
@@ -120,25 +161,48 @@ class DeployService:
             or cfg.get("entry_point")
             or getattr(service, "entry_point", None)
         )
-        celery = bool(
+        celery = _as_bool(
             getattr(deploy_item, "celery", False)
             or cfg.get("celery")
             or getattr(service, "celery", False)
         )
-        celery_beat = bool(
+        celery_beat = _as_bool(
             getattr(deploy_item, "celery_beat", False)
             or cfg.get("celery_beat")
             or getattr(service, "celery_beat", False)
         ) and celery
 
+        # Optional explicit celery app module, e.g. "config" or "myproject"
+        celery_app = (
+            cfg.get("celery_app")
+            or cfg.get("celery_module")
+            or None
+        )
+
+        logger.info(
+            "Orchestrator options for %s: platform=%s celery=%s celery_beat=%s "
+            "server_type=%s entry_point=%s celery_app=%s",
+            container_name,
+            platform,
+            celery,
+            celery_beat,
+            server_type,
+            entry_point,
+            celery_app,
+        )
+
+        networks = []
+        if getattr(service, "network", None) is not None and getattr(service.network, "name", None):
+            networks.append((service.network.name, "bridge"))
+
         deployer = DeployFacade(
             name=container_name,
             tag=deploy_item.version,
-            zip_filename=deploy_item.zip_file.path,
+            zip_filename=deploy_item.zip_file.path if deploy_item.zip_file else "",
             dockerfile_text=dockerfile_text,
             max_cpu=service.plan.max_cpu,
             max_ram=service.plan.max_ram,
-            networks=[(service.network.name, "bridge")],
+            networks=networks,
             volumes=self._volume_specs(deploy_item),
             port=port,
             read_only=service.read_only,
@@ -152,12 +216,24 @@ class DeployService:
             celery_beat=celery_beat,
             entry_point=entry_point,
         )
+        # Pass optional celery_app through environment so Dockerfile layer can use it
+        # if the generator supports it; also keep on facade if attribute exists.
+        if celery_app:
+            try:
+                deployer.celery_app = str(celery_app).strip()
+            except Exception:
+                pass
+            if "CELERY_APP" not in environment:
+                environment["CELERY_APP"] = str(celery_app).strip()
+                deployer.environment = environment
 
         result = deployer.deploy_result()
         state_tracker.finish(result)
 
         if not result.success and result.status != "cancelled":
-            raise OrchestratorDeploymentError(f"Orchestrator compilation failed: {result.message}")
+            raise OrchestratorDeploymentError(
+                f"Orchestrator compilation failed: {result.message}"
+            )
         return result
 
     @staticmethod
@@ -169,17 +245,52 @@ class DeployService:
         return Volume.objects.filter(q_legacy | q_json).distinct()
 
     @staticmethod
-    def _volume_specs(deploy_item: Deploy) -> list[VolumeSpec]:
+    def _volume_specs(deploy_item: Deploy) -> list:
+        """
+        Build VolumeSpec list from volumes attached to the service.
+
+        Bind/mode come from Volume.service_attachments[service_id], falling
+        back to Volume.default_bind / default_mode.
+        """
         specs = []
-        for volume in DeployService._get_volumes_for_service(deploy_item.service):
-            attrs = deploy_item.service.service_attachments.get(str(volume.id), {})
-            bind = attrs.get('bind', volume.default_bind)
-            mode = attrs.get('mode', volume.default_mode)
-            specs.append(VolumeSpec(
-                source=volume.name,
-                target=bind,
-                mode=mode,
-                mount_type="volume",
-                size_mb=volume.size_mb,
-            ))
+        service = deploy_item.service
+        service_id = str(service.id)
+
+        for volume in DeployService._get_volumes_for_service(service):
+            attachments = getattr(volume, "service_attachments", None) or {}
+            if not isinstance(attachments, dict):
+                attachments = {}
+            attrs = attachments.get(service_id) or {}
+            if not isinstance(attrs, dict):
+                attrs = {}
+
+            bind = (
+                attrs.get("bind")
+                or getattr(volume, "default_bind", None)
+                or getattr(volume, "bind", None)
+            )
+            mode = (
+                attrs.get("mode")
+                or getattr(volume, "default_mode", None)
+                or getattr(volume, "mode", None)
+                or "rw"
+            )
+
+            if not bind:
+                logger.warning(
+                    "Skipping volume '%s' for service %s: no bind path configured.",
+                    getattr(volume, "name", volume.pk),
+                    service_id,
+                )
+                continue
+
+            specs.append(
+                VolumeSpec(
+                    source=volume.name,
+                    target=bind,
+                    mode=mode,
+                    mount_type="volume",
+                    size_mb=getattr(volume, "size_mb", None),
+                )
+            )
         return specs

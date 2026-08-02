@@ -1,6 +1,25 @@
+import json
+
 from deploy.models import Deploy
 from deployments.core.db_deployer import DB_PLATFORMS, validate_db_config
 from .exceptions import DeploymentValidationError
+
+
+def _parse_config(raw) -> dict:
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+            if isinstance(parsed, str) and parsed.strip():
+                parsed2 = json.loads(parsed)
+                if isinstance(parsed2, dict):
+                    return parsed2
+        except Exception:
+            pass
+    return {}
 
 
 class DeploymentValidator:
@@ -8,11 +27,10 @@ class DeploymentValidator:
 
     @classmethod
     def _platform(cls, deploy_item: Deploy) -> str:
-        cfg = deploy_item.config or {}
-        if isinstance(cfg, dict):
-            p = cfg.get("platform")
-            if p:
-                return str(p).lower().strip()
+        cfg = _parse_config(getattr(deploy_item, "config", None))
+        p = cfg.get("platform")
+        if p:
+            return str(p).lower().strip()
         plan = getattr(getattr(deploy_item, "service", None), "plan", None)
         if plan and getattr(plan, "platform", None):
             return str(plan.platform).lower().strip()
@@ -47,13 +65,12 @@ class DeploymentValidator:
             )
 
         platform = cls._platform(deploy_item)
+        cfg = _parse_config(getattr(deploy_item, "config", None))
 
         # ------------------------------------------------------------------
         # DB platforms: credentials only — NO zip, NO dockerfile template
         # ------------------------------------------------------------------
         if platform in DB_PLATFORMS:
-            cfg = deploy_item.config if isinstance(deploy_item.config, dict) else {}
-            # Ensure platform is stored on config for downstream deployers
             if not cfg.get("platform"):
                 cfg = {**cfg, "platform": platform}
             errors = validate_db_config(platform, cfg)
@@ -74,4 +91,12 @@ class DeploymentValidator:
         if not dockerfile_text:
             raise DeploymentValidationError(
                 f"Missing dockerfile configuration for platform: {platform}"
+            )
+
+        # Soft checks for Celery flags (do not fail deploy; warn via message only)
+        if cfg.get("celery") and platform not in ("django", "flask", "python"):
+            # Celery supervisord injection is only implemented for Python family
+            raise DeploymentValidationError(
+                f"Celery is only supported for Django/Flask/Python platforms "
+                f"(got '{platform}')."
             )
