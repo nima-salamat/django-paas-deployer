@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import re
 
 from .entrypoints import (
@@ -203,14 +204,17 @@ def _build_supervisor_addon(web_cmd: str, celery_app: str, celery_beat: bool) ->
         web_cmd=web_cmd,
         celery_app=celery_app,
         beat_section=beat_section,
-    ).strip()
-    supervisor_conf_escaped = supervisor_conf.replace("'", "'\\''")
+    ).strip() + "\n"
+
+    # Embed via base64 so multi-line conf never breaks Dockerfile parsing
+    # (plain printf/echo with newlines becomes "unknown instruction: nodaemon=true").
+    b64 = base64.b64encode(supervisor_conf.encode("utf-8")).decode("ascii")
 
     lines = [
         "",
         "# --- Supervisor process manager (injected by deployer) ---",
         "RUN mkdir -p /etc/supervisor/conf.d /var/log/supervisor",
-        f"RUN printf '%s\\n' '{supervisor_conf_escaped}' > /etc/supervisor/conf.d/app.conf",
+        f"RUN echo '{b64}' | base64 -d > /etc/supervisor/conf.d/app.conf",
         "",
         'CMD ["supervisord", "-c", "/etc/supervisor/conf.d/app.conf"]',
     ]
