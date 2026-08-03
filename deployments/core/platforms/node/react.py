@@ -40,7 +40,7 @@ class ReactPlatform(NodePlatform):
                 # Modern default is Vite `dist`. CRA projects are corrected in inspect().
                 "build_dir": "dist",
                 "build_command": "npm run build",
-                "start_command": "npx serve -s dist -l 3000",
+                "start_command": "nginx -g daemon off;",
             }
         )
         return base
@@ -94,9 +94,9 @@ class ReactPlatform(NodePlatform):
         port = result.get("port", 3000)
         if scripts.get("start"):
             # For production we serve the static build
-            result["start_command"] = f"npx serve -s {build_dir} -l {port}"
+            result["start_command"] = 'nginx -g "daemon off;"'
         else:
-            result["start_command"] = f"npx serve -s {build_dir} -l {port}"
+            result["start_command"] = 'nginx -g "daemon off;"'
         
         return result
 

@@ -45,7 +45,7 @@ class VitePlatform(NodePlatform):
                 "port": 4173,
                 "build_dir": "dist",
                 "build_command": "npm run build",
-                "start_command": "npx serve -s dist -l 4173",
+                "start_command": "nginx -g "daemon off;"",
             }
         )
         return base
@@ -60,7 +60,7 @@ class VitePlatform(NodePlatform):
         
         # Update start command with detected output directory
         port = result.get("port", 4173)
-        result["start_command"] = f"npx serve -s {out_dir} -l {port}"
+        result["start_command"] = 'nginx -g "daemon off;"'
         
         return result
 

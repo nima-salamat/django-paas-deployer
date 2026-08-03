@@ -380,6 +380,8 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
         rendered = dockerfile_template.replace("{MIRROR_DOCKER}", MIRROR_DOCKER)
     # Ensure leftover {build_dir} is never left unexpanded
     rendered = rendered.replace("{build_dir}", build_dir)
+    spa_port_early = _resolve_spa_port(config, project_cfg, platform)
+    rendered = _ensure_port_placeholder(rendered, spa_port_early)
 
     if entry_point_override and not use_celery:
         web_cmd = entry_point_override
@@ -899,6 +901,22 @@ def _render_generic(platform, dockerfile_template, tar_stream, config, logger):
 # Public API
 # ---------------------------------------------------------------------------
 
+
+def _ensure_port_placeholder(dockerfile: str, port: int | None) -> str:
+    """Replace residual ``{port}`` placeholders in the Dockerfile text."""
+    if port is None:
+        try:
+            from core.global_settings.config import DEFAULT_EXPOSE_PORT
+            port = DEFAULT_EXPOSE_PORT
+        except Exception:
+            port = 80
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        port = 80
+    return dockerfile.replace("{port}", str(port))
+
+
 class DockerfileGenerator:
     def render(
         self,
@@ -917,25 +935,34 @@ class DockerfileGenerator:
         check_requirements_txt(tar_stream, platform=platform)
         check_package_json(tar_stream, platform=platform)
         platform = (platform or "").lower().strip()
+
         if platform == "django":
-            return _render_django(dockerfile_template, tar_stream, config, logger)
-        if platform in ("flask", "python", "fastapi"):
-            return _render_flask_or_python(
+            rendered = _render_django(dockerfile_template, tar_stream, config, logger)
+        elif platform in ("flask", "python", "fastapi"):
+            rendered = _render_flask_or_python(
                 platform if platform != "fastapi" else "python",
-                dockerfile_template, tar_stream, config, logger
+                dockerfile_template, tar_stream, config, logger,
             )
-        if platform in (
+        elif platform in (
             "nodejs", "nextjs", "react", "vuejs", "vue", "angular",
             "vite", "express",
         ):
-            return _render_node_family(
-                platform, dockerfile_template, tar_stream, config, logger
+            rendered = _render_node_family(
+                platform, dockerfile_template, tar_stream, config, logger,
             )
-        if platform in ("php", "laravel"):
-            return _render_php(dockerfile_template, tar_stream, config, logger)
-        if platform == "go":
-            return _render_generic(platform, dockerfile_template, tar_stream, config, logger)
-        return _render_generic(
-            platform, dockerfile_template, tar_stream, config, logger
-        )
+        elif platform in ("php", "laravel"):
+            rendered = _render_php(dockerfile_template, tar_stream, config, logger)
+        elif platform == "go":
+            rendered = _render_generic(platform, dockerfile_template, tar_stream, config, logger)
+        else:
+            rendered = _render_generic(
+                platform, dockerfile_template, tar_stream, config, logger,
+            )
+
+        # Final pass: resolve any leftover {port} from Config templates.
+        port = None
+        if config is not None and getattr(config, "port", None) is not None:
+            port = config.port
+        rendered = _ensure_port_placeholder(rendered, port)
+        return rendered
 

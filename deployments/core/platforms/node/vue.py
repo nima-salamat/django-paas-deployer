@@ -39,7 +39,7 @@ class VuePlatform(NodePlatform):
                 "port": 80,
                 "build_dir": "dist",
                 "build_command": "npm run build",
-                "start_command": "npx serve -s dist -l 80",
+                "start_command": "nginx -g daemon off;",
             }
         )
         return base
@@ -62,13 +62,13 @@ class VuePlatform(NodePlatform):
             vite_out = self._get_vite_out_dir(file_index)
             result["build_dir"] = vite_out or "dist"
             port = result.get("port", 80)
-            result["start_command"] = f"npx serve -s {result['build_dir']} -l {port}"
+            result["start_command"] = 'nginx -g "daemon off;"'
         else:
             # Vue CLI or generic Vue
             vue_out = self._get_vue_out_dir(file_index)
             result["build_dir"] = vue_out or "dist"
             port = result.get("port", 80)
-            result["start_command"] = f"npx serve -s {result['build_dir']} -l {port}"
+            result["start_command"] = 'nginx -g "daemon off;"'
         
         return result
 

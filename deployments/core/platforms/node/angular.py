@@ -38,7 +38,7 @@ class AngularPlatform(NodePlatform):
                 "port": 80,
                 "build_dir": "dist",
                 "build_command": "npm run build",
-                "start_command": "npx serve -s dist -l 80",
+                "start_command": "nginx -g daemon off;",
             }
         )
         return base
@@ -53,7 +53,7 @@ class AngularPlatform(NodePlatform):
         
         # Update start command with detected output directory
         port = result.get("port", 80)
-        result["start_command"] = f"npx serve -s {build_dir} -l {port}"
+        result["start_command"] = 'nginx -g "daemon off;"'
         
         return result
 
