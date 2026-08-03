@@ -1,7 +1,8 @@
-"""Angular platform plugin."""
+"""Angular platform plugin with improved build directory detection."""
 
 from __future__ import annotations
 
+import json
 from typing import Any, Optional
 
 from ..base.platform import DetectionResult
@@ -45,26 +46,62 @@ class AngularPlatform(NodePlatform):
     def inspect(self, file_index: dict[str, str]) -> dict[str, Any]:
         result = super().inspect(file_index)
         result["framework"] = "angular"
-        # angular.json can define outputPath
-        result["build_dir"] = self._angular_out(file_index) or "dist"
+        
+        # Try to detect build directory from angular.json
+        build_dir = self._angular_out(file_index) or "dist"
+        result["build_dir"] = build_dir
+        
+        # Update start command with detected output directory
+        port = result.get("port", 80)
+        result["start_command"] = f"npx serve -s {build_dir} -l {port}"
+        
         return result
 
     def _angular_out(self, file_index: dict[str, str]) -> Optional[str]:
-        import json, re
+        """
+        Extract outputPath from angular.json.
+        
+        Looks in: projects.{project}.architect.build.options.outputPath
+        """
+        import json
+        
         paths = self._find("angular.json", file_index)
         if not paths:
             return None
+        
         try:
-            data = json.loads(self._read_text(file_index[paths[0]]))
-            # walk projects.*.architect.build.options.outputPath
-            for proj in (data.get("projects") or {}).values():
-                opts = (
-                    (proj.get("architect") or {})
-                    .get("build", {})
-                    .get("options", {})
-                )
-                if opts.get("outputPath"):
-                    return opts["outputPath"]
-        except Exception:
+            content = self._read_text(file_index[paths[0]])
+            data = json.loads(content)
+            
+            # Navigate to projects and extract outputPath
+            projects = data.get("projects") or {}
+            
+            # Try each project's build configuration
+            for proj_name, proj_config in projects.items():
+                if not isinstance(proj_config, dict):
+                    continue
+                
+                # Default project or first project with build config
+                architect = proj_config.get("architect") or {}
+                build_config = architect.get("build") or {}
+                options = build_config.get("options") or {}
+                output_path = options.get("outputPath")
+                
+                if output_path:
+                    return output_path.strip()
+            
+            # Fallback: check for defaultProject and use its outputPath
+            default_project = data.get("defaultProject")
+            if default_project:
+                proj = projects.get(default_project, {})
+                architect = proj.get("architect", {})
+                build_config = architect.get("build", {})
+                options = build_config.get("options", {})
+                output_path = options.get("outputPath")
+                if output_path:
+                    return output_path.strip()
+        
+        except (json.JSONDecodeError, KeyError, TypeError):
             pass
+        
         return None

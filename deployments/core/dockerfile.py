@@ -1,14 +1,3 @@
-"""
-deployments/core/dockerfile.py
---------------------------------
-Dockerfile generation.  Honours config.entry_point / config.server_type
-(filled by platform_bridge from platforms/ auto-detection).
-
-Optional: if ProjectConfig was attached by enrich_config_from_project,
-Node family can use package_manager / install_command / start_command
-from the detector.
-"""
-
 from __future__ import annotations
 
 import base64
@@ -420,11 +409,19 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
 
 
 def _render_node_family(platform, dockerfile_template, tar_stream, config, logger):
+    """
+    Render Node/Next.js/React/Vue Dockerfiles.
+    
+    Priority for start_command:
+    1. User-provided entry_point
+    2. ProjectConfig.start_command from platforms/ detector
+    3. Default template command
+    """
     entry_point_override = None
     if config is not None:
         entry_point_override = (config.entry_point or "").strip() or None
 
-    # Prefer ProjectConfig from platforms/ detector when available
+    # Get ProjectConfig from platforms/ detector when available
     project_cfg = None
     try:
         from .platform_bridge import get_project_cfg
@@ -433,6 +430,7 @@ def _render_node_family(platform, dockerfile_template, tar_stream, config, logge
         project_cfg = None
 
     info = resolve_node_entrypoint(tar_stream)
+    
     if logger:
         logger.info(
             "entrypoint_detection",
@@ -442,6 +440,8 @@ def _render_node_family(platform, dockerfile_template, tar_stream, config, logge
                 **(info or {}),
                 "from_platforms": bool(project_cfg),
                 "package_manager": getattr(project_cfg, "package_manager", None) if project_cfg else None,
+                "start_command": getattr(project_cfg, "start_command", None) if project_cfg else None,
+                "build_dir": getattr(project_cfg, "build_dir", None) if project_cfg else None,
             },
         )
 
@@ -451,13 +451,32 @@ def _render_node_family(platform, dockerfile_template, tar_stream, config, logge
     if project_cfg and project_cfg.install_command:
         rendered = _swap_npm_install(rendered, project_cfg.install_command)
 
+    # User override takes highest priority
     if entry_point_override:
         return _replace_cmd(rendered, entry_point_override)
 
-    # If platforms detector resolved a start_command and user did not override
+    # Use start_command from platforms detector (which includes correct build_dir)
     if project_cfg and project_cfg.start_command:
+        if logger:
+            logger.info(
+                "dockerfile_generation",
+                f"Using detected start command: {project_cfg.start_command}",
+                progress=15,
+                details={
+                    "start_command": project_cfg.start_command,
+                    "build_dir": project_cfg.build_dir,
+                    "framework": project_cfg.framework,
+                },
+            )
         return _replace_cmd(rendered, project_cfg.start_command)
 
+    # Fallback: use template default (shouldn't reach here if platforms/ works)
+    if logger:
+        logger.info(
+            "dockerfile_generation",
+            "Using template default start command (platforms/ detection incomplete)",
+            progress=15,
+        )
     return rendered
 
 

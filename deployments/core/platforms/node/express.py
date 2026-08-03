@@ -1,4 +1,4 @@
-"""Express / Fastify backend Node platform."""
+"""Express / Fastify backend Node platform with improved detection."""
 
 from __future__ import annotations
 
@@ -44,14 +44,31 @@ class ExpressPlatform(NodePlatform):
     def inspect(self, file_index: dict[str, str]) -> dict[str, Any]:
         result = super().inspect(file_index)
         pkg_paths = self._find("package.json", file_index)
+        
         if pkg_paths:
             pkg = self._read_package(file_index, pkg_paths[0])
             main = pkg.get("main") or "index.js"
             result["entrypoint"] = main
+            
             scripts = pkg.get("scripts") or {}
             pm = result.get("package_manager", "npm")
+            
+            # Priority: start script > dev script > main file
             if scripts.get("start"):
                 result["start_command"] = f"{pm} run start"
+            elif scripts.get("dev"):
+                result["start_command"] = f"{pm} run dev"
+            elif scripts.get("serve"):
+                result["start_command"] = f"{pm} run serve"
             else:
                 result["start_command"] = f"node {main}"
+            
+            # Detect port from environment or config
+            port = result.get("port", 3000)
+            
+            # Update start command with port if using node directly
+            if result["start_command"].startswith("node "):
+                # Keep node command as-is, port is handled via env var
+                pass
+        
         return result

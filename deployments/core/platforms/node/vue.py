@@ -1,7 +1,9 @@
-"""Vue / Nuxt / Vite-Vue platform."""
+"""Vue / Nuxt / Vite-Vue platform with improved output detection."""
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Any, Optional
 
 from ..base.platform import DetectionResult
@@ -55,7 +57,61 @@ class VuePlatform(NodePlatform):
             result["build_dir"] = ".output"
             result["port"] = 3000
             result["start_command"] = "node .output/server/index.mjs"
+        elif fw == "vite-vue":
+            # For Vite-Vue, try to read vite.config
+            vite_out = self._get_vite_out_dir(file_index)
+            result["build_dir"] = vite_out or "dist"
+            port = result.get("port", 80)
+            result["start_command"] = f"npx serve -s {result['build_dir']} -l {port}"
         else:
-            # Vue CLI or Vite-Vue → dist
-            result["build_dir"] = "dist"
+            # Vue CLI or generic Vue
+            vue_out = self._get_vue_out_dir(file_index)
+            result["build_dir"] = vue_out or "dist"
+            port = result.get("port", 80)
+            result["start_command"] = f"npx serve -s {result['build_dir']} -l {port}"
+        
         return result
+
+    def _get_vue_out_dir(self, file_index: dict[str, str]) -> Optional[str]:
+        """Extract output directory from vue.config.js."""
+        for name in ("vue.config.js", "vue.config.ts"):
+            paths = self._find(name, file_index)
+            if not paths:
+                continue
+            text = self._read_text(file_index[paths[0]])
+            
+            # Pattern 1: outputDir: 'dist'
+            m = re.search(r"outputDir\s*:\s*['\"]([^'\"]+)['\"]", text)
+            if m:
+                return m.group(1).strip()
+            
+            # Pattern 2: In module.exports object
+            m = re.search(r"outputDir\s*=\s*['\"]([^'\"]+)['\"]", text)
+            if m:
+                return m.group(1).strip()
+        
+        return None
+
+    def _get_vite_out_dir(self, file_index: dict[str, str]) -> Optional[str]:
+        """Extract outDir from vite.config for Vite-Vue."""
+        for name in ("vite.config.ts", "vite.config.js", "vite.config.mjs"):
+            paths = self._find(name, file_index)
+            if not paths:
+                continue
+            text = self._read_text(file_index[paths[0]])
+            
+            # Pattern 1: Direct outDir assignment
+            m = re.search(r"outDir\s*:\s*['\"`]([^'\"` ]+)['\"`]", text)
+            if m:
+                return m.group(1).strip()
+            
+            # Pattern 2: In build object
+            m = re.search(
+                r"build\s*:\s*\{[^}]*?outDir\s*:\s*['\"`]([^'\"` ]+)['\"`]",
+                text,
+                re.DOTALL
+            )
+            if m:
+                return m.group(1).strip()
+        
+        return None
