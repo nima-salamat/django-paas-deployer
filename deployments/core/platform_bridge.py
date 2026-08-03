@@ -138,8 +138,26 @@ def enrich_config_from_project(
     if not preferred and project_cfg.platform:
         updates["platform"] = project_cfg.platform
 
-    if not config.entry_point and project_cfg.start_command:
+    # Do NOT promote "npx serve …" into entry_point for SPA platforms that
+    # ship a multi-stage nginx image – that CMD cannot run without Node.
+    _SPA_NGINX_PLATFORMS = {
+        "react", "vue", "vuejs", "angular", "vite", "static", "statichtmlcss",
+    }
+    if (
+        not config.entry_point
+        and project_cfg.start_command
+        and (project_cfg.platform or config.platform or "").lower()
+        not in _SPA_NGINX_PLATFORMS
+    ):
         updates["entry_point"] = project_cfg.start_command
+    elif (
+        not config.entry_point
+        and project_cfg.start_command
+        and (project_cfg.platform or config.platform or "").lower() in _SPA_NGINX_PLATFORMS
+    ):
+        # Still record detected start_command in sources for debugging, but
+        # leave entry_point empty so DockerfileGenerator keeps nginx CMD.
+        pass
 
     if not config.server_type and project_cfg.server_type:
         updates["server_type"] = project_cfg.server_type
@@ -168,3 +186,4 @@ def enrich_config_from_project(
 def get_project_cfg(config: DeploymentConfig):
     """Return ProjectConfig attached by enrich_config_from_project, or None."""
     return getattr(config, "_project_cfg", None)
+

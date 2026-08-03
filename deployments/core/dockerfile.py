@@ -637,6 +637,93 @@ def _fix_spa_copy_paths(dockerfile: str, build_dir: str) -> str:
     return pattern.sub(_sub, dockerfile)
 
 
+
+def _is_nginx_compatible_cmd(cmd: str) -> bool:
+    """True when CMD is safe to run inside nginx:alpine (no node runtime)."""
+    c = (cmd or "").strip().lower()
+    if not c:
+        return False
+    tokens = c.replace(",", " ").split()
+    if tokens and tokens[0] in {"npx", "npm", "node", "yarn", "pnpm", "bun"}:
+        return False
+    if "serve" in tokens and "nginx" not in tokens:
+        return False
+    return bool(tokens) and (tokens[0] == "nginx" or c.startswith("/usr/sbin/nginx"))
+
+
+def _resolve_spa_port(config, project_cfg, platform: str) -> int:
+    """
+    Port nginx listens on inside the container.
+
+    Priority:
+      1. Explicit DeploymentConfig.port (from Deploy.config["port"])
+      2. Default 80 for nginx SPA (ignore CRA/Vite/Angular dev ports)
+    """
+    if config is not None and getattr(config, "port", None) is not None:
+        try:
+            p = int(config.port)
+            if 1 <= p <= 65535:
+                return p
+        except (TypeError, ValueError):
+            pass
+    return 80
+
+
+def _apply_spa_port(dockerfile: str, port: int) -> str:
+    """Rewrite EXPOSE and, when port != 80, inject nginx default.conf."""
+    import base64
+
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        port = 80
+    if not (1 <= port <= 65535):
+        port = 80
+
+    dockerfile = re.sub(
+        r"^EXPOSE\s+\d+\s*$",
+        f"EXPOSE {port}",
+        dockerfile,
+        flags=re.MULTILINE | re.IGNORECASE,
+    )
+    if not re.search(r"^EXPOSE\s+", dockerfile, re.MULTILINE | re.IGNORECASE):
+        dockerfile = re.sub(
+            r"(^CMD\s+)",
+            f"EXPOSE {port}\n\n\\1",
+            dockerfile,
+            count=1,
+            flags=re.MULTILINE,
+        )
+
+    if port == 80:
+        return dockerfile
+
+    conf = (
+        "server {\n"
+        f"    listen {port};\n"
+        "    server_name _;\n"
+        "    root /usr/share/nginx/html;\n"
+        "    index index.html;\n"
+        "    location / {\n"
+        "        try_files $uri $uri/ /index.html;\n"
+        "    }\n"
+        "}\n"
+    )
+    b64 = base64.b64encode(conf.encode("utf-8")).decode("ascii")
+    inject = (
+        f"\n# SPA listen port override ({port})\n"
+        f"RUN echo '{b64}' | base64 -d > /etc/nginx/conf.d/default.conf\n"
+    )
+    # Insert just before the last EXPOSE (final stage)
+    matches = list(re.finditer(r"^EXPOSE\s+\d+\s*$", dockerfile, re.MULTILINE | re.IGNORECASE))
+    if matches:
+        m = matches[-1]
+        dockerfile = dockerfile[: m.start()] + inject + dockerfile[m.start() :]
+    else:
+        dockerfile = dockerfile.rstrip() + "\n" + inject
+    return dockerfile
+
+
 def _render_node_family(platform, dockerfile_template, tar_stream, config, logger):
     """
     Render Node / Next.js / React / Vue / Angular / Vite Dockerfiles.
@@ -702,37 +789,53 @@ def _render_node_family(platform, dockerfile_template, tar_stream, config, logge
     if _is_nginx_spa_template(rendered):
         before = rendered
         rendered = _fix_spa_copy_paths(rendered, build_dir)
+
+        # Resolve listen port for nginx (default 80). User may override via
+        # DeploymentConfig.port / Deploy.config["port"].
+        spa_port = _resolve_spa_port(config, project_cfg, platform)
+
+        rendered = _apply_spa_port(rendered, spa_port)
+
         if logger:
             logger.info(
                 "dockerfile_generation",
-                f"SPA build output path set to /app/{build_dir}",
+                f"SPA nginx image: build_dir=/app/{build_dir}, port={spa_port}",
                 progress=14,
                 details={
                     "build_dir": build_dir,
+                    "port": spa_port,
                     "platform": platform,
                     "path_rewritten": rendered != before,
                     "framework": getattr(project_cfg, "framework", None) if project_cfg else (info or {}).get("framework"),
                 },
             )
 
-        # Explicit user entry_point may still override the final CMD
-        if entry_point_override:
+        # NEVER inject "npx serve" / node CMDs into an nginx-only final stage.
+        # Only honour a user entry_point when it is clearly an nginx-compatible
+        # command (starts with nginx) – otherwise keep the template CMD.
+        if entry_point_override and _is_nginx_compatible_cmd(entry_point_override):
             if logger:
                 logger.info(
                     "dockerfile_generation",
-                    f"Using user entry_point override: {entry_point_override}",
+                    f"Using nginx-compatible entry_point: {entry_point_override}",
                     progress=15,
                 )
             return _replace_cmd(rendered, entry_point_override)
 
-        # Keep nginx CMD – do not swap in "npx serve …" which breaks the
-        # multi-stage image (no node runtime in the final nginx stage).
+        if entry_point_override and logger:
+            logger.info(
+                "dockerfile_generation",
+                f"Ignoring non-nginx entry_point on SPA template: {entry_point_override!r}",
+                progress=15,
+                details={"reason": "final stage is nginx:alpine (no node/npx)"},
+            )
+
         if logger:
             logger.info(
                 "dockerfile_generation",
-                "Nginx SPA template – keeping nginx CMD, build_dir corrected.",
+                "Nginx SPA template – CMD=nginx, static files from build_dir.",
                 progress=15,
-                details={"build_dir": build_dir},
+                details={"build_dir": build_dir, "port": spa_port},
             )
         return rendered
 

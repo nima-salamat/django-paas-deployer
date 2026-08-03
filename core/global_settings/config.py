@@ -60,10 +60,10 @@ default_ports = {
     "flask": 5000,
     "docker": None,
     "go": None,
-    "statichtmlcss": None,
-    "vuejs": 8080,
-    "angular": 4200,
-    "react": 3000,
+    "statichtmlcss": 80,
+    "vuejs": 80,
+    "angular": 80,
+    "react": 80,
     "dotnet": 5000,
 
     "mysql": 3306,
@@ -166,6 +166,10 @@ DEFAULT_WORKER_COUNT = 1
 # Overridden per-project (Vite→dist, CRA→build). User may set Deploy.config["build_dir"].
 DEFAULT_SPA_BUILD_DIR = "dist"
 
+# Default EXPOSE port when template uses {port} and user did not override.
+DEFAULT_EXPOSE_PORT = 80
+
+
 
 
 
@@ -183,7 +187,7 @@ RUN docker-php-ext-install mysqli pdo pdo_mysql opcache \\
     && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \\
     && echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache.ini
 
-EXPOSE 80
+EXPOSE {port}
 
 CMD ["apache2-foreground"]
 """
@@ -204,7 +208,7 @@ RUN pip install --no-cache-dir --upgrade pip \\
 
 COPY . /app
 
-EXPOSE 8000
+EXPOSE {port}
 
 # Production server – overridden smartly by DockerfileGenerator when possible
 CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8000", "--workers", "1", "--timeout", "60"]
@@ -245,7 +249,7 @@ RUN pip install --no-cache-dir --upgrade pip "setuptools<81" wheel \\
 # Application
 COPY . /app
 
-EXPOSE 8000
+EXPOSE {port}
 
 # Production server – overridden by DockerfileGenerator (gunicorn / uvicorn + optional Celery)
 CMD ["gunicorn", "{module}:application", "--bind", "0.0.0.0:8000", "--workers", "1", "--timeout", "60"]
@@ -275,7 +279,7 @@ COPY --from=builder /app/public ./public
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/node_modules ./node_modules
 
-EXPOSE 3000
+EXPOSE {port}
 
 CMD ["npm", "start"]
 """
@@ -293,7 +297,7 @@ RUN npm ci --omit=dev || npm install --omit=dev
 
 COPY . .
 
-EXPOSE 3000
+EXPOSE {port}
 
 CMD ["npm", "start"]
 """
@@ -315,7 +319,7 @@ RUN pip install --no-cache-dir --upgrade pip \\
 
 COPY . /app
 
-EXPOSE 8000
+EXPOSE {port}
 
 # Production server – overridden smartly by DockerfileGenerator when possible
 CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8000", "--workers", "1", "--timeout", "60"]
@@ -338,7 +342,7 @@ COPY . .
 
 RUN go build -o main .
 
-EXPOSE 8080
+EXPOSE {port}
 
 CMD ["./main"]
 """
@@ -349,7 +353,7 @@ FROM {MIRROR_DOCKER}/nginx:{nginx_version}
 
 COPY . /usr/share/nginx/html
 
-EXPOSE 80
+EXPOSE {port}
 
 CMD ["nginx", "-g", "daemon off;"]
 """
@@ -371,7 +375,7 @@ FROM {MIRROR_DOCKER}/nginx:{nginx_version}
 
 COPY --from=builder /app/{build_dir} /usr/share/nginx/html
 
-EXPOSE 80
+EXPOSE {port}
 
 CMD ["nginx", "-g", "daemon off;"]
 """
@@ -393,7 +397,7 @@ FROM {MIRROR_DOCKER}/nginx:{nginx_version}
 
 COPY --from=builder /app/{build_dir} /usr/share/nginx/html
 
-EXPOSE 80
+EXPOSE {port}
 
 CMD ["nginx", "-g", "daemon off;"]
 """
@@ -415,7 +419,7 @@ FROM {MIRROR_DOCKER}/nginx:{nginx_version}
 
 COPY --from=builder /app/{build_dir} /usr/share/nginx/html
 
-EXPOSE 80
+EXPOSE {port}
 
 CMD ["nginx", "-g", "daemon off;"]
 """
@@ -426,7 +430,7 @@ FROM mcr.microsoft.com/dotnet/aspnet:{dotnet_version} AS base
 
 WORKDIR /app
 
-EXPOSE 80
+EXPOSE {port}
 
 
 FROM mcr.microsoft.com/dotnet/sdk:{dotnet_version} AS build

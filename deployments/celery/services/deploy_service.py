@@ -121,8 +121,10 @@ class DeployService:
                 "go_version",
                 "dotnet_version",
                 "nginx_version",
+                "port",
+                "build_dir",
             )
-            if cfg.get(k) is not None and str(cfg.get(k)).strip()
+            if cfg.get(k) is not None and str(cfg.get(k)).strip() != ""
         }
         dockerfile_text = DeploymentHelper.get_dockerfile_text(
             platform, version_overrides=version_overrides or None
@@ -162,7 +164,15 @@ class DeployService:
         dockerfile_text: str,
         state_tracker: DjangoDeploymentState,
     ):
-        port = default_ports.get(platform)
+        # Port: Deploy.config["port"] → platform default (SPA nginx = 80)
+        raw_port = cfg.get("port")
+        if raw_port is not None and str(raw_port).strip() != "":
+            try:
+                port = int(raw_port)
+            except (TypeError, ValueError):
+                port = default_ports.get(platform)
+        else:
+            port = default_ports.get(platform)
         service = deploy_item.service
         cfg = _parse_config(getattr(deploy_item, "config", None))
 
