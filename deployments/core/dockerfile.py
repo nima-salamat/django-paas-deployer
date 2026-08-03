@@ -1,3 +1,14 @@
+"""
+deployments/core/dockerfile.py
+--------------------------------
+Dockerfile generation.  Honours config.entry_point / config.server_type
+(filled by platform_bridge from platforms/ auto-detection).
+
+Optional: if ProjectConfig was attached by enrich_config_from_project,
+Node family can use package_manager / install_command / start_command
+from the detector.
+"""
+
 from __future__ import annotations
 
 import base64
@@ -76,16 +87,6 @@ def _runtime_pip_packages(
     use_beat: bool,
     web_cmd: str = "",
 ) -> list[str]:
-    """
-    Packages the deployer injects via `pip install` so the image runs even if
-    the project's requirements.txt is incomplete.
-
-    Rules:
-      - Django / Flask / Python always get gunicorn
-      - ASGI / uvicorn in command → uvicorn[standard]
-      - celery flag → celery + supervisor
-      - celery_beat flag → django-celery-beat
-    """
     packages: list[str] = []
     platform = (platform or "").lower()
 
@@ -101,7 +102,6 @@ def _runtime_pip_packages(
         if use_beat:
             packages.append("django-celery-beat")
 
-    # de-dupe while preserving order
     seen: set[str] = set()
     ordered: list[str] = []
     for p in packages:
@@ -113,12 +113,6 @@ def _runtime_pip_packages(
 
 
 def _inject_pip_install(dockerfile: str, packages: list[str]) -> str:
-    """
-    Append a RUN pip install for runtime packages at the END of the Dockerfile.
-
-    Never insert in the middle of a multi-line RUN (lines ending with \\
-    continued with &&) — that produces `unknown instruction: &&`.
-    """
     if not packages:
         return dockerfile
     pkgs = " ".join(packages)
@@ -126,8 +120,6 @@ def _inject_pip_install(dockerfile: str, packages: list[str]) -> str:
         "\n\n# --- Runtime deps injected by deployer (from Deploy.config flags) ---\n"
         f"RUN pip install --no-cache-dir {pkgs}\n"
     )
-    # Remove any trailing CMD/ENTRYPOINT so we don't leave a stale final command
-    # before our install layer; callers re-add CMD / supervisord afterwards.
     body = re.sub(
         r"^\s*(CMD|ENTRYPOINT)\s+.*$",
         "",
@@ -147,6 +139,20 @@ def _replace_cmd(dockerfile: str, new_cmd: str) -> str:
     parts = new_cmd.split()
     json_array = "[" + ", ".join(f'"{p}"' for p in parts) + "]"
     return cleaned + f"\n\nCMD {json_array}\n"
+
+
+def _swap_npm_install(dockerfile: str, install_cmd: str) -> str:
+    """Replace generic npm install RUN with detector-provided command (pnpm/yarn/bun)."""
+    patterns = [
+        r"RUN npm ci \|\| npm install",
+        r"RUN npm ci --omit=dev \|\| npm install --omit=dev",
+        r"RUN npm ci",
+        r"RUN npm install",
+    ]
+    for pat in patterns:
+        if re.search(pat, dockerfile):
+            return re.sub(pat, f"RUN {install_cmd}", dockerfile, count=1)
+    return dockerfile
 
 
 # ---------------------------------------------------------------------------
@@ -206,8 +212,6 @@ def _build_supervisor_addon(web_cmd: str, celery_app: str, celery_beat: bool) ->
         beat_section=beat_section,
     ).strip() + "\n"
 
-    # Embed via base64 so multi-line conf never breaks Dockerfile parsing
-    # (plain printf/echo with newlines becomes "unknown instruction: nodaemon=true").
     b64 = base64.b64encode(supervisor_conf.encode("utf-8")).decode("ascii")
 
     lines = [
@@ -282,7 +286,6 @@ def _render_django(dockerfile_template, tar_stream, config, logger):
             details={"module": module, "error": str(exc)},
         ) from exc
 
-    # Custom entry point without celery → single process CMD
     if entry_point_override and not use_celery:
         web_cmd = entry_point_override
         packages = _runtime_pip_packages(
@@ -420,17 +423,41 @@ def _render_node_family(platform, dockerfile_template, tar_stream, config, logge
     entry_point_override = None
     if config is not None:
         entry_point_override = (config.entry_point or "").strip() or None
+
+    # Prefer ProjectConfig from platforms/ detector when available
+    project_cfg = None
+    try:
+        from .platform_bridge import get_project_cfg
+        project_cfg = get_project_cfg(config) if config else None
+    except Exception:
+        project_cfg = None
+
     info = resolve_node_entrypoint(tar_stream)
     if logger:
         logger.info(
             "entrypoint_detection",
             f"Node package detected (framework={info.get('framework')}).",
             progress=12,
-            details=info,
+            details={
+                **(info or {}),
+                "from_platforms": bool(project_cfg),
+                "package_manager": getattr(project_cfg, "package_manager", None) if project_cfg else None,
+            },
         )
+
     rendered = dockerfile_template.replace("{MIRROR_DOCKER}", MIRROR_DOCKER)
+
+    # Apply package manager install command from platforms detector
+    if project_cfg and project_cfg.install_command:
+        rendered = _swap_npm_install(rendered, project_cfg.install_command)
+
     if entry_point_override:
         return _replace_cmd(rendered, entry_point_override)
+
+    # If platforms detector resolved a start_command and user did not override
+    if project_cfg and project_cfg.start_command:
+        return _replace_cmd(rendered, project_cfg.start_command)
+
     return rendered
 
 
@@ -487,16 +514,22 @@ class DockerfileGenerator:
         platform = (platform or "").lower().strip()
         if platform == "django":
             return _render_django(dockerfile_template, tar_stream, config, logger)
-        if platform in ("flask", "python"):
+        if platform in ("flask", "python", "fastapi"):
             return _render_flask_or_python(
-                platform, dockerfile_template, tar_stream, config, logger
+                platform if platform != "fastapi" else "python",
+                dockerfile_template, tar_stream, config, logger
             )
-        if platform in ("nodejs", "nextjs", "react", "vuejs", "vue", "angular"):
+        if platform in (
+            "nodejs", "nextjs", "react", "vuejs", "vue", "angular",
+            "vite", "express",
+        ):
             return _render_node_family(
                 platform, dockerfile_template, tar_stream, config, logger
             )
-        if platform == "php":
+        if platform in ("php", "laravel"):
             return _render_php(dockerfile_template, tar_stream, config, logger)
+        if platform == "go":
+            return _render_generic(platform, dockerfile_template, tar_stream, config, logger)
         return _render_generic(
             platform, dockerfile_template, tar_stream, config, logger
         )

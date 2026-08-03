@@ -198,10 +198,20 @@ def _detect_node_framework(pkg: dict) -> str:
         return "express"
     if "fastify" in deps:
         return "fastify"
+    if "vite" in deps:
+        return "vite"
     return "node"
 
 
-PLATFORMS_REQUIRING_REQUIREMENTS_TXT = frozenset({"django", "python", "flask"})
+# Aligned with platforms/ plugins + DockerfileGenerator routes
+PLATFORMS_REQUIRING_REQUIREMENTS_TXT = frozenset({
+    "django", "python", "flask", "fastapi",
+})
+
+PLATFORMS_REQUIRING_PACKAGE_JSON = frozenset({
+    "nodejs", "nextjs", "react", "vuejs", "vue", "angular",
+    "vite", "express",
+})
 
 
 def check_requirements_txt(tar_stream, *, platform: str) -> None:
@@ -221,11 +231,6 @@ def check_requirements_txt(tar_stream, *, platform: str) -> None:
             stage="requirements_check",
             details={"platform": platform},
         )
-
-
-PLATFORMS_REQUIRING_PACKAGE_JSON = frozenset({
-    "nodejs", "nextjs", "react", "vuejs", "angular", "vue",
-})
 
 
 def check_package_json(tar_stream, *, platform: str) -> None:

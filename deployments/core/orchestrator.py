@@ -1,3 +1,13 @@
+"""
+deployments/core/orchestrator.py
+---------------------------------
+Main deployment pipeline with platform auto-detection integrated.
+"""
+
+from __future__ import annotations
+
+import shutil
+
 from .cleanup import CleanupManager
 from .converter import convert_zip_to_tar
 from .deployment_logger import DeploymentLogger
@@ -7,6 +17,7 @@ from .health import DockerHealthChecker
 from .manager.container_manager import Container
 from .manager.image_manager import Image
 from .manager.network_manager import Network
+from .platform_bridge import enrich_config_from_project, extract_zip_to_temp
 from .rollback import RollbackManager
 from .types import DeploymentConfig, DeploymentResult, EventSink
 from .validation import DeploymentValidator
@@ -28,6 +39,7 @@ class DeploymentOrchestrator:
         old_container_removed = False
         image_built = False
         volume_binds = {}
+        inspect_temp_dir = None
 
         self.logger.info(
             "deployment_started",
@@ -37,11 +49,42 @@ class DeploymentOrchestrator:
         )
 
         try:
+            # --------------------------------------------------------------
+            # 1. Validate
+            # --------------------------------------------------------------
             self.logger.info("validation", "Validating deployment configuration.", progress=5)
             self.validator.validate(config)
 
+            # --------------------------------------------------------------
+            # 2. Prepare build context (zip → tar)
+            # --------------------------------------------------------------
             self.logger.info("prepare_resources", "Preparing build context.", progress=10)
             tar_stream = convert_zip_to_tar(config.zip_path)
+
+            # --------------------------------------------------------------
+            # 3. Platform auto-detection (filesystem inspect)
+            #    Fills empty entry_point / server_type / port / platform
+            #    without overwriting explicit user values.
+            # --------------------------------------------------------------
+            try:
+                inspect_temp_dir, project_root = extract_zip_to_temp(config.zip_path)
+                config = enrich_config_from_project(
+                    config,
+                    project_root,
+                    logger_sink=self.logger,
+                )
+            except Exception as exc:
+                self.logger.warning(
+                    "platform_detection",
+                    f"Could not inspect project tree: {exc}. "
+                    "Continuing without enrichment.",
+                    progress=11,
+                    details={"error": str(exc)},
+                )
+
+            # --------------------------------------------------------------
+            # 4. Generate Dockerfile (honours enriched entry_point/server_type)
+            # --------------------------------------------------------------
             dockerfile_text = self.dockerfile_generator.render(
                 platform=config.platform,
                 dockerfile_template=config.dockerfile_template,
@@ -50,6 +93,9 @@ class DeploymentOrchestrator:
                 logger=self.logger,
             )
 
+            # --------------------------------------------------------------
+            # 5. Snapshot existing container for rollback
+            # --------------------------------------------------------------
             existing_container = Container(config.name)
             if existing_container.exists():
                 previous_image_ref = existing_container.get_image_identifier()
@@ -60,6 +106,9 @@ class DeploymentOrchestrator:
                     details={"previous_image_ref": previous_image_ref},
                 )
 
+            # --------------------------------------------------------------
+            # 6. Build image
+            # --------------------------------------------------------------
             self.logger.info("image_build", "Building Docker image.", progress=20)
             image = Image(config.name, str(config.tag), dockerfile_text, tar_stream)
             image.create(on_build_output=self._on_build_output)
@@ -95,16 +144,24 @@ class DeploymentOrchestrator:
             )
 
             if existing_container.exists():
-                self.logger.info("container_replacement", "Stopping existing container.", progress=55)
+                self.logger.info(
+                    "container_replacement", "Stopping existing container.", progress=55
+                )
                 existing_container.stop(timeout=config.stop_timeout)
-                self.logger.info("container_replacement", "Removing existing container.", progress=60)
+                self.logger.info(
+                    "container_replacement", "Removing existing container.", progress=60
+                )
                 existing_container.remove()
                 old_container_removed = True
 
-            self.logger.info("container_creation", "Creating replacement container.", progress=65)
+            self.logger.info(
+                "container_creation", "Creating replacement container.", progress=65
+            )
             replacement_container.create()
 
-            self.logger.info("container_startup", "Starting replacement container.", progress=80)
+            self.logger.info(
+                "container_startup", "Starting replacement container.", progress=80
+            )
             replacement_container.start()
 
             self.logger.info("health_check", "Verifying container health.", progress=86)
@@ -167,6 +224,13 @@ class DeploymentOrchestrator:
                 image_built=image_built,
                 volume_binds=volume_binds,
             )
+        finally:
+            if inspect_temp_dir:
+                shutil.rmtree(inspect_temp_dir, ignore_errors=True)
+
+    # ------------------------------------------------------------------
+    # Cancellation / failure / helpers (unchanged behaviour)
+    # ------------------------------------------------------------------
 
     def _handle_cancellation(
         self,
@@ -230,7 +294,9 @@ class DeploymentOrchestrator:
             status = chunk.get("status")
             progress = chunk.get("progress")
             message = f"{status} {progress}".strip() if progress else status
-            self.logger.info("image_build", message, progress=25, details={"docker_status": status})
+            self.logger.info(
+                "image_build", message, progress=25, details={"docker_status": status}
+            )
         elif "error" in chunk:
             self.logger.error(
                 "image_build",
