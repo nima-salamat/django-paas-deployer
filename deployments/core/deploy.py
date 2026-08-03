@@ -56,6 +56,7 @@ class Deploy:
         celery=False,
         celery_beat=False,
         entry_point=None,
+        worker_count=1,
     ):
         self.name = name
         self.tag = str(tag)
@@ -77,6 +78,10 @@ class Deploy:
         self.celery = bool(celery)
         self.celery_beat = bool(celery_beat) and self.celery
         self.entry_point = (entry_point or "").strip() or None
+        try:
+            self.worker_count = max(1, int(worker_count or 1))
+        except (TypeError, ValueError):
+            self.worker_count = 1
         self.errors = []
         self.result = None
 
@@ -153,6 +158,7 @@ class Deploy:
             celery=self.celery,
             celery_beat=self.celery_beat,
             entry_point=self.entry_point,
+            worker_count=self.worker_count,
         )
 
     def deploy(self):
@@ -259,3 +265,4 @@ class Deploy:
     @classmethod
     def stop_container(cls, name):
         Container(name).stop()
+

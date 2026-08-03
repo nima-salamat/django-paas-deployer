@@ -55,6 +55,9 @@ class DeploymentConfig:
     # When non-empty, this fully replaces the auto-generated CMD instruction
     # in the Dockerfile.  Use this as an escape hatch for custom entrypoints.
     entry_point: Optional[str] = None
+    # Number of web-server / Celery worker processes. Default 1.
+    # Overridable via Deploy.config["worker_count"].
+    worker_count: int = 1
     # ------------------------------------------------------------------------
     stop_timeout: int = 15
     start_timeout: int = 45
@@ -87,3 +90,4 @@ class DeploymentResult:
     error: Optional[str] = None
     stage: Optional[str] = None
     details: dict[str, Any] = field(default_factory=dict)
+

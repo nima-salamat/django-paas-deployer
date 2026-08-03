@@ -105,9 +105,28 @@ class DeployService:
             raise
 
     def _process_deployment(self, deploy_item: Deploy, container_name: str, state_tracker: DjangoDeploymentState):
-        platform = getattr(getattr(deploy_item.service, "plan", None), "platform", None) or "docker"
-        platform = str(platform).lower().strip()
-        dockerfile_text = DeploymentHelper.get_dockerfile_text(platform)
+        cfg = _parse_config(getattr(deploy_item, "config", None))
+        platform = (
+            str(cfg.get("platform") or "").lower().strip()
+            or str(getattr(getattr(deploy_item.service, "plan", None), "platform", None) or "docker").lower().strip()
+        )
+        # Runtime image tags from Deploy.config (optional overrides)
+        version_overrides = {
+            k: cfg[k]
+            for k in (
+                "python_version",
+                "django_python_version",
+                "node_version",
+                "php_version",
+                "go_version",
+                "dotnet_version",
+                "nginx_version",
+            )
+            if cfg.get(k) is not None and str(cfg.get(k)).strip()
+        }
+        dockerfile_text = DeploymentHelper.get_dockerfile_text(
+            platform, version_overrides=version_overrides or None
+        )
 
         DeploymentValidator.validate_for_deploy(deploy_item, dockerfile_text)
 
@@ -179,9 +198,23 @@ class DeployService:
             or None
         )
 
+        # worker_count: default 1 unless user sets it in Deploy.config
+        worker_count = 1
+        raw_wc = (
+            cfg.get("worker_count")
+            or cfg.get("workers")
+            or getattr(deploy_item, "worker_count", None)
+            or getattr(service, "worker_count", None)
+        )
+        if raw_wc is not None:
+            try:
+                worker_count = max(1, int(raw_wc))
+            except (TypeError, ValueError):
+                worker_count = 1
+
         logger.info(
             "Orchestrator options for %s: platform=%s celery=%s celery_beat=%s "
-            "server_type=%s entry_point=%s celery_app=%s",
+            "server_type=%s entry_point=%s celery_app=%s worker_count=%s",
             container_name,
             platform,
             celery,
@@ -189,6 +222,7 @@ class DeployService:
             server_type,
             entry_point,
             celery_app,
+            worker_count,
         )
 
         networks = []
@@ -215,6 +249,7 @@ class DeployService:
             celery=celery,
             celery_beat=celery_beat,
             entry_point=entry_point,
+            worker_count=worker_count,
         )
         # Pass optional celery_app through environment so Dockerfile layer can use it
         # if the generator supports it; also keep on facade if attribute exists.
@@ -294,3 +329,4 @@ class DeployService:
                 )
             )
         return specs
+

@@ -146,11 +146,28 @@ class SERVICE_STATUS_CHOICES(models.TextChoices):
 
 MIRROR_DOCKER = "docker.arvancloud.ir"
 
+# Runtime image tags – overridable via Deploy.config keys of the same name.
+# Example: {"python_version": "3.12", "node_version": "22", "worker_count": 2}
+DEFAULT_RUNTIME_VERSIONS = {
+    "python_version": "3.11",
+    "django_python_version": "3.10",
+    "node_version": "20",
+    "php_version": "8.2",
+    "go_version": "1.21",
+    "dotnet_version": "6.0",
+    "nginx_version": "alpine",
+}
+
+# Default number of web / Celery worker processes. User may override with
+# Deploy.config["worker_count"] (int >= 1).
+DEFAULT_WORKER_COUNT = 1
+
+
 
 class Config:
 
     php = """
-FROM {MIRROR_DOCKER}/php:8.2-apache
+FROM {MIRROR_DOCKER}/php:{php_version}-apache
 
 ENV APACHE_DOCUMENT_ROOT=/var/www/html
 
@@ -168,7 +185,7 @@ CMD ["apache2-foreground"]
 
 
     python = """
-FROM {MIRROR_DOCKER}/python:3.11-slim
+FROM {MIRROR_DOCKER}/python:{python_version}-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -185,12 +202,12 @@ COPY . /app
 EXPOSE 8000
 
 # Production server – overridden smartly by DockerfileGenerator when possible
-CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "60"]
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8000", "--workers", "1", "--timeout", "60"]
 """
 
 
     django = """
-FROM {MIRROR_DOCKER}/python:3.10-slim
+FROM {MIRROR_DOCKER}/python:{django_python_version}-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -226,12 +243,12 @@ COPY . /app
 EXPOSE 8000
 
 # Production server – overridden by DockerfileGenerator (gunicorn / uvicorn + optional Celery)
-CMD ["gunicorn", "{module}:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "60"]
+CMD ["gunicorn", "{module}:application", "--bind", "0.0.0.0:8000", "--workers", "1", "--timeout", "60"]
 """
 
 
     nextjs = """
-FROM {MIRROR_DOCKER}/node:20-alpine AS builder
+FROM {MIRROR_DOCKER}/node:{node_version}-alpine AS builder
 
 WORKDIR /app
 
@@ -242,7 +259,7 @@ COPY . .
 RUN npm run build
 
 
-FROM {MIRROR_DOCKER}/node:20-alpine
+FROM {MIRROR_DOCKER}/node:{node_version}-alpine
 
 WORKDIR /app
 
@@ -260,7 +277,7 @@ CMD ["npm", "start"]
 
 
     nodejs = """
-FROM {MIRROR_DOCKER}/node:20-alpine
+FROM {MIRROR_DOCKER}/node:{node_version}-alpine
 
 WORKDIR /app
 
@@ -278,7 +295,7 @@ CMD ["npm", "start"]
 
 
     flask = """
-FROM {MIRROR_DOCKER}/python:3.11-slim
+FROM {MIRROR_DOCKER}/python:{python_version}-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -296,7 +313,7 @@ COPY . /app
 EXPOSE 8000
 
 # Production server – overridden smartly by DockerfileGenerator when possible
-CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "60"]
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8000", "--workers", "1", "--timeout", "60"]
 """
 
 
@@ -308,7 +325,7 @@ CMD ["dockerd"]
 
 
     go = """
-FROM {MIRROR_DOCKER}/golang:1.21-alpine
+FROM {MIRROR_DOCKER}/golang:{go_version}-alpine
 
 WORKDIR /app
 
@@ -323,7 +340,7 @@ CMD ["./main"]
 
 
     static = """
-FROM {MIRROR_DOCKER}/nginx:alpine
+FROM {MIRROR_DOCKER}/nginx:{nginx_version}
 
 COPY . /usr/share/nginx/html
 
@@ -334,7 +351,7 @@ CMD ["nginx", "-g", "daemon off;"]
 
 
     vue = """
-FROM {MIRROR_DOCKER}/node:20-alpine AS builder
+FROM {MIRROR_DOCKER}/node:{node_version}-alpine AS builder
 
 WORKDIR /app
 
@@ -345,7 +362,7 @@ COPY . .
 RUN npm run build
 
 
-FROM {MIRROR_DOCKER}/nginx:alpine
+FROM {MIRROR_DOCKER}/nginx:{nginx_version}
 
 COPY --from=builder /app/dist /usr/share/nginx/html
 
@@ -356,7 +373,7 @@ CMD ["nginx", "-g", "daemon off;"]
 
 
     angular = """
-FROM {MIRROR_DOCKER}/node:20-alpine AS builder
+FROM {MIRROR_DOCKER}/node:{node_version}-alpine AS builder
 
 WORKDIR /app
 
@@ -367,7 +384,7 @@ COPY . .
 RUN npm run build
 
 
-FROM {MIRROR_DOCKER}/nginx:alpine
+FROM {MIRROR_DOCKER}/nginx:{nginx_version}
 
 COPY --from=builder /app/dist /usr/share/nginx/html
 
@@ -378,7 +395,7 @@ CMD ["nginx", "-g", "daemon off;"]
 
 
     react = """
-FROM {MIRROR_DOCKER}/node:20-alpine AS builder
+FROM {MIRROR_DOCKER}/node:{node_version}-alpine AS builder
 
 WORKDIR /app
 
@@ -389,7 +406,7 @@ COPY . .
 RUN npm run build
 
 
-FROM {MIRROR_DOCKER}/nginx:alpine
+FROM {MIRROR_DOCKER}/nginx:{nginx_version}
 
 COPY --from=builder /app/build /usr/share/nginx/html
 
@@ -400,14 +417,14 @@ CMD ["nginx", "-g", "daemon off;"]
 
 
     dotnet = """
-FROM mcr.microsoft.com/dotnet/aspnet:6.0 AS base
+FROM mcr.microsoft.com/dotnet/aspnet:{dotnet_version} AS base
 
 WORKDIR /app
 
 EXPOSE 80
 
 
-FROM mcr.microsoft.com/dotnet/sdk:6.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:{dotnet_version} AS build
 
 WORKDIR /src
 

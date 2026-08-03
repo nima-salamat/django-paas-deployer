@@ -20,27 +20,43 @@ from core.global_settings.config import MIRROR_DOCKER
 # Web commands
 # ---------------------------------------------------------------------------
 
-def _django_web_command(module: str, server_type: str) -> str:
+def _worker_count_from_config(config) -> int:
+    """Always at least 1; read DeploymentConfig.worker_count when present."""
+    if config is None:
+        return 1
+    try:
+        return max(1, int(getattr(config, "worker_count", 1) or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _django_web_command(module: str, server_type: str, workers: int = 1) -> str:
+    workers = max(1, int(workers or 1))
     if server_type == "asgi":
         return (
             f"uvicorn {module}:application "
-            f"--host 0.0.0.0 --port 8000 --workers 2"
+            f"--host 0.0.0.0 --port 8000 --workers {workers}"
         )
     return (
         f"gunicorn {module}:application "
-        f"--bind 0.0.0.0:8000 --workers 3 --timeout 60"
+        f"--bind 0.0.0.0:8000 --workers {workers} --timeout 60"
     )
 
 
-def _flask_web_command(module: str, callable_name: str, server_type: str) -> str:
+def _flask_web_command(
+    module: str, callable_name: str, server_type: str, workers: int = 1
+) -> str:
+    workers = max(1, int(workers or 1))
     target = f"{module}:{callable_name.rstrip('()')}"
     if server_type == "asgi" or "fastapi" in module.lower():
         return (
             f"gunicorn {target} "
             f"--worker-class uvicorn.workers.UvicornWorker "
-            f"--bind 0.0.0.0:8000 --workers 2 --timeout 60"
+            f"--bind 0.0.0.0:8000 --workers {workers} --timeout 60"
         )
-    return f"gunicorn {target} --bind 0.0.0.0:8000 --workers 3 --timeout 60"
+    return (
+        f"gunicorn {target} --bind 0.0.0.0:8000 --workers {workers} --timeout 60"
+    )
 
 
 def _celery_app_name(module: str, override: str | None = None) -> str:
@@ -167,7 +183,7 @@ stderr_logfile=/dev/stderr
 stderr_logfile_maxbytes=0
 
 [program:worker]
-command=celery -A {celery_app} worker --loglevel=info --concurrency=2
+command=celery -A {celery_app} worker --loglevel=info --concurrency={concurrency}
 directory=/app
 autostart=true
 autorestart=true
@@ -191,7 +207,14 @@ stderr_logfile=/dev/stderr
 stderr_logfile_maxbytes=0"""
 
 
-def _build_supervisor_addon(web_cmd: str, celery_app: str, celery_beat: bool) -> str:
+def _build_supervisor_addon(
+    web_cmd: str,
+    celery_app: str,
+    celery_beat: bool,
+    *,
+    concurrency: int = 1,
+) -> str:
+    concurrency = max(1, int(concurrency or 1))
     beat_section = (
         _SUPERVISOR_BEAT_SECTION.format(celery_app=celery_app) if celery_beat else ""
     )
@@ -199,6 +222,7 @@ def _build_supervisor_addon(web_cmd: str, celery_app: str, celery_beat: bool) ->
         web_cmd=web_cmd,
         celery_app=celery_app,
         beat_section=beat_section,
+        concurrency=concurrency,
     ).strip() + "\n"
 
     b64 = base64.b64encode(supervisor_conf.encode("utf-8")).decode("ascii")
@@ -287,10 +311,11 @@ def _render_django(dockerfile_template, tar_stream, config, logger):
         rendered = _inject_pip_install(rendered, packages)
         return _replace_cmd(rendered, web_cmd)
 
+    workers = _worker_count_from_config(config)
     web_cmd = (
         entry_point_override
         if entry_point_override
-        else _django_web_command(module, resolved_server_type)
+        else _django_web_command(module, resolved_server_type, workers=workers)
     )
 
     packages = _runtime_pip_packages(
@@ -317,7 +342,7 @@ def _render_django(dockerfile_template, tar_stream, config, logger):
                     "packages": packages,
                 },
             )
-        addon = _build_supervisor_addon(web_cmd, celery_app, use_beat)
+        addon = _build_supervisor_addon(web_cmd, celery_app, use_beat, concurrency=workers)
         rendered = _strip_cmd_entrypoint(rendered)
         return rendered + "\n" + addon
 
@@ -366,10 +391,11 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
         rendered = _inject_pip_install(rendered, packages)
         return _replace_cmd(rendered, web_cmd)
 
+    workers = _worker_count_from_config(config)
     web_cmd = (
         entry_point_override
         if entry_point_override
-        else _flask_web_command(module, callable_name, resolved_type)
+        else _flask_web_command(module, callable_name, resolved_type, workers=workers)
     )
 
     packages = _runtime_pip_packages(
@@ -395,7 +421,7 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
                     "packages": packages,
                 },
             )
-        addon = _build_supervisor_addon(web_cmd, celery_app, use_beat)
+        addon = _build_supervisor_addon(web_cmd, celery_app, use_beat, concurrency=workers)
         rendered = _strip_cmd_entrypoint(rendered)
         return rendered + "\n" + addon
 
