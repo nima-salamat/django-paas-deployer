@@ -18,9 +18,21 @@ class MockOrchestratorResult:
 class DeploymentHelper:
     """Utility class for evaluating deployment conditions and configurations."""
 
+    # Platform id → Config attribute (when names differ)
+    _DOCKERFILE_ALIASES = {
+        "vuejs": "vue",
+        "vue": "vue",
+        "statichtmlcss": "static",
+        "static": "static",
+        "html": "static",
+        "fastapi": "python",  # share python template; generator specialises
+    }
+
     @staticmethod
     def get_dockerfile_text(platform: str) -> str | None:
-        return getattr(Config, platform, None)
+        key = (platform or "").lower().strip()
+        attr = DeploymentHelper._DOCKERFILE_ALIASES.get(key, key)
+        return getattr(Config, attr, None) or getattr(Config, key, None)
 
     @staticmethod
     def is_restart_only(deploy_item: Deploy, container_name: str) -> bool:
@@ -36,3 +48,4 @@ class DeploymentHelper:
             return False
 
         return Container(container_name).exists()
+

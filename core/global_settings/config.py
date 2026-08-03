@@ -425,5 +425,10 @@ COPY --from=build /app/publish .
 ENTRYPOINT ["dotnet", "YourAppName.dll"]
 """
 
+    # Aliases so plan.platform ids resolve to the correct Dockerfile template
+    vuejs = vue
+    statichtmlcss = static
+
 
 MAX_DEPLOY_TIME_MINUTE = 10
+

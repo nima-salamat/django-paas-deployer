@@ -408,20 +408,156 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
     return rendered
 
 
+def _default_spa_build_dir(platform: str, framework: str | None = None) -> str:
+    """
+    Sensible default static output directory per platform / framework.
+
+    CRA → build, Vite/Vue/Angular → dist.  React without a clear signal
+    defaults to dist because modern React (Vite) is far more common than
+    CRA in 2024+.
+    """
+    platform = (platform or "").lower().strip()
+    framework = (framework or "").lower().strip()
+
+    if framework in ("cra", "create-react-app") or (
+        platform == "react" and framework in ("react", "cra")
+    ):
+        # Only force "build" when we positively identified CRA
+        if framework in ("cra", "create-react-app"):
+            return "build"
+
+    if platform in ("vuejs", "vue", "angular", "vite") or framework in (
+        "vite",
+        "vite-react",
+        "vite-vue",
+        "vue",
+        "angular",
+    ):
+        return "dist"
+
+    if platform == "react":
+        # Prefer dist (Vite) over build (CRA) when ambiguous
+        return "dist"
+
+    return "dist"
+
+
+def _resolve_spa_build_dir(
+    platform: str,
+    project_cfg,
+    info: dict | None,
+    tar_stream=None,
+) -> str:
+    """Pick the directory that `npm run build` will actually produce."""
+    if project_cfg is not None:
+        for attr in ("build_dir", "output_dir", "static_dir", "publish_dir"):
+            val = getattr(project_cfg, attr, None)
+            if val and str(val).strip():
+                d = str(val).strip().lstrip("./").rstrip("/")
+                if d:
+                    return d
+        fw = getattr(project_cfg, "framework", None)
+        return _default_spa_build_dir(platform, fw)
+
+    # Fallback: inspect package.json inside the tar for CRA vs Vite signals
+    fw = (info or {}).get("framework")
+    if tar_stream is not None:
+        try:
+            import json
+            import tarfile as _tf
+            tar_stream.seek(0)
+            with _tf.open(fileobj=tar_stream, mode="r:*") as tar:
+                for member in tar.getmembers():
+                    if not member.name.endswith("package.json"):
+                        continue
+                    if member.name.count("/") > 1:
+                        continue
+                    fobj = tar.extractfile(member)
+                    if not fobj:
+                        continue
+                    try:
+                        pkg = json.loads(fobj.read().decode("utf-8", "ignore"))
+                    except Exception:
+                        continue
+                    deps = {
+                        **(pkg.get("dependencies") or {}),
+                        **(pkg.get("devDependencies") or {}),
+                    }
+                    if "react-scripts" in deps:
+                        tar_stream.seek(0)
+                        return "build"
+                    if "vite" in deps or "@vitejs/plugin-react" in deps:
+                        tar_stream.seek(0)
+                        return "dist"
+                    break
+            tar_stream.seek(0)
+        except Exception:
+            try:
+                tar_stream.seek(0)
+            except Exception:
+                pass
+
+    return _default_spa_build_dir(platform, fw)
+
+
+def _is_nginx_spa_template(dockerfile: str) -> bool:
+    """True when the template is a multi-stage build that serves via nginx."""
+    lower = dockerfile.lower()
+    return (
+        "nginx" in lower
+        and "copy --from=builder" in lower
+        and ("/usr/share/nginx/html" in lower or "nginx -g" in lower)
+    )
+
+
+def _fix_spa_copy_paths(dockerfile: str, build_dir: str) -> str:
+    """
+    Rewrite every
+        COPY --from=builder /app/<old> ...
+    (and the common `/app/build` / `/app/dist` variants) so the stage-2
+    COPY matches the directory that the builder actually produced.
+    """
+    build_dir = build_dir.strip().lstrip("./").rstrip("/")
+    if not build_dir:
+        return dockerfile
+
+    # Match COPY --from=builder  /app/SOMETHING  DEST
+    # SOMETHING may be "build", "dist", "dist/my-app", etc.
+    pattern = re.compile(
+        r"(COPY\s+--from=builder\s+)/app/([^\s]+)",
+        re.IGNORECASE,
+    )
+
+    def _sub(match: re.Match) -> str:
+        prefix = match.group(1)
+        old_path = match.group(2).rstrip("/")
+        # Only rewrite the well-known static-output paths (or anything under them)
+        first = old_path.split("/", 1)[0]
+        if first in ("build", "dist", "out", "public", "www"):
+            return f"{prefix}/app/{build_dir}"
+        return match.group(0)
+
+    return pattern.sub(_sub, dockerfile)
+
+
 def _render_node_family(platform, dockerfile_template, tar_stream, config, logger):
     """
-    Render Node/Next.js/React/Vue Dockerfiles.
-    
-    Priority for start_command:
-    1. User-provided entry_point
-    2. ProjectConfig.start_command from platforms/ detector
-    3. Default template command
+    Render Node / Next.js / React / Vue / Angular / Vite Dockerfiles.
+
+    Rules
+    -----
+    * Multi-stage nginx SPA templates (react, vue, angular, static-like):
+      - Fix the builder→nginx COPY path so it matches the real build output
+        (CRA ``build``, Vite/Vue ``dist``, Angular ``dist/<project>``, …).
+      - Keep the nginx CMD; do NOT replace it with ``npx serve``.
+    * Runtime Node apps (nextjs, express, plain nodejs):
+      - Honour user entry_point, then ProjectConfig.start_command, then template.
+    * Package-manager install line is always swapped when detector provides one.
     """
     entry_point_override = None
     if config is not None:
         entry_point_override = (config.entry_point or "").strip() or None
 
-    # Get ProjectConfig from platforms/ detector when available
     project_cfg = None
     try:
         from .platform_bridge import get_project_cfg
@@ -429,33 +565,67 @@ def _render_node_family(platform, dockerfile_template, tar_stream, config, logge
     except Exception:
         project_cfg = None
 
-    info = resolve_node_entrypoint(tar_stream)
-    
+    info = resolve_node_entrypoint(tar_stream) or {}
+
+    build_dir = _resolve_spa_build_dir(platform, project_cfg, info, tar_stream=tar_stream)
+
     if logger:
         logger.info(
             "entrypoint_detection",
             f"Node package detected (framework={info.get('framework')}).",
             progress=12,
             details={
-                **(info or {}),
+                **info,
                 "from_platforms": bool(project_cfg),
                 "package_manager": getattr(project_cfg, "package_manager", None) if project_cfg else None,
                 "start_command": getattr(project_cfg, "start_command", None) if project_cfg else None,
-                "build_dir": getattr(project_cfg, "build_dir", None) if project_cfg else None,
+                "build_dir": build_dir,
+                "detected_build_dir": getattr(project_cfg, "build_dir", None) if project_cfg else None,
             },
         )
 
     rendered = dockerfile_template.replace("{MIRROR_DOCKER}", MIRROR_DOCKER)
 
-    # Apply package manager install command from platforms detector
     if project_cfg and project_cfg.install_command:
         rendered = _swap_npm_install(rendered, project_cfg.install_command)
 
-    # User override takes highest priority
+    # Always correct SPA copy paths when the template is nginx multi-stage
+    if _is_nginx_spa_template(rendered):
+        before = rendered
+        rendered = _fix_spa_copy_paths(rendered, build_dir)
+        if logger and rendered != before:
+            logger.info(
+                "dockerfile_generation",
+                f"SPA build output path set to /app/{build_dir}",
+                progress=14,
+                details={"build_dir": build_dir, "platform": platform},
+            )
+
+        # Explicit user entry_point may still override the final CMD
+        if entry_point_override:
+            if logger:
+                logger.info(
+                    "dockerfile_generation",
+                    f"Using user entry_point override: {entry_point_override}",
+                    progress=15,
+                )
+            return _replace_cmd(rendered, entry_point_override)
+
+        # Keep nginx CMD – do not swap in "npx serve …" which breaks the
+        # multi-stage image (no node runtime in the final nginx stage).
+        if logger:
+            logger.info(
+                "dockerfile_generation",
+                "Nginx SPA template – keeping nginx CMD, build_dir corrected.",
+                progress=15,
+                details={"build_dir": build_dir},
+            )
+        return rendered
+
+    # ---- runtime Node apps (Next.js, Express, plain Node) ----
     if entry_point_override:
         return _replace_cmd(rendered, entry_point_override)
 
-    # Use start_command from platforms detector (which includes correct build_dir)
     if project_cfg and project_cfg.start_command:
         if logger:
             logger.info(
@@ -464,13 +634,12 @@ def _render_node_family(platform, dockerfile_template, tar_stream, config, logge
                 progress=15,
                 details={
                     "start_command": project_cfg.start_command,
-                    "build_dir": project_cfg.build_dir,
-                    "framework": project_cfg.framework,
+                    "build_dir": build_dir,
+                    "framework": getattr(project_cfg, "framework", None),
                 },
             )
         return _replace_cmd(rendered, project_cfg.start_command)
 
-    # Fallback: use template default (shouldn't reach here if platforms/ works)
     if logger:
         logger.info(
             "dockerfile_generation",
