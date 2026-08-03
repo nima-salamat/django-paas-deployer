@@ -378,6 +378,8 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
         )
     except Exception:
         rendered = dockerfile_template.replace("{MIRROR_DOCKER}", MIRROR_DOCKER)
+    # Ensure leftover {build_dir} is never left unexpanded
+    rendered = rendered.replace("{build_dir}", build_dir)
 
     if entry_point_override and not use_celery:
         web_cmd = entry_point_override
@@ -473,33 +475,83 @@ def _resolve_spa_build_dir(
     project_cfg,
     info: dict | None,
     tar_stream=None,
+    *,
+    user_build_dir: str | None = None,
 ) -> str:
-    """Pick the directory that `npm run build` will actually produce."""
+    """
+    Pick the directory that ``npm run build`` actually produces.
+
+    Priority (highest first)
+    ------------------------
+    1. Explicit user override (Deploy.config["build_dir"])
+    2. Evidence from the deployment archive (vite vs react-scripts)
+    3. ProjectConfig from platforms/ detector (inspect wins over defaults)
+    4. Framework / platform heuristics (Vite/Vue/Angular → dist, CRA → build)
+    """
+    # 1. User override
+    if user_build_dir and str(user_build_dir).strip():
+        return str(user_build_dir).strip().lstrip("./").rstrip("/")
+
+    # 2. Archive signals – most reliable for the actual zip being built
+    tar_signal = _detect_build_dir_from_tar(tar_stream)
+    if tar_signal:
+        return tar_signal
+
+    # 3. Detector ProjectConfig (only trust non-default-ish values when framework known)
     if project_cfg is not None:
+        fw = (getattr(project_cfg, "framework", None) or "").lower()
         for attr in ("build_dir", "output_dir", "static_dir", "publish_dir"):
             val = getattr(project_cfg, attr, None)
             if val and str(val).strip():
                 d = str(val).strip().lstrip("./").rstrip("/")
-                if d:
-                    return d
-        fw = getattr(project_cfg, "framework", None)
-        return _default_spa_build_dir(platform, fw)
+                # If detector says vite-* never keep CRA "build"
+                if fw in ("vite-react", "vite", "vite-vue", "vue", "angular") and d == "build":
+                    return "dist"
+                if fw in ("cra", "create-react-app") and d == "dist":
+                    return "build"
+                return d
+        return _default_spa_build_dir(platform, fw or (info or {}).get("framework"))
 
-    # Fallback: inspect package.json inside the tar for CRA vs Vite signals
     fw = (info or {}).get("framework")
-    if tar_stream is not None:
-        try:
-            import json
-            import tarfile as _tf
-            tar_stream.seek(0)
-            with _tf.open(fileobj=tar_stream, mode="r:*") as tar:
-                for member in tar.getmembers():
-                    if not member.name.endswith("package.json"):
-                        continue
-                    if member.name.count("/") > 1:
-                        continue
+    return _default_spa_build_dir(platform, fw)
+
+
+def _detect_build_dir_from_tar(tar_stream) -> str | None:
+    """Return 'dist' / 'build' / custom outDir based on files inside the tar."""
+    if tar_stream is None:
+        return None
+    try:
+        import json
+        import tarfile as _tf
+
+        tar_stream.seek(0)
+        with _tf.open(fileobj=tar_stream, mode="r:*") as tar:
+            vite_cfg_names = (
+                "vite.config.ts",
+                "vite.config.js",
+                "vite.config.mjs",
+                "vite.config.cjs",
+            )
+
+            has_vite_config = False
+            has_react_scripts = False
+            has_vite_dep = False
+            vite_config_text = None
+
+            for member in tar.getmembers():
+                n = member.name.replace("\\", "/")
+                base = n.rsplit("/", 1)[-1]
+                depth = 0 if "/" not in n else n.count("/")
+
+                if base in vite_cfg_names and depth <= 2:
+                    has_vite_config = True
                     fobj = tar.extractfile(member)
-                    if not fobj:
+                    if fobj is not None and vite_config_text is None:
+                        vite_config_text = fobj.read().decode("utf-8", "ignore")
+
+                if base == "package.json" and depth <= 1:
+                    fobj = tar.extractfile(member)
+                    if fobj is None:
                         continue
                     try:
                         pkg = json.loads(fobj.read().decode("utf-8", "ignore"))
@@ -510,20 +562,35 @@ def _resolve_spa_build_dir(
                         **(pkg.get("devDependencies") or {}),
                     }
                     if "react-scripts" in deps:
-                        tar_stream.seek(0)
-                        return "build"
+                        has_react_scripts = True
                     if "vite" in deps or "@vitejs/plugin-react" in deps:
+                        has_vite_dep = True
+
+            if has_vite_config or has_vite_dep:
+                if vite_config_text:
+                    m = re.search(
+                        r"outDir\s*:\s*['\"]([^'\"]+)['\"]",
+                        vite_config_text,
+                        re.DOTALL | re.IGNORECASE,
+                    )
+                    if m:
                         tar_stream.seek(0)
-                        return "dist"
-                    break
+                        return m.group(1).strip().lstrip("./").rstrip("/")
+                tar_stream.seek(0)
+                return "dist"
+
+            if has_react_scripts:
+                tar_stream.seek(0)
+                return "build"
+
+        tar_stream.seek(0)
+    except Exception:
+        try:
             tar_stream.seek(0)
         except Exception:
-            try:
-                tar_stream.seek(0)
-            except Exception:
-                pass
+            pass
+    return None
 
-    return _default_spa_build_dir(platform, fw)
 
 
 def _is_nginx_spa_template(dockerfile: str) -> bool:
@@ -538,17 +605,20 @@ def _is_nginx_spa_template(dockerfile: str) -> bool:
 
 def _fix_spa_copy_paths(dockerfile: str, build_dir: str) -> str:
     """
-    Rewrite every
-        COPY --from=builder /app/<old> ...
-    (and the common `/app/build` / `/app/dist` variants) so the stage-2
-    COPY matches the directory that the builder actually produced.
-    """
-    build_dir = build_dir.strip().lstrip("./").rstrip("/")
-    if not build_dir:
-        return dockerfile
+    Rewrite SPA stage-2 COPY paths so they match the real build output.
 
-    # Match COPY --from=builder  /app/SOMETHING  DEST
-    # SOMETHING may be "build", "dist", "dist/my-app", etc.
+    Handles both:
+      * literal paths:  COPY --from=builder /app/build ...
+      * placeholders:   COPY --from=builder /app/{build_dir} ...
+    """
+    build_dir = (build_dir or "dist").strip().lstrip("./").rstrip("/")
+    if not build_dir:
+        build_dir = "dist"
+
+    # 1. Replace explicit placeholder if the template still has it
+    dockerfile = dockerfile.replace("{build_dir}", build_dir)
+
+    # 2. Rewrite literal COPY --from=builder /app/<old> lines
     pattern = re.compile(
         r"(COPY\s+--from=builder\s+)/app/([^\s]+)",
         re.IGNORECASE,
@@ -557,9 +627,10 @@ def _fix_spa_copy_paths(dockerfile: str, build_dir: str) -> str:
     def _sub(match: re.Match) -> str:
         prefix = match.group(1)
         old_path = match.group(2).rstrip("/")
-        # Only rewrite the well-known static-output paths (or anything under them)
+        # Strip residual placeholder braces just in case
+        old_path = old_path.replace("{", "").replace("}", "")
         first = old_path.split("/", 1)[0]
-        if first in ("build", "dist", "out", "public", "www"):
+        if first in ("build", "dist", "out", "public", "www") or old_path == build_dir:
             return f"{prefix}/app/{build_dir}"
         return match.group(0)
 
@@ -593,7 +664,19 @@ def _render_node_family(platform, dockerfile_template, tar_stream, config, logge
 
     info = resolve_node_entrypoint(tar_stream) or {}
 
-    build_dir = _resolve_spa_build_dir(platform, project_cfg, info, tar_stream=tar_stream)
+    # User may pass build_dir via Deploy.config → environment or a top-level field
+    user_bd = None
+    if config is not None:
+        user_bd = getattr(config, "build_dir", None)
+        if not user_bd and isinstance(getattr(config, "environment", None), dict):
+            user_bd = config.environment.get("BUILD_DIR") or config.environment.get("build_dir")
+    build_dir = _resolve_spa_build_dir(
+        platform,
+        project_cfg,
+        info,
+        tar_stream=tar_stream,
+        user_build_dir=user_bd,
+    )
 
     if logger:
         logger.info(
@@ -619,12 +702,17 @@ def _render_node_family(platform, dockerfile_template, tar_stream, config, logge
     if _is_nginx_spa_template(rendered):
         before = rendered
         rendered = _fix_spa_copy_paths(rendered, build_dir)
-        if logger and rendered != before:
+        if logger:
             logger.info(
                 "dockerfile_generation",
                 f"SPA build output path set to /app/{build_dir}",
                 progress=14,
-                details={"build_dir": build_dir, "platform": platform},
+                details={
+                    "build_dir": build_dir,
+                    "platform": platform,
+                    "path_rewritten": rendered != before,
+                    "framework": getattr(project_cfg, "framework", None) if project_cfg else (info or {}).get("framework"),
+                },
             )
 
         # Explicit user entry_point may still override the final CMD
@@ -747,3 +835,4 @@ class DockerfileGenerator:
         return _render_generic(
             platform, dockerfile_template, tar_stream, config, logger
         )
+

@@ -162,6 +162,11 @@ DEFAULT_RUNTIME_VERSIONS = {
 # Deploy.config["worker_count"] (int >= 1).
 DEFAULT_WORKER_COUNT = 1
 
+# Default static output dir for SPA multi-stage nginx templates.
+# Overridden per-project (Vite→dist, CRA→build). User may set Deploy.config["build_dir"].
+DEFAULT_SPA_BUILD_DIR = "dist"
+
+
 
 
 class Config:
@@ -364,7 +369,7 @@ RUN npm run build
 
 FROM {MIRROR_DOCKER}/nginx:{nginx_version}
 
-COPY --from=builder /app/dist /usr/share/nginx/html
+COPY --from=builder /app/{build_dir} /usr/share/nginx/html
 
 EXPOSE 80
 
@@ -386,7 +391,7 @@ RUN npm run build
 
 FROM {MIRROR_DOCKER}/nginx:{nginx_version}
 
-COPY --from=builder /app/dist /usr/share/nginx/html
+COPY --from=builder /app/{build_dir} /usr/share/nginx/html
 
 EXPOSE 80
 
@@ -408,7 +413,7 @@ RUN npm run build
 
 FROM {MIRROR_DOCKER}/nginx:{nginx_version}
 
-COPY --from=builder /app/build /usr/share/nginx/html
+COPY --from=builder /app/{build_dir} /usr/share/nginx/html
 
 EXPOSE 80
 
@@ -448,4 +453,5 @@ ENTRYPOINT ["dotnet", "YourAppName.dll"]
 
 
 MAX_DEPLOY_TIME_MINUTE = 10
+
 

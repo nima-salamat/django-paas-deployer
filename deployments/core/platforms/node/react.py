@@ -37,9 +37,10 @@ class ReactPlatform(NodePlatform):
         base.update(
             {
                 "port": 3000,
-                "build_dir": "build",  # CRA default
+                # Modern default is Vite `dist`. CRA projects are corrected in inspect().
+                "build_dir": "dist",
                 "build_command": "npm run build",
-                "start_command": "npx serve -s build -l 3000",
+                "start_command": "npx serve -s dist -l 3000",
             }
         )
         return base
