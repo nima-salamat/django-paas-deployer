@@ -3,11 +3,12 @@ import logging
 from django.db.models.signals import pre_delete
 from django.dispatch import receiver
 
-from .models import Service, Volume
+from .models import Service, Volume, PrivateNetwork
 from deployments.core.deploy import Deploy as Deployer
 from deployments.core.manager.container_manager import Container
 from deployments.core.manager.volume_manager import Volume as DockerVolume
 from deployments.core.manager.image_manager import Image
+from deployments.core.manager.network_manager import Network
 from core.global_settings.config import PlanTypeChoices
 
 logger = logging.getLogger(__name__)
@@ -114,3 +115,34 @@ def _cleanup_orphaned_volumes(service: Service) -> None:
             logger.info("Deleted orphaned Volume record '%s'.", volume.name)
         except Exception:
             logger.exception("Failed deleting volume record '%s'.", volume.name)
+
+@receiver(pre_delete, sender=Volume)
+def cleanup_volume_on_delete(sender, instance: Volume, **kwargs):
+
+    logger.info("pre_delete Volume '%s' → removing Docker volume", instance.name)
+    try:
+        docker_volume = DockerVolume(instance.name)
+        docker_volume.remove()
+        logger.info("Docker volume '%s' removed successfully", instance.name)
+    except Exception:
+        logger.exception(
+            "Failed to remove Docker volume '%s' during Volume pre_delete",
+            instance.name,
+        )
+
+@receiver(pre_delete, sender=PrivateNetwork)
+def cleanup_network_on_delete(sender, instance: PrivateNetwork, **kwargs):
+
+    logger.info("pre_delete PrivateNetwork '%s' → removing Docker network", instance.name)
+    try:
+        if Network.network_exists(instance.name):
+            docker_net = Network(name=instance.name)
+            docker_net.remove()
+            logger.info("Docker network '%s' removed successfully", instance.name)
+        else:
+            logger.info("Docker network '%s' does not exist; nothing to remove", instance.name)
+    except Exception:
+        logger.exception(
+            "Failed to remove Docker network '%s' during PrivateNetwork pre_delete",
+            instance.name,
+        )
