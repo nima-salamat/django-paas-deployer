@@ -6,7 +6,7 @@ from django.conf import settings
 from django.db.models.signals import pre_delete
 from django.dispatch import receiver
 
-from users.models import User        
+from users.models import User, Profile
 from services.models import Service, Volume, PrivateNetwork
 from deploy.models import Deploy
 from deployments.core.manager.container_manager import Container
@@ -40,9 +40,9 @@ def _resolve_platform(deploy):
 
 @receiver(pre_delete, sender=User)
 def cleanup_user_resources(sender, instance: User, **kwargs):
-
     user_id = instance.id
     logger.info("=== pre_delete User %s (id=%s) → full cleanup started ===", instance, user_id)
+
 
     services = list(Service.objects.filter(user=instance).select_related("plan", "selected_deploy"))
 
@@ -61,7 +61,6 @@ def cleanup_user_resources(sender, instance: User, **kwargs):
                     DBDeployer().remove(container_name)
                 except Exception:
                     logger.exception("DBDeployer.remove failed for %s", container_name)
-                    # fallback
                     c = Container(name=container_name)
                     if c.exists():
                         if c.is_running():
@@ -93,15 +92,28 @@ def cleanup_user_resources(sender, instance: User, **kwargs):
         except Exception:
             logger.exception("Failed to remove Docker volume '%s'", volume.name)
 
+
     networks = list(PrivateNetwork.objects.filter(user=instance))
     for net in networks:
         try:
-            docker_net = DockerNetwork(name=net.name)
             if DockerNetwork.network_exists(net.name):
+                docker_net = DockerNetwork(name=net.name)
                 docker_net.remove()
                 logger.info("Removed Docker network '%s'", net.name)
         except Exception:
             logger.exception("Failed to remove Docker network '%s'", net.name)
+
+    profiles = list(Profile.objects.filter(user=instance))
+    for profile in profiles:
+        if profile.image:
+            try:
+                profile.image.delete(save=False)
+                logger.info("Deleted profile image for user %s (profile id=%s)", user_id, profile.pk)
+            except Exception:
+                logger.exception(
+                    "Failed to delete profile image for user %s (profile id=%s)",
+                    user_id, profile.pk
+                )
 
     try:
         media_root = getattr(settings, "MEDIA_ROOT", None)
@@ -115,3 +127,15 @@ def cleanup_user_resources(sender, instance: User, **kwargs):
 
     logger.info("=== pre_delete User %s finished ===", user_id)
 
+
+@receiver(pre_delete, sender=Profile)
+def cleanup_profile_image(sender, instance: Profile, **kwargs):
+    if instance.image:
+        try:
+            instance.image.delete(save=False)
+            logger.info("Deleted profile image: %s", instance.image.name)
+        except Exception:
+            logger.exception(
+                "Failed to delete profile image: %s",
+                getattr(instance.image, "name", None)
+            )
