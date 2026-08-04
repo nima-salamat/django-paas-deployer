@@ -114,3 +114,34 @@ def cleanup_user_resources(sender, instance: User, **kwargs):
         logger.exception("Failed to remove user deployment directory for user_id=%s", user_id)
 
     logger.info("=== pre_delete User %s finished ===", user_id)
+
+@receiver(pre_delete, sender=Volume)
+def cleanup_volume_on_delete(sender, instance: Volume, **kwargs):
+
+    logger.info("pre_delete Volume '%s' → removing Docker volume", instance.name)
+    try:
+        docker_volume = DockerVolume(instance.name)
+        docker_volume.remove()
+        logger.info("Docker volume '%s' removed successfully", instance.name)
+    except Exception:
+        logger.exception(
+            "Failed to remove Docker volume '%s' during Volume pre_delete",
+            instance.name,
+        )
+
+@receiver(pre_delete, sender=PrivateNetwork)
+def cleanup_network_on_delete(sender, instance: PrivateNetwork, **kwargs):
+
+    logger.info("pre_delete PrivateNetwork '%s' → removing Docker network", instance.name)
+    try:
+        if DockerNetwork.network_exists(instance.name):
+            docker_net = DockerNetwork(name=instance.name)
+            docker_net.remove()
+            logger.info("Docker network '%s' removed successfully", instance.name)
+        else:
+            logger.info("Docker network '%s' does not exist; nothing to remove", instance.name)
+    except Exception:
+        logger.exception(
+            "Failed to remove Docker network '%s' during PrivateNetwork pre_delete",
+            instance.name,
+        )
