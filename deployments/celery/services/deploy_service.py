@@ -164,6 +164,9 @@ class DeployService:
         dockerfile_text: str,
         state_tracker: DjangoDeploymentState,
     ):
+        service = deploy_item.service
+        cfg = _parse_config(getattr(deploy_item, "config", None))
+
         # Port: Deploy.config["port"] → platform default (SPA nginx = 80)
         raw_port = cfg.get("port")
         if raw_port is not None and str(raw_port).strip() != "":
@@ -173,8 +176,6 @@ class DeployService:
                 port = default_ports.get(platform)
         else:
             port = default_ports.get(platform)
-        service = deploy_item.service
-        cfg = _parse_config(getattr(deploy_item, "config", None))
 
         environment = dict(cfg.get("env") or cfg.get("environment") or {})
         # Ensure all env values are strings (Docker requirement)

@@ -41,33 +41,52 @@ class DeploymentHelper:
           python_version, django_python_version, node_version,
           php_version, go_version, dotnet_version, nginx_version,
           port, build_dir
+
+        Port resolution when user did not pass one:
+          default_ports[platform] → DEFAULT_EXPOSE_PORT (80)
         """
         from core.global_settings import config as _gcfg
-        kwargs = {"MIRROR_DOCKER": _gcfg.MIRROR_DOCKER}
-        kwargs.update(_gcfg.DEFAULT_RUNTIME_VERSIONS)
 
-        # Port: platform default → global default → user override
+        kwargs = {"MIRROR_DOCKER": getattr(_gcfg, "MIRROR_DOCKER", "docker.io")}
+        versions = getattr(_gcfg, "DEFAULT_RUNTIME_VERSIONS", None) or {
+            "python_version": "3.11",
+            "django_python_version": "3.10",
+            "node_version": "20",
+            "php_version": "8.2",
+            "go_version": "1.21",
+            "dotnet_version": "6.0",
+            "nginx_version": "alpine",
+        }
+        kwargs.update(versions)
+
+        # Port: user override later; start from platform default in config
         plat = (platform or "").lower().strip()
-        port_default = _gcfg.default_ports.get(plat)
+        default_ports = getattr(_gcfg, "default_ports", {}) or {}
+        port_default = default_ports.get(plat)
         if port_default is None:
             port_default = getattr(_gcfg, "DEFAULT_EXPOSE_PORT", 80)
-        kwargs["port"] = int(port_default)
+        try:
+            kwargs["port"] = int(port_default)
+        except (TypeError, ValueError):
+            kwargs["port"] = 80
 
-        # build_dir placeholder (SPA); generator may still refine it
         kwargs["build_dir"] = getattr(_gcfg, "DEFAULT_SPA_BUILD_DIR", "dist")
 
         if overrides:
-            for key in DEFAULT_RUNTIME_VERSIONS:
+            for key in versions:
                 val = overrides.get(key)
                 if val is not None and str(val).strip():
                     kwargs[key] = str(val).strip().lstrip("vV")
-            if overrides.get("port") is not None and str(overrides.get("port")).strip() != "":
+            raw_port = overrides.get("port")
+            if raw_port is not None and str(raw_port).strip() != "":
                 try:
-                    kwargs["port"] = int(overrides["port"])
+                    kwargs["port"] = int(raw_port)
                 except (TypeError, ValueError):
-                    pass
+                    pass  # keep platform default
             if overrides.get("build_dir"):
-                kwargs["build_dir"] = str(overrides["build_dir"]).strip().lstrip("./").rstrip("/")
+                kwargs["build_dir"] = (
+                    str(overrides["build_dir"]).strip().lstrip("./").rstrip("/")
+                )
         return kwargs
 
     @staticmethod
@@ -85,6 +104,9 @@ class DeploymentHelper:
 
         Pass overrides from Deploy.config::
           {"python_version": "3.12", "node_version": "22", "port": 8080}
+
+        If ``port`` is omitted, uses ``default_ports[platform]`` from
+        ``core.global_settings.config`` (e.g. react→80, django→8000).
         """
         key = (platform or "").lower().strip()
         attr = DeploymentHelper._DOCKERFILE_ALIASES.get(key, key)
@@ -106,7 +128,7 @@ class DeploymentHelper:
     @staticmethod
     def is_restart_only(deploy_item: Deploy, container_name: str) -> bool:
         service = deploy_item.service
-        
+
         if service.deployed_at is None:
             return False
 
@@ -117,5 +139,3 @@ class DeploymentHelper:
             return False
 
         return Container(container_name).exists()
-
-
