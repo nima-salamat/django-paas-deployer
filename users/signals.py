@@ -86,7 +86,7 @@ def cleanup_user_resources(sender, instance: User, **kwargs):
     volumes = list(Volume.objects.filter(user=instance))
     for volume in volumes:
         try:
-            docker_vol = DockerVolume(volume.name)
+            docker_vol = DockerVolume(volume.get_docker_volume_name())
             docker_vol.remove()
             logger.info("Removed Docker volume '%s'", volume.name)
         except Exception:
@@ -97,7 +97,7 @@ def cleanup_user_resources(sender, instance: User, **kwargs):
     for net in networks:
         try:
             if DockerNetwork.network_exists(net.name):
-                docker_net = DockerNetwork(name=net.name)
+                docker_net = DockerNetwork(name=net.get_docker_network_name())
                 docker_net.remove()
                 logger.info("Removed Docker network '%s'", net.name)
         except Exception:

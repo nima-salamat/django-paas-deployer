@@ -97,9 +97,9 @@ class NameChoices(models.TextChoices):
 
 
 class VOLUME_MODE_CHOICES(models.TextChoices):
-    READ = "read", _("Read-only")
-    WRITE = "write", _("Write-only")
-    READ_WRITE = "readwrite", _("Read & Write")
+    READ = "r", _("Read-only")
+    WRITE = "w", _("Write-only")
+    READ_WRITE = "rw", _("Read & Write")
 
 
 COLORS = [

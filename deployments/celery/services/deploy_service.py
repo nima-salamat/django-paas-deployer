@@ -238,7 +238,7 @@ class DeployService:
 
         networks = []
         if getattr(service, "network", None) is not None and getattr(service.network, "name", None):
-            networks.append((service.network.name, "bridge"))
+            networks.append((service.network.get_docker_network_name(), "bridge"))
 
         deployer = DeployFacade(
             name=container_name,
@@ -332,7 +332,7 @@ class DeployService:
 
             specs.append(
                 VolumeSpec(
-                    source=volume.name,
+                    source=volume.get_docker_volume_name(),
                     target=bind,
                     mode=mode,
                     mount_type="volume",

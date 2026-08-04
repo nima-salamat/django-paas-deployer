@@ -104,7 +104,7 @@ def _cleanup_orphaned_volumes(service: Service) -> None:
 
         # Orphaned → remove Docker volume then DB record
         try:
-            docker_volume = DockerVolume(volume.name)
+            docker_volume = DockerVolume(volume.get_docker_volume_name())
             try:
                 docker_volume.remove()
                 logger.info("Removed orphaned docker volume '%s'.", volume.name)
@@ -121,7 +121,7 @@ def cleanup_volume_on_delete(sender, instance: Volume, **kwargs):
 
     logger.info("pre_delete Volume '%s' → removing Docker volume", instance.name)
     try:
-        docker_volume = DockerVolume(instance.name)
+        docker_volume = DockerVolume(instance.get_docker_volume_name())
         docker_volume.remove()
         logger.info("Docker volume '%s' removed successfully", instance.name)
     except Exception:
@@ -136,7 +136,7 @@ def cleanup_network_on_delete(sender, instance: PrivateNetwork, **kwargs):
     logger.info("pre_delete PrivateNetwork '%s' → removing Docker network", instance.name)
     try:
         if Network.network_exists(instance.name):
-            docker_net = Network(name=instance.name)
+            docker_net = Network(name=instance.get_docker_network_name())
             docker_net.remove()
             logger.info("Docker network '%s' removed successfully", instance.name)
         else:

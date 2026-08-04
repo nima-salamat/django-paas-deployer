@@ -20,7 +20,8 @@ class PrivateNetwork(BaseModel):
     def __str__(self):
         return self.name
 
-
+    def get_docker_network_name(self):
+        return f"net-{self.id.hex[:8]}-{self.name}"
 class Service(BaseModel):
     name = models.CharField(_("Name"), max_length=30, unique=True)
     user = models.ForeignKey(
@@ -173,7 +174,10 @@ class Volume(BaseModel):
     def is_attached_to_service(self, service: Service):
         """Check if volume is attached to a service."""
         return str(service.id) in self.service_attachments
-    
+
+    def get_docker_volume_name(self):
+        return f"vol-{self.id.hex[:8]}-{self.name}"
+
     def __str__(self):
         return f"Volume: {self.name} ({self.size_mb} MB)"
         
