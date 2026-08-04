@@ -7,8 +7,8 @@ from django.utils import timezone
 
 
 def zip_file_path(instance, filename):
-    return f'deployments/{instance.name}/{filename}'
-
+    user_id = getattr(getattr(instance.service, "user", None), "id", "unknown")
+    return f"deployments/{user_id}/{instance.name}/{filename}"
 
 class DeploymentStatusChoices(models.TextChoices):
     PENDING = "pending", _("Pending")
