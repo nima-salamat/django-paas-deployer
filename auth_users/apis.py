@@ -247,6 +247,12 @@ class StartAuthAPIView(APIView):
                     extra={"errors": serializer.errors},
                 )
             user = serializer.save()
+            # Ensure brand-new users do not appear to "already have a password"
+            # unless the client explicitly sent one in this request.
+            client_password = (request.data.get("password") or "").strip()
+            if not client_password:
+                user.set_unusable_password()
+                user.save(update_fields=["password"])
             if not settings.auto_activate_on_signup:
                 user.is_active = False
                 user.save(update_fields=["is_active"])
@@ -274,17 +280,17 @@ class StartAuthAPIView(APIView):
         if settings.require_otp and not channel:
             return err(_("error::email or phone required to send code"))
 
-        user_needs_to_set_password = (
-            created
-            and settings.require_password_on_signup
-            and not user.has_usable_password()
+        has_password = user.has_usable_password()
+        user_needs_to_set_password = (not has_password) and (
+            (created and settings.require_password_on_signup)
+            or (not has_password and settings.require_password and created)
         )
 
         if settings.require_otp:
             next_step = "otp"
         elif user_needs_to_set_password:
             next_step = "set_password"
-        elif settings.needs_password(user):
+        elif has_password and settings.needs_password(user):
             next_step = "password"
         else:
             if not user.is_active and not settings.activate_after_successful_otp:
@@ -361,12 +367,13 @@ class ValidateOTPAPIView(APIView):
 
         instance.consume()
 
-        # After a valid OTP, decide what comes next
-        needs_set_password = (
-            settings.require_password_on_signup
-            and not user.has_usable_password()
+        # After a valid OTP, decide what comes next.
+        # If the user has NO usable password → they must SET one (not "enter" one).
+        has_password = user.has_usable_password()
+        needs_set_password = (not has_password) and (
+            settings.require_password_on_signup or settings.require_password
         )
-        needs_pwd = settings.needs_password(user)
+        needs_pwd = has_password and settings.needs_password(user)
 
         if needs_set_password:
             return ok(
@@ -375,6 +382,7 @@ class ValidateOTPAPIView(APIView):
                     "is_valid": True,
                     "twofactor": False,
                     "next_step": "set_password",
+                    "must_set_password": True,
                 },
             )
 
