@@ -2,19 +2,23 @@ import logging
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from django.contrib.auth import get_user_model
 from django.utils.translation import gettext as _
 from django.db.models import Q
+from django.core.exceptions import ValidationError
+from django.utils import timezone
 
 from users.serializers import CreateUserSerializer
-from .models import LoginSettings, AuthCode
+from .models import LoginSettings, AuthCode, InviteLink, InviteUsage
 from .services import (
     get_tokens_for_user,
     resolve_user_from_identifiers,
     extract_contact,
     send_otp,
     validate_required_identifiers,
+    can_create_user,
+    resolve_invite,
 )
 
 User = get_user_model()
@@ -36,7 +40,7 @@ def ok(msg, data=None, http_status=status.HTTP_200_OK):
 
 
 # ---------------------------------------------------------------------------
-# Public endpoint: current login settings (frontend uses this to render UI)
+# Public endpoint: current login settings
 # ---------------------------------------------------------------------------
 class LoginSettingsAPIView(APIView):
     permission_classes = [AllowAny]
@@ -57,6 +61,7 @@ class LoginSettingsAPIView(APIView):
                     "auto_activate_on_signup": s.auto_activate_on_signup,
                     "require_password_on_signup": s.require_password_on_signup,
                     "activate_after_successful_otp": s.activate_after_successful_otp,
+                    "require_invite_for_signup": s.require_invite_for_signup,
                     "allow_username_recovery": s.allow_username_recovery,
                     "recovery_via_email": s.recovery_via_email,
                     "recovery_via_phone": s.recovery_via_phone,
@@ -68,28 +73,160 @@ class LoginSettingsAPIView(APIView):
 
 
 # ---------------------------------------------------------------------------
-# Step 1 – Send OTP / start auth flow
-# Endpoint: POST /api/authentication/
+# Invite validation (public – frontend checks before showing form)
+# GET /api/invite/validate/?token=xxx
+# ---------------------------------------------------------------------------
+class InviteValidateAPIView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        token = (request.query_params.get("token") or "").strip()
+        invite, error = resolve_invite(token)
+        if error:
+            return err(error, status.HTTP_400_BAD_REQUEST)
+        return ok(
+            _("success::invite is valid"),
+            {
+                "valid": True,
+                "label": invite.label,
+                "remaining_uses": invite.remaining_uses(),
+                "expires_at": invite.expires_at.isoformat() if invite.expires_at else None,
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
+# Admin: create / list invite links
+# ---------------------------------------------------------------------------
+class InviteCreateAPIView(APIView):
+    """
+    POST /api/invite/create/
+    Body (all optional except nothing required):
+      {
+        "label": "Beta batch 1",
+        "max_uses": 1,          // 1 = one-time, null/omit = unlimited
+        "expires_at": "2026-12-31T23:59:59Z",  // optional ISO datetime
+        "base_url": "https://echonode.website" // optional, for full URL in response
+      }
+    """
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        label = (request.data.get("label") or "").strip()
+        max_uses = request.data.get("max_uses", None)
+        expires_at_raw = request.data.get("expires_at")
+        base_url = (request.data.get("base_url") or "").strip()
+
+        if max_uses is not None:
+            try:
+                max_uses = int(max_uses)
+                if max_uses < 1:
+                    return err(_("error::max_uses must be >= 1 or null"))
+            except (TypeError, ValueError):
+                return err(_("error::max_uses must be an integer or null"))
+
+        expires_at = None
+        if expires_at_raw:
+            from django.utils.dateparse import parse_datetime
+            expires_at = parse_datetime(str(expires_at_raw))
+            if expires_at is None:
+                return err(_("error::invalid expires_at format (use ISO 8601)"))
+            if timezone.is_naive(expires_at):
+                expires_at = timezone.make_aware(expires_at)
+
+        invite = InviteLink.objects.create(
+            label=label,
+            max_uses=max_uses,
+            expires_at=expires_at,
+            created_by=request.user if request.user.is_authenticated else None,
+        )
+
+        return ok(
+            _("success::invite created"),
+            {
+                "token": invite.token,
+                "url": invite.get_invite_url(base_url),
+                "label": invite.label,
+                "max_uses": invite.max_uses,
+                "expires_at": invite.expires_at.isoformat() if invite.expires_at else None,
+                "is_active": invite.is_active,
+            },
+            status.HTTP_201_CREATED,
+        )
+
+
+class InviteListAPIView(APIView):
+    """GET /api/invite/list/ – admin only"""
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        qs = InviteLink.objects.all().prefetch_related("usages__user")
+        results = []
+        for inv in qs:
+            results.append({
+                "id": inv.id,
+                "token": inv.token,
+                "label": inv.label,
+                "max_uses": inv.max_uses,
+                "uses_count": inv.uses_count,
+                "remaining_uses": inv.remaining_uses(),
+                "is_active": inv.is_active,
+                "is_valid": inv.is_valid(),
+                "expires_at": inv.expires_at.isoformat() if inv.expires_at else None,
+                "created_at": inv.created_at.isoformat(),
+                "created_by": inv.created_by.username if inv.created_by else None,
+                "url": inv.get_invite_url(request.build_absolute_uri("/").rstrip("/").replace("/auth", "")),
+                "users": [
+                    {
+                        "username": u.user.username,
+                        "email": getattr(u.user, "email", None),
+                        "used_at": u.used_at.isoformat(),
+                        "ip_address": u.ip_address,
+                    }
+                    for u in inv.usages.all()
+                ],
+            })
+        return ok(_("success::invite list"), {"invites": results})
+
+
+class InviteDeactivateAPIView(APIView):
+    """POST /api/invite/deactivate/  body: {"token": "..."}"""
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        token = (request.data.get("token") or "").strip()
+        if not token:
+            return err(_("error::token is required"))
+        try:
+            invite = InviteLink.objects.get(token=token)
+        except InviteLink.DoesNotExist:
+            return err(_("error::invite not found"), status.HTTP_404_NOT_FOUND)
+        invite.is_active = False
+        invite.save(update_fields=["is_active", "updated_at"])
+        return ok(_("success::invite deactivated"))
+
+
+# ---------------------------------------------------------------------------
+# Step 1 – Send OTP / start auth flow  (with invite support)
 # ---------------------------------------------------------------------------
 class StartAuthAPIView(APIView):
     """
     Unified entry point.
 
-    Body can contain any combination of:
-        username, email, phone_number
+    Body:
+        username, email, phone_number  (any allowed combination)
+        invite  (optional / required depending on LoginSettings)
 
-    Behaviour is driven by LoginSettings:
-    - If user exists -> send OTP (if require_otp) and return next_step
-    - If user does not exist and allow_auto_signup -> create user,
-      optionally ask for password, send OTP
-    - If user does not exist and not allow_auto_signup -> 404
+    When allow_auto_signup=False (or require_invite_for_signup=True):
+        a valid invite token is mandatory to create a new account.
     """
 
     permission_classes = [AllowAny]
 
     def post(self, request):
         settings = LoginSettings.get_solo()
-        data = {k: (v or "").strip() for k, v in request.data.items()}
+        data = {k: (v or "").strip() if isinstance(v, str) else v for k, v in request.data.items()}
+        invite_token = (data.get("invite") or data.get("invite_token") or "").strip()
 
         validation_err = validate_required_identifiers(data, settings)
         if validation_err:
@@ -97,13 +234,11 @@ class StartAuthAPIView(APIView):
 
         user, lookup_err = resolve_user_from_identifiers(data, settings)
 
-        # ---------- User does not exist ----------
+        # ---------- User does not exist → maybe create ----------
         if user is None:
-            if not settings.allow_auto_signup:
-                return err(
-                    lookup_err or _("error::user not found"),
-                    status.HTTP_404_NOT_FOUND,
-                )
+            allowed, invite, create_err = can_create_user(settings, invite_token)
+            if not allowed:
+                return err(create_err or _("error::signup is closed"), status.HTTP_403_FORBIDDEN)
 
             serializer = CreateUserSerializer(data=request.data)
             if not serializer.is_valid():
@@ -116,9 +251,19 @@ class StartAuthAPIView(APIView):
                 user.is_active = False
                 user.save(update_fields=["is_active"])
 
+            # Record invite usage
+            if invite is not None:
+                try:
+                    invite.consume(user, request=request)
+                except ValidationError as e:
+                    # Extremely rare race condition – delete the just-created user
+                    user.delete()
+                    return err(str(e), status.HTTP_403_FORBIDDEN)
+
             created = True
         else:
             created = False
+            # Existing user logging in – invite is irrelevant
 
         # ---------- Decide next step ----------
         channel, contact = extract_contact(data, settings)
@@ -158,6 +303,7 @@ class StartAuthAPIView(APIView):
             "requires_password": needs_password_now or settings.needs_password(user),
             "requires_otp": settings.require_otp,
             "channel": channel,
+            "invite_used": bool(created and invite_token),
         }
         return ok(
             _("success::code sent") if settings.require_otp else _("success::continue"),
@@ -168,14 +314,13 @@ class StartAuthAPIView(APIView):
 
 # ---------------------------------------------------------------------------
 # Step 2 – Verify OTP
-# Endpoint: POST /api/login/validate/
 # ---------------------------------------------------------------------------
 class ValidateOTPAPIView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
         settings = LoginSettings.get_solo()
-        data = {k: (v or "").strip() for k, v in request.data.items()}
+        data = {k: (v or "").strip() if isinstance(v, str) else v for k, v in request.data.items()}
         code = data.get("code", "")
 
         if not settings.require_otp:
@@ -239,20 +384,14 @@ class ValidateOTPAPIView(APIView):
 
 
 # ---------------------------------------------------------------------------
-# Step 3 – Final login with password (and optional OTP already verified)
-# Endpoint: POST /api/login/token/
+# Step 3 – Final login with password
 # ---------------------------------------------------------------------------
 class FinalAuthAPIView(APIView):
-    """
-    Used when password is required (with or without prior OTP).
-    Also used for pure password login when require_otp=False.
-    """
-
     permission_classes = [AllowAny]
 
     def post(self, request):
         settings = LoginSettings.get_solo()
-        data = {k: (v or "").strip() for k, v in request.data.items()}
+        data = {k: (v or "").strip() if isinstance(v, str) else v for k, v in request.data.items()}
         password = data.get("password", "")
         code = data.get("code", "")
 
@@ -305,15 +444,14 @@ class FinalAuthAPIView(APIView):
 
 
 # ---------------------------------------------------------------------------
-# Set password (for new users when require_password_on_signup=True)
-# Endpoint: POST /api/set-password/
+# Set password
 # ---------------------------------------------------------------------------
 class SetPasswordAPIView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
         settings = LoginSettings.get_solo()
-        data = {k: (v or "").strip() for k, v in request.data.items()}
+        data = {k: (v or "").strip() if isinstance(v, str) else v for k, v in request.data.items()}
         password = data.get("password", "")
         code = data.get("code", "")
 
@@ -361,8 +499,7 @@ class SetPasswordAPIView(APIView):
 
 
 # ---------------------------------------------------------------------------
-# Username recovery – Step 1: request OTP
-# Endpoint: POST /api/recovery/request/
+# Username recovery
 # ---------------------------------------------------------------------------
 class RecoveryRequestAPIView(APIView):
     permission_classes = [AllowAny]
@@ -390,7 +527,6 @@ class RecoveryRequestAPIView(APIView):
             q |= Q(phone_number=phone)
         users = User.objects.filter(q)
         if not users.exists():
-            # Do not leak existence
             return ok(_("success::if the account exists a code was sent"))
 
         user = users.first()
@@ -409,10 +545,6 @@ class RecoveryRequestAPIView(APIView):
         )
 
 
-# ---------------------------------------------------------------------------
-# Username recovery – Step 2: verify OTP and return username
-# Endpoint: POST /api/recovery/confirm/
-# ---------------------------------------------------------------------------
 class RecoveryConfirmAPIView(APIView):
     permission_classes = [AllowAny]
 
@@ -472,7 +604,7 @@ class ValidateToken(APIView):
 
 
 # ---------------------------------------------------------------------------
-# Legacy-compatible thin wrappers
+# Legacy aliases
 # ---------------------------------------------------------------------------
 class LoginAPIView(StartAuthAPIView):
     pass

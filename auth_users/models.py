@@ -3,6 +3,7 @@ from django.core.exceptions import ValidationError
 from users.models import User
 import string
 import random
+import secrets
 from django.utils import timezone
 from datetime import timedelta
 
@@ -15,6 +16,11 @@ def get_random_code(n):
 
 def get_random_code_8():
     return get_random_code(8)
+
+
+def generate_invite_token():
+    """Cryptographically strong URL-safe token."""
+    return secrets.token_urlsafe(32)
 
 
 class LoginSettings(models.Model):
@@ -57,7 +63,10 @@ class LoginSettings(models.Model):
     # ---------- Signup / auto-create behaviour ----------
     allow_auto_signup = models.BooleanField(
         default=True,
-        help_text="If user does not exist, automatically create the account",
+        help_text=(
+            "If user does not exist, automatically create the account. "
+            "When False, signup is only possible via a valid invite link."
+        ),
     )
     auto_activate_on_signup = models.BooleanField(
         default=False,
@@ -73,6 +82,15 @@ class LoginSettings(models.Model):
     activate_after_successful_otp = models.BooleanField(
         default=True,
         help_text="After a valid OTP, set is_active=True (and mark email/phone verified)",
+    )
+
+    # ---------- Invite system ----------
+    require_invite_for_signup = models.BooleanField(
+        default=False,
+        help_text=(
+            "When True (recommended when allow_auto_signup is False), a valid "
+            "invite token is mandatory to create a new account."
+        ),
     )
 
     # ---------- Recovery (forgot username) ----------
@@ -155,11 +173,6 @@ class LoginSettings(models.Model):
         return self.require_otp
 
     def needs_password(self, user=None):
-        """
-        Decide whether password is required for this user.
-        - If password_as_second_factor and user already has a password -> yes
-        - If require_password and user has password -> yes
-        """
         if user is None:
             return self.require_password
         has_password = bool(user.has_usable_password())
@@ -170,6 +183,173 @@ class LoginSettings(models.Model):
         return self.require_password
 
 
+# ---------------------------------------------------------------------------
+# Invite Link system
+# ---------------------------------------------------------------------------
+class InviteLink(models.Model):
+    """
+    Invitation / referral link that unlocks signup when public signup is closed.
+
+    Usage modes:
+    - max_uses = 1          → one-time invite
+    - max_uses = N          → up to N users can sign up
+    - max_uses = null       → unlimited uses (until disabled or expired)
+    """
+
+    token = models.CharField(
+        max_length=64,
+        unique=True,
+        default=generate_invite_token,
+        editable=False,
+        db_index=True,
+    )
+    label = models.CharField(
+        max_length=120,
+        blank=True,
+        default="",
+        help_text="Optional internal note (e.g. 'Beta testers batch 3')",
+    )
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_invites",
+    )
+    max_uses = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Maximum number of successful signups. Leave empty for unlimited.",
+    )
+    uses_count = models.PositiveIntegerField(default=0, editable=False)
+    is_active = models.BooleanField(default=True)
+    expires_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Optional expiry datetime. Leave empty for no expiry.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Invite Link"
+        verbose_name_plural = "Invite Links"
+
+    def __str__(self):
+        uses = f"{self.uses_count}"
+        if self.max_uses is not None:
+            uses += f"/{self.max_uses}"
+        else:
+            uses += "/inf"
+        status = "active" if self.is_valid() else "invalid"
+        return f"Invite({self.token[:12]}... {uses} {status})"
+
+    def is_expired(self):
+        if self.expires_at is None:
+            return False
+        return timezone.now() > self.expires_at
+
+    def is_exhausted(self):
+        if self.max_uses is None:
+            return False
+        return self.uses_count >= self.max_uses
+
+    def is_valid(self):
+        return self.is_active and not self.is_expired() and not self.is_exhausted()
+
+    def remaining_uses(self):
+        if self.max_uses is None:
+            return None
+        return max(0, self.max_uses - self.uses_count)
+
+    def get_invite_url(self, base_url=""):
+        """
+        Build the full invite URL.
+        Example: https://echonode.website/signin_or_signup?invite=<token>
+        """
+        path = f"/signin_or_signup?invite={self.token}"
+        if base_url:
+            return base_url.rstrip("/") + path
+        return path
+
+    @classmethod
+    def get_valid(cls, token: str):
+        """Return a valid InviteLink or None."""
+        if not token:
+            return None
+        try:
+            invite = cls.objects.get(token=token)
+        except cls.DoesNotExist:
+            return None
+        if not invite.is_valid():
+            return None
+        return invite
+
+    def consume(self, user, request=None):
+        """
+        Record that `user` signed up with this invite.
+        Raises ValidationError if the invite is no longer valid.
+        """
+        if not self.is_valid():
+            raise ValidationError("This invite link is no longer valid.")
+
+        InviteUsage.objects.create(
+            invite=self,
+            user=user,
+            ip_address=_get_client_ip(request) if request else None,
+            user_agent=(
+                (request.META.get("HTTP_USER_AGENT", "") or "")[:500]
+                if request
+                else ""
+            ),
+        )
+        # Atomic increment
+        InviteLink.objects.filter(pk=self.pk).update(
+            uses_count=models.F("uses_count") + 1
+        )
+        self.refresh_from_db(fields=["uses_count"])
+
+
+class InviteUsage(models.Model):
+    """Tracks exactly which users signed up with which invite link."""
+
+    invite = models.ForeignKey(
+        InviteLink,
+        on_delete=models.CASCADE,
+        related_name="usages",
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="invite_usages",
+    )
+    used_at = models.DateTimeField(auto_now_add=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=500, blank=True, default="")
+
+    class Meta:
+        ordering = ["-used_at"]
+        unique_together = [("invite", "user")]
+        verbose_name = "Invite Usage"
+        verbose_name_plural = "Invite Usages"
+
+    def __str__(self):
+        return f"{self.user.username} <- {self.invite.token[:12]}..."
+
+
+def _get_client_ip(request):
+    if not request:
+        return None
+    xff = request.META.get("HTTP_X_FORWARDED_FOR")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.META.get("REMOTE_ADDR")
+
+
+# ---------------------------------------------------------------------------
+# OTP codes
+# ---------------------------------------------------------------------------
 class AuthCode(models.Model):
     """
     One-time password / verification code.
@@ -220,20 +400,20 @@ class AuthCode(models.Model):
         return f"AuthCode({target}, {self.purpose}, {self.code})"
 
     def is_expired(self):
-        settings = LoginSettings.get_solo()
-        expire_time = self.updated_at + timedelta(minutes=settings.otp_expire_minutes)
+        s = LoginSettings.get_solo()
+        expire_time = self.updated_at + timedelta(minutes=s.otp_expire_minutes)
         return timezone.now() > expire_time
 
     def is_not_expired(self):
         return not self.is_expired()
 
     def is_locked(self):
-        settings = LoginSettings.get_solo()
-        return self.attempts >= settings.otp_max_attempts
+        s = LoginSettings.get_solo()
+        return self.attempts >= s.otp_max_attempts
 
     def update_code(self):
-        settings = LoginSettings.get_solo()
-        length = settings.otp_length or 8
+        s = LoginSettings.get_solo()
+        length = s.otp_length or 8
         self.code = get_random_code(length)
         self.attempts = 0
         self.save(update_fields=["code", "attempts", "updated_at"])
@@ -241,9 +421,6 @@ class AuthCode(models.Model):
 
     @classmethod
     def create_or_refresh(cls, *, user=None, contact="", purpose=PURPOSE_LOGIN):
-        """
-        Get or create a code for the given user/contact+purpose and refresh if expired.
-        """
         if user is None and not contact:
             raise ValueError("Either user or contact must be provided")
 
@@ -261,10 +438,6 @@ class AuthCode(models.Model):
 
     @classmethod
     def validate(cls, *, user=None, contact="", code="", purpose=PURPOSE_LOGIN):
-        """
-        Validate a code. Returns (is_valid: bool, instance_or_None).
-        Increments attempts on failure.
-        """
         if not code:
             return False, None
 
@@ -291,5 +464,4 @@ class AuthCode(models.Model):
         return False, instance
 
     def consume(self):
-        """Delete the code after successful use."""
         self.delete()

@@ -3,11 +3,12 @@ Business logic helpers for the customizable auth system.
 """
 from django.contrib.auth import get_user_model
 from django.db.models import Q
+from django.core.exceptions import ValidationError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import AuthenticationFailed
 from django.utils.translation import gettext as _
 
-from .models import LoginSettings, AuthCode
+from .models import LoginSettings, AuthCode, InviteLink
 
 User = get_user_model()
 
@@ -118,3 +119,52 @@ def validate_required_identifiers(data, settings: LoginSettings):
         allowed = settings.get_allowed_identifiers()
         return _("error::provide one of: %(fields)s") % {"fields": ", ".join(allowed)}
     return None
+
+
+def resolve_invite(token: str):
+    """
+    Validate an invite token.
+    Returns (invite_or_None, error_message_or_None).
+    """
+    if not token:
+        return None, _("error::invite token is required")
+    invite = InviteLink.get_valid(token)
+    if invite is None:
+        # Distinguish reasons for better UX
+        try:
+            raw = InviteLink.objects.get(token=token)
+        except InviteLink.DoesNotExist:
+            return None, _("error::invalid invite link")
+        if not raw.is_active:
+            return None, _("error::invite link has been disabled")
+        if raw.is_expired():
+            return None, _("error::invite link has expired")
+        if raw.is_exhausted():
+            return None, _("error::invite link has reached its usage limit")
+        return None, _("error::invalid invite link")
+    return invite, None
+
+
+def can_create_user(settings: LoginSettings, invite_token: str = ""):
+    """
+    Decide whether a new user may be created right now.
+    Returns (allowed: bool, invite_or_None, error_message_or_None).
+    """
+    if settings.allow_auto_signup and not settings.require_invite_for_signup:
+        # Open signup – invite is optional
+        if invite_token:
+            invite, err = resolve_invite(invite_token)
+            if err:
+                # Invalid invite should not block open signup
+                return True, None, None
+            return True, invite, None
+        return True, None, None
+
+    # Signup is restricted – invite is mandatory
+    if not invite_token:
+        return False, None, _("error::signup is closed. an invite link is required")
+
+    invite, err = resolve_invite(invite_token)
+    if err:
+        return False, None, err
+    return True, invite, None
