@@ -244,10 +244,23 @@ class VolumeViewSet(ModelViewSet):
         if serializer.is_valid():
             service_obj = serializer.validated_data.get("service")
             if service_obj and service_obj.user != request.user:
-                return Response({"error": _("Selected service does not belong to the authenticated user.")}, status=status.HTTP_400_BAD_REQUEST)
-            serializer.save(user=request.user)
-            return Response({"success": _("Volume created.")}, status=status.HTTP_201_CREATED)
-        return Response({"error": _("Can not create Volume."), "errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+                return Response(
+                    {"error": _("Selected service does not belong to the authenticated user.")},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            instance = serializer.save(user=request.user)
+            return Response(
+                {
+                    "success": _("Volume created."),
+                    "id": str(instance.pk),
+                    **self.get_serializer(instance).data,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+        return Response(
+            {"error": _("Can not create Volume."), "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     def update(self, request, pk=None, *args, **kwargs):
         volume = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
@@ -262,13 +275,35 @@ class VolumeViewSet(ModelViewSet):
 
     def destroy(self, request, pk=None, *args, **kwargs):
         volume = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
+
         if volume.service and volume.service.status in (
             SERVICE_STATUS_CHOICES.QUEUED,
             SERVICE_STATUS_CHOICES.DEPLOYING,
             SERVICE_STATUS_CHOICES.RUNNING,
             SERVICE_STATUS_CHOICES.STOPPING,
         ):
-            return Response({"error": _("Cannot delete a volume attached to an active service.")}, status=status.HTTP_409_CONFLICT)
+            return Response(
+                {"error": _("Cannot delete a volume attached to an active service.")},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        active_statuses = {
+            SERVICE_STATUS_CHOICES.QUEUED,
+            SERVICE_STATUS_CHOICES.DEPLOYING,
+            SERVICE_STATUS_CHOICES.RUNNING,
+            SERVICE_STATUS_CHOICES.STOPPING,
+        }
+        for sid in (volume.service_attachments or {}).keys():
+            try:
+                svc = Service.objects.get(pk=sid, user=request.user)
+                if svc.status in active_statuses:
+                    return Response(
+                        {"error": _("Cannot delete a volume attached to an active service.")},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+            except Service.DoesNotExist:
+                continue
+
         volume.delete()
         return Response({"success": _("Volume deleted.")}, status=status.HTTP_200_OK)
 

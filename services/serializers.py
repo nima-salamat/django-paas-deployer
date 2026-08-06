@@ -66,11 +66,21 @@ class VolumeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Volume
         fields = "__all__"
-        read_only_fields = ["id", "created_at", "updated_at", "service_name", "service_status", "is_unused", "attached_services", "attached_services_count"]
+        read_only_fields = [
+            "id",
+            "created_at",
+            "updated_at",
+            "user",
+            "service_name",
+            "service_status",
+            "is_unused",
+            "attached_services",
+            "attached_services_count",
+        ]
         extra_kwargs = {
-            "name" : {"required": True, "allow_blank": False},
+            "name": {"required": True, "allow_blank": False},
             "service": {"required": False, "allow_null": True},
-            "service_attachments": {"read_only": True},  # Managed via attach/detach endpoints
+            "service_attachments": {"read_only": True},
         }
         
     def get_fields(self):
