@@ -4,7 +4,6 @@ from django.db.models.signals import pre_delete
 from django.dispatch import receiver
 
 from .models import Service, Volume, PrivateNetwork
-from deployments.core.deploy import Deploy as Deployer
 from deployments.core.manager.container_manager import Container
 from deployments.core.manager.volume_manager import Volume as DockerVolume
 from deployments.core.manager.image_manager import Image
@@ -21,27 +20,32 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
 
     DATABASE:
         - Stop container if running.
-        - Remove container (volumes are cleaned later if orphaned).
+        - Remove container (volumes owned by this service are cleaned below).
 
     APPLICATION:
         - Stop + remove container.
-        - Optionally remove image (kept conservative: only remove if no other
-          services reference the same image name pattern).
+        - Remove image associated with this service name.
     """
     service_name = instance.get_docker_service_name()
-    logger.info("pre_delete Service '%s' → cleaning Docker resources for '%s'", instance.name, service_name)
+    logger.info(
+        "pre_delete Service '%s' → cleaning Docker resources for '%s'",
+        instance.name,
+        service_name,
+    )
 
     try:
         container = Container(name=service_name)
 
-        # Always try to stop if it exists and is running
         if container.exists():
             if container.is_running():
                 logger.info("Stopping running container '%s'...", service_name)
                 try:
                     container.stop(timeout=10)
                 except Exception:
-                    logger.exception("Failed to stop container '%s' (continuing with remove)", service_name)
+                    logger.exception(
+                        "Failed to stop container '%s' (continuing with remove)",
+                        service_name,
+                    )
 
             logger.info("Removing container '%s'...", service_name)
             try:
@@ -49,17 +53,22 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
             except Exception:
                 logger.exception("Failed to remove container '%s'", service_name)
         else:
-            logger.info("Container '%s' does not exist; nothing to stop/remove.", service_name)
+            logger.info(
+                "Container '%s' does not exist; nothing to stop/remove.",
+                service_name,
+            )
 
-        # For application plans we also try to clean the image that belongs to this service
-        if getattr(instance, "plan", None) and instance.plan.plan_type != PlanTypeChoices.DATABASE:
-            # Image name convention used by the orchestrator is usually the container name
+        # Application plans: remove image built for this service
+        if getattr(instance, "plan", None) and getattr(
+            instance.plan, "plan_type", None
+        ) != PlanTypeChoices.DATABASE:
             try:
                 Image.remove_by_name(service_name)
-                # also try with :latest if tagged that way
                 Image.remove_by_name(f"{service_name}:latest")
             except Exception:
-                logger.exception("Failed to remove image for service '%s'", service_name)
+                logger.exception(
+                    "Failed to remove image for service '%s'", service_name
+                )
 
     except Exception:
         logger.exception(
@@ -69,57 +78,58 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
         )
 
     finally:
-        _cleanup_orphaned_volumes(instance)
+        # Volumes are exclusive to this service — delete them (Docker + DB)
+        _cleanup_service_volumes(instance)
 
 
-def _cleanup_orphaned_volumes(service: Service) -> None:
+def _cleanup_service_volumes(service: Service) -> None:
     """
-    Detach this service from all volumes and delete any volume that becomes
-    completely unattached (both in DB and in Docker).
+    With exclusive ownership, every volume with service_id == this service
+    is deleted (Docker volume + DB row). There is no multi-service sharing.
     """
-    service_id = str(service.id)
-
-    # We iterate over a snapshot so we can safely delete
-    volumes = list(Volume.objects.filter(user=service.user))
+    volumes = list(Volume.objects.filter(service_id=service.pk))
 
     for volume in volumes:
-        changed = False
-        attachments = dict(volume.service_attachments or {})
-
-        if service_id in attachments:
-            del attachments[service_id]
-            volume.service_attachments = attachments
-            changed = True
-
-        if volume.service_id == service.id:
-            volume.service = None
-            changed = True
-
-        if changed:
-            volume.save(update_fields=["service_attachments", "service"])
-
-        # Still attached to other services → keep it
-        if volume.service_attachments:
-            continue
-
-        # Orphaned → remove Docker volume then DB record
+        # Remove Docker volume first
         try:
             docker_volume = DockerVolume(volume.get_docker_volume_name())
             try:
                 docker_volume.remove()
-                logger.info("Removed orphaned docker volume '%s'.", volume.name)
+                logger.info(
+                    "Removed Docker volume '%s' for deleted service '%s'.",
+                    volume.name,
+                    service.name,
+                )
             except Exception:
-                logger.exception("Failed removing docker volume '%s' (will still delete DB record).", volume.name)
-
-            volume.delete()
-            logger.info("Deleted orphaned Volume record '%s'.", volume.name)
+                logger.exception(
+                    "Failed removing Docker volume '%s' (will still delete DB record).",
+                    volume.name,
+                )
         except Exception:
-            logger.exception("Failed deleting volume record '%s'.", volume.name)
+            logger.exception(
+                "Could not resolve Docker volume for '%s'.", volume.name
+            )
+
+        # Delete DB record (avoids cascading surprises if CASCADE is not set)
+        try:
+            volume.delete()
+            logger.info(
+                "Deleted Volume record '%s' owned by service '%s'.",
+                volume.name,
+                service.name,
+            )
+        except Exception:
+            logger.exception(
+                "Failed deleting volume record '%s'.", volume.name
+            )
+
 
 @receiver(pre_delete, sender=Volume)
 def cleanup_volume_on_delete(sender, instance: Volume, **kwargs):
-
-    logger.info("pre_delete Volume '%s' → removing Docker volume", instance.name)
+    """Remove the underlying Docker volume when a Volume row is deleted."""
+    logger.info(
+        "pre_delete Volume '%s' → removing Docker volume", instance.name
+    )
     try:
         docker_volume = DockerVolume(instance.get_docker_volume_name())
         docker_volume.remove()
@@ -130,19 +140,37 @@ def cleanup_volume_on_delete(sender, instance: Volume, **kwargs):
             instance.name,
         )
 
+
 @receiver(pre_delete, sender=PrivateNetwork)
 def cleanup_network_on_delete(sender, instance: PrivateNetwork, **kwargs):
-
-    logger.info("pre_delete PrivateNetwork '%s' → removing Docker network", instance.name)
+    """Remove the Docker network when a PrivateNetwork row is deleted."""
+    logger.info(
+        "pre_delete PrivateNetwork '%s' → removing Docker network",
+        instance.name,
+    )
     try:
-        if Network.network_exists(instance.name):
-            docker_net = Network(name=instance.get_docker_network_name())
+        docker_name = instance.get_docker_network_name()
+        if Network.network_exists(docker_name):
+            docker_net = Network(name=docker_name)
             docker_net.remove()
-            logger.info("Docker network '%s' removed successfully", instance.name)
+            logger.info(
+                "Docker network '%s' removed successfully", docker_name
+            )
         else:
-            logger.info("Docker network '%s' does not exist; nothing to remove", instance.name)
+            # Fallback: some code paths used plain name
+            if Network.network_exists(instance.name):
+                docker_net = Network(name=instance.name)
+                docker_net.remove()
+                logger.info(
+                    "Docker network '%s' removed successfully", instance.name
+                )
+            else:
+                logger.info(
+                    "Docker network '%s' does not exist; nothing to remove",
+                    docker_name,
+                )
     except Exception:
         logger.exception(
-            "Failed to remove Docker network '%s' during PrivateNetwork pre_delete",
+            "Failed to remove Docker network for PrivateNetwork '%s'",
             instance.name,
         )

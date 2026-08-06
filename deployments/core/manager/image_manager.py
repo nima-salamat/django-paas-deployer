@@ -48,27 +48,15 @@ def _build_container_limits(
     max_cpu: float | None = None,
     max_ram_mb: int | None = None,
 ) -> dict[str, Any]:
-    """
-    Return the ``container_limits`` dict for the Docker Engine build API.
-
-    Keys (Engine API):
-      Memory / MemorySwap  – bytes
-      NanoCpus             – 10^-9 CPU units
-      CpuPeriod / CpuQuota – cgroup v1 fallback
-    """
     cpu = float(max_cpu if max_cpu is not None else DEFAULT_BUILD_CPU)
     ram = int(max_ram_mb if max_ram_mb is not None else DEFAULT_BUILD_RAM_MB)
-
-    # Hard safety clamps
     cpu = max(0.1, min(cpu, 32.0))
     ram = max(128, min(ram, 65536))
-
     nano_cpus = int(cpu * 1_000_000_000)
     mem_bytes = ram * 1024 * 1024
-
     return {
         "Memory": mem_bytes,
-        "MemorySwap": mem_bytes,  # no extra swap beyond the hard limit
+        "MemorySwap": mem_bytes,
         "NanoCpus": nano_cpus,
         "CpuPeriod": 100_000,
         "CpuQuota": int(cpu * 100_000),
@@ -84,13 +72,6 @@ def safe_extract(
     path: str,
     max_bytes: int = 500 * 1024 * 1024,
 ) -> None:
-    """
-    Extract tar safely into ``path``.
-
-    - Prevents path traversal
-    - Rejects symlinks and hard links
-    - Limits total extracted bytes to ``max_bytes``
-    """
     abs_base = os.path.abspath(path)
     total_written = 0
 
@@ -146,44 +127,81 @@ def safe_extract(
 
 
 # ---------------------------------------------------------------------------
-# Reference sanitization (prevents "invalid reference format")
+# Reference sanitization — fixes "invalid tag ... invalid reference format"
 # ---------------------------------------------------------------------------
+#
+# Some docker-py / daemon versions reject tags that are pure version numbers
+# like "1.22" or "1.00". We always produce a tag that starts with a letter
+# and uses only [A-Za-z0-9_.-].
 
 _VALID_NAME_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
-_VALID_TAG_RE = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$")
+# Full reference as accepted by common docker-py match_tag implementations
+_SAFE_REF_RE = re.compile(
+    r"^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[a-zA-Z][a-zA-Z0-9._-]{0,127})?$"
+)
 
 
 def _sanitize_image_name(name: str) -> str:
-    """Force a Docker-legal lowercase repository name."""
     if not name or not isinstance(name, str):
         raise ValueError("Image name must not be empty")
     cleaned = name.strip().lower()
-    # Collapse consecutive separators that Docker rejects
-    cleaned = re.sub(r"[._-]{2,}", "-", cleaned)
-    cleaned = cleaned.strip("._-")
+    cleaned = re.sub(r"[^a-z0-9._-]", "-", cleaned)
+    cleaned = re.sub(r"[._-]{2,}", "-", cleaned).strip("._-")
     if not cleaned or not _VALID_NAME_RE.match(cleaned):
-        # Last-resort safe name
-        cleaned = re.sub(r"[^a-z0-9._-]", "-", cleaned)
-        cleaned = re.sub(r"[._-]{2,}", "-", cleaned).strip("._-") or "image"
-    return cleaned
+        cleaned = re.sub(r"[^a-z0-9]", "", cleaned) or "image"
+    return cleaned[:255]
 
 
 def _sanitize_image_tag(tag: Any) -> str:
-    """Return a Docker-legal tag (never empty, never starts with . or -)."""
+    """
+    Return a Docker-legal tag that starts with a letter.
+
+    Examples
+    --------
+    1.22  → v1-22
+    1.00  → v1-00
+    v1.2  → v1.2
+    latest → latest
+    """
     if tag is None:
         return "latest"
     t = str(tag).strip()
     if not t:
         return "latest"
-    # Common case: version numbers like 1.00 / 1.0 → keep them
-    if _VALID_TAG_RE.match(t):
-        return t
-    # Make it legal: drop illegal chars, ensure first char is alnum/underscore
+
+    # Strip leading v/V for normalization, then re-apply
+    raw = t
+    if t.lower().startswith("v") and len(t) > 1 and t[1].isdigit():
+        raw = t[1:]
+
+    # Pure numeric / semver style (digits and dots/hyphens only)
+    if re.match(r"^[\d]+([.\-][\d]+)*$", raw):
+        # Prefer hyphens over dots — maximally compatible with strict match_tag
+        safe = "v" + raw.replace(".", "-")
+        return safe[:128]
+
+    # General sanitization
     t = re.sub(r"[^a-zA-Z0-9_.-]", "-", t)
     t = t.strip(".-")
-    if not t or not re.match(r"^[a-zA-Z0-9_]", t):
-        t = f"v{t}" if t else "latest"
+    if not t:
+        return "latest"
+    # Must start with letter or underscore (not digit, not dot, not hyphen)
+    if not re.match(r"^[a-zA-Z_]", t):
+        t = "v" + t
     return t[:128]
+
+
+def _make_safe_ref(name: str, tag: str) -> str:
+    n = _sanitize_image_name(name)
+    t = _sanitize_image_tag(tag)
+    ref = f"{n}:{t}"
+    if not _SAFE_REF_RE.match(ref):
+        # Last resort
+        t2 = re.sub(r"[^a-zA-Z0-9-]", "-", t)
+        if not re.match(r"^[a-zA-Z_]", t2):
+            t2 = "v" + t2
+        ref = f"{n}:{t2[:128]}"
+    return ref
 
 
 # ---------------------------------------------------------------------------
@@ -201,35 +219,21 @@ class Image(Client):
         max_cpu: float | None = None,
         max_ram: int | None = None,
     ):
-        """
-        Parameters
-        ----------
-        name, tag, dockerfile_text, tarfile
-            Standard build inputs.
-        max_cpu : float, optional
-            CPU cores the *build* container may use (overrides
-            ``DEPLOY_BUILD_MAX_CPU``).  Typically taken from the service plan.
-        max_ram : int, optional
-            RAM in megabytes for the build container (overrides
-            ``DEPLOY_BUILD_MAX_RAM_MB``).
-        """
         super().__init__()
         self.name = _sanitize_image_name(name)
         self.tag = _sanitize_image_tag(tag)
         self.dockerfile_text = dockerfile_text
         self.tarfile = tarfile
-        self.image_ref = f"{self.name}:{self.tag}"
+        self.image_ref = _make_safe_ref(self.name, self.tag)
+        # Keep name/tag in sync with image_ref
+        if ":" in self.image_ref:
+            self.name, self.tag = self.image_ref.rsplit(":", 1)
         self.max_cpu = max_cpu
         self.max_ram = max_ram
         if not self.name:
             raise ValueError("Image name must not be empty")
 
-    # ------------------------------------------------------------------
-    # Build stream helpers
-    # ------------------------------------------------------------------
-
     def _iter_build_stream(self, stream):
-        """Normalize build stream chunks to dicts (bytes or dict)."""
         for chunk in stream:
             if isinstance(chunk, (bytes, bytearray)):
                 try:
@@ -256,7 +260,6 @@ class Image(Client):
         response,
         on_build_output: Optional[Callable] = None,
     ) -> None:
-        """Log each chunk and optionally forward to the caller callback."""
         for chunk in self._iter_build_stream(response):
             if on_build_output:
                 try:
@@ -281,19 +284,7 @@ class Image(Client):
             else:
                 logger.debug("Build chunk: %s", chunk)
 
-    # ------------------------------------------------------------------
-    # Build
-    # ------------------------------------------------------------------
-
     def create(self, on_build_output: Optional[Callable] = None):
-        """
-        Build the image with CPU / memory limits so concurrent deploys
-        cannot exhaust the host.
-
-        If ``on_build_output`` is provided it is called for every build
-        chunk (dict) as it arrives — useful for streaming to the UI.
-        Returns the built image object.
-        """
         if not self.dockerfile_text or not self.tarfile:
             raise ValueError("dockerfile_text and tarfile are required")
 
@@ -307,16 +298,15 @@ class Image(Client):
         effective_ram = (
             self.max_ram if self.max_ram is not None else DEFAULT_BUILD_RAM_MB
         )
+        safe_tag = self.image_ref
         logger.info(
             "Building image %s with limits cpu=%.2f cores ram=%d MB",
-            self.image_ref,
+            safe_tag,
             effective_cpu,
             effective_ram,
         )
 
-        buildargs = {
-            "BUILDKIT_INLINE_CACHE": "1",
-        }
+        buildargs = {"BUILDKIT_INLINE_CACHE": "1"}
 
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -344,8 +334,6 @@ class Image(Client):
                     ) as f:
                         f.write(self.dockerfile_text)
 
-                # Guaranteed legal reference – prevents the exact error you hit
-                safe_tag = f"{self.name}:{self.tag}"
                 logger.debug("Docker build tag (sanitized): %s", safe_tag)
 
                 response = self.client.api.build(
@@ -367,10 +355,7 @@ class Image(Client):
         except BuildError as exc:
             raise ImageBuildError(
                 "Docker image build failed.",
-                details={
-                    "image": self.image_ref,
-                    "error": str(exc),
-                },
+                details={"image": safe_tag, "error": str(exc)},
             ) from exc
         except ImageBuildError:
             raise
@@ -379,40 +364,25 @@ class Image(Client):
             logger.error(traceback.format_exc())
             raise ImageBuildError(
                 "Unexpected error while building Docker image.",
-                details={
-                    "image": self.image_ref,
-                    "error": str(exc),
-                },
+                details={"image": safe_tag, "error": str(exc)},
             ) from exc
 
-    # ------------------------------------------------------------------
-    # Inspection helpers
-    # ------------------------------------------------------------------
-
     def inspect(self):
-        """Return docker inspect dict for this image (raises if missing)."""
         image = self.client.images.get(self.image_ref)
         return image.attrs
 
     def history(self):
-        """Return image history (list of layers / commands)."""
         return self.client.api.history(self.image_ref)
 
     def size(self):
-        """Return image size in bytes."""
         attrs = self.inspect()
         return attrs.get("Size", 0)
 
     def labels(self):
-        """Return image labels dict (or {})."""
         attrs = self.inspect()
         return attrs.get("Config", {}).get("Labels", {}) or {}
 
     def save_to_path(self, path: str):
-        """
-        Save image as a tar archive to the given filesystem path.
-        Writes incrementally (does not load everything into memory).
-        """
         image = self.client.images.get(self.image_ref)
         stream = image.save(named=True)
         with open(path, "wb") as f:
@@ -421,9 +391,6 @@ class Image(Client):
         return path
 
     def save_to_fileobj(self, fileobj):
-        """
-        Write image tar to a file-like object (must be opened for binary write).
-        """
         image = self.client.images.get(self.image_ref)
         stream = image.save(named=True)
         for chunk in stream:
@@ -431,17 +398,8 @@ class Image(Client):
         fileobj.flush()
         return fileobj
 
-    # ------------------------------------------------------------------
-    # Class-level helpers
-    # ------------------------------------------------------------------
-
     @classmethod
     def remove_by_name(cls, name):
-        """
-        Remove image by name (may include tag, e.g. ``repo:tag``, or be an id).
-        Returns True if removed, False if not found.
-        Raises on unexpected errors.
-        """
         client = Client()()
         try:
             image = client.images.get(name)
@@ -469,10 +427,6 @@ class Image(Client):
 
     @classmethod
     def check_exists(cls, name):
-        """
-        Check whether an image exists (name may include tag).
-        Returns True if exists, False otherwise.
-        """
         client = Client()()
         try:
             client.images.get(name)
@@ -484,10 +438,6 @@ class Image(Client):
                 "Error while checking existence of image '%s': %s", name, e
             )
             raise
-
-    # ------------------------------------------------------------------
-    # Instance removal
-    # ------------------------------------------------------------------
 
     def remove(self, force: bool = False) -> bool:
         try:
@@ -514,23 +464,11 @@ class Image(Client):
 
             except docker.errors.APIError as e:
                 if "referenced in multiple repositories" in str(e):
-                    logger.warning(
-                        "Image '%s' has multiple tags (%s)",
-                        self.image_ref,
-                        image.tags,
-                    )
                     if force:
                         self.client.images.remove(self.image_ref, force=True)
-                        logger.info(
-                            "Image '%s' force removed", self.image_ref
-                        )
                         return True
-                    logger.info(
-                        "Only removing tag '%s' from image", self.image_ref
-                    )
                     self.client.images.remove(self.image_ref)
                     return True
-
                 logger.error(
                     "Docker API error removing '%s': %s", self.image_ref, e
                 )
@@ -555,11 +493,9 @@ class Image(Client):
             "failed": 0,
             "kept": [],
         }
-
         try:
             try:
                 images = self.client.images.list(name=self.name)
-
                 if not images:
                     all_images = self.client.images.list()
                     images = [
@@ -567,13 +503,9 @@ class Image(Client):
                         for img in all_images
                         if any(self.name in tag for tag in img.tags)
                     ]
-
                 stats["total_found"] = len(images)
-
                 if not images:
-                    logger.info("No images found with name '%s'", self.name)
                     return stats
-
             except Exception as e:
                 logger.error("Error listing images: %s", e)
                 return stats
@@ -583,75 +515,43 @@ class Image(Client):
                 key=lambda x: x.attrs.get("Created", ""),
                 reverse=True,
             )
-
             keep_tags = list(keep_tags or [])
             if keep_latest and images_sorted:
                 keep_tags.extend(images_sorted[0].tags)
 
             for image in images_sorted:
-                should_keep = False
-                for tag in image.tags:
-                    if tag in keep_tags:
-                        should_keep = True
-                        stats["kept"].append(tag)
-                        break
-
+                should_keep = any(tag in keep_tags for tag in image.tags)
                 if should_keep:
                     stats["skipped"] += 1
-                    logger.debug("Skipping image with tags: %s", image.tags)
+                    stats["kept"].extend(image.tags)
                     continue
-
                 if self._remove_image_with_tags(image, force):
                     stats["removed"] += 1
                 else:
                     stats["failed"] += 1
-
-            logger.info(
-                "Remove all completed for '%s': "
-                "%s removed, %s skipped, %s failed, %s kept",
-                self.name,
-                stats["removed"],
-                stats["skipped"],
-                stats["failed"],
-                len(stats["kept"]),
-            )
             return stats
-
         except Exception as e:
             logger.error("Error in remove_all for '%s': %s", self.name, e)
             return stats
 
     def _remove_image_with_tags(self, image, force: bool = False) -> bool:
         image_id = image.id[:12] if hasattr(image, "id") else "unknown"
-
         try:
             for tag in image.tags:
                 try:
                     self.client.images.remove(tag, force=force)
-                    logger.debug("Removed tag: %s", tag)
                 except docker.errors.APIError as e:
                     if "referenced in multiple repositories" in str(e):
                         self.client.images.remove(tag, force=True)
-                        logger.debug("Force removed tag: %s", tag)
                     else:
-                        logger.warning(
-                            "Could not remove tag '%s': %s", tag, e
-                        )
-
+                        logger.warning("Could not remove tag '%s': %s", tag, e)
             try:
                 self.client.images.remove(image.id, force=True)
-                logger.debug("Removed image ID: %s", image_id)
-            except Exception as e:
-                logger.debug(
-                    "Image ID %s might already be removed: %s", image_id, e
-                )
-
+            except Exception:
+                pass
             return True
-
         except Exception as e:
-            logger.error(
-                "Failed to remove image with ID %s: %s", image_id, e
-            )
+            logger.error("Failed to remove image with ID %s: %s", image_id, e)
             return False
 
     def list_all(self):
@@ -676,20 +576,14 @@ class Image(Client):
 
     def exists(self) -> bool:
         try:
-            if self.tag:
-                self.client.images.get(f"{self.name}:{self.tag}")
-            else:
-                images = self.client.images.list(name=self.name)
-                return len(images) > 0
+            self.client.images.get(self.image_ref)
             return True
         except ImageNotFound:
             return False
 
     def get_image_info(self):
         try:
-            if not self.tag:
-                return None
-            image = self.client.images.get(f"{self.name}:{self.tag}")
+            image = self.client.images.get(self.image_ref)
             return {
                 "id": image.id,
                 "tags": image.tags,

@@ -2,7 +2,6 @@ import logging
 import traceback
 import json
 
-from django.db.models import Q
 
 from deploy.models import Deploy
 from deploy.deployment_state import DjangoDeploymentState
@@ -143,7 +142,11 @@ class DeployService:
             state_tracker.finish(restart_result)
             result = restart_result
         else:
-            logger.info("Full orchestration required. Building image for: %s", container_name)
+            logger.info(
+                "Full orchestration required (container/image missing or deploy changed). "
+                "Building image for: %s",
+                container_name,
+            )
             result = self._execute_orchestrator(
                 deploy_item, container_name, platform, dockerfile_text, state_tracker
             )
@@ -284,11 +287,13 @@ class DeployService:
 
     @staticmethod
     def _get_volumes_for_service(service):
-        """Return all Volume objects attached to the given service."""
-        service_id = str(service.id)
-        q_legacy = Q(service=service)
-        q_json = Q(service_attachments__has_key=service_id)
-        return Volume.objects.filter(q_legacy | q_json).distinct()
+        """
+        Return volumes owned exclusively by this service.
+
+        With exclusive ownership Volume.service is the single owner;
+        service_attachments is only metadata for bind/mode.
+        """
+        return Volume.objects.filter(service_id=service.pk)
 
     @staticmethod
     def _volume_specs(deploy_item: Deploy) -> list:
@@ -340,4 +345,5 @@ class DeployService:
                 )
             )
         return specs
+
 

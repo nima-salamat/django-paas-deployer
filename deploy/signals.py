@@ -1,6 +1,5 @@
 import logging
 import os
-import shutil
 
 from django.db.models.signals import pre_delete
 from django.dispatch import receiver
@@ -19,6 +18,7 @@ def _resolve_platform(deploy: Deploy) -> str:
     cfg = deploy.config or {}
     if isinstance(cfg, str):
         import json
+
         try:
             cfg = json.loads(cfg)
         except Exception:
@@ -40,7 +40,9 @@ def _cleanup_zip_and_dirs(instance: Deploy):
     try:
         file_path = instance.zip_file.path
     except Exception:
-        logger.exception("Could not resolve zip file path for Deploy '%s'", instance.name)
+        logger.exception(
+            "Could not resolve zip file path for Deploy '%s'", instance.name
+        )
         return
 
     if os.path.isfile(file_path):
@@ -51,26 +53,35 @@ def _cleanup_zip_and_dirs(instance: Deploy):
             logger.exception("Failed to remove zip file: %s", file_path)
             return
     try:
-        deploy_dir = os.path.dirname(file_path)          # .../deployments/USER_ID/DEPLOY_NAME
-        user_dir   = os.path.dirname(deploy_dir)         # .../deployments/USER_ID
-        base_dir   = os.path.dirname(user_dir)           # .../deployments
+        deploy_dir = os.path.dirname(file_path)
+        user_dir = os.path.dirname(deploy_dir)
 
         for d in (deploy_dir, user_dir):
             if os.path.isdir(d) and not os.listdir(d):
                 os.rmdir(d)
                 logger.info("Removed empty directory: %s", d)
-
-
     except Exception:
-        logger.exception("Failed while cleaning empty directories for Deploy '%s'", instance.name)
+        logger.exception(
+            "Failed while cleaning empty directories for Deploy '%s'",
+            instance.name,
+        )
 
 
 @receiver(pre_delete, sender=Deploy)
 def cleanup_deploy_resources(sender, instance: Deploy, **kwargs):
+    """
+    On Deploy delete:
+      - Remove zip + empty dirs
+      - If this deploy is selected by any Service, stop/remove its container
+        (and image for app platforms). Volumes stay with the Service —
+        they are exclusive and cleaned only when the Service is deleted.
+    """
     _cleanup_zip_and_dirs(instance)
 
     try:
-        services = Service.objects.filter(selected_deploy=instance).select_related("plan")
+        services = Service.objects.filter(
+            selected_deploy=instance
+        ).select_related("plan")
         if not services.exists():
             return
 
@@ -81,7 +92,9 @@ def cleanup_deploy_resources(sender, instance: Deploy, **kwargs):
             container_name = service.get_docker_service_name()
             logger.info(
                 "Deploy '%s' is selected by Service '%s' → cleaning container '%s'",
-                instance.name, service.name, container_name,
+                instance.name,
+                service.name,
+                container_name,
             )
 
             try:
@@ -103,7 +116,9 @@ def cleanup_deploy_resources(sender, instance: Deploy, **kwargs):
                     Image.remove_by_name(container_name)
                     Image.remove_by_name(f"{container_name}:latest")
                 except Exception:
-                    logger.exception("Fallback cleanup also failed for '%s'", container_name)
+                    logger.exception(
+                        "Fallback cleanup also failed for '%s'", container_name
+                    )
 
             Service.objects.filter(pk=service.pk).update(
                 selected_deploy=None,

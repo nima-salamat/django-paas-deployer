@@ -1,12 +1,15 @@
 from dataclasses import dataclass
+
 from deploy.models import Deploy
 from core.global_settings.config import Config
 from deployments.core.manager.container_manager import Container
+from deployments.core.manager.image_manager import Image
 
 
 @dataclass(frozen=True)
 class MockOrchestratorResult:
     """Value object matching the Orchestrator result shape for local execution paths."""
+
     success: bool
     stage: str
     message: str
@@ -18,14 +21,13 @@ class MockOrchestratorResult:
 class DeploymentHelper:
     """Utility class for evaluating deployment conditions and configurations."""
 
-    # Platform id → Config attribute (when names differ)
     _DOCKERFILE_ALIASES = {
         "vuejs": "vue",
         "vue": "vue",
         "statichtmlcss": "static",
         "static": "static",
         "html": "static",
-        "fastapi": "python",  # share python template; generator specialises
+        "fastapi": "python",
     }
 
     @staticmethod
@@ -34,17 +36,6 @@ class DeploymentHelper:
         *,
         platform: str | None = None,
     ) -> dict:
-        """
-        Merge defaults with optional user overrides for Dockerfile placeholders.
-
-        Recognised keys (all optional):
-          python_version, django_python_version, node_version,
-          php_version, go_version, dotnet_version, nginx_version,
-          port, build_dir
-
-        Port resolution when user did not pass one:
-          default_ports[platform] → DEFAULT_EXPOSE_PORT (80)
-        """
         from core.global_settings import config as _gcfg
 
         kwargs = {"MIRROR_DOCKER": getattr(_gcfg, "MIRROR_DOCKER", "docker.io")}
@@ -59,18 +50,19 @@ class DeploymentHelper:
         }
         kwargs.update(versions)
 
-        # Port: user override later; start from platform default in config
-        plat = (platform or "").lower().strip()
-        default_ports = getattr(_gcfg, "default_ports", {}) or {}
-        port_default = default_ports.get(plat)
-        if port_default is None:
-            port_default = getattr(_gcfg, "DEFAULT_EXPOSE_PORT", 80)
+        # Port: platform default
         try:
-            kwargs["port"] = int(port_default)
-        except (TypeError, ValueError):
-            kwargs["port"] = 80
+            from core.global_settings.config import default_ports, DEFAULT_EXPOSE_PORT
 
-        kwargs["build_dir"] = getattr(_gcfg, "DEFAULT_SPA_BUILD_DIR", "dist")
+            p = (platform or "").lower().strip()
+            port = default_ports.get(p)
+            if port is None:
+                port = DEFAULT_EXPOSE_PORT
+            kwargs["port"] = port
+        except Exception:
+            kwargs.setdefault("port", 80)
+
+        kwargs.setdefault("build_dir", "dist")
 
         if overrides:
             for key in versions:
@@ -82,7 +74,7 @@ class DeploymentHelper:
                 try:
                     kwargs["port"] = int(raw_port)
                 except (TypeError, ValueError):
-                    pass  # keep platform default
+                    pass
             if overrides.get("build_dir"):
                 kwargs["build_dir"] = (
                     str(overrides["build_dir"]).strip().lstrip("./").rstrip("/")
@@ -95,19 +87,6 @@ class DeploymentHelper:
         *,
         version_overrides: dict | None = None,
     ) -> str | None:
-        """
-        Return the Dockerfile template for ``platform`` with placeholders
-        substituted (versions, port, build_dir, mirror).
-
-        Still leaves placeholders that the generator must fill later
-        (e.g. Django ``{module}``).
-
-        Pass overrides from Deploy.config::
-          {"python_version": "3.12", "node_version": "22", "port": 8080}
-
-        If ``port`` is omitted, uses ``default_ports[platform]`` from
-        ``core.global_settings.config`` (e.g. react→80, django→8000).
-        """
         key = (platform or "").lower().strip()
         attr = DeploymentHelper._DOCKERFILE_ALIASES.get(key, key)
         raw = getattr(Config, attr, None) or getattr(Config, key, None)
@@ -119,7 +98,6 @@ class DeploymentHelper:
         try:
             return raw.format(**fmt)
         except KeyError:
-            # Leave unknown placeholders (e.g. {module}) for DockerfileGenerator
             out = raw
             for k, v in fmt.items():
                 out = out.replace("{" + k + "}", str(v))
@@ -127,15 +105,47 @@ class DeploymentHelper:
 
     @staticmethod
     def is_restart_only(deploy_item: Deploy, container_name: str) -> bool:
+        """
+        True only when we can safely restart an *existing* container that
+        still has its image. If the container or image is missing, return
+        False so the orchestrator does a full rebuild from the zip.
+        """
         service = deploy_item.service
 
         if service.deployed_at is None:
             return False
 
-        if service.selected_deploy_at and service.selected_deploy_at > service.deployed_at:
+        if (
+            service.selected_deploy_at
+            and service.selected_deploy_at > service.deployed_at
+        ):
             return False
 
-        if deploy_item.updated_file_at and deploy_item.updated_file_at > service.deployed_at:
+        if (
+            getattr(deploy_item, "updated_file_at", None)
+            and deploy_item.updated_file_at > service.deployed_at
+        ):
             return False
 
-        return Container(container_name).exists()
+        container = Container(container_name)
+        if not container.exists():
+            return False
+
+        # Image must still be present; otherwise restart would fail and
+        # the user expects a rebuild from the existing zip.
+        try:
+            image_id = container.get_image_identifier()
+            if not image_id:
+                return False
+            # Prefer checking by id; also try common name:tag patterns
+            if not Image.check_exists(image_id):
+                # Fallback: any tag under container name
+                if not Image.check_exists(container_name) and not Image.check_exists(
+                    f"{container_name}:latest"
+                ):
+                    return False
+        except Exception:
+            # On any inspect error treat as missing → full rebuild
+            return False
+
+        return True
