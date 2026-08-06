@@ -266,18 +266,24 @@ class StartAuthAPIView(APIView):
             # Existing user logging in – invite is irrelevant
 
         # ---------- Decide next step ----------
+        # Priority:
+        #   1) OTP first (if required) so the code is verified before password
+        #   2) set_password for brand-new users that must set a password
+        #   3) password (2FA) for existing users that already have one
         channel, contact = extract_contact(data, settings)
         if settings.require_otp and not channel:
             return err(_("error::email or phone required to send code"))
 
-        next_step = "done"
-        needs_password_now = False
+        user_needs_to_set_password = (
+            created
+            and settings.require_password_on_signup
+            and not user.has_usable_password()
+        )
 
-        if created and settings.require_password_on_signup:
-            needs_password_now = True
-            next_step = "set_password"
-        elif settings.require_otp:
+        if settings.require_otp:
             next_step = "otp"
+        elif user_needs_to_set_password:
+            next_step = "set_password"
         elif settings.needs_password(user):
             next_step = "password"
         else:
@@ -300,7 +306,7 @@ class StartAuthAPIView(APIView):
         response_data = {
             "next_step": next_step,
             "created": created,
-            "requires_password": needs_password_now or settings.needs_password(user),
+            "requires_password": user_needs_to_set_password or settings.needs_password(user),
             "requires_otp": settings.require_otp,
             "channel": channel,
             "invite_used": bool(created and invite_token),
@@ -355,7 +361,23 @@ class ValidateOTPAPIView(APIView):
 
         instance.consume()
 
+        # After a valid OTP, decide what comes next
+        needs_set_password = (
+            settings.require_password_on_signup
+            and not user.has_usable_password()
+        )
         needs_pwd = settings.needs_password(user)
+
+        if needs_set_password:
+            return ok(
+                _("success::code valid"),
+                {
+                    "is_valid": True,
+                    "twofactor": False,
+                    "next_step": "set_password",
+                },
+            )
+
         if needs_pwd:
             return ok(
                 _("success::code valid"),
@@ -447,6 +469,15 @@ class FinalAuthAPIView(APIView):
 # Set password
 # ---------------------------------------------------------------------------
 class SetPasswordAPIView(APIView):
+    """
+    Set password for a newly created user.
+
+    OTP handling:
+    - If require_otp=True and a code is still present → validate it (and consume).
+    - If require_otp=True but code was already consumed in /login/validate/
+      (normal flow: otp → set_password) → do NOT require the code again.
+    - If require_otp=False → just set the password.
+    """
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -462,30 +493,35 @@ class SetPasswordAPIView(APIView):
         if user is None:
             return err(lookup_err or _("error::user not found"), status.HTTP_404_NOT_FOUND)
 
+        # Optional OTP check: only enforce when a code is supplied OR
+        # when an AuthCode still exists for this user (OTP not yet verified).
         if settings.require_otp:
-            if not code:
-                return err(_("error::code is required"))
-            is_valid, _ = AuthCode.validate(
-                user=user, code=code, purpose=AuthCode.PURPOSE_SIGNUP
-            )
-            if not is_valid:
-                is_valid, _ = AuthCode.validate(
-                    user=user, code=code, purpose=AuthCode.PURPOSE_LOGIN
+            has_pending_code = AuthCode.objects.filter(user=user).exists()
+            if has_pending_code:
+                if not code:
+                    return err(_("error::code is required"))
+                is_valid, instance = AuthCode.validate(
+                    user=user, code=code, purpose=AuthCode.PURPOSE_SIGNUP
                 )
-            if not is_valid:
-                return err(_("error::code is incorrect or expired"))
+                if not is_valid:
+                    is_valid, instance = AuthCode.validate(
+                        user=user, code=code, purpose=AuthCode.PURPOSE_LOGIN
+                    )
+                if not is_valid:
+                    return err(_("error::code is incorrect or expired"))
+                if instance:
+                    instance.consume()
 
         user.set_password(password)
-        if settings.activate_after_successful_otp:
+        if settings.activate_after_successful_otp or settings.auto_activate_on_signup:
             user.is_active = True
+        if data.get("email") and hasattr(user, "email_verified"):
+            user.email_verified = True
+        if data.get("phone_number") and hasattr(user, "phone_number_verified"):
+            user.phone_number_verified = True
         user.save()
 
-        if settings.require_otp and not code:
-            return ok(
-                _("success::password set"),
-                {"next_step": "otp"},
-            )
-
+        # Clean up any leftover codes
         AuthCode.objects.filter(user=user).delete()
 
         if not user.is_active:
