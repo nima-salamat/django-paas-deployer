@@ -1,0 +1,57 @@
+{% extends "admin/base.html" %}
+{% load static %}
+
+{% block title %}{% if subtitle %}{{ subtitle }} | {% endif %}{{ title }} | {{ site_title|default:_('Django site admin') }}{% endblock %}
+
+{% block branding %}
+<h1 id="site-name">
+  <a href="{% url 'admin:index' %}">
+    <span style="display:inline-flex;align-items:center;gap:10px;">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="3" y="3" width="18" height="18" rx="4" stroke="#3b82f6" stroke-width="2"/>
+        <path d="M8 12h8M12 8v8" stroke="#3b82f6" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <span>{{ site_header|default:_('EchoNode Admin') }}</span>
+    </span>
+  </a>
+</h1>
+{% endblock %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{% static 'admin/css/custom_admin.css' %}">
+<style>
+  /* Extra polish for change list actions */
+  .actions {
+    background: var(--bg-elevated) !important;
+    border-bottom: 1px solid var(--border) !important;
+    padding: 10px 14px !important;
+  }
+  .actions select {
+    min-width: 180px;
+  }
+  #changelist .actions label {
+    color: var(--text-muted) !important;
+  }
+  /* Calendar widget */
+  .calendarbox, .clockbox {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 10px !important;
+    box-shadow: var(--shadow) !important;
+  }
+  .calendar caption, .calendarbox h2, .clockbox h2 {
+    background: var(--bg-elevated) !important;
+    color: var(--text) !important;
+  }
+  .calendar td a:hover, .timelist a:hover {
+    background: var(--primary) !important;
+    color: #fff !important;
+  }
+</style>
+{% endblock %}
+
+{% block nav-global %}{% endblock %}
