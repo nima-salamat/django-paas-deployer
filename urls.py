@@ -25,4 +25,4 @@ if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 # ===DENUG FALSE===
 else:
-    urlpatterns += [path("media", include("core.urls"))]
+    urlpatterns += [path("media/", include("core.urls"))]
