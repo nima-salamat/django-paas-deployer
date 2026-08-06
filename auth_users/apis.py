@@ -1,248 +1,490 @@
+import logging
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import status
-from rest_framework_simplejwt.exceptions import AuthenticationFailed
-from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework.permissions import IsAuthenticated
-from users.models import User
-from users.serializers import CreateUserSerializer
-from .models import AuthCode
-from core.tasks.email import send_code_via_email
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from django.contrib.auth import get_user_model
 from django.utils.translation import gettext as _
-import logging
+from django.db.models import Q
 
+from users.serializers import CreateUserSerializer
+from .models import LoginSettings, AuthCode
+from .services import (
+    get_tokens_for_user,
+    resolve_user_from_identifiers,
+    extract_contact,
+    send_otp,
+    validate_required_identifiers,
+)
+
+User = get_user_model()
 logger = logging.getLogger("auth_users.apis")
 
-def get_tokens_for_user(user):
-    if not user.is_active:
-      raise AuthenticationFailed("User is not active")
 
-    refresh = RefreshToken.for_user(user)
+def err(msg, http_status=status.HTTP_400_BAD_REQUEST, extra=None):
+    body = {"message": msg, "success": False}
+    if extra:
+        body.update(extra)
+    return Response(body, status=http_status)
 
-    return {
-        'refresh': str(refresh),
-        'access': str(refresh.access_token),
-    }
 
-class AuthAPIView(APIView):
+def ok(msg, data=None, http_status=status.HTTP_200_OK):
+    body = {"message": msg, "success": True}
+    if data:
+        body.update(data)
+    return Response(body, status=http_status)
+
+
+# ---------------------------------------------------------------------------
+# Public endpoint: current login settings (frontend uses this to render UI)
+# ---------------------------------------------------------------------------
+class LoginSettingsAPIView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        s = LoginSettings.get_solo()
+        return ok(
+            _("success::settings"),
+            {
+                "settings": {
+                    "allow_username": s.allow_username,
+                    "allow_email": s.allow_email,
+                    "allow_phone": s.allow_phone,
+                    "require_password": s.require_password,
+                    "require_otp": s.require_otp,
+                    "password_as_second_factor": s.password_as_second_factor,
+                    "allow_auto_signup": s.allow_auto_signup,
+                    "auto_activate_on_signup": s.auto_activate_on_signup,
+                    "require_password_on_signup": s.require_password_on_signup,
+                    "activate_after_successful_otp": s.activate_after_successful_otp,
+                    "allow_username_recovery": s.allow_username_recovery,
+                    "recovery_via_email": s.recovery_via_email,
+                    "recovery_via_phone": s.recovery_via_phone,
+                    "otp_length": s.otp_length,
+                    "otp_expire_minutes": s.otp_expire_minutes,
+                }
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
+# Step 1 – Send OTP / start auth flow
+# Endpoint: POST /api/authentication/
+# ---------------------------------------------------------------------------
+class StartAuthAPIView(APIView):
+    """
+    Unified entry point.
+
+    Body can contain any combination of:
+        username, email, phone_number
+
+    Behaviour is driven by LoginSettings:
+    - If user exists -> send OTP (if require_otp) and return next_step
+    - If user does not exist and allow_auto_signup -> create user,
+      optionally ask for password, send OTP
+    - If user does not exist and not allow_auto_signup -> 404
+    """
+
+    permission_classes = [AllowAny]
+
     def post(self, request):
-        username = request.data.get("username", "")
-        email = request.data.get("email", "")
-        phone_number = request.data.get("phone_number", "")
-        password = request.data.get("password", "")
-        code = request.data.get("code", "")
+        settings = LoginSettings.get_solo()
+        data = {k: (v or "").strip() for k, v in request.data.items()}
 
-        if not username:
-            return Response({"message": _("error::username is required")}, status=status.HTTP_400_BAD_REQUEST)
-  
-        if not any([email, phone_number]):
-            return Response({"message": _("error::email or phone number is required")}, status=status.HTTP_400_BAD_REQUEST)
+        validation_err = validate_required_identifiers(data, settings)
+        if validation_err:
+            return err(validation_err)
 
-        data = {"username":username}
+        user, lookup_err = resolve_user_from_identifiers(data, settings)
 
-        if email:
-            data["email"] = email
-        if phone_number:
-            data["phone_number"] = phone_number
-        try:
-            user = User.objects.get(**data)
-            if user.password:
-                if not user.check_password(password):
-                    return Response({"message": _("error::password is incorrect")}, status=status.HTTP_400_BAD_REQUEST)
- 
-                
-            if not AuthCode.code_is_valid(user, code):
-                return Response({"message": _("error::code is incorrect")}, status=status.HTTP_400_BAD_REQUEST)
+        # ---------- User does not exist ----------
+        if user is None:
+            if not settings.allow_auto_signup:
+                return err(
+                    lookup_err or _("error::user not found"),
+                    status.HTTP_404_NOT_FOUND,
+                )
 
+            serializer = CreateUserSerializer(data=request.data)
+            if not serializer.is_valid():
+                return err(
+                    _("error::user not created"),
+                    extra={"errors": serializer.errors},
+                )
+            user = serializer.save()
+            if not settings.auto_activate_on_signup:
+                user.is_active = False
+                user.save(update_fields=["is_active"])
+
+            created = True
+        else:
+            created = False
+
+        # ---------- Decide next step ----------
+        channel, contact = extract_contact(data, settings)
+        if settings.require_otp and not channel:
+            return err(_("error::email or phone required to send code"))
+
+        next_step = "done"
+        needs_password_now = False
+
+        if created and settings.require_password_on_signup:
+            needs_password_now = True
+            next_step = "set_password"
+        elif settings.require_otp:
+            next_step = "otp"
+        elif settings.needs_password(user):
+            next_step = "password"
+        else:
+            if not user.is_active and not settings.activate_after_successful_otp:
+                return err(
+                    _("error::account is inactive. contact admin"),
+                    status.HTTP_403_FORBIDDEN,
+                )
+            tokens = get_tokens_for_user(user)
+            return ok(_("success::logged in"), tokens)
+
+        if settings.require_otp and channel:
+            send_otp(
+                user=user,
+                contact=contact,
+                channel=channel,
+                purpose=AuthCode.PURPOSE_SIGNUP if created else AuthCode.PURPOSE_LOGIN,
+            )
+
+        response_data = {
+            "next_step": next_step,
+            "created": created,
+            "requires_password": needs_password_now or settings.needs_password(user),
+            "requires_otp": settings.require_otp,
+            "channel": channel,
+        }
+        return ok(
+            _("success::code sent") if settings.require_otp else _("success::continue"),
+            response_data,
+            status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Step 2 – Verify OTP
+# Endpoint: POST /api/login/validate/
+# ---------------------------------------------------------------------------
+class ValidateOTPAPIView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        settings = LoginSettings.get_solo()
+        data = {k: (v or "").strip() for k, v in request.data.items()}
+        code = data.get("code", "")
+
+        if not settings.require_otp:
+            return err(_("error::otp is not required by current settings"))
+
+        validation_err = validate_required_identifiers(data, settings)
+        if validation_err:
+            return err(validation_err)
+
+        user, lookup_err = resolve_user_from_identifiers(data, settings)
+        if user is None:
+            return err(lookup_err or _("error::user not found"), status.HTTP_404_NOT_FOUND)
+
+        is_valid, instance = AuthCode.validate(
+            user=user, code=code, purpose=AuthCode.PURPOSE_LOGIN
+        )
+        if not is_valid:
+            is_valid, instance = AuthCode.validate(
+                user=user, code=code, purpose=AuthCode.PURPOSE_SIGNUP
+            )
+
+        if not is_valid:
+            return err(_("error::code is incorrect or expired"))
+
+        if settings.activate_after_successful_otp:
             user.is_active = True
-            if email:
-                user.email_verified = True
-            if phone_number:
-                user.phone_number_verified = True
-            user.save()
+        if data.get("email") and hasattr(user, "email_verified"):
+            user.email_verified = True
+        if data.get("phone_number") and hasattr(user, "phone_number_verified"):
+            user.phone_number_verified = True
+        user.save()
+
+        instance.consume()
+
+        needs_pwd = settings.needs_password(user)
+        if needs_pwd:
+            return ok(
+                _("success::code valid"),
+                {
+                    "is_valid": True,
+                    "twofactor": True,
+                    "next_step": "password",
+                },
+            )
+
+        if not user.is_active:
+            return err(
+                _("error::account is inactive. contact admin"),
+                status.HTTP_403_FORBIDDEN,
+            )
+        tokens = get_tokens_for_user(user)
+        return ok(
+            _("success::user is valid"),
+            {
+                "is_valid": True,
+                "twofactor": False,
+                "next_step": "done",
+                **tokens,
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
+# Step 3 – Final login with password (and optional OTP already verified)
+# Endpoint: POST /api/login/token/
+# ---------------------------------------------------------------------------
+class FinalAuthAPIView(APIView):
+    """
+    Used when password is required (with or without prior OTP).
+    Also used for pure password login when require_otp=False.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        settings = LoginSettings.get_solo()
+        data = {k: (v or "").strip() for k, v in request.data.items()}
+        password = data.get("password", "")
+        code = data.get("code", "")
+
+        validation_err = validate_required_identifiers(data, settings)
+        if validation_err:
+            return err(validation_err)
+
+        user, lookup_err = resolve_user_from_identifiers(data, settings)
+        if user is None:
+            return err(lookup_err or _("error::user not found"), status.HTTP_404_NOT_FOUND)
+
+        if settings.require_otp:
+            if not code:
+                return err(_("error::code is required"))
+            is_valid, instance = AuthCode.validate(
+                user=user, code=code, purpose=AuthCode.PURPOSE_LOGIN
+            )
+            if not is_valid:
+                is_valid, instance = AuthCode.validate(
+                    user=user, code=code, purpose=AuthCode.PURPOSE_SIGNUP
+                )
+            if not is_valid:
+                return err(_("error::code is incorrect or expired"))
+
+        if settings.needs_password(user):
+            if not password:
+                return err(_("error::password is required"))
+            if not user.has_usable_password() or not user.check_password(password):
+                return err(_("error::password is incorrect"))
+
+        if settings.require_otp and code:
             AuthCode.objects.filter(user=user).delete()
-                
-        except User.DoesNotExist:
-            return Response({"message": _("error::user not found")}, status=status.HTTP_404_NOT_FOUND)
 
-        
-        return Response({**get_tokens_for_user(user), "message": _("success::user logged in")})
-
-
-class ValidateAPIView(APIView):
-    def post(self, request):
-        username = request.data.get("username", "")
-        email = request.data.get("email", "")
-        phone_number = request.data.get("phone_number", "")
-        code = request.data.get("code", "")
-
-        if not username:
-            return Response({"message": _("error::username is required")}, status=status.HTTP_400_BAD_REQUEST)
-  
-        if not any([email, phone_number]):
-            return Response({"message": _("error::email or phone number is required")}, status=status.HTTP_400_BAD_REQUEST)
-
-        data = {"username":username}
-        
-        
-        if email:
-            
-            data["email"] = email
-        if phone_number:
-            data["phone_number"] = phone_number
-        try:
-            user = User.objects.get(**data)
-            _2fa=False
-            if user.password:
-                _2fa=True
-            if not AuthCode.code_is_valid(user, code):
-                return Response({"message": _("error::code is incorrect")}, status=status.HTTP_400_BAD_REQUEST)
+        if settings.activate_after_successful_otp or settings.auto_activate_on_signup:
             user.is_active = True
-            if email:
-            
-                user.email_verified = True
-            if phone_number:
-                user.phone_number_verified = True
-            user.save()
-             
-        except User.DoesNotExist:
-            return Response({"message": _("error::user not found")}, status=status.HTTP_404_NOT_FOUND)
+        if data.get("email") and hasattr(user, "email_verified"):
+            user.email_verified = True
+        if data.get("phone_number") and hasattr(user, "phone_number_verified"):
+            user.phone_number_verified = True
+        user.save()
 
-        data = {"is_valid": True, "message": _("success::user is valid"), "twofactor": _2fa}
-
-        if not _2fa:
-            data = {"is_valid": True, **get_tokens_for_user(user) ,"message": _("success::user is valid"), "twofactor": _2fa}
-        print(data)
-        return Response(data, status=status.HTTP_200_OK)
-    
-
-
-
-
-class LoginAPIView(APIView):
-    def post(self, request):
-        username = request.data.get("username", "")
-        email = request.data.get("email", "")
-        phone_number = request.data.get("phone_number", "")
- 
-        if not username:
-            return Response({"message":"error::username is required"},status=status.HTTP_400_BAD_REQUEST)
-        if not any([email, phone_number]):
-            return Response({"message":"error::email or phone_number is required"},status=status.HTTP_400_BAD_REQUEST)
-            
-        data = {"username":username}
-        
-        sent_to = ""
-        if email:
-            sent_to="email"
-            data["email"] = email     
-        else:
-            sent_to="phone_number"
-            data["phone_number"] = phone_number
- 
-        try:
-            user = User.objects.get(**data)
-            print(user)
-            code = AuthCode.create_code(user)
-            
-            print(code)
-            if sent_to == "email":
-                # print(code)
-                send_code_via_email.delay(user.id)
-            else:
-                logger.info(f"Sms is not implemented yet. user:{user.username}, code: {code}")
-            
-        except User.DoesNotExist:
-            return Response({"message":"error::such username does not exist"},status=status.HTTP_404_NOT_FOUND)
-        print(sent_to, code)
-        return Response({"message":f"success:code sent to your {sent_to}"},status=status.HTTP_200_OK)
-
-
-class SignupView(APIView):
-    def post(self, request):
-        username = request.data.get("username", "")
-        email = request.data.get("email", "")
-        phone_number = request.data.get("phone_number", "")
-        print(username, email, phone_number)
-        if not username:
-            return Response({"message":"error::username is required"},status=status.HTTP_400_BAD_REQUEST)
-        if not any([email, phone_number]):
-            return Response({"message":"error::email or phone_number is required"},status=status.HTTP_400_BAD_REQUEST)
-        
-        user = request.data
-        serializer = CreateUserSerializer(data=user)
-        
-        if serializer.is_valid():
-            serializer.save()
-            return Response(
-                {"user": serializer.data, "message": "success::user created."},
-                status=status.HTTP_201_CREATED
+        if not user.is_active:
+            return err(
+                _("error::account is inactive. contact admin"),
+                status.HTTP_403_FORBIDDEN,
             )
-        print(serializer.errors)
-        return Response(
-            {"user": {}, "message": "error::user not created!", "errors": serializer.errors},
-            status=status.HTTP_400_BAD_REQUEST
+
+        tokens = get_tokens_for_user(user)
+        return ok(_("success::user logged in"), tokens)
+
+
+# ---------------------------------------------------------------------------
+# Set password (for new users when require_password_on_signup=True)
+# Endpoint: POST /api/set-password/
+# ---------------------------------------------------------------------------
+class SetPasswordAPIView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        settings = LoginSettings.get_solo()
+        data = {k: (v or "").strip() for k, v in request.data.items()}
+        password = data.get("password", "")
+        code = data.get("code", "")
+
+        if not password or len(password) < 6:
+            return err(_("error::password must be at least 6 characters"))
+
+        user, lookup_err = resolve_user_from_identifiers(data, settings)
+        if user is None:
+            return err(lookup_err or _("error::user not found"), status.HTTP_404_NOT_FOUND)
+
+        if settings.require_otp:
+            if not code:
+                return err(_("error::code is required"))
+            is_valid, _ = AuthCode.validate(
+                user=user, code=code, purpose=AuthCode.PURPOSE_SIGNUP
+            )
+            if not is_valid:
+                is_valid, _ = AuthCode.validate(
+                    user=user, code=code, purpose=AuthCode.PURPOSE_LOGIN
+                )
+            if not is_valid:
+                return err(_("error::code is incorrect or expired"))
+
+        user.set_password(password)
+        if settings.activate_after_successful_otp:
+            user.is_active = True
+        user.save()
+
+        if settings.require_otp and not code:
+            return ok(
+                _("success::password set"),
+                {"next_step": "otp"},
+            )
+
+        AuthCode.objects.filter(user=user).delete()
+
+        if not user.is_active:
+            return err(
+                _("error::account is inactive. contact admin"),
+                status.HTTP_403_FORBIDDEN,
+            )
+
+        tokens = get_tokens_for_user(user)
+        return ok(_("success::password set and logged in"), {**tokens, "next_step": "done"})
+
+
+# ---------------------------------------------------------------------------
+# Username recovery – Step 1: request OTP
+# Endpoint: POST /api/recovery/request/
+# ---------------------------------------------------------------------------
+class RecoveryRequestAPIView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        settings = LoginSettings.get_solo()
+        if not settings.allow_username_recovery:
+            return err(_("error::username recovery is disabled"), status.HTTP_403_FORBIDDEN)
+
+        email = (request.data.get("email") or "").strip().lower()
+        phone = (request.data.get("phone_number") or "").strip()
+
+        if not email and not phone:
+            return err(_("error::email or phone is required"))
+
+        if email and not settings.recovery_via_email:
+            return err(_("error::email recovery is disabled"))
+        if phone and not settings.recovery_via_phone:
+            return err(_("error::phone recovery is disabled"))
+
+        q = Q()
+        if email:
+            q |= Q(email=email)
+        if phone:
+            q |= Q(phone_number=phone)
+        users = User.objects.filter(q)
+        if not users.exists():
+            # Do not leak existence
+            return ok(_("success::if the account exists a code was sent"))
+
+        user = users.first()
+        channel = "email" if email else "phone"
+        contact = email or phone
+
+        send_otp(
+            user=user,
+            contact=contact,
+            channel=channel,
+            purpose=AuthCode.PURPOSE_RECOVERY,
+        )
+        return ok(
+            _("success::code sent"),
+            {"channel": channel, "next_step": "recovery_otp"},
         )
 
 
-class SignupOrLoginAPIView(APIView):
+# ---------------------------------------------------------------------------
+# Username recovery – Step 2: verify OTP and return username
+# Endpoint: POST /api/recovery/confirm/
+# ---------------------------------------------------------------------------
+class RecoveryConfirmAPIView(APIView):
+    permission_classes = [AllowAny]
+
     def post(self, request):
-        username = request.data.get("username", "")
-        email = request.data.get("email", "")
-        phone_number = request.data.get("phone_number", "")
-        print(username, email, phone_number)
-        if not username:
-            return Response({"message":"error::username is required"},status=status.HTTP_400_BAD_REQUEST)
-        if not any([email, phone_number]):
-            return Response({"message":"error::email or phone_number is required"},status=status.HTTP_400_BAD_REQUEST)
-        
-        data={}
-        data["username"] = username
-        sent_to = ""
+        settings = LoginSettings.get_solo()
+        if not settings.allow_username_recovery:
+            return err(_("error::username recovery is disabled"), status.HTTP_403_FORBIDDEN)
+
+        email = (request.data.get("email") or "").strip().lower()
+        phone = (request.data.get("phone_number") or "").strip()
+        code = (request.data.get("code") or "").strip()
+
+        if not code:
+            return err(_("error::code is required"))
+        if not email and not phone:
+            return err(_("error::email or phone is required"))
+
+        q = Q()
         if email:
-            sent_to="email"
-            data["email"] = email     
-        else:
-            sent_to="phone_number"
-            data["phone_number"] = phone_number
- 
-        def send_email_or_sms():
-            user = User.objects.get(**data)
-            print(user)
-            code = AuthCode.create_code(user)
-            
-            if sent_to == "email":
-                send_code_via_email.delay(user.id)
-            else:
-                logger.info(f"Sms is not implemented yet. user:{user.username}, code: {code}")
-            
-        try:
-            send_email_or_sms()
-            return Response({"message":f"success:code sent to your {sent_to}"},status=status.HTTP_200_OK)
+            q |= Q(email=email)
+        if phone:
+            q |= Q(phone_number=phone)
+        user = User.objects.filter(q).first()
+        if not user:
+            return err(_("error::invalid code or contact"))
 
-        except User.DoesNotExist:
-            pass
+        is_valid, instance = AuthCode.validate(
+            user=user, code=code, purpose=AuthCode.PURPOSE_RECOVERY
+        )
+        if not is_valid:
+            return err(_("error::code is incorrect or expired"))
 
-        user = request.data
-        serializer = CreateUserSerializer(data=user)
-
-        if serializer.is_valid():
-            serializer.save()
-            send_email_or_sms()
-            return Response(
-                {"user": serializer.data, "message": "success::user created."},
-                status=status.HTTP_201_CREATED
-            )
-        return Response(
-            {"user": {}, "message": "error::user not created!", "errors": serializer.errors},
-            status=status.HTTP_400_BAD_REQUEST
+        instance.consume()
+        return ok(
+            _("success::username recovered"),
+            {
+                "username": user.username,
+                "email": user.email if settings.allow_email else None,
+                "phone_number": getattr(user, "phone_number", None)
+                if settings.allow_phone
+                else None,
+            },
         )
 
 
+# ---------------------------------------------------------------------------
+# Token validation
+# ---------------------------------------------------------------------------
 class ValidateToken(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         return Response({"status": "valid access token"}, status=status.HTTP_200_OK)
+
     def get(self, request):
         return Response({"status": "valid access token"}, status=status.HTTP_200_OK)
+
+
+# ---------------------------------------------------------------------------
+# Legacy-compatible thin wrappers
+# ---------------------------------------------------------------------------
+class LoginAPIView(StartAuthAPIView):
+    pass
+
+
+class SignupOrLoginAPIView(StartAuthAPIView):
+    pass
+
+
+class AuthAPIView(FinalAuthAPIView):
+    pass
+
+
+class ValidateAPIView(ValidateOTPAPIView):
+    pass

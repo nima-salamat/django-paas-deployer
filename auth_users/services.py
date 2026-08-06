@@ -1,0 +1,120 @@
+"""
+Business logic helpers for the customizable auth system.
+"""
+from django.contrib.auth import get_user_model
+from django.db.models import Q
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.exceptions import AuthenticationFailed
+from django.utils.translation import gettext as _
+
+from .models import LoginSettings, AuthCode
+
+User = get_user_model()
+
+
+def get_tokens_for_user(user):
+    if not user.is_active:
+        raise AuthenticationFailed(_("error::user is not active"))
+    refresh = RefreshToken.for_user(user)
+    return {
+        "refresh": str(refresh),
+        "access": str(refresh.access_token),
+    }
+
+
+def resolve_user_from_identifiers(data, settings: LoginSettings):
+    """
+    Build a lookup from the allowed identifiers present in `data`.
+    Returns (user, error_message).
+    """
+    lookup = {}
+    if settings.allow_username and data.get("username"):
+        lookup["username"] = data["username"].strip()
+    if settings.allow_email and data.get("email"):
+        lookup["email"] = data["email"].strip().lower()
+    if settings.allow_phone and data.get("phone_number"):
+        lookup["phone_number"] = data["phone_number"].strip()
+
+    if not lookup:
+        return None, _("error::at least one allowed identifier is required")
+
+    try:
+        user = User.objects.get(**lookup)
+        return user, None
+    except User.DoesNotExist:
+        pass
+    except User.MultipleObjectsReturned:
+        return None, _("error::multiple users match these identifiers")
+
+    # Fallback: try each identifier independently
+    q = Q()
+    if "username" in lookup:
+        q |= Q(username=lookup["username"])
+    if "email" in lookup:
+        q |= Q(email=lookup["email"])
+    if "phone_number" in lookup:
+        q |= Q(phone_number=lookup["phone_number"])
+
+    users = User.objects.filter(q)
+    if users.count() == 1:
+        return users.first(), None
+    if users.count() > 1:
+        return None, _("error::multiple users match these identifiers")
+    return None, _("error::user not found")
+
+
+def extract_contact(data, settings: LoginSettings):
+    """Return the best contact channel for sending OTP."""
+    if settings.allow_email and data.get("email"):
+        return "email", data["email"].strip().lower()
+    if settings.allow_phone and data.get("phone_number"):
+        return "phone", data["phone_number"].strip()
+    return None, None
+
+
+def send_otp(user=None, contact="", channel="email", purpose=AuthCode.PURPOSE_LOGIN):
+    """
+    Create/refresh code and dispatch it.
+    Replace the SMS stub with a real implementation when ready.
+    """
+    from core.tasks.email import send_code_via_email
+
+    instance = AuthCode.create_or_refresh(
+        user=user,
+        contact=contact if not user else "",
+        purpose=purpose,
+    )
+    code = instance.code
+
+    if channel == "email":
+        if user:
+            send_code_via_email.delay(user.id)
+        else:
+            import logging
+            logging.getLogger("auth_users").info(
+                f"OTP for contact={contact} purpose={purpose} code={code}"
+            )
+    else:
+        import logging
+        logging.getLogger("auth_users").info(
+            f"SMS not implemented. contact={contact or (user.username if user else '')} code={code}"
+        )
+    return code
+
+
+def validate_required_identifiers(data, settings: LoginSettings):
+    """
+    Check that at least one allowed identifier is present.
+    Returns error message or None.
+    """
+    has_any = False
+    if settings.allow_username and data.get("username"):
+        has_any = True
+    if settings.allow_email and data.get("email"):
+        has_any = True
+    if settings.allow_phone and data.get("phone_number"):
+        has_any = True
+    if not has_any:
+        allowed = settings.get_allowed_identifiers()
+        return _("error::provide one of: %(fields)s") % {"fields": ", ".join(allowed)}
+    return None
