@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import os
+import re
 import tarfile
 import tempfile
 import traceback
@@ -145,6 +146,47 @@ def safe_extract(
 
 
 # ---------------------------------------------------------------------------
+# Reference sanitization (prevents "invalid reference format")
+# ---------------------------------------------------------------------------
+
+_VALID_NAME_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
+_VALID_TAG_RE = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$")
+
+
+def _sanitize_image_name(name: str) -> str:
+    """Force a Docker-legal lowercase repository name."""
+    if not name or not isinstance(name, str):
+        raise ValueError("Image name must not be empty")
+    cleaned = name.strip().lower()
+    # Collapse consecutive separators that Docker rejects
+    cleaned = re.sub(r"[._-]{2,}", "-", cleaned)
+    cleaned = cleaned.strip("._-")
+    if not cleaned or not _VALID_NAME_RE.match(cleaned):
+        # Last-resort safe name
+        cleaned = re.sub(r"[^a-z0-9._-]", "-", cleaned)
+        cleaned = re.sub(r"[._-]{2,}", "-", cleaned).strip("._-") or "image"
+    return cleaned
+
+
+def _sanitize_image_tag(tag: Any) -> str:
+    """Return a Docker-legal tag (never empty, never starts with . or -)."""
+    if tag is None:
+        return "latest"
+    t = str(tag).strip()
+    if not t:
+        return "latest"
+    # Common case: version numbers like 1.00 / 1.0 → keep them
+    if _VALID_TAG_RE.match(t):
+        return t
+    # Make it legal: drop illegal chars, ensure first char is alnum/underscore
+    t = re.sub(r"[^a-zA-Z0-9_.-]", "-", t)
+    t = t.strip(".-")
+    if not t or not re.match(r"^[a-zA-Z0-9_]", t):
+        t = f"v{t}" if t else "latest"
+    return t[:128]
+
+
+# ---------------------------------------------------------------------------
 # Image manager
 # ---------------------------------------------------------------------------
 
@@ -172,14 +214,14 @@ class Image(Client):
             ``DEPLOY_BUILD_MAX_RAM_MB``).
         """
         super().__init__()
-        self.name = name
-        self.tag = tag
+        self.name = _sanitize_image_name(name)
+        self.tag = _sanitize_image_tag(tag)
         self.dockerfile_text = dockerfile_text
         self.tarfile = tarfile
-        self.image_ref = f"{self.name}:{self.tag}" if tag else self.name
+        self.image_ref = f"{self.name}:{self.tag}"
         self.max_cpu = max_cpu
         self.max_ram = max_ram
-        if not self.name or not isinstance(self.name, str):
+        if not self.name:
             raise ValueError("Image name must not be empty")
 
     # ------------------------------------------------------------------
@@ -302,9 +344,13 @@ class Image(Client):
                     ) as f:
                         f.write(self.dockerfile_text)
 
+                # Guaranteed legal reference – prevents the exact error you hit
+                safe_tag = f"{self.name}:{self.tag}"
+                logger.debug("Docker build tag (sanitized): %s", safe_tag)
+
                 response = self.client.api.build(
                     path=build_path,
-                    tag=f"{self.name}:{self.tag}",
+                    tag=safe_tag,
                     rm=True,
                     forcerm=True,
                     decode=True,
@@ -316,13 +362,13 @@ class Image(Client):
                 self._handle_build_stream(
                     response, on_build_output=on_build_output
                 )
-                return self.client.images.get(f"{self.name}:{self.tag}")
+                return self.client.images.get(safe_tag)
 
         except BuildError as exc:
             raise ImageBuildError(
                 "Docker image build failed.",
                 details={
-                    "image": f"{self.name}:{self.tag}",
+                    "image": self.image_ref,
                     "error": str(exc),
                 },
             ) from exc
@@ -334,7 +380,7 @@ class Image(Client):
             raise ImageBuildError(
                 "Unexpected error while building Docker image.",
                 details={
-                    "image": f"{self.name}:{self.tag}",
+                    "image": self.image_ref,
                     "error": str(exc),
                 },
             ) from exc
@@ -345,14 +391,12 @@ class Image(Client):
 
     def inspect(self):
         """Return docker inspect dict for this image (raises if missing)."""
-        image_ref = f"{self.name}:{self.tag}"
-        image = self.client.images.get(image_ref)
+        image = self.client.images.get(self.image_ref)
         return image.attrs
 
     def history(self):
         """Return image history (list of layers / commands)."""
-        image_ref = f"{self.name}:{self.tag}"
-        return self.client.api.history(image_ref)
+        return self.client.api.history(self.image_ref)
 
     def size(self):
         """Return image size in bytes."""
@@ -369,8 +413,7 @@ class Image(Client):
         Save image as a tar archive to the given filesystem path.
         Writes incrementally (does not load everything into memory).
         """
-        image_ref = f"{self.name}:{self.tag}"
-        image = self.client.images.get(image_ref)
+        image = self.client.images.get(self.image_ref)
         stream = image.save(named=True)
         with open(path, "wb") as f:
             for chunk in stream:
@@ -381,8 +424,7 @@ class Image(Client):
         """
         Write image tar to a file-like object (must be opened for binary write).
         """
-        image_ref = f"{self.name}:{self.tag}"
-        image = self.client.images.get(image_ref)
+        image = self.client.images.get(self.image_ref)
         stream = image.save(named=True)
         for chunk in stream:
             fileobj.write(chunk)

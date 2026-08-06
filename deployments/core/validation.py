@@ -5,7 +5,8 @@ from .exceptions import DeploymentValidationError
 from .types import DeploymentConfig, VolumeSpec
 
 
-DOCKER_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]+$")
+# Docker repository names MUST be lowercase
+DOCKER_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]+$")
 IMAGE_TAG_RE = re.compile(r"^[\w][\w.-]{0,127}$")
 VOLUME_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]+$")
 ABSOLUTE_CONTAINER_PATH_RE = re.compile(r"^/[^:\0]*$")
@@ -16,7 +17,10 @@ class DeploymentValidator:
         errors = []
 
         if not config.name or not DOCKER_NAME_RE.match(config.name):
-            errors.append("Container/image name must use only letters, numbers, dot, underscore, or dash.")
+            errors.append(
+                "Container/image name must use only lowercase letters, numbers, "
+                "dot, underscore, or dash (Docker requires lowercase)."
+            )
 
         if not config.tag or not IMAGE_TAG_RE.match(str(config.tag)):
             errors.append("Image tag is missing or invalid.")
@@ -41,7 +45,7 @@ class DeploymentValidator:
         else:
             for network in config.networks:
                 if not network.name or not DOCKER_NAME_RE.match(network.name):
-                    errors.append(f"Network name '{network.name}' is invalid.")
+                    errors.append(f"Network name '{network.name}' is invalid (must be lowercase).")
 
         for volume in config.volumes:
             errors.extend(self._validate_volume(volume))
