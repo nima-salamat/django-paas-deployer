@@ -1,11 +1,18 @@
+from __future__ import annotations
+
+import logging
 import urllib.parse
+
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
+from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
-from rest_framework_simplejwt.tokens import AccessToken
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+from rest_framework_simplejwt.tokens import AccessToken
 
 from deploy.models import Deploy
+
+logger = logging.getLogger(__name__)
 
 
 class DeploymentConsumer(AsyncJsonWebsocketConsumer):
@@ -26,31 +33,76 @@ class DeploymentConsumer(AsyncJsonWebsocketConsumer):
             await self.close(code=4002)
             return
 
-        self.user_id = user_id
+        self.user_id = int(user_id)
         self.deploy_id = self.scope["url_route"]["kwargs"].get("deploy_id")
-        # Permission check: only owner or superuser can subscribe
-        deploy = await database_sync_to_async(get_object_or_404)(Deploy.objects.select_related("service", "service__user"), pk=self.deploy_id)
-        if deploy.service.user_id != int(self.user_id):
-            # deny unless superuser - we can't easily check superuser status from token here without DB lookup
-            from django.contrib.auth import get_user_model
-            User = get_user_model()
-            user = await database_sync_to_async(User.objects.get)(pk=self.user_id)
-            if not user.is_superuser:
-                await self.close(code=4003)
-                return
+        if not self.deploy_id:
+            await self.close(code=4004)
+            return
+
+        allowed = await self._user_may_subscribe(self.deploy_id, self.user_id)
+        if not allowed:
+            await self.close(code=4003)
+            return
 
         self.group_name = f"deploy_{self.deploy_id}"
-
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
 
-    async def disconnect(self, code):
-        try:
-            await self.channel_layer.group_discard(self.group_name, self.channel_name)
-        except Exception:
-            pass
+        # Send a bootstrap ack so the client knows the socket is live
+        await self.send_json(
+            {
+                "type": "deployment.connected",
+                "event": {
+                    "deploy_id": str(self.deploy_id),
+                    "message": "Subscribed to deployment events.",
+                },
+            }
+        )
 
-    # handler for messages sent from sink (type: deployment.message)
+    async def disconnect(self, code):
+        group = getattr(self, "group_name", None)
+        if group:
+            try:
+                await self.channel_layer.group_discard(group, self.channel_name)
+            except Exception:
+                logger.debug("group_discard failed", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Channel-layer handler (type = "deployment.message")
+    # ------------------------------------------------------------------
+
     async def deployment_message(self, event):
-        payload = event.get("payload")
-        await self.send_json({"type": "deployment.event", "event": payload})
+    
+        payload = event.get("payload") or {}
+        try:
+            await self.send_json({"type": "deployment.event", "event": payload})
+        except Exception:
+            logger.exception(
+                "Failed to send deployment event to client deploy=%s",
+                getattr(self, "deploy_id", None),
+            )
+
+    # ------------------------------------------------------------------
+    # Permission
+    # ------------------------------------------------------------------
+
+    @database_sync_to_async
+    def _user_may_subscribe(self, deploy_id, user_id: int) -> bool:
+        try:
+            deploy = get_object_or_404(
+                Deploy.objects.select_related("service", "service__user"),
+                pk=deploy_id,
+            )
+        except Exception:
+            return False
+
+        owner_id = getattr(deploy.service, "user_id", None)
+        if owner_id is not None and int(owner_id) == int(user_id):
+            return True
+
+        User = get_user_model()
+        try:
+            user = User.objects.get(pk=user_id)
+            return bool(getattr(user, "is_superuser", False))
+        except User.DoesNotExist:
+            return False

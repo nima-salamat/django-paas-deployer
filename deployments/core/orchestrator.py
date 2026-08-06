@@ -110,7 +110,8 @@ class DeploymentOrchestrator:
             # 6. Build image
             # --------------------------------------------------------------
             self.logger.info("image_build", "Building Docker image.", progress=20)
-            image = Image(config.name, str(config.tag), dockerfile_text, tar_stream)
+            image = Image(config.name, str(config.tag), dockerfile_text, tar_stream, 
+                          max_cpu=config.max_cpu, max_ram=config.max_ram,)
             image.create(on_build_output=self._on_build_output)
             image_built = True
             self.logger.info(

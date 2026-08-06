@@ -349,7 +349,6 @@ def _render_django(dockerfile_template, tar_stream, config, logger):
     rendered = _replace_cmd(rendered, web_cmd)
     return rendered
 
-
 def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, logger):
     server_type_override = entry_point_override = None
     use_celery = use_beat = False
@@ -378,10 +377,12 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
         )
     except Exception:
         rendered = dockerfile_template.replace("{MIRROR_DOCKER}", MIRROR_DOCKER)
-    # Ensure leftover {build_dir} is never left unexpanded
-    rendered = rendered.replace("{build_dir}", build_dir)
-    spa_port_early = _resolve_spa_port(config, project_cfg, platform)
-    rendered = _ensure_port_placeholder(rendered, spa_port_early)
+
+    # Flask/Python templates must never leave {build_dir}/{port} unexpanded.
+    # Use safe defaults (SPA helpers are irrelevant here).
+    rendered = rendered.replace("{build_dir}", "dist")
+    port = getattr(config, "port", None) if config is not None else None
+    rendered = _ensure_port_placeholder(rendered, port)
 
     if entry_point_override and not use_celery:
         web_cmd = entry_point_override
@@ -436,7 +437,6 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
             f"WORKDIR /app\nENV FLASK_APP={module}.py\nENV FLASK_ENV=production",
         )
     return rendered
-
 
 def _default_spa_build_dir(platform: str, framework: str | None = None) -> str:
     """

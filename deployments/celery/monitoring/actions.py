@@ -1,26 +1,9 @@
-"""
-deployments/celery/monitoring/actions.py
------------------------------------------
-Pure state-writer helpers used by the reconciliation rules.
-
-Every function that changes Service or Deploy status lives here so the
-monitor rules stay readable and the side-effects stay testable.
-
-Rules for all writers
----------------------
-* Always run inside transaction.atomic().
-* select_for_update() the row(s) being changed, then re-read current status
-  before writing — skip if another worker already transitioned the row.
-* Use update_fields to avoid accidental over-writes of unrelated columns.
-* Call create_deploy_log() for every automatic transition so the event log
-  remains complete for the user.
-* Clear service.task_id when reaching a terminal state
-  (running / stopped / failed).
-* Set deploy.completed_at when the deploy reaches a terminal state.
-"""
+from __future__ import annotations
 
 import logging
+from typing import Optional
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -29,6 +12,10 @@ from deploy.models import Deploy, DeployLog, DeploymentStatusChoices, RollbackSt
 from services.models import Service
 
 logger = logging.getLogger(__name__)
+
+
+def _log_db_alias() -> str:
+    return getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", None) or "default"
 
 
 # ---------------------------------------------------------------------------
@@ -46,13 +33,14 @@ def _create_deploy_log(
     details: dict | None = None,
 ) -> None:
     """
-    Write a DeployLog entry.  Failures are swallowed so a log-write error
-    never aborts a state transition that already succeeded.
+    Write a DeployLog entry (cross-DB safe) and best-effort broadcast
+    to the WebSocket group.
     """
     try:
-        DeployLog.objects.create(
-            deploy_id=deploy.pk,       
-            service_id=deploy.service.pk,  
+        DeployLog.objects.using(_log_db_alias()).create(
+            deploy_id=deploy.pk,
+            service_id=getattr(deploy, "service_id", None)
+            or (deploy.service.pk if getattr(deploy, "service", None) else None),
             stage=stage,
             event_type=event_type,
             level=level,
@@ -64,18 +52,34 @@ def _create_deploy_log(
         logger.exception(
             "Failed to write DeployLog for deploy %s stage=%s", deploy.pk, stage
         )
+
+    # Live push to connected browsers
+    try:
+        from deployments.core.sink import DBAndChannelEventSink
+        from deployments.core.types import DeploymentEvent
+
+        sink = DBAndChannelEventSink(deploy.pk)
+        sink(
+            DeploymentEvent(
+                stage=stage,
+                message=message,
+                level=level,
+                progress=progress,
+                details=details or {},
+            )
+        )
+    except Exception:
+        logger.debug(
+            "Monitor WS broadcast skipped for deploy %s", deploy.pk, exc_info=True
+        )
+
+
 # ---------------------------------------------------------------------------
 # Service-level writers
 # ---------------------------------------------------------------------------
 
 @transaction.atomic
 def mark_service_running(service: Service, deploy: Deploy | None = None) -> bool:
-    """
-    Transition a service to RUNNING (container confirmed up after deploy).
-
-    Returns True if the transition was applied, False if skipped (already
-    in a terminal state or transitioned by another worker).
-    """
     locked = (
         Service.objects
         .select_for_update()
@@ -85,18 +89,16 @@ def mark_service_running(service: Service, deploy: Deploy | None = None) -> bool
     if locked is None:
         return False
 
-    # Only advance from transient states; do not overwrite a manual stop.
     allowed = (
         SERVICE_STATUS_CHOICES.QUEUED,
         SERVICE_STATUS_CHOICES.DEPLOYING,
-        SERVICE_STATUS_CHOICES.SUCCEEDED,   # legacy rows
-        SERVICE_STATUS_CHOICES.RUNNING,     # idempotent
+        SERVICE_STATUS_CHOICES.SUCCEEDED,
+        SERVICE_STATUS_CHOICES.RUNNING,
     )
     if locked.status not in allowed:
         return False
 
     if locked.status == SERVICE_STATUS_CHOICES.RUNNING:
-        # Already running — idempotent, nothing to write.
         return True
 
     now = timezone.now()
@@ -116,6 +118,7 @@ def mark_service_running(service: Service, deploy: Deploy | None = None) -> bool
             message="Service is running. Container confirmed up.",
             level="info",
             event_type="deployment.monitor",
+            progress=100,
             details={"previous_status": locked.status, "new_status": "running"},
         )
     return True
@@ -123,12 +126,6 @@ def mark_service_running(service: Service, deploy: Deploy | None = None) -> bool
 
 @transaction.atomic
 def mark_service_stopped(service: Service, deploy: Deploy | None = None) -> bool:
-    """
-    Transition a service to STOPPED (stop completed or container gone after
-    user-initiated stop).
-
-    Returns True if applied.
-    """
     locked = (
         Service.objects
         .select_for_update()
@@ -140,13 +137,13 @@ def mark_service_stopped(service: Service, deploy: Deploy | None = None) -> bool
 
     allowed = (
         SERVICE_STATUS_CHOICES.STOPPING,
-        SERVICE_STATUS_CHOICES.STOPPED,   # idempotent
+        SERVICE_STATUS_CHOICES.STOPPED,
     )
     if locked.status not in allowed:
         return False
 
     if locked.status == SERVICE_STATUS_CHOICES.STOPPED:
-        return True  # idempotent
+        return True
 
     Service.objects.filter(pk=service.pk).update(
         status=SERVICE_STATUS_CHOICES.STOPPED,
@@ -175,11 +172,6 @@ def mark_service_failed(
     *,
     details: dict | None = None,
 ) -> bool:
-    """
-    Transition a service to FAILED.
-
-    Returns True if applied.
-    """
     locked = (
         Service.objects
         .select_for_update()
@@ -189,7 +181,6 @@ def mark_service_failed(
     if locked is None:
         return False
 
-    # Never overwrite a user-initiated stop that completed cleanly.
     if locked.status == SERVICE_STATUS_CHOICES.STOPPED:
         return False
 
@@ -229,14 +220,6 @@ def mark_deploy_failed(
     *,
     details: dict | None = None,
 ) -> bool:
-    """
-    Mark a Deploy as FAILED, set completed_at, write a DeployLog.
-
-    Also fails the associated Service unless it is already in a terminal
-    (stopped / failed) state.
-
-    Returns True if applied.
-    """
     locked = (
         Deploy.objects
         .select_related("service")
@@ -247,7 +230,6 @@ def mark_deploy_failed(
     if locked is None:
         return False
 
-    # Skip if already terminal.
     terminal = (
         DeploymentStatusChoices.SUCCEEDED,
         DeploymentStatusChoices.FAILED,
@@ -280,7 +262,6 @@ def mark_deploy_failed(
         },
     )
 
-    # Cascade to service
     service = locked.service
     if service and service.status not in (
         SERVICE_STATUS_CHOICES.STOPPED,
@@ -303,14 +284,6 @@ def mark_deploy_timeout(
     container_exists: bool,
     container_running: bool,
 ) -> bool:
-    """
-    Handle a deploy that exceeded the timeout threshold.
-
-    Marks both the Deploy and its Service as failed and writes an
-    event log with timeout details.
-
-    Returns True if applied.
-    """
     locked = (
         Deploy.objects
         .select_related("service")
@@ -341,13 +314,12 @@ def mark_deploy_timeout(
         stage="timeout",
         error_message=message,
         status_message="Deployment timed out.",
-        progress=min(locked.progress, 99),
+        progress=min(locked.progress or 0, 99),
         completed_at=now,
     )
 
     logger.warning("Deploy %s → timed out", deploy.pk)
 
-    # Re-fetch for log creation so the FK references are correct
     refreshed = Deploy.objects.select_related("service").get(pk=deploy.pk)
     _create_deploy_log(
         refreshed,
@@ -362,7 +334,6 @@ def mark_deploy_timeout(
         },
     )
 
-    # Cascade to service
     service = locked.service
     if service and service.status not in (
         SERVICE_STATUS_CHOICES.STOPPED,
@@ -380,11 +351,6 @@ def mark_deploy_timeout(
 
 @transaction.atomic
 def mark_rollback_complete(deploy: Deploy) -> bool:
-    """
-    Mark rollback as succeeded, service as running.
-
-    Returns True if applied.
-    """
     locked = (
         Deploy.objects
         .select_related("service")
@@ -427,11 +393,6 @@ def mark_rollback_complete(deploy: Deploy) -> bool:
 
 @transaction.atomic
 def mark_rollback_failed(deploy: Deploy) -> bool:
-    """
-    Mark rollback as failed, service as failed.
-
-    Returns True if applied.
-    """
     locked = (
         Deploy.objects
         .select_related("service")

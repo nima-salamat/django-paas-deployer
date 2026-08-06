@@ -108,33 +108,58 @@ class Container(Client):
                 details={"container": self.name, "image": self.image_name},
             ) from exc
 
+    
     def start(self):
+        container = None
         try:
             container = self.client.containers.get(self.name)
             container.start()
             container.reload()
-
-            
-            
-            logger.info("Container '%s' started; status=%s", self.name, container.status)
+            logger.info(
+                "Container '%s' started; status=%s", self.name, container.status
+            )
             return container
         except docker.errors.NotFound as exc:
-            raise ContainerError(f"Container '{self.name}' was not found during start.") from exc
+            raise ContainerError(
+                f"Container '{self.name}' was not found during start."
+            ) from exc
         except docker.errors.DockerException as exc:
-            logs = container.logs(tail=200).decode(errors="ignore")
+            logs = ""
+            status = "unknown"
+            exit_code = None
+            if container is not None:
+                try:
+                    container.reload()
+                    status = container.status
+                    exit_code = (container.attrs.get("State") or {}).get("ExitCode")
+                    raw = container.logs(tail=200)
+                    logs = (
+                        raw.decode("utf-8", errors="ignore")
+                        if isinstance(raw, bytes)
+                        else str(raw)
+                    )
+                except Exception:
+                    logger.debug(
+                        "Could not fetch logs after start failure for %s",
+                        self.name,
+                        exc_info=True,
+                    )
 
-            print("=" * 80)
-            print(logs)
-            print("=" * 80)
-
+            logger.error(
+                "Container '%s' failed to stay running. status=%s exit=%s\n%s",
+                self.name,
+                status,
+                exit_code,
+                logs[-4000:] if logs else "(no logs)",
+            )
             raise ContainerError(
                 f"Container '{self.name}' exited immediately.",
                 details={
-                    "status": container.status,
-                    "exit_code": container.attrs["State"]["ExitCode"],
-                    "logs": logs,
+                    "status": status,
+                    "exit_code": exit_code,
+                    "logs": logs[-4000:] if logs else "",
                 },
-            )
+            ) from exc
             
     def stop(self, timeout=5):
         try:
