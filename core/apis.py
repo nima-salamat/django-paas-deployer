@@ -2,8 +2,9 @@ from pathlib import Path
 
 from django.http import FileResponse, Http404
 from rest_framework.views import APIView
-from rest_framework.authentication import TokenAuthentication, SessionAuthentication
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.authentication import SessionAuthentication
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from deploy.models import Deploy
 
@@ -11,7 +12,7 @@ from deploy.models import Deploy
 class DeploymentDownloadAPIView(APIView):
     authentication_classes = [
         SessionAuthentication,  
-        TokenAuthentication,   
+        JWTAuthentication,
     ]
     permission_classes = [
         IsAuthenticated,
