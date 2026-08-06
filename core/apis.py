@@ -4,13 +4,11 @@ from django.http import FileResponse, Http404
 from rest_framework.views import APIView
 from rest_framework.authentication import TokenAuthentication, SessionAuthentication
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.exceptions import PermissionDenied, NotFound
 
 from deploy.models import Deploy
 
 
 class DeploymentDownloadAPIView(APIView):
-
     authentication_classes = [
         SessionAuthentication,  
         TokenAuthentication,   
@@ -31,7 +29,6 @@ class DeploymentDownloadAPIView(APIView):
             raise Http404("Deployment not found.")
 
         user = request.user
-
         is_admin = user.is_staff or user.is_superuser
         is_owner = (
             deploy.service_id
@@ -44,14 +41,13 @@ class DeploymentDownloadAPIView(APIView):
         if not deploy.zip_file:
             raise Http404("No ZIP file available for this deployment.")
 
-        try:
-            file_path = Path(deploy.zip_file.path)
-            if not file_path.exists():
-                raise Http404("ZIP file not found on disk.")
-        except (ValueError, OSError):
-            raise Http404("ZIP file not accessible.")
+        if not deploy.zip_file.storage.exists(deploy.zip_file.name):
+            raise Http404("ZIP file not found on storage.")
 
-        file_handle = deploy.zip_file.open("rb")
+        try:
+            file_handle = deploy.zip_file.open("rb")
+        except Exception:
+            raise Http404("ZIP file not accessible.")
 
         filename = Path(deploy.zip_file.name).name
 
@@ -62,7 +58,6 @@ class DeploymentDownloadAPIView(APIView):
             content_type="application/zip",
         )
 
-        response["Content-Length"] = deploy.zip_file.size
         response["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response["Pragma"] = "no-cache"
         response["Expires"] = "0"
