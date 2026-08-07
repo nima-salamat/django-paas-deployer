@@ -987,18 +987,16 @@ def _detect_php_document_root(
     return ""
 
 
-
 def _apply_php_document_root(dockerfile: str, document_root_rel: str) -> str:
     """
     Point Apache DocumentRoot at the real application path inside the image.
 
     ``document_root_rel`` is relative to ``/var/www/html`` (may be empty).
 
-    Writes a literal 000-default.conf so Apache always serves the correct
-    directory even when the zip unpacks into a single top-level folder
-    (common for GitHub release archives). Also strips any older
-    ``sed ... APACHE_DOCUMENT_ROOT`` lines that would re-rewrite the path
-    and produce nested DocumentRoots like /var/www/html/App/App.
+    Writes a literal 000-default.conf (via base64) so Apache always serves
+    the correct directory even when the zip unpacks into a single top-level
+    folder. Strips older ``sed ... APACHE_DOCUMENT_ROOT`` lines that would
+    nest the path (e.g. /var/www/html/App/App).
     """
     rel = (document_root_rel or "").replace("\\", "/").strip().lstrip("./").rstrip("/")
     if rel in {".", ".."} or rel.startswith("/") or "/../" in f"/{rel}/":
@@ -1031,7 +1029,7 @@ def _apply_php_document_root(dockerfile: str, document_root_rel: str) -> str:
         count=1,
     )
 
-    # 3) Strip generic sed that rewrites /var/www/html -> ${ENV} (causes nested paths)
+    # 3) Strip generic sed that rewrites /var/www/html -> ${ENV}
     dockerfile = re.sub(
         r"\s*&&\s*sed\s+-ri\s+-e\s+'s!/var/www/html!\$\{APACHE_DOCUMENT_ROOT\}!g'\s+/etc/apache2/sites-available/\*\.conf",
         "",
@@ -1043,27 +1041,28 @@ def _apply_php_document_root(dockerfile: str, document_root_rel: str) -> str:
         dockerfile,
     )
 
-    conf_lines = [
-        "ServerName localhost",
-        "<VirtualHost *:80>",
-        "    ServerAdmin webmaster@localhost",
-        f"    DocumentRoot {absolute}",
-        f"    <Directory {absolute}>",
-        "        Options FollowSymLinks",
-        "        AllowOverride All",
-        "        Require all granted",
-        "        DirectoryIndex index.php index.html",
-        "    </Directory>",
-        "    ErrorLog ${APACHE_LOG_DIR}/error.log",
-        "    CustomLog ${APACHE_LOG_DIR}/access.log combined",
-        "</VirtualHost>",
-        "",
-    ]
-    conf_text = "\\n".join(conf_lines).replace("'", "'\"'\"'")
+    # Real newlines in the conf body (base64-encoded into the Dockerfile so
+    # we never depend on printf \n expansion or shell quoting).
+    conf_body = (
+        "ServerName localhost\n"
+        "<VirtualHost *:80>\n"
+        "    ServerAdmin webmaster@localhost\n"
+        f"    DocumentRoot {absolute}\n"
+        f"    <Directory {absolute}>\n"
+        "        Options FollowSymLinks\n"
+        "        AllowOverride All\n"
+        "        Require all granted\n"
+        "        DirectoryIndex index.php index.html\n"
+        "    </Directory>\n"
+        "    ErrorLog ${APACHE_LOG_DIR}/error.log\n"
+        "    CustomLog ${APACHE_LOG_DIR}/access.log combined\n"
+        "</VirtualHost>\n"
+    )
+    b64 = base64.b64encode(conf_body.encode("utf-8")).decode("ascii")
 
     apache_block = (
         "\n# --- Apache DocumentRoot (auto) ---\n"
-        f"RUN printf '%s\\n' '{conf_text}' > /etc/apache2/sites-available/000-default.conf \\\n"
+        f"RUN echo '{b64}' | base64 -d > /etc/apache2/sites-available/000-default.conf \\\n"
         f"    && sed -ri -e 's#DocumentRoot /var/www/html#DocumentRoot {absolute}#g' "
         "/etc/apache2/sites-available/*.conf 2>/dev/null || true \\\n"
         "    && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \\\n"
@@ -1087,7 +1086,6 @@ def _apply_php_document_root(dockerfile: str, document_root_rel: str) -> str:
     while " \\ \\ " in dockerfile or "\\ \\ \\" in dockerfile:
         dockerfile = dockerfile.replace(" \\ \\ ", " ")
         dockerfile = dockerfile.replace("\\ \\ \\", "\\")
-    dockerfile = re.sub(r" && \\\\s*\n", "\n", dockerfile)
     return dockerfile
 
 
