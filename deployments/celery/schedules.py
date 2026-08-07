@@ -1,3 +1,4 @@
+
 from datetime import timedelta
 import logging
 
@@ -35,6 +36,23 @@ from .monitoring.actions import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Stages where a container is not expected yet (image still building).
+# Monitor must NOT fail the deploy for a missing container during these stages.
+PRE_CONTAINER_STAGES = frozenset({
+    "",
+    "idle",
+    "starting",
+    "validation",
+    "prepare_resources",
+    "platform_detection",
+    "entrypoint_detection",
+    "image_build",
+    "dockerfile",
+    "state_snapshot",
+    "cancelled",
+})
+
 
 
 def create_deploy_log(
@@ -192,8 +210,29 @@ def _reconcile_active_deploy(deploy: Deploy) -> None:
             return
 
         # 3. Running deployment
+        # IMPORTANT: Deploy.status is set to RUNNING as soon as the Celery task
+        # starts — long before a container exists (image build can take minutes).
+        # Only treat a missing/dead container as failure once we are past the
+        # build/prepare stages (or progress indicates container should exist).
         if locked.status == DeploymentStatusChoices.RUNNING:
             if not is_running:
+                stage_name = (locked.stage or "").strip().lower()
+                progress = int(locked.progress or 0)
+                still_building = (
+                    stage_name in PRE_CONTAINER_STAGES
+                    or progress < 50  # container_creation starts ~55-65
+                )
+                if still_building:
+                    # Let the worker finish; timeout handler covers stuck builds.
+                    logger.debug(
+                        "Deploy %s still in pre-container stage=%s progress=%s; "
+                        "skipping missing-container fail",
+                        locked.pk,
+                        stage_name,
+                        progress,
+                    )
+                    return
+
                 stage = "container_missing" if not exists else "container_not_running"
                 message = (
                     "Deployment container no longer exists."
@@ -208,6 +247,8 @@ def _reconcile_active_deploy(deploy: Deploy) -> None:
                         "container_exists": exists,
                         "container_status": status_raw,
                         "exit_code": exit_code,
+                        "deploy_stage": stage_name,
+                        "deploy_progress": progress,
                     },
                 )
             return

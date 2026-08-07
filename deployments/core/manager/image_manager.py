@@ -32,15 +32,34 @@ def _setting(name: str, default: Any) -> Any:
         return default
 
 
-DEFAULT_BUILD_CPU: float = float(
-    _setting("DEPLOY_BUILD_MAX_CPU", os.getenv("DEPLOY_BUILD_MAX_CPU", "1.0"))
-)
-DEFAULT_BUILD_RAM_MB: int = int(
-    _setting("DEPLOY_BUILD_MAX_RAM_MB", os.getenv("DEPLOY_BUILD_MAX_RAM_MB", "1024"))
-)
-DEFAULT_BUILD_PARALLELISM: int = int(
-    _setting("DEPLOY_BUILD_PARALLELISM", os.getenv("DEPLOY_BUILD_PARALLELISM", "1"))
-)
+def _build_default_cpu() -> float:
+    try:
+        from core import settings_service as svc
+        return float(svc.build_max_cpu())
+    except Exception:
+        return float(_setting("DEPLOY_BUILD_MAX_CPU", os.getenv("DEPLOY_BUILD_MAX_CPU", "1.0")))
+
+
+def _build_default_ram() -> int:
+    try:
+        from core import settings_service as svc
+        return int(svc.build_max_ram_mb())
+    except Exception:
+        return int(_setting("DEPLOY_BUILD_MAX_RAM_MB", os.getenv("DEPLOY_BUILD_MAX_RAM_MB", "1024")))
+
+
+def _build_default_parallelism() -> int:
+    try:
+        from core import settings_service as svc
+        return int(svc.build_parallelism())
+    except Exception:
+        return int(_setting("DEPLOY_BUILD_PARALLELISM", os.getenv("DEPLOY_BUILD_PARALLELISM", "1")))
+
+
+# Lazy defaults — re-read from DB on each build via helpers below
+DEFAULT_BUILD_CPU: float = 1.0
+DEFAULT_BUILD_RAM_MB: int = 1024
+DEFAULT_BUILD_PARALLELISM: int = 1
 
 
 def _build_container_limits(
@@ -48,8 +67,8 @@ def _build_container_limits(
     max_cpu: float | None = None,
     max_ram_mb: int | None = None,
 ) -> dict[str, Any]:
-    cpu = float(max_cpu if max_cpu is not None else DEFAULT_BUILD_CPU)
-    ram = int(max_ram_mb if max_ram_mb is not None else DEFAULT_BUILD_RAM_MB)
+    cpu = float(max_cpu if max_cpu is not None else _build_default_cpu())
+    ram = int(max_ram_mb if max_ram_mb is not None else _build_default_ram())
     cpu = max(0.1, min(cpu, 32.0))
     ram = max(128, min(ram, 65536))
     nano_cpus = int(cpu * 1_000_000_000)
@@ -284,7 +303,100 @@ class Image(Client):
             else:
                 logger.debug("Build chunk: %s", chunk)
 
+
+    def _tag_image(self, image_id: str) -> None:
+        """Tag image by ID via low-level API (avoids broken match_tag)."""
+        repo = self.name
+        tag = self.tag or "latest"
+        try:
+            ok = self.client.api.tag(
+                image_id, repository=repo, tag=tag, force=True
+            )
+            logger.info(
+                "Tagged image %s as %s:%s (ok=%s)",
+                (image_id or "")[:12],
+                repo,
+                tag,
+                ok,
+            )
+        except Exception:
+            logger.exception(
+                "api.tag failed for %s → %s:%s; trying images.get().tag()",
+                (image_id or "")[:12],
+                repo,
+                tag,
+            )
+            img = self.client.images.get(image_id)
+            img.tag(repository=repo, tag=tag)
+
+    def _handle_build_stream_collect_id(
+        self,
+        response,
+        on_build_output: Optional[Callable] = None,
+    ) -> Optional[str]:
+        """Consume build stream, log output, return final image ID."""
+        image_id: Optional[str] = None
+
+        for chunk in self._iter_build_stream(response):
+            if on_build_output:
+                try:
+                    on_build_output(chunk)
+                except Exception:
+                    logger.exception("on_build_output callback failed")
+
+            if not isinstance(chunk, dict):
+                continue
+
+            aux = chunk.get("aux") or {}
+            if isinstance(aux, dict):
+                cid = aux.get("ID") or aux.get("Id")
+                if cid:
+                    image_id = cid
+
+            if "stream" in chunk:
+                msg = (chunk.get("stream") or "").strip()
+                if msg:
+                    logger.info(msg)
+                    m = re.search(
+                        r"Successfully built ([0-9a-f]{12,})",
+                        msg,
+                        re.IGNORECASE,
+                    )
+                    if m:
+                        image_id = m.group(1)
+                    m2 = re.search(
+                        r"writing image (sha256:[0-9a-f]+)",
+                        msg,
+                        re.IGNORECASE,
+                    )
+                    if m2:
+                        image_id = m2.group(1)
+            elif "status" in chunk:
+                status = chunk.get("status")
+                progress = chunk.get("progress")
+                if progress:
+                    logger.info("%s %s", status, progress)
+                else:
+                    logger.info("%s", status)
+            elif "error" in chunk or "errorDetail" in chunk:
+                err = chunk.get("error") or (
+                    (chunk.get("errorDetail") or {}).get("message")
+                )
+                logger.error(err)
+                raise BuildError(str(err), build_log=[chunk])
+            else:
+                logger.debug("Build chunk: %s", chunk)
+
+        return image_id
+
+
     def create(self, on_build_output: Optional[Callable] = None):
+        """
+        Build Docker image without passing tag= (avoids broken match_tag).
+
+        Also degrades gracefully if container_limits / network_mode are
+        unsupported by the installed docker-py or engine.
+        """
         if not self.dockerfile_text or not self.tarfile:
             raise ValueError("dockerfile_text and tarfile are required")
 
@@ -298,13 +410,25 @@ class Image(Client):
         effective_ram = (
             self.max_ram if self.max_ram is not None else DEFAULT_BUILD_RAM_MB
         )
-        safe_tag = self.image_ref
+        target_ref = self.image_ref
+
         logger.info(
-            "Building image %s with limits cpu=%.2f cores ram=%d MB",
-            safe_tag,
+            "Building image %s (untagged → tag after) cpu=%.2f ram=%d MB",
+            target_ref,
             effective_cpu,
             effective_ram,
         )
+        try:
+            import docker as _docker_mod
+
+            logger.info(
+                "docker-py=%s name=%r tag=%r",
+                getattr(_docker_mod, "__version__", "?"),
+                self.name,
+                self.tag,
+            )
+        except Exception:
+            pass
 
         buildargs = {"BUILDKIT_INLINE_CACHE": "1"}
 
@@ -315,7 +439,6 @@ class Image(Client):
                     if isinstance(self.tarfile, (bytes, bytearray))
                     else self.tarfile
                 )
-
                 tar_stream.seek(0)
                 with tarfile.open(fileobj=tar_stream, mode="r:*") as tar:
                     safe_extract(tar, tmpdir, max_bytes=500 * 1024 * 1024)
@@ -334,38 +457,156 @@ class Image(Client):
                     ) as f:
                         f.write(self.dockerfile_text)
 
-                logger.debug("Docker build tag (sanitized): %s", safe_tag)
+                # Ensure Dockerfile exists at build root
+                df_path = os.path.join(build_path, "Dockerfile")
+                if not os.path.isfile(df_path):
+                    with open(df_path, "w", encoding="utf-8") as f:
+                        f.write(self.dockerfile_text)
 
-                response = self.client.api.build(
-                    path=build_path,
-                    tag=safe_tag,
-                    rm=True,
-                    forcerm=True,
-                    decode=True,
-                    container_limits=limits,
-                    buildargs=buildargs,
-                    network_mode="default",
+                logger.info(
+                    "Build context ready path=%s files=%s",
+                    build_path,
+                    len(os.listdir(build_path)),
                 )
 
-                self._handle_build_stream(
+                # Try progressively simpler kwargs so unsupported options
+                # never abort the whole deploy.
+                attempt_kwargs = [
+                    dict(
+                        path=build_path,
+                        rm=True,
+                        forcerm=True,
+                        decode=True,
+                        container_limits=limits,
+                        buildargs=buildargs,
+                        network_mode="default",
+                    ),
+                    dict(
+                        path=build_path,
+                        rm=True,
+                        forcerm=True,
+                        decode=True,
+                        buildargs=buildargs,
+                    ),
+                    dict(
+                        path=build_path,
+                        rm=True,
+                        forcerm=True,
+                        decode=True,
+                    ),
+                ]
+
+                response = None
+                last_err: Exception | None = None
+                for i, kwargs in enumerate(attempt_kwargs):
+                    try:
+                        logger.info(
+                            "api.build attempt %d kwargs=%s",
+                            i + 1,
+                            sorted(k for k in kwargs if k != "path"),
+                        )
+                        response = self.client.api.build(**kwargs)
+                        last_err = None
+                        break
+                    except TypeError as exc:
+                        # Unknown kwarg for this docker-py version
+                        logger.warning(
+                            "api.build attempt %d TypeError: %s", i + 1, exc
+                        )
+                        last_err = exc
+                    except docker.errors.DockerException as exc:
+                        msg = str(exc).lower()
+                        # Still the broken match_tag? (should not happen without tag=)
+                        logger.warning(
+                            "api.build attempt %d DockerException: %s: %s",
+                            i + 1,
+                            type(exc).__name__,
+                            exc,
+                        )
+                        last_err = exc
+                        # If somehow tag validation still triggers, continue
+                        if "invalid tag" in msg or "invalid reference" in msg:
+                            continue
+                        # Other docker errors (daemon down, etc.) — stop
+                        break
+                    except Exception as exc:
+                        logger.warning(
+                            "api.build attempt %d %s: %s",
+                            i + 1,
+                            type(exc).__name__,
+                            exc,
+                        )
+                        last_err = exc
+                        break
+
+                if response is None:
+                    raise ImageBuildError(
+                        f"Docker api.build failed: "
+                        f"{type(last_err).__name__ if last_err else 'unknown'}: "
+                        f"{last_err}",
+                        details={
+                            "image": target_ref,
+                            "error": str(last_err),
+                            "error_type": type(last_err).__name__
+                            if last_err
+                            else None,
+                        },
+                    ) from last_err
+
+                image_id = self._handle_build_stream_collect_id(
                     response, on_build_output=on_build_output
                 )
-                return self.client.images.get(safe_tag)
+
+                if not image_id:
+                    logger.warning(
+                        "No image ID in build stream; trying dangling images"
+                    )
+                    try:
+                        dangling = self.client.images.list(
+                            filters={"dangling": True}
+                        )
+                        if dangling:
+                            image_id = dangling[0].id
+                    except Exception:
+                        pass
+
+                if not image_id:
+                    raise ImageBuildError(
+                        "Docker build finished but no image ID was returned.",
+                        details={"image": target_ref},
+                    )
+
+                self._tag_image(image_id)
+
+                try:
+                    return self.client.images.get(target_ref)
+                except ImageNotFound:
+                    return self.client.images.get(image_id)
 
         except BuildError as exc:
             raise ImageBuildError(
                 "Docker image build failed.",
-                details={"image": safe_tag, "error": str(exc)},
+                details={"image": target_ref, "error": str(exc)},
             ) from exc
         except ImageBuildError:
             raise
         except Exception as exc:
-            logger.error("Unexpected error while building Docker image")
+            logger.error(
+                "Unexpected error while building Docker image: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
             logger.error(traceback.format_exc())
             raise ImageBuildError(
-                "Unexpected error while building Docker image.",
-                details={"image": safe_tag, "error": str(exc)},
+                f"Unexpected error while building Docker image: "
+                f"{type(exc).__name__}: {exc}",
+                details={
+                    "image": target_ref,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                },
             ) from exc
+
 
     def inspect(self):
         image = self.client.images.get(self.image_ref)

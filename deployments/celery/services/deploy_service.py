@@ -1,6 +1,8 @@
 import logging
 import traceback
 import json
+import os
+import re
 
 
 from deploy.models import Deploy
@@ -17,6 +19,32 @@ from ..waiters import ContainerWaiter
 from ..exceptions import InvalidServiceStateError, OrchestratorDeploymentError
 
 logger = logging.getLogger(__name__)
+
+def _docker_safe_tag(version) -> str:
+    """
+    Convert Deploy.version (Decimal/float/str) to a docker-py-safe tag.
+
+    Decimal 1.22 → "v1-22"
+    Avoids pure numeric tags that some docker-py match_tag builds reject,
+    and guarantees a letter-leading tag.
+    """
+    if version is None:
+        return "latest"
+    raw = str(version).strip()
+    if not raw:
+        return "latest"
+    # Normalize Decimal string
+    if re.match(r"^\d+(\.\d+)?$", raw):
+        return "v" + raw.replace(".", "-")
+    # Already looks like a tag
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]", "-", raw)
+    if not cleaned:
+        return "latest"
+    if not re.match(r"^[A-Za-z_]", cleaned):
+        cleaned = "v" + cleaned
+    return cleaned[:128]
+
+
 
 
 def _parse_config(raw) -> dict:
@@ -243,10 +271,31 @@ class DeployService:
         if getattr(service, "network", None) is not None and getattr(service.network, "name", None):
             networks.append((service.network.get_docker_network_name(), "bridge"))
 
+        # ZIP must exist on disk for image build; fail early with clear message
+        zip_path = ""
+        if getattr(deploy_item, "zip_file", None):
+            try:
+                zip_path = deploy_item.zip_file.path
+            except Exception as exc:
+                raise OrchestratorDeploymentError(
+                    f"Deploy zip file path is invalid: {exc}"
+                ) from exc
+        if not zip_path or not os.path.isfile(zip_path):
+            raise OrchestratorDeploymentError(
+                "Deploy has no ZIP file on disk. Upload a package before starting."
+            )
+        logger.info(
+            "Deploy package ready: path=%s size=%s tag=%s name=%s",
+            zip_path,
+            os.path.getsize(zip_path),
+            _docker_safe_tag(deploy_item.version),
+            container_name,
+        )
+
         deployer = DeployFacade(
             name=container_name,
-            tag=deploy_item.version,
-            zip_filename=deploy_item.zip_file.path if deploy_item.zip_file else "",
+            tag=_docker_safe_tag(deploy_item.version),
+            zip_filename=zip_path,
             dockerfile_text=dockerfile_text,
             max_cpu=service.plan.max_cpu,
             max_ram=service.plan.max_ram,
@@ -345,5 +394,6 @@ class DeployService:
                 )
             )
         return specs
+
 
 

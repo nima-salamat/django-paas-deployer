@@ -11,6 +11,8 @@ urlpatterns = [
     path("api/volumes/", include("services.volume_api_urls")),
     path("api/networks/", include("services.network_api_urls")),
     path("deploy/", include("deploy.urls")),
+    path("api/system/", include("core.settings_urls")),
+    path("media/", include("core.urls"))
     
 ]
 
@@ -18,11 +20,6 @@ urlpatterns = [
 from django.conf import settings
 
 if settings.DEBUG:
-    from django.urls import re_path
     from django.conf.urls.static import static
     
     urlpatterns += static(settings.STATIC_URL, document_root= settings.STATIC_ROOT)
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
-# ===DENUG FALSE===
-else:
-    urlpatterns += [path("media/", include("core.urls"))]

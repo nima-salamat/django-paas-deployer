@@ -1,3 +1,4 @@
+"""deployments/celery/helpers.py — mirrors + versions from DB settings."""
 from dataclasses import dataclass
 
 from deploy.models import Deploy
@@ -8,8 +9,6 @@ from deployments.core.manager.image_manager import Image
 
 @dataclass(frozen=True)
 class MockOrchestratorResult:
-    """Value object matching the Orchestrator result shape for local execution paths."""
-
     success: bool
     stage: str
     message: str
@@ -19,8 +18,6 @@ class MockOrchestratorResult:
 
 
 class DeploymentHelper:
-    """Utility class for evaluating deployment conditions and configurations."""
-
     _DOCKERFILE_ALIASES = {
         "vuejs": "vue",
         "vue": "vue",
@@ -36,33 +33,69 @@ class DeploymentHelper:
         *,
         platform: str | None = None,
     ) -> dict:
-        from core.global_settings import config as _gcfg
+        # Prefer DB-backed settings; fall back to module constants.
+        try:
+            from core import settings_service as svc
 
-        kwargs = {"MIRROR_DOCKER": getattr(_gcfg, "MIRROR_DOCKER", "docker.io")}
-        versions = getattr(_gcfg, "DEFAULT_RUNTIME_VERSIONS", None) or {
-            "python_version": "3.11",
-            "django_python_version": "3.10",
-            "node_version": "20",
-            "php_version": "8.2",
-            "go_version": "1.21",
-            "dotnet_version": "6.0",
-            "nginx_version": "alpine",
+            mirror_docker = svc.mirror_docker()
+            mirror_python = svc.mirror_python()
+            mirror_npm = svc.mirror_npm()
+            mirror_apt = svc.mirror_apt()
+            versions = dict(svc.default_runtime_versions() or {})
+            ports_map = dict(svc.default_ports_map() or {})
+            default_expose = svc.default_expose_port()
+            build_dir = svc.default_spa_build_dir()
+            pip_timeout = svc.get_int("deploy.pip_timeout", 120)
+        except Exception:
+            from core.global_settings import config as _gcfg
+
+            mirror_docker = getattr(_gcfg, "MIRROR_DOCKER", "docker.io")
+            mirror_python = getattr(
+                _gcfg, "MIRROR_PYTHON", "https://pypi.org/simple"
+            )
+            mirror_npm = "https://registry.npmjs.org"
+            mirror_apt = ""
+            versions = dict(getattr(_gcfg, "DEFAULT_RUNTIME_VERSIONS", None) or {})
+            try:
+                from core.global_settings.config import default_ports, DEFAULT_EXPOSE_PORT
+
+                ports_map = dict(default_ports)
+                default_expose = DEFAULT_EXPOSE_PORT
+            except Exception:
+                ports_map = {}
+                default_expose = 80
+            build_dir = "dist"
+            pip_timeout = 120
+
+        if not versions:
+            versions = {
+                "python_version": "3.11",
+                "django_python_version": "3.10",
+                "node_version": "20",
+                "php_version": "8.2",
+                "go_version": "1.21",
+                "dotnet_version": "6.0",
+                "nginx_version": "alpine",
+            }
+
+        kwargs = {
+            "MIRROR_DOCKER": mirror_docker,
+            "MIRROR_PYTHON": mirror_python,
+            "MIRROR_NPM": mirror_npm,
+            "MIRROR_APT": mirror_apt or "http://deb.debian.org/debian/",
+            "PIP_DEFAULT_TIMEOUT": str(pip_timeout),
+            "build_dir": build_dir,
         }
         kwargs.update(versions)
 
-        # Port: platform default
+        p = (platform or "").lower().strip()
+        port = ports_map.get(p)
+        if port is None:
+            port = default_expose
         try:
-            from core.global_settings.config import default_ports, DEFAULT_EXPOSE_PORT
-
-            p = (platform or "").lower().strip()
-            port = default_ports.get(p)
-            if port is None:
-                port = DEFAULT_EXPOSE_PORT
-            kwargs["port"] = port
-        except Exception:
-            kwargs.setdefault("port", 80)
-
-        kwargs.setdefault("build_dir", "dist")
+            kwargs["port"] = int(port)
+        except (TypeError, ValueError):
+            kwargs["port"] = default_expose
 
         if overrides:
             for key in versions:
@@ -89,9 +122,22 @@ class DeploymentHelper:
     ) -> str | None:
         key = (platform or "").lower().strip()
         attr = DeploymentHelper._DOCKERFILE_ALIASES.get(key, key)
-        raw = getattr(Config, attr, None) or getattr(Config, key, None)
+
+        # 1) DB template if present
+        raw = None
+        try:
+            from core import settings_service as svc
+
+            raw = svc.dockerfile_template(attr) or svc.dockerfile_template(key)
+        except Exception:
+            pass
+
+        # 2) Code Config class
+        if not raw:
+            raw = getattr(Config, attr, None) or getattr(Config, key, None)
         if not raw:
             return None
+
         fmt = DeploymentHelper._runtime_format_kwargs(
             version_overrides, platform=key
         )
@@ -105,11 +151,6 @@ class DeploymentHelper:
 
     @staticmethod
     def is_restart_only(deploy_item: Deploy, container_name: str) -> bool:
-        """
-        True only when we can safely restart an *existing* container that
-        still has its image. If the container or image is missing, return
-        False so the orchestrator does a full rebuild from the zip.
-        """
         service = deploy_item.service
 
         if service.deployed_at is None:
@@ -131,21 +172,16 @@ class DeploymentHelper:
         if not container.exists():
             return False
 
-        # Image must still be present; otherwise restart would fail and
-        # the user expects a rebuild from the existing zip.
         try:
             image_id = container.get_image_identifier()
             if not image_id:
                 return False
-            # Prefer checking by id; also try common name:tag patterns
             if not Image.check_exists(image_id):
-                # Fallback: any tag under container name
                 if not Image.check_exists(container_name) and not Image.check_exists(
                     f"{container_name}:latest"
                 ):
                     return False
         except Exception:
-            # On any inspect error treat as missing → full rebuild
             return False
 
         return True

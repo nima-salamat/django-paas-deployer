@@ -3,77 +3,30 @@ from django.utils.translation import gettext_lazy as _
 
 
 APPLICATIONS = [
-    "php",
-    "python",
-    "django",
-    "nextjs",
-    "nodejs",
-    "flask",
-    "docker",
-    "go",
-    "statichtmlcss",
-    "vuejs",
-    "angular",
-    "react",
-    "dotnet",
+    "php", "python", "django", "nextjs", "nodejs", "flask", "docker", "go",
+    "statichtmlcss", "vuejs", "angular", "react", "dotnet",
 ]
 
-DBS = [
-    "mysql",
-    "postgresql",
-    "mariadb",
-    "mongodb",
-    "redis",
-    "oracle",
-]
-
+DBS = ["mysql", "postgresql", "mariadb", "mongodb", "redis", "oracle"]
 
 PLATFORM_CHOICES = [
-    ("php", "PHP"),
-    ("python", "Python"),
-    ("django", "Django"),
-    ("nextjs", "Next.js"),
-    ("nodejs", "Node.js"),
-    ("flask", "Flask"),
-    ("docker", "Docker"),
-    ("go", "Go"),
-    ("statichtmlcss", "Static HTML/CSS"),
-    ("vuejs", "Vue.js"),
-    ("angular", "Angular"),
-    ("react", "React"),
-    ("dotnet", ".NET"),
-    ("mysql", "MySQL"),
-    ("postgresql", "PostgreSQL"),
-    ("mariadb", "MariaDB"),
-    ("mongodb", "MongoDB"),
-    ("redis", "Redis"),
+    ("php", "PHP"), ("python", "Python"), ("django", "Django"),
+    ("nextjs", "Next.js"), ("nodejs", "Node.js"), ("flask", "Flask"),
+    ("docker", "Docker"), ("go", "Go"), ("statichtmlcss", "Static HTML/CSS"),
+    ("vuejs", "Vue.js"), ("angular", "Angular"), ("react", "React"),
+    ("dotnet", ".NET"), ("mysql", "MySQL"), ("postgresql", "PostgreSQL"),
+    ("mariadb", "MariaDB"), ("mongodb", "MongoDB"), ("redis", "Redis"),
     ("oracle", "Oracle"),
 ]
 
-
+# Fallback when DB settings are empty
 default_ports = {
-    "php": 80,
-    "python": None,
-    "django": 8000,
-    "nextjs": 3000,
-    "nodejs": 3000,
-    "flask": 5000,
-    "docker": None,
-    "go": None,
-    "statichtmlcss": 80,
-    "vuejs": 80,
-    "angular": 80,
-    "react": 80,
-    "dotnet": 5000,
-
-    "mysql": 3306,
-    "postgresql": 5432,
-    "mariadb": 3306,
-    "mongodb": 27017,
-    "redis": 6379,
-    "oracle": 1521,
+    "php": 80, "python": None, "django": 8000, "nextjs": 3000, "nodejs": 3000,
+    "flask": 5000, "docker": None, "go": None, "statichtmlcss": 80,
+    "vuejs": 80, "angular": 80, "react": 80, "dotnet": 5000,
+    "mysql": 3306, "postgresql": 5432, "mariadb": 3306, "mongodb": 27017,
+    "redis": 6379, "oracle": 1521,
 }
-
 
 DEFAULT_MAX_APPS = 2
 
@@ -103,28 +56,11 @@ class VOLUME_MODE_CHOICES(models.TextChoices):
 
 
 COLORS = [
-    "#1abc9c",
-    "#2ecc71",
-    "#3498db",
-    "#9b59b6",
-    "#34495e",
-    "#16a085",
-    "#27ae60",
-    "#2980b9",
-    "#8e44ad",
-    "#2c3e50",
-    "#f1c40f",
-    "#e67e22",
-    "#e74c3c",
-    "#ecf0f1",
-    "#95a5a6",
-    "#f39c12",
-    "#d35400",
-    "#c0392b",
-    "#bdc3c7",
-    "#7f8c8d",
+    "#1abc9c", "#2ecc71", "#3498db", "#9b59b6", "#34495e", "#16a085",
+    "#27ae60", "#2980b9", "#8e44ad", "#2c3e50", "#f1c40f", "#e67e22",
+    "#e74c3c", "#ecf0f1", "#95a5a6", "#f39c12", "#d35400", "#c0392b",
+    "#bdc3c7", "#7f8c8d",
 ]
-
 COLOR_CHOICES = [(i, j) for i, j in enumerate(COLORS, 0)]
 
 
@@ -138,16 +74,16 @@ class SERVICE_STATUS_CHOICES(models.TextChoices):
     STOPPED = "stopped", _("stopped")
     QUEUED = "queued", _("queued")
     DEPLOYING = "deploying", _("deploying")
-    RUNNING = "running", _("running")      # container is confirmed up after deploy
+    RUNNING = "running", _("running")
     FAILED = "failed", _("failed")
-    SUCCEEDED = "succeeded", _("succeeded")  # kept for backward compat; monitor maps → running
+    SUCCEEDED = "succeeded", _("succeeded")
     STOPPING = "stopping", _("stopping")
 
 
+# Code-level fallbacks (DB SystemSetting overrides these at runtime)
 MIRROR_DOCKER = "docker.arvancloud.ir"
+MIRROR_PYTHON = "https://mirror-pypi.runflare.com/simple"
 
-# Runtime image tags – overridable via Deploy.config keys of the same name.
-# Example: {"python_version": "3.12", "node_version": "22", "worker_count": 2}
 DEFAULT_RUNTIME_VERSIONS = {
     "python_version": "3.11",
     "django_python_version": "3.10",
@@ -158,304 +94,201 @@ DEFAULT_RUNTIME_VERSIONS = {
     "nginx_version": "alpine",
 }
 
-# Default number of web / Celery worker processes. User may override with
-# Deploy.config["worker_count"] (int >= 1).
 DEFAULT_WORKER_COUNT = 1
-
-# Default static output dir for SPA multi-stage nginx templates.
-# Overridden per-project (Vite→dist, CRA→build). User may set Deploy.config["build_dir"].
 DEFAULT_SPA_BUILD_DIR = "dist"
-
-# Default EXPOSE port when template uses {port} and user did not override.
 DEFAULT_EXPOSE_PORT = 80
-
-
-
+MAX_DEPLOY_TIME_MINUTE = 10
 
 
 class Config:
+    """Dockerfile templates — placeholders filled by DeploymentHelper."""
 
     php = """
 FROM {MIRROR_DOCKER}/php:{php_version}-apache
 
 ENV APACHE_DOCUMENT_ROOT=/var/www/html
-
 COPY . /var/www/html/
-
 RUN docker-php-ext-install mysqli pdo pdo_mysql opcache \\
     && a2enmod rewrite headers \\
     && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \\
     && echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache.ini
-
 EXPOSE {port}
-
 CMD ["apache2-foreground"]
 """
-
 
     python = """
 FROM {MIRROR_DOCKER}/python:{python_version}-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 \\
+    PYTHONUNBUFFERED=1 \\
+    PIP_DEFAULT_TIMEOUT={PIP_DEFAULT_TIMEOUT} \\
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
-
 COPY requirements.txt /app/
-RUN pip install --no-cache-dir --upgrade pip \\
-    && pip install --no-cache-dir -r requirements.txt \\
-    && pip install --no-cache-dir gunicorn uvicorn[standard]
-
+RUN pip install -i {MIRROR_PYTHON} --trusted-host $(echo {MIRROR_PYTHON} | sed -E 's|https?://([^/]+).*|\\1|') \\
+        --no-cache-dir --upgrade pip \\
+    && pip install -i {MIRROR_PYTHON} --no-cache-dir -r requirements.txt \\
+    && pip install -i {MIRROR_PYTHON} --no-cache-dir gunicorn uvicorn[standard]
 COPY . /app
-
 EXPOSE {port}
-
-# Production server – overridden smartly by DockerfileGenerator when possible
 CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8000", "--workers", "1", "--timeout", "60"]
 """
-
 
     django = """
 FROM {MIRROR_DOCKER}/python:{django_python_version}-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 \\
+    PYTHONUNBUFFERED=1 \\
+    PIP_DEFAULT_TIMEOUT={PIP_DEFAULT_TIMEOUT} \\
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
 
-# Debian 13 (Trixie) - IUT Mirror
-RUN rm -f /etc/apt/sources.list.d/*.sources \\
-    && rm -f /etc/apt/sources.list.d/*.list \\
+RUN rm -f /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list \\
     && printf '%s\\n' \\
-        'deb http://repo.iut.ac.ir/debian/ trixie main' \\
-        'deb http://repo.iut.ac.ir/debian/ trixie-updates main' \\
+        'deb {MIRROR_APT} trixie main' \\
+        'deb {MIRROR_APT} trixie-updates main' \\
         > /etc/apt/sources.list \\
     && apt-get update \\
     && apt-get install -y --no-install-recommends \\
-        build-essential \\
-        libpq-dev \\
-        python3-dev \\
-        libjpeg-dev \\
-        zlib1g-dev \\
+        build-essential libpq-dev python3-dev libjpeg-dev zlib1g-dev \\
     && rm -rf /var/lib/apt/lists/*
 
-# Python dependencies
 COPY requirements.txt /app/
-
-RUN pip install --no-cache-dir --upgrade pip "setuptools<81" wheel \\
-    && pip install --no-cache-dir -r requirements.txt \\
-    && pip install --no-cache-dir gunicorn uvicorn[standard]
-
-# Application
+RUN pip install -i {MIRROR_PYTHON} --no-cache-dir --upgrade pip "setuptools<81" wheel \\
+    && pip install -i {MIRROR_PYTHON} --no-cache-dir -r requirements.txt \\
+    && pip install -i {MIRROR_PYTHON} --no-cache-dir gunicorn uvicorn[standard]
 COPY . /app
-
 EXPOSE {port}
-
-# Production server – overridden by DockerfileGenerator (gunicorn / uvicorn + optional Celery)
 CMD ["gunicorn", "{module}:application", "--bind", "0.0.0.0:8000", "--workers", "1", "--timeout", "60"]
 """
-
-
-    nextjs = """
-FROM {MIRROR_DOCKER}/node:{node_version}-alpine AS builder
-
-WORKDIR /app
-
-COPY package*.json ./
-RUN npm ci || npm install
-
-COPY . .
-RUN npm run build
-
-
-FROM {MIRROR_DOCKER}/node:{node_version}-alpine
-
-WORKDIR /app
-
-ENV NODE_ENV=production
-
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/node_modules ./node_modules
-
-EXPOSE {port}
-
-CMD ["npm", "start"]
-"""
-
-
-    nodejs = """
-FROM {MIRROR_DOCKER}/node:{node_version}-alpine
-
-WORKDIR /app
-
-ENV NODE_ENV=production
-
-COPY package*.json ./
-RUN npm ci --omit=dev || npm install --omit=dev
-
-COPY . .
-
-EXPOSE {port}
-
-CMD ["npm", "start"]
-"""
-
 
     flask = """
 FROM {MIRROR_DOCKER}/python:{python_version}-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV FLASK_ENV=production
+ENV PYTHONDONTWRITEBYTECODE=1 \\
+    PYTHONUNBUFFERED=1 \\
+    FLASK_ENV=production \\
+    PIP_DEFAULT_TIMEOUT={PIP_DEFAULT_TIMEOUT} \\
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
-
 COPY requirements.txt /app/
-RUN pip install --no-cache-dir --upgrade pip \\
-    && pip install --no-cache-dir -r requirements.txt \\
-    && pip install --no-cache-dir gunicorn uvicorn[standard]
-
+RUN pip install -i {MIRROR_PYTHON} --no-cache-dir --upgrade pip \\
+    && pip install -i {MIRROR_PYTHON} --no-cache-dir -r requirements.txt \\
+    && pip install -i {MIRROR_PYTHON} --no-cache-dir gunicorn uvicorn[standard]
 COPY . /app
-
 EXPOSE {port}
-
-# Production server – overridden smartly by DockerfileGenerator when possible
 CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8000", "--workers", "1", "--timeout", "60"]
 """
 
+    nextjs = """
+FROM {MIRROR_DOCKER}/node:{node_version}-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci || npm install
+COPY . .
+RUN npm run build
+FROM {MIRROR_DOCKER}/node:{node_version}-alpine
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/node_modules ./node_modules
+EXPOSE {port}
+CMD ["npm", "start"]
+"""
+
+    nodejs = """
+FROM {MIRROR_DOCKER}/node:{node_version}-alpine
+WORKDIR /app
+ENV NODE_ENV=production
+COPY package*.json ./
+RUN npm ci --omit=dev || npm install --omit=dev
+COPY . .
+EXPOSE {port}
+CMD ["npm", "start"]
+"""
 
     docker = """
 FROM docker:dind
-
 CMD ["dockerd"]
 """
 
-
     go = """
 FROM {MIRROR_DOCKER}/golang:{go_version}-alpine
-
 WORKDIR /app
-
 COPY . .
-
 RUN go build -o main .
-
 EXPOSE {port}
-
 CMD ["./main"]
 """
 
-
     static = """
 FROM {MIRROR_DOCKER}/nginx:{nginx_version}
-
 COPY . /usr/share/nginx/html
-
 EXPOSE {port}
-
 CMD ["nginx", "-g", "daemon off;"]
 """
-
 
     vue = """
 FROM {MIRROR_DOCKER}/node:{node_version}-alpine AS builder
-
 WORKDIR /app
-
 COPY package*.json ./
 RUN npm ci || npm install
-
 COPY . .
 RUN npm run build
-
-
 FROM {MIRROR_DOCKER}/nginx:{nginx_version}
-
 COPY --from=builder /app/{build_dir} /usr/share/nginx/html
-
 EXPOSE {port}
-
 CMD ["nginx", "-g", "daemon off;"]
 """
 
+    angular = vue  # same multi-stage shape; build_dir differs per project
+    react = vue
 
+    # Fix angular/react properly
     angular = """
 FROM {MIRROR_DOCKER}/node:{node_version}-alpine AS builder
-
 WORKDIR /app
-
 COPY package*.json ./
 RUN npm ci || npm install
-
 COPY . .
 RUN npm run build
-
-
 FROM {MIRROR_DOCKER}/nginx:{nginx_version}
-
 COPY --from=builder /app/{build_dir} /usr/share/nginx/html
-
 EXPOSE {port}
-
 CMD ["nginx", "-g", "daemon off;"]
 """
-
 
     react = """
 FROM {MIRROR_DOCKER}/node:{node_version}-alpine AS builder
-
 WORKDIR /app
-
 COPY package*.json ./
 RUN npm ci || npm install
-
 COPY . .
 RUN npm run build
-
-
 FROM {MIRROR_DOCKER}/nginx:{nginx_version}
-
 COPY --from=builder /app/{build_dir} /usr/share/nginx/html
-
 EXPOSE {port}
-
 CMD ["nginx", "-g", "daemon off;"]
 """
 
-
     dotnet = """
 FROM mcr.microsoft.com/dotnet/aspnet:{dotnet_version} AS base
-
 WORKDIR /app
-
 EXPOSE {port}
-
-
 FROM mcr.microsoft.com/dotnet/sdk:{dotnet_version} AS build
-
 WORKDIR /src
-
 COPY . .
-
 RUN dotnet publish -c Release -o /app/publish
-
-
 FROM base AS final
-
 WORKDIR /app
-
 COPY --from=build /app/publish .
-
 ENTRYPOINT ["dotnet", "YourAppName.dll"]
 """
 
-    # Aliases so plan.platform ids resolve to the correct Dockerfile template
     vuejs = vue
     statichtmlcss = static
-
-
-MAX_DEPLOY_TIME_MINUTE = 10
-
-
