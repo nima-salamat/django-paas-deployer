@@ -107,11 +107,14 @@ class Service(BaseModel):
         """
         Sum of size_mb of EVERY volume owned by this service.
 
-        Ownership is Volume.service_id == this.id.
-        Soft-detached volumes (no mount metadata) still count — only
-        releasing ownership (service=None) or deleting frees quota.
-        Also includes any row that still lists this service in
-        service_attachments (legacy / inconsistent rows).
+        CRITICAL quota rule (same as Railway / Render persistent disks):
+          - Ownership is Volume.service_id == this.id.
+          - Soft-detached volumes (service_attachments cleared, FK kept)
+            STILL count toward the plan limit.
+          - Only hard-release (service=None) or permanent delete frees quota.
+          - Attach vs detach does NOT change the sum — both are included.
+          - Also includes any legacy row that still lists this service in
+            service_attachments.
         """
         from django.db.models import Q
 
