@@ -441,19 +441,31 @@ class VolumeViewSet(ModelViewSet):
             queryset = queryset.filter(service__isnull=True)
 
         page = self.paginate_queryset(queryset)
-        serializer = self.get_serializer(page, many=True)
+        # Keep model instances so is_mounted is computed from DB, not serializer quirks
+        if page is not None:
+            instances = list(page)
+        else:
+            instances = list(queryset)
+        serializer = self.get_serializer(instances, many=True)
         data = list(serializer.data)
 
-        if service_id:
-            for row in data:
-                attachments = row.get("service_attachments") or {}
-                att = attachments.get(str(service_id)) or {}
-                row["bind"] = att.get("bind") or row.get("default_bind") or ""
-                row["mode"] = att.get("mode") or row.get("default_mode") or ""
-                # Explicit mounted flag for UI
+        for instance, row in zip(instances, data):
+            sid = str(service_id) if service_id else str(instance.service_id or "")
+            atts = instance.service_attachments or {}
+            att = atts.get(sid) or {}
+            row["bind"] = att.get("bind") or row.get("default_bind") or instance.default_bind or ""
+            row["mode"] = att.get("mode") or row.get("default_mode") or instance.default_mode or ""
+            # Authoritative mount flag from DB row
+            try:
+                row["is_mounted"] = bool(instance.is_mounted_on_service())
+            except Exception:
                 row["is_mounted"] = bool(att)
+            row["service_attachments"] = atts
+            row["service"] = str(instance.service_id) if instance.service_id else None
 
-        return self.get_paginated_response(data)
+        if page is not None:
+            return self.get_paginated_response(data)
+        return Response(data)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(
@@ -618,10 +630,17 @@ class VolumeViewSet(ModelViewSet):
                     # Soft-detach by default (keeps ownership + quota).
                     # Send release=true to hard-release and free quota.
                     release = str(data.get("release", "")).lower() in ("1", "true", "yes")
-                    if release and hasattr(volume, "release_from_service"):
+                    if release:
                         volume.release_from_service()
+                        Volume.objects.filter(pk=volume.pk).update(
+                            service=None, service_attachments={}
+                        )
                     else:
                         volume.detach_from_service()
+                        Volume.objects.filter(pk=volume.pk).update(
+                            service_attachments={}
+                        )
+                    volume.refresh_from_db()
                 else:
                     bind = volume.default_bind or "/data"
                     mode = volume.default_mode or "rw"
@@ -674,33 +693,92 @@ class VolumeViewSet(ModelViewSet):
     @action(detail=True, methods=["post"], url_path="detach")
     def detach(self, request, pk=None):
         """
-        Soft-detach this volume from its owning service.
+        Detach volume from its service.
+
         POST /volume/{id}/detach/
-        Keeps ownership (quota); clears mount metadata only.
+        POST /volume/{id}/detach/?release=1   (or body {"release": true})
+
+        Default = soft-detach:
+          service_attachments → {}
+          service FK kept (quota still counts)
+          is_mounted → false
+
+        release=1 = hard-release:
+          service → null, attachments → {}
+          quota freed
         """
         volume = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
-        if not volume.service_id:
+
+        release = str(
+            request.query_params.get("release")
+            or request.data.get("release")
+            or ""
+        ).lower() in ("1", "true", "yes")
+
+        # Already free
+        if not volume.service_id and not (volume.service_attachments or {}):
             return Response(
-                {"success": _("Volume is already unowned."), "is_mounted": False},
+                {
+                    "success": _("Volume is already detached."),
+                    "is_mounted": False,
+                    "service": None,
+                    "service_attachments": {},
+                    "released": True,
+                },
                 status=status.HTTP_200_OK,
             )
-        ok, reason = _service_is_mutable(volume.service)
-        if not ok:
-            return Response({"error": reason}, status=status.HTTP_409_CONFLICT)
 
-        volume.detach_from_service()
+        owner = volume.service
+        if owner is not None:
+            ok, reason = _service_is_mutable(owner)
+            if not ok:
+                return Response({"error": reason}, status=status.HTTP_409_CONFLICT)
+
+        if release:
+            volume.release_from_service()
+            # Force DB row
+            Volume.objects.filter(pk=volume.pk).update(
+                service=None, service_attachments={}
+            )
+        else:
+            volume.detach_from_service()
+            Volume.objects.filter(pk=volume.pk).update(service_attachments={})
+
         volume.refresh_from_db()
+
+        # Verify write stuck
+        if volume.service_attachments:
+            Volume.objects.filter(pk=volume.pk).update(service_attachments={})
+            volume.refresh_from_db()
+        if release and volume.service_id:
+            Volume.objects.filter(pk=volume.pk).update(service=None, service_attachments={})
+            volume.refresh_from_db()
+
         storage = None
-        try:
-            if volume.service_id:
-                storage = volume.service.storage_quota_summary()
-        except Exception:
-            pass
+        svc_for_quota = volume.service or owner
+        if svc_for_quota is not None:
+            try:
+                # Re-fetch after possible hard-release so summary is current
+                from .models import Service as ServiceModel
+                svc_obj = ServiceModel.objects.filter(pk=svc_for_quota.pk).first()
+                if svc_obj:
+                    storage = svc_obj.storage_quota_summary()
+            except Exception:
+                pass
+
+        mounted = bool(volume.is_mounted_on_service()) if volume.service_id else False
+
         return Response(
             {
-                "success": _("Volume detached (soft)."),
+                "success": _(
+                    "Volume released (ownership cleared)."
+                    if release
+                    else "Volume detached (soft — ownership kept, quota still counts)."
+                ),
                 "service": str(volume.service_id) if volume.service_id else None,
-                "is_mounted": volume.is_mounted_on_service(),
+                "is_mounted": mounted,
+                "service_attachments": volume.service_attachments or {},
+                "released": release,
                 "storage": storage,
             },
             status=status.HTTP_200_OK,
