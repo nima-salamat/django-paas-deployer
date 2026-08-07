@@ -55,6 +55,19 @@ class PHPPlatform(BasePlatform):
         else:
             result["framework"] = "php"
 
+        # Prefer public/ (or web/) as document root when present — works for
+        # Laravel, Symfony, and many plain PHP layouts. Paths are relative to
+        # the detected project root (may itself sit under a single top-level
+        # archive directory; DockerfileGenerator resolves that).
+        if self._exists("public/index.php", file_index):
+            result["static_dir"] = "public"
+            result["document_root"] = "public"
+        elif self._exists("web/index.php", file_index):
+            result["static_dir"] = "web"
+            result["document_root"] = "web"
+        elif self._exists("index.php", file_index):
+            result["document_root"] = ""
+
         if self._exists("Dockerfile", file_index):
             result["dockerfile_path"] = "Dockerfile"
         return result

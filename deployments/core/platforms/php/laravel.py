@@ -56,6 +56,7 @@ class LaravelPlatform(PHPPlatform):
 
         if self._exists("public/index.php", file_index):
             result["static_dir"] = "public"
+            result["document_root"] = "public"
         return result
 
     def _dir_hint(self, file_index: dict[str, str]) -> set[str]:

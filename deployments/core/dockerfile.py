@@ -868,13 +868,233 @@ def _render_node_family(platform, dockerfile_template, tar_stream, config, logge
     return rendered
 
 
+def _php_member_names(tar_stream) -> list[str]:
+    """Return normalized file paths from the deployment archive."""
+    if tar_stream is None:
+        return []
+    names: list[str] = []
+    try:
+        import tarfile as _tf
+
+        tar_stream.seek(0)
+        with _tf.open(fileobj=tar_stream, mode="r:*") as tar:
+            for member in tar.getmembers():
+                if not member.isfile() and not member.isdir():
+                    continue
+                n = member.name.replace("\\", "/").lstrip("./")
+                if not n or n in {".", ".."} or "/../" in f"/{n}/":
+                    continue
+                names.append(n)
+        tar_stream.seek(0)
+    except Exception:
+        try:
+            tar_stream.seek(0)
+        except Exception:
+            pass
+    return names
+
+
+def _detect_php_document_root(
+    tar_stream,
+    *,
+    user_override: str | None = None,
+    project_cfg=None,
+) -> str:
+    """
+    Resolve Apache DocumentRoot relative to ``/var/www/html``.
+
+    Returns a relative path such as ``""`` (meaning ``/var/www/html``),
+    ``"MyApp"``, or ``"MyApp/public"``.  Never returns an absolute path.
+
+    Priority
+    --------
+    1. Explicit user override (Deploy.config document_root / DOCUMENT_ROOT)
+    2. Laravel / Symfony style: ``…/public/index.php`` (shallowest)
+    3. Plain PHP: shallowest ``index.php``
+    4. Platform inspect hint (``static_dir`` / ``document_root``)
+    5. Single top-level archive directory
+    6. Fallback: ``""`` → ``/var/www/html``
+
+    Handles archives that unpack into a single top-level directory
+    (common for GitHub release zips) without hard-coding any project name.
+    """
+    def _clean_rel(path: str) -> str:
+        p = (path or "").replace("\\", "/").strip().lstrip("./").rstrip("/")
+        if p in {"", ".", ".."} or p.startswith("/") or "/../" in f"/{p}/":
+            return ""
+        return p
+
+    if user_override and str(user_override).strip():
+        return _clean_rel(str(user_override))
+
+    # project_cfg paths (e.g. static_dir="public") are relative to the
+    # *application* root. Archives often wrap that root in a single
+    # top-level directory, so resolve against the tar layout first.
+
+    names = _php_member_names(tar_stream)
+    if not names:
+        if project_cfg is not None:
+            sd = getattr(project_cfg, "static_dir", None) or getattr(
+                project_cfg, "document_root", None
+            )
+            if sd and str(sd).strip().lower() in ("public", "web", "www"):
+                return _clean_rel(str(sd))
+        return ""
+
+    file_names = [n for n in names if not n.endswith("/")]
+    top_level = sorted({n.split("/", 1)[0] for n in names if n})
+    single_prefix = ""
+    if len(top_level) == 1:
+        only = top_level[0]
+        if any(n.startswith(only + "/") for n in names):
+            single_prefix = only
+
+    def _depth(path: str) -> int:
+        return path.count("/")
+
+    public_indexes = [
+        n for n in file_names
+        if n.endswith("/public/index.php") or n == "public/index.php"
+    ]
+    plain_indexes = [
+        n for n in file_names
+        if n == "index.php" or n.endswith("/index.php")
+    ]
+
+    chosen_index: str | None = None
+    if public_indexes:
+        chosen_index = min(public_indexes, key=_depth)
+    elif plain_indexes:
+        chosen_index = min(plain_indexes, key=_depth)
+
+    if chosen_index:
+        rel = chosen_index.rsplit("/", 1)[0] if "/" in chosen_index else ""
+        return _clean_rel(rel)
+
+    if project_cfg is not None:
+        sd = getattr(project_cfg, "static_dir", None) or getattr(
+            project_cfg, "document_root", None
+        )
+        if sd and str(sd).strip():
+            sd_rel = _clean_rel(str(sd))
+            if single_prefix and sd_rel and not sd_rel.startswith(single_prefix):
+                return _clean_rel(f"{single_prefix}/{sd_rel}")
+            return sd_rel or single_prefix
+
+    if single_prefix:
+        return single_prefix
+
+    return ""
+
+
+def _apply_php_document_root(dockerfile: str, document_root_rel: str) -> str:
+    """
+    Set ``APACHE_DOCUMENT_ROOT`` and rewrite Apache vhost / conf paths.
+
+    ``document_root_rel`` is relative to ``/var/www/html`` (may be empty).
+    """
+    rel = (document_root_rel or "").replace("\\", "/").strip().lstrip("./").rstrip("/")
+    if rel in {".", ".."} or rel.startswith("/") or "/../" in f"/{rel}/":
+        rel = ""
+    absolute = f"/var/www/html/{rel}" if rel else "/var/www/html"
+
+    if re.search(r"^ENV\s+APACHE_DOCUMENT_ROOT=", dockerfile, re.MULTILINE):
+        dockerfile = re.sub(
+            r"^ENV\s+APACHE_DOCUMENT_ROOT=.*$",
+            f"ENV APACHE_DOCUMENT_ROOT={absolute}",
+            dockerfile,
+            count=1,
+            flags=re.MULTILINE,
+        )
+    else:
+        dockerfile = re.sub(
+            r"(^FROM\s+[^\n]+\n)",
+            rf"\1\nENV APACHE_DOCUMENT_ROOT={absolute}\n",
+            dockerfile,
+            count=1,
+            flags=re.MULTILINE,
+        )
+
+    # Official php:*-apache images honour APACHE_DOCUMENT_ROOT only when
+    # conf files are rewritten. Always inject the sed block once.
+    if "sites-available" in dockerfile and "APACHE_DOCUMENT_ROOT" in dockerfile:
+        return dockerfile
+
+    sed_block = (
+        "RUN sed -ri -e 's!/var/www/html!${APACHE_DOCUMENT_ROOT}!g' "
+        "/etc/apache2/sites-available/*.conf \\\n"
+        "    && sed -ri -e 's!/var/www/!${APACHE_DOCUMENT_ROOT}!g' "
+        "/etc/apache2/apache2.conf /etc/apache2/conf-available/*.conf \\\n"
+        "    && sed -i 's/AllowOverride None/AllowOverride All/g' "
+        "/etc/apache2/apache2.conf"
+    )
+
+    if re.search(r"^COPY\s+\.\s+/var/www/html/?\s*$", dockerfile, re.MULTILINE):
+        dockerfile = re.sub(
+            r"^(COPY\s+\.\s+/var/www/html/?\s*)$",
+            rf"\1\n\n{sed_block}",
+            dockerfile,
+            count=1,
+            flags=re.MULTILINE,
+        )
+    else:
+        dockerfile = dockerfile.rstrip() + "\n\n" + sed_block + "\n"
+
+    return dockerfile
+
+
 def _render_php(dockerfile_template, tar_stream, config, logger):
     entry_point_override = None
     if config is not None:
         entry_point_override = (config.entry_point or "").strip() or None
+
     rendered = dockerfile_template.replace("{MIRROR_DOCKER}", MIRROR_DOCKER)
+
+    user_doc_root = None
+    project_cfg = None
+    if config is not None:
+        user_doc_root = getattr(config, "document_root", None)
+        env = getattr(config, "environment", None) or {}
+        if not user_doc_root and isinstance(env, dict):
+            user_doc_root = (
+                env.get("APACHE_DOCUMENT_ROOT")
+                or env.get("DOCUMENT_ROOT")
+                or env.get("document_root")
+            )
+            if user_doc_root and str(user_doc_root).startswith("/var/www/html"):
+                user_doc_root = str(user_doc_root)[len("/var/www/html") :].lstrip("/")
+        try:
+            from .platform_bridge import get_project_cfg
+
+            project_cfg = get_project_cfg(config)
+        except Exception:
+            project_cfg = None
+
+    doc_root_rel = _detect_php_document_root(
+        tar_stream,
+        user_override=user_doc_root,
+        project_cfg=project_cfg,
+    )
+
+    if logger:
+        absolute = (
+            f"/var/www/html/{doc_root_rel}" if doc_root_rel else "/var/www/html"
+        )
+        logger.info(
+            "dockerfile_generation",
+            f"PHP Apache DocumentRoot set to '{absolute}'.",
+            progress=14,
+            details={
+                "document_root": absolute,
+                "document_root_rel": doc_root_rel or "",
+                "platform": "php",
+            },
+        )
+
     if entry_point_override:
+        rendered = _apply_php_document_root(rendered, doc_root_rel)
         return _replace_cmd(rendered, entry_point_override)
+
     if "docker-php-ext-install" not in rendered:
         rendered = rendered.replace(
             "COPY . /var/www/html/",
@@ -884,6 +1104,8 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
             "    && sed -i 's/AllowOverride None/AllowOverride All/g' "
             "/etc/apache2/apache2.conf",
         )
+
+    rendered = _apply_php_document_root(rendered, doc_root_rel)
     return rendered
 
 
