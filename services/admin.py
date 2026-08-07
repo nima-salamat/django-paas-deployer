@@ -1,401 +1,337 @@
-from django.db import models
-from django.core.exceptions import ValidationError
-from django.db.models import Sum, Q
-from django.utils.translation import gettext_lazy as _
-from django.utils import timezone
-from plans.models import Plan
-from users.models import User
-from core.base.BaseModel import BaseModel
-from django.conf import settings
-
-from core.global_settings.config import SERVICE_STATUS_CHOICES, VOLUME_MODE_CHOICES
+from django.contrib import admin
+from django.utils.html import format_html
+from django.urls import reverse
+from .models import Service, PrivateNetwork, Volume
 
 
-class PrivateNetwork(BaseModel):
-    name = models.CharField(_("Name"), max_length=50)
-    user = models.ForeignKey(User, verbose_name=_("User Network"), on_delete=models.CASCADE)
-    description = models.TextField(_("Description"), blank=True)
-
-    class Meta:
-        verbose_name = _("Private Network")
-        verbose_name_plural = _("Private Networks")
-
-    def __str__(self):
-        return self.name
-
-    def get_docker_network_name(self):
-        return f"net-{self.id.hex[:8]}-{self.name}"
-
-
-class Service(BaseModel):
-    name = models.CharField(_("Name"), max_length=30, unique=True)
-    user = models.ForeignKey(
-        User,
-        verbose_name=_("User"),
-        on_delete=models.CASCADE,
+# ─────────────────────────────────────────────────────────────
+# Private Network
+# ─────────────────────────────────────────────────────────────
+@admin.register(PrivateNetwork)
+class PrivateNetworkAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "name",
+        "user_link",
+        "description_short",
+        "service_count",
+        "docker_name",
+        "created_at",
     )
-    plan = models.ForeignKey(
-        Plan,
-        verbose_name=_("Plan"),
-        on_delete=models.CASCADE,
-    )
-    network = models.ForeignKey(
-        PrivateNetwork,
-        verbose_name=_("Private Network"),
-        on_delete=models.SET_NULL,
-        null=True,
-        related_name="Service",
-    )
+    list_display_links = ("id", "name")
+    search_fields = ("name", "description", "user__username", "user__email")
+    list_filter = ("user", "created_at")
+    ordering = ("-created_at",)
+    list_per_page = 25
+    autocomplete_fields = ("user",)
+    readonly_fields = ("docker_name", "created_at", "updated_at")
 
-    read_only = models.BooleanField(_("Read only"), default=not (settings.DEBUG))
-
-    selected_deploy = models.OneToOneField(
-        "deploy.Deploy",
-        verbose_name=_("Selected Deploy"),
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="+",
-    )
-    selected_deploy_at = models.DateTimeField(blank=True, null=True)
-    deploy_started = models.DateTimeField(blank=True, null=True)
-    deployed_at = models.DateTimeField(blank=True, null=True)
-    status = models.CharField(
-        _("Deploy Status"),
-        choices=SERVICE_STATUS_CHOICES.choices,
-        default=SERVICE_STATUS_CHOICES.STOPPED,
+    fieldsets = (
+        (
+            None,
+            {
+                "fields": ("name", "user", "description"),
+            },
+        ),
+        (
+            "Docker",
+            {
+                "fields": ("docker_name",),
+            },
+        ),
+        (
+            "Timestamps",
+            {
+                "fields": ("created_at", "updated_at"),
+                "classes": ("collapse",),
+            },
+        ),
     )
 
-    task_id = models.CharField(_("Task ID"), max_length=64, unique=True, null=True, blank=True)
+    @admin.display(description="User", ordering="user__username")
+    def user_link(self, obj):
+        if not obj.user_id:
+            return "—"
+        url = reverse("admin:users_user_change", args=[obj.user_id])
+        return format_html('<a href="{}">{}</a>', url, obj.user.username)
 
-    def save(self, *args, **kwargs):
-        self.full_clean()
+    @admin.display(description="Description")
+    def description_short(self, obj):
+        if obj.description:
+            text = obj.description
+            return (text[:75] + "…") if len(text) > 75 else text
+        return format_html('<span style="color:#6e7681;">—</span>')
 
-        selected_deploy_changed = False
+    @admin.display(description="Services")
+    def service_count(self, obj):
+        count = obj.Service.count()
+        if count == 0:
+            return format_html('<span style="color:#6e7681;">0</span>')
+        return format_html(
+            '<span class="badge badge-primary">{}</span>',
+            count,
+        )
 
-        if self.pk and Service.objects.filter(pk=self.pk).exists():
-            old = Service.objects.get(pk=self.pk)
-            if old.selected_deploy != self.selected_deploy:
-                selected_deploy_changed = True
-        else:
-            selected_deploy_changed = bool(self.selected_deploy)
+    @admin.display(description="Docker Network")
+    def docker_name(self, obj):
+        return format_html(
+            '<code style="font-size:12px;">{}</code>',
+            obj.get_docker_network_name(),
+        )
 
-        if selected_deploy_changed:
-            self.selected_deploy_at = timezone.now()
-        super().save(*args, **kwargs)
 
-    def get_docker_service_name(self):
-        return f"app-{self.id.hex[:8]}-{self.name.lower()}"
+# ─────────────────────────────────────────────────────────────
+# Service
+# ─────────────────────────────────────────────────────────────
+@admin.register(Service)
+class ServiceAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "name",
+        "user_link",
+        "plan_link",
+        "network_link",
+        "selected_deploy_link",
+        "status_badge",
+        "read_only",
+        "deployed_at",
+        "created_at",
+    )
+    list_display_links = ("id", "name")
+    search_fields = (
+        "name",
+        "user__username",
+        "user__email",
+        "plan__name",
+        "network__name",
+    )
+    list_filter = ("plan", "network", "status", "read_only", "created_at")
+    ordering = ("-created_at",)
+    list_per_page = 25
+    list_select_related = ("user", "plan", "network", "selected_deploy")
+    autocomplete_fields = ("user", "plan", "network", "selected_deploy")
+    readonly_fields = (
+        "selected_deploy_at",
+        "deploy_started",
+        "deployed_at",
+        "docker_service_name",
+        "created_at",
+        "updated_at",
+    )
 
-    @property
-    def get_service_name(self):
-        return self.get_docker_service_name()
-
-    # ------------------------------------------------------------------
-    # Storage quota helpers (plan.max_storage is GB → MB)
-    # ------------------------------------------------------------------
-
-    def get_storage_quota_mb(self) -> int:
-        """Plan max_storage is in GB. Convert to MiB (1024-based)."""
-        try:
-            gb = float(getattr(self.plan, "max_storage", 0) or 0)
-        except (TypeError, ValueError):
-            gb = 0.0
-        return max(0, int(gb * 1024))
-
-    def get_used_storage_mb(self, *, exclude_volume_id=None) -> int:
-        """
-        Sum of size_mb of EVERY volume owned by this service.
-
-        CRITICAL quota rule (same as Railway / Render persistent disks):
-          - Ownership is Volume.service_id == this.id.
-          - Soft-detached volumes (service_attachments cleared, FK kept)
-            STILL count toward the plan limit.
-          - Only hard-release (service=None) or permanent delete frees quota.
-          - Attach vs detach does NOT change the sum — both are included.
-          - Also includes any legacy row that still lists this service in
-            service_attachments.
-        """
-        from django.db.models import Q
-
-        sid = str(self.pk)
-        qs = Volume.objects.filter(
-            Q(service_id=self.pk) | Q(service_attachments__has_key=sid)
-        ).distinct()
-        if exclude_volume_id:
-            qs = qs.exclude(pk=exclude_volume_id)
-        total = qs.aggregate(s=Sum("size_mb"))["s"]
-        return int(total or 0)
-
-    def get_remaining_storage_mb(self, *, exclude_volume_id=None) -> int:
-        quota = self.get_storage_quota_mb()
-        used = self.get_used_storage_mb(exclude_volume_id=exclude_volume_id)
-        return max(0, quota - used)
-
-    def storage_quota_summary(self) -> dict:
-        quota = self.get_storage_quota_mb()
-        used = self.get_used_storage_mb()
-        remaining = max(0, quota - used)
-        return {
-            "quota_mb": quota,
-            "used_mb": used,
-            "remaining_mb": remaining,
-            "quota_gb": round(quota / 1024, 2) if quota else 0,
-            "used_gb": round(used / 1024, 2) if used else 0,
-            "remaining_gb": round(remaining / 1024, 2) if remaining else 0,
-        }
-
-    def can_allocate_storage(self, size_mb: int, *, exclude_volume_id=None) -> tuple[bool, str]:
-        """Return (ok, error_message)."""
-        try:
-            size = int(size_mb)
-        except (TypeError, ValueError):
-            return False, "Volume size must be a positive integer (MB)."
-        if size <= 0:
-            return False, "Volume size must be greater than zero."
-        remaining = self.get_remaining_storage_mb(exclude_volume_id=exclude_volume_id)
-        if size > remaining:
-            return (
-                False,
-                (
-                    f"Not enough storage on this service plan. "
-                    f"Requested {size} MB, remaining {remaining} MB "
-                    f"(plan limit {self.get_storage_quota_mb()} MB)."
+    fieldsets = (
+        (
+            "Identity",
+            {
+                "fields": ("name", "user", "plan", "network", "read_only"),
+            },
+        ),
+        (
+            "Deployment",
+            {
+                "fields": (
+                    "selected_deploy",
+                    "selected_deploy_at",
+                    "deploy_started",
+                    "deployed_at",
+                    "status",
+                    "task_id",
                 ),
-            )
-        return True, ""
-
-    def __str__(self):
-        return f"Service: {self.name}"
-
-
-class Volume(BaseModel):
-    """
-    Docker volume owned by at most ONE service (exclusive).
-
-    - Volumes do NOT share between services.
-    - A service may have multiple volumes.
-    - Total size_mb of volumes for a service must not exceed plan.max_storage (GB → MB).
-    - service_attachments keeps bind/mode for the owning service only
-      (single key = str(service.id)).
-    """
-
-    name = models.CharField(unique=True, max_length=32)
-    user = models.ForeignKey(
-        User,
-        verbose_name=_("User"),
-        on_delete=models.CASCADE,
+            },
+        ),
+        (
+            "Docker",
+            {
+                "fields": ("docker_service_name",),
+            },
+        ),
+        (
+            "Timestamps",
+            {
+                "fields": ("created_at", "updated_at"),
+                "classes": ("collapse",),
+            },
+        ),
     )
-    # Exclusive ownership — one service only (null = unused / orphan)
-    service = models.ForeignKey(
-        Service,
-        verbose_name=_("Service"),
-        related_name="volumes",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        help_text=_("Owning service. Volumes cannot be shared across services."),
-    )
-    # bind/mode for the owning service only: { "<service_id>": {"bind": "...", "mode": "rw"} }
-    service_attachments = models.JSONField(
-        _("Service Attachments"),
-        default=dict,
-        blank=True,
-        help_text=_("Owning service ID → {bind, mode}. Only one service is allowed."),
-    )
-    default_bind = models.CharField(
-        _("Default Bind Directory"), max_length=255, blank=True, default=""
-    )
-    default_mode = models.CharField(
-        _("Default Mode"),
-        max_length=255,
-        choices=VOLUME_MODE_CHOICES.choices,
-        default=VOLUME_MODE_CHOICES.READ_WRITE,
-        blank=True,
-    )
-    size_mb = models.PositiveIntegerField()
 
-    class Meta:
-        verbose_name = _("Volume")
-        verbose_name_plural = _("Volumes")
+    @admin.display(description="User", ordering="user__username")
+    def user_link(self, obj):
+        if not obj.user_id:
+            return "—"
+        url = reverse("admin:users_user_change", args=[obj.user_id])
+        return format_html('<a href="{}">{}</a>', url, obj.user.username)
 
-    def clean(self):
-        super().clean()
-        # Enforce exclusive ownership: attachments may only contain the owning service
-        attachments = self.service_attachments or {}
-        if self.service_id:
-            sid = str(self.service_id)
-            # Drop any foreign service keys; allow empty att = soft-detached
-            if attachments:
-                if sid in attachments:
-                    self.service_attachments = {sid: attachments[sid]}
-                else:
-                    self.service_attachments = {}
-            # Quota check when assigned to a service (mounted or soft-detached)
-            ok, msg = self.service.can_allocate_storage(
-                self.size_mb, exclude_volume_id=self.pk
-            )
-            if not ok:
-                raise ValidationError({"size_mb": msg})
-        else:
-            # Unused volume: no attachments allowed
-            if attachments:
-                self.service_attachments = {}
+    @admin.display(description="Plan", ordering="plan__name")
+    def plan_link(self, obj):
+        if not obj.plan_id:
+            return "—"
+        url = reverse("admin:plans_plan_change", args=[obj.plan_id])
+        return format_html('<a href="{}">{}</a>', url, obj.plan.name)
 
-    def save(self, *args, **kwargs):
-        self.full_clean()
-        # Keep attachments consistent with exclusive ownership.
-        #
-        # IMPORTANT: empty service_attachments + service_id set means
-        # soft-detached (owned, counts toward quota, NOT mounted).
-        # Do NOT auto-recreate attachment metadata on every save — that
-        # made detach appear to succeed then immediately re-attach.
-        if self.service_id:
-            sid = str(self.service_id)
-            att = dict(self.service_attachments or {})
-            if att:
-                # Keep only the owning service key; drop foreign keys
-                if sid in att:
-                    self.service_attachments = {sid: att[sid]}
-                else:
-                    # Stale keys only → treat as soft-detached
-                    self.service_attachments = {}
-            else:
-                self.service_attachments = {}
-        else:
-            self.service_attachments = {}
-        super().save(*args, **kwargs)
+    @admin.display(description="Network", ordering="network__name")
+    def network_link(self, obj):
+        if not obj.network_id:
+            return format_html('<span style="color:#6e7681;">—</span>')
+        url = reverse("admin:services_privatenetwork_change", args=[obj.network_id])
+        return format_html('<a href="{}">{}</a>', url, obj.network.name)
 
-    def attach_to_service(self, service: Service, bind: str = None, mode: str = None):
-        """
-        Attach (or re-attach) exclusively to one service.
-        Raises ValidationError if quota exceeded or ownership conflict.
-        """
-        if str(service.user_id) != str(self.user_id):
-            raise ValidationError(_("Volume and service must belong to the same user."))
-
-        # Already owned by a different service?
-        if self.service_id and str(self.service_id) != str(service.id):
-            raise ValidationError(
-                _(
-                    "This volume is already attached to another service. "
-                    "Volumes cannot be shared between services."
-                )
-            )
-
-        # Quota
-        ok, msg = service.can_allocate_storage(
-            self.size_mb, exclude_volume_id=self.pk
+    @admin.display(description="Selected Deploy")
+    def selected_deploy_link(self, obj):
+        if not obj.selected_deploy_id:
+            return format_html('<span style="color:#6e7681;">—</span>')
+        url = reverse("admin:deploy_deploy_change", args=[obj.selected_deploy_id])
+        return format_html(
+            '<a href="{}">{}</a>',
+            url,
+            obj.selected_deploy.name,
         )
-        if not ok:
-            raise ValidationError(msg)
 
-        if bind is None:
-            bind = self.default_bind or "/data"
-        if mode is None:
-            mode = self.default_mode or "rw"
-
-        self.service = service
-        self.service_attachments = {
-            str(service.id): {
-                "bind": bind,
-                "mode": mode,
-                "attached_at": timezone.now().isoformat(),
-            }
+    @admin.display(description="Status", ordering="status")
+    def status_badge(self, obj):
+        # Adjust keys to match your SERVICE_STATUS_CHOICES values
+        colors = {
+            "stopped": "#6b7280",
+            "running": "#16a34a",
+            "deploying": "#2563eb",
+            "failed": "#dc2626",
+            "pending": "#f59e0b",
+            "error": "#dc2626",
         }
-        self.save()
-
-    def detach_from_service(self, service: Service = None):
-        """
-        Soft-detach (DB only):
-          - Clears service_attachments → is_mounted_on_service() == False
-          - KEEPS service FK → still counts toward plan storage quota
-          - Does NOT touch Docker; next deploy must skip non-mounted volumes
-
-        Uses QuerySet.update (skips save/clean) so attachments cannot be
-        re-created by Volume.save().
-        """
-        if service is not None and self.service_id and str(self.service_id) != str(service.id):
-            return False
-        updated = Volume.objects.filter(pk=self.pk).update(service_attachments={})
-        self.service_attachments = {}
-        try:
-            self.refresh_from_db(fields=["service_attachments"])
-        except Exception:
-            pass
-        return updated > 0
-
-    def release_from_service(self, service: Service = None):
-        """
-        Hard-release:
-          - service = None, service_attachments = {}
-          - No longer counts toward any service quota
-        """
-        if service is not None and self.service_id and str(self.service_id) != str(service.id):
-            return False
-        updated = Volume.objects.filter(pk=self.pk).update(
-            service=None,
-            service_attachments={},
-        )
-        self.service = None
-        self.service_attachments = {}
-        try:
-            self.refresh_from_db(fields=["service", "service_attachments"])
-        except Exception:
-            pass
-        return updated > 0
-
-    def get_attached_services(self):
-        """Return list of Service objects (0 or 1)."""
-        if self.service_id:
-            return Service.objects.filter(pk=self.service_id)
-        return Service.objects.none()
-
-    def get_bind_for_service(self, service: Service):
-        if not service or str(service.id) != str(self.service_id or ""):
-            return self.default_bind
-        return (self.service_attachments or {}).get(str(service.id), {}).get(
-            "bind", self.default_bind
+        color = colors.get(str(obj.status).lower(), "#6b7280")
+        label = obj.get_status_display() if hasattr(obj, "get_status_display") else obj.status
+        return format_html(
+            '<span class="badge" style="background:{};">{}</span>',
+            color,
+            label,
         )
 
-    def get_mode_for_service(self, service: Service):
-        if not service or str(service.id) != str(self.service_id or ""):
-            return self.default_mode
-        return (self.service_attachments or {}).get(str(service.id), {}).get(
-            "mode", self.default_mode
+    @admin.display(description="Docker Service")
+    def docker_service_name(self, obj):
+        return format_html(
+            '<code style="font-size:12px;">{}</code>',
+            obj.get_docker_service_name(),
         )
 
-    def is_attached_to_service(self, service: Service):
-        """True if this service owns the volume (counts toward quota)."""
-        return bool(service and str(service.id) == str(self.service_id or ""))
 
-    def is_mounted_on_service(self, service: Service = None) -> bool:
-        """
-        True only when service_attachments has a non-empty entry for the owner.
+# ─────────────────────────────────────────────────────────────
+# Volume
+# ─────────────────────────────────────────────────────────────
+@admin.register(Volume)
+class VolumeAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "name",
+        "user_link",
+        "legacy_service_link",
+        "default_bind",
+        "default_mode",
+        "size_mb_display",
+        "attachment_count",
+        "docker_volume_name",
+        "created_at",
+    )
+    list_display_links = ("id", "name")
+    search_fields = (
+        "name",
+        "user__username",
+        "user__email",
+        "service__name",
+        "default_bind",
+    )
+    list_filter = ("default_mode", "user", "created_at")
+    ordering = ("-created_at",)
+    list_per_page = 25
+    autocomplete_fields = ("user", "service")
+    readonly_fields = (
+        "service_attachments_pretty",
+        "docker_volume_name",
+        "created_at",
+        "updated_at",
+    )
 
-        Soft-detach → attachments {} → False (even though service FK remains).
-        """
-        if not self.service_id:
-            return False
-        if service is not None and str(service.id) != str(self.service_id):
-            return False
-        atts = self.service_attachments or {}
-        if not atts:
-            return False
-        sid = str(self.service_id)
-        # Tolerate key stored as str(uuid) or bare hex
-        if sid in atts and atts[sid]:
-            return True
-        sid_hex = sid.replace("-", "")
-        for k, v in atts.items():
-            if not v:
-                continue
-            if str(k) == sid or str(k).replace("-", "") == sid_hex:
-                return True
-        return False
+    fieldsets = (
+        (
+            "Identity",
+            {
+                "fields": ("name", "user", "size_mb"),
+            },
+        ),
+        (
+            "Defaults",
+            {
+                "fields": ("default_bind", "default_mode"),
+            },
+        ),
+        (
+            "Attachments",
+            {
+                "fields": (
+                    "service",
+                    "service_attachments",
+                    "service_attachments_pretty",
+                ),
+            },
+        ),
+        (
+            "Docker",
+            {
+                "fields": ("docker_volume_name",),
+            },
+        ),
+        (
+            "Timestamps",
+            {
+                "fields": ("created_at", "updated_at"),
+                "classes": ("collapse",),
+            },
+        ),
+    )
 
-    def get_docker_volume_name(self):
-        return f"vol-{self.id.hex[:8]}-{self.name}"
+    @admin.display(description="User", ordering="user__username")
+    def user_link(self, obj):
+        if not obj.user_id:
+            return "—"
+        url = reverse("admin:users_user_change", args=[obj.user_id])
+        return format_html('<a href="{}">{}</a>', url, obj.user.username)
 
-    def __str__(self):
-        return f"Volume: {self.name} ({self.size_mb} MB)"
+    @admin.display(description="Legacy Service")
+    def legacy_service_link(self, obj):
+        if not obj.service_id:
+            return format_html('<span style="color:#6e7681;">—</span>')
+        url = reverse("admin:services_service_change", args=[obj.service_id])
+        return format_html('<a href="{}">{}</a>', url, obj.service.name)
+
+    @admin.display(description="Size", ordering="size_mb")
+    def size_mb_display(self, obj):
+        return f"{obj.size_mb:,} MB"
+
+    @admin.display(description="Attachments")
+    def attachment_count(self, obj):
+        attachments = obj.service_attachments or {}
+        count = len(attachments)
+        if count == 0:
+            return format_html('<span style="color:#6e7681;">0</span>')
+        return format_html(
+            '<span class="badge badge-info">{}</span>',
+            count,
+        )
+
+    @admin.display(description="Docker Volume")
+    def docker_volume_name(self, obj):
+        return format_html(
+            '<code style="font-size:12px;">{}</code>',
+            obj.get_docker_volume_name(),
+        )
+
+    @admin.display(description="Attachments (pretty)")
+    def service_attachments_pretty(self, obj):
+        import json
+        data = obj.service_attachments or {}
+        if not data:
+            return "—"
+        pretty = json.dumps(data, indent=2, ensure_ascii=False)
+        return format_html(
+            '<pre style="background:#0f1117;padding:12px;border-radius:6px;'
+            'font-size:12px;max-height:300px;overflow:auto;">{}</pre>',
+            pretty,
+        )
