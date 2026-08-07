@@ -225,16 +225,13 @@ class Volume(BaseModel):
         attachments = self.service_attachments or {}
         if self.service_id:
             sid = str(self.service_id)
-            # Drop any other keys
-            if set(attachments.keys()) - {sid}:
-                self.service_attachments = {
-                    sid: attachments.get(sid)
-                    or {
-                        "bind": self.default_bind or "/data",
-                        "mode": self.default_mode or "rw",
-                    }
-                }
-            # Quota check when assigned to a service
+            # Drop any foreign service keys; allow empty att = soft-detached
+            if attachments:
+                if sid in attachments:
+                    self.service_attachments = {sid: attachments[sid]}
+                else:
+                    self.service_attachments = {}
+            # Quota check when assigned to a service (mounted or soft-detached)
             ok, msg = self.service.can_allocate_storage(
                 self.size_mb, exclude_volume_id=self.pk
             )
@@ -247,22 +244,24 @@ class Volume(BaseModel):
 
     def save(self, *args, **kwargs):
         self.full_clean()
-        # Keep attachments consistent with exclusive ownership
+        # Keep attachments consistent with exclusive ownership.
+        #
+        # IMPORTANT: empty service_attachments + service_id set means
+        # soft-detached (owned, counts toward quota, NOT mounted).
+        # Do NOT auto-recreate attachment metadata on every save — that
+        # made detach appear to succeed then immediately re-attach.
         if self.service_id:
             sid = str(self.service_id)
             att = dict(self.service_attachments or {})
-            if sid not in att:
-                att = {
-                    sid: {
-                        "bind": self.default_bind or "/data",
-                        "mode": self.default_mode or "rw",
-                        "attached_at": timezone.now().isoformat(),
-                    }
-                }
+            if att:
+                # Keep only the owning service key; drop foreign keys
+                if sid in att:
+                    self.service_attachments = {sid: att[sid]}
+                else:
+                    # Stale keys only → treat as soft-detached
+                    self.service_attachments = {}
             else:
-                # Keep only this service key
-                att = {sid: att[sid]}
-            self.service_attachments = att
+                self.service_attachments = {}
         else:
             self.service_attachments = {}
         super().save(*args, **kwargs)
@@ -312,12 +311,19 @@ class Volume(BaseModel):
 
         Quota is based on ownership, so size_mb still counts toward the
         service plan until the volume is released or deleted.
+
+        Uses QuerySet.update to avoid any save()/clean() path that could
+        re-populate service_attachments.
         """
         if service is not None and self.service_id and str(self.service_id) != str(service.id):
             return
-        # Keep self.service — ownership & quota stay on this service
+        Volume.objects.filter(pk=self.pk).update(service_attachments={})
         self.service_attachments = {}
-        self.save(update_fields=["service_attachments"])
+        # refresh in-memory
+        try:
+            self.refresh_from_db(fields=["service_attachments"])
+        except Exception:
+            pass
 
     def release_from_service(self, service: Service = None):
         """

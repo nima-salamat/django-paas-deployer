@@ -20,7 +20,7 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes, action
 from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 from deployments.celery.tasks import deploy as start_service
@@ -39,13 +39,14 @@ logger = logging.getLogger(__name__)
 
 def _service_is_mutable(service) -> tuple:
     """
-    Volume attach / detach / mounted-delete / metadata edit is allowed when:
-      1. service status is not busy (running, deploying, queued, stopping, pending, …)
-      2. Docker container for this service does not exist (even if exited)
-      3. Docker image for this service does not exist
+    Volume attach / detach / mounted-delete is allowed when:
+      1. service status is idle (stopped / failed / succeeded / empty — NOT
+         running, deploying, queued, stopping, pending)
+      2. Docker *container* for this service does not exist (even if exited)
 
-    This matches managed platforms (Railway, Render, Fly.io): storage topology
-    changes are only safe when the runtime is fully torn down.
+    Image presence alone does NOT block: after a normal stop the image may
+    remain, and volume topology changes are still safe without a container.
+    Use purge_service_runtime if you also want images removed.
 
     Returns (ok: bool, reason: str).
     """
@@ -60,29 +61,16 @@ def _service_is_mutable(service) -> tuple:
         "running",
         "updating...",
         "pending",
-        "succeeded",  # treat post-deploy success as still "has runtime" until stopped
-    }
-    # "succeeded" alone should not block if container already gone — checked below.
-    # Keep only true lifecycle-busy states here:
-    busy = {
-        "queued",
-        "deploying",
-        "stopping",
-        "running",
-        "updating...",
-        "pending",
     }
     if status in busy:
         return (
             False,
-            f"Service is '{status}'. Stop it and use 'Remove container & image' "
-            "before changing volumes.",
+            f"Service is '{status}'. Stop it first, then change volumes.",
         )
 
     name = service.get_docker_service_name()
     try:
         client = Client()()
-        # 1) Container present (any state) → block
         try:
             c = client.containers.get(name)
             state = ""
@@ -93,34 +81,19 @@ def _service_is_mutable(service) -> tuple:
             return (
                 False,
                 f"Container still exists (status={state or 'unknown'}). "
-                "Use 'Remove container & image' first, then change volumes.",
+                "Use Danger zone → Remove runtime first, then change volumes.",
             )
         except DockerNotFound:
             pass
         except Exception as exc:
-            logger.warning("container check for %s: %s", name, exc)
-
-        # 2) Image present → block (user asked for image + container both gone)
-        for ref in (name, f"{name}:latest"):
-            try:
-                client.images.get(ref)
-                return (
-                    False,
-                    f"Image still exists ({ref}). "
-                    "Use 'Remove container & image' first, then change volumes.",
-                )
-            except DockerNotFound:
-                continue
-            except Exception as exc:
-                # image API may raise differently; treat unknown as absent
-                msg = str(exc).lower()
-                if "no such image" in msg or "not found" in msg:
-                    continue
-                logger.warning("image check for %s: %s", ref, exc)
+            # Unreachable docker: do NOT block — service is already stopped in DB.
+            # Blocking here made detach impossible even with no container.
+            logger.warning("container check for %s (non-blocking): %s", name, exc)
     except Exception as exc:
-        logger.warning("docker client for mutability check: %s", exc)
+        logger.warning("docker client for mutability check (non-blocking): %s", exc)
 
     return True, ""
+
 
 
 def _docker_volume_exists(volume) -> bool:
@@ -696,6 +669,98 @@ class VolumeViewSet(ModelViewSet):
             },
             status=status.HTTP_200_OK,
         )
+
+
+    @action(detail=True, methods=["post"], url_path="detach")
+    def detach(self, request, pk=None):
+        """
+        Soft-detach this volume from its owning service.
+        POST /volume/{id}/detach/
+        Keeps ownership (quota); clears mount metadata only.
+        """
+        volume = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
+        if not volume.service_id:
+            return Response(
+                {"success": _("Volume is already unowned."), "is_mounted": False},
+                status=status.HTTP_200_OK,
+            )
+        ok, reason = _service_is_mutable(volume.service)
+        if not ok:
+            return Response({"error": reason}, status=status.HTTP_409_CONFLICT)
+
+        volume.detach_from_service()
+        volume.refresh_from_db()
+        storage = None
+        try:
+            if volume.service_id:
+                storage = volume.service.storage_quota_summary()
+        except Exception:
+            pass
+        return Response(
+            {
+                "success": _("Volume detached (soft)."),
+                "service": str(volume.service_id) if volume.service_id else None,
+                "is_mounted": volume.is_mounted_on_service(),
+                "storage": storage,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"], url_path="attach")
+    def attach(self, request, pk=None):
+        """
+        Attach volume to a service.
+        POST /volume/{id}/attach/  body: { "service": "<uuid>" }
+        """
+        volume = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
+        service_raw = request.data.get("service") or request.data.get("service_id")
+        if not service_raw:
+            return Response(
+                {"error": _("service is required.")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        target = get_object_or_404(
+            Service.objects.filter(user=request.user), pk=service_raw
+        )
+        ok, reason = _service_is_mutable(target)
+        if not ok:
+            return Response({"error": reason}, status=status.HTTP_409_CONFLICT)
+        if volume.service_id and str(volume.service_id) != str(target.id):
+            return Response(
+                {"error": _("Volume is owned by another service.")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            bind = volume.default_bind or "/data"
+            mode = volume.default_mode or "rw"
+            volume.attach_to_service(target, bind=bind, mode=mode)
+        except Exception as exc:
+            from django.core.exceptions import ValidationError as DjangoValidationError
+            if isinstance(exc, DjangoValidationError):
+                msgs = getattr(exc, "message_dict", None) or {
+                    "detail": list(getattr(exc, "messages", [str(exc)]))
+                }
+                return Response(
+                    {"error": _("Can not attach Volume"), "errors": msgs},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            raise
+        volume.refresh_from_db()
+        storage = None
+        try:
+            storage = target.storage_quota_summary()
+        except Exception:
+            pass
+        return Response(
+            {
+                "success": _("Volume attached."),
+                "service": str(volume.service_id),
+                "is_mounted": volume.is_mounted_on_service(),
+                "storage": storage,
+            },
+            status=status.HTTP_200_OK,
+        )
+
 
     def destroy(self, request, pk=None, *args, **kwargs):
         """
