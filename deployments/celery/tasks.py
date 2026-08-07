@@ -534,11 +534,13 @@ def run_db_deploy(self, deploy_id: str | int) -> None:
 
     event_sink = None
     try:
-        from deploy.sink import DBAndChannelEventSink
-
+        try:
+            from deployments.core.sink import DBAndChannelEventSink
+        except ImportError:
+            from deploy.sink import DBAndChannelEventSink
         event_sink = DBAndChannelEventSink(deploy.pk)
     except Exception:
-        logger.debug("Event sink unavailable for deploy %s", deploy.pk)
+        logger.exception("Event sink unavailable for deploy %s", deploy.pk)
 
     try:
         result = DBDeployer().deploy(

@@ -45,7 +45,7 @@ class VitePlatform(NodePlatform):
                 "port": 4173,
                 "build_dir": "dist",
                 "build_command": "npm run build",
-                "start_command": "nginx -g "daemon off;"",
+                "start_command": 'nginx -g "daemon off;"',
             }
         )
         return base

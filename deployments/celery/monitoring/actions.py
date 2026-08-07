@@ -55,7 +55,10 @@ def _create_deploy_log(
 
     # Live push to connected browsers
     try:
-        from deployments.core.sink import DBAndChannelEventSink
+        try:
+            from deployments.core.sink import DBAndChannelEventSink
+        except ImportError:
+            from deploy.sink import DBAndChannelEventSink
         from deployments.core.types import DeploymentEvent
 
         sink = DBAndChannelEventSink(deploy.pk)

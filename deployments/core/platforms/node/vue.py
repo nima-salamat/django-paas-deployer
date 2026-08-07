@@ -39,7 +39,7 @@ class VuePlatform(NodePlatform):
                 "port": 80,
                 "build_dir": "dist",
                 "build_command": "npm run build",
-                "start_command": "nginx -g daemon off;",
+                'start_command': 'nginx -g "daemon off;"',
             }
         )
         return base

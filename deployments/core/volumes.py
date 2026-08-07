@@ -18,6 +18,13 @@ class VolumeMountManager:
         self.logger = logger
 
     def prepare(self, volumes: list[VolumeSpec]) -> dict:
+        """
+        Ensure named volumes exist and return docker-py binds dict.
+
+        size_mb on VolumeSpec is application quota metadata only. It is
+        forwarded to Volume() for drivers that support size limits; the
+        stock local driver ignores it (see volume_manager.Volume._options).
+        """
         binds = {}
         targets = set()
 
@@ -44,13 +51,18 @@ class VolumeMountManager:
                         "volume_creation",
                         f"Ensuring Docker volume '{volume.source}' exists.",
                         progress=42,
-                        details={"volume": volume.source, "target": target},
+                        details={
+                            "volume": volume.source,
+                            "target": target,
+                            "size_mb": volume.size_mb,
+                            "driver": volume.driver or "local",
+                        },
                     )
                 Volume(
                     name=volume.source,
                     size_mb=volume.size_mb,
-                    driver=volume.driver,
-                    driver_opts=volume.driver_opts,
+                    driver=volume.driver or "local",
+                    driver_opts=dict(volume.driver_opts or {}),
                 ).ensure()
             elif mount_type == "bind" and self.logger:
                 self.logger.info(

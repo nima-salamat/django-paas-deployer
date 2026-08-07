@@ -287,21 +287,47 @@ class DeploymentOrchestrator:
             )
 
     def _on_build_output(self, chunk):
+        """
+        Forward docker build stream to DeploymentLogger.
+
+        High-volume lines (layer hashes, intermediate containers) still go to
+        the Python logger via DeploymentLogger, but the sink filters noise
+        before writing DeployLog / WebSocket.  Milestone and error lines are
+        always promoted.
+        """
         if "stream" in chunk:
-            message = chunk["stream"].strip()
-            if message:
+            message = (chunk.get("stream") or "").strip()
+            if not message:
+                return
+            lower = message.lower()
+            # Promote milestones so UI always sees them even under throttle
+            if any(
+                k in lower
+                for k in (
+                    "successfully built",
+                    "successfully tagged",
+                    "writing image",
+                    "error",
+                    "failed",
+                )
+            ):
+                self.logger.info("image_build", message, progress=30)
+            else:
                 self.logger.info("image_build", message, progress=25)
         elif "status" in chunk:
             status = chunk.get("status")
             progress = chunk.get("progress")
             message = f"{status} {progress}".strip() if progress else status
             self.logger.info(
-                "image_build", message, progress=25, details={"docker_status": status}
+                "image_build",
+                message,
+                progress=25,
+                details={"docker_status": status},
             )
         elif "error" in chunk:
             self.logger.error(
                 "image_build",
-                chunk.get("error"),
+                chunk.get("error") or "Docker build error",
                 progress=25,
                 details={"docker_build_error": chunk},
             )

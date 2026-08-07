@@ -16,6 +16,16 @@ logger = logging.getLogger(__name__)
 
 
 class DeploymentConsumer(AsyncJsonWebsocketConsumer):
+    """
+    Live deployment events for one Deploy row.
+
+    Client connects to:
+      ws/deployments/<deploy_id>/?token=<jwt>
+
+    Server pushes:
+      {"type": "deployment.event", "event": {stage, message, level, progress, ...}}
+    """
+
     async def connect(self):
         query = self.scope.get("query_string", b"").decode("utf-8")
         params = urllib.parse.parse_qs(query)
@@ -34,7 +44,9 @@ class DeploymentConsumer(AsyncJsonWebsocketConsumer):
             return
 
         self.user_id = int(user_id)
-        self.deploy_id = self.scope["url_route"]["kwargs"].get("deploy_id")
+        # Normalise to string so group name matches sink (deploy_<str(pk)>)
+        raw_id = self.scope["url_route"]["kwargs"].get("deploy_id")
+        self.deploy_id = str(raw_id) if raw_id is not None else None
         if not self.deploy_id:
             await self.close(code=4004)
             return
@@ -48,15 +60,22 @@ class DeploymentConsumer(AsyncJsonWebsocketConsumer):
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
 
-        # Send a bootstrap ack so the client knows the socket is live
+        bootstrap = await self._bootstrap_snapshot()
         await self.send_json(
             {
                 "type": "deployment.connected",
                 "event": {
-                    "deploy_id": str(self.deploy_id),
+                    "deploy_id": self.deploy_id,
                     "message": "Subscribed to deployment events.",
+                    **bootstrap,
                 },
             }
+        )
+        logger.info(
+            "WS subscribed deploy=%s user=%s group=%s",
+            self.deploy_id,
+            self.user_id,
+            self.group_name,
         )
 
     async def disconnect(self, code):
@@ -67,12 +86,8 @@ class DeploymentConsumer(AsyncJsonWebsocketConsumer):
             except Exception:
                 logger.debug("group_discard failed", exc_info=True)
 
-    # ------------------------------------------------------------------
-    # Channel-layer handler (type = "deployment.message")
-    # ------------------------------------------------------------------
-
     async def deployment_message(self, event):
-    
+        """Channel-layer handler: type = \"deployment.message\"."""
         payload = event.get("payload") or {}
         try:
             await self.send_json({"type": "deployment.event", "event": payload})
@@ -81,10 +96,6 @@ class DeploymentConsumer(AsyncJsonWebsocketConsumer):
                 "Failed to send deployment event to client deploy=%s",
                 getattr(self, "deploy_id", None),
             )
-
-    # ------------------------------------------------------------------
-    # Permission
-    # ------------------------------------------------------------------
 
     @database_sync_to_async
     def _user_may_subscribe(self, deploy_id, user_id: int) -> bool:
@@ -106,3 +117,20 @@ class DeploymentConsumer(AsyncJsonWebsocketConsumer):
             return bool(getattr(user, "is_superuser", False))
         except User.DoesNotExist:
             return False
+
+    @database_sync_to_async
+    def _bootstrap_snapshot(self) -> dict:
+        """Send current Deploy progress so late subscribers catch up."""
+        try:
+            deploy = Deploy.objects.only(
+                "status", "stage", "progress", "status_message", "error_message"
+            ).get(pk=self.deploy_id)
+            return {
+                "status": getattr(deploy, "status", None),
+                "stage": getattr(deploy, "stage", None),
+                "progress": getattr(deploy, "progress", None),
+                "status_message": getattr(deploy, "status_message", None),
+                "error_message": getattr(deploy, "error_message", None) or None,
+            }
+        except Exception:
+            return {}
