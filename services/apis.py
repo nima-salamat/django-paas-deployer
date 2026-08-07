@@ -37,6 +37,123 @@ from docker.errors import NotFound as DockerNotFound
 logger = logging.getLogger(__name__)
 
 
+def _service_is_mutable(service) -> tuple:
+    """
+    Volumes may only be attached/detached/deleted when:
+      - service is stopped (or no service)
+      - Docker container does not exist
+      - Docker image does not exist (for app services)
+    Returns (ok: bool, reason: str).
+    """
+    if service is None:
+        return True, ""
+
+    status = str(getattr(service, "status", "") or "").lower()
+    busy = {
+        "queued",
+        "deploying",
+        "stopping",
+        "running",
+        "updating...",
+        "pending",
+    }
+    if status in busy:
+        return (
+            False,
+            f"Service is '{status}'. Stop it and remove container/image before changing volumes.",
+        )
+
+    name = service.get_docker_service_name()
+    try:
+        client = Client()()
+        try:
+            c = client.containers.get(name)
+            if c is not None:
+                return (
+                    False,
+                    "Container still exists. Remove container & image first, then change volumes.",
+                )
+        except DockerNotFound:
+            pass
+        except Exception as exc:
+            logger.warning("container check for %s: %s", name, exc)
+
+        # Image presence (tag :latest and bare name)
+        try:
+            images = client.images.list(name=name)
+            if images:
+                return (
+                    False,
+                    "Image still exists. Remove container & image first, then change volumes.",
+                )
+        except Exception as exc:
+            logger.warning("image check for %s: %s", name, exc)
+    except Exception as exc:
+        logger.warning("docker client for mutability check: %s", exc)
+
+    return True, ""
+
+
+def _purge_service_runtime(service) -> dict:
+    """Force-stop/remove container and related images. Always best-effort."""
+    name = service.get_docker_service_name()
+    report = {"container": None, "images": [], "errors": []}
+    try:
+        client = Client()()
+    except Exception as exc:
+        report["errors"].append(str(exc))
+        return report
+
+    # Container
+    try:
+        c = client.containers.get(name)
+        try:
+            c.reload()
+            if getattr(c, "status", "") == "running":
+                c.stop(timeout=15)
+        except Exception as e:
+            report["errors"].append(f"stop: {e}")
+        try:
+            c.remove(force=True)
+            report["container"] = "removed"
+        except Exception as e:
+            report["errors"].append(f"remove container: {e}")
+            report["container"] = "failed"
+    except DockerNotFound:
+        report["container"] = "absent"
+    except Exception as e:
+        report["errors"].append(f"container: {e}")
+        report["container"] = "error"
+
+    # Images by reference name
+    for ref in (name, f"{name}:latest"):
+        try:
+            client.images.remove(ref, force=True)
+            report["images"].append({"ref": ref, "result": "removed"})
+        except Exception as e:
+            msg = str(e).lower()
+            if "no such image" in msg or "not found" in msg:
+                report["images"].append({"ref": ref, "result": "absent"})
+            else:
+                report["images"].append({"ref": ref, "result": f"error: {e}"})
+                report["errors"].append(f"image {ref}: {e}")
+
+    # Update service status if needed
+    try:
+        from core.global_settings.config import SERVICE_STATUS_CHOICES as SSC
+
+        Service.objects.filter(pk=service.pk).update(status=SSC.STOPPED)
+    except Exception:
+        try:
+            Service.objects.filter(pk=service.pk).update(status="stopped")
+        except Exception:
+            pass
+
+    return report
+
+
+
+
 def _parse_deploy_config(raw) -> dict:
     """Normalize Deploy.config whether stored as dict or JSON string."""
     if isinstance(raw, dict):
@@ -124,9 +241,15 @@ class ServiceViewSet(ModelViewSet):
 
         serializer = self.get_serializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
+            instance = serializer.save()
             return Response(
-                {"success": _("Service created.")}, status=status.HTTP_201_CREATED
+                {
+                    "success": _("Service created."),
+                    "id": str(instance.pk),
+                    "pk": str(instance.pk),
+                    "name": instance.name,
+                },
+                status=status.HTTP_201_CREATED,
             )
         return Response(
             {"error": serializer.errors}, status=status.HTTP_400_BAD_REQUEST
@@ -343,32 +466,79 @@ class VolumeViewSet(ModelViewSet):
         )
 
     def update(self, request, pk=None, *args, **kwargs):
+        """
+        Only attach/detach is allowed (field `service`).
+        name / size_mb / default_bind / default_mode are immutable after create.
+        Attach/detach require service stopped + no container/image.
+        Quota is checked only on attach (not on detach).
+        """
         volume = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
-        serializer = self.get_serializer(
-            volume, data=request.data, partial=True, context={"request": request}
-        )
-        if not serializer.is_valid():
+        data = request.data if hasattr(request.data, "get") else {}
+
+        # Reject attempts to edit immutable fields
+        forbidden = []
+        for field in ("name", "size_mb", "default_bind", "default_mode", "default_mode"):
+            if field in data and data.get(field) is not None:
+                # allow same value silently; block real changes
+                current = getattr(volume, field, None)
+                incoming = data.get(field)
+                if field == "size_mb":
+                    try:
+                        if int(incoming) != int(current or 0):
+                            forbidden.append(field)
+                    except Exception:
+                        forbidden.append(field)
+                elif str(incoming) != str(current or ""):
+                    forbidden.append(field)
+        if forbidden:
             return Response(
                 {
-                    "error": _("Can not update Volume"),
-                    "errors": serializer.errors,
+                    "error": _("Volume fields are immutable after creation."),
+                    "errors": {
+                        f: _("Cannot edit %(f)s. Delete and recreate the volume.")
+                        % {"f": f}
+                        for f in forbidden
+                    },
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        service_obj = serializer.validated_data.get("service")
-        if service_obj and service_obj.user != request.user:
+        if "service" not in data:
             return Response(
                 {
                     "error": _(
-                        "Selected service does not belong to the authenticated user."
+                        "Only attach/detach is supported (send service id or null)."
                     )
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        service_raw = data.get("service")
+        target_service = None
+        if service_raw not in (None, "", "null"):
+            target_service = get_object_or_404(
+                Service.objects.filter(user=request.user), pk=service_raw
+            )
+
+        # Mutability: current owner and target must both be safe
+        for svc in {volume.service, target_service}:
+            if svc is None:
+                continue
+            ok, reason = _service_is_mutable(svc)
+            if not ok:
+                return Response(
+                    {"error": reason},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
         try:
-            serializer.save()
+            if target_service is None:
+                volume.detach_from_service()
+            else:
+                # attach_to_service enforces exclusive ownership + quota
+                bind = volume.default_bind or "/data"
+                mode = volume.default_mode or "rw"
+                volume.attach_to_service(target_service, bind=bind, mode=mode)
         except Exception as exc:
             from django.core.exceptions import ValidationError as DjangoValidationError
 
@@ -384,9 +554,10 @@ class VolumeViewSet(ModelViewSet):
 
         storage = None
         volume.refresh_from_db()
-        if volume.service_id:
+        svc = volume.service or target_service
+        if svc is not None:
             try:
-                storage = volume.service.storage_quota_summary()
+                storage = svc.storage_quota_summary()
             except Exception:
                 storage = None
 
@@ -394,6 +565,7 @@ class VolumeViewSet(ModelViewSet):
             {
                 "success": _("Volume updated."),
                 "storage": storage,
+                "service": str(volume.service_id) if volume.service_id else None,
             },
             status=status.HTTP_200_OK,
         )
@@ -401,20 +573,13 @@ class VolumeViewSet(ModelViewSet):
     def destroy(self, request, pk=None, *args, **kwargs):
         volume = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
 
-        if volume.service and volume.service.status in (
-            SERVICE_STATUS_CHOICES.QUEUED,
-            SERVICE_STATUS_CHOICES.DEPLOYING,
-            SERVICE_STATUS_CHOICES.RUNNING,
-            SERVICE_STATUS_CHOICES.STOPPING,
-        ):
-            return Response(
-                {
-                    "error": _(
-                        "Cannot delete a volume attached to an active service."
-                    )
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
+        if volume.service_id:
+            ok, reason = _service_is_mutable(volume.service)
+            if not ok:
+                return Response(
+                    {"error": reason},
+                    status=status.HTTP_409_CONFLICT,
+                )
 
         volume.delete()
         return Response(
@@ -474,33 +639,33 @@ def _get_volume_mountpoint(volume):
 
 
 def _list_via_helper_container(docker_name: str):
-    """List files by mounting the volume into a short-lived alpine container.
+    """List volume files via short-lived alpine container.
 
-    Output protocol (one entry per line, pipe-separated — never appears in paths
-    we care about for normal project trees):
-        directory|0|relative/path
-        file|1234|relative/path.py
+    Emits one JSON object per line (NDJSON) so parsing cannot mix fields:
+      {"path":"dir/file.py","type":"file","size":123}
     """
     client = Client()()
+    # Pure busybox/ash — no -printf, no python
     script = r"""
-set -e
+set +e
 cd /data || exit 1
-# BusyBox-safe listing (no -printf)
+tmp=/tmp/vol_list.txt
+: > "$tmp"
 find . -mindepth 1 2>/dev/null | sort | while IFS= read -r p; do
   [ -z "$p" ] && continue
   rel="${p#./}"
   [ -z "$rel" ] && continue
+  # escape for JSON string
+  esc=$(printf '%s' "$rel" | sed 's/\\/\\\\/g; s/"/\\"/g')
   if [ -d "$p" ]; then
-    printf 'directory|0|%s\n' "$rel"
+    printf '{"path":"%s","type":"directory","size":0}\n' "$esc" >> "$tmp"
   elif [ -f "$p" ] || [ -L "$p" ]; then
-    # wc -c prints leading spaces on some busybox builds
-    sz=$(wc -c < "$p" 2>/dev/null | tr -d ' \n' || echo 0)
-    case "$sz" in
-      ''|*[!0-9]*) sz=0 ;;
-    esac
-    printf 'file|%s|%s\n' "$sz" "$rel"
+    sz=$(wc -c < "$p" 2>/dev/null | tr -d ' \n')
+    case "$sz" in ''|*[!0-9]*) sz=0 ;; esac
+    printf '{"path":"%s","type":"file","size":%s}\n' "$esc" "$sz" >> "$tmp"
   fi
 done
+cat "$tmp"
 """
     container = None
     try:
@@ -511,9 +676,9 @@ done
             detach=True,
             remove=False,
             network_mode="none",
-            mem_limit="64m",
+            mem_limit="96m",
         )
-        result = container.wait(timeout=60)
+        result = container.wait(timeout=90)
         raw = container.logs(stdout=True, stderr=False) or b""
         err = container.logs(stdout=False, stderr=True) or b""
         if isinstance(raw, bytes):
@@ -522,36 +687,75 @@ done
             err = err.decode("utf-8", "replace")
         status_code = result.get("StatusCode", 1) if isinstance(result, dict) else 1
 
+        import json as _json
+
         files = []
         for line in raw.splitlines():
-            line = line.strip("\r\n")
-            if not line or line.count("|") < 2:
+            line = line.strip()
+            if not line:
                 continue
-            entry_type, size_s, rel = line.split("|", 2)
-            entry_type = entry_type.strip().lower()
-            rel = rel.strip()
-            if not rel or rel in (".", "/"):
+            # Prefer NDJSON
+            if line.startswith("{") and line.endswith("}"):
+                try:
+                    obj = _json.loads(line)
+                    p = str(obj.get("path") or "").strip().lstrip("/").replace("\\", "/")
+                    if not p or p in (".", "/"):
+                        continue
+                    t = str(obj.get("type") or "file").lower()
+                    if t in ("d", "dir", "directory"):
+                        t = "directory"
+                    else:
+                        t = "file"
+                    try:
+                        sz = int(obj.get("size") or 0)
+                    except Exception:
+                        sz = 0
+                    files.append(
+                        {
+                            "path": p,
+                            "type": t,
+                            "size": 0 if t == "directory" else max(0, sz),
+                            "modified_at": None,
+                        }
+                    )
+                    continue
+                except Exception:
+                    pass
+            # Legacy fallbacks: type|size|path  OR  type\tsize\tmtime\tpath
+            if "|" in line and line.count("|") >= 2:
+                a, b, c = line.split("|", 2)
+                t = a.strip().lower()
+                t = "directory" if t.startswith("d") else "file"
+                try:
+                    sz = int(b)
+                except Exception:
+                    sz = 0
+                p = c.strip().lstrip("/").replace("\\", "/")
+                if p:
+                    files.append({"path": p, "type": t, "size": 0 if t == "directory" else sz, "modified_at": None})
                 continue
-            # normalize path separators
-            rel = rel.lstrip("/").replace("\\", "/")
-            if entry_type not in ("directory", "file"):
-                # tolerate legacy d/f markers
-                if entry_type in ("d", "dir"):
-                    entry_type = "directory"
+            if "\t" in line:
+                parts = line.split("\t")
+                if len(parts) >= 4:
+                    y, size_s, _mtime, p = parts[0], parts[1], parts[2], parts[3]
+                elif len(parts) == 3:
+                    y, size_s, p = parts[0], parts[1], parts[2]
                 else:
-                    entry_type = "file"
-            try:
-                size = int(size_s)
-            except Exception:
-                size = 0
-            files.append(
-                {
-                    "path": rel,
-                    "type": entry_type,
-                    "size": size if entry_type == "file" else 0,
-                    "modified_at": None,
-                }
-            )
+                    continue
+                p = (p or "").strip().lstrip("/").replace("\\", "/")
+                if not p:
+                    continue
+                t = "directory" if str(y).lower().startswith("d") else "file"
+                # handle odd "0\t0\tpath" directory lines from old scripts
+                if str(y).strip() == "0":
+                    t = "directory"
+                    size_s = "0"
+                try:
+                    sz = int(float(size_s))
+                except Exception:
+                    sz = 0
+                files.append({"path": p, "type": t, "size": 0 if t == "directory" else sz, "modified_at": None})
+                continue
 
         if status_code not in (0, None) and not files:
             raise RuntimeError((err or raw).strip() or f"helper container exit {status_code}")
@@ -560,6 +764,13 @@ done
         if container is not None:
             try:
                 container.remove(force=True)
+            except Exception:
+                pass
+            try:
+                # double-ensure by id if object stale
+                cid = getattr(container, "id", None)
+                if cid:
+                    Client()().containers.get(cid).remove(force=True)
             except Exception:
                 pass
 
@@ -654,6 +865,12 @@ def _archive_via_helper_container(docker_name: str, archive_name: str):
         if container is not None:
             try:
                 container.remove(force=True)
+            except Exception:
+                pass
+            try:
+                cid = getattr(container, "id", None)
+                if cid:
+                    Client()().containers.get(cid).remove(force=True)
             except Exception:
                 pass
 
@@ -791,6 +1008,60 @@ def volume_download_apiview(request, pk):
             },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def purge_service_runtime_apiview(request):
+    """
+    Force-remove Docker container + image for a service so volumes can be
+    attached / detached / deleted. Body: { "service_id": "<uuid>" }
+    """
+    service_id = request.data.get("service_id", "")
+    if not service_id:
+        return Response(
+            {"result": "error", "detail": _("service_id is required.")},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    try:
+        service = Service.objects.select_related("plan").get(
+            id=service_id, user=request.user
+        )
+    except Service.DoesNotExist:
+        return Response(
+            {"result": "error", "detail": _("Service not found.")},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    status_now = str(getattr(service, "status", "") or "").lower()
+    if status_now in ("queued", "deploying", "stopping"):
+        return Response(
+            {
+                "result": "error",
+                "detail": _(
+                    "Service is busy (%(s)s). Wait until it is stopped."
+                )
+                % {"s": status_now},
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    report = _purge_service_runtime(service)
+    ok = report.get("container") in ("removed", "absent") and not any(
+        str(i.get("result", "")).startswith("error") for i in report.get("images", [])
+    )
+    return Response(
+        {
+            "result": "success" if ok else "partial",
+            "detail": _("Container and image cleanup finished."),
+            "report": report,
+            "mutable": _service_is_mutable(Service.objects.get(pk=service.pk))[0],
+        },
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(["GET"])
