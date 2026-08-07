@@ -44,9 +44,11 @@ urlpatterns = [
     # ---- Token check ----
     path("api/validateToken/", ValidateToken.as_view(), name="validate_token"),
 
-    # JWT
+    # JWT — register BOTH with and without trailing slash to avoid POST redirect issues
     path("api/login/token/refresh", jwt_views.TokenRefreshView.as_view(), name="token_refresh"),
+    path("api/login/token/refresh/", jwt_views.TokenRefreshView.as_view(), name="token_refresh_slash"),
     path("api/login/token/verify", jwt_views.TokenVerifyView.as_view(), name="token_verify"),
+    path("api/login/token/verify/", jwt_views.TokenVerifyView.as_view(), name="token_verify_slash"),
 
     # Legacy aliases
     path("api/login/", LoginAPIView.as_view(), name="login"),
