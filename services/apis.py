@@ -579,7 +579,13 @@ class VolumeViewSet(ModelViewSet):
         if touching_service:
             try:
                 if target_service is None:
-                    volume.detach_from_service()
+                    # Soft-detach by default (keeps ownership + quota).
+                    # Send release=true to hard-release and free quota.
+                    release = str(data.get("release", "")).lower() in ("1", "true", "yes")
+                    if release and hasattr(volume, "release_from_service"):
+                        volume.release_from_service()
+                    else:
+                        volume.detach_from_service()
                 else:
                     bind = volume.default_bind or "/data"
                     mode = volume.default_mode or "rw"
@@ -892,9 +898,12 @@ class VolumeViewSet(ModelViewSet):
 
         try:
             if target_service is None:
-                volume.detach_from_service()
+                release = str(data.get("release", "")).lower() in ("1", "true", "yes")
+                if release and hasattr(volume, "release_from_service"):
+                    volume.release_from_service()
+                else:
+                    volume.detach_from_service()
             else:
-                # attach_to_service enforces exclusive ownership + quota
                 bind = volume.default_bind or "/data"
                 mode = volume.default_mode or "rw"
                 volume.attach_to_service(target_service, bind=bind, mode=mode)

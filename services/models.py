@@ -105,10 +105,20 @@ class Service(BaseModel):
 
     def get_used_storage_mb(self, *, exclude_volume_id=None) -> int:
         """
-        Sum of size_mb of all volumes owned by this service.
-        Ownership = Volume.service_id == this.id  (exclusive, no sharing).
+        Sum of size_mb of EVERY volume owned by this service.
+
+        Ownership is Volume.service_id == this.id.
+        Soft-detached volumes (no mount metadata) still count — only
+        releasing ownership (service=None) or deleting frees quota.
+        Also includes any row that still lists this service in
+        service_attachments (legacy / inconsistent rows).
         """
-        qs = Volume.objects.filter(service_id=self.pk)
+        from django.db.models import Q
+
+        sid = str(self.pk)
+        qs = Volume.objects.filter(
+            Q(service_id=self.pk) | Q(service_attachments__has_key=sid)
+        ).distinct()
         if exclude_volume_id:
             qs = qs.exclude(pk=exclude_volume_id)
         total = qs.aggregate(s=Sum("size_mb"))["s"]
@@ -294,13 +304,28 @@ class Volume(BaseModel):
         self.save()
 
     def detach_from_service(self, service: Service = None):
-        """Detach from the owning service (makes volume unused)."""
+        """
+        Soft-detach: clear mount metadata but KEEP ownership (service FK).
+
+        Quota is based on ownership, so size_mb still counts toward the
+        service plan until the volume is released or deleted.
+        """
         if service is not None and self.service_id and str(self.service_id) != str(service.id):
-            # Requested detach of a service that does not own this volume
+            return
+        # Keep self.service — ownership & quota stay on this service
+        self.service_attachments = {}
+        self.save(update_fields=["service_attachments"])
+
+    def release_from_service(self, service: Service = None):
+        """
+        Hard-release: drop ownership so the volume no longer counts toward
+        any service quota and can be attached elsewhere.
+        """
+        if service is not None and self.service_id and str(self.service_id) != str(service.id):
             return
         self.service = None
         self.service_attachments = {}
-        self.save()
+        self.save(update_fields=["service", "service_attachments"])
 
     def get_attached_services(self):
         """Return list of Service objects (0 or 1)."""
@@ -323,7 +348,17 @@ class Volume(BaseModel):
         )
 
     def is_attached_to_service(self, service: Service):
+        """True if this service owns the volume (counts toward quota)."""
         return bool(service and str(service.id) == str(self.service_id or ""))
+
+    def is_mounted_on_service(self, service: Service = None) -> bool:
+        """True if mount metadata exists for the owner (or given) service."""
+        if not self.service_id:
+            return False
+        if service is not None and str(service.id) != str(self.service_id):
+            return False
+        atts = self.service_attachments or {}
+        return str(self.service_id) in atts
 
     def get_docker_volume_name(self):
         return f"vol-{self.id.hex[:8]}-{self.name}"
