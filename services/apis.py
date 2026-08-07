@@ -1612,6 +1612,317 @@ def stop_service_apiview(request):
     )
 
 
+def _force_cancel_runtime_cleanup(service, *, container_name: str) -> dict:
+    """
+    Best-effort cleanup after a forced deploy cancel.
+
+    - Revoke is done by the caller (needs task_id from DB).
+    - Here we only touch Docker: stop/remove the app container, related
+      images, and short-lived intermediate/build containers that share the
+      service name prefix or managed-by label.
+    - Volumes and networks are intentionally preserved.
+    """
+    report = {
+        "container": None,
+        "images": [],
+        "intermediate_containers": [],
+        "errors": [],
+    }
+    try:
+        client = Client()()
+    except Exception as exc:
+        report["errors"].append(f"docker client: {exc}")
+        return report
+
+    # 1) Primary service container
+    try:
+        c = client.containers.get(container_name)
+        try:
+            c.reload()
+            if getattr(c, "status", "") == "running":
+                c.stop(timeout=10)
+        except Exception as e:
+            report["errors"].append(f"stop: {e}")
+        try:
+            c.remove(force=True)
+            report["container"] = "removed"
+        except Exception as e:
+            report["errors"].append(f"remove container: {e}")
+            report["container"] = "failed"
+    except DockerNotFound:
+        report["container"] = "absent"
+    except Exception as e:
+        report["errors"].append(f"container: {e}")
+        report["container"] = "error"
+
+    # 2) Intermediate / orphaned build containers
+    #    docker build leaves exited helpers; also match name prefix so a
+    #    half-created replacement container is not left behind.
+    try:
+        name_prefix = container_name
+        short_id = ""
+        try:
+            short_id = str(service.id.hex[:8])
+        except Exception:
+            pass
+
+        candidates = client.containers.list(all=True)
+        for c in candidates:
+            try:
+                cname = (c.name or "").lstrip("/")
+                labels = (c.labels or {}) if hasattr(c, "labels") else {}
+                attrs_labels = {}
+                try:
+                    attrs_labels = (c.attrs or {}).get("Config", {}).get("Labels") or {}
+                except Exception:
+                    pass
+                labels = {**attrs_labels, **(labels or {})}
+
+                managed = str(labels.get("managed-by") or "")
+                same_name = cname == name_prefix or cname.startswith(name_prefix + "-")
+                same_label = (
+                    managed == "django-paas-deployer"
+                    and short_id
+                    and short_id in cname
+                )
+                # docker build temporary containers often have no useful name
+                # but share ancestor of an in-progress image for this service
+                if not (same_name or same_label):
+                    continue
+                if cname == name_prefix and report["container"] == "removed":
+                    continue  # already handled
+                try:
+                    if getattr(c, "status", "") == "running":
+                        c.stop(timeout=5)
+                except Exception:
+                    pass
+                try:
+                    c.remove(force=True)
+                    report["intermediate_containers"].append(
+                        {"name": cname, "result": "removed"}
+                    )
+                except Exception as e:
+                    report["intermediate_containers"].append(
+                        {"name": cname, "result": f"error: {e}"}
+                    )
+            except Exception as e:
+                report["errors"].append(f"intermediate scan: {e}")
+    except Exception as e:
+        report["errors"].append(f"list containers: {e}")
+
+    # 3) Images for this service (failed / partial builds)
+    for ref in (container_name, f"{container_name}:latest"):
+        try:
+            client.images.remove(ref, force=True)
+            report["images"].append({"ref": ref, "result": "removed"})
+        except Exception as e:
+            msg = str(e).lower()
+            if "no such image" in msg or "not found" in msg:
+                report["images"].append({"ref": ref, "result": "absent"})
+            else:
+                report["images"].append({"ref": ref, "result": f"error: {e}"})
+                report["errors"].append(f"image {ref}: {e}")
+
+    # 4) Dangling layers left by interrupted builds (best-effort, never fatal)
+    try:
+        client.images.prune(filters={"dangling": True})
+    except Exception as e:
+        report["errors"].append(f"prune dangling: {e}")
+
+    return report
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def force_cancel_deploy_apiview(request):
+    """
+    Force-cancel an in-progress deploy and clean Docker runtime.
+
+    Body: { "service_id": "<uuid>" }
+
+    Steps (safe, ordered):
+      1. Mark cancel_requested on active Deploy rows for this service.
+      2. Revoke the Celery task (terminate) so the worker stops ASAP.
+      3. Stop/remove the service container + intermediate build containers.
+      4. Remove partial images; prune dangling layers.
+      5. Set service → stopped, deploy → cancelled.
+
+    Volumes and private networks are NOT deleted.
+    """
+    service_id = request.data.get("service_id", "")
+    if not service_id:
+        return Response(
+            {"result": "error", "detail": _("service_id is required.")},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        with transaction.atomic():
+            service_item = (
+                Service.objects.select_for_update()
+                .select_related("selected_deploy")
+                .get(id=service_id, user=request.user)
+            )
+    except Service.DoesNotExist:
+        return Response(
+            {
+                "result": "error",
+                "detail": _(f"Service with this ID:{service_id} not found."),
+            },
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    status_now = str(getattr(service_item, "status", "") or "").lower().strip()
+    # Allow force-cancel whenever something is in flight or stuck "running"
+    # after a bad deploy; also allow on failed so user can clear leftovers.
+    allowed = {
+        "queued",
+        "deploying",
+        "stopping",
+        "running",
+        "failed",
+        "succeeded",
+    }
+    if status_now and status_now not in allowed and status_now != "stopped":
+        # still proceed for unknown statuses — force cancel is intentional
+        pass
+
+    task_id = getattr(service_item, "task_id", None)
+    container_name = service_item.get_docker_service_name()
+    now = timezone.now()
+
+    # --- 1) Signal cancel on all non-terminal deploys for this service ---
+    cancelled_deploy_ids: list = []
+    try:
+        from deploy.models import DeploymentStatusChoices
+
+        terminal = {
+            getattr(DeploymentStatusChoices, "SUCCEEDED", "succeeded"),
+            getattr(DeploymentStatusChoices, "FAILED", "failed"),
+            getattr(DeploymentStatusChoices, "CANCELLED", "cancelled"),
+            getattr(DeploymentStatusChoices, "ROLLED_BACK", "rolled_back"),
+            "succeeded",
+            "failed",
+            "cancelled",
+            "rolled_back",
+        }
+        qs = Deploy.objects.filter(service_id=service_item.pk).exclude(
+            status__in=list(terminal)
+        )
+        cancelled_deploy_ids = list(qs.values_list("pk", flat=True))
+        update_kwargs = {
+            "cancel_requested": True,
+            "status": getattr(DeploymentStatusChoices, "CANCELLED", "cancelled"),
+            "stage": "cancelled",
+            "status_message": "Deployment force-cancelled by user.",
+            "completed_at": now,
+            "progress": 100,
+            "error_message": "Force cancelled by user.",
+        }
+        if cancelled_deploy_ids:
+            Deploy.objects.filter(pk__in=cancelled_deploy_ids).update(**update_kwargs)
+
+        # Always set the flag on the selected deploy so a worker mid-flight sees it
+        selected = service_item.selected_deploy
+        if selected is not None:
+            Deploy.objects.filter(pk=selected.pk).update(cancel_requested=True)
+    except Exception as exc:
+        logger.exception("force_cancel: deploy flag failed for %s", service_id)
+        return Response(
+            {
+                "result": "error",
+                "detail": _("Could not mark deploy as cancelled: %(err)s")
+                % {"err": str(exc)[:200]},
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    # --- 2) Revoke Celery task (terminate worker) ---
+    revoke_result = None
+    if task_id:
+        try:
+            from celery import current_app
+
+            current_app.control.revoke(
+                str(task_id), terminate=True, signal="SIGTERM"
+            )
+            revoke_result = "revoked"
+        except Exception as exc:
+            logger.warning(
+                "force_cancel: revoke failed task=%s: %s", task_id, exc
+            )
+            revoke_result = f"revoke_error: {exc}"
+
+    # --- 3) Docker cleanup (outside transaction; best-effort) ---
+    docker_report = _force_cancel_runtime_cleanup(
+        service_item, container_name=container_name
+    )
+
+    # --- 4) Service row → stopped ---
+    try:
+        Service.objects.filter(pk=service_item.pk).update(
+            status=SERVICE_STATUS_CHOICES.STOPPED,
+            task_id=None,
+            deploy_started=None,
+        )
+    except Exception as exc:
+        logger.exception("force_cancel: service update failed")
+        docker_report["errors"].append(f"service status: {exc}")
+
+    # Deploy log for audit trail
+    try:
+        from deploy.models import DeployLog
+        from django.conf import settings as dj_settings
+
+        alias = getattr(dj_settings, "DEPLOYMENT_LOG_DB_ALIAS", None) or "default"
+        log_deploy_id = (
+            cancelled_deploy_ids[0]
+            if cancelled_deploy_ids
+            else (
+                service_item.selected_deploy_id
+                if getattr(service_item, "selected_deploy_id", None)
+                else None
+            )
+        )
+        if log_deploy_id:
+            DeployLog.objects.using(alias).create(
+                deploy_id=log_deploy_id,
+                service_id=service_item.pk,
+                stage="cancelled",
+                event_type="deployment.force_cancel",
+                level="warning",
+                message="Deployment force-cancelled by user; runtime cleaned up.",
+                progress=100,
+                details={
+                    "task_id": task_id,
+                    "revoke": revoke_result,
+                    "docker": docker_report,
+                    "cancelled_deploys": [str(x) for x in cancelled_deploy_ids],
+                },
+            )
+    except Exception:
+        logger.debug("force_cancel: DeployLog write skipped", exc_info=True)
+
+    ok = docker_report.get("container") in ("removed", "absent") and not any(
+        str(i.get("result", "")).startswith("error")
+        for i in docker_report.get("images", [])
+    )
+    return Response(
+        {
+            "result": "success" if ok else "partial",
+            "detail": _(
+                "Deployment cancelled. Container and intermediate resources cleaned up."
+            ),
+            "task_id": task_id,
+            "revoke": revoke_result,
+            "cancelled_deploys": [str(x) for x in cancelled_deploy_ids],
+            "report": docker_report,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
