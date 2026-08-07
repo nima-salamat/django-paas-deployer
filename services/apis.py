@@ -37,19 +37,28 @@ from docker.errors import NotFound as DockerNotFound
 logger = logging.getLogger(__name__)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Mutability helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
 def _service_is_mutable(service) -> tuple:
     """
-    Volume attach/detach/delete is allowed when:
-      - service is not busy (running/deploying/queued/stopping)
-      - Docker *container* does not exist (image alone does NOT block)
+    A service is "mutable" (safe to change volumes) when:
+      1. Service status is NOT busy (running / deploying / queued / stopping / pending / updating)
+      2. Docker container does NOT exist (even an exited container blocks because
+         volumes are still mounted to it)
+
+    This is the SINGLE source of truth for all volume attach / detach / delete / edit
+    decisions.  The frontend receives ``can_mutate`` from the parent which calls this
+    same logic (or the ``purge_service_runtime`` endpoint which re-checks).
 
     Returns (ok: bool, reason: str).
     """
     if service is None:
         return True, ""
 
-    status = str(getattr(service, "status", "") or "").lower().strip()
-    busy = {
+    svc_status = str(getattr(service, "status", "") or "").lower().strip()
+    busy_statuses = {
         "queued",
         "deploying",
         "stopping",
@@ -57,32 +66,31 @@ def _service_is_mutable(service) -> tuple:
         "updating...",
         "pending",
     }
-    if status in busy:
+    if svc_status in busy_statuses:
         return (
             False,
-            f"Service is '{status}'. Stop it (and remove the container if needed) before changing volumes.",
+            f"Service is '{svc_status}'. Stop the service and remove its container before changing volumes.",
         )
 
+    # Even if status is "stopped", check if the container still lingers
     name = service.get_docker_service_name()
     try:
         client = Client()()
         try:
             c = client.containers.get(name)
-            # exists → block (even if exited)
-            state = ""
+            c_state = ""
             try:
-                state = (c.attrs or {}).get("State", {}).get("Status", "") or c.status
+                c_state = (c.attrs or {}).get("State", {}).get("Status", "") or c.status
             except Exception:
-                state = getattr(c, "status", "") or ""
+                c_state = getattr(c, "status", "") or ""
             return (
                 False,
-                f"Container still exists (status={state or 'unknown'}). "
-                "Use 'Remove container & image' first, then change volumes.",
+                f"Container still exists (status={c_state or 'unknown'}). "
+                "Remove it first, then change volumes.",
             )
         except DockerNotFound:
             pass
         except Exception as exc:
-            # If Docker is unreachable, be conservative but log
             logger.warning("container check for %s: %s", name, exc)
     except Exception as exc:
         logger.warning("docker client for mutability check: %s", exc)
@@ -149,7 +157,6 @@ def _purge_service_runtime(service) -> dict:
     # Update service status if needed
     try:
         from core.global_settings.config import SERVICE_STATUS_CHOICES as SSC
-
         Service.objects.filter(pk=service.pk).update(status=SSC.STOPPED)
     except Exception:
         try:
@@ -160,7 +167,78 @@ def _purge_service_runtime(service) -> dict:
     return report
 
 
+def _delete_container_only(service) -> dict:
+    """Stop and remove only the Docker container. Do NOT touch images."""
+    name = service.get_docker_service_name()
+    report = {"container": None, "errors": []}
+    try:
+        client = Client()()
+    except Exception as exc:
+        report["errors"].append(str(exc))
+        return report
 
+    try:
+        c = client.containers.get(name)
+        try:
+            c.reload()
+            if getattr(c, "status", "") == "running":
+                c.stop(timeout=15)
+        except Exception as e:
+            report["errors"].append(f"stop: {e}")
+        try:
+            c.remove(force=True)
+            report["container"] = "removed"
+        except Exception as e:
+            report["errors"].append(f"remove container: {e}")
+            report["container"] = "failed"
+    except DockerNotFound:
+        report["container"] = "absent"
+    except Exception as e:
+        report["errors"].append(f"container: {e}")
+        report["container"] = "error"
+
+    # If container was removed and service was running, update status
+    if report["container"] == "removed":
+        try:
+            from core.global_settings.config import SERVICE_STATUS_CHOICES as SSC
+            Service.objects.filter(pk=service.pk).update(status=SSC.STOPPED)
+        except Exception:
+            try:
+                Service.objects.filter(pk=service.pk).update(status="stopped")
+            except Exception:
+                pass
+
+    return report
+
+
+def _delete_image_only(service) -> dict:
+    """Remove only the Docker image(s) for this service. Do NOT touch the container."""
+    name = service.get_docker_service_name()
+    report = {"images": [], "errors": []}
+    try:
+        client = Client()()
+    except Exception as exc:
+        report["errors"].append(str(exc))
+        return report
+
+    for ref in (name, f"{name}:latest"):
+        try:
+            client.images.remove(ref, force=True)
+            report["images"].append({"ref": ref, "result": "removed"})
+        except Exception as e:
+            msg = str(e).lower()
+            if "no such image" in msg or "not found" in msg:
+                report["images"].append({"ref": ref, "result": "absent"})
+            else:
+                report["images"].append({"ref": ref, "result": f"error: {e}"})
+                report["errors"].append(f"image {ref}: {e}")
+
+    return report
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Deploy helpers
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_deploy_config(raw) -> dict:
     """Normalize Deploy.config whether stored as dict or JSON string."""
@@ -168,7 +246,6 @@ def _parse_deploy_config(raw) -> dict:
         return dict(raw)
     if isinstance(raw, str) and raw.strip():
         import json
-
         try:
             parsed = json.loads(raw)
             if isinstance(parsed, dict):
@@ -183,7 +260,7 @@ def _parse_deploy_config(raw) -> dict:
 
 
 def _resolve_platform(deploy) -> str:
-    """config.platform → service.plan.platform → docker."""
+    """config.platform -> service.plan.platform -> docker."""
     cfg = _parse_deploy_config(getattr(deploy, "config", None))
     p = str(cfg.get("platform") or "").strip().lower()
     if p:
@@ -195,7 +272,6 @@ def _resolve_platform(deploy) -> str:
     if service is not None and getattr(service, "plan_id", None):
         try:
             from plans.models import Plan
-
             plat = (
                 Plan.objects.filter(pk=service.plan_id)
                 .values_list("platform", flat=True)
@@ -208,11 +284,19 @@ def _resolve_platform(deploy) -> str:
     return "docker"
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Pagination
+# ─────────────────────────────────────────────────────────────────────────────
+
 class ServiceAdminPagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = "page_size"
     max_page_size = 50
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Service ViewSet
+# ─────────────────────────────────────────────────────────────────────────────
 
 class ServiceViewSet(ModelViewSet):
     queryset = Service.objects.all()
@@ -290,7 +374,6 @@ class ServiceViewSet(ModelViewSet):
                 },
                 status=status.HTTP_409_CONFLICT,
             )
-
         service.delete()
         return Response(
             {"success": _("Service deleted.")}, status=status.HTTP_200_OK
@@ -302,6 +385,10 @@ class ServiceViewSet(ModelViewSet):
         data = GetServiceSerializer(instance).data
         return Response(data)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PrivateNetwork ViewSet
+# ─────────────────────────────────────────────────────────────────────────────
 
 class PrivateNetworkViewSet(ModelViewSet):
     queryset = PrivateNetwork.objects.all()
@@ -370,10 +457,35 @@ class PrivateNetworkViewSet(ModelViewSet):
         )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Volume ViewSet
+# ─────────────────────────────────────────────────────────────────────────────
+
 class VolumeViewSet(ModelViewSet):
     """
     Volumes are exclusive to one service.
-    Total size of volumes for a service cannot exceed plan.max_storage (GB → MB).
+    Total size of volumes for a service cannot exceed plan.max_storage (GB -> MB).
+
+    Volume mutability rules
+    -----------------------
+    A volume is considered **in-use** when:
+      - It is attached to a service whose status is busy (queued / deploying /
+        stopping / running / updating / pending), OR
+      - A Docker container for the owning service still exists (even if exited),
+        because volumes are still mounted to that container.
+
+    When a volume is in-use:
+      - attach  : BLOCKED (already attached)
+      - detach  : BLOCKED
+      - delete  : BLOCKED
+      - edit    : BLOCKED
+
+    When a volume is NOT in-use (service stopped + no container):
+      - attach  : ALLOWED
+      - detach  : ALLOWED
+      - delete  : ALLOWED (Docker volume is also removed if it exists)
+      - edit    : ALLOWED only if the Docker volume does NOT yet exist
+                   (once provisioned in Docker, name/size/bind/mode are locked)
     """
 
     queryset = Volume.objects.all()
@@ -389,18 +501,14 @@ class VolumeViewSet(ModelViewSet):
         return queryset.filter(user=self.request.user)
 
     def list(self, request, *args, **kwargs):
-        from django.db.models import Q
-
         queryset = self.get_queryset()
         service_id = request.query_params.get("service")
         unused = request.query_params.get("unused")
 
         if service_id:
-            # Only volumes owned by this service (exclusive)
             queryset = queryset.filter(service_id=service_id)
 
         if unused is not None and str(unused).lower() in ("1", "true", "yes"):
-            # Truly unused = no owning service
             queryset = queryset.filter(service__isnull=True)
 
         page = self.paginate_queryset(queryset)
@@ -437,12 +545,9 @@ class VolumeViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Quota already validated in serializer.validate when service is set.
-        # If created without service (unused), no quota yet.
         try:
             instance = serializer.save(user=request.user)
         except Exception as exc:
-            # Model.clean ValidationError surfaces here
             from django.core.exceptions import ValidationError as DjangoValidationError
 
             if isinstance(exc, DjangoValidationError):
@@ -455,7 +560,6 @@ class VolumeViewSet(ModelViewSet):
                 )
             raise
 
-        # Attach payload for UI (storage remaining after create)
         storage = None
         if instance.service_id:
             try:
@@ -475,18 +579,29 @@ class VolumeViewSet(ModelViewSet):
 
     def update(self, request, pk=None, *args, **kwargs):
         """
-        Rules
-        -----
-        - Service busy OR container exists → no changes.
-        - Docker volume EXISTS → name/size/bind/mode immutable; only service attach/detach.
-        - Docker volume MISSING → full metadata edit allowed + attach/detach.
-        - Quota checked only on attach (not detach).
+        Handles two types of changes:
+
+        1. **Field edits** (name, size_mb, default_bind, default_mode):
+           - Only allowed when the Docker volume does NOT yet exist.
+           - If the Docker volume already exists these fields are locked
+             (detach, delete, and recreate if you need different values).
+           - Always requires the owning service to be mutable (stopped + no container).
+
+        2. **Attach / detach** (``service`` field):
+           - Detach: send ``service: null`` (or ``release=true`` to free quota).
+           - Attach: send ``service: <uuid>``.
+           - Requires the owning (or target) service to be mutable.
+
+        Mutability is checked via ``_service_is_mutable()`` — the single source
+        of truth.  A service is mutable when it is NOT busy (running / deploying /
+        queued / stopping / pending / updating) AND no Docker container exists for it.
         """
         volume = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
         data = dict(request.data) if hasattr(request.data, "keys") else {}
 
         docker_exists = _docker_volume_exists(volume)
 
+        # ── Resolve target service (attach / detach) ───────────────────────
         service_raw = data.get("service", "__omit__")
         target_service = None
         touching_service = service_raw != "__omit__"
@@ -495,15 +610,14 @@ class VolumeViewSet(ModelViewSet):
                 Service.objects.filter(user=request.user), pk=service_raw
             )
 
-        # Mutability for any change tied to a service (current owner or target)
+        # ── Mutability gate ─────────────────────────────────────────────────
+        # Any change (field edit OR attach/detach) requires the owning service
+        # (and target service on attach) to be mutable.
         services_to_check = set()
         if volume.service_id:
             services_to_check.add(volume.service)
         if target_service is not None:
             services_to_check.add(target_service)
-        # Even metadata-only edits while attached to a live container are unsafe
-        if volume.service_id:
-            services_to_check.add(volume.service)
 
         for svc in services_to_check:
             if svc is None:
@@ -512,7 +626,7 @@ class VolumeViewSet(ModelViewSet):
             if not ok:
                 return Response({"error": reason}, status=status.HTTP_409_CONFLICT)
 
-        # Field edits
+        # ── Field edits ─────────────────────────────────────────────────────
         field_keys = ("name", "size_mb", "default_bind", "default_mode")
         wants_field_edit = any(k in data for k in field_keys)
 
@@ -528,7 +642,6 @@ class VolumeViewSet(ModelViewSet):
             )
 
         if wants_field_edit and not docker_exists:
-            # Apply metadata while volume is only a DB row
             if "name" in data and data["name"]:
                 volume.name = str(data["name"]).strip()[:32]
             if "size_mb" in data and data["size_mb"] is not None:
@@ -549,7 +662,7 @@ class VolumeViewSet(ModelViewSet):
             if "default_mode" in data and data["default_mode"]:
                 volume.default_mode = str(data["default_mode"]).strip()
 
-            # If still attached, re-check quota for new size
+            # Re-check quota when size changed and volume is still attached
             if volume.service_id and "size_mb" in data:
                 ok, msg = volume.service.can_allocate_storage(
                     volume.size_mb, exclude_volume_id=volume.pk
@@ -575,12 +688,10 @@ class VolumeViewSet(ModelViewSet):
                     )
                 raise
 
-        # Attach / detach
+        # ── Attach / detach ─────────────────────────────────────────────────
         if touching_service:
             try:
                 if target_service is None:
-                    # Soft-detach by default (keeps ownership + quota).
-                    # Send release=true to hard-release and free quota.
                     release = str(data.get("release", "")).lower() in ("1", "true", "yes")
                     if release and hasattr(volume, "release_from_service"):
                         volume.release_from_service()
@@ -634,313 +745,19 @@ class VolumeViewSet(ModelViewSet):
         )
 
     def destroy(self, request, pk=None, *args, **kwargs):
-        service = get_object_or_404(self.get_queryset(), pk=pk)
-        if service.status in (
-            SERVICE_STATUS_CHOICES.QUEUED,
-            SERVICE_STATUS_CHOICES.DEPLOYING,
-            SERVICE_STATUS_CHOICES.STOPPING,
-        ):
-            return Response(
-                {
-                    "result": "error",
-                    "detail": _(f"Service is in '{service.status}' mode."),
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
-
-        service.delete()
-        return Response(
-            {"success": _("Service deleted.")}, status=status.HTTP_200_OK
-        )
-
-    def retrieve(self, request, *args, **kwargs):
-        """Include storage quota summary on service detail."""
-        instance = self.get_object()
-        data = GetServiceSerializer(instance).data
-        return Response(data)
-
-
-class PrivateNetworkViewSet(ModelViewSet):
-    queryset = PrivateNetwork.objects.all()
-    serializer_class = PrivateNetworkSerializer
-    authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
-    pagination_class = ServiceAdminPagination
-
-    def get_queryset(self):
-        return super().get_queryset().filter(user=self.request.user)
-
-    def list(self, request, *args, **kwargs):
-        page = self.paginate_queryset(self.get_queryset())
-        serializer = self.get_serializer(page, many=True)
-        return self.get_paginated_response(serializer.data)
-
-    def create(self, request, *args, **kwargs):
-        request.data["user"] = request.user.id
-        serializer = self.get_serializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(user=request.user)
-            return Response(
-                {"success": _("Private Network created.")},
-                status=status.HTTP_201_CREATED,
-            )
-        return Response(
-            {
-                "error": _("Can not create network."),
-                "errors": serializer.errors,
-            },
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    def update(self, request, pk=None, *args, **kwargs):
-        network = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
-        serializer = self.get_serializer(network, data=request.data, partial=True)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(
-                {"success": _("Private Network updated.")}, status=status.HTTP_200_OK
-            )
-        return Response(
-            {
-                "error": _("Can not update network"),
-                "errors": serializer.errors,
-            },
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    def destroy(self, request, pk=None, *args, **kwargs):
-        network = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
-
-        if Service.objects.filter(network=network).exists():
-            return Response(
-                {
-                    "result": "error",
-                    "detail": _("Cannot delete network with active services."),
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        network.delete()
-        return Response(
-            {"success": _("Private Network deleted.")},
-            status=status.HTTP_200_OK,
-        )
-
-
-class VolumeViewSet(ModelViewSet):
-    """
-    Volumes are exclusive to one service.
-    Total size of volumes for a service cannot exceed plan.max_storage (GB → MB).
-    """
-
-    queryset = Volume.objects.all()
-    serializer_class = VolumeSerializer
-    authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
-    pagination_class = ServiceAdminPagination
-
-    def get_queryset(self):
-        queryset = super().get_queryset()
-        if self.request.user.is_superuser:
-            return queryset
-        return queryset.filter(user=self.request.user)
-
-    def list(self, request, *args, **kwargs):
-        from django.db.models import Q
-
-        queryset = self.get_queryset()
-        service_id = request.query_params.get("service")
-        unused = request.query_params.get("unused")
-
-        if service_id:
-            # Only volumes owned by this service (exclusive)
-            queryset = queryset.filter(service_id=service_id)
-
-        if unused is not None and str(unused).lower() in ("1", "true", "yes"):
-            # Truly unused = no owning service
-            queryset = queryset.filter(service__isnull=True)
-
-        page = self.paginate_queryset(queryset)
-        serializer = self.get_serializer(page, many=True)
-        data = list(serializer.data)
-
-        if service_id:
-            for row in data:
-                attachments = row.get("service_attachments") or {}
-                att = attachments.get(str(service_id)) or {}
-                row["bind"] = att.get("bind") or row.get("default_bind") or ""
-                row["mode"] = att.get("mode") or row.get("default_mode") or ""
-
-        return self.get_paginated_response(data)
-
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(
-            data=request.data, context={"request": request}
-        )
-        if not serializer.is_valid():
-            return Response(
-                {"error": _("Can not create Volume."), "errors": serializer.errors},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        service_obj = serializer.validated_data.get("service")
-        if service_obj and service_obj.user != request.user:
-            return Response(
-                {
-                    "error": _(
-                        "Selected service does not belong to the authenticated user."
-                    )
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Quota already validated in serializer.validate when service is set.
-        # If created without service (unused), no quota yet.
-        try:
-            instance = serializer.save(user=request.user)
-        except Exception as exc:
-            # Model.clean ValidationError surfaces here
-            from django.core.exceptions import ValidationError as DjangoValidationError
-
-            if isinstance(exc, DjangoValidationError):
-                msgs = getattr(exc, "message_dict", None) or {
-                    "detail": list(getattr(exc, "messages", [str(exc)]))
-                }
-                return Response(
-                    {"error": _("Can not create Volume."), "errors": msgs},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            raise
-
-        # Attach payload for UI (storage remaining after create)
-        storage = None
-        if instance.service_id:
-            try:
-                storage = instance.service.storage_quota_summary()
-            except Exception:
-                storage = None
-
-        return Response(
-            {
-                "success": _("Volume created."),
-                "id": str(instance.pk),
-                "storage": storage,
-                **self.get_serializer(instance).data,
-            },
-            status=status.HTTP_201_CREATED,
-        )
-
-    def update(self, request, pk=None, *args, **kwargs):
         """
-        Only attach/detach is allowed (field `service`).
-        name / size_mb / default_bind / default_mode are immutable after create.
-        Attach/detach require service stopped + no container/image.
-        Quota is checked only on attach (not on detach).
+        Delete a volume.
+
+        Rules:
+          - If the volume is attached to a service, the service must be mutable
+            (stopped + no container).  This is the SAME check used for attach/detach.
+          - The Docker volume is also removed if it exists.
+          - If the volume is not attached to any service, deletion is always allowed
+            (it is just a DB row + possibly an orphaned Docker volume).
         """
         volume = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
-        data = request.data if hasattr(request.data, "get") else {}
 
-        # Reject attempts to edit immutable fields
-        forbidden = []
-        for field in ("name", "size_mb", "default_bind", "default_mode", "default_mode"):
-            if field in data and data.get(field) is not None:
-                # allow same value silently; block real changes
-                current = getattr(volume, field, None)
-                incoming = data.get(field)
-                if field == "size_mb":
-                    try:
-                        if int(incoming) != int(current or 0):
-                            forbidden.append(field)
-                    except Exception:
-                        forbidden.append(field)
-                elif str(incoming) != str(current or ""):
-                    forbidden.append(field)
-        if forbidden:
-            return Response(
-                {
-                    "error": _("Volume fields are immutable after creation."),
-                    "errors": {
-                        f: _("Cannot edit %(f)s. Delete and recreate the volume.")
-                        % {"f": f}
-                        for f in forbidden
-                    },
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if "service" not in data:
-            return Response(
-                {
-                    "error": _(
-                        "Only attach/detach is supported (send service id or null)."
-                    )
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        service_raw = data.get("service")
-        target_service = None
-        if service_raw not in (None, "", "null"):
-            target_service = get_object_or_404(
-                Service.objects.filter(user=request.user), pk=service_raw
-            )
-
-        # Mutability: current owner and target must both be safe
-        for svc in {volume.service, target_service}:
-            if svc is None:
-                continue
-            ok, reason = _service_is_mutable(svc)
-            if not ok:
-                return Response(
-                    {"error": reason},
-                    status=status.HTTP_409_CONFLICT,
-                )
-
-        try:
-            if target_service is None:
-                release = str(data.get("release", "")).lower() in ("1", "true", "yes")
-                if release and hasattr(volume, "release_from_service"):
-                    volume.release_from_service()
-                else:
-                    volume.detach_from_service()
-            else:
-                bind = volume.default_bind or "/data"
-                mode = volume.default_mode or "rw"
-                volume.attach_to_service(target_service, bind=bind, mode=mode)
-        except Exception as exc:
-            from django.core.exceptions import ValidationError as DjangoValidationError
-
-            if isinstance(exc, DjangoValidationError):
-                msgs = getattr(exc, "message_dict", None) or {
-                    "detail": list(getattr(exc, "messages", [str(exc)]))
-                }
-                return Response(
-                    {"error": _("Can not update Volume"), "errors": msgs},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            raise
-
-        storage = None
-        volume.refresh_from_db()
-        svc = volume.service or target_service
-        if svc is not None:
-            try:
-                storage = svc.storage_quota_summary()
-            except Exception:
-                storage = None
-
-        return Response(
-            {
-                "success": _("Volume updated."),
-                "storage": storage,
-                "service": str(volume.service_id) if volume.service_id else None,
-            },
-            status=status.HTTP_200_OK,
-        )
-
-    def destroy(self, request, pk=None, *args, **kwargs):
-        volume = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
-
+        # Only block if volume is owned by a service that is in-use
         if volume.service_id:
             ok, reason = _service_is_mutable(volume.service)
             if not ok:
@@ -949,11 +766,41 @@ class VolumeViewSet(ModelViewSet):
                     status=status.HTTP_409_CONFLICT,
                 )
 
+        # Best-effort: remove the Docker volume if it was provisioned
+        docker_removed = False
+        try:
+            docker_vol, _docker_name = _get_docker_volume(volume)
+            docker_vol.remove(force=True)
+            docker_removed = True
+        except DockerNotFound:
+            pass
+        except Exception as exc:
+            logger.warning(
+                "Failed to remove Docker volume %s on delete: %s",
+                volume.name,
+                exc,
+            )
+
         volume.delete()
+
         return Response(
-            {"success": _("Volume deleted.")}, status=status.HTTP_200_OK
+            {
+                "success": _("Volume deleted."),
+                "docker_volume_removed": docker_removed,
+            },
+            status=status.HTTP_200_OK,
         )
 
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        data = self.get_serializer(instance).data
+        data["docker_exists"] = _docker_volume_exists(instance)
+        return Response(data)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Docker volume helpers
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _docker_volume_names(volume) -> list:
     """Candidate Docker volume names (canonical first)."""
@@ -966,7 +813,6 @@ def _docker_volume_names(volume) -> list:
         pass
     if volume.name and volume.name not in names:
         names.append(volume.name)
-    # legacy patterns sometimes used
     try:
         short = f"vol-{volume.id.hex[:8]}-{volume.name}"
         if short not in names:
@@ -1006,6 +852,10 @@ def _get_volume_mountpoint(volume):
     return None, docker_name
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Volume file listing helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
 def _list_via_helper_container(docker_name: str):
     """List volume files via short-lived alpine container.
 
@@ -1013,7 +863,6 @@ def _list_via_helper_container(docker_name: str):
       {"path":"dir/file.py","type":"file","size":123}
     """
     client = Client()()
-    # Pure busybox/ash — no -printf, no python
     script = r"""
 set +e
 cd /data || exit 1
@@ -1023,8 +872,7 @@ find . -mindepth 1 2>/dev/null | sort | while IFS= read -r p; do
   [ -z "$p" ] && continue
   rel="${p#./}"
   [ -z "$rel" ] && continue
-  # escape for JSON string
-  esc=$(printf '%s' "$rel" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  esc=$(printf '%s' "$rel" | sed 's/\\\\/\\\\\\\\/g; s/\"/\\\\\"/g')
   if [ -d "$p" ]; then
     printf '{"path":"%s","type":"directory","size":0}\n' "$esc" >> "$tmp"
   elif [ -f "$p" ] || [ -L "$p" ]; then
@@ -1062,7 +910,6 @@ cat "$tmp"
             line = line.strip()
             if not line:
                 continue
-            # Prefer NDJSON
             if line.startswith("{") and line.endswith("}"):
                 try:
                     obj = _json.loads(line)
@@ -1089,7 +936,6 @@ cat "$tmp"
                     continue
                 except Exception:
                     pass
-            # Legacy fallbacks: type|size|path  OR  type\tsize\tmtime\tpath
             if "|" in line and line.count("|") >= 2:
                 a, b, c = line.split("|", 2)
                 t = a.strip().lower()
@@ -1114,7 +960,6 @@ cat "$tmp"
                 if not p:
                     continue
                 t = "directory" if str(y).lower().startswith("d") else "file"
-                # handle odd "0\t0\tpath" directory lines from old scripts
                 if str(y).strip() == "0":
                     t = "directory"
                     size_s = "0"
@@ -1135,7 +980,6 @@ cat "$tmp"
             except Exception:
                 pass
             try:
-                # double-ensure by id if object stale
                 cid = getattr(container, "id", None)
                 if cid:
                     Client()().containers.get(cid).remove(force=True)
@@ -1185,6 +1029,10 @@ def _list_volume_files(root_path):
     return files
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Volume archive helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
 def _archive_via_helper_container(docker_name: str, archive_name: str):
     """Create tar.gz of volume contents via helper container; return host temp path."""
     client = Client()()
@@ -1196,7 +1044,6 @@ def _archive_via_helper_container(docker_name: str, archive_name: str):
 
     container = None
     try:
-        # Write archive inside the container then copy out
         container = client.containers.run(
             "alpine:3.20",
             command=[
@@ -1253,6 +1100,10 @@ def _create_volume_archive(root_path, archive_name):
     return temp_file.name
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Volume API views
+# ─────────────────────────────────────────────────────────────────────────────
+
 @api_view(["GET"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -1264,7 +1115,6 @@ def volume_files_apiview(request, pk):
             files = _list_volume_files(mountpoint)
         else:
             files = _list_via_helper_container(docker_name)
-        # sort: directories first, then path
         files.sort(key=lambda x: (0 if x.get("type") == "directory" else 1, x.get("path") or ""))
         return Response(
             {
@@ -1280,7 +1130,7 @@ def volume_files_apiview(request, pk):
             {
                 "result": "error",
                 "detail": _(
-                    "Docker volume not found. It may not have been created yet — "
+                    "Docker volume not found. It may not have been created yet -- "
                     "start/rebuild the service once so the volume is provisioned."
                 ),
             },
@@ -1296,8 +1146,7 @@ def volume_files_apiview(request, pk):
         return Response(
             {
                 "result": "error",
-                "detail": _("Unable to list volume files: %(err)s")
-                % {"err": str(exc)[:300]},
+                "detail": _("Unable to list volume files: %(err)s") % {"err": str(exc)[:300]},
             },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
@@ -1324,7 +1173,6 @@ def volume_download_apiview(request, pk):
         response["Content-Length"] = os.path.getsize(archive_path)
         response["Content-Type"] = "application/gzip"
 
-        # Best-effort cleanup after response is closed
         def _cleanup(path=archive_path):
             try:
                 os.unlink(path)
@@ -1332,7 +1180,7 @@ def volume_download_apiview(request, pk):
                 pass
 
         try:
-            response._resource_closers.append(lambda: _cleanup())  # type: ignore[attr-defined]
+            response._resource_closers.append(lambda: _cleanup())
         except Exception:
             pass
         return response
@@ -1371,14 +1219,15 @@ def volume_download_apiview(request, pk):
         return Response(
             {
                 "result": "error",
-                "detail": _("Unable to create volume archive: %(err)s")
-                % {"err": str(exc)[:300]},
+                "detail": _("Unable to create volume archive: %(err)s") % {"err": str(exc)[:300]},
             },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
 
-
+# ─────────────────────────────────────────────────────────────────────────────
+# Service runtime management API views
+# ─────────────────────────────────────────────────────────────────────────────
 
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
@@ -1386,7 +1235,7 @@ def volume_download_apiview(request, pk):
 def purge_service_runtime_apiview(request):
     """
     Force-remove Docker container + image for a service so volumes can be
-    attached / detached / deleted. Body: { "service_id": "<uuid>" }
+    attached / detached / deleted.  Body: { "service_id": "<uuid>" }
     """
     service_id = request.data.get("service_id", "")
     if not service_id:
@@ -1411,8 +1260,7 @@ def purge_service_runtime_apiview(request):
                 "result": "error",
                 "detail": _(
                     "Service is busy (%(s)s). Wait until it is stopped."
-                )
-                % {"s": status_now},
+                ) % {"s": status_now},
             },
             status=status.HTTP_409_CONFLICT,
         )
@@ -1431,6 +1279,96 @@ def purge_service_runtime_apiview(request):
         status=status.HTTP_200_OK,
     )
 
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def delete_container_only_apiview(request):
+    """
+    Stop and remove ONLY the Docker container for a service.
+    Images are NOT touched.
+    Body: { "service_id": "<uuid>" }
+    """
+    service_id = request.data.get("service_id", "")
+    if not service_id:
+        return Response(
+            {"result": "error", "detail": _("service_id is required.")},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    try:
+        service = Service.objects.select_related("plan").get(
+            id=service_id, user=request.user
+        )
+    except Service.DoesNotExist:
+        return Response(
+            {"result": "error", "detail": _("Service not found.")},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    status_now = str(getattr(service, "status", "") or "").lower()
+    if status_now in ("queued", "deploying", "stopping"):
+        return Response(
+            {
+                "result": "error",
+                "detail": _(
+                    "Service is busy (%(s)s). Wait until it is stopped."
+                ) % {"s": status_now},
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    report = _delete_container_only(service)
+    return Response(
+        {
+            "result": "success" if report.get("container") == "removed" else "partial",
+            "detail": _("Container removal finished."),
+            "report": report,
+            "mutable": _service_is_mutable(Service.objects.get(pk=service.pk))[0],
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def delete_image_only_apiview(request):
+    """
+    Remove ONLY the Docker image(s) for a service.
+    Container is NOT touched.
+    Body: { "service_id": "<uuid>" }
+    """
+    service_id = request.data.get("service_id", "")
+    if not service_id:
+        return Response(
+            {"result": "error", "detail": _("service_id is required.")},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    try:
+        service = Service.objects.select_related("plan").get(
+            id=service_id, user=request.user
+        )
+    except Service.DoesNotExist:
+        return Response(
+            {"result": "error", "detail": _("Service not found.")},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    report = _delete_image_only(service)
+    removed_any = any(i.get("result") == "removed" for i in report.get("images", []))
+    return Response(
+        {
+            "result": "success" if removed_any else "partial",
+            "detail": _("Image removal finished."),
+            "report": report,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Service control API views
+# ─────────────────────────────────────────────────────────────────────────────
 
 @api_view(["GET"])
 @authentication_classes([JWTAuthentication])
@@ -1470,8 +1408,8 @@ def start_service_apiview(request):
 
     Body parameters
     ---------------
-    service_id    : UUID  — required
-    force_rebuild : bool  — optional (default false)
+    service_id    : UUID  -- required
+    force_rebuild : bool  -- optional (default false)
     """
     service_id = request.data.get("service_id", "")
     force_rebuild = str(request.data.get("force_rebuild", "")).lower() in (
