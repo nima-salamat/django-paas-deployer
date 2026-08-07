@@ -987,17 +987,25 @@ def _detect_php_document_root(
     return ""
 
 
+
 def _apply_php_document_root(dockerfile: str, document_root_rel: str) -> str:
     """
-    Set ``APACHE_DOCUMENT_ROOT`` and rewrite Apache vhost / conf paths.
+    Point Apache DocumentRoot at the real application path inside the image.
 
     ``document_root_rel`` is relative to ``/var/www/html`` (may be empty).
+
+    Writes a literal 000-default.conf so Apache always serves the correct
+    directory even when the zip unpacks into a single top-level folder
+    (common for GitHub release archives). Also strips any older
+    ``sed ... APACHE_DOCUMENT_ROOT`` lines that would re-rewrite the path
+    and produce nested DocumentRoots like /var/www/html/App/App.
     """
     rel = (document_root_rel or "").replace("\\", "/").strip().lstrip("./").rstrip("/")
     if rel in {".", ".."} or rel.startswith("/") or "/../" in f"/{rel}/":
         rel = ""
     absolute = f"/var/www/html/{rel}" if rel else "/var/www/html"
 
+    # 1) ENV
     if re.search(r"^ENV\s+APACHE_DOCUMENT_ROOT=", dockerfile, re.MULTILINE):
         dockerfile = re.sub(
             r"^ENV\s+APACHE_DOCUMENT_ROOT=.*$",
@@ -1015,32 +1023,73 @@ def _apply_php_document_root(dockerfile: str, document_root_rel: str) -> str:
             flags=re.MULTILINE,
         )
 
-    # Official php:*-apache images honour APACHE_DOCUMENT_ROOT only when
-    # conf files are rewritten. Always inject the sed block once.
-    if "sites-available" in dockerfile and "APACHE_DOCUMENT_ROOT" in dockerfile:
-        return dockerfile
+    # 2) Remove previous auto block
+    dockerfile = re.sub(
+        r"\n# --- Apache DocumentRoot \(auto\) ---[\s\S]*?(?=\n(?:RUN|COPY|WORKDIR|EXPOSE|CMD|ENTRYPOINT|ENV|FROM|#)|$)",
+        "\n",
+        dockerfile,
+        count=1,
+    )
 
-    sed_block = (
-        "RUN sed -ri -e 's!/var/www/html!${APACHE_DOCUMENT_ROOT}!g' "
-        "/etc/apache2/sites-available/*.conf \\\n"
-        "    && sed -ri -e 's!/var/www/!${APACHE_DOCUMENT_ROOT}!g' "
-        "/etc/apache2/apache2.conf /etc/apache2/conf-available/*.conf \\\n"
-        "    && sed -i 's/AllowOverride None/AllowOverride All/g' "
-        "/etc/apache2/apache2.conf"
+    # 3) Strip generic sed that rewrites /var/www/html -> ${ENV} (causes nested paths)
+    dockerfile = re.sub(
+        r"\s*&&\s*sed\s+-ri\s+-e\s+'s!/var/www/html!\$\{APACHE_DOCUMENT_ROOT\}!g'\s+/etc/apache2/sites-available/\*\.conf",
+        "",
+        dockerfile,
+    )
+    dockerfile = re.sub(
+        r"\s*&&\s*sed\s+-ri\s+-e\s+'s!/var/www/!\$\{APACHE_DOCUMENT_ROOT\}!g'\s+/etc/apache2/apache2\.conf\s+/etc/apache2/conf-available/\*\.conf",
+        "",
+        dockerfile,
+    )
+
+    conf_lines = [
+        "ServerName localhost",
+        "<VirtualHost *:80>",
+        "    ServerAdmin webmaster@localhost",
+        f"    DocumentRoot {absolute}",
+        f"    <Directory {absolute}>",
+        "        Options FollowSymLinks",
+        "        AllowOverride All",
+        "        Require all granted",
+        "        DirectoryIndex index.php index.html",
+        "    </Directory>",
+        "    ErrorLog ${APACHE_LOG_DIR}/error.log",
+        "    CustomLog ${APACHE_LOG_DIR}/access.log combined",
+        "</VirtualHost>",
+        "",
+    ]
+    conf_text = "\\n".join(conf_lines).replace("'", "'\"'\"'")
+
+    apache_block = (
+        "\n# --- Apache DocumentRoot (auto) ---\n"
+        f"RUN printf '%s\\n' '{conf_text}' > /etc/apache2/sites-available/000-default.conf \\\n"
+        f"    && sed -ri -e 's#DocumentRoot /var/www/html#DocumentRoot {absolute}#g' "
+        "/etc/apache2/sites-available/*.conf 2>/dev/null || true \\\n"
+        "    && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \\\n"
+        "    && (grep -q '^ServerName ' /etc/apache2/apache2.conf || echo 'ServerName localhost' >> /etc/apache2/apache2.conf) \\\n"
+        "    && a2enmod rewrite headers\n"
     )
 
     if re.search(r"^COPY\s+\.\s+/var/www/html/?\s*$", dockerfile, re.MULTILINE):
         dockerfile = re.sub(
             r"^(COPY\s+\.\s+/var/www/html/?\s*)$",
-            rf"\1\n\n{sed_block}",
+            lambda m: m.group(1) + "\n" + apache_block,
             dockerfile,
             count=1,
             flags=re.MULTILINE,
         )
     else:
-        dockerfile = dockerfile.rstrip() + "\n\n" + sed_block + "\n"
+        dockerfile = dockerfile.rstrip() + "\n" + apache_block
 
+    dockerfile = re.sub(r"\n{3,}", "\n\n", dockerfile)
+    # Drop orphan backslash runs left by sed-line removal
+    while " \\ \\ " in dockerfile or "\\ \\ \\" in dockerfile:
+        dockerfile = dockerfile.replace(" \\ \\ ", " ")
+        dockerfile = dockerfile.replace("\\ \\ \\", "\\")
+    dockerfile = re.sub(r" && \\\\s*\n", "\n", dockerfile)
     return dockerfile
+
 
 
 def _render_php(dockerfile_template, tar_stream, config, logger):
