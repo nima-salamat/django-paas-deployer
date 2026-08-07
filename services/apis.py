@@ -422,13 +422,146 @@ class VolumeViewSet(ModelViewSet):
         )
 
 
-def _get_volume_mountpoint(name: str):
+def _docker_volume_names(volume) -> list:
+    """Candidate Docker volume names (canonical first)."""
+    names = []
+    try:
+        canonical = volume.get_docker_volume_name()
+        if canonical:
+            names.append(canonical)
+    except Exception:
+        pass
+    if volume.name and volume.name not in names:
+        names.append(volume.name)
+    # legacy patterns sometimes used
+    try:
+        short = f"vol-{volume.id.hex[:8]}-{volume.name}"
+        if short not in names:
+            names.append(short)
+    except Exception:
+        pass
+    return names
+
+
+def _get_docker_volume(volume):
+    """Resolve the real Docker volume object for a Django Volume row."""
     client = Client()()
-    volume = client.volumes.get(name)
-    mountpoint = volume.attrs.get("Mountpoint")
-    if not mountpoint or not os.path.isdir(mountpoint):
-        raise ValueError("Volume mountpoint is unavailable.")
-    return mountpoint
+    last_err = None
+    for name in _docker_volume_names(volume):
+        try:
+            return client.volumes.get(name), name
+        except DockerNotFound as exc:
+            last_err = exc
+        except Exception as exc:
+            last_err = exc
+            logger.warning("volumes.get(%s) failed: %s", name, exc)
+    if last_err:
+        raise last_err
+    raise DockerNotFound(f"Volume not found for {volume.name}")
+
+
+def _get_volume_mountpoint(volume):
+    """
+    Return host mountpoint if readable; otherwise None.
+    Prefer helper-container path when mountpoint is not accessible
+    (typical when API runs inside a container).
+    """
+    docker_vol, docker_name = _get_docker_volume(volume)
+    mountpoint = (docker_vol.attrs or {}).get("Mountpoint")
+    if mountpoint and os.path.isdir(mountpoint) and os.access(mountpoint, os.R_OK):
+        return mountpoint, docker_name
+    return None, docker_name
+
+
+def _list_via_helper_container(docker_name: str):
+    """List files by mounting the volume into a short-lived alpine container.
+
+    Output protocol (one entry per line, pipe-separated — never appears in paths
+    we care about for normal project trees):
+        directory|0|relative/path
+        file|1234|relative/path.py
+    """
+    client = Client()()
+    script = r"""
+set -e
+cd /data || exit 1
+# BusyBox-safe listing (no -printf)
+find . -mindepth 1 2>/dev/null | sort | while IFS= read -r p; do
+  [ -z "$p" ] && continue
+  rel="${p#./}"
+  [ -z "$rel" ] && continue
+  if [ -d "$p" ]; then
+    printf 'directory|0|%s\n' "$rel"
+  elif [ -f "$p" ] || [ -L "$p" ]; then
+    # wc -c prints leading spaces on some busybox builds
+    sz=$(wc -c < "$p" 2>/dev/null | tr -d ' \n' || echo 0)
+    case "$sz" in
+      ''|*[!0-9]*) sz=0 ;;
+    esac
+    printf 'file|%s|%s\n' "$sz" "$rel"
+  fi
+done
+"""
+    container = None
+    try:
+        container = client.containers.run(
+            "alpine:3.20",
+            command=["sh", "-c", script],
+            volumes={docker_name: {"bind": "/data", "mode": "ro"}},
+            detach=True,
+            remove=False,
+            network_mode="none",
+            mem_limit="64m",
+        )
+        result = container.wait(timeout=60)
+        raw = container.logs(stdout=True, stderr=False) or b""
+        err = container.logs(stdout=False, stderr=True) or b""
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "replace")
+        if isinstance(err, bytes):
+            err = err.decode("utf-8", "replace")
+        status_code = result.get("StatusCode", 1) if isinstance(result, dict) else 1
+
+        files = []
+        for line in raw.splitlines():
+            line = line.strip("\r\n")
+            if not line or line.count("|") < 2:
+                continue
+            entry_type, size_s, rel = line.split("|", 2)
+            entry_type = entry_type.strip().lower()
+            rel = rel.strip()
+            if not rel or rel in (".", "/"):
+                continue
+            # normalize path separators
+            rel = rel.lstrip("/").replace("\\", "/")
+            if entry_type not in ("directory", "file"):
+                # tolerate legacy d/f markers
+                if entry_type in ("d", "dir"):
+                    entry_type = "directory"
+                else:
+                    entry_type = "file"
+            try:
+                size = int(size_s)
+            except Exception:
+                size = 0
+            files.append(
+                {
+                    "path": rel,
+                    "type": entry_type,
+                    "size": size if entry_type == "file" else 0,
+                    "modified_at": None,
+                }
+            )
+
+        if status_code not in (0, None) and not files:
+            raise RuntimeError((err or raw).strip() or f"helper container exit {status_code}")
+        return files
+    finally:
+        if container is not None:
+            try:
+                container.remove(force=True)
+            except Exception:
+                pass
 
 
 def _list_volume_files(root_path):
@@ -438,30 +571,91 @@ def _list_volume_files(root_path):
         if rel_base == ".":
             rel_base = ""
         for dirname in dirs:
-            path = os.path.join(rel_base, dirname)
+            path = os.path.join(rel_base, dirname).replace("\\", "/")
             full = os.path.join(base, dirname)
-            stats = os.stat(full)
+            try:
+                stats = os.stat(full)
+                mtime = stats.st_mtime
+            except Exception:
+                mtime = 0
             files.append(
                 {
                     "path": path,
                     "type": "directory",
                     "size": 0,
-                    "modified_at": stats.st_mtime,
+                    "modified_at": mtime,
                 }
             )
         for filename in filenames:
-            path = os.path.join(rel_base, filename)
+            path = os.path.join(rel_base, filename).replace("\\", "/")
             full = os.path.join(base, filename)
-            stats = os.stat(full)
+            try:
+                stats = os.stat(full)
+                size = stats.st_size
+                mtime = stats.st_mtime
+            except Exception:
+                size, mtime = 0, 0
             files.append(
                 {
                     "path": path,
                     "type": "file",
-                    "size": stats.st_size,
-                    "modified_at": stats.st_mtime,
+                    "size": size,
+                    "modified_at": mtime,
                 }
             )
     return files
+
+
+def _archive_via_helper_container(docker_name: str, archive_name: str):
+    """Create tar.gz of volume contents via helper container; return host temp path."""
+    client = Client()()
+    temp_file = tempfile.NamedTemporaryFile(
+        prefix="volume_archive_", suffix=".tar.gz", delete=False
+    )
+    temp_path = temp_file.name
+    temp_file.close()
+
+    container = None
+    try:
+        # Write archive inside the container then copy out
+        container = client.containers.run(
+            "alpine:3.20",
+            command=[
+                "sh",
+                "-c",
+                "cd /data && tar -czf /tmp/vol.tgz . && cat /tmp/vol.tgz",
+            ],
+            volumes={docker_name: {"bind": "/data", "mode": "ro"}},
+            detach=True,
+            remove=False,
+            network_mode="none",
+            mem_limit="256m",
+        )
+        result = container.wait(timeout=300)
+        status_code = result.get("StatusCode", 1) if isinstance(result, dict) else 1
+        raw = container.logs(stdout=True, stderr=False) or b""
+        if status_code not in (0, None):
+            err = container.logs(stdout=False, stderr=True) or b""
+            raise RuntimeError(
+                err.decode("utf-8", "replace") if isinstance(err, bytes) else str(err)
+            )
+        if isinstance(raw, str):
+            raw = raw.encode("utf-8", "replace")
+        with open(temp_path, "wb") as fh:
+            fh.write(raw)
+        return temp_path
+    except Exception:
+        try:
+            os.unlink(temp_path)
+        except Exception:
+            pass
+        raise
+    finally:
+        if container is not None:
+            try:
+                container.remove(force=True)
+            except Exception:
+                pass
 
 
 def _create_volume_archive(root_path, archive_name):
@@ -469,10 +663,8 @@ def _create_volume_archive(root_path, archive_name):
         prefix="volume_archive_", suffix=".tar.gz", delete=False
     )
     temp_file.close()
-
     with tarfile.open(temp_file.name, mode="w:gz") as tar:
         tar.add(root_path, arcname=".")
-
     return temp_file.name
 
 
@@ -482,14 +674,31 @@ def _create_volume_archive(root_path, archive_name):
 def volume_files_apiview(request, pk):
     volume = get_object_or_404(Volume.objects.filter(user=request.user), pk=pk)
     try:
-        mountpoint = _get_volume_mountpoint(volume.name)
-        files = _list_volume_files(mountpoint)
+        mountpoint, docker_name = _get_volume_mountpoint(volume)
+        if mountpoint:
+            files = _list_volume_files(mountpoint)
+        else:
+            files = _list_via_helper_container(docker_name)
+        # sort: directories first, then path
+        files.sort(key=lambda x: (0 if x.get("type") == "directory" else 1, x.get("path") or ""))
         return Response(
-            {"result": "success", "files": files}, status=status.HTTP_200_OK
+            {
+                "result": "success",
+                "docker_name": docker_name,
+                "files": files,
+                "count": len(files),
+            },
+            status=status.HTTP_200_OK,
         )
     except DockerNotFound:
         return Response(
-            {"result": "error", "detail": _("Docker volume not found.")},
+            {
+                "result": "error",
+                "detail": _(
+                    "Docker volume not found. It may not have been created yet — "
+                    "start/rebuild the service once so the volume is provisioned."
+                ),
+            },
             status=status.HTTP_404_NOT_FOUND,
         )
     except ValueError as exc:
@@ -497,9 +706,14 @@ def volume_files_apiview(request, pk):
             {"result": "error", "detail": str(exc)},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    except Exception:
+    except Exception as exc:
+        logger.exception("volume_files failed for %s", pk)
         return Response(
-            {"result": "error", "detail": _("Unable to list volume files.")},
+            {
+                "result": "error",
+                "detail": _("Unable to list volume files: %(err)s")
+                % {"err": str(exc)[:300]},
+            },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -509,9 +723,14 @@ def volume_files_apiview(request, pk):
 @permission_classes([IsAuthenticated])
 def volume_download_apiview(request, pk):
     volume = get_object_or_404(Volume.objects.filter(user=request.user), pk=pk)
+    archive_path = None
     try:
-        mountpoint = _get_volume_mountpoint(volume.name)
-        archive_path = _create_volume_archive(mountpoint, volume.name)
+        mountpoint, docker_name = _get_volume_mountpoint(volume)
+        if mountpoint:
+            archive_path = _create_volume_archive(mountpoint, volume.name)
+        else:
+            archive_path = _archive_via_helper_container(docker_name, volume.name)
+
         response = FileResponse(
             open(archive_path, "rb"),
             as_attachment=True,
@@ -519,20 +738,57 @@ def volume_download_apiview(request, pk):
         )
         response["Content-Length"] = os.path.getsize(archive_path)
         response["Content-Type"] = "application/gzip"
+
+        # Best-effort cleanup after response is closed
+        def _cleanup(path=archive_path):
+            try:
+                os.unlink(path)
+            except Exception:
+                pass
+
+        try:
+            response._resource_closers.append(lambda: _cleanup())  # type: ignore[attr-defined]
+        except Exception:
+            pass
         return response
     except DockerNotFound:
+        if archive_path:
+            try:
+                os.unlink(archive_path)
+            except Exception:
+                pass
         return Response(
-            {"result": "error", "detail": _("Docker volume not found.")},
+            {
+                "result": "error",
+                "detail": _(
+                    "Docker volume not found. Start/rebuild the service to provision it."
+                ),
+            },
             status=status.HTTP_404_NOT_FOUND,
         )
     except ValueError as exc:
+        if archive_path:
+            try:
+                os.unlink(archive_path)
+            except Exception:
+                pass
         return Response(
             {"result": "error", "detail": str(exc)},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    except Exception:
+    except Exception as exc:
+        if archive_path:
+            try:
+                os.unlink(archive_path)
+            except Exception:
+                pass
+        logger.exception("volume_download failed for %s", pk)
         return Response(
-            {"result": "error", "detail": _("Unable to create volume archive.")},
+            {
+                "result": "error",
+                "detail": _("Unable to create volume archive: %(err)s")
+                % {"err": str(exc)[:300]},
+            },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
