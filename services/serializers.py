@@ -1,6 +1,36 @@
 from rest_framework import serializers
+from django.conf import settings as django_settings
+
 from .models import PrivateNetwork, Service, Volume
 from plans.serializers import PlanSerializer
+
+
+def _deployment_domain() -> str:
+    """
+    Public suffix for service hosts, e.g. deploy.echonode.website
+    From Django settings.DEPLOYMENT_DOMAIN (env DEPLOYMENT_DOMAIN).
+    """
+    raw = getattr(django_settings, "DEPLOYMENT_DOMAIN", None) or ""
+    return str(raw).strip().lstrip(".").rstrip(".")
+
+
+def _service_docker_label(obj: Service) -> str | None:
+    try:
+        return obj.get_docker_service_name()
+    except Exception:
+        return None
+
+
+def _service_host(obj: Service) -> str | None:
+    label = _service_docker_label(obj)
+    if not label:
+        return None
+    domain = _deployment_domain()
+    if not domain or domain.lower() in ("local", "localhost"):
+        # Still return label.domain if domain is set; for "local" keep full form
+        if not domain:
+            return label
+    return f"{label}.{domain}"
 
 
 class PrivateNetworkSerializer(serializers.ModelSerializer):
@@ -29,7 +59,10 @@ class PrivateNetworkSerializer(serializers.ModelSerializer):
 
 
 class ServiceSerializer(serializers.ModelSerializer):
-    service_name = serializers.ReadOnlyField(source="get_service_name")
+    # Docker container / DNS label: app-<id8>-<name>
+    service_name = serializers.SerializerMethodField(read_only=True)
+    # Full public host: <service_name>.<DEPLOYMENT_DOMAIN>
+    service_host = serializers.SerializerMethodField(read_only=True)
     storage = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
@@ -42,10 +75,18 @@ class ServiceSerializer(serializers.ModelSerializer):
             "selected_deploy_at",
             "deployed_at",
             "storage",
+            "service_name",
+            "service_host",
         ]
         extra_kwargs = {
             "name": {"required": True, "allow_blank": False},
         }
+
+    def get_service_name(self, obj):
+        return _service_docker_label(obj)
+
+    def get_service_host(self, obj):
+        return _service_host(obj)
 
     def get_storage(self, obj):
         try:
@@ -71,12 +112,27 @@ class GetServiceSerializer(serializers.ModelSerializer):
     id = serializers.CharField(source="pk", read_only=True)
     network = PrivateNetworkSerializer()
     plan = PlanSerializer()
+    service_name = serializers.SerializerMethodField(read_only=True)
+    service_host = serializers.SerializerMethodField(read_only=True)
     storage = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Service
         fields = "__all__"
-        read_only_fields = ["id", "created_at", "updated_at", "storage"]
+        read_only_fields = [
+            "id",
+            "created_at",
+            "updated_at",
+            "storage",
+            "service_name",
+            "service_host",
+        ]
+
+    def get_service_name(self, obj):
+        return _service_docker_label(obj)
+
+    def get_service_host(self, obj):
+        return _service_host(obj)
 
     def get_storage(self, obj):
         try:
@@ -124,7 +180,6 @@ class VolumeSerializer(serializers.ModelSerializer):
         fields = super().get_fields()
         if self.instance:
             fields["name"].read_only = True
-            # size can still be changed but quota is validated in validate()
         return fields
 
     def get_service_name(self, obj):
@@ -159,11 +214,6 @@ class VolumeSerializer(serializers.ModelSerializer):
         return int(value)
 
     def validate(self, attrs):
-        """
-        Enforce:
-        1. Exclusive ownership (cannot attach to a different service if already owned).
-        2. Plan storage quota when service is set / changed / size grows.
-        """
         attrs = super().validate(attrs)
         request = self.context.get("request")
         instance = self.instance
@@ -174,7 +224,6 @@ class VolumeSerializer(serializers.ModelSerializer):
             getattr(instance, "size_mb", None) if instance else None,
         )
 
-        # Ownership conflict
         if instance and instance.service_id and service is not None:
             if str(instance.service_id) != str(getattr(service, "pk", service)):
                 raise serializers.ValidationError(
@@ -188,7 +237,6 @@ class VolumeSerializer(serializers.ModelSerializer):
                 )
 
         if service is not None and size_mb is not None:
-            # Resolve Service instance if we only got an id
             if not hasattr(service, "can_allocate_storage"):
                 from .models import Service as ServiceModel
 
@@ -197,7 +245,6 @@ class VolumeSerializer(serializers.ModelSerializer):
                 except ServiceModel.DoesNotExist:
                     raise serializers.ValidationError({"service": "Service not found."})
 
-            # Same user
             if request and str(service.user_id) != str(request.user.id):
                 raise serializers.ValidationError(
                     {"service": "Selected service does not belong to the authenticated user."}
@@ -211,15 +258,12 @@ class VolumeSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-        # user is set by the view
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
-        # If service is explicitly set to null → detach
         if "service" in validated_data and validated_data["service"] is None:
             instance.service = None
             instance.service_attachments = {}
-            # size may still change while unused (no quota)
             if "size_mb" in validated_data:
                 instance.size_mb = validated_data["size_mb"]
             if "default_bind" in validated_data:
@@ -233,7 +277,6 @@ class VolumeSerializer(serializers.ModelSerializer):
         if service is not None and (
             not instance.service_id or str(instance.service_id) != str(service.pk)
         ):
-            # New exclusive attach
             bind = validated_data.get("default_bind") or instance.default_bind or "/data"
             mode = validated_data.get("default_mode") or instance.default_mode or "rw"
             if "size_mb" in validated_data:
