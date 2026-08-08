@@ -152,8 +152,10 @@ class ContainerCreateErrorSurfacingTests(unittest.TestCase):
         self.assertIn("container failed to start: invalid argument", msg)
         self.assertIn("Docker APIError", msg)
         self.assertIn("HTTP 400", msg)
-        # The last attempted fallback stage must be named.
-        self.assertIn("minimal", msg)
+        # The last attempted fallback stage must be named.  The final
+        # stage in the fallback chain is "no restart_policy" (added so a
+        # bad restart policy never blocks container creation).
+        self.assertIn("no restart_policy", msg)
         # And details preserve the structured info for sinks/dashboards.
         self.assertEqual(ctx.exception.details.get("error_type"), "APIError")
         self.assertEqual(ctx.exception.details.get("status_code"), 400)

@@ -82,11 +82,68 @@ class Container(Client):
         self.entry_port = entry_port
         self.labels = labels
         self.route_name = sanitize_route_name(route_name or name)
-        self.restart_policy = restart_policy or {
-            "Name": "unless-stopped",
-            "MaximumRetryCount": 5,
-        }
+        self.restart_policy = self._normalize_restart_policy(
+            restart_policy or {"Name": "unless-stopped"}
+        )
         self.extra_host_config = extra_host_config or {}
+
+    @staticmethod
+    def _normalize_restart_policy(policy: dict | None) -> dict:
+        """
+        Validate / normalize a Docker restart-policy dict.
+
+        Docker's API only accepts ``MaximumRetryCount`` when the policy
+        ``Name`` is ``"on-failure"``.  Any other name (``always``,
+        ``unless-stopped``, ``no``) combined with a non-zero
+        ``MaximumRetryCount`` is rejected with HTTP 400:
+
+            "invalid restart policy: maximum retry count can only be
+             used with 'on-failure'"
+
+        Rather than letting that 400 surface mid-deploy (where it is
+        expensive — image already built, networks/volumes already
+        created), we strip the offending field here and log a warning.
+        """
+        if not policy or not isinstance(policy, dict):
+            return {"Name": "unless-stopped"}
+
+        name = str(policy.get("Name", "unless-stopped")).strip().lower()
+        # Accept hyphenless aliases so callers don't have to remember the
+        # exact casing/punctuation Docker expects.
+        alias_map = {
+            "onfailure": "on-failure",
+            "unlessstopped": "unless-stopped",
+        }
+        name = alias_map.get(name, name)
+        valid_names = {"no", "always", "unless-stopped", "on-failure"}
+        if name not in valid_names:
+            logger.warning(
+                "Unknown restart policy Name='%s'; falling back to "
+                "'unless-stopped'. Valid names: %s",
+                policy.get("Name"), sorted(valid_names),
+            )
+            name = "unless-stopped"
+
+        normalized: dict[str, Any] = {"Name": name}
+
+        if name == "on-failure":
+            max_retries = policy.get("MaximumRetryCount")
+            if max_retries is not None:
+                try:
+                    normalized["MaximumRetryCount"] = int(max_retries)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "restart_policy MaximumRetryCount=%r is not an "
+                        "int; ignoring.", max_retries,
+                    )
+        elif "MaximumRetryCount" in policy:
+            logger.warning(
+                "restart_policy Name='%s' cannot carry MaximumRetryCount "
+                "(only 'on-failure' can). Stripping it to avoid Docker "
+                "HTTP 400 'invalid restart policy'.", name,
+            )
+
+        return normalized
 
     # ------------------------------------------------------------------
     # Host config — resource limits, tmpfs, restart policy
@@ -310,6 +367,13 @@ class Container(Client):
                 k: v for k, v in kw.items()
                 if k not in ("security_opt", "pids_limit", "memswap_limit", "tmpfs")
             }),
+            # Last-resort: also drop restart_policy.  A bad restart policy
+            # (e.g. MaximumRetryCount on a non-on-failure Name — see
+            # _normalize_restart_policy) causes Docker to reject the
+            # entire create_container call with HTTP 400, and the
+            # mutators above don't touch restart_policy, so without this
+            # stage we'd surface a 400 even from the "minimal" config.
+            ("no restart_policy", lambda kw: {k: v for k, v in kw.items() if k != "restart_policy"}),
         ]
 
         last_exc: Exception | None = None
