@@ -416,6 +416,11 @@ class DBDeployer:
             "binds":         volume_binds or None,
             "port_bindings": port_bindings or None,
             "read_only":     False,   # DB containers must write data
+            # Ephemeral tmpfs – some DB images / init scripts still touch /tmp
+            "tmpfs": {
+                "/tmp": "rw,noexec,nosuid,size=64m",
+                "/var/tmp": "rw,noexec,nosuid,size=32m",
+            },
         }
         max_cpu = cfg.get("max_cpu")
         max_ram = cfg.get("max_ram")

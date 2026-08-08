@@ -165,6 +165,7 @@ class Deploy:
         orchestrator = DeploymentOrchestrator(
             event_sink=self.event_sink,
             deployment_id=self.deployment_id,
+            cancel_check=getattr(self, '_cancel_check', None),
         )
         self.result = orchestrator.deploy(self._config())
         self.errors = [] if self.result.success else [DeployException(self.result.message, stage=self.result.stage)]
@@ -174,6 +175,7 @@ class Deploy:
         orchestrator = DeploymentOrchestrator(
             event_sink=self.event_sink,
             deployment_id=self.deployment_id,
+            cancel_check=getattr(self, '_cancel_check', None),
         )
         self.result = orchestrator.deploy(self._config())
         return self.result

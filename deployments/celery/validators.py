@@ -1,25 +1,21 @@
-import json
+"""
+deployments/celery/validators.py
+--------------------------------
+Business-rule validation for deployments.
 
-from deploy.models import Deploy
+Key changes vs. legacy:
+  * Uses the unified ``deployments.common.parse_config`` (was a local
+    duplicate of the same JSON-decoding logic).
+  * Uses the unified ``DeploymentValidationError`` from
+    ``deployments.common.exceptions``.
+"""
+
+from __future__ import annotations
+
+from deploy.models import Deploy  # type: ignore
 from deployments.core.db_deployer import DB_PLATFORMS, validate_db_config
-from .exceptions import DeploymentValidationError
-
-
-def _parse_config(raw) -> dict:
-    if isinstance(raw, dict):
-        return dict(raw)
-    if isinstance(raw, str) and raw.strip():
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                return parsed
-            if isinstance(parsed, str) and parsed.strip():
-                parsed2 = json.loads(parsed)
-                if isinstance(parsed2, dict):
-                    return parsed2
-        except Exception:
-            pass
-    return {}
+from deployments.common import parse_config
+from deployments.common.exceptions import DeploymentValidationError
 
 
 class DeploymentValidator:
@@ -27,7 +23,7 @@ class DeploymentValidator:
 
     @classmethod
     def _platform(cls, deploy_item: Deploy) -> str:
-        cfg = _parse_config(getattr(deploy_item, "config", None))
+        cfg = parse_config(getattr(deploy_item, "config", None))
         p = cfg.get("platform")
         if p:
             return str(p).lower().strip()
@@ -53,7 +49,6 @@ class DeploymentValidator:
                 "Deployment has no associated service."
             )
 
-        # network is nullable on the model; business rule still requires it
         if service.network_id is None:
             raise DeploymentValidationError(
                 "Service must have a private network before deployment."
@@ -65,7 +60,7 @@ class DeploymentValidator:
             )
 
         platform = cls._platform(deploy_item)
-        cfg = _parse_config(getattr(deploy_item, "config", None))
+        cfg = parse_config(getattr(deploy_item, "config", None))
 
         # ------------------------------------------------------------------
         # DB platforms: credentials only — NO zip, NO dockerfile template

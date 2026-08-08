@@ -87,6 +87,10 @@ class DeploymentResult:
     container_name: Optional[str] = None
     previous_image_ref: Optional[str] = None
     rollback_performed: bool = False
+    # Explicit flag so callers can distinguish "deploy failed, but
+    # rollback restored the previous container" from "deploy failed AND
+    # rollback itself failed" (the service is now without a container).
+    rollback_failed: bool = False
     error: Optional[str] = None
     stage: Optional[str] = None
     details: dict[str, Any] = field(default_factory=dict)

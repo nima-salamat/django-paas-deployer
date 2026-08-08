@@ -76,8 +76,22 @@ class DeploymentLogger:
                 elif self._sink_error_count == 4:
                     self.logger.error(
                         "Deployment event sink keeps failing; further sink "
-                        "errors will be suppressed for deploy=%s",
+                        "errors will be sampled at 1/100 for deploy=%s",
                         self.deployment_id,
+                    )
+                elif self._sink_error_count % 100 == 0:
+                    # Legacy code suppressed ALL errors after count=4,
+                    # making a permanently broken sink invisible.  We
+                    # now log a summary every 100 errors so operators
+                    # always have visibility.
+                    self.logger.error(
+                        "Deployment event sink has failed %s times for "
+                        "deploy=%s (last stage=%s). Sink is likely "
+                        "permanently broken — investigate channel layer "
+                        "and log database.",
+                        self._sink_error_count,
+                        self.deployment_id,
+                        stage,
                     )
 
         return event

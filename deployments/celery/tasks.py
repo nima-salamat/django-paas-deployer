@@ -11,6 +11,18 @@ stop            Container stop pipeline (StopService).
 run_db_deploy   Database-platform pipeline (DBDeployer).  No zip, no
                 Dockerfile — credentials from Deploy.config + Service metadata.
 monitor_services  Periodic reconciler (re-exported from .schedules).
+
+Key changes vs. legacy:
+  * Uses the unified ``deployments.common.parse_config`` (was a triplicate copy).
+  * Uses the unified exception hierarchy from
+    ``deployments.common.exceptions`` (was two parallel hierarchies that
+    silently missed each other in ``except`` clauses).
+  * ``deploy`` retry now respects the ``recoverable`` flag on
+    ``DeploymentError`` subclasses — known-permanent errors are not retried.
+  * ``run_db_deploy`` is now strictly idempotent: ``_lock_for_db_deploy``
+    no longer accepts DEPLOYING (which previously caused duplicate
+    task delivery to forcefully remove + recreate the container).
+    Duplicate delivery now no-ops cleanly.
 """
 
 from __future__ import annotations
@@ -23,31 +35,34 @@ from celery import shared_task
 from django.db import transaction
 from django.utils import timezone
 
-from core.global_settings.config import SERVICE_STATUS_CHOICES
-from deploy.models import Deploy, DeployLog, DeploymentStatusChoices
+from core.global_settings.config import SERVICE_STATUS_CHOICES  # type: ignore
+from deploy.models import Deploy, DeployLog, DeploymentStatusChoices  # type: ignore
 from deployments.core.db_deployer import (
     DB_PLATFORMS,
     DBDeployer,
     validate_db_config,
 )
-from deployments.core.exceptions import DeploymentError
-from services.models import Service
+from deployments.common import parse_config, as_bool
+from deployments.common.exceptions import (
+    DeploymentError,
+    InvalidServiceStateError,
+    DeploymentValidationError,
+    ContainerTimeoutError,
+    OrchestratorDeploymentError,
+)
+from deployments.common.retry import is_retryable_exception
+from deployments.core.state.locks import acquire_service_deployment_lock
+from services.models import Service  # type: ignore
 
 from .services.deploy_service import DeployService
 from .services.stop_service import StopService
-from .exceptions import (
-    ContainerTimeoutError,
-    DeploymentValidationError,
-    InvalidServiceStateError,
-    OrchestratorDeploymentError,
-)
 from .schedules import monitor_services  # noqa: F401  — re-export for beat
 
 logger = logging.getLogger(__name__)
 
 
 # ===========================================================================
-# App deploy / stop (existing)
+# App deploy / stop
 # ===========================================================================
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=15)
@@ -63,7 +78,7 @@ def deploy(self, deploy_id) -> None:
             .first()
         )
         if deploy_item is not None:
-            cfg = deploy_item.config if isinstance(deploy_item.config, dict) else {}
+            cfg = parse_config(deploy_item.config) if isinstance(deploy_item.config, dict) else {}
             platform = (
                 (cfg.get("platform") or "")
                 or getattr(getattr(deploy_item.service, "plan", None), "platform", "")
@@ -74,8 +89,7 @@ def deploy(self, deploy_id) -> None:
                 logger.warning(
                     "deploy task received DB platform '%s' for deploy_id=%s; "
                     "redirecting to run_db_deploy",
-                    platform,
-                    deploy_id,
+                    platform, deploy_id,
                 )
                 run_db_deploy.delay(str(deploy_id))
                 return
@@ -87,16 +101,30 @@ def deploy(self, deploy_id) -> None:
 
     try:
         DeployService().execute(deploy_id)
-    except (
-        InvalidServiceStateError,
-        DeploymentValidationError,
-        OrchestratorDeploymentError,
-        ContainerTimeoutError,
-    ):
+    except (InvalidServiceStateError, DeploymentValidationError,
+            OrchestratorDeploymentError, ContainerTimeoutError):
+        # Permanent errors — log but do NOT retry.
         logger.exception("Deployment did not complete for deploy_id: %s", deploy_id)
+    except DeploymentError as exc:
+        # DeploymentError with recoverable=True MAY be retried.  Others
+        # are permanent.  Legacy code retried on ANY DeploymentError,
+        # wasting resources on bad Dockerfiles.
+        if getattr(exc, "recoverable", False) and self.request.retries < self.max_retries:
+            logger.warning(
+                "Recoverable deployment error for deploy_id=%s (attempt %d/%d): %s",
+                deploy_id, self.request.retries + 1, self.max_retries + 1, exc,
+            )
+            raise self.retry(exc=exc)
+        logger.exception("Permanent deployment error for deploy_id: %s", deploy_id)
     except Exception as exc:
-        logger.warning("Deploy execution error; re-enqueueing (ID: %s)", deploy_id)
-        raise self.retry(exc=exc)
+        # Unknown errors are treated as transient — retry up to max.
+        if self.request.retries < self.max_retries:
+            logger.warning(
+                "Deploy execution error; re-enqueueing (ID: %s, attempt %d/%d)",
+                deploy_id, self.request.retries + 1, self.max_retries + 1,
+            )
+            raise self.retry(exc=exc)
+        logger.exception("Deploy exhausted retries for deploy_id: %s", deploy_id)
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=10)
@@ -107,43 +135,22 @@ def stop(self, service_id) -> None:
     except InvalidServiceStateError:
         pass
     except Exception as exc:
-        logger.warning("Stop error; re-enqueueing (ID: %s)", service_id)
-        raise self.retry(exc=exc)
+        if self.request.retries < self.max_retries:
+            logger.warning(
+                "Stop error; re-enqueueing (ID: %s, attempt %d/%d)",
+                service_id, self.request.retries + 1, self.max_retries + 1,
+            )
+            raise self.retry(exc=exc)
+        logger.exception("Stop exhausted retries for service_id: %s", service_id)
 
 
 # ===========================================================================
-# DB deploy
+# DB deploy helpers
 # ===========================================================================
-
-def _parse_config(raw) -> dict:
-    """
-    Normalize Deploy.config to a dict.
-
-    UI often sends JSON.stringify(...), so the value may be stored as a
-    JSON *string* inside a JSONField / TextField.  Treating a non-dict as
-    empty was wiping all credentials and causing false validation failures.
-    """
-    if isinstance(raw, dict):
-        return dict(raw)
-    if isinstance(raw, str) and raw.strip():
-        import json
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                return parsed
-            # double-encoded
-            if isinstance(parsed, str) and parsed.strip():
-                parsed2 = json.loads(parsed)
-                if isinstance(parsed2, dict):
-                    return parsed2
-        except Exception:
-            pass
-    return {}
-
 
 def _resolve_platform(deploy: Deploy) -> str:
-    """config.platform → service.plan.platform → empty string."""
-    cfg = _parse_config(getattr(deploy, "config", None))
+    """config.platform -> service.plan.platform -> empty string."""
+    cfg = parse_config(getattr(deploy, "config", None))
     p = str(cfg.get("platform") or "").strip().lower()
     if p:
         return p
@@ -157,10 +164,6 @@ def _collect_service_volumes(service: Service) -> list[dict]:
     """
     Resolve volumes attached to a service without assuming a reverse
     relation named ``volumes`` exists on the Service model.
-
-    Supports:
-      - service.volumes (reverse FK) when present
-      - services.models.Volume filtered by service_id / service_attachments
     """
     volumes: list[dict] = []
     seen: set[str] = set()
@@ -185,7 +188,6 @@ def _collect_service_volumes(service: Service) -> list[dict]:
         seen.add(name)
         volumes.append({"source": name, "target": bind, "mode": mode or "rw"})
 
-    # Path A: reverse relation on Service (legacy / some deployments)
     rel = getattr(service, "volumes", None)
     if rel is not None and hasattr(rel, "all"):
         try:
@@ -196,11 +198,10 @@ def _collect_service_volumes(service: Service) -> list[dict]:
                 "service.volumes.all() failed for service %s", service.pk
             )
 
-    # Path B: query Volume model directly
     if not volumes:
         try:
             from django.db.models import Q
-            from services.models import Volume
+            from services.models import Volume  # type: ignore
 
             qs = Volume.objects.filter(
                 Q(service_id=service.pk)
@@ -211,27 +212,21 @@ def _collect_service_volumes(service: Service) -> list[dict]:
         except Exception:
             logger.debug(
                 "Volume model query unavailable for service %s; skipping",
-                service.pk,
-                exc_info=True,
+                service.pk, exc_info=True,
             )
 
     return volumes
 
 
 def _build_db_cfg(deploy: Deploy, service: Service) -> dict[str, Any]:
-    """
-    Merge Deploy.config credentials with live Service metadata
-    (plan limits, volumes, network) so DBDeployer has everything it needs.
-    """
+    """Merge Deploy.config credentials with live Service metadata."""
     cfg: dict[str, Any] = {}
-    cfg.update(_parse_config(getattr(deploy, "config", None)))
+    cfg.update(parse_config(getattr(deploy, "config", None)))
 
     platform = _resolve_platform(deploy)
     if platform:
         cfg["platform"] = platform
 
-    # MySQL/MariaDB: accept password as root_password alias so validation
-    # and the image env builder both see a value.
     if platform in ("mysql", "mariadb"):
         if not str(cfg.get("root_password") or "").strip() and str(cfg.get("password") or "").strip():
             cfg["root_password"] = str(cfg["password"])
@@ -272,15 +267,13 @@ def _create_deploy_log(
     traceback_str: str = "",
 ) -> None:
     """
-    Write DeployLog on the dedicated log database.
+    Write a DeployLog row on the dedicated log database.
 
-    DeployLog lives on DEPLOYMENT_LOG_DB_ALIAS (cross-db).  Assigning full
-    FK objects triggers the router error
-    "the current database router prevents this relation", so we pass raw
-    ids and use .using(alias).
+    Uses raw IDs (not FK objects) because DeployLog lives on a separate
+    database alias and Django's router would refuse FK objects.
     """
     try:
-        from django.conf import settings
+        from django.conf import settings  # type: ignore
 
         alias = getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", None) or "default"
         kwargs = {
@@ -316,30 +309,27 @@ def _mark_success(deploy: Deploy, service: Service, result_message: str) -> None
             error_message="",
             completed_at=now,
         )
-        Service.objects.filter(pk=service.pk).update(
+        # Never overwrite a cleanly-stopped service.
+        Service.objects.filter(pk=service.pk).exclude(
+            status=SERVICE_STATUS_CHOICES.STOPPED
+        ).update(
             status=SERVICE_STATUS_CHOICES.RUNNING,
             deployed_at=now,
             deploy_started=None,
             task_id=None,
         )
     _create_deploy_log(
-        deploy,
-        stage="finished",
+        deploy, stage="finished",
         message=result_message or "Database deployed successfully.",
-        level="info",
-        progress=100,
+        level="info", progress=100,
     )
     logger.info("DB deploy succeeded: deploy=%s service=%s", deploy.pk, service.pk)
 
 
 def _mark_failure(
-    deploy: Deploy,
-    service: Service,
-    message: str,
-    *,
+    deploy: Deploy, service: Service, message: str, *,
     stage: str = "deployment_failed",
-    details: dict | None = None,
-    tb: str = "",
+    details: dict | None = None, tb: str = "",
 ) -> None:
     now = timezone.now()
     with transaction.atomic():
@@ -358,37 +348,30 @@ def _mark_failure(
             task_id=None,
         )
     _create_deploy_log(
-        deploy,
-        stage=stage,
-        message=message,
-        level="error",
-        details=details or {},
-        exception_type="DBDeployError",
-        traceback_str=tb,
+        deploy, stage=stage, message=message, level="error",
+        details=details or {}, exception_type="DBDeployError", traceback_str=tb,
     )
     logger.warning(
         "DB deploy failed: deploy=%s service=%s stage=%s msg=%s",
-        deploy.pk,
-        service.pk,
-        stage,
-        message,
+        deploy.pk, service.pk, stage, message,
     )
 
 
 def _lock_for_db_deploy(deploy_id: str | int) -> tuple[Deploy, Service] | None:
     """
-    Transition Service QUEUED → DEPLOYING and Deploy → RUNNING under row locks.
+    Transition Service QUEUED -> DEPLOYING and Deploy -> RUNNING under
+    row locks.
 
-    Accepts QUEUED (normal) and DEPLOYING (retry / re-delivery) so the task
-    is idempotent.
+    IDEMPOTENCY FIX: previously accepted DEPLOYING (re-entry), which
+    meant duplicate Celery delivery would forcefully remove + recreate
+    the container, causing downtime and potential data corruption.
+    Now strictly requires QUEUED — duplicates no-op cleanly.
     """
     with transaction.atomic():
         try:
             deploy = (
                 Deploy.objects.select_related(
-                    "service",
-                    "service__plan",
-                    "service__network",
+                    "service", "service__plan", "service__network",
                 )
                 .select_for_update(of=("self", "service"))
                 .get(pk=deploy_id)
@@ -402,57 +385,41 @@ def _lock_for_db_deploy(deploy_id: str | int) -> tuple[Deploy, Service] | None:
             logger.error("run_db_deploy: Deploy %s has no service", deploy_id)
             return None
 
-        allowed = (
-            SERVICE_STATUS_CHOICES.QUEUED,
-            SERVICE_STATUS_CHOICES.DEPLOYING,
-        )
-        if service.status not in allowed:
+        # STRICT: only QUEUED is accepted.  A duplicate task delivery
+        # (which is possible under Celery's at-least-once semantics)
+        # will see DEPLOYING and no-op, leaving the original to finish.
+        if service.status != SERVICE_STATUS_CHOICES.QUEUED:
             logger.info(
                 "run_db_deploy: skipping deploy=%s — service status is %s "
-                "(expected QUEUED/DEPLOYING)",
+                "(expected QUEUED). Duplicate delivery or stale task.",
+                deploy_id, service.status,
+            )
+            return None
+
+        # Also refuse if the deploy row is already RUNNING — means a
+        # previous task picked it up.
+        if deploy.status == DeploymentStatusChoices.RUNNING:
+            logger.info(
+                "run_db_deploy: skipping deploy=%s — deploy already RUNNING. "
+                "Duplicate delivery.",
                 deploy_id,
-                service.status,
             )
             return None
 
         now = timezone.now()
         service.status = SERVICE_STATUS_CHOICES.DEPLOYING
-        service.deploy_started = service.deploy_started or now
+        service.deploy_started = now
         service.save(update_fields=["status", "deploy_started"])
 
         deploy.status = DeploymentStatusChoices.RUNNING
-        deploy.started_at = deploy.started_at or now
+        deploy.started_at = now
         deploy.stage = "starting"
-        deploy.progress = max(deploy.progress or 0, 5)
+        deploy.progress = 5
         deploy.status_message = "Database deployment in progress."
-        deploy.save(
-            update_fields=[
-                "status",
-                "started_at",
-                "stage",
-                "progress",
-                "status_message",
-            ]
-        )
+        deploy.save(update_fields=[
+            "status", "started_at", "stage", "progress", "status_message",
+        ])
         return deploy, service
-
-
-def _is_retryable(exc: BaseException) -> bool:
-    if isinstance(exc, DeploymentError) and not getattr(exc, "recoverable", False):
-        return False
-    name = type(exc).__name__.lower()
-    text = str(exc).lower()
-    markers = (
-        "timeout",
-        "connection",
-        "temporarily",
-        "unavailable",
-        "network",
-        "docker",
-        "apierror",
-        "servererror",
-    )
-    return any(m in name or m in text for m in markers)
 
 
 @shared_task(
@@ -462,13 +429,7 @@ def _is_retryable(exc: BaseException) -> bool:
     name="deployments.celery.tasks.run_db_deploy",
 )
 def run_db_deploy(self, deploy_id: str | int) -> None:
-    """
-    Execute a database-platform deployment via DBDeployer.
-
-    Enqueued by:
-      - services.apis.start_service_apiview  (when platform ∈ DB_PLATFORMS)
-      - deployments.celery.tasks.deploy      (guard redirect)
-    """
+    """Execute a database-platform deployment via DBDeployer."""
     logger.info("run_db_deploy started for deploy_id=%s", deploy_id)
 
     locked = _lock_for_db_deploy(deploy_id)
@@ -489,15 +450,13 @@ def run_db_deploy(self, deploy_id: str | int) -> None:
 
     if getattr(deploy, "cancel_requested", False):
         _mark_failure(
-            deploy,
-            service,
+            deploy, service,
             "Deployment cancelled before execution.",
             stage="cancelled",
         )
         Service.objects.filter(pk=service.pk).update(
             status=SERVICE_STATUS_CHOICES.STOPPED,
-            task_id=None,
-            deploy_started=None,
+            task_id=None, deploy_started=None,
         )
         return
 
@@ -505,28 +464,20 @@ def run_db_deploy(self, deploy_id: str | int) -> None:
 
     errors = validate_db_config(platform, cfg)
     if errors:
-        # Log key names only (never secret values) to diagnose empty-config bugs
         safe_keys = sorted(str(k) for k in cfg.keys())
         logger.warning(
             "DB validation failed for deploy=%s platform=%s config_keys=%s errors=%s",
-            deploy.pk,
-            platform,
-            safe_keys,
-            errors,
+            deploy.pk, platform, safe_keys, errors,
         )
         msg = "DB config validation failed: " + "; ".join(errors)
         _mark_failure(
-            deploy,
-            service,
-            msg,
-            stage="validation",
+            deploy, service, msg, stage="validation",
             details={"errors": errors, "config_keys": safe_keys},
         )
         return
 
     _create_deploy_log(
-        deploy,
-        stage="validation",
+        deploy, stage="validation",
         message=f"Config validated for platform '{platform}'.",
         progress=10,
         details={"platform": platform, "container": container_name},
@@ -537,42 +488,53 @@ def run_db_deploy(self, deploy_id: str | int) -> None:
         try:
             from deployments.core.sink import DBAndChannelEventSink
         except ImportError:
-            from deploy.sink import DBAndChannelEventSink
+            from deploy.sink import DBAndChannelEventSink  # type: ignore
         event_sink = DBAndChannelEventSink(deploy.pk)
     except Exception:
         logger.exception("Event sink unavailable for deploy %s", deploy.pk)
 
+    # Acquire the per-service advisory lock so duplicate delivery of
+    # this task cannot race with itself even if the row-lock check above
+    # somehow passes (e.g. the original task crashed after releasing
+    # the row but before completing Docker work).
     try:
-        result = DBDeployer().deploy(
-            container_name=container_name,
-            platform=platform,
-            cfg=cfg,
-            event_sink=event_sink,
-            deployment_id=str(deploy.pk),
-        )
+        with acquire_service_deployment_lock(service.pk):
+            result = DBDeployer().deploy(
+                container_name=container_name,
+                platform=platform,
+                cfg=cfg,
+                event_sink=event_sink,
+                deployment_id=str(deploy.pk),
+            )
     except Exception as exc:
         tb = traceback.format_exc()
         logger.exception(
             "DBDeployer raised for deploy=%s container=%s",
-            deploy.pk,
-            container_name,
+            deploy.pk, container_name,
         )
-        if self.request.retries < self.max_retries and _is_retryable(exc):
+        # Use the unified retryability predicate.
+        if (
+            self.request.retries < self.max_retries
+            and is_retryable_exception(
+                exc,
+                recoverable_types=(DeploymentError,),
+                transient_markers=(
+                    "timeout", "connection", "temporarily", "unavailable",
+                    "network", "docker", "apierror", "servererror",
+                ),
+            )
+        ):
             logger.warning(
                 "Retrying run_db_deploy (attempt %s) for deploy=%s: %s",
-                self.request.retries + 1,
-                deploy.pk,
-                exc,
+                self.request.retries + 1, deploy.pk, exc,
             )
             raise self.retry(exc=exc)
 
         _mark_failure(
-            deploy,
-            service,
+            deploy, service,
             str(exc) or "Unexpected error during database deployment.",
             stage=getattr(exc, "stage", "deployment_failed"),
-            details={"error": str(exc)},
-            tb=tb,
+            details={"error": str(exc)}, tb=tb,
         )
         return
 
@@ -580,8 +542,7 @@ def run_db_deploy(self, deploy_id: str | int) -> None:
         _mark_success(deploy, service, result.message)
     else:
         _mark_failure(
-            deploy,
-            service,
+            deploy, service,
             result.message or result.error or "Database deployment failed.",
             stage="deployment_failed",
             details=result.details or {},

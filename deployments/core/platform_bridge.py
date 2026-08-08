@@ -14,6 +14,8 @@ import zipfile
 from dataclasses import replace
 from typing import Any
 
+from deployments.common.security import is_safe_archive_name, is_zip_symlink, safe_join
+
 from .types import DeploymentConfig
 
 logger = logging.getLogger(__name__)
@@ -24,12 +26,23 @@ def _ensure_plugins_loaded() -> None:
     from .platforms import loader  # noqa: F401
 
 
+# Hard caps matching converter.convert_zip_to_tar.
+_MAX_EXTRACT_BYTES = 500 * 1024 * 1024
+_MAX_EXTRACT_MEMBERS = 5000
+
+
 def extract_zip_to_temp(zip_path: str) -> tuple[str, str]:
     """
     Extract deployment ZIP to a temporary directory for filesystem inspection.
 
-    Returns (temp_dir, project_root).
-    Caller MUST call shutil.rmtree(temp_dir) when finished.
+    Returns ``(temp_dir, project_root)``.  Caller MUST call
+    ``shutil.rmtree(temp_dir)`` when finished.
+
+    Security:
+      * Rejects absolute paths, ``../`` traversal, Windows drive prefixes.
+      * Rejects symlink + hardlink members (Zip Slip vector).
+      * Caps total uncompressed size and member count.
+      * Uses ``safe_join`` to assert every member resolves inside ``temp_dir``.
     """
     if not os.path.exists(zip_path):
         raise FileNotFoundError(f"ZIP file not found at: {zip_path}")
@@ -37,11 +50,38 @@ def extract_zip_to_temp(zip_path: str) -> tuple[str, str]:
     temp_dir = tempfile.mkdtemp(prefix="deploy-inspect-")
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
-            for info in zf.infolist():
+            total_bytes = 0
+            for idx, info in enumerate(zf.infolist()):
+                if idx >= _MAX_EXTRACT_MEMBERS:
+                    raise ValueError(
+                        f"ZIP has too many members (>{_MAX_EXTRACT_MEMBERS})."
+                    )
                 name = info.filename.replace("\\", "/")
-                if name.startswith("/") or name.startswith("../") or "/../" in name:
+                if not is_safe_archive_name(name):
                     raise ValueError(f"Unsafe path in ZIP: {info.filename}")
-            zf.extractall(temp_dir)
+                if is_zip_symlink(info):
+                    raise ValueError(
+                        f"Refusing to extract symlink member '{info.filename}'."
+                    )
+                # Cap on uncompressed size — guards against zip bombs.
+                total_bytes += info.file_size
+                if total_bytes > _MAX_EXTRACT_BYTES:
+                    raise ValueError(
+                        f"ZIP uncompressed size exceeds {_MAX_EXTRACT_BYTES} bytes."
+                    )
+
+                # Resolve target and assert it stays inside temp_dir.
+                target = safe_join(temp_dir, name)
+                if name.endswith("/"):
+                    os.makedirs(target, exist_ok=True)
+                    continue
+
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                # Force mode 0o644 for files — no executable bits.
+                with zf.open(info, "r") as src, open(target, "wb") as dst:
+                    import shutil as _shutil
+                    _shutil.copyfileobj(src, dst, length=64 * 1024)
+                os.chmod(target, 0o644)
     except Exception:
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise

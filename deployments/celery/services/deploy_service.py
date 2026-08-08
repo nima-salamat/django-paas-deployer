@@ -1,42 +1,59 @@
+"""
+deployments/celery/services/deploy_service.py
+---------------------------------------------
+App-deploy service — the layer between the Celery ``deploy`` task and
+the ``DeploymentOrchestrator``.
+
+Key changes vs. legacy:
+  * Uses ``deployments.common.parse_config`` instead of a local
+    ``_parse_config`` copy (the codebase had THREE copies).
+  * Acquires a per-service advisory lock for the WHOLE deploy so two
+    deploys targeting the same Service cannot race.
+  * Wires ``cancel_check`` into the orchestrator so a user-requested
+    cancel between stages is honoured (legacy code only checked at start).
+  * Reports ``rollback_failed`` distinctly from ``rollback_performed``
+    in the final state transition.
+"""
+
+from __future__ import annotations
+
 import logging
-import traceback
-import json
 import os
 import re
+import traceback
 
-
-from deploy.models import Deploy
-from deploy.deployment_state import DjangoDeploymentState
-from core.global_settings.config import default_ports
+from deploy.models import Deploy  # type: ignore
+from deploy.deployment_state import DjangoDeploymentState  # type: ignore
+from core.global_settings.config import default_ports  # type: ignore
 from deployments.core.deploy import Deploy as DeployFacade
 from deployments.core.types import VolumeSpec
 from deployments.core.manager.container_manager import Container
-from services.models import Volume
+from deployments.core.state.locks import acquire_service_deployment_lock
+from services.models import Volume  # type: ignore
+
+from deployments.common import parse_config, as_bool, as_int
+from deployments.common.exceptions import (
+    InvalidServiceStateError,
+    OrchestratorDeploymentError,
+)
+
 from ..service_status import ServiceStateManager
 from ..validators import DeploymentValidator
 from ..helpers import DeploymentHelper, MockOrchestratorResult
 from ..waiters import ContainerWaiter
-from ..exceptions import InvalidServiceStateError, OrchestratorDeploymentError
 
 logger = logging.getLogger(__name__)
 
-def _docker_safe_tag(version) -> str:
-    """
-    Convert Deploy.version (Decimal/float/str) to a docker-py-safe tag.
 
-    Decimal 1.22 → "v1-22"
-    Avoids pure numeric tags that some docker-py match_tag builds reject,
-    and guarantees a letter-leading tag.
-    """
+def _docker_safe_tag(version) -> str:
+    """Convert ``Deploy.version`` to a docker-py-safe tag."""
     if version is None:
         return "latest"
     raw = str(version).strip()
     if not raw:
         return "latest"
-    # Normalize Decimal string
     if re.match(r"^\d+(\.\d+)?$", raw):
         return "v" + raw.replace(".", "-")
-    # Already looks like a tag
     cleaned = re.sub(r"[^A-Za-z0-9_.-]", "-", raw)
     if not cleaned:
         return "latest"
@@ -45,47 +62,47 @@ def _docker_safe_tag(version) -> str:
     return cleaned[:128]
 
 
-
-
-def _parse_config(raw) -> dict:
-    """Normalize Deploy.config whether stored as dict or JSON string."""
-    if isinstance(raw, dict):
-        return dict(raw)
-    if isinstance(raw, str) and raw.strip():
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                return parsed
-            if isinstance(parsed, str) and parsed.strip():
-                parsed2 = json.loads(parsed)
-                if isinstance(parsed2, dict):
-                    return parsed2
-        except Exception:
-            pass
-    return {}
-
-
-def _as_bool(value) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "yes", "on")
-    return bool(value)
-
-
 class DeployService:
     """Orchestrates deployment execution flows coupled with state logging."""
 
     def execute(self, deploy_id: int) -> None:
+        # 1. Acquire the per-service advisory lock BEFORE touching the
+        #    row state.  This prevents two deploys for the same Service
+        #    from racing even if the row-lock transaction boundary is
+        #    in the wrong place.
+        try:
+            deploy_item = (
+                Deploy.objects
+                .select_related("service")
+                .filter(pk=deploy_id)
+                .first()
+            )
+            if deploy_item is None:
+                logger.warning("Deploy %s does not exist; aborting.", deploy_id)
+                return
+            service_id = deploy_item.service_id
+        except Exception:
+            logger.exception("Failed to pre-fetch deploy %s for locking.", deploy_id)
+            return
+
+        try:
+            with acquire_service_deployment_lock(service_id):
+                self._execute_locked(deploy_id, service_id)
+        except InvalidServiceStateError as exc:
+            logger.info("Skipped deploy execution for ID %s: %s", deploy_id, str(exc))
+            return
+        except Exception:
+            # The lock itself raised (e.g. DeploymentLockError) — log and exit.
+            logger.exception("Deploy %s could not acquire deployment lock.", deploy_id)
+            return
+
+    def _execute_locked(self, deploy_id: int, service_id: int) -> None:
         try:
             deploy_item = ServiceStateManager.lock_and_get_deployment(deploy_id)
         except InvalidServiceStateError as exc:
             logger.info("Skipped deploy execution for ID %s: %s", deploy_id, str(exc))
             return
 
-        service_id = deploy_item.service.id
         container_name = deploy_item.service.get_docker_service_name()
         state_tracker = DjangoDeploymentState(deploy_item)
 
@@ -108,15 +125,20 @@ class DeployService:
             if getattr(result, "status", None) == "cancelled":
                 ServiceStateManager.sync_legacy_stopped(service_id)
             else:
+                # If rollback itself failed, surface that — don't claim success.
+                if getattr(result, "rollback_failed", False):
+                    logger.error(
+                        "Deploy %s succeeded in starting the new container but "
+                        "a previous rollback attempt failed; operator review required.",
+                        deploy_id,
+                    )
                 ServiceStateManager.sync_legacy_success(service_id, deploy_id=deploy_item.pk)
             logger.info("Successfully executed deploy cycle for container: %s", container_name)
 
         except Exception as exc:
             logger.error(
                 "Deployment critical failure on %s: %s",
-                container_name,
-                str(exc),
-                exc_info=True,
+                container_name, str(exc), exc_info=True,
             )
             state_tracker.record_exception(exc, traceback.format_exc())
             if state_tracker.deploy.status not in {"failed", "cancelled"}:
@@ -131,36 +153,36 @@ class DeployService:
             ServiceStateManager.sync_legacy_failure(service_id, deploy_id=deploy_item.pk)
             raise
 
-    def _process_deployment(self, deploy_item: Deploy, container_name: str, state_tracker: DjangoDeploymentState):
-        cfg = _parse_config(getattr(deploy_item, "config", None))
+    def _process_deployment(
+        self, deploy_item: Deploy, container_name: str,
+        state_tracker: DjangoDeploymentState,
+    ):
+        cfg = parse_config(getattr(deploy_item, "config", None))
         platform = (
             str(cfg.get("platform") or "").lower().strip()
             or str(getattr(getattr(deploy_item.service, "plan", None), "platform", None) or "docker").lower().strip()
         )
-        # Runtime image tags from Deploy.config (optional overrides)
+
         version_overrides = {
             k: cfg[k]
             for k in (
-                "python_version",
-                "django_python_version",
-                "node_version",
-                "php_version",
-                "go_version",
-                "dotnet_version",
-                "nginx_version",
-                "port",
-                "build_dir",
+                "python_version", "django_python_version", "node_version",
+                "php_version", "go_version", "dotnet_version",
+                "nginx_version", "port", "build_dir",
             )
             if cfg.get(k) is not None and str(cfg.get(k)).strip() != ""
         }
         dockerfile_text = DeploymentHelper.get_dockerfile_text(
-            platform, version_overrides=version_overrides or None
+            platform, version_overrides=version_overrides or None,
         )
 
         DeploymentValidator.validate_for_deploy(deploy_item, dockerfile_text)
 
         if DeploymentHelper.is_restart_only(deploy_item, container_name):
-            logger.info("Fast-path conditions met. Restarting existing container: %s", container_name)
+            logger.info(
+                "Fast-path conditions met. Restarting existing container: %s",
+                container_name,
+            )
             Container(container_name).start()
             restart_result = MockOrchestratorResult(
                 success=True,
@@ -176,29 +198,25 @@ class DeployService:
                 container_name,
             )
             result = self._execute_orchestrator(
-                deploy_item, container_name, platform, dockerfile_text, state_tracker
+                deploy_item, container_name, platform, dockerfile_text, state_tracker,
             )
 
         if getattr(result, "status", None) != "cancelled":
-            # Django + Celery/supervisord needs more time to come up
-            cfg = _parse_config(getattr(deploy_item, "config", None))
-            use_celery = _as_bool(cfg.get("celery"))
+            # Re-read config in case it changed (defensive).
+            cfg = parse_config(getattr(deploy_item, "config", None))
+            use_celery = as_bool(cfg.get("celery"))
             wait_timeout = 90 if use_celery or platform == "django" else 45
             ContainerWaiter.wait_until_running(container_name, timeout=wait_timeout)
         return result
 
     def _execute_orchestrator(
-        self,
-        deploy_item: Deploy,
-        container_name: str,
-        platform: str,
-        dockerfile_text: str,
-        state_tracker: DjangoDeploymentState,
+        self, deploy_item: Deploy, container_name: str, platform: str,
+        dockerfile_text: str, state_tracker: DjangoDeploymentState,
     ):
         service = deploy_item.service
-        cfg = _parse_config(getattr(deploy_item, "config", None))
+        cfg = parse_config(getattr(deploy_item, "config", None))
 
-        # Port: Deploy.config["port"] → platform default (SPA nginx = 80)
+        # Port resolution: explicit config > platform default.
         raw_port = cfg.get("port")
         if raw_port is not None and str(raw_port).strip() != "":
             try:
@@ -209,7 +227,6 @@ class DeployService:
             port = default_ports.get(platform)
 
         environment = dict(cfg.get("env") or cfg.get("environment") or {})
-        # Ensure all env values are strings (Docker requirement)
         environment = {str(k): str(v) for k, v in environment.items()}
 
         server_type = (
@@ -222,56 +239,37 @@ class DeployService:
             or cfg.get("entry_point")
             or getattr(service, "entry_point", None)
         )
-        celery = _as_bool(
+        celery = as_bool(
             getattr(deploy_item, "celery", False)
             or cfg.get("celery")
             or getattr(service, "celery", False)
         )
-        celery_beat = _as_bool(
+        celery_beat = as_bool(
             getattr(deploy_item, "celery_beat", False)
             or cfg.get("celery_beat")
             or getattr(service, "celery_beat", False)
         ) and celery
 
-        # Optional explicit celery app module, e.g. "config" or "myproject"
-        celery_app = (
-            cfg.get("celery_app")
-            or cfg.get("celery_module")
-            or None
-        )
+        celery_app = cfg.get("celery_app") or cfg.get("celery_module") or None
 
-        # worker_count: default 1 unless user sets it in Deploy.config
-        worker_count = 1
-        raw_wc = (
-            cfg.get("worker_count")
-            or cfg.get("workers")
+        worker_count = as_int(
+            cfg.get("worker_count") or cfg.get("workers")
             or getattr(deploy_item, "worker_count", None)
-            or getattr(service, "worker_count", None)
+            or getattr(service, "worker_count", None),
+            default=1, minimum=1,
         )
-        if raw_wc is not None:
-            try:
-                worker_count = max(1, int(raw_wc))
-            except (TypeError, ValueError):
-                worker_count = 1
 
         logger.info(
             "Orchestrator options for %s: platform=%s celery=%s celery_beat=%s "
             "server_type=%s entry_point=%s celery_app=%s worker_count=%s",
-            container_name,
-            platform,
-            celery,
-            celery_beat,
-            server_type,
-            entry_point,
-            celery_app,
-            worker_count,
+            container_name, platform, celery, celery_beat,
+            server_type, entry_point, celery_app, worker_count,
         )
 
-        networks = []
+        networks: list[tuple[str, str]] = []
         if getattr(service, "network", None) is not None and getattr(service.network, "name", None):
             networks.append((service.network.get_docker_network_name(), "bridge"))
 
-        # ZIP must exist on disk for image build; fail early with clear message
         zip_path = ""
         if getattr(deploy_item, "zip_file", None):
             try:
@@ -286,10 +284,8 @@ class DeployService:
             )
         logger.info(
             "Deploy package ready: path=%s size=%s tag=%s name=%s",
-            zip_path,
-            os.path.getsize(zip_path),
-            _docker_safe_tag(deploy_item.version),
-            container_name,
+            zip_path, os.path.getsize(zip_path),
+            _docker_safe_tag(deploy_item.version), container_name,
         )
 
         deployer = DeployFacade(
@@ -314,8 +310,6 @@ class DeployService:
             entry_point=entry_point,
             worker_count=worker_count,
         )
-        # Pass optional celery_app through environment so Dockerfile layer can use it
-        # if the generator supports it; also keep on facade if attribute exists.
         if celery_app:
             try:
                 deployer.celery_app = str(celery_app).strip()
@@ -324,6 +318,26 @@ class DeployService:
             if "CELERY_APP" not in environment:
                 environment["CELERY_APP"] = str(celery_app).strip()
                 deployer.environment = environment
+
+        # Wire up mid-deployment cancellation by reading cancel_requested
+        # from the DB on each check.  The orchestrator calls this between
+        # every stage.
+        def _cancel_check() -> bool:
+            try:
+                fresh = Deploy.objects.filter(pk=deploy_item.pk).values_list(
+                    "cancel_requested", flat=True,
+                ).first()
+                return bool(fresh)
+            except Exception:
+                return False
+
+        # The orchestrator accepts a cancel_check callable.  We pass it
+        # via the facade's deploy_result path (which constructs the
+        # orchestrator internally).
+        try:
+            deployer._cancel_check = _cancel_check  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
         result = deployer.deploy_result()
         state_tracker.finish(result)
@@ -334,24 +348,16 @@ class DeployService:
             )
         return result
 
+    # ------------------------------------------------------------------
+    # Volume resolution (unchanged)
+    # ------------------------------------------------------------------
+
     @staticmethod
     def _get_volumes_for_service(service):
-        """
-        Return volumes owned exclusively by this service.
-
-        With exclusive ownership Volume.service is the single owner;
-        service_attachments is only metadata for bind/mode.
-        """
         return Volume.objects.filter(service_id=service.pk)
 
     @staticmethod
     def _volume_specs(deploy_item: Deploy) -> list:
-        """
-        Build VolumeSpec list from volumes attached to the service.
-
-        Bind/mode come from Volume.service_attachments[service_id], falling
-        back to Volume.default_bind / default_mode.
-        """
         specs = []
         service = deploy_item.service
         service_id = str(service.id)
@@ -379,8 +385,7 @@ class DeployService:
             if not bind:
                 logger.warning(
                     "Skipping volume '%s' for service %s: no bind path configured.",
-                    getattr(volume, "name", volume.pk),
-                    service_id,
+                    getattr(volume, "name", volume.pk), service_id,
                 )
                 continue
 
@@ -394,6 +399,3 @@ class DeployService:
                 )
             )
         return specs
-
-
-

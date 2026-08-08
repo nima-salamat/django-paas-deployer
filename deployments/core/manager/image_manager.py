@@ -558,22 +558,22 @@ class Image(Client):
                 )
 
                 if not image_id:
-                    logger.warning(
-                        "No image ID in build stream; trying dangling images"
-                    )
-                    try:
-                        dangling = self.client.images.list(
-                            filters={"dangling": True}
-                        )
-                        if dangling:
-                            image_id = dangling[0].id
-                    except Exception:
-                        pass
-
-                if not image_id:
+                    # SECURITY/RELIABILITY: the legacy code fell back to
+                    # ``dangling[0].id`` here, which could pick up an
+                    # UNRELATED dangling image and silently tag it as the
+                    # deployment image — deploying the wrong code.  We
+                    # now fail loudly instead of guessing.
                     raise ImageBuildError(
-                        "Docker build finished but no image ID was returned.",
-                        details={"image": target_ref},
+                        "Docker build finished but no image ID was returned "
+                        "by the build stream. Refusing to guess a dangling image.",
+                        details={
+                            "image": target_ref,
+                            "hint": (
+                                "Enable BuildKit (DOCKER_BUILDKIT=1) or upgrade "
+                                "docker-py to a version that emits 'writing image "
+                                "sha256:...' in the build stream."
+                            ),
+                        },
                     )
 
                 self._tag_image(image_id)
