@@ -414,9 +414,28 @@ class DeploymentOrchestrator:
         rollback_performed = False
         rollback_failed = False
 
+        # Build a richer, operator-actionable error message.  The legacy
+        # code only surfaced ``exc.message`` (e.g. "Failed to create
+        # container 'X'.") which told the operator NOTHING about why.
+        # We now include ``details['error']`` (the actual Docker error)
+        # and ``details['error_type']`` when present.
+        underlying_error = exc.details.get("error") if exc.details else None
+        error_type = exc.details.get("error_type") if exc.details else None
+        status_code = exc.details.get("status_code") if exc.details else None
+
+        if underlying_error and underlying_error not in exc.message:
+            detailed_message = (
+                f"{exc.message} "
+                f"Underlying error: {error_type or 'error'}: {underlying_error}"
+            )
+            if status_code is not None:
+                detailed_message += f" (HTTP {status_code})"
+        else:
+            detailed_message = exc.message
+
         self.logger.error(
             exc.stage,
-            exc.message,
+            detailed_message,
             progress=95,
             details={**exc.details, "recoverable": exc.recoverable},
         )
@@ -491,18 +510,20 @@ class DeploymentOrchestrator:
                 "stage": exc.stage,
                 "rollback_performed": rollback_performed,
                 "rollback_failed": rollback_failed,
+                "error": underlying_error or "",
+                "error_type": error_type or "",
             },
         )
         return DeploymentResult(
             success=False,
             status="failed",
-            message=exc.message,
+            message=detailed_message,
             image_ref=config.image_ref,
             container_name=config.name,
             previous_image_ref=snapshot.image_ref,
             rollback_performed=rollback_performed,
             rollback_failed=rollback_failed,
-            error=exc.message,
+            error=detailed_message,
             stage=exc.stage,
             details={
                 **exc.details,

@@ -46,10 +46,19 @@ class DeploymentLogger:
         )
 
         log_method = getattr(self.logger, level, self.logger.info)
+
+        # CRITICAL: the celery log formatter only renders ``%(message)s``.
+        # ``extra`` fields (including ``deployment_details``) are silently
+        # dropped by default.  To make diagnostics actually visible in the
+        # worker log, we append high-signal fields from ``details`` to the
+        # message text on a continuation line.  This is what makes the
+        # difference between "Failed to create container 'X'." and
+        # "Failed to create container 'X'. Docker APIError: <reason>".
+        rendered_message = self._render_log_message(stage, message, event.details)
+
         log_method(
-            "%s | %s",
-            stage,
-            message,
+            "%s",
+            rendered_message,
             extra={
                 "deployment_id": self.deployment_id,
                 "deployment_stage": stage,
@@ -95,6 +104,63 @@ class DeploymentLogger:
                     )
 
         return event
+
+    @staticmethod
+    def _render_log_message(stage: str, message: str, details: dict) -> str:
+        """
+        Build the celery-visible log message.
+
+        Format: ``stage | message`` optionally followed by a continuation
+        line with the most diagnostic detail fields.
+
+        We surface only the fields most useful for debugging the actual
+        Docker / deployment failure (``error``, ``error_type``,
+        ``status_code``, ``stage``, ``last_stage``, ``image_present``,
+        ``networks``, ``volumes``).  Other details stay in the structured
+        ``extra`` for sinks / dashboards.
+        """
+        base = f"{stage} | {message}"
+        if not details:
+            return base
+
+        # Always include the underlying engine error if present — this
+        # is the single most important field for diagnosing create / start
+        # / network / volume failures, and the legacy code dropped it.
+        diagnostic_keys = (
+            "error",
+            "error_type",
+            "status_code",
+            "last_stage",
+            "image_present",
+            "exit_code",
+            "container",
+            "image",
+            "network",
+            "volume",
+            "networks",
+            "volumes",
+            "previous_image_ref",
+            "rollback_performed",
+            "rollback_failed",
+        )
+        parts = []
+        for key in diagnostic_keys:
+            if key not in details:
+                continue
+            value = details[key]
+            if value is None or value == "" or value == []:
+                continue
+            if isinstance(value, (list, dict)):
+                value = repr(value)
+            else:
+                value = str(value)
+            if len(value) > 400:
+                value = value[:400] + "...(truncated)"
+            parts.append(f"{key}={value}")
+
+        if not parts:
+            return base
+        return f"{base} | {' '.join(parts)}"
 
     def debug(self, stage: str, message: str, *, progress=None, details=None):
         return self.emit(

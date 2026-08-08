@@ -343,8 +343,26 @@ class DeployService:
         state_tracker.finish(result)
 
         if not result.success and result.status != "cancelled":
+            # The orchestrator's DeploymentResult.message already contains
+            # the full diagnostic (including the underlying Docker error,
+            # error_type, status_code, etc.).  We surface it verbatim so
+            # the celery traceback and the deploy-log row show the actual
+            # reason rather than a generic "Orchestrator compilation
+            # failed" wrapper that hides the root cause.
+            error_details = getattr(result, "details", {}) or {}
             raise OrchestratorDeploymentError(
-                f"Orchestrator compilation failed: {result.message}"
+                result.message or "Orchestrator deployment failed.",
+                details={
+                    "stage": getattr(result, "stage", None),
+                    "container": getattr(result, "container_name", None),
+                    "image": getattr(result, "image_ref", None),
+                    "rollback_performed": getattr(result, "rollback_performed", False),
+                    "rollback_failed": getattr(result, "rollback_failed", False),
+                    "underlying_error": error_details.get("error"),
+                    "error_type": error_details.get("error_type"),
+                    "status_code": error_details.get("status_code"),
+                    "last_stage": error_details.get("last_stage"),
+                },
             )
         return result
 

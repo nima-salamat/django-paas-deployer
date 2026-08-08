@@ -92,7 +92,14 @@ class Container(Client):
     # Host config — resource limits, tmpfs, restart policy
     # ------------------------------------------------------------------
 
-    def _host_config(self):
+    def _host_config_kwargs(self) -> dict[str, Any]:
+        """
+        Build the kwargs dict for ``client.api.create_host_config``.
+
+        Returns the dict (not the constructed host_config) so the caller
+        can apply progressive fallbacks when a specific Docker engine
+        version rejects one of the options.
+        """
         kwargs: dict[str, Any] = {
             "binds": self.volumes or None,
             "port_bindings": self.port_bindings or None,
@@ -137,30 +144,40 @@ class Container(Client):
             "/var/tmp": "rw,noexec,nosuid,size=32m",
             "/run": "rw,noexec,nosuid,size=16m",
         }
-        if not self.read_only:
-            tmpfs["/tmp"] = "rw,noexec,nosuid,size=64m"
         kwargs["tmpfs"] = tmpfs
 
-        # Security hardening — drop all capabilities and let the image
-        # add back what it needs via ``docker run --cap-add``.  This
-        # matters because user-supplied images may try to mount /proc
-        # or ptrace other processes.
+        # Security hardening — no-new-privileges prevents the container
+        # process from gaining additional capabilities via setuid binaries.
+        # NOTE: older Docker engines (< 1.11) and rootless Docker sometimes
+        # reject this; the create() fallback path will retry without it.
         kwargs["security_opt"] = ["no-new-privileges:true"]
 
         # Allow callers (orchestrator, rollback) to extend the host
         # config without subclassing.
-        kwargs.update(self.extra_host_config)
+        kwargs.update(self.extra_host_config or {})
 
-        return self.client.api.create_host_config(**kwargs)
+        return kwargs
+
+    def _host_config(self):
+        return self.client.api.create_host_config(**self._host_config_kwargs())
 
     def _networking_config(self):
         if not self.networks:
             return None
-        endpoints_config = {
-            network: self.client.api.create_endpoint_config()
-            for network in self.networks
-        }
-        return self.client.api.create_networking_config(endpoints_config)
+        try:
+            endpoints_config = {
+                network: self.client.api.create_endpoint_config()
+                for network in self.networks
+            }
+            return self.client.api.create_networking_config(endpoints_config)
+        except Exception as exc:
+            logger.warning(
+                "Could not build networking_config for container '%s' "
+                "networks=%s: %s. Falling back to no networking_config "
+                "(Docker will use the default network).",
+                self.name, self.networks, exc,
+            )
+            return None
 
     def _labels(self):
         if self.labels is not None:
@@ -188,29 +205,272 @@ class Container(Client):
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def create(self):
+    def _image_exists(self) -> bool:
+        """Return True if ``self.image_name`` resolves to a local image."""
+        if not self.image_name:
+            return False
         try:
-            container = self.client.api.create_container(
-                name=self.name,
-                image=self.image_name,
-                command=self.command,
-                environment=self.environment,
-                host_config=self._host_config(),
-                networking_config=self._networking_config(),
-                ports=self.exposed_ports or None,
-                labels=self._labels(),
+            self.client.images.get(self.image_name)
+            return True
+        except docker.errors.ImageNotFound:
+            return False
+        except docker.errors.DockerException:
+            # Don't crash on transient Docker errors; the create attempt
+            # itself will surface a clearer error if the image is missing.
+            return True
+
+    def _remove_stale_container_if_present(self) -> bool:
+        """
+        Remove a stopped container with our name if it exists.
+
+        Returns True if a container was removed, False otherwise.
+        Used by create() when the Docker daemon reports a name conflict.
+        """
+        try:
+            existing = self.client.containers.get(self.name)
+        except docker.errors.NotFound:
+            return False
+        except docker.errors.DockerException:
+            return False
+
+        try:
+            existing.reload()
+            status = existing.status
+        except Exception:
+            status = "unknown"
+
+        # Never remove a running container here — that would cause
+        # downtime.  Let the create error surface so an operator can
+        # decide what to do.
+        if status == "running":
+            return False
+
+        try:
+            existing.remove(force=True)
+            logger.warning(
+                "Removed stale stopped container '%s' (status=%s) before "
+                "create retry.", self.name, status,
             )
-            logger.info("Container '%s' created from image '%s'", self.name, self.image_name)
-            return container
-        except (docker.errors.APIError, docker.errors.DockerException) as exc:
+            return True
+        except docker.errors.DockerException as exc:
+            logger.warning(
+                "Could not remove stale container '%s': %s",
+                self.name, exc,
+            )
+            return False
+
+    def create(self):
+        """
+        Create the container.
+
+        Strategy:
+          1. Pre-flight: confirm the image exists locally so we can
+             surface a clean error instead of letting Docker return an
+             opaque "No such image" 404 mid-create.
+          2. Build host_config + networking_config with progressive
+             fallback: if a particular option (security_opt, pids_limit,
+             tmpfs entry) is rejected by the engine, retry without it
+             rather than failing the whole deploy.
+          3. On name conflict (409), remove a stale stopped container
+             and retry once.
+
+        The actual Docker error is ALWAYS included in the resulting
+        ContainerError message — the legacy code swallowed it inside
+        ``details``, leaving the operator with only "Failed to create
+        container 'X'." and no clue why.
+        """
+        # Pre-flight image check
+        if not self._image_exists():
             raise ContainerError(
-                f"Failed to create container '{self.name}'.",
+                f"Cannot create container '{self.name}': image "
+                f"'{self.image_name}' is not present in the local Docker "
+                f"image store. Did the build succeed and tag the image?",
                 details={
                     "container": self.name,
                     "image": self.image_name,
-                    "error": str(exc),
+                    "image_present": False,
                 },
-            ) from exc
+            )
+
+        host_kwargs = self._host_config_kwargs()
+        networking_config = self._networking_config()
+        labels = self._labels()
+
+        # Progressive fallback list.  Each entry is a tuple of
+        # (description, mutator) where mutator takes a copy of host_kwargs
+        # and returns a possibly-reduced copy.  We try the full config
+        # first, then strip the options most likely to be rejected by
+        # older / rootless Docker engines.
+        fallbacks = [
+            ("full config", lambda kw: kw),
+            ("without security_opt", lambda kw: {k: v for k, v in kw.items() if k != "security_opt"}),
+            ("without pids_limit", lambda kw: {k: v for k, v in kw.items() if k != "pids_limit"}),
+            ("without memswap_limit", lambda kw: {k: v for k, v in kw.items() if k != "memswap_limit"}),
+            ("minimal (no security_opt/pids/memswap/tmpfs)", lambda kw: {
+                k: v for k, v in kw.items()
+                if k not in ("security_opt", "pids_limit", "memswap_limit", "tmpfs")
+            }),
+        ]
+
+        last_exc: Exception | None = None
+        last_stage_desc = ""
+
+        for attempt in range(2):
+            for stage_desc, mutator in fallbacks:
+                attempt_kwargs = mutator(dict(host_kwargs))
+                try:
+                    host_config = self.client.api.create_host_config(**attempt_kwargs)
+                except TypeError as te:
+                    # An option is unsupported by this docker-py version.
+                    logger.warning(
+                        "create_host_config rejected kwarg(s) in stage '%s' "
+                        "for container '%s': %s. Trying next fallback.",
+                        stage_desc, self.name, te,
+                    )
+                    last_exc = te
+                    last_stage_desc = stage_desc
+                    continue
+                except Exception as he:
+                    logger.warning(
+                        "create_host_config failed in stage '%s' for "
+                        "container '%s': %s. Trying next fallback.",
+                        stage_desc, self.name, he,
+                    )
+                    last_exc = he
+                    last_stage_desc = stage_desc
+                    continue
+
+                try:
+                    container = self.client.api.create_container(
+                        name=self.name,
+                        image=self.image_name,
+                        command=self.command,
+                        environment=self.environment,
+                        host_config=host_config,
+                        networking_config=networking_config,
+                        ports=self.exposed_ports or None,
+                        labels=labels,
+                    )
+                    logger.info(
+                        "Container '%s' created from image '%s' (stage='%s', "
+                        "attempt=%d).",
+                        self.name, self.image_name, stage_desc, attempt + 1,
+                    )
+                    return container
+                except docker.errors.APIError as exc:
+                    last_exc = exc
+                    last_stage_desc = stage_desc
+                    status_code = getattr(exc, "status_code", None)
+                    msg = str(exc).lower()
+
+                    # 409 Conflict — name already in use.  If the existing
+                    # container is stopped, remove it and retry the WHOLE
+                    # fallback list once.  If it's running, surface the
+                    # error (we never silently destroy a running container).
+                    if status_code == 409 or "conflict" in msg or "already in use" in msg:
+                        if attempt == 0:
+                            removed = self._remove_stale_container_if_present()
+                            if removed:
+                                logger.info(
+                                    "Retrying container create for '%s' after "
+                                    "removing stale container.", self.name,
+                                )
+                                break  # break inner loop; outer loop retries
+                        # If we couldn't remove it (running container, or
+                        # remove failed) continue to next fallback — it
+                        # won't help, but we'll surface a clear error
+                        # after exhausting fallbacks.
+                        logger.warning(
+                            "Container name '%s' already in use and could "
+                            "not be removed (attempt=%d, stage='%s').",
+                            self.name, attempt + 1, stage_desc,
+                        )
+                        continue
+
+                    # 404 Not Found — referenced resource (network/volume)
+                    # is missing.  No point in trying other fallbacks for
+                    # host_config; surface the error immediately.
+                    if status_code == 404:
+                        raise ContainerError(
+                            f"Failed to create container '{self.name}': "
+                            f"Docker reported a missing referenced resource. "
+                            f"Engine error: {exc}",
+                            details={
+                                "container": self.name,
+                                "image": self.image_name,
+                                "stage": stage_desc,
+                                "error": str(exc),
+                                "status_code": status_code,
+                            },
+                        ) from exc
+
+                    # Other API errors — try the next fallback
+                    logger.warning(
+                        "create_container failed in stage '%s' for "
+                        "container '%s' (status=%s): %s. Trying next fallback.",
+                        stage_desc, self.name, status_code, exc,
+                    )
+                    continue
+                except docker.errors.DockerException as exc:
+                    last_exc = exc
+                    last_stage_desc = stage_desc
+                    logger.warning(
+                        "create_container failed in stage '%s' for "
+                        "container '%s': %s. Trying next fallback.",
+                        stage_desc, self.name, exc,
+                    )
+                    continue
+            else:
+                # Inner loop completed without break — no fallback worked.
+                break
+
+        # All fallbacks exhausted.  Surface the actual error.
+        err_msg = str(last_exc) if last_exc else "unknown error"
+        err_type = type(last_exc).__name__ if last_exc else "Unknown"
+        status_code = getattr(last_exc, "status_code", None) if last_exc else None
+
+        # CRITICAL: include the actual Docker error in the user-visible
+        # message.  The legacy code only put it in details, which were
+        # silently dropped by the log formatter.
+        message = (
+            f"Failed to create container '{self.name}' from image "
+            f"'{self.image_name}'. Docker {err_type}: {err_msg}"
+        )
+        if status_code is not None:
+            message += f" (HTTP {status_code})"
+        message += (
+            f". Last attempted configuration: '{last_stage_desc}'. "
+            f"Verified image present locally before create attempt."
+        )
+
+        logger.error(
+            "Container create exhausted all fallback configurations for "
+            "'%s' (image='%s'). Last stage='%s', last error: %s",
+            self.name, self.image_name, last_stage_desc, err_msg,
+            extra={
+                "container": self.name,
+                "image": self.image_name,
+                "last_stage": last_stage_desc,
+                "error_type": err_type,
+                "status_code": status_code,
+            },
+        )
+
+        raise ContainerError(
+            message,
+            details={
+                "container": self.name,
+                "image": self.image_name,
+                "image_present": True,
+                "last_stage": last_stage_desc,
+                "error": err_msg,
+                "error_type": err_type,
+                "status_code": status_code,
+                "networks": list(self.networks or []),
+                "volumes": list((self.volumes or {}).keys()),
+                "host_config_keys": list(host_kwargs.keys()),
+            },
+        ) from last_exc
 
     def start(self):
         """
@@ -276,18 +536,40 @@ class Container(Client):
                     exc_info=True,
                 )
 
+        # Surface the last few log lines in the user-visible message so
+        # the operator can see WHY the container exited (e.g. missing
+        # env var, port conflict, import error) without having to dig
+        # through ``docker logs``.
+        tail = (logs or "").strip().splitlines()[-8:] if logs else []
+        tail_text = " | ".join(line.strip() for line in tail if line.strip())
+        if tail_text:
+            if len(tail_text) > 600:
+                tail_text = tail_text[:600] + "..."
+            message = (
+                f"Container '{self.name}' exited immediately (status={status}, "
+                f"exit_code={exit_code}). Last logs: {tail_text}. "
+                f"Docker error: {exc}"
+            )
+        else:
+            message = (
+                f"Container '{self.name}' exited immediately (status={status}, "
+                f"exit_code={exit_code}). No logs available. "
+                f"Docker error: {exc}"
+            )
+
         logger.error(
             "Container '%s' failed to stay running. status=%s exit=%s\n%s",
             self.name, status, exit_code,
             logs[-4000:] if logs else "(no logs)",
         )
         raise ContainerError(
-            f"Container '{self.name}' exited immediately.",
+            message,
             details={
                 "status": status,
                 "exit_code": exit_code,
                 "logs": logs[-4000:] if logs else "",
                 "error": str(exc),
+                "error_type": type(exc).__name__,
             },
         ) from exc
 
