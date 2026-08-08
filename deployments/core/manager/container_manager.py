@@ -164,15 +164,17 @@ class Container(Client):
             "restart_policy": self.restart_policy,
         }
 
-        # CPU limit.  We set BOTH cpu_quota/cpu_period (Linux cgroup v1)
-        # and NanoCpus (cgroup v2 friendly) so the limit is enforced
-        # regardless of the host's cgroup version.
+        # CPU limit.  Docker accepts EITHER ``cpu_period`` + ``cpu_quota``
+        # (cgroup v1 style) OR ``nano_cpus`` (cgroup v2 style) — setting
+        # BOTH causes HTTP 400:
+        #     "Conflicting options: Nano CPUs and CPU Period cannot both be set"
+        # We use ``nano_cpus`` exclusively because it's the simpler,
+        # engine-agnostic API: 1 CPU = 1_000_000_000 nano_cpus.  Docker
+        # internally translates it to the right cgroup knobs for the host.
         if self.max_cpu is not None:
             try:
                 cpu_float = float(self.max_cpu)
                 if cpu_float > 0:
-                    kwargs["cpu_period"] = 100_000
-                    kwargs["cpu_quota"] = int(cpu_float * 100_000)
                     kwargs["nano_cpus"] = int(cpu_float * 1_000_000_000)
             except (TypeError, ValueError):
                 pass
@@ -355,25 +357,25 @@ class Container(Client):
 
         # Progressive fallback list.  Each entry is a tuple of
         # (description, mutator) where mutator takes a copy of host_kwargs
-        # and returns a possibly-reduced copy.  We try the full config
-        # first, then strip the options most likely to be rejected by
-        # older / rootless Docker engines.
+        # and returns a possibly-reduced copy.  Each stage strips one more
+        # option known to cause Docker HTTP 400 ("Conflicting options",
+        # "invalid ...") on some engine versions.  The final "bare" stage
+        # keeps only binds + ports + read_only, so a deploy can NEVER be
+        # blocked by a host_config rejection — better to deploy without
+        # resource limits than not to deploy at all.
         fallbacks = [
             ("full config", lambda kw: kw),
             ("without security_opt", lambda kw: {k: v for k, v in kw.items() if k != "security_opt"}),
             ("without pids_limit", lambda kw: {k: v for k, v in kw.items() if k != "pids_limit"}),
             ("without memswap_limit", lambda kw: {k: v for k, v in kw.items() if k != "memswap_limit"}),
-            ("minimal (no security_opt/pids/memswap/tmpfs)", lambda kw: {
+            ("without nano_cpus", lambda kw: {k: v for k, v in kw.items() if k != "nano_cpus"}),
+            ("without mem_limit", lambda kw: {k: v for k, v in kw.items() if k != "mem_limit"}),
+            ("without tmpfs", lambda kw: {k: v for k, v in kw.items() if k != "tmpfs"}),
+            ("without restart_policy", lambda kw: {k: v for k, v in kw.items() if k != "restart_policy"}),
+            ("bare (binds+ports+read_only only)", lambda kw: {
                 k: v for k, v in kw.items()
-                if k not in ("security_opt", "pids_limit", "memswap_limit", "tmpfs")
+                if k in ("binds", "port_bindings", "read_only")
             }),
-            # Last-resort: also drop restart_policy.  A bad restart policy
-            # (e.g. MaximumRetryCount on a non-on-failure Name — see
-            # _normalize_restart_policy) causes Docker to reject the
-            # entire create_container call with HTTP 400, and the
-            # mutators above don't touch restart_policy, so without this
-            # stage we'd surface a 400 even from the "minimal" config.
-            ("no restart_policy", lambda kw: {k: v for k, v in kw.items() if k != "restart_policy"}),
         ]
 
         last_exc: Exception | None = None
