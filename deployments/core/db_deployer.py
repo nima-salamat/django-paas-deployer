@@ -195,35 +195,49 @@ def _sql_quote(value: str) -> str:
     return str(value).replace("\\", "\\\\").replace("'", "''")
 
 
-def _wait_mysql_ready(client, container_name: str, timeout: int = 90) -> bool:
+def _wait_mysql_ready(client, container_name: str, timeout: int = 120) -> bool:
     """
-    Wait until mysqld accepts queries on the unix socket.
+    Wait until the official entrypoint has FULLY finished init.
 
-    Tries both passwordless (during early init) and any ping.  Returns True
-    once the server answers, False on timeout.
+    Must NOT return true during the temporary server phase — otherwise we
+    race the entrypoint (set root password while it still expects empty
+    root) and cause::
+
+        ERROR 1045 (28000): Access denied for user 'root'@'localhost'
+        (using password: NO)
+
+    We wait for the final mysqld log line ``ready for connections`` after
+    ``MySQL init process done`` (or equivalent).
     """
     import time as _time
+    markers_done = (
+        "MySQL init process done",
+        "ready for connections",
+    )
     for _ in range(timeout):
         try:
             c = client.containers.get(container_name)
             c.reload()
-            if c.status not in ("running",):
-                if c.status in ("exited", "dead"):
-                    return False
+            if c.status in ("exited", "dead"):
+                return False
+            if c.status != "running":
                 _time.sleep(1)
                 continue
-            # Prefer mysqladmin ping without password — works during init and
-            # also if root is still empty.  We only need "server is up".
-            exit_code, _out = c.exec_run(
-                ["mysqladmin", "ping", "-uroot", "--protocol=socket", "--silent"],
+            raw = c.logs(tail=80)
+            logs = (
+                raw.decode("utf-8", "replace")
+                if isinstance(raw, (bytes, bytearray))
+                else str(raw or "")
             )
-            if exit_code == 0:
+            # Entrypoint finished + final server is accepting connections.
+            if "ready for connections" in logs and (
+                "MySQL init process done" in logs
+                or "init process done" in logs.lower()
+                or "mysqld: ready for connections" in logs.lower()
+            ):
                 return True
-            # Also try with empty password flag variants
-            exit_code, _out = c.exec_run(
-                ["mysqladmin", "ping", "-uroot", "--protocol=socket"],
-            )
-            if exit_code == 0:
+            # Image already had data dir (restart path): no init, just ready.
+            if "ready for connections" in logs and "Initializing database" not in logs:
                 return True
         except Exception:
             pass
@@ -285,12 +299,33 @@ def _force_apply_mysql_credentials(
     except Exception as exc:
         return False, f"container not found for credential apply: {exc}"
 
-    # Try as root with password first; fall back to passwordless (init-insecure).
-    attempts = [
-        ["mysql", "-uroot", f"-p{root_password}", "--protocol=socket", "-e", sql],
-        ["mysql", "-uroot", "--protocol=socket", "-e", sql],
-    ]
+    def _ping(with_password: bool) -> int:
+        cmd = ["mysqladmin", "ping", "-uroot", "--protocol=socket", "--silent"]
+        if with_password:
+            cmd = [
+                "mysqladmin", "ping", "-uroot", f"-p{root_password}",
+                "--protocol=socket", "--silent",
+            ]
+        try:
+            code, _ = c.exec_run(cmd)
+            return int(code)
+        except Exception:
+            return 1
+
+    # If entrypoint already applied the password, do not touch anything.
+    if _ping(with_password=True) == 0:
+        return True, "entrypoint password already works — no force-apply needed"
+
+    # Password does not work yet.  Only then try passwordless (leftover
+    # initialize-insecure) and apply SQL.  Never run this during entrypoint
+    # temp-server phase — caller must wait for init to finish first.
     last_err = ""
+    attempts = [
+        # passwordless root (only valid right after initialize-insecure)
+        ["mysql", "-uroot", "--protocol=socket", "-e", sql],
+        # in case a partial password is set
+        ["mysql", "-uroot", f"-p{root_password}", "--protocol=socket", "-e", sql],
+    ]
     for cmd in attempts:
         try:
             exit_code, output = c.exec_run(cmd)
@@ -300,21 +335,11 @@ def _force_apply_mysql_credentials(
                 else str(output or "")
             )
             if exit_code == 0:
-                # Verify password works and empty does not
-                ok_code, _ = c.exec_run(
-                    ["mysqladmin", "ping", "-uroot", f"-p{root_password}",
-                     "--protocol=socket", "--silent"]
-                )
-                empty_code, _ = c.exec_run(
-                    ["mysqladmin", "ping", "-uroot", "--protocol=socket", "--silent"]
-                )
-                if ok_code == 0 and empty_code != 0:
-                    return True, "credentials applied and verified (password required)"
-                if ok_code == 0:
-                    return True, "credentials applied (password works; empty may still work on socket)"
-                last_err = f"applied but verify failed: ok={ok_code} empty={empty_code} out={out[-500:]}"
+                if _ping(with_password=True) == 0:
+                    return True, "credentials force-applied and verified"
+                last_err = f"SQL ok but password ping still fails: {out[-400:]}"
             else:
-                last_err = f"exit={exit_code} out={out[-500:]}"
+                last_err = f"exit={exit_code} out={out[-400:]}"
         except Exception as exc:
             last_err = str(exc)
     return False, last_err
@@ -1150,7 +1175,8 @@ class DBDeployer:
 
             log.info(
                 "health_check",
-                "Waiting for MySQL to finish init and accept connections...",
+                "Waiting for MySQL entrypoint to finish init "
+                "(must not touch credentials until then)...",
                 progress=90,
                 details={
                     "root_pw_len": len(root_pw),
@@ -1158,11 +1184,25 @@ class DBDeployer:
                     "has_app_db": bool(app_db),
                 },
             )
-            ready = _wait_mysql_ready(client, container_name, timeout=90)
+            ready = _wait_mysql_ready(client, container_name, timeout=120)
             if not ready:
+                # Pull tail logs for diagnosis
+                log_tail = ""
+                try:
+                    raw = client.containers.get(container_name).logs(tail=40)
+                    log_tail = (
+                        raw.decode("utf-8", "replace")
+                        if isinstance(raw, (bytes, bytearray))
+                        else str(raw or "")
+                    )
+                except Exception:
+                    pass
                 msg = (
-                    "MySQL did not become ready within 90s after container start. "
-                    "Check container logs for init errors."
+                    "MySQL did not finish init within 120s. "
+                    "If logs show 'Access denied ... (using password: NO)', "
+                    "a previous force-apply raced the entrypoint — rebuild "
+                    "with force_reinit=true. "
+                    f"Logs:\n{log_tail[-1500:]}"
                 )
                 log.error("health_check", msg, progress=100)
                 return DBDeployResult(
@@ -1170,6 +1210,8 @@ class DBDeployer:
                     platform=platform, error=msg,
                 )
 
+            # Only force-apply AFTER entrypoint is done. First check whether
+            # the entrypoint already set the password correctly.
             ok, detail = _force_apply_mysql_credentials(
                 client,
                 container_name,
@@ -1180,7 +1222,7 @@ class DBDeployer:
             )
             if not ok:
                 msg = (
-                    "Failed to apply/verify MySQL credentials from deploy.config. "
+                    "Failed to verify/apply MySQL credentials from deploy.config. "
                     f"Detail: {detail}"
                 )
                 log.error("health_check", msg, progress=100, details={"detail": detail})
@@ -1190,7 +1232,7 @@ class DBDeployer:
                 )
             log.info(
                 "health_check",
-                f"MySQL credentials from deploy.config applied and verified. ({detail})",
+                f"MySQL credentials verified. ({detail})",
                 progress=95,
             )
 
