@@ -218,6 +218,206 @@ def _collect_service_volumes(service: Service) -> list[dict]:
     return volumes
 
 
+# ---------------------------------------------------------------------------
+# Default-data-volume auto-creation for DB deploys
+# ---------------------------------------------------------------------------
+#
+# When a database service has NO Volume attached in the Django registry
+# (the user's PostgreSQL), the deploy would otherwise fall back to an
+# anonymous Docker volume — which works, but loses all data the moment the
+# container is removed (rebuild, host reboot, etc.).
+#
+# To prevent silent data loss, every DB deploy now auto-creates a named
+# Volume record in the Django registry (services.Volume) AND binds it to
+# the platform's data directory.  The Volume is owned exclusively by the
+# service (FK + service_attachments), respects the plan's max_storage
+# quota, and is reused on subsequent deploys.
+
+# Platform → (container data path, default size in MB)
+_DB_DEFAULT_DATA_PATHS: dict[str, tuple[str, int]] = {
+    "mysql":      ("/var/lib/mysql",           1024),
+    "mariadb":    ("/var/lib/mysql",           1024),
+    "postgresql": ("/var/lib/postgresql/data", 1024),
+    "postgres":   ("/var/lib/postgresql/data", 1024),
+    "mongodb":    ("/data/db",                 2048),
+    "mongo":      ("/data/db",                 2048),
+    "redis":      ("/data",                     256),
+    "oracle":     ("/opt/oracle/oradata",      2048),
+}
+
+
+def _ensure_default_db_volume(platform: str, service: Service) -> dict | None:
+    """
+    Guarantee a DB service has a named Volume in the Django registry for
+    its platform-specific data directory.  Returns a volume-bind dict
+    ``{"source": name, "target": bind, "mode": "rw"}`` suitable for
+    ``cfg["volumes"]``, or ``None`` if creation failed (non-fatal — the
+    deploy will still proceed with an anonymous Docker volume).
+
+    Idempotent: if the service already owns a Volume, returns that one.
+    Respects the service plan's max_storage quota — if the default size
+    would exceed the remaining quota, shrinks to fit; if even 128 MB
+    won't fit, skips creation and logs a warning.
+    """
+    p = str(platform or "").lower().strip()
+    if p not in _DB_DEFAULT_DATA_PATHS:
+        return None
+    default_bind, default_size_mb = _DB_DEFAULT_DATA_PATHS[p]
+
+    # ------------------------------------------------------------------
+    # 1. If the service already owns a Volume, reuse it.
+    # ------------------------------------------------------------------
+    try:
+        from services.models import Volume  # type: ignore
+    except Exception:
+        logger.debug(
+            "services.models.Volume unavailable; cannot auto-create volume "
+            "for service %s", service.pk, exc_info=True,
+        )
+        return None
+
+    existing = None
+    rel = getattr(service, "volumes", None)
+    if rel is not None and hasattr(rel, "all"):
+        try:
+            existing = rel.all().first()
+        except Exception:
+            logger.exception(
+                "service.volumes.all() lookup failed for service %s", service.pk
+            )
+    if existing is None:
+        try:
+            from django.db.models import Q
+            existing = (
+                Volume.objects
+                .filter(Q(service_id=service.pk))
+                .order_by("created_at")
+                .first()
+            )
+        except Exception:
+            logger.debug(
+                "Volume registry query failed for service %s; skipping",
+                service.pk, exc_info=True,
+            )
+
+    if existing is not None:
+        # Reuse — prefer the attachment bind, fall back to default_bind.
+        atts = getattr(existing, "service_attachments", None) or {}
+        att = atts.get(str(service.pk), {}) if isinstance(atts, dict) else {}
+        bind = att.get("bind") or getattr(existing, "default_bind", "") or default_bind
+        return {
+            "source": existing.name,
+            "target": bind,
+            "mode": att.get("mode") or getattr(existing, "default_mode", "") or "rw",
+        }
+
+    # ------------------------------------------------------------------
+    # 2. No existing Volume — create one.  First check the plan quota.
+    # ------------------------------------------------------------------
+    size_mb = default_size_mb
+    plan = getattr(service, "plan", None)
+    if plan is not None and hasattr(plan, "can_allocate_storage"):
+        try:
+            # Try the requested size first, then shrink to fit.
+            ok, _ = plan.can_allocate_storage(size_mb)
+            if not ok:
+                # Shrink to the remaining quota, but not below 128 MB.
+                remaining = getattr(plan, "get_remaining_storage_mb", lambda: 0)()
+                try:
+                    remaining = int(remaining)
+                except (TypeError, ValueError):
+                    remaining = 0
+                if remaining >= 128:
+                    size_mb = remaining
+                    logger.info(
+                        "Plan quota for service %s is tight; auto-volume "
+                        "shrunk to %d MB (default was %d MB).",
+                        service.pk, size_mb, default_size_mb,
+                    )
+                else:
+                    logger.warning(
+                        "Service %s plan has only %d MB remaining; cannot "
+                        "auto-create a default DB volume. The deploy will "
+                        "use an anonymous Docker volume and data will NOT "
+                        "persist across container removals.",
+                        service.pk, remaining,
+                    )
+                    return None
+        except Exception:
+            logger.exception(
+                "Plan quota check failed for service %s; attempting "
+                "auto-volume creation anyway with default size.",
+                service.pk,
+            )
+
+    # ------------------------------------------------------------------
+    # 3. Derive a unique Docker volume name (≤32 chars per model).
+    # ------------------------------------------------------------------
+    base = getattr(service, "get_docker_service_name", lambda: "")() or f"svc-{service.pk}"
+    # Strip non-alphanumerics (Docker volume names allow [A-Za-z0-9_.-]
+    # but the Django Volume.name field is CharField(32, unique=True)).
+    base_clean = "".join(c if c.isalnum() else "-" for c in str(base)).strip("-")
+    if not base_clean:
+        base_clean = f"svc-{service.pk}"
+    suffix = "-data"
+    max_base_len = 32 - len(suffix)
+    vol_name = (base_clean[:max_base_len] + suffix)[:32]
+
+    # Ensure uniqueness without truncating past 32 chars.
+    try:
+        existing_by_name = Volume.objects.filter(name=vol_name).first()
+    except Exception:
+        existing_by_name = None
+    if existing_by_name is not None:
+        # Append a short pk suffix to disambiguate.
+        suffix2 = f"-{str(service.pk)[-6:]}"
+        max_base_len2 = 32 - len(suffix2)
+        vol_name = (base_clean[:max_base_len2] + suffix2)[:32]
+
+    # ------------------------------------------------------------------
+    # 4. Create the Volume record in the Django registry (PostgreSQL).
+    # ------------------------------------------------------------------
+    user = getattr(service, "user", None)
+    if user is None:
+        logger.warning(
+            "Service %s has no owner user; cannot auto-create Volume.", service.pk
+        )
+        return None
+
+    try:
+        with transaction.atomic():
+            vol = Volume.objects.create(
+                name=vol_name,
+                user=user,
+                service=service,
+                service_attachments={
+                    str(service.pk): {"bind": default_bind, "mode": "rw"}
+                },
+                default_bind=default_bind,
+                default_mode="rw",
+                size_mb=size_mb,
+            )
+        logger.info(
+            "Auto-created Volume '%s' (%d MB, bind=%s) for service %s "
+            "platform=%s — DB data will now persist across rebuilds.",
+            vol_name, size_mb, default_bind, service.pk, p,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Could not auto-create Volume '%s' for service %s: %s. "
+            "Deploy will proceed with an anonymous Docker volume; data "
+            "will NOT persist across container removals.",
+            vol_name, service.pk, exc,
+        )
+        return None
+
+    return {
+        "source": vol.name,
+        "target": default_bind,
+        "mode": "rw",
+    }
+
+
 def _build_db_cfg(deploy: Deploy, service: Service) -> dict[str, Any]:
     """Merge Deploy.config credentials with live Service metadata."""
     cfg: dict[str, Any] = {}
@@ -250,6 +450,17 @@ def _build_db_cfg(deploy: Deploy, service: Service) -> dict[str, Any]:
         vols = _collect_service_volumes(service)
         if vols:
             cfg["volumes"] = vols
+
+    # ------------------------------------------------------------------
+    # Auto-volume safety net — if the service has NO Volume attached in
+    # the Django registry, create one now so DB data persists across
+    # rebuilds instead of being lost to an anonymous Docker volume.
+    # See ``_ensure_default_db_volume`` for the full rationale.
+    # ------------------------------------------------------------------
+    if not cfg.get("volumes") and platform in _DB_DEFAULT_DATA_PATHS:
+        auto_vol = _ensure_default_db_volume(platform, service)
+        if auto_vol:
+            cfg["volumes"] = [auto_vol]
 
     return cfg
 
@@ -428,9 +639,20 @@ def _lock_for_db_deploy(deploy_id: str | int) -> tuple[Deploy, Service] | None:
     default_retry_delay=20,
     name="deployments.celery.tasks.run_db_deploy",
 )
-def run_db_deploy(self, deploy_id: str | int) -> None:
-    """Execute a database-platform deployment via DBDeployer."""
-    logger.info("run_db_deploy started for deploy_id=%s", deploy_id)
+def run_db_deploy(self, deploy_id: str | int, force_reinit: bool = False) -> None:
+    """Execute a database-platform deployment via DBDeployer.
+
+    Parameters
+    ----------
+    force_reinit : bool, default False
+        If True, wipe every named Docker volume bound to this DB before
+        starting, so the database reinitialises from scratch.  Use this
+        when a previous deploy failed mid-init and left corrupt data.
+    """
+    logger.info(
+        "run_db_deploy started for deploy_id=%s force_reinit=%s",
+        deploy_id, force_reinit,
+    )
 
     locked = _lock_for_db_deploy(deploy_id)
     if locked is None:
@@ -476,6 +698,19 @@ def run_db_deploy(self, deploy_id: str | int) -> None:
         )
         return
 
+    if force_reinit:
+        _create_deploy_log(
+            deploy, stage="volume_creation",
+            message=(
+                "Force-reinit requested — wiping data volumes so the "
+                "database will reinitialise from scratch. ALL DATA IN "
+                "THE DB VOLUMES WILL BE LOST."
+            ),
+            progress=15,
+            level="warning",
+            details={"platform": platform, "container": container_name},
+        )
+
     _create_deploy_log(
         deploy, stage="validation",
         message=f"Config validated for platform '{platform}'.",
@@ -505,6 +740,7 @@ def run_db_deploy(self, deploy_id: str | int) -> None:
                 cfg=cfg,
                 event_sink=event_sink,
                 deployment_id=str(deploy.pk),
+                force_reinit=force_reinit,
             )
     except Exception as exc:
         tb = traceback.format_exc()

@@ -276,7 +276,22 @@ class DBDeployer:
         cfg: dict,
         event_sink=None,
         deployment_id: str | None = None,
+        force_reinit: bool = False,
     ) -> DBDeployResult:
+        """
+        Deploy a database container.
+
+        Parameters
+        ----------
+        force_reinit : bool, default False
+            If True, wipe every named Docker volume bound to this container
+            BEFORE starting it, so the DB reinitialises from scratch.
+            Use this when a previous deploy failed mid-initialisation and
+            left corrupt data in the volume — symptoms include mysqld
+            crashing silently within seconds of startup, or repeated
+            container restarts with no clear error.
+            WARNING: this DESTROYS all data in the affected volumes.
+        """
         from deployments.core.deployment_logger import DeploymentLogger
 
         log = DeploymentLogger(deployment_id=deployment_id, sink=event_sink)
@@ -394,6 +409,47 @@ class DBDeployer:
                                 )
 
         # ------------------------------------------------------------------
+        # 7b. Optional force-reinit — wipe named volumes so the DB
+        # reinitialises from scratch.  Used by the rebuild action when
+        # the previous deploy failed mid-init and left corrupt data.
+        # Host-bind paths (starting with "/") are NEVER wiped — only
+        # named Docker volumes managed by the platform.
+        # ------------------------------------------------------------------
+        if force_reinit and volume_binds:
+            for src in list(volume_binds.keys()):
+                if str(src).startswith("/"):
+                    continue  # never wipe host bind paths
+                try:
+                    vol_obj = client.volumes.get(src)
+                    vol_obj.remove(force=True)
+                    log.info(
+                        "volume_creation",
+                        f"Wiped volume '{src}' for force-reinit.",
+                        progress=29,
+                    )
+                    # Recreate empty
+                    client.volumes.create(name=src)
+                    log.info(
+                        "volume_creation",
+                        f"Recreated empty volume '{src}'.",
+                        progress=29,
+                    )
+                except NotFound:
+                    # Already gone — fine.
+                    pass
+                except (APIError, docker.errors.DockerException) as exc:
+                    logger.warning(
+                        "force_reinit: could not wipe volume '%s': %s", src, exc
+                    )
+                    log.info(
+                        "volume_creation",
+                        f"Warning: could not wipe volume '{src}': {exc}. "
+                        f"The DB may fail to start if the volume has "
+                        f"corrupt data from a previous failed init.",
+                        progress=29,
+                    )
+
+        # ------------------------------------------------------------------
         # 8. Remove existing container (safe to call on missing container)
         # ------------------------------------------------------------------
         log.info("container_replacement", "Checking for existing container.", progress=30)
@@ -491,8 +547,17 @@ class DBDeployer:
 
         # Progressive fallback chain — same design as container_manager.py.
         # If the engine rejects one option, retry without it.  The final
-        # "bare" stage keeps only binds + ports + read_only so a DB deploy
-        # can NEVER be blocked by a host_config rejection.
+        # "bare" stage keeps only binds + ports + read_only + init so a DB
+        # deploy can NEVER be blocked by a host_config rejection.
+        #
+        # CRITICAL: ``init=True`` is NEVER stripped.  MySQL 8.0.36+ entrypoint
+        # scripts use process-management calls (pgrep/pidof) that fail with
+        # "Inappropriate ioctl for device" when the container runs without
+        # tini as PID 1.  Stripping init — even as a fallback — reintroduces
+        # the bug.  ``init=True`` is supported by every Docker engine since
+        # 18.09 (released 2018) so there is no scenario where it should be
+        # dropped.  The "bare" safety-net stage also keeps init for the
+        # same reason.
         fallbacks = [
             ("full config", lambda kw: kw),
             ("without memswap_limit", lambda kw: {k: v for k, v in kw.items() if k != "memswap_limit"}),
@@ -500,7 +565,6 @@ class DBDeployer:
             ("without mem_limit", lambda kw: {k: v for k, v in kw.items() if k != "mem_limit"}),
             ("without tmpfs", lambda kw: {k: v for k, v in kw.items() if k != "tmpfs"}),
             ("without restart_policy", lambda kw: {k: v for k, v in kw.items() if k != "restart_policy"}),
-            ("without init", lambda kw: {k: v for k, v in kw.items() if k != "init"}),
             ("bare (binds+ports+read_only+init only)", lambda kw: {
                 k: v for k, v in kw.items()
                 if k in ("binds", "port_bindings", "read_only", "init")
@@ -626,11 +690,31 @@ class DBDeployer:
             # Include the actual DB container logs in the user-visible
             # message — the previous "did not reach running state" message
             # gave the operator no clue WHY it failed.
+            #
+            # Recovery hint: if the container is exiting repeatedly with
+            # little or no error output (common when the volume has corrupt
+            # data from a previous failed init), tell the operator to use
+            # the rebuild action with force_reinit=True to wipe the volume.
+            has_volumes = bool(volume_binds)
+            recovery_hint = ""
+            if has_volumes and final_status in ("exited", "dead"):
+                recovery_hint = (
+                    "\n\n--- Recovery hint ---\n"
+                    "This DB container has a data volume and is exiting "
+                    "without reaching running state. If the container logs "
+                    "above show the entrypoint starting mysqld and then "
+                    "silently dying (no error message), the volume likely "
+                    "has corrupt data from a previous failed initialisation. "
+                    "Trigger a rebuild with force_reinit=True (or manually "
+                    "delete the volume and redeploy) to force a fresh "
+                    "initialisation."
+                )
             msg = (
                 f"DB container did not reach running state "
                 f"(final status: '{final_status}'"
                 f"{f', exit code: {exit_code}' if exit_code is not None else ''}). "
                 f"Container logs (last 50 lines):\n{log_tail[-2000:]}"
+                f"{recovery_hint}"
             )
             log.error(
                 "health_check",
