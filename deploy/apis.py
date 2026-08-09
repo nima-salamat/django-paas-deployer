@@ -1108,9 +1108,10 @@ def inspect_deploy_zip_apiview(request):
             )
 
         # Build a minimal DeploymentConfig to feed into enrich_config_from_project.
-        # enrich_config_from_project only fills EMPTY fields, so we pass a
-        # config with platform unset (let the detector pick) and all other
-        # fields at their defaults / None.
+        # enrich_config_from_project only fills EMPTY fields. If we pre-set
+        # platform="docker", the detector never overwrites it and every
+        # inspect returns platform=docker even for Django/Flask/Node zips.
+        # Pass an empty / unset platform so detection can win.
         try:
             config = DeploymentConfig(
                 name="inspect",
@@ -1123,12 +1124,44 @@ def inspect_deploy_zip_apiview(request):
                 volumes=[],
                 port=None,
                 read_only=False,
-                platform="docker",  # placeholder — enrich will overwrite
+                platform="",  # empty so enrich can set the detected platform
                 platform_type="app",
             )
         except TypeError:
-            # DeploymentConfig signature changed — fall back to a plain dict.
-            config = None
+            # Some DeploymentConfig versions reject empty platform — try None,
+            # then omit the kwarg entirely.
+            try:
+                config = DeploymentConfig(
+                    name="inspect",
+                    tag="inspect",
+                    zip_path=tmp_zip_path,
+                    dockerfile_template="",
+                    max_cpu=1.0,
+                    max_ram=512,
+                    networks=[],
+                    volumes=[],
+                    port=None,
+                    read_only=False,
+                    platform=None,
+                    platform_type="app",
+                )
+            except TypeError:
+                try:
+                    config = DeploymentConfig(
+                        name="inspect",
+                        tag="inspect",
+                        zip_path=tmp_zip_path,
+                        dockerfile_template="",
+                        max_cpu=1.0,
+                        max_ram=512,
+                        networks=[],
+                        volumes=[],
+                        port=None,
+                        read_only=False,
+                        platform_type="app",
+                    )
+                except TypeError:
+                    config = None
 
         detection_raw = {}
         suggested_config: dict = {}
@@ -1136,21 +1169,25 @@ def inspect_deploy_zip_apiview(request):
         if config is not None:
             try:
                 enriched = enrich_config_from_project(config, project_root)
-                # Pull the detection result back out for the response.
+                detected_platform = (
+                    str(getattr(enriched, "platform", None) or "").strip().lower()
+                )
                 suggested_config = {
-                    "platform": enriched.platform or "docker",
+                    "platform": detected_platform or "docker",
                 }
-                if enriched.server_type:
+                if getattr(enriched, "server_type", None):
                     suggested_config["server_type"] = enriched.server_type
-                if enriched.entry_point:
+                if getattr(enriched, "entry_point", None):
                     suggested_config["entry_point"] = enriched.entry_point
-                suggested_config["celery"] = bool(enriched.celery)
-                suggested_config["celery_beat"] = bool(enriched.celery_beat)
-                suggested_config["worker_count"] = int(enriched.worker_count or 1)
+                suggested_config["celery"] = bool(getattr(enriched, "celery", False))
+                suggested_config["celery_beat"] = bool(
+                    getattr(enriched, "celery_beat", False)
+                )
+                suggested_config["worker_count"] = int(
+                    getattr(enriched, "worker_count", None) or 1
+                )
 
-                # Try to get the raw detection result for extra fields
-                # (django_settings_module, static_dir, etc.) that aren't
-                # on DeploymentConfig itself.
+                # Raw detector fields (django_settings_module, static_dir, …)
                 try:
                     from deployments.core.platform_bridge import get_project_cfg
                     project_cfg = get_project_cfg(enriched)
@@ -1159,8 +1196,22 @@ def inspect_deploy_zip_apiview(request):
                             k: v for k, v in vars(project_cfg).items()
                             if not k.startswith("_") and _json_safe(v)
                         }
-                        # Markers are the files the detector found.
                         markers = list(getattr(project_cfg, "markers", []) or [])
+                        # Prefer framework/platform from the raw detector when
+                        # enriched still left platform empty/docker.
+                        raw_plat = (
+                            str(
+                                detection_raw.get("platform")
+                                or detection_raw.get("framework")
+                                or ""
+                            )
+                            .strip()
+                            .lower()
+                        )
+                        if raw_plat and (
+                            not detected_platform or detected_platform == "docker"
+                        ):
+                            suggested_config["platform"] = raw_plat
                 except Exception:
                     pass
             except Exception as exc:
@@ -1174,16 +1225,43 @@ def inspect_deploy_zip_apiview(request):
             try:
                 from deployments.core.platforms.inspector import ProjectInspector
                 inspector = ProjectInspector(project_root)
-                # ProjectInspector populates self.markers during __init__
-                # (or via a scan() method) — try both shapes for safety.
                 if hasattr(inspector, "markers") and isinstance(inspector.markers, list):
                     markers = sorted(inspector.markers)
                 elif hasattr(inspector, "scan"):
                     inspector.scan()
                     markers = sorted(getattr(inspector, "markers", []) or [])
             except Exception:
-                # Marker detection is best-effort — don't fail the request.
                 markers = []
+
+        # Heuristic fallback: if platform is still empty/docker but markers
+        # clearly indicate a known framework, override so the UI does not
+        # always show "docker".
+        current_plat = str(suggested_config.get("platform") or "").strip().lower()
+        if (not current_plat or current_plat == "docker") and markers:
+            marker_set = {str(m).lower().replace("\\", "/") for m in markers}
+            basename_set = {m.split("/")[-1] for m in marker_set}
+
+            if "manage.py" in basename_set or any(
+                m.endswith("/settings.py") or m == "settings.py" for m in marker_set
+            ):
+                suggested_config["platform"] = "django"
+                detection_raw.setdefault("framework", "django")
+            elif "package.json" in basename_set:
+                suggested_config["platform"] = "node"
+                detection_raw.setdefault("framework", "node")
+            elif "go.mod" in basename_set:
+                suggested_config["platform"] = "go"
+            elif "cargo.toml" in basename_set:
+                suggested_config["platform"] = "rust"
+            elif "pom.xml" in basename_set or "build.gradle" in basename_set:
+                suggested_config["platform"] = "java"
+            elif any(
+                m in basename_set for m in ("app.py", "wsgi.py", "asgi.py")
+            ) and (
+                "requirements.txt" in basename_set or "pyproject.toml" in basename_set
+            ):
+                suggested_config["platform"] = "flask"
+                detection_raw.setdefault("framework", "flask")
 
         return Response(
             {
@@ -1201,7 +1279,6 @@ def inspect_deploy_zip_apiview(request):
             },
             status=status.HTTP_200_OK,
         )
-
     finally:
         # Cleanup — never leave temp files behind.
         if tmp_dir and os.path.isdir(tmp_dir):
