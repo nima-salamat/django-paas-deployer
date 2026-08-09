@@ -113,14 +113,46 @@ class DBDeployResult:
 # ---------------------------------------------------------------------------
 
 def _mysql_env(cfg: dict) -> dict[str, str]:
+    """
+    Map Deploy.config credentials onto the official MySQL/MariaDB image
+    environment variables.
+
+    Rules
+    -----
+    * ``MYSQL_ROOT_PASSWORD`` is ALWAYS set to a non-empty value.  An empty
+      root password makes the official entrypoint run ``--initialize-insecure``
+      (empty root password) and silently ignore the caller's intent.
+    * ``password`` is accepted as an alias for ``root_password`` when the
+      latter is missing (UI often only exposes a single password field).
+    * When ``username`` is set, ``MYSQL_PASSWORD`` is required by the image.
+      If the app-user password is empty we fall back to the root password so
+      the user is still created with a usable credential.
+    * Never emit empty credential env vars — the image treats empty as
+      "use insecure defaults".
+    """
+    root_pw = str(cfg.get("root_password") or cfg.get("password") or "").strip()
+    user_pw = str(cfg.get("password") or "").strip() or root_pw
+    username = str(cfg.get("username") or "").strip()
+    database = str(cfg.get("database") or "").strip()
+
+    if not root_pw:
+        # Caller must validate first; this is a hard safety net so we never
+        # start MySQL with --initialize-insecure by accident.
+        raise DeploymentError(
+            "MySQL/MariaDB requires a non-empty root_password (or password). "
+            "Refusing to start the container with an empty root password.",
+            stage="validation",
+            details={"platform": "mysql"},
+        )
+
     env: dict[str, str] = {
-        "MYSQL_ROOT_PASSWORD": str(cfg.get("root_password") or cfg.get("password") or ""),
+        "MYSQL_ROOT_PASSWORD": root_pw,
     }
-    if cfg.get("database"):
-        env["MYSQL_DATABASE"] = str(cfg["database"])
-    if cfg.get("username"):
-        env["MYSQL_USER"] = str(cfg["username"])
-        env["MYSQL_PASSWORD"] = str(cfg.get("password") or "")
+    if database:
+        env["MYSQL_DATABASE"] = database
+    if username:
+        env["MYSQL_USER"] = username
+        env["MYSQL_PASSWORD"] = user_pw
     return env
 
 
@@ -193,8 +225,27 @@ def validate_db_config(platform: str, cfg: dict) -> list[str]:
 
     required = list(_REQUIRED_FIELDS.get(platform, []))
     if platform in ("mysql", "mariadb"):
+        # password may stand in for root_password
         if not str(cfg.get("root_password") or "").strip() and str(cfg.get("password") or "").strip():
             required = [k for k in required if k != "root_password"]
+        # Hard rule: at least one of root_password/password must be non-empty.
+        # Empty root password → official image uses --initialize-insecure and
+        # the caller's credentials are effectively ignored.
+        if not str(cfg.get("root_password") or cfg.get("password") or "").strip():
+            errors.append(
+                "MySQL/MariaDB requires a non-empty 'root_password' (or 'password'). "
+                "An empty root password makes the container start with insecure "
+                "defaults and ignores the credentials you configured."
+            )
+        # If a non-root username is set, ensure it will get a usable password.
+        if str(cfg.get("username") or "").strip() and not (
+            str(cfg.get("password") or "").strip()
+            or str(cfg.get("root_password") or "").strip()
+        ):
+            errors.append(
+                "'password' is required when 'username' is set for "
+                f"platform '{platform}'."
+            )
 
     for key in required:
         val = cfg.get(key)
@@ -347,12 +398,98 @@ class DBDeployer:
         # ------------------------------------------------------------------
         # 4. Build runtime environment variables
         # ------------------------------------------------------------------
-        environment = _ENV_BUILDERS[platform](cfg)
+        # Normalise MySQL/MariaDB aliases so root_password is always present
+        # in the cfg dict before the env builder runs.
+        if platform in ("mysql", "mariadb"):
+            if not str(cfg.get("root_password") or "").strip() and str(
+                cfg.get("password") or ""
+            ).strip():
+                cfg = {**cfg, "root_password": str(cfg["password"]).strip()}
 
-        # Merge any extra env vars the user supplied under cfg["env"]
+        try:
+            environment = _ENV_BUILDERS[platform](cfg)
+        except DeploymentError as exc:
+            log.error(
+                getattr(exc, "stage", "validation"),
+                exc.message,
+                progress=100,
+                details=getattr(exc, "details", {}) or {},
+            )
+            return DBDeployResult(
+                success=False,
+                message=exc.message,
+                container_name=container_name,
+                platform=platform,
+                error=exc.message,
+                details=getattr(exc, "details", {}) or {},
+            )
+
+        # Merge any extra env vars the user supplied under cfg["env"],
+        # but NEVER let them override / blank-out credential env vars or
+        # force insecure init (MYSQL_ALLOW_EMPTY_PASSWORD, etc.).
+        _CREDENTIAL_ENV_KEYS = {
+            "MYSQL_ROOT_PASSWORD", "MYSQL_PASSWORD", "MYSQL_USER", "MYSQL_DATABASE",
+            "MYSQL_ALLOW_EMPTY_PASSWORD", "MYSQL_RANDOM_ROOT_PASSWORD",
+            "MARIADB_ROOT_PASSWORD", "MARIADB_PASSWORD", "MARIADB_USER",
+            "MARIADB_DATABASE", "MARIADB_ALLOW_EMPTY_PASSWORD",
+            "POSTGRES_PASSWORD", "POSTGRES_USER", "POSTGRES_DB",
+            "MONGO_INITDB_ROOT_USERNAME", "MONGO_INITDB_ROOT_PASSWORD",
+            "MONGO_INITDB_DATABASE",
+            "ORACLE_PASSWORD", "ORACLE_PWD",
+            "REDIS_PASSWORD",
+        }
         extra_env = cfg.get("env") or {}
         if isinstance(extra_env, dict):
-            environment.update({str(k): str(v) for k, v in extra_env.items()})
+            for k, v in extra_env.items():
+                key = str(k)
+                if key.upper() in _CREDENTIAL_ENV_KEYS or key in _CREDENTIAL_ENV_KEYS:
+                    continue  # ignore attempts to override credentials
+                environment[key] = str(v)
+
+        # Final safety: never start MySQL/MariaDB with an empty root password.
+        if platform in ("mysql", "mariadb"):
+            root_env = (
+                environment.get("MYSQL_ROOT_PASSWORD")
+                or environment.get("MARIADB_ROOT_PASSWORD")
+                or ""
+            ).strip()
+            if not root_env:
+                msg = (
+                    "Refusing to start MySQL/MariaDB: MYSQL_ROOT_PASSWORD is empty. "
+                    "Set root_password (or password) in the deploy config."
+                )
+                log.error("validation", msg, progress=100)
+                return DBDeployResult(
+                    success=False, message=msg, container_name=container_name,
+                    platform=platform, error=msg,
+                )
+            # Drop insecure flags if they somehow got in
+            environment.pop("MYSQL_ALLOW_EMPTY_PASSWORD", None)
+            environment.pop("MARIADB_ALLOW_EMPTY_PASSWORD", None)
+            environment.pop("MYSQL_RANDOM_ROOT_PASSWORD", None)
+
+        log.info(
+            "validation",
+            f"Credential env prepared for '{platform}' "
+            f"(keys={sorted(environment.keys())}).",
+            progress=8,
+            details={
+                "env_keys": sorted(environment.keys()),
+                "has_root_password": bool(
+                    (environment.get("MYSQL_ROOT_PASSWORD")
+                     or environment.get("MARIADB_ROOT_PASSWORD")
+                     or environment.get("POSTGRES_PASSWORD")
+                     or environment.get("MONGO_INITDB_ROOT_PASSWORD")
+                     or environment.get("ORACLE_PASSWORD")
+                     or "")
+                ),
+                "has_app_user": bool(
+                    environment.get("MYSQL_USER")
+                    or environment.get("POSTGRES_USER")
+                    or environment.get("MONGO_INITDB_ROOT_USERNAME")
+                ),
+            },
+        )
 
         # Official Redis image ignores REDIS_PASSWORD env; override CMD instead.
         command = None
