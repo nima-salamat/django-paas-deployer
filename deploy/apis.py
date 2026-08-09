@@ -1108,7 +1108,6 @@ def inspect_deploy_zip_apiview(request):
             )
 
         # Optional plan resources from the client (Create Deploy form).
-        # Used to suggest worker_count from max_cpu / max_ram.
         plan_cpu = request.data.get("max_cpu") or request.POST.get("max_cpu")
         plan_ram = request.data.get("max_ram") or request.POST.get("max_ram")
         try:
@@ -1171,6 +1170,8 @@ def inspect_deploy_zip_apiview(request):
                 except TypeError:
                     config = None
 
+        _PYTHON_FAMILY = {"django", "flask", "python", "fastapi"}
+
         detection_raw = {}
         suggested_config: dict = {}
         markers: list[str] = []
@@ -1183,52 +1184,59 @@ def inspect_deploy_zip_apiview(request):
                 suggested_config = {
                     "platform": detected_platform or "docker",
                 }
-                if getattr(enriched, "server_type", None):
-                    suggested_config["server_type"] = enriched.server_type
                 if getattr(enriched, "entry_point", None):
                     suggested_config["entry_point"] = enriched.entry_point
-                suggested_config["celery"] = bool(getattr(enriched, "celery", False))
-                suggested_config["celery_beat"] = bool(
-                    getattr(enriched, "celery_beat", False)
-                )
 
-                # worker_count: prefer plan resources when provided.
-                try:
-                    from deployments.common.config import (
-                        suggest_worker_count,
-                        parse_workers_from_command,
-                        apply_workers_to_command,
-                    )
-                except ImportError:
-                    suggest_worker_count = None
-                    parse_workers_from_command = None
-                    apply_workers_to_command = None
+                is_python_family = detected_platform in _PYTHON_FAMILY
 
-                ep = suggested_config.get("entry_point")
-                from_cmd = (
-                    parse_workers_from_command(ep)
-                    if parse_workers_from_command
-                    else None
-                )
-                if suggest_worker_count and (
-                    plan_cpu_f is not None or plan_ram_f is not None
-                ):
-                    wc = suggest_worker_count(
-                        plan_cpu_f,
-                        plan_ram_f,
-                        platform=suggested_config.get("platform"),
-                        default=1,
+                # server_type / celery / worker_count only for Python-family apps.
+                # Never surface them for PHP, Node, static, Go, etc.
+                if is_python_family:
+                    if getattr(enriched, "server_type", None):
+                        suggested_config["server_type"] = enriched.server_type
+                    suggested_config["celery"] = bool(
+                        getattr(enriched, "celery", False)
                     )
-                elif from_cmd:
-                    wc = from_cmd
-                else:
-                    wc = int(getattr(enriched, "worker_count", None) or 1) or 1
+                    suggested_config["celery_beat"] = bool(
+                        getattr(enriched, "celery_beat", False)
+                    )
 
-                suggested_config["worker_count"] = max(1, int(wc))
-                if ep and apply_workers_to_command:
-                    suggested_config["entry_point"] = apply_workers_to_command(
-                        ep, suggested_config["worker_count"]
+                    try:
+                        from deployments.common.config import (
+                            suggest_worker_count,
+                            parse_workers_from_command,
+                            apply_workers_to_command,
+                        )
+                    except ImportError:
+                        suggest_worker_count = None
+                        parse_workers_from_command = None
+                        apply_workers_to_command = None
+
+                    ep = suggested_config.get("entry_point")
+                    from_cmd = (
+                        parse_workers_from_command(ep)
+                        if parse_workers_from_command
+                        else None
                     )
+                    if suggest_worker_count and (
+                        plan_cpu_f is not None or plan_ram_f is not None
+                    ):
+                        wc = suggest_worker_count(
+                            plan_cpu_f,
+                            plan_ram_f,
+                            platform=suggested_config.get("platform"),
+                            default=1,
+                        )
+                    elif from_cmd:
+                        wc = from_cmd
+                    else:
+                        wc = int(getattr(enriched, "worker_count", None) or 1) or 1
+
+                    suggested_config["worker_count"] = max(1, int(wc))
+                    if ep and apply_workers_to_command:
+                        suggested_config["entry_point"] = apply_workers_to_command(
+                            ep, suggested_config["worker_count"]
+                        )
 
                 try:
                     from deployments.core.platform_bridge import get_project_cfg
@@ -1252,6 +1260,15 @@ def inspect_deploy_zip_apiview(request):
                             not detected_platform or detected_platform == "docker"
                         ):
                             suggested_config["platform"] = raw_plat
+                            detected_platform = raw_plat
+                            # Re-evaluate python-family after platform correction
+                            if (
+                                detected_platform in _PYTHON_FAMILY
+                                and "celery" not in suggested_config
+                            ):
+                                suggested_config["celery"] = False
+                                suggested_config["celery_beat"] = False
+                                suggested_config["worker_count"] = 1
                 except Exception:
                     pass
             except Exception as exc:
@@ -1292,6 +1309,17 @@ def inspect_deploy_zip_apiview(request):
             ):
                 suggested_config["platform"] = "flask"
                 detection_raw.setdefault("framework", "flask")
+            elif any(m.endswith(".php") for m in marker_set) or "composer.json" in basename_set:
+                suggested_config["platform"] = "php"
+                detection_raw.setdefault("framework", "php")
+
+        # Final strip: if platform is not Python-family, drop celery keys.
+        final_plat = str(suggested_config.get("platform") or "").strip().lower()
+        if final_plat not in _PYTHON_FAMILY:
+            suggested_config.pop("celery", None)
+            suggested_config.pop("celery_beat", None)
+            suggested_config.pop("worker_count", None)
+            suggested_config.pop("server_type", None)
 
         return Response(
             {
