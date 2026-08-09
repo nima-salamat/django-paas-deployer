@@ -194,8 +194,7 @@ def _sql_quote(value: str) -> str:
     """Escape a string for use inside a single-quoted MySQL string literal."""
     return str(value).replace("\\", "\\\\").replace("'", "''")
 
-
-def _wait_mysql_ready(client, container_name: str, timeout: int = 120) -> bool:
+def _wait_mysql_ready(client, container_name: str, timeout: int = 180) -> bool:
     """
     Wait until the official entrypoint has FULLY finished init.
 
@@ -208,37 +207,63 @@ def _wait_mysql_ready(client, container_name: str, timeout: int = 120) -> bool:
 
     We wait for the final mysqld log line ``ready for connections`` after
     ``MySQL init process done`` (or equivalent).
+
+    CRITICAL: Do NOT return False immediately on "exited" status — the
+    container might be restarting (OOM kill during init with
+    restart_policy=unless-stopped).  Wait and check again.
     """
     import time as _time
-    markers_done = (
-        "MySQL init process done",
-        "ready for connections",
-    )
+
+    exited_count = 0
+    max_exited_retries = 5  # tolerate up to 5 restart cycles
+
     for _ in range(timeout):
         try:
             c = client.containers.get(container_name)
             c.reload()
-            if c.status in ("exited", "dead"):
-                return False
-            if c.status != "running":
+            status = c.status
+
+            if status in ("exited", "dead"):
+                exited_count += 1
+                if exited_count > max_exited_retries:
+                    # Container has exited too many times — give up.
+                    return False
+                # Don't return False yet — Docker might be restarting it.
+                _time.sleep(3)
+                continue
+            else:
+                exited_count = 0  # reset if container is running again
+
+            if status != "running":
                 _time.sleep(1)
                 continue
-            raw = c.logs(tail=80)
+
+            raw = c.logs(tail=120, timestamps=False)
             logs = (
                 raw.decode("utf-8", "replace")
                 if isinstance(raw, (bytes, bytearray))
                 else str(raw or "")
             )
-            # Entrypoint finished + final server is accepting connections.
-            if "ready for connections" in logs and (
-                "MySQL init process done" in logs
-                or "init process done" in logs.lower()
-                or "mysqld: ready for connections" in logs.lower()
-            ):
+
+            # ── Restart path: no init needed (data dir already populated) ──
+            # Only match if we see "ready for connections" AND there's NO
+            # evidence of initialization in the logs.
+            if "ready for connections" in logs and "Initializing database" not in logs and "MySQL init process done" not in logs:
                 return True
-            # Image already had data dir (restart path): no init, just ready.
-            if "ready for connections" in logs and "Initializing database" not in logs:
-                return True
+
+            # ── Fresh init path: init must be DONE ──
+            # Look for BOTH "init process done" AND "ready for connections"
+            # that appears AFTER "init process done".
+            if "MySQL init process done" in logs or "init process done" in logs.lower():
+                # After init is done, the entrypoint stops the temp server
+                # and starts the final one. Check for the final "ready".
+                # The final server's "ready for connections" comes AFTER
+                # "init process done".
+                init_done_idx = logs.lower().rfind("init process done")
+                after_init = logs[init_done_idx:] if init_done_idx >= 0 else ""
+                if "ready for connections" in after_init:
+                    return True
+
         except Exception:
             pass
         _time.sleep(1)
@@ -259,6 +284,14 @@ def _force_apply_mysql_credentials(
     passwords via SQL so special characters cannot break the entrypoint's
     shell-heredoc path.
 
+    CRITICAL FIX:
+    - Statements are executed INDIVIDUALLY so one failure doesn't abort
+      the rest.
+    - ``CREATE USER IF NOT EXISTS`` runs BEFORE ``ALTER USER`` so we don't
+      hit ERROR 1396 for non-existent users.
+    - Uses ``MYSQL_PWD`` env var instead of ``-p{password}`` on the CLI
+      to avoid shell-escaping issues with special characters.
+
     Returns (ok, message).
     """
     root_password = str(root_password or "").strip()
@@ -266,82 +299,106 @@ def _force_apply_mysql_credentials(
         return False, "root_password is empty — cannot force-apply"
 
     root_q = _sql_quote(root_password)
-    statements = [
-        f"ALTER USER 'root'@'localhost' IDENTIFIED BY '{root_q}';",
-        f"ALTER USER 'root'@'%' IDENTIFIED BY '{root_q}';",
-        "CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '{0}';".format(root_q),
-        f"GRANT ALL ON *.* TO 'root'@'%' WITH GRANT OPTION;",
+
+    # ── Build statements in CORRECT order ──
+    # 1. Create root@% if it doesn't exist (fresh init only has root@localhost)
+    # 2. ALTER root@localhost and root@% to set password
+    # 3. Grant privileges
+    # 4. Handle app user (create + alter + grant)
+    statements: list[str] = [
+        f"CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '{root_q}'",
+        f"ALTER USER 'root'@'localhost' IDENTIFIED BY '{root_q}'",
+        f"ALTER USER 'root'@'%' IDENTIFIED BY '{root_q}'",
+        f"GRANT ALL ON *.* TO 'root'@'%' WITH GRANT OPTION",
     ]
 
     username = str(username or "").strip()
     user_password = str(user_password or "").strip() or root_password
     database = str(database or "").strip()
+
     if username:
         uq = _sql_quote(username)
         pq = _sql_quote(user_password)
         statements.append(
-            f"CREATE USER IF NOT EXISTS '{uq}'@'%' IDENTIFIED BY '{pq}';"
+            f"CREATE USER IF NOT EXISTS '{uq}'@'%' IDENTIFIED BY '{pq}'"
         )
         statements.append(
-            f"ALTER USER '{uq}'@'%' IDENTIFIED BY '{pq}';"
+            f"ALTER USER '{uq}'@'%' IDENTIFIED BY '{pq}'"
         )
         if database:
             dq = database.replace("`", "``")
-            statements.append(f"CREATE DATABASE IF NOT EXISTS `{dq}`;")
+            statements.append(f"CREATE DATABASE IF NOT EXISTS `{dq}`")
             statements.append(
-                f"GRANT ALL ON `{dq}`.* TO '{uq}'@'%';"
+                f"GRANT ALL ON `{dq}`.* TO '{uq}'@'%'"
             )
-    statements.append("FLUSH PRIVILEGES;")
-    sql = " ".join(statements)
+    statements.append("FLUSH PRIVILEGES")
 
     try:
         c = client.containers.get(container_name)
     except Exception as exc:
         return False, f"container not found for credential apply: {exc}"
 
+    # ── Ping using MYSQL_PWD env var (avoids CLI password issues) ──
     def _ping(with_password: bool) -> int:
-        cmd = ["mysqladmin", "ping", "-uroot", "--protocol=socket", "--silent"]
         if with_password:
-            cmd = [
-                "mysqladmin", "ping", "-uroot", f"-p{root_password}",
-                "--protocol=socket", "--silent",
-            ]
-        try:
-            code, _ = c.exec_run(cmd)
-            return int(code)
-        except Exception:
-            return 1
+            # Use MYSQL_PWD env var — no shell escaping needed
+            cmd = ["mysqladmin", "ping", "-uroot", "--protocol=socket", "--silent"]
+            try:
+                code, _ = c.exec_run(cmd, environment={"MYSQL_PWD": root_password})
+                return int(code)
+            except Exception:
+                return 1
+        else:
+            cmd = ["mysqladmin", "ping", "-uroot", "--protocol=socket", "--silent"]
+            try:
+                code, _ = c.exec_run(cmd)
+                return int(code)
+            except Exception:
+                return 1
 
     # If entrypoint already applied the password, do not touch anything.
     if _ping(with_password=True) == 0:
         return True, "entrypoint password already works — no force-apply needed"
 
-    # Password does not work yet.  Only then try passwordless (leftover
-    # initialize-insecure) and apply SQL.  Never run this during entrypoint
-    # temp-server phase — caller must wait for init to finish first.
+    # ── Execute each statement INDIVIDUALLY ──
+    # This way, if one fails (e.g. CREATE USER for an existing user),
+    # the rest still execute.
     last_err = ""
-    attempts = [
-        # passwordless root (only valid right after initialize-insecure)
-        ["mysql", "-uroot", "--protocol=socket", "-e", sql],
-        # in case a partial password is set
-        ["mysql", "-uroot", f"-p{root_password}", "--protocol=socket", "-e", sql],
-    ]
-    for cmd in attempts:
-        try:
-            exit_code, output = c.exec_run(cmd)
-            out = (
-                output.decode("utf-8", "replace")
-                if isinstance(output, (bytes, bytearray))
-                else str(output or "")
-            )
-            if exit_code == 0:
-                if _ping(with_password=True) == 0:
-                    return True, "credentials force-applied and verified"
-                last_err = f"SQL ok but password ping still fails: {out[-400:]}"
-            else:
-                last_err = f"exit={exit_code} out={out[-400:]}"
-        except Exception as exc:
-            last_err = str(exc)
+
+    # Try passwordless first (only works right after --initialize-insecure
+    # where the entrypoint's heredoc failed to set the password due to
+    # special characters)
+    for use_password in [False, True]:
+        env = {"MYSQL_PWD": root_password} if use_password else {}
+        auth_flag = []  # MYSQL_PWD handles authentication
+        all_ok = True
+        errors = []
+
+        for stmt in statements:
+            cmd = ["mysql", "-uroot", "--protocol=socket", "-e", stmt]
+            try:
+                exit_code, output = c.exec_run(cmd, environment=env or None)
+                out = (
+                    output.decode("utf-8", "replace")
+                    if isinstance(output, (bytes, bytearray))
+                    else str(output or "")
+                )
+                if exit_code != 0:
+                    all_ok = False
+                    errors.append(f"'{stmt[:60]}...' → exit={exit_code}: {out.strip()[-200:]}")
+            except Exception as exc:
+                all_ok = False
+                errors.append(f"'{stmt[:60]}...' → exception: {exc}")
+
+        if all_ok:
+            if _ping(with_password=True) == 0:
+                return True, "credentials force-applied and verified"
+            last_err = f"SQL ok but password ping still fails. Errors: {'; '.join(errors)}"
+        else:
+            last_err = "; ".join(errors)
+            # If passwordless failed, try with password next
+            # If password also failed, give up
+
     return False, last_err
 
 
