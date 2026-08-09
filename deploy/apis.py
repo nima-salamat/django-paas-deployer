@@ -1078,14 +1078,13 @@ def unset_deploy_apiview(request):
 # ---------------------------------------------------------------------------
 
 # Safe alphabet for DB passwords — excludes characters that break:
-#   * URL encoding in connection strings (`@`, `:`, `/`, `#`, `?`)
-#   * Shell quoting (`'`, `"`, `` ` ``, `\`, `$`)
-#   * SQL string literals (`'`, `"`)
-#   * JSON string escaping (`"`, `\`)
-#   * Whitespace (space, tab, newline — break copy-paste and config files)
-# Includes a healthy mix of upper/lower/digits/symbols so the password
-# satisfies typical DB password policy requirements.
-_PASSWORD_ALPHABET = string.ascii_letters + string.digits + "!@#%^&*()-_=+"
+#   * URL / connection strings: @ : / # ? & %
+#   * Shell: ' " ` \ $ ( ) ^
+#   * SQL string literals: ' "
+#   * JSON: " \
+#   * Whitespace
+# Keep only URL-and-shell-safe symbols so connection strings and copy-paste work.
+_PASSWORD_ALPHABET = string.ascii_letters + string.digits + "!.*_+-="
 _DB_USERNAME_ALPHABET = string.ascii_lowercase + string.digits
 
 
