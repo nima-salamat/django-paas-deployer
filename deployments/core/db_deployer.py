@@ -1,35 +1,43 @@
 """
 deployments/core/db_deployer.py
----------------------------------
-Deploys database containers (MySQL, PostgreSQL, MariaDB, MongoDB, Redis,
-Oracle) from credentials stored in Deploy.config.
 
-Unlike application deployments there is NO zip file or Dockerfile build step.
-The deployer:
-  1. Validates required credential fields are present.
-  2. Pulls the official image via the mirror registry.
-  3. Stops and removes any existing container for the same service name.
-  4. Creates and starts a new container with credentials injected as runtime
-     environment variables (never baked into an image layer).
-  5. Waits up to 12 seconds for the container to reach running state.
+Database container deployer for:
+    - MySQL
+    - MariaDB
+    - PostgreSQL
+    - MongoDB
+    - Redis
+    - Oracle
 
-Re-deploy / rebuild semantics
-------------------------------
-Calling deploy() on an existing DB service is intentionally destructive to
-the container but not to volumes:
-  - The old container is removed.
-  - A new container starts with new credentials from config.
-  - Data on named volumes is preserved as long as the volume is re-attached.
-  - Data in ephemeral container storage is lost (this is expected).
+Important MySQL behavior
+------------------------
+Docker official MySQL environment variables such as:
 
-Supported platforms and required config keys
---------------------------------------------
-  mysql      root_password                (+optional: database, username, password)
-  mariadb    root_password                (same env convention as MySQL)
-  postgresql password                     (+optional: username, database)
-  mongodb    username, password
-  redis      (none required)              (+optional: password)
-  oracle     password
+    MYSQL_ROOT_PASSWORD
+    MYSQL_DATABASE
+    MYSQL_USER
+    MYSQL_PASSWORD
+
+are primarily initialization variables.
+
+If a persistent Docker volume already contains an initialized MySQL
+datadir, changing those environment variables does NOT automatically
+change existing MySQL users/passwords.
+
+Therefore this deployer does NOT rely only on environment variables.
+
+For MySQL/MariaDB it:
+
+    1. Starts the container.
+    2. Waits until mysqld is actually ready.
+    3. Connects through the local Unix socket.
+    4. Reconciles root credentials.
+    5. Creates/updates the requested application user.
+    6. Creates the requested database.
+    7. Grants the application user access to that database.
+    8. Verifies the credentials.
+
+This makes redeploying against an existing persistent volume predictable.
 """
 
 from __future__ import annotations
@@ -46,43 +54,44 @@ from core.global_settings.config import MIRROR_DOCKER
 from deployments.core.exceptions import DeploymentError
 from deployments.core.manager.client_manager import Client
 
+
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Image map
-# ---------------------------------------------------------------------------
+# ============================================================================
+# Images
+# ============================================================================
 
 _DB_IMAGES: dict[str, str] = {
-    "mysql":      "mysql:8.0",
-    "mariadb":    "mariadb:11",
+    "mysql": "mysql:8.0.36",
+    "mariadb": "mariadb:11",
     "postgresql": "postgres:16-alpine",
-    "mongodb":    "mongo:7",
-    "redis":      "redis:7-alpine",
-    # Oracle XE community image — not on Docker Hub, mirror prefix not applied
-    "oracle":     "gvenzl/oracle-xe:21-slim",
+    "mongodb": "mongo:7",
+    "redis": "redis:7-alpine",
+    "oracle": "gvenzl/oracle-xe:21-slim",
 }
 
-# Public set used by other modules to check if a platform is a DB platform
+
 DB_PLATFORMS: frozenset[str] = frozenset(_DB_IMAGES.keys())
 
+
 _DEFAULT_PORTS: dict[str, int] = {
-    "mysql":      3306,
-    "mariadb":    3306,
+    "mysql": 3306,
+    "mariadb": 3306,
     "postgresql": 5432,
-    "mongodb":    27017,
-    "redis":      6379,
-    "oracle":     1521,
+    "mongodb": 27017,
+    "redis": 6379,
+    "oracle": 1521,
 }
 
-# Keys that hold credentials — stripped from public API read responses
+
 SENSITIVE_CONFIG_KEYS: frozenset[str] = frozenset({
     "password",
     "root_password",
     "username",
 })
 
-# Keys the user is allowed to update via update_db_config
+
 MUTABLE_DB_CONFIG_KEYS: frozenset[str] = frozenset({
     "root_password",
     "password",
@@ -93,9 +102,9 @@ MUTABLE_DB_CONFIG_KEYS: frozenset[str] = frozenset({
 })
 
 
-# ---------------------------------------------------------------------------
-# Result dataclass
-# ---------------------------------------------------------------------------
+# ============================================================================
+# Result
+# ============================================================================
 
 @dataclass
 class DBDeployResult:
@@ -108,142 +117,707 @@ class DBDeployResult:
     details: dict[str, Any] = field(default_factory=dict)
 
 
-# ---------------------------------------------------------------------------
-# Environment variable builders — one per platform
-# ---------------------------------------------------------------------------
+# ============================================================================
+# Helpers
+# ============================================================================
 
-def _mysql_env(cfg: dict) -> dict[str, str]:
+def _clean(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _mysql_identifier(value: str) -> str:
     """
-    Map Deploy.config credentials onto the official MySQL/MariaDB image
-    environment variables.
-
-    Rules
-    -----
-    * ``MYSQL_ROOT_PASSWORD`` is ALWAYS set to a non-empty value.  An empty
-      root password makes the official entrypoint run ``--initialize-insecure``
-      (empty root password) and silently ignore the caller's intent.
-    * ``password`` is accepted as an alias for ``root_password`` when the
-      latter is missing (UI often only exposes a single password field).
-    * When ``username`` is set, ``MYSQL_PASSWORD`` is required by the image.
-      If the app-user password is empty we fall back to the root password so
-      the user is still created with a usable credential.
-    * Never emit empty credential env vars — the image treats empty as
-      "use insecure defaults".
+    Escape a MySQL identifier used inside backticks.
     """
-    root_pw = str(cfg.get("root_password") or cfg.get("password") or "").strip()
-    user_pw = str(cfg.get("password") or "").strip() or root_pw
-    username = str(cfg.get("username") or "").strip()
-    database = str(cfg.get("database") or "").strip()
+    return _clean(value).replace("`", "``")
 
-    if not root_pw:
-        # Caller must validate first; this is a hard safety net so we never
-        # start MySQL with --initialize-insecure by accident.
+
+def _mysql_string(value: str) -> str:
+    """
+    Escape a MySQL string literal.
+
+    We explicitly escape backslashes and single quotes because passwords
+    may contain characters such as:
+
+        '
+        \
+        $
+        !
+        "
+
+    Passwords are never logged.
+    """
+    value = str(value or "")
+
+    return (
+        value
+        .replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace("\x00", "")
+    )
+
+
+def _safe_bool(value: Any) -> bool:
+    return str(value or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+# ============================================================================
+# Environment builders
+# ============================================================================
+
+def _mysql_env(cfg: dict[str, Any]) -> dict[str, str]:
+    """
+    Build environment for MySQL/MariaDB.
+
+    ONLY root credentials (and optional database name) are passed as
+    environment variables.  These are consumed exclusively by the official
+    entrypoint on FIRST initialization of an empty data volume.
+
+    Application username / password are NEVER passed via env.
+    They are always created / updated / verified by
+    ``_reconcile_mysql_credentials`` after the server is ready.
+    This guarantees identical behaviour for both fresh volumes and
+    pre-existing persistent volumes.
+    """
+
+    root_password = _clean(
+        cfg.get("root_password") or cfg.get("password")
+    )
+
+    database = _clean(cfg.get("database"))
+
+    if not root_password:
         raise DeploymentError(
-            "MySQL/MariaDB requires a non-empty root_password (or password). "
-            "Refusing to start the container with an empty root password.",
+            "MySQL/MariaDB requires a non-empty root_password "
+            "(or password).",
             stage="validation",
             details={"platform": "mysql"},
         )
 
     env: dict[str, str] = {
-        "MYSQL_ROOT_PASSWORD": root_pw,
+        "MYSQL_ROOT_PASSWORD": root_password,
     }
+
+    # Optional: let the entrypoint create the schema on first init.
+    # The reconcile step also issues CREATE DATABASE IF NOT EXISTS,
+    # so this is purely an optimisation for empty volumes.
     if database:
         env["MYSQL_DATABASE"] = database
+
+    # Deliberately omitted:
+    #   MYSQL_USER / MYSQL_PASSWORD
+    # Application users are managed solely by the SQL reconciliation
+    # path so that password changes on existing volumes always take effect.
+
+    return env
+
+
+def _postgres_env(cfg: dict[str, Any]) -> dict[str, str]:
+    password = _clean(cfg.get("password"))
+
+    if not password:
+        raise DeploymentError(
+            "PostgreSQL requires a non-empty password.",
+            stage="validation",
+            details={"platform": "postgresql"},
+        )
+
+    env = {
+        "POSTGRES_PASSWORD": password,
+    }
+
+    username = _clean(cfg.get("username"))
+    database = _clean(cfg.get("database"))
+
     if username:
-        env["MYSQL_USER"] = username
-        env["MYSQL_PASSWORD"] = user_pw
+        env["POSTGRES_USER"] = username
+
+    if database:
+        env["POSTGRES_DB"] = database
+
     return env
 
 
-def _postgres_env(cfg: dict) -> dict[str, str]:
-    env: dict[str, str] = {
-        "POSTGRES_PASSWORD": str(cfg.get("password") or ""),
+def _mongo_env(cfg: dict[str, Any]) -> dict[str, str]:
+    username = _clean(cfg.get("username")) or "root"
+    password = _clean(cfg.get("password"))
+
+    if not password:
+        raise DeploymentError(
+            "MongoDB requires a non-empty password.",
+            stage="validation",
+            details={"platform": "mongodb"},
+        )
+
+    env = {
+        "MONGO_INITDB_ROOT_USERNAME": username,
+        "MONGO_INITDB_ROOT_PASSWORD": password,
     }
-    if cfg.get("username"):
-        env["POSTGRES_USER"] = str(cfg["username"])
-    if cfg.get("database"):
-        env["POSTGRES_DB"] = str(cfg["database"])
+
+    database = _clean(cfg.get("database"))
+
+    if database:
+        env["MONGO_INITDB_DATABASE"] = database
+
     return env
 
 
-def _mongo_env(cfg: dict) -> dict[str, str]:
-    env: dict[str, str] = {
-        "MONGO_INITDB_ROOT_USERNAME": str(cfg.get("username") or "root"),
-        "MONGO_INITDB_ROOT_PASSWORD": str(cfg.get("password") or ""),
+def _redis_env(cfg: dict[str, Any]) -> dict[str, str]:
+    return {}
+
+
+def _oracle_env(cfg: dict[str, Any]) -> dict[str, str]:
+    password = _clean(cfg.get("password"))
+
+    if not password:
+        raise DeploymentError(
+            "Oracle requires a non-empty password.",
+            stage="validation",
+            details={"platform": "oracle"},
+        )
+
+    return {
+        "ORACLE_PASSWORD": password,
+        "ORACLE_PWD": password,
     }
-    if cfg.get("database"):
-        env["MONGO_INITDB_DATABASE"] = str(cfg["database"])
-    return env
 
 
-def _redis_env(cfg: dict) -> dict[str, str]:
-    env: dict[str, str] = {}
-    if cfg.get("password"):
-        env["REDIS_PASSWORD"] = str(cfg["password"])
-    return env
+_ENV_BUILDERS: dict[str, Any] = {
+    "mysql": _mysql_env,
+    "mariadb": _mysql_env,
+    "postgresql": _postgres_env,
+    "mongodb": _mongo_env,
+    "redis": _redis_env,
+    "oracle": _oracle_env,
+}
 
 
-def _oracle_env(cfg: dict) -> dict[str, str]:
-    pw = str(cfg.get("password") or "")
-    return {"ORACLE_PASSWORD": pw, "ORACLE_PWD": pw}
+# ============================================================================
+# Validation
+# ============================================================================
+
+_REQUIRED_FIELDS: dict[str, list[str]] = {
+    "mysql": ["root_password"],
+    "mariadb": ["root_password"],
+    "postgresql": ["password"],
+    "mongodb": ["username", "password"],
+    "redis": [],
+    "oracle": ["password"],
+}
 
 
+def validate_db_config(
+    platform: str,
+    cfg: dict[str, Any],
+) -> list[str]:
 
-def _sql_quote(value: str) -> str:
-    """Escape a string for use inside a single-quoted MySQL string literal."""
-    return str(value).replace("\\", "\\\\").replace("'", "''")
+    errors: list[str] = []
 
-def _wait_mysql_ready(client, container_name: str, timeout: int = 180) -> bool:
-    """
-    Wait until the official entrypoint has FULLY finished init.
-    """
-    import time as _time
-    exited_count = 0
-    max_exited_retries = 5
+    if platform not in DB_PLATFORMS:
+        return [f"Unsupported database platform '{platform}'."]
 
-    for _ in range(timeout):
-        try:
-            c = client.containers.get(container_name)
-            c.reload()
-            status = c.status
+    # ------------------------------------------------------------------------
+    # MySQL / MariaDB
+    # ------------------------------------------------------------------------
 
-            if status in ("exited", "dead"):
-                exited_count += 1
-                if exited_count > max_exited_retries:
-                    return False
-                _time.sleep(3)
-                continue
-            else:
-                exited_count = 0
+    if platform in ("mysql", "mariadb"):
 
-            if status != "running":
-                _time.sleep(1)
-                continue
+        root_password = _clean(
+            cfg.get("root_password") or cfg.get("password")
+        )
 
-            raw = c.logs(tail=120, timestamps=False)
-            logs = (
-                raw.decode("utf-8", "replace")
-                if isinstance(raw, (bytes, bytearray))
-                else str(raw or "")
+        if not root_password:
+            errors.append(
+                "MySQL/MariaDB requires a non-empty "
+                "'root_password' or 'password'."
             )
 
-            if "ready for connections" in logs and "Initializing database" not in logs and "MySQL init process done" not in logs:
-                return True
+        username = _clean(cfg.get("username"))
 
-            if "MySQL init process done" in logs or "init process done" in logs.lower():
-                init_done_idx = logs.lower().rfind("init process done")
-                after_init = logs[init_done_idx:] if init_done_idx >= 0 else ""
-                if "ready for connections" in after_init:
-                    return True
+        if username:
 
-        except Exception:
-            pass
-        _time.sleep(1)
-    return False
+            if username.lower() == "root":
+                errors.append(
+                    "Do not use 'root' as the application username. "
+                    "Use a separate application user."
+                )
+
+            if not _clean(cfg.get("password")) and not root_password:
+                errors.append(
+                    "A password is required when username is provided."
+                )
+
+    # ------------------------------------------------------------------------
+    # PostgreSQL
+    # ------------------------------------------------------------------------
+
+    elif platform == "postgresql":
+
+        if not _clean(cfg.get("password")):
+            errors.append(
+                "PostgreSQL requires a non-empty 'password'."
+            )
+
+    # ------------------------------------------------------------------------
+    # MongoDB
+    # ------------------------------------------------------------------------
+
+    elif platform == "mongodb":
+
+        if not _clean(cfg.get("username")):
+            errors.append(
+                "MongoDB requires 'username'."
+            )
+
+        if not _clean(cfg.get("password")):
+            errors.append(
+                "MongoDB requires 'password'."
+            )
+
+    # ------------------------------------------------------------------------
+    # Oracle
+    # ------------------------------------------------------------------------
+
+    elif platform == "oracle":
+
+        if not _clean(cfg.get("password")):
+            errors.append(
+                "Oracle requires 'password'."
+            )
+
+    # ------------------------------------------------------------------------
+    # Port
+    # ------------------------------------------------------------------------
+
+    port = cfg.get("port")
+
+    if port is not None:
+
+        try:
+            port_int = int(port)
+
+            if not 1 <= port_int <= 65535:
+                errors.append(
+                    f"port {port_int} is outside valid range 1-65535."
+                )
+
+        except (TypeError, ValueError):
+            errors.append(
+                f"port '{port}' is not a valid integer."
+            )
+
+    # ------------------------------------------------------------------------
+    # MySQL database name
+    # ------------------------------------------------------------------------
+
+    if platform in ("mysql", "mariadb"):
+
+        database = _clean(cfg.get("database"))
+
+        reserved = {
+            "mysql",
+            "sys",
+            "information_schema",
+            "performance_schema",
+        }
+
+        if database.lower() in reserved:
+            errors.append(
+                f"database '{database}' is reserved by MySQL/MariaDB."
+            )
+
+    return errors
 
 
-def _force_apply_mysql_credentials(
+# ============================================================================
+# MySQL readiness
+# ============================================================================
+
+def _mysql_is_running(
+    client,
+    container_name: str,
+) -> bool:
+
+    try:
+        container = client.containers.get(container_name)
+        container.reload()
+
+        return container.status == "running"
+
+    except Exception:
+        return False
+
+
+
+
+def _mysql_wait_until_ready(
+    client,
+    container_name: str,
+    timeout: int = 240,
+) -> tuple[bool, str]:
+    """
+    Wait until the OFFICIAL MySQL Docker entrypoint has completely
+    finished initialization and the FINAL mysqld instance is ready.
+
+    IMPORTANT:
+    `mysqladmin ping` alone is NOT sufficient because the official
+    MySQL entrypoint starts a temporary mysqld during initialization.
+
+    We therefore require:
+
+        1. MySQL initialization to be finished.
+        2. Temporary server to have stopped.
+        3. Final mysqld to be running.
+        4. Final mysqld to answer mysqladmin ping.
+    """
+
+    import time
+
+    deadline = time.monotonic() + timeout
+
+    last_status = ""
+    last_logs = ""
+
+    initialization_finished = False
+    temporary_server_stopped = False
+    notfound_streak = 0
+
+    while time.monotonic() < deadline:
+
+        try:
+            container = client.containers.get(
+                container_name
+            )
+
+            container.reload()
+
+            status = container.status
+            last_status = status
+
+            # ------------------------------------------------------------
+            # Read current logs
+            # ------------------------------------------------------------
+
+            try:
+
+                raw_logs = container.logs(
+                    tail=250,
+                    timestamps=False,
+                )
+
+                logs = (
+                    raw_logs.decode(
+                        "utf-8",
+                        "replace",
+                    )
+                    if isinstance(
+                        raw_logs,
+                        (bytes, bytearray),
+                    )
+                    else str(raw_logs or "")
+                )
+
+                last_logs = logs
+
+            except Exception:
+                logs = last_logs
+
+            logs_lower = logs.lower()
+
+            # ------------------------------------------------------------
+            # Detect official initialization completion
+            # ------------------------------------------------------------
+
+            init_done = (
+                "mysql init process done" in logs_lower
+                or
+                "mysql init process done." in logs_lower
+            )
+
+            if init_done:
+                initialization_finished = True
+
+            # ------------------------------------------------------------
+            # Detect temporary server shutdown
+            # ------------------------------------------------------------
+
+            temporary_stopped = (
+                "temporary server stopped" in logs_lower
+                or
+                "temporary server stop" in logs_lower
+            )
+
+            if temporary_stopped:
+                temporary_server_stopped = True
+
+            # ------------------------------------------------------------
+            # FINAL SERVER readiness
+            #
+            # We ONLY run mysqladmin ping after the official
+            # initialization has finished.
+            # ------------------------------------------------------------
+
+            if (
+                initialization_finished
+                and temporary_server_stopped
+                and status == "running"
+            ):
+
+                try:
+
+                    exit_code, output = (
+                        container.exec_run(
+                            [
+                                "mysqladmin",
+                                "ping",
+                                "-uroot",
+                                "--protocol=socket",
+                                "--silent",
+                            ]
+                        )
+                    )
+
+                    output_text = (
+                        output.decode(
+                            "utf-8",
+                            "replace",
+                        )
+                        if isinstance(
+                            output,
+                            (bytes, bytearray),
+                        )
+                        else str(output or "")
+                    )
+
+                    if int(exit_code) == 0:
+
+                        return (
+                            True,
+                            "MySQL official initialization completed "
+                            "and the final MySQL server is ready.",
+                        )
+
+                    last_logs = output_text
+
+                except Exception as exc:
+
+                    last_logs = str(exc)
+
+            # ------------------------------------------------------------
+            # IMPORTANT:
+            #
+            # Do NOT consider the temporary server ready.
+            # ------------------------------------------------------------
+
+            if (
+                "temporary server started" in logs_lower
+                and not initialization_finished
+            ):
+
+                time.sleep(1)
+                continue
+
+            # ------------------------------------------------------------
+            # Container restarting
+            # ------------------------------------------------------------
+
+            if status == "restarting":
+
+                time.sleep(1)
+                continue
+
+            # ------------------------------------------------------------
+            # Created / paused
+            # ------------------------------------------------------------
+
+            if status in {
+                "created",
+                "paused",
+            }:
+
+                time.sleep(1)
+                continue
+
+            # ------------------------------------------------------------
+            # Exited / dead
+            # ------------------------------------------------------------
+
+            if status in {
+                "exited",
+                "dead",
+            }:
+
+                restart_policy = {}
+
+                try:
+
+                    restart_policy = (
+                        container.attrs
+                        .get("HostConfig", {})
+                        .get("RestartPolicy", {})
+                    )
+
+                except Exception:
+                    pass
+
+                restart_name = str(
+                    restart_policy.get("Name") or ""
+                ).lower()
+
+                if restart_name in {
+                    "always",
+                    "unless-stopped",
+                    "on-failure",
+                }:
+
+                    time.sleep(1)
+                    continue
+
+                return (
+                    False,
+                    (
+                        f"MySQL container '{container_name}' "
+                        f"stopped with status '{status}'.\n\n"
+                        f"Last logs:\n"
+                        f"{last_logs[-5000:]}"
+                    ),
+                )
+
+        except NotFound:
+            # Brief races are possible (rename / force-recreate / monitor).
+            # Tolerate a handful of consecutive NotFound before declaring
+            # permanent removal; otherwise a single transient miss aborts
+            # a perfectly healthy init that takes 30-90 s.
+            notfound_streak += 1
+            if notfound_streak >= 8:
+                return (
+                    False,
+                    (
+                        f"MySQL container '{container_name}' "
+                        "was removed while waiting for readiness."
+                    ),
+                )
+            time.sleep(1)
+            continue
+
+        except Exception as exc:
+
+            last_logs = str(exc)
+
+        # Reset streak on any successful inspect
+        notfound_streak = 0
+        time.sleep(1)
+
+    return (
+        False,
+        (
+            f"MySQL official initialization did not complete "
+            f"within {timeout} seconds.\n\n"
+            f"Status: {last_status}\n\n"
+            f"Last logs:\n{last_logs[-5000:]}"
+        ),
+    )
+
+
+# ============================================================================
+# MySQL SQL execution
+# ============================================================================
+
+def _mysql_exec(
+    container,
+    statement: str,
+    *,
+    password: str | None = None,
+) -> tuple[bool, str]:
+
+    """
+    Execute SQL inside the MySQL container.
+
+    The password is passed through MYSQL_PWD instead of putting it
+    directly into the command line.
+
+    This avoids:
+
+        mysql -uroot -pPASSWORD
+
+    which would expose the password in process arguments.
+    """
+
+    env = None
+
+    if password:
+        env = {
+            "MYSQL_PWD": password,
+        }
+
+    try:
+
+        exit_code, output = container.exec_run(
+            [
+                "mysql",
+                "-uroot",
+                "--protocol=socket",
+                "--batch",
+                "--skip-column-names",
+                "-e",
+                statement,
+            ],
+            environment=env,
+        )
+
+        text = (
+            output.decode(
+                "utf-8",
+                "replace",
+            )
+            if isinstance(output, bytes)
+            else str(output or "")
+        )
+
+        if int(exit_code) == 0:
+            return True, text.strip()
+
+        return False, text.strip()
+
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _mysql_ping_with_password(
+    container,
+    password: str,
+) -> bool:
+
+    try:
+
+        exit_code, _ = container.exec_run(
+            [
+                "mysqladmin",
+                "ping",
+                "-uroot",
+                "--protocol=socket",
+                "--silent",
+            ],
+            environment={
+                "MYSQL_PWD": password,
+            },
+        )
+
+        return int(exit_code) == 0
+
+    except Exception:
+        return False
+
+
+# ============================================================================
+# MySQL credential reconciliation
+# ============================================================================
+def _reconcile_mysql_credentials(
     client,
     container_name: str,
     *,
@@ -252,1052 +826,1633 @@ def _force_apply_mysql_credentials(
     user_password: str = "",
     database: str = "",
 ) -> tuple[bool, str]:
+
     """
-    After the official entrypoint finishes init, force-set root + app-user
-    passwords via SQL so special characters cannot break the entrypoint's
-    shell-heredoc path.
+    Reconcile MySQL credentials against the ACTUAL database state.
+    
+    CRITICAL FIX: We explicitly use 'mysql_native_password' because MySQL 8.0's
+    default 'caching_sha2_password' blocks authentication via Unix Socket
+    when using MYSQL_PWD, causing false "Access Denied" errors during verification.
     """
-    root_password = str(root_password or "").strip()
+
+    root_password = _clean(root_password)
+    username = _clean(username)
+    user_password = _clean(user_password) or root_password
+    database = _clean(database)
+
     if not root_password:
-        return False, "root_password is empty — cannot force-apply"
-
-    root_q = _sql_quote(root_password)
-
-    # 1. Create root@% if it doesn't exist (fresh init only has root@localhost)
-    # 2. ALTER root@localhost and root@%
-    statements: list[str] = [
-        f"CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '{root_q}'",
-        f"ALTER USER 'root'@'localhost' IDENTIFIED BY '{root_q}'",
-        f"ALTER USER 'root'@'%' IDENTIFIED BY '{root_q}'",
-        f"GRANT ALL ON *.* TO 'root'@'%' WITH GRANT OPTION",
-    ]
-
-    username = str(username or "").strip()
-    user_password = str(user_password or "").strip() or root_password
-    database = str(database or "").strip()
-
-    if username:
-        uq = _sql_quote(username)
-        pq = _sql_quote(user_password)
-        statements.append(
-            f"CREATE USER IF NOT EXISTS '{uq}'@'%' IDENTIFIED BY '{pq}'"
-        )
-        statements.append(
-            f"ALTER USER '{uq}'@'%' IDENTIFIED BY '{pq}'"
-        )
-        if database:
-            dq = database.replace("`", "``")
-            statements.append(f"CREATE DATABASE IF NOT EXISTS `{dq}`")
-            statements.append(
-                f"GRANT ALL ON `{dq}`.* TO '{uq}'@'%'"
-            )
-    statements.append("FLUSH PRIVILEGES")
+        return False, "root password is empty"
 
     try:
-        c = client.containers.get(container_name)
+        container = client.containers.get(container_name)
     except Exception as exc:
-        return False, f"container not found for credential apply: {exc}"
+        return False, f"container not found: {exc}"
 
-    def _ping(with_password: bool) -> int:
-        if with_password:
-            cmd = ["mysqladmin", "ping", "-uroot", "--protocol=socket", "--silent"]
-            try:
-                code, _ = c.exec_run(cmd, environment={"MYSQL_PWD": root_password})
-                return int(code)
-            except Exception:
-                return 1
-        else:
-            cmd = ["mysqladmin", "ping", "-uroot", "--protocol=socket", "--silent"]
-            try:
-                code, _ = c.exec_run(cmd)
-                return int(code)
-            except Exception:
-                return 1
+    # ------------------------------------------------------------------------
+    # First determine whether root password already works.
+    # ------------------------------------------------------------------------
+    root_password_works = _mysql_ping_with_password(
+        container,
+        root_password,
+    )
 
-    if _ping(with_password=True) == 0:
-        return True, "entrypoint password already works — no force-apply needed"
+    # ------------------------------------------------------------------------
+    # If root password does NOT work, try local socket without password.
+    # ------------------------------------------------------------------------
+    if not root_password_works:
 
-    last_err = ""
-    for use_password in [False, True]:
-        env = {"MYSQL_PWD": root_password} if use_password else {}
-        all_ok = True
-        errors = []
+        ok, output = _mysql_exec(
+            container,
+            "SELECT 1;",
+        )
 
-        for stmt in statements:
-            cmd = ["mysql", "-uroot", "--protocol=socket", "-e", stmt]
-            try:
-                exit_code, output = c.exec_run(cmd, environment=env or None)
-                out = (
-                    output.decode("utf-8", "replace")
-                    if isinstance(output, (bytes, bytearray))
-                    else str(output or "")
+        if not ok:
+            return False, (
+                "Cannot authenticate to MySQL as root. "
+                "The configured root password does not work and "
+                "socket authentication without password also failed. "
+                f"mysql output: {output[-1000:]}"
+            )
+
+        # --------------------------------------------------------------------
+        # Root currently has no password / socket authentication.
+        # Set it now with mysql_native_password.
+        # --------------------------------------------------------------------
+        root_q = _mysql_string(root_password)
+
+        statements = [
+            (
+                "ALTER USER 'root'@'localhost' "
+                "IDENTIFIED WITH mysql_native_password BY "
+                f"'{root_q}'"
+            ),
+            (
+                "CREATE USER IF NOT EXISTS 'root'@'%' "
+                "IDENTIFIED WITH mysql_native_password BY "
+                f"'{root_q}'"
+            ),
+            (
+                "ALTER USER 'root'@'%' "
+                "IDENTIFIED WITH mysql_native_password BY "
+                f"'{root_q}'"
+            ),
+            (
+                "GRANT ALL PRIVILEGES ON *.* "
+                "TO 'root'@'%' WITH GRANT OPTION"
+            ),
+            "FLUSH PRIVILEGES",
+        ]
+
+        for statement in statements:
+            ok, output = _mysql_exec(
+                container,
+                statement,
+            )
+            if not ok:
+                return False, (
+                    "Failed to initialize root credentials. "
+                    f"SQL error: {output[-1000:]}"
                 )
-                if exit_code != 0:
-                    all_ok = False
-                    errors.append(f"'{stmt[:60]}...' → exit={exit_code}: {out.strip()[-200:]}")
-            except Exception as exc:
-                all_ok = False
-                errors.append(f"'{stmt[:60]}...' → exception: {exc}")
 
-        if all_ok:
-            if _ping(with_password=True) == 0:
-                return True, "credentials force-applied and verified"
-            last_err = f"SQL ok but password ping still fails. Errors: {'; '.join(errors)}"
-        else:
-            last_err = "; ".join(errors)
-
-    return False, last_err
-
-
-_ENV_BUILDERS: dict[str, Any] = {
-    "mysql":      _mysql_env,
-    "mariadb":    _mysql_env,   # same convention as MySQL
-    "postgresql": _postgres_env,
-    "mongodb":    _mongo_env,
-    "redis":      _redis_env,
-    "oracle":     _oracle_env,
-}
-
-
-# ---------------------------------------------------------------------------
-# Validation
-# ---------------------------------------------------------------------------
-
-_REQUIRED_FIELDS: dict[str, list[str]] = {
-    "mysql":      ["root_password"],
-    "mariadb":    ["root_password"],
-    "postgresql": ["password"],
-    "mongodb":    ["username", "password"],
-    "redis":      [],
-    "oracle":     ["password"],
-}
-
-
-def validate_db_config(platform: str, cfg: dict) -> list[str]:
-    """
-    Return a list of human-readable validation error strings.
-    An empty list means the config is valid.
-
-    MySQL/MariaDB accept ``password`` as an alias for ``root_password``
-    (``_mysql_env`` already falls back the same way).
-    """
-    errors: list[str] = []
-
-    required = list(_REQUIRED_FIELDS.get(platform, []))
-    if platform in ("mysql", "mariadb"):
-        # password may stand in for root_password
-        if not str(cfg.get("root_password") or "").strip() and str(cfg.get("password") or "").strip():
-            required = [k for k in required if k != "root_password"]
-        # Hard rule: at least one of root_password/password must be non-empty.
-        # Empty root password → official image uses --initialize-insecure and
-        # the caller's credentials are effectively ignored.
-        if not str(cfg.get("root_password") or cfg.get("password") or "").strip():
-            errors.append(
-                "MySQL/MariaDB requires a non-empty 'root_password' (or 'password'). "
-                "An empty root password makes the container start with insecure "
-                "defaults and ignores the credentials you configured."
-            )
-        # If a non-root username is set, ensure it will get a usable password.
-        if str(cfg.get("username") or "").strip() and not (
-            str(cfg.get("password") or "").strip()
-            or str(cfg.get("root_password") or "").strip()
+        # Verify
+        if not _mysql_ping_with_password(
+            container,
+            root_password,
         ):
-            errors.append(
-                "'password' is required when 'username' is set for "
-                f"platform '{platform}'."
+            return False, (
+                "Root password was configured but verification failed."
             )
 
-    for key in required:
-        val = cfg.get(key)
-        if not val or not str(val).strip():
-            errors.append(f"'{key}' is required for platform '{platform}'.")
+    else:
 
-    port = cfg.get("port")
-    if port is not None:
+        # --------------------------------------------------------------------
+        # Root password works, but we MUST force it to mysql_native_password
+        # so the application user verification step doesn't fail later.
+        # --------------------------------------------------------------------
+        logger.info(
+            "MySQL root credentials already valid for '%s'; "
+            "forcing mysql_native_password and continuing with user/db reconciliation.",
+            container_name,
+        )
+
+        root_q = _mysql_string(root_password)
+
+        statements = [
+            (
+                "ALTER USER 'root'@'localhost' "
+                "IDENTIFIED WITH mysql_native_password BY "
+                f"'{root_q}'"
+            ),
+            (
+                "CREATE USER IF NOT EXISTS 'root'@'%' "
+                "IDENTIFIED WITH mysql_native_password BY "
+                f"'{root_q}'"
+            ),
+            (
+                "ALTER USER 'root'@'%' "
+                "IDENTIFIED WITH mysql_native_password BY "
+                f"'{root_q}'"
+            ),
+            (
+                "GRANT ALL PRIVILEGES ON *.* "
+                "TO 'root'@'%' WITH GRANT OPTION"
+            ),
+            "FLUSH PRIVILEGES",
+        ]
+
+        for statement in statements:
+            ok, output = _mysql_exec(
+                container,
+                statement,
+                password=root_password,
+            )
+            if not ok:
+                return False, (
+                    "Failed while synchronizing root@%. "
+                    f"SQL error: {output[-1000:]}"
+                )
+
+    # =========================================================================
+    # Application user
+    # =========================================================================
+
+    if username:
+
+        if username.lower() == "root":
+            return False, (
+                "Application username 'root' is not allowed. "
+                "Use a separate application user."
+            )
+
+        username_q = _mysql_string(username)
+        password_q = _mysql_string(user_password)
+
+        # --------------------------------------------------------------------
+        # Create user if missing (with mysql_native_password).
+        # --------------------------------------------------------------------
+        create_user_sql = (
+            f"CREATE USER IF NOT EXISTS "
+            f"'{username_q}'@'%' "
+            f"IDENTIFIED WITH mysql_native_password BY '{password_q}'"
+        )
+
+        ok, output = _mysql_exec(
+            container,
+            create_user_sql,
+            password=root_password,
+        )
+
+        if not ok:
+            return False, (
+                f"Failed to create MySQL user '{username}'. "
+                f"SQL error: {output[-1000:]}"
+            )
+
+        # --------------------------------------------------------------------
+        # ALWAYS ALTER password.
+        # --------------------------------------------------------------------
+        alter_user_sql = (
+            f"ALTER USER "
+            f"'{username_q}'@'%' "
+            f"IDENTIFIED WITH mysql_native_password BY '{password_q}'"
+        )
+
+        ok, output = _mysql_exec(
+            container,
+            alter_user_sql,
+            password=root_password,
+        )
+
+        if not ok:
+            return False, (
+                f"Failed to update password for MySQL user '{username}'. "
+                f"SQL error: {output[-1000:]}"
+            )
+
+        # --------------------------------------------------------------------
+        # Database
+        # --------------------------------------------------------------------
+
+        if database:
+
+            database_q = _mysql_identifier(database)
+
+            create_database_sql = (
+                f"CREATE DATABASE IF NOT EXISTS `{database_q}`"
+            )
+
+            ok, output = _mysql_exec(
+                container,
+                create_database_sql,
+                password=root_password,
+            )
+
+            if not ok:
+                return False, (
+                    f"Failed to create database '{database}'. "
+                    f"SQL error: {output[-1000:]}"
+                )
+
+            # ----------------------------------------------------------------
+            # Grant
+            # ----------------------------------------------------------------
+
+            grant_sql = (
+                f"GRANT ALL PRIVILEGES "
+                f"ON `{database_q}`.* "
+                f"TO '{username_q}'@'%'"
+            )
+
+            ok, output = _mysql_exec(
+                container,
+                grant_sql,
+                password=root_password,
+            )
+
+            if not ok:
+                return False, (
+                    f"Failed to grant database '{database}' "
+                    f"to user '{username}'. "
+                    f"SQL error: {output[-1000:]}"
+                )
+
+        # --------------------------------------------------------------------
+        # Flush
+        # --------------------------------------------------------------------
+
+        ok, output = _mysql_exec(
+            container,
+            "FLUSH PRIVILEGES",
+            password=root_password,
+        )
+
+        if not ok:
+            return False, (
+                "Failed to flush MySQL privileges. "
+                f"SQL error: {output[-1000:]}"
+            )
+
+    # =========================================================================
+    # Final root verification
+    # =========================================================================
+
+    if not _mysql_ping_with_password(
+        container,
+        root_password,
+    ):
+        return False, (
+            "Final root password verification failed."
+        )
+
+    # =========================================================================
+    # Verify application user
+    # =========================================================================
+
+    if username:
+
         try:
-            p = int(port)
-            if not (1 <= p <= 65535):
-                errors.append(f"port {port} is out of range (1–65535).")
-            else:
-                # Warn (not error) if port doesn't match the platform default —
-                # e.g. user sets port=6379 (Redis) for a MySQL deploy.  This is
-                # technically valid (host port can be anything) but almost
-                # always a copy-paste mistake.
-                default = _DEFAULT_PORTS.get(platform)
-                if default and p != default and p in _DEFAULT_PORTS.values():
-                    errors.append(
-                        f"port {p} is the default port for a different "
-                        f"database platform; did you mean port {default} "
-                        f"for {platform}?"
-                    )
-        except (TypeError, ValueError):
-            errors.append(f"port '{port}' is not a valid integer.")
+            verify_sql = "SELECT CURRENT_USER();"
+            env = {
+                "MYSQL_PWD": user_password,
+            }
 
-    # Reserved database names — MySQL/MariaDB reserve several names for
-    # system databases.  Creating a user database with one of these names
-    # can cause init failures or silent data corruption.
-    if platform in ("mysql", "mariadb"):
-        reserved = {"mysql", "sys", "information_schema", "performance_schema"}
-        db_name = str(cfg.get("database") or "").strip().lower()
-        if db_name in reserved:
-            errors.append(
-                f"database name '{db_name}' is reserved by {platform} "
-                f"as a system database; choose a different name."
+            exit_code, output = container.exec_run(
+                [
+                    "mysql",
+                    f"-u{username}",
+                    "--protocol=socket",
+                    "--batch",
+                    "--skip-column-names",
+                    "-e",
+                    verify_sql,
+                ],
+                environment=env,
             )
 
-    return errors
+            output_text = (
+                output.decode(
+                    "utf-8",
+                    "replace",
+                )
+                if isinstance(output, bytes)
+                else str(output or "")
+            )
+
+            if int(exit_code) != 0:
+                return False, (
+                    f"MySQL user '{username}' was configured but "
+                    f"credential verification failed. "
+                    f"SQL output: {output_text[-1000:]}"
+                )
+
+        except Exception as exc:
+            return False, (
+                f"MySQL application user verification failed: {exc}"
+            )
+
+    return True, (
+        "MySQL credentials successfully reconciled. "
+        "Root password, application user, database and privileges "
+        "were applied and verified."
+    )
 
 
-# ---------------------------------------------------------------------------
-# Main deployer
-# ---------------------------------------------------------------------------
+# ============================================================================
+# DB Deployer
+# ============================================================================
 
 class DBDeployer:
-    """
-    Deploy or redeploy a database container from ``Deploy.config`` credentials.
-
-    No zip file is required.  The container image is pulled from the mirror
-    registry and credentials are injected as runtime environment variables.
-
-    Example usage::
-
-        result = DBDeployer().deploy(
-            container_name="app-abc12345-mydb",
-            platform="postgresql",
-            cfg={
-                "password": "s3cret",
-                "username": "appuser",
-                "database": "appdb",
-                "port": 5432,
-                "max_cpu": 1,
-                "max_ram": 512,
-                "volumes": [{"source": "pgdata", "target": "/var/lib/postgresql/data"}],
-                "networks": ["proxy_net"],
-            },
-            event_sink=sink,
-            deployment_id=str(deploy.id),
-        )
-    """
 
     def deploy(
         self,
         *,
         container_name: str,
         platform: str,
-        cfg: dict,
+        cfg: dict[str, Any],
         event_sink=None,
         deployment_id: str | None = None,
         force_reinit: bool = False,
     ) -> DBDeployResult:
-        """
-        Deploy a database container.
 
-        Parameters
-        ----------
-        force_reinit : bool, default False
-            If True, wipe every named Docker volume bound to this container
-            BEFORE starting it, so the DB reinitialises from scratch.
-            Use this when a previous deploy failed mid-initialisation and
-            left corrupt data in the volume — symptoms include mysqld
-            crashing silently within seconds of startup, or repeated
-            container restarts with no clear error.
-            WARNING: this DESTROYS all data in the affected volumes.
-        """
         from deployments.core.deployment_logger import DeploymentLogger
 
-        log = DeploymentLogger(deployment_id=deployment_id, sink=event_sink)
+        log = DeploymentLogger(
+            deployment_id=deployment_id,
+            sink=event_sink,
+        )
 
-        # ------------------------------------------------------------------
-        # 1. Validate config
-        # ------------------------------------------------------------------
-        errors = validate_db_config(platform, cfg)
+        # ====================================================================
+        # 1. Validate
+        # ====================================================================
+
+        errors = validate_db_config(
+            platform,
+            cfg,
+        )
+
         if errors:
-            msg = "DB config validation failed: " + "; ".join(errors)
-            log.error("validation", msg, progress=100, details={"errors": errors})
-            return DBDeployResult(
-                success=False, message=msg, container_name=container_name,
-                platform=platform, error=msg, details={"errors": errors},
-            )
-        log.info("validation", f"Config validated for platform '{platform}'.", progress=5)
 
-        # ------------------------------------------------------------------
-        # 2. Resolve full image name
-        # ------------------------------------------------------------------
-        base_image = _DB_IMAGES.get(platform)
-        if not base_image:
-            msg = f"Unsupported DB platform: '{platform}'."
-            log.error("image_pull", msg, progress=100)
-            return DBDeployResult(
-                success=False, message=msg, container_name=container_name,
-                platform=platform, error=msg,
+            message = (
+                "DB config validation failed: "
+                + "; ".join(errors)
             )
 
-        # Apply mirror prefix only for plain Docker Hub images
-        if base_image.startswith(("ghcr.io", "mcr.", "quay.")):
-            full_image = base_image
-        else:
-            full_image = f"{MIRROR_DOCKER}/{base_image}"
-
-        # ------------------------------------------------------------------
-        # 3. Pull image
-        # ------------------------------------------------------------------
-        log.info("image_pull", f"Pulling image '{full_image}'.", progress=10)
-        try:
-            client = Client()()
-            repo, _, tag = full_image.rpartition(":")
-            client.images.pull(repo, tag=tag or "latest")
-            log.info("image_pull", f"Image '{full_image}' ready.", progress=25)
-        except (APIError, docker.errors.DockerException) as exc:
-            msg = f"Failed to pull image '{full_image}': {exc}"
-            log.error("image_pull", msg, progress=100, details={"image": full_image})
-            return DBDeployResult(
-                success=False, message=msg, container_name=container_name,
-                platform=platform, error=str(exc),
-            )
-
-        # ------------------------------------------------------------------
-        # 4. Build runtime environment variables
-        # ------------------------------------------------------------------
-        # Normalise MySQL/MariaDB aliases so root_password is always present
-        # in the cfg dict before the env builder runs.
-        if platform in ("mysql", "mariadb"):
-            if not str(cfg.get("root_password") or "").strip() and str(
-                cfg.get("password") or ""
-            ).strip():
-                cfg = {**cfg, "root_password": str(cfg["password"]).strip()}
-
-        try:
-            environment = _ENV_BUILDERS[platform](cfg)
-        except DeploymentError as exc:
             log.error(
-                getattr(exc, "stage", "validation"),
-                exc.message,
+                "validation",
+                message,
                 progress=100,
-                details=getattr(exc, "details", {}) or {},
+                details={"errors": errors},
             )
+
             return DBDeployResult(
                 success=False,
-                message=exc.message,
+                message=message,
                 container_name=container_name,
                 platform=platform,
-                error=exc.message,
-                details=getattr(exc, "details", {}) or {},
+                error=message,
+                details={"errors": errors},
             )
-
-        # Merge any extra env vars the user supplied under cfg["env"],
-        # but NEVER let them override / blank-out credential env vars or
-        # force insecure init (MYSQL_ALLOW_EMPTY_PASSWORD, etc.).
-        _CREDENTIAL_ENV_KEYS = {
-            "MYSQL_ROOT_PASSWORD", "MYSQL_PASSWORD", "MYSQL_USER", "MYSQL_DATABASE",
-            "MYSQL_ALLOW_EMPTY_PASSWORD", "MYSQL_RANDOM_ROOT_PASSWORD",
-            "MARIADB_ROOT_PASSWORD", "MARIADB_PASSWORD", "MARIADB_USER",
-            "MARIADB_DATABASE", "MARIADB_ALLOW_EMPTY_PASSWORD",
-            "POSTGRES_PASSWORD", "POSTGRES_USER", "POSTGRES_DB",
-            "MONGO_INITDB_ROOT_USERNAME", "MONGO_INITDB_ROOT_PASSWORD",
-            "MONGO_INITDB_DATABASE",
-            "ORACLE_PASSWORD", "ORACLE_PWD",
-            "REDIS_PASSWORD",
-        }
-        extra_env = cfg.get("env") or {}
-        if isinstance(extra_env, dict):
-            for k, v in extra_env.items():
-                key = str(k)
-                if key.upper() in _CREDENTIAL_ENV_KEYS or key in _CREDENTIAL_ENV_KEYS:
-                    continue  # ignore attempts to override credentials
-                environment[key] = str(v)
-
-        # Final safety: never start MySQL/MariaDB with an empty root password.
-        if platform in ("mysql", "mariadb"):
-            root_env = (
-                environment.get("MYSQL_ROOT_PASSWORD")
-                or environment.get("MARIADB_ROOT_PASSWORD")
-                or ""
-            ).strip()
-            if not root_env:
-                msg = (
-                    "Refusing to start MySQL/MariaDB: MYSQL_ROOT_PASSWORD is empty. "
-                    "Set root_password (or password) in the deploy config."
-                )
-                log.error("validation", msg, progress=100)
-                return DBDeployResult(
-                    success=False, message=msg, container_name=container_name,
-                    platform=platform, error=msg,
-                )
-            # Drop insecure flags if they somehow got in
-            environment.pop("MYSQL_ALLOW_EMPTY_PASSWORD", None)
-            environment.pop("MARIADB_ALLOW_EMPTY_PASSWORD", None)
-            environment.pop("MYSQL_RANDOM_ROOT_PASSWORD", None)
 
         log.info(
             "validation",
-            f"Credential env prepared for '{platform}' "
-            f"(keys={sorted(environment.keys())}).",
-            progress=8,
-            details={
-                "env_keys": sorted(environment.keys()),
-                "has_root_password": bool(
-                    (environment.get("MYSQL_ROOT_PASSWORD")
-                     or environment.get("MARIADB_ROOT_PASSWORD")
-                     or environment.get("POSTGRES_PASSWORD")
-                     or environment.get("MONGO_INITDB_ROOT_PASSWORD")
-                     or environment.get("ORACLE_PASSWORD")
-                     or "")
-                ),
-                "has_app_user": bool(
-                    environment.get("MYSQL_USER")
-                    or environment.get("POSTGRES_USER")
-                    or environment.get("MONGO_INITDB_ROOT_USERNAME")
-                ),
-            },
+            f"Config validated for '{platform}'.",
+            progress=5,
         )
 
-        # Official Redis image ignores REDIS_PASSWORD env; override CMD instead.
-        command = None
-        if platform == "redis" and cfg.get("password"):
-            command = ["redis-server", "--requirepass", str(cfg["password"])]
+        # ====================================================================
+        # 2. Image
+        # ====================================================================
 
-        # ------------------------------------------------------------------
-        # 5. Port bindings
-        # ------------------------------------------------------------------
-        # Container-internal port the DB listens on (always the platform default).
-        # Host publish is OFF by default — DB services must only be reachable
-        # via Docker networks (e.g. proxy_net / service network), never on
-        # 0.0.0.0 of the host.  Opt-in with cfg["publish_port"]=true (and
-        # optional cfg["port"] for the host port).
-        default_port = _DEFAULT_PORTS.get(platform)
-        container_port = default_port
-        publish_port = str(cfg.get("publish_port") or "").strip().lower() in (
-            "1", "true", "yes", "on",
-        )
-        host_port = None
-        if publish_port:
-            host_port = cfg.get("port") or default_port
+        base_image = _DB_IMAGES.get(platform)
 
-        exposed_ports: dict = {}
-        port_bindings: dict = {}
-        if container_port:
-            # Document the listening port inside the container; does NOT
-            # publish to the host by itself.
-            exposed_ports = {f"{container_port}/tcp": {}}
-        if publish_port and container_port and host_port:
-            port_bindings = {
-                f"{container_port}/tcp": [{"HostPort": str(host_port)}]
-            }
-            log.info(
-                "validation",
-                f"Host port publish ENABLED: 0.0.0.0:{host_port}->{container_port} "
-                f"(publish_port=true). Prefer internal Docker networks in production.",
-                progress=9,
-            )
-        else:
-            log.info(
-                "validation",
-                f"DB port {container_port} is internal-only (not published on host). "
-                f"Reachable via Docker networks only.",
-                progress=9,
+        if not base_image:
+
+            message = (
+                f"Unsupported DB platform '{platform}'."
             )
 
-        # ------------------------------------------------------------------
-        # 6. Networks
-        # ------------------------------------------------------------------
-        networks: list[str] = []
-        for n in cfg.get("networks") or []:
-            name = n if isinstance(n, str) else (n.get("name") if isinstance(n, dict) else "")
-            if name:
-                networks.append(name)
+            log.error(
+                "image_pull",
+                message,
+                progress=100,
+            )
 
-        # ------------------------------------------------------------------
-        # 7. Volume binds
-        # ------------------------------------------------------------------
-        volume_binds: dict[str, dict] = {}
-        for vol in cfg.get("volumes") or []:
-            if isinstance(vol, dict):
-                src = vol.get("source") or vol.get("name")
-                tgt = vol.get("target") or vol.get("bind")
-                mode = vol.get("mode", "rw")
-                if src and tgt:
-                    volume_binds[src] = {"bind": tgt, "mode": mode}
-                    # Ensure named Docker volumes exist (skip host bind paths)
-                    if not str(src).startswith("/"):
-                        try:
-                            client.volumes.get(src)
-                        except NotFound:
-                            try:
-                                client.volumes.create(name=src)
-                                log.info(
-                                    "volume_creation",
-                                    f"Created volume '{src}'.",
-                                    progress=28,
-                                )
-                            except (APIError, docker.errors.DockerException) as exc:
-                                logger.warning(
-                                    "Could not create volume '%s': %s", src, exc
-                                )
-
-        # ------------------------------------------------------------------
-        # 7b. Optional force-reinit — wipe named volumes so the DB
-        # reinitialises from scratch.  Used by the rebuild action when
-        # the previous deploy failed mid-init and left corrupt data.
-        # Host-bind paths (starting with "/") are NEVER wiped — only
-        # named Docker volumes managed by the platform.
-        # ------------------------------------------------------------------
-        if force_reinit and volume_binds:
-            for src in list(volume_binds.keys()):
-                if str(src).startswith("/"):
-                    continue  # never wipe host bind paths
-                try:
-                    vol_obj = client.volumes.get(src)
-                    vol_obj.remove(force=True)
-                    log.info(
-                        "volume_creation",
-                        f"Wiped volume '{src}' for force-reinit.",
-                        progress=29,
-                    )
-                    # Recreate empty
-                    client.volumes.create(name=src)
-                    log.info(
-                        "volume_creation",
-                        f"Recreated empty volume '{src}'.",
-                        progress=29,
-                    )
-                except NotFound:
-                    # Already gone — fine.
-                    pass
-                except (APIError, docker.errors.DockerException) as exc:
-                    logger.warning(
-                        "force_reinit: could not wipe volume '%s': %s", src, exc
-                    )
-                    log.info(
-                        "volume_creation",
-                        f"Warning: could not wipe volume '{src}': {exc}. "
-                        f"The DB may fail to start if the volume has "
-                        f"corrupt data from a previous failed init.",
-                        progress=29,
-                    )
-
-        # ------------------------------------------------------------------
-        # 8. Remove existing container (safe to call on missing container)
-        # ------------------------------------------------------------------
-        log.info("container_replacement", "Checking for existing container.", progress=30)
-        try:
-            old = client.containers.get(container_name)
-            old.reload()
-            if old.status == "running":
-                old.stop(timeout=5)
-                log.info("container_replacement", "Stopped existing container.", progress=38)
-            old.remove(force=True)
-            log.info("container_replacement", "Removed existing container.", progress=50)
-        except NotFound:
-            log.info("container_replacement", "No existing container found.", progress=50)
-        except (APIError, docker.errors.DockerException) as exc:
-            msg = f"Failed to remove existing container: {exc}"
-            log.error("container_replacement", msg, progress=100)
             return DBDeployResult(
-                success=False, message=msg, container_name=container_name,
-                platform=platform, error=str(exc),
+                success=False,
+                message=message,
+                container_name=container_name,
+                platform=platform,
+                error=message,
             )
 
-        # ------------------------------------------------------------------
-        # 9. Ensure networks exist
-        # ------------------------------------------------------------------
-        for net_name in networks:
+        if base_image.startswith(
+            (
+                "ghcr.io",
+                "mcr.",
+                "quay.",
+            )
+        ):
+            full_image = base_image
+        else:
+            full_image = (
+                f"{MIRROR_DOCKER}/{base_image}"
+            )
+
+        # ====================================================================
+        # 3. Docker client
+        # ====================================================================
+
+        try:
+
+            client = Client()()
+
+        except Exception as exc:
+
+            message = (
+                f"Failed to create Docker client: {exc}"
+            )
+
+            log.error(
+                "docker_client",
+                message,
+                progress=100,
+            )
+
+            return DBDeployResult(
+                success=False,
+                message=message,
+                container_name=container_name,
+                platform=platform,
+                error=str(exc),
+            )
+
+        # ====================================================================
+        # 4. Pull image
+        # ====================================================================
+
+        log.info(
+            "image_pull",
+            f"Pulling image '{full_image}'.",
+            progress=10,
+        )
+
+        try:
+
+            repo, separator, tag = full_image.rpartition(":")
+
+            if not separator:
+                repo = full_image
+                tag = "latest"
+
+            client.images.pull(
+                repo,
+                tag=tag,
+            )
+
+        except (
+            APIError,
+            docker.errors.DockerException,
+        ) as exc:
+
+            message = (
+                f"Failed to pull image '{full_image}': {exc}"
+            )
+
+            log.error(
+                "image_pull",
+                message,
+                progress=100,
+            )
+
+            return DBDeployResult(
+                success=False,
+                message=message,
+                container_name=container_name,
+                platform=platform,
+                error=str(exc),
+            )
+
+        log.info(
+            "image_pull",
+            f"Image '{full_image}' ready.",
+            progress=25,
+        )
+
+        # ====================================================================
+        # 5. Normalize MySQL credentials
+        # ====================================================================
+
+        if platform in (
+            "mysql",
+            "mariadb",
+        ):
+
+            cfg = dict(cfg)
+
+            if not _clean(
+                cfg.get("root_password")
+            ):
+
+                cfg["root_password"] = _clean(
+                    cfg.get("password")
+                )
+
+        # ====================================================================
+        # 6. Environment
+        # ====================================================================
+
+        try:
+
+            environment = _ENV_BUILDERS[
+                platform
+            ](cfg)
+
+        except DeploymentError as exc:
+
+            message = getattr(
+                exc,
+                "message",
+                str(exc),
+            )
+
+            log.error(
+                "validation",
+                message,
+                progress=100,
+            )
+
+            return DBDeployResult(
+                success=False,
+                message=message,
+                container_name=container_name,
+                platform=platform,
+                error=message,
+            )
+
+        # ====================================================================
+        # Extra environment
+        # ====================================================================
+
+        protected_env_keys = {
+            "MYSQL_ROOT_PASSWORD",
+            "MYSQL_PASSWORD",
+            "MYSQL_USER",
+            "MYSQL_DATABASE",
+
+            "MARIADB_ROOT_PASSWORD",
+            "MARIADB_PASSWORD",
+            "MARIADB_USER",
+            "MARIADB_DATABASE",
+
+            "POSTGRES_PASSWORD",
+            "POSTGRES_USER",
+            "POSTGRES_DB",
+
+            "MONGO_INITDB_ROOT_USERNAME",
+            "MONGO_INITDB_ROOT_PASSWORD",
+            "MONGO_INITDB_DATABASE",
+
+            "ORACLE_PASSWORD",
+            "ORACLE_PWD",
+
+            "REDIS_PASSWORD",
+
+            "MYSQL_ALLOW_EMPTY_PASSWORD",
+            "MYSQL_RANDOM_ROOT_PASSWORD",
+            "MARIADB_ALLOW_EMPTY_PASSWORD",
+        }
+
+        extra_env = cfg.get("env") or {}
+
+        if isinstance(extra_env, dict):
+
+            for key, value in extra_env.items():
+
+                key = str(key)
+
+                if key.upper() in protected_env_keys:
+                    continue
+
+                environment[key] = str(value)
+
+        # ====================================================================
+        # Final MySQL safety
+        # ====================================================================
+
+        if platform in (
+            "mysql",
+            "mariadb",
+        ):
+
+            root_password = _clean(
+                environment.get(
+                    "MYSQL_ROOT_PASSWORD"
+                )
+                or environment.get(
+                    "MARIADB_ROOT_PASSWORD"
+                )
+            )
+
+            if not root_password:
+
+                message = (
+                    "Refusing to start MySQL/MariaDB because "
+                    "root password is empty."
+                )
+
+                log.error(
+                    "validation",
+                    message,
+                    progress=100,
+                )
+
+                return DBDeployResult(
+                    success=False,
+                    message=message,
+                    container_name=container_name,
+                    platform=platform,
+                    error=message,
+                )
+
+            environment.pop(
+                "MYSQL_ALLOW_EMPTY_PASSWORD",
+                None,
+            )
+
+            environment.pop(
+                "MYSQL_RANDOM_ROOT_PASSWORD",
+                None,
+            )
+
+            environment.pop(
+                "MARIADB_ALLOW_EMPTY_PASSWORD",
+                None,
+            )
+
+        # ====================================================================
+        # Redis command
+        # ====================================================================
+
+        command = None
+
+        if platform == "redis":
+
+            redis_password = _clean(
+                cfg.get("password")
+            )
+
+            if redis_password:
+
+                command = [
+                    "redis-server",
+                    "--requirepass",
+                    redis_password,
+                ]
+
+        # ====================================================================
+        # 7. Ports
+        # ====================================================================
+
+        container_port = _DEFAULT_PORTS.get(
+            platform
+        )
+
+        publish_port = _safe_bool(
+            cfg.get("publish_port")
+        )
+
+        host_port = None
+
+        if publish_port and container_port:
+
+            host_port = (
+                cfg.get("port")
+                or container_port
+            )
+
+        exposed_ports: dict[str, dict] = {}
+
+        if container_port:
+
+            exposed_ports = {
+                f"{container_port}/tcp": {}
+            }
+
+        port_bindings: dict[str, list[dict]] = {}
+
+        if (
+            publish_port
+            and container_port
+            and host_port
+        ):
+
+            port_bindings = {
+                f"{container_port}/tcp": [
+                    {
+                        "HostPort": str(
+                            host_port
+                        )
+                    }
+                ]
+            }
+
+        # ====================================================================
+        # 8. Networks
+        # ====================================================================
+
+        networks: list[str] = []
+
+        for network in cfg.get("networks") or []:
+
+            if isinstance(network, str):
+
+                name = network
+
+            elif isinstance(network, dict):
+
+                name = network.get("name")
+
+            else:
+
+                name = ""
+
+            if name:
+
+                networks.append(
+                    str(name)
+                )
+
+        for network_name in networks:
+
             try:
-                client.networks.get(net_name)
+
+                client.networks.get(
+                    network_name
+                )
+
             except NotFound:
+
                 try:
-                    client.networks.create(net_name, driver="bridge")
-                    log.info("network_creation", f"Created network '{net_name}'.", progress=55)
-                except (APIError, docker.errors.DockerException) as exc:
-                    logger.warning("Could not create network '%s': %s", net_name, exc)
+
+                    client.networks.create(
+                        network_name,
+                        driver="bridge",
+                    )
+
+                except (
+                    APIError,
+                    docker.errors.DockerException,
+                ) as exc:
+
+                    logger.warning(
+                        "Could not create network '%s': %s",
+                        network_name,
+                        exc,
+                    )
 
         networking_config = None
+
         if networks:
-            endpoints = {n: client.api.create_endpoint_config() for n in networks}
-            networking_config = client.api.create_networking_config(endpoints)
 
-        # ------------------------------------------------------------------
-        # 10. Build host config (resource limits + binds + ports)
-        # ------------------------------------------------------------------
-        # DB containers need:
-        #   * read_only=False (they write data — this is already set below)
-        #   * init=True (PID 1 init process via tini) — MySQL/MariaDB/
-        #     PostgreSQL entrypoint scripts expect a proper init system.
-        #     Without it, MySQL 8.0.36+ fails with "Inappropriate ioctl
-        #     for device" when the entrypoint tries to check if mysqld is
-        #     running.  This is the root cause of the user's reported bug.
-        #   * /var/run/mysqld in tmpfs for MySQL/MariaDB — the official
-        #     image declares it as a VOLUME, but on some hosts the
-        #     anonymous volume isn't created in time for the entrypoint.
-        #   * /var/run/postgresql in tmpfs for PostgreSQL — same reason.
-        #   * restart_policy=unless-stopped so the DB auto-recovers after
-        #     a host reboot or crash.
-        tmpfs: dict[str, str] = {
-            "/tmp": "rw,noexec,nosuid,size=64m",
-            "/var/tmp": "rw,noexec,nosuid,size=32m",
+            endpoints = {
+                network_name:
+                    client.api.create_endpoint_config()
+                for network_name in networks
+            }
+
+            networking_config = (
+                client.api.create_networking_config(
+                    endpoints
+                )
+            )
+
+        # ====================================================================
+        # 9. Volumes
+        # ====================================================================
+
+        volume_binds: dict[str, dict] = {}
+
+        for volume in cfg.get("volumes") or []:
+
+            if not isinstance(volume, dict):
+                continue
+
+            source = (
+                volume.get("source")
+                or volume.get("name")
+            )
+
+            target = (
+                volume.get("target")
+                or volume.get("bind")
+            )
+
+            mode = volume.get(
+                "mode",
+                "rw",
+            )
+
+            if not source or not target:
+                continue
+
+            source = str(source)
+            target = str(target)
+
+            volume_binds[source] = {
+                "bind": target,
+                "mode": mode,
+            }
+
+            # Named volume
+            if not source.startswith("/"):
+
+                try:
+
+                    client.volumes.get(
+                        source
+                    )
+
+                except NotFound:
+
+                    try:
+
+                        client.volumes.create(
+                            name=source
+                        )
+
+                    except (
+                        APIError,
+                        docker.errors.DockerException,
+                    ) as exc:
+
+                        logger.warning(
+                            "Could not create volume '%s': %s",
+                            source,
+                            exc,
+                        )
+
+        # ====================================================================
+        # 10. Remove old container FIRST
+        # ====================================================================
+        # MUST happen before force_reinit volume wipe.  Yanking a volume
+        # from under a still-running container makes the container exit /
+        # become uninspectable; the monitor then races and can delete the
+        # newly-created replacement while we are still waiting for MySQL
+        # readiness ("container was removed while waiting for readiness").
+
+        log.info(
+            "container_replacement",
+            "Removing existing container if present.",
+            progress=35,
+        )
+
+        try:
+
+            old_container = client.containers.get(
+                container_name
+            )
+
+            old_container.reload()
+
+            if old_container.status == "running":
+
+                old_container.stop(
+                    timeout=10
+                )
+
+            old_container.remove(
+                force=True
+            )
+
+        except NotFound:
+            pass
+
+        except (
+            APIError,
+            docker.errors.DockerException,
+        ) as exc:
+
+            message = (
+                f"Failed to remove existing "
+                f"container: {exc}"
+            )
+
+            log.error(
+                "container_replacement",
+                message,
+                progress=100,
+            )
+
+            return DBDeployResult(
+                success=False,
+                message=message,
+                container_name=container_name,
+                platform=platform,
+                error=str(exc),
+            )
+
+        # ====================================================================
+        # 11. force_reinit (safe now that no container holds the volume)
+        # ====================================================================
+
+        if force_reinit:
+
+            for source in list(
+                volume_binds.keys()
+            ):
+
+                if source.startswith("/"):
+                    continue
+
+                try:
+
+                    volume = client.volumes.get(
+                        source
+                    )
+
+                    volume.remove(
+                        force=True
+                    )
+
+                    client.volumes.create(
+                        name=source
+                    )
+
+                    log.info(
+                        "volume_creation",
+                        f"Recreated volume '{source}'.",
+                        progress=30,
+                    )
+
+                except NotFound:
+                    pass
+
+                except (
+                    APIError,
+                    docker.errors.DockerException,
+                ) as exc:
+
+                    logger.warning(
+                        "Could not reset volume '%s': %s",
+                        source,
+                        exc,
+                    )
+
+        # ====================================================================
+        # 12. tmpfs
+        # ====================================================================
+
+        tmpfs = {
+            "/tmp": (
+                "rw,noexec,nosuid,size=64m"
+            ),
+            "/var/tmp": (
+                "rw,noexec,nosuid,size=32m"
+            ),
         }
-        if platform in ("mysql", "mariadb"):
-            tmpfs["/var/run/mysqld"] = "rw,noexec,nosuid,size=8m"
+
+        if platform in (
+            "mysql",
+            "mariadb",
+        ):
+
+            tmpfs[
+                "/var/run/mysqld"
+            ] = (
+                "rw,noexec,nosuid,size=8m"
+            )
+
         elif platform == "postgresql":
-            tmpfs["/var/run/postgresql"] = "rw,noexec,nosuid,size=8m"
 
-        hc_kwargs: dict[str, Any] = {
-            "binds":         volume_binds or None,
-            "port_bindings": port_bindings or None,
-            "read_only":     False,   # DB containers must write data
-            "tmpfs":          tmpfs,
-            "init":          True,    # tini as PID 1 — fixes MySQL ioctl bug
-            "restart_policy": {"Name": "unless-stopped"},
+            tmpfs[
+                "/var/run/postgresql"
+            ] = (
+                "rw,noexec,nosuid,size=8m"
+            )
+
+        # ====================================================================
+        # 13. Host config
+        # ====================================================================
+
+        host_config_kwargs: dict[str, Any] = {
+            "binds": volume_binds or None,
+            "port_bindings": (
+                port_bindings or None
+            ),
+            "read_only": False,
+            "tmpfs": tmpfs,
+            "init": True,
+            "restart_policy": {
+                "Name": "unless-stopped"
+            },
         }
-        # CPU limit — use nano_cpus exclusively (NOT cpu_quota+cpu_period).
-        # Setting cpu_quota without cpu_period, or both nano_cpus AND
-        # cpu_period, causes Docker HTTP 400 "Conflicting options".  See
-        # container_manager.py for the full rationale.
+
         max_cpu = cfg.get("max_cpu")
-        max_ram = cfg.get("max_ram")
+
         if max_cpu is not None:
+
             try:
-                cpu_float = float(max_cpu)
-                if cpu_float > 0:
-                    hc_kwargs["nano_cpus"] = int(cpu_float * 1_000_000_000)
-            except (TypeError, ValueError):
-                pass
-        if max_ram is not None:
-            try:
-                ram_mb = int(max_ram)
-                if ram_mb > 0:
-                    mem_bytes = ram_mb * 1024 * 1024
-                    hc_kwargs["mem_limit"] = mem_bytes
-                    hc_kwargs["memswap_limit"] = mem_bytes  # no swap
-            except (TypeError, ValueError):
+
+                cpu = float(max_cpu)
+
+                if cpu > 0:
+
+                    host_config_kwargs[
+                        "nano_cpus"
+                    ] = int(
+                        cpu * 1_000_000_000
+                    )
+
+            except (
+                TypeError,
+                ValueError,
+            ):
                 pass
 
-        # Progressive fallback chain — same design as container_manager.py.
-        # If the engine rejects one option, retry without it.  The final
-        # "bare" stage keeps only binds + ports + read_only + init so a DB
-        # deploy can NEVER be blocked by a host_config rejection.
-        #
-        # CRITICAL: ``init=True`` is NEVER stripped.  MySQL 8.0.36+ entrypoint
-        # scripts use process-management calls (pgrep/pidof) that fail with
-        # "Inappropriate ioctl for device" when the container runs without
-        # tini as PID 1.  Stripping init — even as a fallback — reintroduces
-        # the bug.  ``init=True`` is supported by every Docker engine since
-        # 18.09 (released 2018) so there is no scenario where it should be
-        # dropped.  The "bare" safety-net stage also keeps init for the
-        # same reason.
-        fallbacks = [
-            ("full config", lambda kw: kw),
-            ("without memswap_limit", lambda kw: {k: v for k, v in kw.items() if k != "memswap_limit"}),
-            ("without nano_cpus", lambda kw: {k: v for k, v in kw.items() if k != "nano_cpus"}),
-            ("without mem_limit", lambda kw: {k: v for k, v in kw.items() if k != "mem_limit"}),
-            ("without tmpfs", lambda kw: {k: v for k, v in kw.items() if k != "tmpfs"}),
-            ("without restart_policy", lambda kw: {k: v for k, v in kw.items() if k != "restart_policy"}),
-            ("bare (binds+ports+read_only+init only)", lambda kw: {
-                k: v for k, v in kw.items()
-                if k in ("binds", "port_bindings", "read_only", "init")
-            }),
+        max_ram = cfg.get("max_ram")
+
+        if max_ram is not None:
+
+            try:
+
+                ram_mb = int(max_ram)
+
+                if ram_mb > 0:
+
+                    memory = (
+                        ram_mb
+                        * 1024
+                        * 1024
+                    )
+
+                    host_config_kwargs[
+                        "mem_limit"
+                    ] = memory
+
+                    host_config_kwargs[
+                        "memswap_limit"
+                    ] = memory
+
+            except (
+                TypeError,
+                ValueError,
+            ):
+                pass
+
+        # ====================================================================
+        # Host config fallback
+        # ====================================================================
+
+        fallback_configs = [
+            host_config_kwargs,
+
+            {
+                k: v
+                for k, v in host_config_kwargs.items()
+                if k != "memswap_limit"
+            },
+
+            {
+                k: v
+                for k, v in host_config_kwargs.items()
+                if k not in {
+                    "memswap_limit",
+                    "nano_cpus",
+                }
+            },
+
+            {
+                k: v
+                for k, v in host_config_kwargs.items()
+                if k not in {
+                    "memswap_limit",
+                    "nano_cpus",
+                    "mem_limit",
+                }
+            },
+
+            {
+                k: v
+                for k, v in host_config_kwargs.items()
+                if k not in {
+                    "memswap_limit",
+                    "nano_cpus",
+                    "mem_limit",
+                    "tmpfs",
+                }
+            },
         ]
 
         host_config = None
-        last_hc_error: Exception | None = None
-        for stage_desc, mutator in fallbacks:
-            attempt_kwargs = mutator(dict(hc_kwargs))
+        last_error = None
+
+        for candidate in fallback_configs:
+
             try:
-                host_config = client.api.create_host_config(**attempt_kwargs)
-                logger.info(
-                    "DB host_config built (stage='%s') for '%s'.",
-                    stage_desc, container_name,
+
+                host_config = (
+                    client.api.create_host_config(
+                        **candidate
+                    )
                 )
+
                 break
-            except (TypeError, APIError, docker.errors.DockerException) as exc:
-                last_hc_error = exc
-                logger.warning(
-                    "create_host_config failed in stage '%s' for DB '%s': "
-                    "%s. Trying next fallback.",
-                    stage_desc, container_name, exc,
-                )
-                continue
+
+            except (
+                TypeError,
+                APIError,
+                docker.errors.DockerException,
+            ) as exc:
+
+                last_error = exc
 
         if host_config is None:
-            msg = (
-                f"Failed to build host_config for DB container "
-                f"'{container_name}' after exhausting all fallbacks. "
-                f"Last error: {last_hc_error}"
-            )
-            log.error("container_creation", msg, progress=100)
-            return DBDeployResult(
-                success=False, message=msg, container_name=container_name,
-                platform=platform, error=str(last_hc_error),
+
+            message = (
+                "Failed to build Docker host config. "
+                f"Last error: {last_error}"
             )
 
-        # ------------------------------------------------------------------
-        # 11. Create container
-        # ------------------------------------------------------------------
-        # CRITICAL — TTY allocation for MySQL 8.0.46+:
-        #
-        # MySQL 8.0.46 added a new daemon-detection check in mysqld_main()
-        # that calls ``tcgetpgrp(STDIN_FILENO)`` to determine whether the
-        # process is running in the foreground or as a background daemon.
-        # This ioctl returns ``ENOTTY`` ("Inappropriate ioctl for device")
-        # when stdin is connected to /dev/null or a pipe — which is the
-        # Docker default for containers created WITHOUT a TTY.
-        #
-        # The result: mysqld 8.0.46 starts the temporary server (process
-        # 123 in the entrypoint), begins InnoDB init, and ~2 seconds later
-        # dies with:
-        #
-        #   [ERROR] [MY-011065] Unable to determine if daemon is running:
-        #           Inappropriate ioctl for device (rc=0).
-        #   [ERROR] [MY-010946] Failed to start mysqld daemon.
-        #   [ERROR] [Entrypoint]: Unable to start server.
-        #
-        # ``init=True`` (tini as PID 1) does NOT fix this — tini handles
-        # signal forwarding and zombie reaping but does NOT allocate a
-        # pseudo-TTY. The only fix is to allocate a real PTY for the
-        # container's stdin via ``tty=True`` + ``stdin_open=True``.
-        #
-        # These two flags go in ``create_container()`` (container config),
-        # NOT in ``create_host_config()`` (host config). They are
-        # therefore NOT subject to the host_config fallback chain —
-        # they will always be applied regardless of which fallback
-        # stage succeeds.
-        #
-        # The bug is fixed upstream in MySQL 8.0.47+, but we must support
-        # 8.0.46 (the current ``mysql:8.0`` tag at the time of writing)
-        # so we always allocate a TTY for DB containers.
-        #
-        # Side effect: container stdout/stderr will contain ANSI escape
-        # codes. This is harmless — docker logs handle them fine.
-        # ------------------------------------------------------------------
-        log.info("container_creation", f"Creating container '{container_name}'.", progress=60)
+            log.error(
+                "container_creation",
+                message,
+                progress=100,
+            )
+
+            return DBDeployResult(
+                success=False,
+                message=message,
+                container_name=container_name,
+                platform=platform,
+                error=str(last_error),
+            )
+
+        # ====================================================================
+        # 14. Create container
+        # ====================================================================
+
+        log.info(
+            "container_creation",
+            f"Creating '{container_name}'.",
+            progress=60,
+        )
+
         try:
-            resp = client.api.create_container(
+
+            response = client.api.create_container(
                 name=container_name,
                 image=full_image,
                 environment=environment,
                 host_config=host_config,
                 networking_config=networking_config,
-                ports=list(exposed_ports.keys()) or None,
+                ports=(
+                    list(exposed_ports.keys())
+                    or None
+                ),
                 command=command,
-                tty=True,           # allocate PTY — fixes MySQL 8.0.46 ioctl bug
-                stdin_open=True,    # keep stdin open so the PTY isn't closed
+
+                # Keep these for compatibility with MySQL versions that
+                # exhibit daemon detection problems around stdin.
+                tty=True,
+                stdin_open=True,
+
                 labels={
-                    "managed-by":    "django-paas-deployer",
-                    "platform":      platform,
-                    "platform-type": "DB",
+                    "managed-by":
+                        "django-paas-deployer",
+                    "platform":
+                        platform,
+                    "platform-type":
+                        "DB",
                 },
             )
-            container_id = resp.get("Id") or resp.get("id")
-            # Verify Docker actually stored non-empty credential env vars.
-            try:
-                insp = client.api.inspect_container(container_id)
-                env_list = (insp.get("Config") or {}).get("Env") or []
-                env_map = {}
-                for entry in env_list:
-                    if isinstance(entry, str) and "=" in entry:
-                        k, _, v = entry.partition("=")
-                        env_map[k] = v
-                root_len = len(env_map.get("MYSQL_ROOT_PASSWORD") or env_map.get("MARIADB_ROOT_PASSWORD") or "")
-                user_len = len(env_map.get("MYSQL_PASSWORD") or env_map.get("MARIADB_PASSWORD") or "")
-                log.info(
-                    "container_creation",
-                    f"Container env credential lengths: "
-                    f"MYSQL_ROOT_PASSWORD={root_len} MYSQL_PASSWORD={user_len} "
-                    f"MYSQL_USER={bool(env_map.get('MYSQL_USER') or env_map.get('MARIADB_USER'))} "
-                    f"MYSQL_DATABASE={bool(env_map.get('MYSQL_DATABASE') or env_map.get('MARIADB_DATABASE'))}",
-                    progress=65,
-                    details={
-                        "root_pw_len": root_len,
-                        "user_pw_len": user_len,
-                        "mysql_user": env_map.get("MYSQL_USER") or env_map.get("MARIADB_USER") or "",
-                        "mysql_database": env_map.get("MYSQL_DATABASE") or env_map.get("MARIADB_DATABASE") or "",
-                    },
-                )
-                if platform in ("mysql", "mariadb") and root_len == 0:
-                    raise DeploymentError(
-                        "Docker container was created with empty MYSQL_ROOT_PASSWORD "
-                        "despite non-empty config — aborting before start.",
-                        stage="container_creation",
-                    )
-            except DeploymentError:
-                raise
-            except Exception as insp_exc:
-                logger.warning("Could not inspect container env after create: %s", insp_exc)
-        except DeploymentError as exc:
-            msg = exc.message
-            log.error(getattr(exc, "stage", "container_creation"), msg, progress=100)
-            try:
-                client.api.remove_container(container_id, force=True)
-            except Exception:
-                pass
-            return DBDeployResult(
-                success=False, message=msg, container_name=container_name,
-                platform=platform, error=msg,
-            )
-        except (APIError, docker.errors.DockerException) as exc:
-            msg = f"Failed to create DB container: {exc}"
-            log.error("container_creation", msg, progress=100, details={"image": full_image})
-            return DBDeployResult(
-                success=False, message=msg, container_name=container_name,
-                platform=platform, error=str(exc),
+
+            container_id = (
+                response.get("Id")
+                or response.get("id")
             )
 
-        # ------------------------------------------------------------------
-        # 12. Start container
-        # ------------------------------------------------------------------
-        log.info("container_startup", "Starting container.", progress=80)
-        try:
-            client.api.start(container_id)
-        except (APIError, docker.errors.DockerException) as exc:
-            msg = f"Failed to start DB container: {exc}"
-            log.error("container_startup", msg, progress=100)
-            return DBDeployResult(
-                success=False, message=msg, container_name=container_name,
-                platform=platform, error=str(exc),
+            if not container_id:
+
+                raise RuntimeError(
+                    "Docker returned no container ID."
+                )
+
+        except (
+            APIError,
+            docker.errors.DockerException,
+            RuntimeError,
+        ) as exc:
+
+            message = (
+                f"Failed to create DB container: {exc}"
             )
 
-        # ------------------------------------------------------------------
-        # 13. Wait for running state (platform-aware timeout)
-        # ------------------------------------------------------------------
-        _HEALTH_WAIT = {
-            "mysql": 30, "mariadb": 30, "postgresql": 20,
-            "mongodb": 20, "redis": 10, "oracle": 90,
-        }
-        wait_secs = _HEALTH_WAIT.get(platform, 20)
-        final_status = "unknown"
-        for _ in range(wait_secs):
-            try:
-                c = client.containers.get(container_name)
-                c.reload()
-                final_status = c.status
-                if final_status == "running":
-                    break
-                if final_status in ("exited", "dead"):
-                    break
-            except NotFound:
-                pass
-            time.sleep(1)
-
-        if final_status != "running":
-            log_tail = ""
-            exit_code = None
-            try:
-                c = client.containers.get(container_name)
-                raw = c.logs(tail=50)
-                log_tail = (
-                    raw.decode("utf-8", "replace")
-                    if isinstance(raw, bytes)
-                    else str(raw)
-                )
-                # Capture the exit code — it often tells you exactly why
-                # the DB failed (e.g. MySQL exit code 1 = generic error,
-                # 137 = OOM kill, 139 = segfault).
-                try:
-                    exit_code = c.attrs.get("State", {}).get("ExitCode")
-                except Exception:
-                    pass
-            except Exception:
-                pass
-            # Include the actual DB container logs in the user-visible
-            # message — the previous "did not reach running state" message
-            # gave the operator no clue WHY it failed.
-            #
-            # Recovery hint: if the container is exiting repeatedly with
-            # little or no error output (common when the volume has corrupt
-            # data from a previous failed init), tell the operator to use
-            # the rebuild action with force_reinit=True to wipe the volume.
-            has_volumes = bool(volume_binds)
-            recovery_hint = ""
-            if has_volumes and final_status in ("exited", "dead"):
-                recovery_hint = (
-                    "\n\n--- Recovery hint ---\n"
-                    "This DB container has a data volume and is exiting "
-                    "without reaching running state. If the container logs "
-                    "above show the entrypoint starting mysqld and then "
-                    "silently dying (no error message), the volume likely "
-                    "has corrupt data from a previous failed initialisation. "
-                    "Trigger a rebuild with force_reinit=True (or manually "
-                    "delete the volume and redeploy) to force a fresh "
-                    "initialisation."
-                )
-            msg = (
-                f"DB container did not reach running state "
-                f"(final status: '{final_status}'"
-                f"{f', exit code: {exit_code}' if exit_code is not None else ''}). "
-                f"Container logs (last 50 lines):\n{log_tail[-2000:]}"
-                f"{recovery_hint}"
-            )
             log.error(
-                "health_check",
-                msg,
+                "container_creation",
+                message,
                 progress=100,
-                details={
-                    "final_status": final_status,
-                    "exit_code": exit_code,
-                    "logs": log_tail[-2000:],
-                },
-            )
-            return DBDeployResult(
-                success=False, message=msg, container_name=container_name,
-                platform=platform, error=msg,
-                details={
-                    "final_status": final_status,
-                    "exit_code": exit_code,
-                    "logs": log_tail[-2000:],
-                },
             )
 
-        # ------------------------------------------------------------------
-        # 14. MySQL/MariaDB: wait for init, force-apply credentials, verify
-        # ------------------------------------------------------------------
-        # The official entrypoint ALWAYS runs --initialize-insecure first
-        # (hence the "empty password" warning).  It then sets the password
-        # via a shell heredoc SQL.  Special characters in the password can
-        # break that path, leaving root empty while MYSQL_USER is still
-        # created.  We wait for the server, then force-set credentials via
-        # exec SQL and verify that the password is required.
-        if platform in ("mysql", "mariadb"):
-            root_pw = str(
-                environment.get("MYSQL_ROOT_PASSWORD")
-                or environment.get("MARIADB_ROOT_PASSWORD")
-                or ""
-            ).strip()
-            app_user = str(
-                environment.get("MYSQL_USER")
-                or environment.get("MARIADB_USER")
-                or ""
-            ).strip()
-            app_pw = str(
-                environment.get("MYSQL_PASSWORD")
-                or environment.get("MARIADB_PASSWORD")
-                or root_pw
-            ).strip()
-            app_db = str(
-                environment.get("MYSQL_DATABASE")
+            return DBDeployResult(
+                success=False,
+                message=message,
+                container_name=container_name,
+                platform=platform,
+                error=str(exc),
+            )
+
+        # ====================================================================
+        # 15. Start
+        # ====================================================================
+
+        log.info(
+            "container_startup",
+            "Starting database container.",
+            progress=75,
+        )
+
+        try:
+
+            client.api.start(
+                container_id
+            )
+
+        except (
+            APIError,
+            docker.errors.DockerException,
+        ) as exc:
+
+            message = (
+                f"Failed to start DB container: {exc}"
+            )
+
+            log.error(
+                "container_startup",
+                message,
+                progress=100,
+            )
+
+            return DBDeployResult(
+                success=False,
+                message=message,
+                container_name=container_name,
+                platform=platform,
+                error=str(exc),
+            )
+
+        # ====================================================================
+        # 16. MySQL special handling
+        # ====================================================================
+
+        if platform in (
+            "mysql",
+            "mariadb",
+        ):
+
+            # Root password always comes from the env we built (canonical).
+            root_password = _clean(
+                environment.get(
+                    "MYSQL_ROOT_PASSWORD"
+                )
+                or environment.get(
+                    "MARIADB_ROOT_PASSWORD"
+                )
+            )
+
+            # Application credentials MUST come from the original cfg,
+            # never from environment — we deliberately never put
+            # MYSQL_USER / MYSQL_PASSWORD into the container env so that
+            # the official entrypoint cannot create a half-configured
+            # user.  All app-user / DB work is done exclusively by
+            # _reconcile_mysql_credentials after the server is ready.
+            username = _clean(cfg.get("username"))
+            user_password = (
+                _clean(cfg.get("password"))
+                or root_password
+            )
+            database = _clean(
+                cfg.get("database")
+                or environment.get("MYSQL_DATABASE")
                 or environment.get("MARIADB_DATABASE")
-                or ""
-            ).strip()
+            )
+
+            # ----------------------------------------------------------------
+            # Wait for real MySQL readiness
+            # ----------------------------------------------------------------
 
             log.info(
                 "health_check",
-                "Waiting for MySQL entrypoint to finish init "
-                "(must not touch credentials until then)...",
-                progress=90,
-                details={
-                    "root_pw_len": len(root_pw),
-                    "has_app_user": bool(app_user),
-                    "has_app_db": bool(app_db),
-                },
+                "Waiting for MySQL server to become ready.",
+                progress=85,
             )
-            ready = _wait_mysql_ready(client, container_name, timeout=120)
+
+            ready, ready_details = (
+                _mysql_wait_until_ready(
+                    client,
+                    container_name,
+                    timeout=180,
+                )
+            )
+
             if not ready:
-                # Pull tail logs for diagnosis
+
                 log_tail = ""
+
                 try:
-                    raw = client.containers.get(container_name).logs(tail=40)
+
+                    container = client.containers.get(
+                        container_name
+                    )
+
+                    raw = container.logs(
+                        tail=100
+                    )
+
                     log_tail = (
-                        raw.decode("utf-8", "replace")
-                        if isinstance(raw, (bytes, bytearray))
+                        raw.decode(
+                            "utf-8",
+                            "replace",
+                        )
+                        if isinstance(raw, bytes)
                         else str(raw or "")
                     )
+
                 except Exception:
                     pass
-                msg = (
-                    "MySQL did not finish init within 120s. "
-                    "If logs show 'Access denied ... (using password: NO)', "
-                    "a previous force-apply raced the entrypoint — rebuild "
-                    "with force_reinit=true. "
-                    f"Logs:\n{log_tail[-1500:]}"
-                )
-                log.error("health_check", msg, progress=100)
-                return DBDeployResult(
-                    success=False, message=msg, container_name=container_name,
-                    platform=platform, error=msg,
+
+                message = (
+                    "MySQL did not become ready within 180 seconds.\n\n"
+                    f"Readiness details:\n{ready_details[-1500:]}\n\n"
+                    f"Container logs:\n{log_tail[-3000:]}"
                 )
 
-            # Only force-apply AFTER entrypoint is done. First check whether
-            # the entrypoint already set the password correctly.
-            ok, detail = _force_apply_mysql_credentials(
-                client,
-                container_name,
-                root_password=root_pw,
-                username=app_user,
-                user_password=app_pw,
-                database=app_db,
-            )
-            if not ok:
-                msg = (
-                    "Failed to verify/apply MySQL credentials from deploy.config. "
-                    f"Detail: {detail}"
+                log.error(
+                    "health_check",
+                    message,
+                    progress=100,
                 )
-                log.error("health_check", msg, progress=100, details={"detail": detail})
+
                 return DBDeployResult(
-                    success=False, message=msg, container_name=container_name,
-                    platform=platform, error=msg, details={"detail": detail},
+                    success=False,
+                    message=message,
+                    container_name=container_name,
+                    platform=platform,
+                    error=message,
+                    details={
+                        "logs": log_tail[-3000:],
+                    },
                 )
+
+            # ----------------------------------------------------------------
+            # THIS IS THE IMPORTANT PART
+            #
+            # We now reconcile credentials against the existing database.
+            #
+            # This works even if the volume already existed before this
+            # deployment.
+            # ----------------------------------------------------------------
+
             log.info(
-                "health_check",
-                f"MySQL credentials verified. ({detail})",
+                "credentials",
+                "Reconciling MySQL credentials "
+                "against existing database state.",
+                progress=90,
+            )
+
+            ok, credential_message = (
+                _reconcile_mysql_credentials(
+                    client,
+                    container_name,
+                    root_password=root_password,
+                    username=username,
+                    user_password=user_password,
+                    database=database,
+                )
+            )
+
+            if not ok:
+
+                message = (
+                    "MySQL credential reconciliation failed: "
+                    f"{credential_message}"
+                )
+
+                log.error(
+                    "credentials",
+                    message,
+                    progress=100,
+                )
+
+                return DBDeployResult(
+                    success=False,
+                    message=message,
+                    container_name=container_name,
+                    platform=platform,
+                    error=message,
+                    details={
+                        "credential_error":
+                            credential_message,
+                    },
+                )
+
+            log.info(
+                "credentials",
+                "MySQL credentials verified and synchronized.",
                 progress=95,
             )
 
-        listen_port = int(host_port) if host_port else (int(container_port) if container_port else None)
-        port_note = (
-            f"published on host port {host_port}"
+        # ====================================================================
+        # 17. Other DB readiness
+        # ====================================================================
+
+        else:
+
+            health_timeout = {
+                "postgresql": 60,
+                "mongodb": 60,
+                "redis": 30,
+                "oracle": 120,
+            }.get(
+                platform,
+                60,
+            )
+
+            deadline = (
+                time.monotonic()
+                + health_timeout
+            )
+
+            running = False
+
+            while time.monotonic() < deadline:
+
+                try:
+
+                    container = client.containers.get(
+                        container_name
+                    )
+
+                    container.reload()
+
+                    if container.status == "running":
+
+                        running = True
+                        break
+
+                    if container.status in {
+                        "dead",
+                        "exited",
+                    }:
+
+                        break
+
+                except Exception:
+                    pass
+
+                time.sleep(1)
+
+            if not running:
+
+                log_tail = ""
+
+                try:
+
+                    container = client.containers.get(
+                        container_name
+                    )
+
+                    raw = container.logs(
+                        tail=80
+                    )
+
+                    log_tail = (
+                        raw.decode(
+                            "utf-8",
+                            "replace",
+                        )
+                        if isinstance(raw, bytes)
+                        else str(raw or "")
+                    )
+
+                except Exception:
+                    pass
+
+                message = (
+                    f"{platform} container did not become running.\n"
+                    f"Logs:\n{log_tail[-3000:]}"
+                )
+
+                log.error(
+                    "health_check",
+                    message,
+                    progress=100,
+                )
+
+                return DBDeployResult(
+                    success=False,
+                    message=message,
+                    container_name=container_name,
+                    platform=platform,
+                    error=message,
+                    details={
+                        "logs": log_tail[-3000:],
+                    },
+                )
+
+        # ====================================================================
+        # 18. Final status
+        # ====================================================================
+
+        host_port_result = (
+            int(host_port)
             if host_port
-            else f"internal port {container_port} (Docker networks only)"
+            else None
         )
+
         log.info(
             "deployment_completed",
-            f"Database '{platform}' is running ({port_note}).",
+            f"Database '{platform}' deployed successfully.",
             progress=100,
             details={
                 "platform": platform,
                 "image": full_image,
                 "container_port": container_port,
-                "host_port": host_port,
-                "publish_port": bool(host_port),
+                "host_port": host_port_result,
+                "publish_port":
+                    bool(host_port_result),
             },
         )
+
         return DBDeployResult(
             success=True,
-            message=f"Database '{platform}' deployed successfully.",
+            message=(
+                f"Database '{platform}' deployed successfully."
+            ),
             container_name=container_name,
             platform=platform,
-            port=listen_port,
+            port=(
+                host_port_result
+                or container_port
+            ),
             details={
                 "image": full_image,
                 "container_port": container_port,
-                "host_port": host_port,
-                "publish_port": bool(host_port),
+                "host_port": host_port_result,
+                "publish_port":
+                    bool(host_port_result),
             },
         )
 
-    # ------------------------------------------------------------------
-    # Utility: remove a DB container (used by rebuild / teardown)
-    # ------------------------------------------------------------------
+    # =========================================================================
+    # Remove
+    # =========================================================================
 
-    def remove(self, container_name: str) -> bool:
-        """
-        Stop and remove a DB container.
+    def remove(
+        self,
+        container_name: str,
+    ) -> bool:
 
-        Returns True if the container was found and removed, False if it
-        was already gone (idempotent).  Raises DeploymentError on unexpected
-        Docker API failures.
-        """
         try:
+
             client = Client()()
-            c = client.containers.get(container_name)
-            c.reload()
-            if c.status == "running":
-                c.stop(timeout=5)
-            c.remove(force=True)
-            logger.info("DB container '%s' removed.", container_name)
+
+            container = client.containers.get(
+                container_name
+            )
+
+            container.reload()
+
+            if container.status == "running":
+
+                container.stop(
+                    timeout=10
+                )
+
+            container.remove(
+                force=True
+            )
+
+            logger.info(
+                "DB container '%s' removed.",
+                container_name,
+            )
+
             return True
+
         except NotFound:
+
             return False
-        except (APIError, docker.errors.DockerException) as exc:
+
+        except (
+            APIError,
+            docker.errors.DockerException,
+        ) as exc:
+
             raise DeploymentError(
-                f"Failed to remove DB container '{container_name}'.",
+                f"Failed to remove DB container "
+                f"'{container_name}'.",
                 stage="container_removal",
-                details={"error": str(exc)},
+                details={
+                    "error": str(exc)
+                },
             ) from exc
