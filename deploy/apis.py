@@ -321,6 +321,15 @@ class DeployViewSet(ModelViewSet):
 
         DB platforms: remove container only (volumes preserved), then run_db_deploy.
         App platforms: remove container + image, then full rebuild from zip.
+
+        Query params (DB platforms only):
+          ?force_reinit=true  wipe the data volume(s) so the database
+                              reinitialises from scratch.  Use this when
+                              a previous deploy failed mid-init and left
+                              corrupt data — symptoms include mysqld
+                              crashing silently within seconds of startup,
+                              or repeated container restarts with no
+                              clear error message.
         """
         deploy = get_object_or_404(
             self.get_queryset().select_related("service", "service__plan"),
@@ -336,6 +345,28 @@ class DeployViewSet(ModelViewSet):
         platform = _resolve_platform(deploy)
         is_db = platform in DB_PLATFORMS
         _ensure_config_platform(deploy, platform)
+
+        # force_reinit is only meaningful for DB platforms.  Parse it
+        # leniently so callers can pass true/1/yes.
+        force_reinit_raw = (
+            request.query_params.get("force_reinit")
+            if hasattr(request, "query_params")
+            else None
+        )
+        force_reinit = is_db and str(force_reinit_raw or "").strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+        if force_reinit_raw and not is_db:
+            return Response(
+                {
+                    "result": "error",
+                    "detail": _(
+                        "force_reinit is only supported for database-platform "
+                        "deploys."
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         with transaction.atomic():
             service = Service.objects.select_for_update().get(pk=deploy.service_id)
@@ -370,7 +401,11 @@ class DeployViewSet(ModelViewSet):
                 status="pending",
                 stage="queued",
                 progress=0,
-                status_message="Rebuild queued.",
+                status_message=(
+                    "Rebuild queued (force_reinit=true — volumes will be wiped)."
+                    if force_reinit
+                    else "Rebuild queued."
+                ),
                 error_message="",
                 cancel_requested=False,
             )
@@ -378,7 +413,11 @@ class DeployViewSet(ModelViewSet):
             deploy_pk = str(deploy.pk)
             if is_db:
                 transaction.on_commit(
-                    lambda: run_db_deploy.apply_async(args=[deploy_pk], task_id=task_id)
+                    lambda: run_db_deploy.apply_async(
+                        args=[deploy_pk],
+                        kwargs={"force_reinit": force_reinit},
+                        task_id=task_id,
+                    )
                 )
             else:
                 transaction.on_commit(
@@ -386,7 +425,16 @@ class DeployViewSet(ModelViewSet):
                 )
 
         return Response(
-            {"result": "success", "task_id": task_id, "detail": _("Rebuild queued.")},
+            {
+                "result": "success",
+                "task_id": task_id,
+                "force_reinit": force_reinit,
+                "detail": _(
+                    "Rebuild queued (force_reinit=true — volumes will be wiped)."
+                    if force_reinit
+                    else "Rebuild queued."
+                ),
+            },
             status=status.HTTP_202_ACCEPTED,
         )
 
