@@ -606,6 +606,42 @@ class DBDeployer:
         # ------------------------------------------------------------------
         # 11. Create container
         # ------------------------------------------------------------------
+        # CRITICAL — TTY allocation for MySQL 8.0.46+:
+        #
+        # MySQL 8.0.46 added a new daemon-detection check in mysqld_main()
+        # that calls ``tcgetpgrp(STDIN_FILENO)`` to determine whether the
+        # process is running in the foreground or as a background daemon.
+        # This ioctl returns ``ENOTTY`` ("Inappropriate ioctl for device")
+        # when stdin is connected to /dev/null or a pipe — which is the
+        # Docker default for containers created WITHOUT a TTY.
+        #
+        # The result: mysqld 8.0.46 starts the temporary server (process
+        # 123 in the entrypoint), begins InnoDB init, and ~2 seconds later
+        # dies with:
+        #
+        #   [ERROR] [MY-011065] Unable to determine if daemon is running:
+        #           Inappropriate ioctl for device (rc=0).
+        #   [ERROR] [MY-010946] Failed to start mysqld daemon.
+        #   [ERROR] [Entrypoint]: Unable to start server.
+        #
+        # ``init=True`` (tini as PID 1) does NOT fix this — tini handles
+        # signal forwarding and zombie reaping but does NOT allocate a
+        # pseudo-TTY. The only fix is to allocate a real PTY for the
+        # container's stdin via ``tty=True`` + ``stdin_open=True``.
+        #
+        # These two flags go in ``create_container()`` (container config),
+        # NOT in ``create_host_config()`` (host config). They are
+        # therefore NOT subject to the host_config fallback chain —
+        # they will always be applied regardless of which fallback
+        # stage succeeds.
+        #
+        # The bug is fixed upstream in MySQL 8.0.47+, but we must support
+        # 8.0.46 (the current ``mysql:8.0`` tag at the time of writing)
+        # so we always allocate a TTY for DB containers.
+        #
+        # Side effect: container stdout/stderr will contain ANSI escape
+        # codes. This is harmless — docker logs handle them fine.
+        # ------------------------------------------------------------------
         log.info("container_creation", f"Creating container '{container_name}'.", progress=60)
         try:
             resp = client.api.create_container(
@@ -616,6 +652,8 @@ class DBDeployer:
                 networking_config=networking_config,
                 ports=list(exposed_ports.keys()) or None,
                 command=command,
+                tty=True,           # allocate PTY — fixes MySQL 8.0.46 ioctl bug
+                stdin_open=True,    # keep stdin open so the PTY isn't closed
                 labels={
                     "managed-by":    "django-paas-deployer",
                     "platform":      platform,
