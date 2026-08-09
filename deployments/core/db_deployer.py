@@ -189,6 +189,137 @@ def _oracle_env(cfg: dict) -> dict[str, str]:
     return {"ORACLE_PASSWORD": pw, "ORACLE_PWD": pw}
 
 
+
+def _sql_quote(value: str) -> str:
+    """Escape a string for use inside a single-quoted MySQL string literal."""
+    return str(value).replace("\\", "\\\\").replace("'", "''")
+
+
+def _wait_mysql_ready(client, container_name: str, timeout: int = 90) -> bool:
+    """
+    Wait until mysqld accepts queries on the unix socket.
+
+    Tries both passwordless (during early init) and any ping.  Returns True
+    once the server answers, False on timeout.
+    """
+    import time as _time
+    for _ in range(timeout):
+        try:
+            c = client.containers.get(container_name)
+            c.reload()
+            if c.status not in ("running",):
+                if c.status in ("exited", "dead"):
+                    return False
+                _time.sleep(1)
+                continue
+            # Prefer mysqladmin ping without password — works during init and
+            # also if root is still empty.  We only need "server is up".
+            exit_code, _out = c.exec_run(
+                ["mysqladmin", "ping", "-uroot", "--protocol=socket", "--silent"],
+            )
+            if exit_code == 0:
+                return True
+            # Also try with empty password flag variants
+            exit_code, _out = c.exec_run(
+                ["mysqladmin", "ping", "-uroot", "--protocol=socket"],
+            )
+            if exit_code == 0:
+                return True
+        except Exception:
+            pass
+        _time.sleep(1)
+    return False
+
+
+def _force_apply_mysql_credentials(
+    client,
+    container_name: str,
+    *,
+    root_password: str,
+    username: str = "",
+    user_password: str = "",
+    database: str = "",
+) -> tuple[bool, str]:
+    """
+    After the official entrypoint finishes init, force-set root + app-user
+    passwords via SQL so special characters cannot break the entrypoint's
+    shell-heredoc path.
+
+    Returns (ok, message).
+    """
+    root_password = str(root_password or "").strip()
+    if not root_password:
+        return False, "root_password is empty — cannot force-apply"
+
+    root_q = _sql_quote(root_password)
+    statements = [
+        f"ALTER USER 'root'@'localhost' IDENTIFIED BY '{root_q}';",
+        f"ALTER USER 'root'@'%' IDENTIFIED BY '{root_q}';",
+        "CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '{0}';".format(root_q),
+        f"GRANT ALL ON *.* TO 'root'@'%' WITH GRANT OPTION;",
+    ]
+
+    username = str(username or "").strip()
+    user_password = str(user_password or "").strip() or root_password
+    database = str(database or "").strip()
+    if username:
+        uq = _sql_quote(username)
+        pq = _sql_quote(user_password)
+        statements.append(
+            f"CREATE USER IF NOT EXISTS '{uq}'@'%' IDENTIFIED BY '{pq}';"
+        )
+        statements.append(
+            f"ALTER USER '{uq}'@'%' IDENTIFIED BY '{pq}';"
+        )
+        if database:
+            dq = database.replace("`", "``")
+            statements.append(f"CREATE DATABASE IF NOT EXISTS `{dq}`;")
+            statements.append(
+                f"GRANT ALL ON `{dq}`.* TO '{uq}'@'%';"
+            )
+    statements.append("FLUSH PRIVILEGES;")
+    sql = " ".join(statements)
+
+    try:
+        c = client.containers.get(container_name)
+    except Exception as exc:
+        return False, f"container not found for credential apply: {exc}"
+
+    # Try as root with password first; fall back to passwordless (init-insecure).
+    attempts = [
+        ["mysql", "-uroot", f"-p{root_password}", "--protocol=socket", "-e", sql],
+        ["mysql", "-uroot", "--protocol=socket", "-e", sql],
+    ]
+    last_err = ""
+    for cmd in attempts:
+        try:
+            exit_code, output = c.exec_run(cmd)
+            out = (
+                output.decode("utf-8", "replace")
+                if isinstance(output, (bytes, bytearray))
+                else str(output or "")
+            )
+            if exit_code == 0:
+                # Verify password works and empty does not
+                ok_code, _ = c.exec_run(
+                    ["mysqladmin", "ping", "-uroot", f"-p{root_password}",
+                     "--protocol=socket", "--silent"]
+                )
+                empty_code, _ = c.exec_run(
+                    ["mysqladmin", "ping", "-uroot", "--protocol=socket", "--silent"]
+                )
+                if ok_code == 0 and empty_code != 0:
+                    return True, "credentials applied and verified (password required)"
+                if ok_code == 0:
+                    return True, "credentials applied (password works; empty may still work on socket)"
+                last_err = f"applied but verify failed: ok={ok_code} empty={empty_code} out={out[-500:]}"
+            else:
+                last_err = f"exit={exit_code} out={out[-500:]}"
+        except Exception as exc:
+            last_err = str(exc)
+    return False, last_err
+
+
 _ENV_BUILDERS: dict[str, Any] = {
     "mysql":      _mysql_env,
     "mariadb":    _mysql_env,   # same convention as MySQL
@@ -798,6 +929,52 @@ class DBDeployer:
                 },
             )
             container_id = resp.get("Id") or resp.get("id")
+            # Verify Docker actually stored non-empty credential env vars.
+            try:
+                insp = client.api.inspect_container(container_id)
+                env_list = (insp.get("Config") or {}).get("Env") or []
+                env_map = {}
+                for entry in env_list:
+                    if isinstance(entry, str) and "=" in entry:
+                        k, _, v = entry.partition("=")
+                        env_map[k] = v
+                root_len = len(env_map.get("MYSQL_ROOT_PASSWORD") or env_map.get("MARIADB_ROOT_PASSWORD") or "")
+                user_len = len(env_map.get("MYSQL_PASSWORD") or env_map.get("MARIADB_PASSWORD") or "")
+                log.info(
+                    "container_creation",
+                    f"Container env credential lengths: "
+                    f"MYSQL_ROOT_PASSWORD={root_len} MYSQL_PASSWORD={user_len} "
+                    f"MYSQL_USER={bool(env_map.get('MYSQL_USER') or env_map.get('MARIADB_USER'))} "
+                    f"MYSQL_DATABASE={bool(env_map.get('MYSQL_DATABASE') or env_map.get('MARIADB_DATABASE'))}",
+                    progress=65,
+                    details={
+                        "root_pw_len": root_len,
+                        "user_pw_len": user_len,
+                        "mysql_user": env_map.get("MYSQL_USER") or env_map.get("MARIADB_USER") or "",
+                        "mysql_database": env_map.get("MYSQL_DATABASE") or env_map.get("MARIADB_DATABASE") or "",
+                    },
+                )
+                if platform in ("mysql", "mariadb") and root_len == 0:
+                    raise DeploymentError(
+                        "Docker container was created with empty MYSQL_ROOT_PASSWORD "
+                        "despite non-empty config — aborting before start.",
+                        stage="container_creation",
+                    )
+            except DeploymentError:
+                raise
+            except Exception as insp_exc:
+                logger.warning("Could not inspect container env after create: %s", insp_exc)
+        except DeploymentError as exc:
+            msg = exc.message
+            log.error(getattr(exc, "stage", "container_creation"), msg, progress=100)
+            try:
+                client.api.remove_container(container_id, force=True)
+            except Exception:
+                pass
+            return DBDeployResult(
+                success=False, message=msg, container_name=container_name,
+                platform=platform, error=msg,
+            )
         except (APIError, docker.errors.DockerException) as exc:
             msg = f"Failed to create DB container: {exc}"
             log.error("container_creation", msg, progress=100, details={"image": full_image})
@@ -909,6 +1086,83 @@ class DBDeployer:
                     "exit_code": exit_code,
                     "logs": log_tail[-2000:],
                 },
+            )
+
+        # ------------------------------------------------------------------
+        # 14. MySQL/MariaDB: wait for init, force-apply credentials, verify
+        # ------------------------------------------------------------------
+        # The official entrypoint ALWAYS runs --initialize-insecure first
+        # (hence the "empty password" warning).  It then sets the password
+        # via a shell heredoc SQL.  Special characters in the password can
+        # break that path, leaving root empty while MYSQL_USER is still
+        # created.  We wait for the server, then force-set credentials via
+        # exec SQL and verify that the password is required.
+        if platform in ("mysql", "mariadb"):
+            root_pw = str(
+                environment.get("MYSQL_ROOT_PASSWORD")
+                or environment.get("MARIADB_ROOT_PASSWORD")
+                or ""
+            ).strip()
+            app_user = str(
+                environment.get("MYSQL_USER")
+                or environment.get("MARIADB_USER")
+                or ""
+            ).strip()
+            app_pw = str(
+                environment.get("MYSQL_PASSWORD")
+                or environment.get("MARIADB_PASSWORD")
+                or root_pw
+            ).strip()
+            app_db = str(
+                environment.get("MYSQL_DATABASE")
+                or environment.get("MARIADB_DATABASE")
+                or ""
+            ).strip()
+
+            log.info(
+                "health_check",
+                "Waiting for MySQL to finish init and accept connections...",
+                progress=90,
+                details={
+                    "root_pw_len": len(root_pw),
+                    "has_app_user": bool(app_user),
+                    "has_app_db": bool(app_db),
+                },
+            )
+            ready = _wait_mysql_ready(client, container_name, timeout=90)
+            if not ready:
+                msg = (
+                    "MySQL did not become ready within 90s after container start. "
+                    "Check container logs for init errors."
+                )
+                log.error("health_check", msg, progress=100)
+                return DBDeployResult(
+                    success=False, message=msg, container_name=container_name,
+                    platform=platform, error=msg,
+                )
+
+            ok, detail = _force_apply_mysql_credentials(
+                client,
+                container_name,
+                root_password=root_pw,
+                username=app_user,
+                user_password=app_pw,
+                database=app_db,
+            )
+            if not ok:
+                msg = (
+                    "Failed to apply/verify MySQL credentials from deploy.config. "
+                    f"Detail: {detail}"
+                )
+                log.error("health_check", msg, progress=100, details={"detail": detail})
+                return DBDeployResult(
+                    success=False, message=msg, container_name=container_name,
+                    platform=platform, error=msg, details={"detail": detail},
+                )
+            log.info(
+                "health_check",
+                f"MySQL credentials from deploy.config applied and verified. ({detail})",
+                progress=95,
             )
 
         log.info(
