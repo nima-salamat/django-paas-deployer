@@ -429,7 +429,26 @@ def _build_db_cfg(deploy: Deploy, service: Service) -> dict[str, Any]:
 
     if platform in ("mysql", "mariadb"):
         if not str(cfg.get("root_password") or "").strip() and str(cfg.get("password") or "").strip():
-            cfg["root_password"] = str(cfg["password"])
+            cfg["root_password"] = str(cfg["password"]).strip()
+        # If username is set but app password empty, reuse root so MYSQL_PASSWORD
+        # is never blank when MYSQL_USER is present.
+        if (
+            str(cfg.get("username") or "").strip()
+            and not str(cfg.get("password") or "").strip()
+            and str(cfg.get("root_password") or "").strip()
+        ):
+            cfg["password"] = str(cfg["root_password"]).strip()
+        logger.info(
+            "DB cfg built for deploy=%s platform=%s keys=%s "
+            "has_root=%s has_password=%s has_user=%s has_db=%s",
+            getattr(deploy, "pk", None),
+            platform,
+            sorted(cfg.keys()),
+            bool(str(cfg.get("root_password") or "").strip()),
+            bool(str(cfg.get("password") or "").strip()),
+            bool(str(cfg.get("username") or "").strip()),
+            bool(str(cfg.get("database") or "").strip()),
+        )
 
     plan = getattr(service, "plan", None)
     if plan is not None:

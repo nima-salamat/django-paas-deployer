@@ -69,6 +69,42 @@ def _parse_deploy_config(raw) -> dict:
     return {}
 
 
+
+def _normalize_db_credentials(cfg: dict, platform: str) -> dict:
+    """
+    Ensure MySQL/MariaDB always have a non-empty root_password when possible,
+    and surface a clear error shape for missing secrets.
+
+    Returns a shallow-copied cfg.  Does NOT invent passwords — only aliases
+    password → root_password when root_password is blank.
+    """
+    out = dict(cfg or {})
+    p = str(platform or out.get("platform") or "").strip().lower()
+    if p in ("mysql", "mariadb"):
+        root = str(out.get("root_password") or "").strip()
+        pw = str(out.get("password") or "").strip()
+        if not root and pw:
+            out["root_password"] = pw
+        # Keep password for MYSQL_PASSWORD (app user) if username is set
+        if not pw and root and str(out.get("username") or "").strip():
+            out["password"] = root
+    return out
+
+
+def _db_credential_audit(cfg: dict) -> dict:
+    """Non-secret audit of which credential keys are present (for logs)."""
+    keys = ("root_password", "password", "username", "database", "port")
+    present = {}
+    for k in keys:
+        v = cfg.get(k)
+        if v is None:
+            present[k] = False
+        elif isinstance(v, str):
+            present[k] = bool(v.strip())
+        else:
+            present[k] = bool(v)
+    return present
+
 def _resolve_platform(deploy) -> str:
     """
     Resolve platform for routing DB vs app deploy tasks.
@@ -161,10 +197,21 @@ class DeployViewSet(ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        data = dict(request.data.items())
-        
-        service_id = data.get("service")
-        raw_config = data.get("config")
+        # Prefer the raw request payload for nested config.  Using
+        # dict(request.data.items()) is fine for flat form fields but can
+        # surprise callers when config arrives as a nested JSON object.
+        data = {}
+        try:
+            for k, v in request.data.items():
+                data[str(k)] = v
+        except Exception:
+            data = dict(request.data) if isinstance(request.data, dict) else {}
+
+        service_id = data.get("service") or request.data.get("service")
+        # Read config from the original request first (preserves nested dicts).
+        raw_config = request.data.get("config")
+        if raw_config is None:
+            raw_config = data.get("config")
         cfg = {}
 
         if isinstance(raw_config, dict):
@@ -176,9 +223,8 @@ class DeployViewSet(ModelViewSet):
                 if isinstance(parsed, dict):
                     cfg = parsed
             except Exception:
-                pass
-                
-      
+                logger.warning("Deploy create: config JSON parse failed")
+
         if not cfg:
             for key, value in request.data.items():
                 key_str = str(key)
@@ -194,11 +240,67 @@ class DeployViewSet(ModelViewSet):
             except Service.DoesNotExist:
                 pass
 
+        platform = str(cfg.get("platform") or "").strip().lower()
+        if platform in DB_PLATFORMS:
+            cfg = _normalize_db_credentials(cfg, platform)
+            errors = validate_db_config(platform, cfg)
+            if errors:
+                logger.warning(
+                    "DB deploy create rejected: platform=%s audit=%s errors=%s",
+                    platform, _db_credential_audit(cfg), errors,
+                )
+                return Response(
+                    {
+                        "error": _("DB config validation failed."),
+                        "errors": errors,
+                        "credential_audit": _db_credential_audit(cfg),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            # Hard assert: MySQL must never be saved without a root secret.
+            if platform in ("mysql", "mariadb"):
+                if not str(cfg.get("root_password") or cfg.get("password") or "").strip():
+                    return Response(
+                        {
+                            "error": _(
+                                "MySQL/MariaDB requires root_password or password. "
+                                "Without it the container starts with an empty root "
+                                "password and ignores your credentials."
+                            ),
+                            "credential_audit": _db_credential_audit(cfg),
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
         data["config"] = cfg
+        logger.info(
+            "Deploy create config ready platform=%s audit=%s keys=%s",
+            platform or "?",
+            _db_credential_audit(cfg) if platform in DB_PLATFORMS else {},
+            sorted(cfg.keys()),
+        )
 
         serializer = self.get_serializer(data=data)
         if serializer.is_valid():
             deploy = serializer.save()
+            # Verify secrets actually persisted (catch serializer/field bugs).
+            if platform in ("mysql", "mariadb"):
+                saved = _parse_deploy_config(getattr(deploy, "config", None))
+                if not str(saved.get("root_password") or saved.get("password") or "").strip():
+                    logger.error(
+                        "Deploy %s saved WITHOUT passwords after create! audit=%s",
+                        deploy.pk, _db_credential_audit(saved),
+                    )
+                    deploy.delete()
+                    return Response(
+                        {
+                            "error": _(
+                                "Internal error: passwords were not persisted to "
+                                "deploy.config. Deploy was not created."
+                            ),
+                        },
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
             return Response(
                 {"success": _("Deploy created."), "deploy": self.get_serializer(deploy).data},
                 status=status.HTTP_201_CREATED,
@@ -225,6 +327,53 @@ class DeployViewSet(ModelViewSet):
         platform = _resolve_platform(deploy)
         is_db = platform in DB_PLATFORMS
         _ensure_config_platform(deploy, platform)
+
+        # Fail fast if DB credentials are missing from the stored config.
+        # This is the most common cause of MySQL starting with an empty root
+        # password (--initialize-insecure) and ignoring the user's secrets.
+        if is_db:
+            cfg = _normalize_db_credentials(
+                _parse_deploy_config(getattr(deploy, "config", None)),
+                platform,
+            )
+            # Persist alias normalisation (password → root_password) so the
+            # worker sees the same shape.
+            if cfg != _parse_deploy_config(getattr(deploy, "config", None)):
+                Deploy.objects.filter(pk=deploy.pk).update(config=cfg)
+                deploy.config = cfg
+            errors = validate_db_config(platform, cfg)
+            audit = _db_credential_audit(cfg)
+            logger.info(
+                "DB deploy start precheck deploy=%s platform=%s audit=%s errors=%s",
+                deploy.pk, platform, audit, errors,
+            )
+            if errors:
+                return Response(
+                    {
+                        "result": "error",
+                        "detail": _("DB config validation failed: ") + "; ".join(errors),
+                        "errors": errors,
+                        "credential_audit": audit,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if platform in ("mysql", "mariadb") and not (
+                str(cfg.get("root_password") or "").strip()
+                or str(cfg.get("password") or "").strip()
+            ):
+                return Response(
+                    {
+                        "result": "error",
+                        "detail": _(
+                            "MySQL/MariaDB deploy.config has no root_password/password. "
+                            "Update credentials (update_db_config) before starting. "
+                            "If the volume was already initialised with an empty root "
+                            "password, rebuild with force_reinit=true."
+                        ),
+                        "credential_audit": audit,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         with transaction.atomic():
             service = Service.objects.select_for_update().get(pk=deploy.service_id)
