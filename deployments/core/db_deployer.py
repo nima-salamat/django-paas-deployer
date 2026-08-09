@@ -630,14 +630,43 @@ class DBDeployer:
         # ------------------------------------------------------------------
         # 5. Port bindings
         # ------------------------------------------------------------------
+        # Container-internal port the DB listens on (always the platform default).
+        # Host publish is OFF by default — DB services must only be reachable
+        # via Docker networks (e.g. proxy_net / service network), never on
+        # 0.0.0.0 of the host.  Opt-in with cfg["publish_port"]=true (and
+        # optional cfg["port"] for the host port).
         default_port = _DEFAULT_PORTS.get(platform)
-        host_port = cfg.get("port") or default_port
+        container_port = default_port
+        publish_port = str(cfg.get("publish_port") or "").strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+        host_port = None
+        if publish_port:
+            host_port = cfg.get("port") or default_port
 
         exposed_ports: dict = {}
         port_bindings: dict = {}
-        if default_port and host_port:
-            exposed_ports = {f"{default_port}/tcp": {}}
-            port_bindings = {f"{default_port}/tcp": [{"HostPort": str(host_port)}]}
+        if container_port:
+            # Document the listening port inside the container; does NOT
+            # publish to the host by itself.
+            exposed_ports = {f"{container_port}/tcp": {}}
+        if publish_port and container_port and host_port:
+            port_bindings = {
+                f"{container_port}/tcp": [{"HostPort": str(host_port)}]
+            }
+            log.info(
+                "validation",
+                f"Host port publish ENABLED: 0.0.0.0:{host_port}->{container_port} "
+                f"(publish_port=true). Prefer internal Docker networks in production.",
+                progress=9,
+            )
+        else:
+            log.info(
+                "validation",
+                f"DB port {container_port} is internal-only (not published on host). "
+                f"Reachable via Docker networks only.",
+                progress=9,
+            )
 
         # ------------------------------------------------------------------
         # 6. Networks
@@ -1165,19 +1194,36 @@ class DBDeployer:
                 progress=95,
             )
 
+        listen_port = int(host_port) if host_port else (int(container_port) if container_port else None)
+        port_note = (
+            f"published on host port {host_port}"
+            if host_port
+            else f"internal port {container_port} (Docker networks only)"
+        )
         log.info(
             "deployment_completed",
-            f"Database '{platform}' is running on port {host_port}.",
+            f"Database '{platform}' is running ({port_note}).",
             progress=100,
-            details={"platform": platform, "image": full_image, "port": host_port},
+            details={
+                "platform": platform,
+                "image": full_image,
+                "container_port": container_port,
+                "host_port": host_port,
+                "publish_port": bool(host_port),
+            },
         )
         return DBDeployResult(
             success=True,
             message=f"Database '{platform}' deployed successfully.",
             container_name=container_name,
             platform=platform,
-            port=int(host_port) if host_port else None,
-            details={"image": full_image},
+            port=listen_port,
+            details={
+                "image": full_image,
+                "container_port": container_port,
+                "host_port": host_port,
+                "publish_port": bool(host_port),
+            },
         )
 
     # ------------------------------------------------------------------
