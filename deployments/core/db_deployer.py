@@ -174,21 +174,18 @@ def _mysql_env(cfg: dict[str, Any]) -> dict[str, str]:
     """
     Build environment for MySQL/MariaDB.
 
-    ONLY root credentials (and optional database name) are passed as
-    environment variables.  These are consumed exclusively by the official
-    entrypoint on FIRST initialization of an empty data volume.
+    ONLY root credentials (and optional database name) go into env.
+    These are used by the official entrypoint solely on FIRST init of
+    an empty data volume.
 
-    Application username / password are NEVER passed via env.
-    They are always created / updated / verified by
-    ``_reconcile_mysql_credentials`` after the server is ready.
-    This guarantees identical behaviour for both fresh volumes and
-    pre-existing persistent volumes.
+    Application username/password are NEVER passed as env vars.
+    They are always created/updated by _reconcile_mysql_credentials
+    after the server is ready — same path for new and existing volumes.
     """
 
     root_password = _clean(
         cfg.get("root_password") or cfg.get("password")
     )
-
     database = _clean(cfg.get("database"))
 
     if not root_password:
@@ -201,18 +198,15 @@ def _mysql_env(cfg: dict[str, Any]) -> dict[str, str]:
 
     env: dict[str, str] = {
         "MYSQL_ROOT_PASSWORD": root_password,
+        # MariaDB official image also accepts this alias
+        "MARIADB_ROOT_PASSWORD": root_password,
     }
 
-    # Optional: let the entrypoint create the schema on first init.
-    # The reconcile step also issues CREATE DATABASE IF NOT EXISTS,
-    # so this is purely an optimisation for empty volumes.
     if database:
         env["MYSQL_DATABASE"] = database
+        env["MARIADB_DATABASE"] = database
 
-    # Deliberately omitted:
-    #   MYSQL_USER / MYSQL_PASSWORD
-    # Application users are managed solely by the SQL reconciliation
-    # path so that password changes on existing volumes always take effect.
+    # MYSQL_USER / MYSQL_PASSWORD intentionally omitted.
 
     return env
 
@@ -459,6 +453,8 @@ def _mysql_wait_until_ready(
     client,
     container_name: str,
     timeout: int = 240,
+    *,
+    root_password: str = "",
 ) -> tuple[bool, str]:
     """
     Wait until the OFFICIAL MySQL Docker entrypoint has completely
@@ -473,7 +469,12 @@ def _mysql_wait_until_ready(
         1. MySQL initialization to be finished.
         2. Temporary server to have stopped.
         3. Final mysqld to be running.
-        4. Final mysqld to answer mysqladmin ping.
+        4. Final mysqld to answer mysqladmin ping (with root password).
+
+    After the entrypoint sets MYSQL_ROOT_PASSWORD on the temporary
+    server, root requires a password.  Ping without MYSQL_PWD then
+    fails with Access Denied and the wait would never succeed —
+    so we always pass root_password for the final readiness probe.
     """
 
     import time
@@ -486,6 +487,7 @@ def _mysql_wait_until_ready(
     initialization_finished = False
     temporary_server_stopped = False
     notfound_streak = 0
+    root_password = _clean(root_password)
 
     while time.monotonic() < deadline:
 
@@ -498,6 +500,7 @@ def _mysql_wait_until_ready(
 
             status = container.status
             last_status = status
+            notfound_streak = 0
 
             # ------------------------------------------------------------
             # Read current logs
@@ -559,7 +562,8 @@ def _mysql_wait_until_ready(
             # FINAL SERVER readiness
             #
             # We ONLY run mysqladmin ping after the official
-            # initialization has finished.
+            # initialization has finished.  After the entrypoint has
+            # applied MYSQL_ROOT_PASSWORD, root requires that password.
             # ------------------------------------------------------------
 
             if (
@@ -569,6 +573,9 @@ def _mysql_wait_until_ready(
             ):
 
                 try:
+                    ping_env = None
+                    if root_password:
+                        ping_env = {"MYSQL_PWD": root_password}
 
                     exit_code, output = (
                         container.exec_run(
@@ -578,7 +585,8 @@ def _mysql_wait_until_ready(
                                 "-uroot",
                                 "--protocol=socket",
                                 "--silent",
-                            ]
+                            ],
+                            environment=ping_env,
                         )
                     )
 
@@ -609,8 +617,6 @@ def _mysql_wait_until_ready(
                     last_logs = str(exc)
 
             # ------------------------------------------------------------
-            # IMPORTANT:
-            #
             # Do NOT consider the temporary server ready.
             # ------------------------------------------------------------
 
@@ -689,10 +695,6 @@ def _mysql_wait_until_ready(
                 )
 
         except NotFound:
-            # Brief races are possible (rename / force-recreate / monitor).
-            # Tolerate a handful of consecutive NotFound before declaring
-            # permanent removal; otherwise a single transient miss aborts
-            # a perfectly healthy init that takes 30-90 s.
             notfound_streak += 1
             if notfound_streak >= 8:
                 return (
@@ -709,8 +711,6 @@ def _mysql_wait_until_ready(
 
             last_logs = str(exc)
 
-        # Reset streak on any successful inspect
-        notfound_streak = 0
         time.sleep(1)
 
     return (
@@ -723,10 +723,6 @@ def _mysql_wait_until_ready(
         ),
     )
 
-
-# ============================================================================
-# MySQL SQL execution
-# ============================================================================
 
 def _mysql_exec(
     container,
@@ -990,44 +986,43 @@ def _reconcile_mysql_credentials(
         # --------------------------------------------------------------------
         # Create user if missing (with mysql_native_password).
         # --------------------------------------------------------------------
-        create_user_sql = (
-            f"CREATE USER IF NOT EXISTS "
-            f"'{username_q}'@'%' "
-            f"IDENTIFIED WITH mysql_native_password BY '{password_q}'"
-        )
-
-        ok, output = _mysql_exec(
-            container,
-            create_user_sql,
-            password=root_password,
-        )
-
-        if not ok:
-            return False, (
-                f"Failed to create MySQL user '{username}'. "
-                f"SQL error: {output[-1000:]}"
+        # Create + password for both '%' (TCP from other containers)
+        # and 'localhost' (Unix socket — used by our verification and
+        # local tooling).  Without localhost the socket verify fails
+        # even when the user is correctly set up for remote access.
+        for host in ("%", "localhost"):
+            create_user_sql = (
+                f"CREATE USER IF NOT EXISTS "
+                f"'{username_q}'@'{host}' "
+                f"IDENTIFIED WITH mysql_native_password BY '{password_q}'"
             )
-
-        # --------------------------------------------------------------------
-        # ALWAYS ALTER password.
-        # --------------------------------------------------------------------
-        alter_user_sql = (
-            f"ALTER USER "
-            f"'{username_q}'@'%' "
-            f"IDENTIFIED WITH mysql_native_password BY '{password_q}'"
-        )
-
-        ok, output = _mysql_exec(
-            container,
-            alter_user_sql,
-            password=root_password,
-        )
-
-        if not ok:
-            return False, (
-                f"Failed to update password for MySQL user '{username}'. "
-                f"SQL error: {output[-1000:]}"
+            ok, output = _mysql_exec(
+                container,
+                create_user_sql,
+                password=root_password,
             )
+            if not ok:
+                return False, (
+                    f"Failed to create MySQL user '{username}'@'{host}'. "
+                    f"SQL error: {output[-1000:]}"
+                )
+
+            alter_user_sql = (
+                f"ALTER USER "
+                f"'{username_q}'@'{host}' "
+                f"IDENTIFIED WITH mysql_native_password BY '{password_q}'"
+            )
+            ok, output = _mysql_exec(
+                container,
+                alter_user_sql,
+                password=root_password,
+            )
+            if not ok:
+                return False, (
+                    f"Failed to update password for MySQL user "
+                    f"'{username}'@'{host}'. "
+                    f"SQL error: {output[-1000:]}"
+                )
 
         # --------------------------------------------------------------------
         # Database
@@ -1057,24 +1052,23 @@ def _reconcile_mysql_credentials(
             # Grant
             # ----------------------------------------------------------------
 
-            grant_sql = (
-                f"GRANT ALL PRIVILEGES "
-                f"ON `{database_q}`.* "
-                f"TO '{username_q}'@'%'"
-            )
-
-            ok, output = _mysql_exec(
-                container,
-                grant_sql,
-                password=root_password,
-            )
-
-            if not ok:
-                return False, (
-                    f"Failed to grant database '{database}' "
-                    f"to user '{username}'. "
-                    f"SQL error: {output[-1000:]}"
+            for host in ("%", "localhost"):
+                grant_sql = (
+                    f"GRANT ALL PRIVILEGES "
+                    f"ON `{database_q}`.* "
+                    f"TO '{username_q}'@'{host}'"
                 )
+                ok, output = _mysql_exec(
+                    container,
+                    grant_sql,
+                    password=root_password,
+                )
+                if not ok:
+                    return False, (
+                        f"Failed to grant database '{database}' "
+                        f"to user '{username}'@'{host}'. "
+                        f"SQL error: {output[-1000:]}"
+                    )
 
         # --------------------------------------------------------------------
         # Flush
@@ -1695,10 +1689,8 @@ class DBDeployer:
         # 10. Remove old container FIRST
         # ====================================================================
         # MUST happen before force_reinit volume wipe.  Yanking a volume
-        # from under a still-running container makes the container exit /
-        # become uninspectable; the monitor then races and can delete the
-        # newly-created replacement while we are still waiting for MySQL
-        # readiness ("container was removed while waiting for readiness").
+        # from under a still-running container makes the container exit;
+        # the monitor can then delete the replacement during readiness wait.
 
         log.info(
             "container_replacement",
@@ -1752,7 +1744,7 @@ class DBDeployer:
             )
 
         # ====================================================================
-        # 11. force_reinit (safe now that no container holds the volume)
+        # 11. force_reinit (safe — no container holds the volume)
         # ====================================================================
 
         if force_reinit:
@@ -2109,7 +2101,7 @@ class DBDeployer:
             "mariadb",
         ):
 
-            # Root password always comes from the env we built (canonical).
+            # Root password from the env we built (canonical).
             root_password = _clean(
                 environment.get(
                     "MYSQL_ROOT_PASSWORD"
@@ -2119,12 +2111,10 @@ class DBDeployer:
                 )
             )
 
-            # Application credentials MUST come from the original cfg,
-            # never from environment — we deliberately never put
-            # MYSQL_USER / MYSQL_PASSWORD into the container env so that
-            # the official entrypoint cannot create a half-configured
-            # user.  All app-user / DB work is done exclusively by
-            # _reconcile_mysql_credentials after the server is ready.
+            # App credentials ALWAYS from cfg — never from env.
+            # We deliberately do not put MYSQL_USER/MYSQL_PASSWORD in env
+            # so the entrypoint cannot create a half-configured user.
+            # _reconcile_mysql_credentials owns all app-user / DB work.
             username = _clean(cfg.get("username"))
             user_password = (
                 _clean(cfg.get("password"))
@@ -2151,6 +2141,7 @@ class DBDeployer:
                     client,
                     container_name,
                     timeout=180,
+                    root_password=root_password,
                 )
             )
 

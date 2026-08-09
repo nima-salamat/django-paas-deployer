@@ -53,8 +53,6 @@ PRE_CONTAINER_STAGES = frozenset({
     "dockerfile",
     "state_snapshot",
     "cancelled",
-    # DB-deploy stages that run after the container exists but before
-    # credentials are fully reconciled (MySQL init + SQL reconcile).
     "image_pull",
     "volume_creation",
     "container_replacement",
@@ -231,9 +229,6 @@ def _reconcile_active_deploy(deploy: Deploy) -> None:
                 progress = int(locked.progress or 0)
                 still_building = (
                     stage_name in PRE_CONTAINER_STAGES
-                    # DB MySQL readiness + credential reconcile runs at
-                    # progress 85-95; do not treat a transient non-running
-                    # status as failure until the deploy claims completion.
                     or progress < 95
                 )
                 if still_building:
