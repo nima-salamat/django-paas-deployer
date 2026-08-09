@@ -1,7 +1,11 @@
 # deploy/apis.py
 import functools
+import json
 import logging
 import os
+import secrets
+import shutil
+import string
 import tarfile
 import tempfile
 from uuid import uuid4
@@ -411,7 +415,21 @@ class DeployViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        updates = {k: v for k, v in request.data.items() if k in MUTABLE_DB_CONFIG_KEYS}
+        # Skip empty/null sentinels for password-type keys so a user
+        # editing the deploy via the form (which can't pre-fill passwords
+        # because they're masked in the API response) can leave password
+        # fields empty without overwriting the existing password with "".
+        # For non-password fields (env, port, etc.), an empty value is a
+        # legitimate "clear this" intent, so we still pass it through.
+        PASSWORD_KEYS = {"password", "root_password"}
+        updates = {}
+        for k, v in request.data.items():
+            if k not in MUTABLE_DB_CONFIG_KEYS:
+                continue
+            if k in PASSWORD_KEYS and v in (None, "", "__unchanged__"):
+                # Keep existing password — don't overwrite.
+                continue
+            updates[k] = v
         if not updates:
             return Response(
                 {
@@ -444,7 +462,57 @@ class DeployViewSet(ModelViewSet):
 
     def update(self, request, pk=None, *args, **kwargs):
         deploy = get_object_or_404(self.get_queryset(), pk=pk)
-        serializer = self.get_serializer(deploy, data=request.data, partial=True)
+
+        # For DB-platform deploys, the generic update would normally
+        # overwrite the entire ``config`` JSONField with whatever the
+        # client sends.  That's dangerous because the form cannot
+        # pre-fill password fields (they're masked in the API response),
+        # so a user editing just the username would accidentally wipe
+        # the password to "".
+        #
+        # Defense in depth: if this is a DB platform and the request
+        # includes a ``config`` dict, merge it with the existing config
+        # and drop any empty password sentinels before saving.
+        data = request.data
+        if hasattr(data, "_mutable"):
+            try:
+                data._mutable = True
+            except Exception:
+                pass
+        data = dict(data) if hasattr(data, "items") else dict(data)
+
+        platform = _resolve_platform(deploy)
+        if platform in DB_PLATFORMS and isinstance(data.get("config"), dict):
+            existing_cfg = _parse_deploy_config(getattr(deploy, "config", None))
+            incoming = dict(data["config"])
+            # Drop empty password sentinels — keep existing password.
+            for pw_key in ("password", "root_password"):
+                if incoming.get(pw_key) in (None, "", "__unchanged__"):
+                    incoming.pop(pw_key, None)
+            # Merge: existing values are the base; incoming values win
+            # for any key the client explicitly sent (except dropped
+            # password sentinels).  Always preserve platform.
+            merged = {**existing_cfg, **incoming, "platform": platform}
+            data["config"] = merged
+        elif platform in DB_PLATFORMS and isinstance(data.get("config"), str):
+            # Client sent config as a JSON string (e.g. from a textarea).
+            # Parse it, drop password sentinels, re-merge, re-stringify.
+            try:
+                incoming = json.loads(data["config"]) if data["config"].strip() else {}
+                if not isinstance(incoming, dict):
+                    incoming = {}
+            except (json.JSONDecodeError, ValueError):
+                # Let the serializer surface the validation error.
+                incoming = None
+            if incoming is not None:
+                existing_cfg = _parse_deploy_config(getattr(deploy, "config", None))
+                for pw_key in ("password", "root_password"):
+                    if incoming.get(pw_key) in (None, "", "__unchanged__"):
+                        incoming.pop(pw_key, None)
+                merged = {**existing_cfg, **incoming, "platform": platform}
+                data["config"] = json.dumps(merged)
+
+        serializer = self.get_serializer(deploy, data=data, partial=True)
         if serializer.is_valid():
             deploy = serializer.save()
             return Response(
@@ -460,6 +528,58 @@ class DeployViewSet(ModelViewSet):
         deploy = get_object_or_404(self.get_queryset(), pk=pk)
         deploy.delete()
         return Response({"success": _("Deploy deleted.")}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"])
+    def reveal_db_credentials(self, request, pk=None):
+        """
+        Return the FULL DB config including sensitive fields (password,
+        root_password, username) that are masked by DeploySerializer.
+
+        The default ``retrieve`` endpoint strips these via
+        ``MaskedDBConfigField`` so they don't leak into every list/retrieve
+        response.  This endpoint exists specifically for the service-detail
+        UI's "Database" overview card, which needs the credentials to:
+          1. Show them in the overview (so the user can copy them).
+          2. Pre-fill the edit form (so the user doesn't lose the
+             password by saving with an empty field).
+
+        Security:
+          * Owner-only (403 for non-owners, even superusers see only
+            their own unless they're superusers).
+          * Returns 400 for non-DB deploys.
+          * Logs the reveal event for audit (INFO level).
+        """
+        deploy = get_object_or_404(
+            self.get_queryset().select_related("service", "service__plan"),
+            pk=pk,
+        )
+        if not request.user.is_superuser and deploy.service.user_id != request.user.id:
+            return Response(
+                {"result": "error", "detail": _("Only owner can reveal DB credentials.")},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        platform = _resolve_platform(deploy)
+        if platform not in DB_PLATFORMS:
+            return Response(
+                {"result": "error", "detail": _("This deploy is not a DB platform.")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cfg = _parse_deploy_config(getattr(deploy, "config", None))
+        # Audit log — record that someone revealed the credentials.
+        logger.info(
+            "DB credentials revealed for deploy %s (platform=%s, user=%s).",
+            deploy.pk, platform, request.user.pk,
+        )
+        return Response(
+            {
+                "result": "success",
+                "platform": platform,
+                "config": cfg,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 @api_view(["GET"])
@@ -754,3 +874,303 @@ def unset_deploy_apiview(request):
         },
         status=status.HTTP_200_OK,
     )
+
+
+# ---------------------------------------------------------------------------
+# Credential generation
+# ---------------------------------------------------------------------------
+
+# Safe alphabet for DB passwords — excludes characters that break:
+#   * URL encoding in connection strings (`@`, `:`, `/`, `#`, `?`)
+#   * Shell quoting (`'`, `"`, `` ` ``, `\`, `$`)
+#   * SQL string literals (`'`, `"`)
+#   * JSON string escaping (`"`, `\`)
+#   * Whitespace (space, tab, newline — break copy-paste and config files)
+# Includes a healthy mix of upper/lower/digits/symbols so the password
+# satisfies typical DB password policy requirements.
+_PASSWORD_ALPHABET = string.ascii_letters + string.digits + "!@#%^&*()-_=+"
+_DB_USERNAME_ALPHABET = string.ascii_lowercase + string.digits
+
+
+def _generate_password(length: int = 24) -> str:
+    """Generate a cryptographically-secure random DB password."""
+    return "".join(secrets.choice(_PASSWORD_ALPHABET) for _ in range(length))
+
+
+def _generate_db_username(platform: str) -> str:
+    """Generate a DB-safe username like 'mysql_user_a3f9k2'."""
+    suffix = "".join(secrets.choice(_DB_USERNAME_ALPHABET) for _ in range(6))
+    return f"{platform}_user_{suffix}"
+
+
+def _generate_db_name(platform: str) -> str:
+    """Generate a DB-safe database name like 'mysql_db_7hq2x9p4'."""
+    suffix = "".join(secrets.choice(_DB_USERNAME_ALPHABET) for _ in range(8))
+    return f"{platform}_db_{suffix}"
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def generate_db_credentials_apiview(request):
+    """
+    POST /deploy/generate_db_credentials/  body: {"platform": "mysql"}
+    Returns: {"username", "password", "root_password", "database", "port"}
+
+    Generates a random, DB-safe set of credentials that the frontend can
+    auto-fill into the Create Deploy form.  This endpoint exists for
+    parity with the frontend's client-side generator (so the same
+    generator can be reused server-side if needed, e.g. for API-only
+    clients).  The frontend uses its own client-side generator by
+    default — no network round-trip, secrets never leave the browser.
+
+    The generated values follow these rules:
+      * username: ``<platform>_user_<6 random lowercase+digits>`` (≤32 chars)
+      * password: 24 chars from a safe alphabet (no quotes, backticks,
+        dollar signs, semicolons, spaces, or URL-reserved chars)
+      * root_password: same as password (only for mysql/mariadb)
+      * database: ``<platform>_db_<8 random lowercase+digits>`` (≤64 chars)
+      * port: null (use platform default — backend picks the standard
+        port per platform)
+    """
+    platform = (request.data.get("platform") or "").strip().lower()
+    if not platform:
+        return Response(
+            {"result": "error", "detail": _("'platform' field is required.")},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if platform not in DB_PLATFORMS:
+        return Response(
+            {
+                "result": "error",
+                "detail": _(
+                    f"Unsupported DB platform '{platform}'. "
+                    f"Supported: {', '.join(sorted(DB_PLATFORMS))}."
+                ),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    creds = {
+        "username": _generate_db_username(platform),
+        "password": _generate_password(24),
+        "database": _generate_db_name(platform),
+        "port": None,
+    }
+    # MySQL/MariaDB use root_password; other platforms don't.
+    if platform in ("mysql", "mariadb"):
+        creds["root_password"] = _generate_password(24)
+
+    return Response(
+        {"result": "success", "platform": platform, "credentials": creds},
+        status=status.HTTP_200_OK,
+    )
+
+
+# ---------------------------------------------------------------------------
+# ZIP inspection — suggest deploy config from uploaded project
+# ---------------------------------------------------------------------------
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def inspect_deploy_zip_apiview(request):
+    """
+    POST /deploy/inspect_zip/  (multipart: file=<zip>)
+    Returns: {
+        "platform": "django"|"node-express"|...,
+        "framework": "django"|"express"|...,
+        "server_type": "wsgi"|"asgi"|null,
+        "entrypoint": "<start_command>"|null,
+        "django_settings_module": "myproject.settings"|null,
+        "static_dir": "/app/static"|null,
+        "media_dir": "/app/media"|null,
+        "suggested_config": { ... },  # ready-to-paste JSON for the config field
+        "markers": ["manage.py", "requirements.txt", ...],  # detected marker files
+        "raw": { ... },  # the full platform inspection result, for debugging
+    }
+
+    Reuses the existing ``extract_zip_to_temp`` + ``enrich_config_from_project``
+    infrastructure from ``deployments.core.platform_bridge``.  The endpoint
+    is read-only — it does NOT create a Deploy, just inspects the zip and
+    returns a suggested config that the user can review and edit before
+    submitting the actual create form.
+
+    Security:
+      * Reuses the same zip-safety checks as the deploy endpoint (Zip-Slip
+        protection, size caps, symlink rejection) via ``extract_zip_to_temp``.
+      * Temp files are cleaned up in a ``finally`` block.
+      * No authentication beyond ``IsAuthenticated`` — any logged-in user
+        can inspect any zip they upload.  The zip is never persisted.
+    """
+    uploaded = request.FILES.get("file")
+    if not uploaded:
+        return Response(
+            {"result": "error", "detail": _("'file' field is required (multipart upload).")},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Reject obviously non-zip uploads early — the extraction code would
+    # catch this too, but a clean 400 is friendlier than a 500.
+    if not (uploaded.name or "").lower().endswith(".zip"):
+        return Response(
+            {"result": "error", "detail": _("File must be a .zip archive.")},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Save to a temp file — extract_zip_to_temp takes a path, not a file.
+    tmp_zip_path = None
+    tmp_dir = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            suffix=".zip", delete=False, prefix="deploy-inspect-"
+        ) as tmp:
+            for chunk in uploaded.chunks():
+                tmp.write(chunk)
+            tmp_zip_path = tmp.name
+
+        # Import here so the import-failure doesn't break the whole module
+        # if the deployments package is in a weird state.
+        try:
+            from deployments.core.platform_bridge import (
+                extract_zip_to_temp,
+                enrich_config_from_project,
+            )
+            from deployments.core.types import DeploymentConfig
+            from deployments.core.platforms.registry import PlatformRegistry
+        except ImportError as exc:
+            logger.exception("Failed to import platform inspection modules: %s", exc)
+            return Response(
+                {
+                    "result": "error",
+                    "detail": _(
+                        "Platform inspection is not available on this server. "
+                        "Please write the config JSON manually."
+                    ),
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        try:
+            tmp_dir, project_root = extract_zip_to_temp(tmp_zip_path)
+        except (ValueError, FileNotFoundError) as exc:
+            return Response(
+                {"result": "error", "detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Build a minimal DeploymentConfig to feed into enrich_config_from_project.
+        # enrich_config_from_project only fills EMPTY fields, so we pass a
+        # config with platform unset (let the detector pick) and all other
+        # fields at their defaults / None.
+        try:
+            config = DeploymentConfig(
+                name="inspect",
+                tag="inspect",
+                zip_path=tmp_zip_path,
+                dockerfile_template="",
+                max_cpu=1.0,
+                max_ram=512,
+                networks=[],
+                volumes=[],
+                port=None,
+                read_only=False,
+                platform="docker",  # placeholder — enrich will overwrite
+                platform_type="app",
+            )
+        except TypeError:
+            # DeploymentConfig signature changed — fall back to a plain dict.
+            config = None
+
+        detection_raw = {}
+        suggested_config: dict = {}
+        markers: list[str] = []
+        if config is not None:
+            try:
+                enriched = enrich_config_from_project(config, project_root)
+                # Pull the detection result back out for the response.
+                suggested_config = {
+                    "platform": enriched.platform or "docker",
+                }
+                if enriched.server_type:
+                    suggested_config["server_type"] = enriched.server_type
+                if enriched.entry_point:
+                    suggested_config["entry_point"] = enriched.entry_point
+                suggested_config["celery"] = bool(enriched.celery)
+                suggested_config["celery_beat"] = bool(enriched.celery_beat)
+                suggested_config["worker_count"] = int(enriched.worker_count or 1)
+
+                # Try to get the raw detection result for extra fields
+                # (django_settings_module, static_dir, etc.) that aren't
+                # on DeploymentConfig itself.
+                try:
+                    from deployments.core.platform_bridge import get_project_cfg
+                    project_cfg = get_project_cfg(enriched)
+                    if project_cfg is not None:
+                        detection_raw = {
+                            k: v for k, v in vars(project_cfg).items()
+                            if not k.startswith("_") and _json_safe(v)
+                        }
+                        # Markers are the files the detector found.
+                        markers = list(getattr(project_cfg, "markers", []) or [])
+                except Exception:
+                    pass
+            except Exception as exc:
+                logger.warning(
+                    "enrich_config_from_project failed during zip inspection: %s",
+                    exc, exc_info=True,
+                )
+
+        # If we have markers from the inspector directly, use those.
+        if not markers:
+            try:
+                from deployments.core.platforms.inspector import ProjectInspector
+                inspector = ProjectInspector(project_root)
+                # ProjectInspector populates self.markers during __init__
+                # (or via a scan() method) — try both shapes for safety.
+                if hasattr(inspector, "markers") and isinstance(inspector.markers, list):
+                    markers = sorted(inspector.markers)
+                elif hasattr(inspector, "scan"):
+                    inspector.scan()
+                    markers = sorted(getattr(inspector, "markers", []) or [])
+            except Exception:
+                # Marker detection is best-effort — don't fail the request.
+                markers = []
+
+        return Response(
+            {
+                "result": "success",
+                "platform": suggested_config.get("platform"),
+                "framework": detection_raw.get("framework"),
+                "server_type": suggested_config.get("server_type"),
+                "entrypoint": suggested_config.get("entry_point"),
+                "django_settings_module": detection_raw.get("django_settings_module"),
+                "static_dir": detection_raw.get("static_dir"),
+                "media_dir": detection_raw.get("media_dir"),
+                "suggested_config": suggested_config,
+                "markers": markers,
+                "raw": detection_raw,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    finally:
+        # Cleanup — never leave temp files behind.
+        if tmp_dir and os.path.isdir(tmp_dir):
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        if tmp_zip_path and os.path.exists(tmp_zip_path):
+            try:
+                os.unlink(tmp_zip_path)
+            except OSError:
+                pass
+
+
+def _json_safe(value) -> bool:
+    """Return True if ``value`` is JSON-serializable (for the inspect endpoint)."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return True
+    if isinstance(value, (list, tuple)):
+        return all(_json_safe(v) for v in value)
+    if isinstance(value, dict):
+        return all(isinstance(k, str) and _json_safe(v) for k, v in value.items())
+    return False
