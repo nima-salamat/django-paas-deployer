@@ -37,6 +37,22 @@ def _worker_count_from_config(config) -> int:
         return 1
 
 
+def _align_entry_point_workers(entry_point: str | None, workers: int) -> str | None:
+    """
+    Ensure a user/detector entry_point uses the same --workers as
+    DeploymentConfig.worker_count.  Without this, a suggested command
+    like ``gunicorn … --workers 3`` ignores plan-based worker_count.
+    """
+    if not entry_point:
+        return entry_point
+    try:
+        from deployments.common.config import apply_workers_to_command
+
+        return apply_workers_to_command(entry_point, workers)
+    except Exception:
+        return entry_point
+
+
 def _django_web_command(module: str, server_type: str, workers: int = 1) -> str:
     workers = max(1, int(workers or 1))
     if server_type == "asgi":
@@ -321,8 +337,10 @@ def _render_django(dockerfile_template, tar_stream, config, logger):
             details={"module": module, "error": str(exc)},
         ) from exc
 
+    workers = _worker_count_from_config(config)
+
     if entry_point_override and not use_celery:
-        web_cmd = entry_point_override
+        web_cmd = _align_entry_point_workers(entry_point_override, workers)
         packages = _runtime_pip_packages(
             platform="django",
             server_type=resolved_server_type,
@@ -333,9 +351,8 @@ def _render_django(dockerfile_template, tar_stream, config, logger):
         rendered = _inject_pip_install(rendered, packages)
         return _replace_cmd(rendered, web_cmd)
 
-    workers = _worker_count_from_config(config)
     web_cmd = (
-        entry_point_override
+        _align_entry_point_workers(entry_point_override, workers)
         if entry_point_override
         else _django_web_command(module, resolved_server_type, workers=workers)
     )
@@ -418,8 +435,10 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
     port = getattr(config, "port", None) if config is not None else None
     rendered = _ensure_port_placeholder(rendered, port)
 
+    workers = _worker_count_from_config(config)
+
     if entry_point_override and not use_celery:
-        web_cmd = entry_point_override
+        web_cmd = _align_entry_point_workers(entry_point_override, workers)
         packages = _runtime_pip_packages(
             platform=platform,
             server_type=resolved_type,
@@ -430,9 +449,8 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
         rendered = _inject_pip_install(rendered, packages)
         return _replace_cmd(rendered, web_cmd)
 
-    workers = _worker_count_from_config(config)
     web_cmd = (
-        entry_point_override
+        _align_entry_point_workers(entry_point_override, workers)
         if entry_point_override
         else _flask_web_command(module, callable_name, resolved_type, workers=workers)
     )

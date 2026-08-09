@@ -1107,29 +1107,37 @@ def inspect_deploy_zip_apiview(request):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Build a minimal DeploymentConfig to feed into enrich_config_from_project.
-        # enrich_config_from_project only fills EMPTY fields. If we pre-set
-        # platform="docker", the detector never overwrites it and every
-        # inspect returns platform=docker even for Django/Flask/Node zips.
-        # Pass an empty / unset platform so detection can win.
+        # Optional plan resources from the client (Create Deploy form).
+        # Used to suggest worker_count from max_cpu / max_ram.
+        plan_cpu = request.data.get("max_cpu") or request.POST.get("max_cpu")
+        plan_ram = request.data.get("max_ram") or request.POST.get("max_ram")
+        try:
+            plan_cpu_f = float(plan_cpu) if plan_cpu not in (None, "") else None
+        except (TypeError, ValueError):
+            plan_cpu_f = None
+        try:
+            plan_ram_f = float(plan_ram) if plan_ram not in (None, "") else None
+        except (TypeError, ValueError):
+            plan_ram_f = None
+
+        # enrich_config_from_project only fills EMPTY fields. platform MUST
+        # be empty — otherwise detection never overwrites hard-coded "docker".
         try:
             config = DeploymentConfig(
                 name="inspect",
                 tag="inspect",
                 zip_path=tmp_zip_path,
                 dockerfile_template="",
-                max_cpu=1.0,
-                max_ram=512,
+                max_cpu=plan_cpu_f if plan_cpu_f is not None else 1.0,
+                max_ram=int(plan_ram_f) if plan_ram_f is not None else 512,
                 networks=[],
                 volumes=[],
                 port=None,
                 read_only=False,
-                platform="",  # empty so enrich can set the detected platform
+                platform="",
                 platform_type="app",
             )
         except TypeError:
-            # Some DeploymentConfig versions reject empty platform — try None,
-            # then omit the kwarg entirely.
             try:
                 config = DeploymentConfig(
                     name="inspect",
@@ -1183,11 +1191,45 @@ def inspect_deploy_zip_apiview(request):
                 suggested_config["celery_beat"] = bool(
                     getattr(enriched, "celery_beat", False)
                 )
-                suggested_config["worker_count"] = int(
-                    getattr(enriched, "worker_count", None) or 1
-                )
 
-                # Raw detector fields (django_settings_module, static_dir, …)
+                # worker_count: prefer plan resources when provided.
+                try:
+                    from deployments.common.config import (
+                        suggest_worker_count,
+                        parse_workers_from_command,
+                        apply_workers_to_command,
+                    )
+                except ImportError:
+                    suggest_worker_count = None
+                    parse_workers_from_command = None
+                    apply_workers_to_command = None
+
+                ep = suggested_config.get("entry_point")
+                from_cmd = (
+                    parse_workers_from_command(ep)
+                    if parse_workers_from_command
+                    else None
+                )
+                if suggest_worker_count and (
+                    plan_cpu_f is not None or plan_ram_f is not None
+                ):
+                    wc = suggest_worker_count(
+                        plan_cpu_f,
+                        plan_ram_f,
+                        platform=suggested_config.get("platform"),
+                        default=1,
+                    )
+                elif from_cmd:
+                    wc = from_cmd
+                else:
+                    wc = int(getattr(enriched, "worker_count", None) or 1) or 1
+
+                suggested_config["worker_count"] = max(1, int(wc))
+                if ep and apply_workers_to_command:
+                    suggested_config["entry_point"] = apply_workers_to_command(
+                        ep, suggested_config["worker_count"]
+                    )
+
                 try:
                     from deployments.core.platform_bridge import get_project_cfg
                     project_cfg = get_project_cfg(enriched)
@@ -1197,8 +1239,6 @@ def inspect_deploy_zip_apiview(request):
                             if not k.startswith("_") and _json_safe(v)
                         }
                         markers = list(getattr(project_cfg, "markers", []) or [])
-                        # Prefer framework/platform from the raw detector when
-                        # enriched still left platform empty/docker.
                         raw_plat = (
                             str(
                                 detection_raw.get("platform")
@@ -1220,7 +1260,6 @@ def inspect_deploy_zip_apiview(request):
                     exc, exc_info=True,
                 )
 
-        # If we have markers from the inspector directly, use those.
         if not markers:
             try:
                 from deployments.core.platforms.inspector import ProjectInspector
@@ -1233,14 +1272,11 @@ def inspect_deploy_zip_apiview(request):
             except Exception:
                 markers = []
 
-        # Heuristic fallback: if platform is still empty/docker but markers
-        # clearly indicate a known framework, override so the UI does not
-        # always show "docker".
+        # Marker heuristic if platform still docker/empty.
         current_plat = str(suggested_config.get("platform") or "").strip().lower()
         if (not current_plat or current_plat == "docker") and markers:
             marker_set = {str(m).lower().replace("\\", "/") for m in markers}
             basename_set = {m.split("/")[-1] for m in marker_set}
-
             if "manage.py" in basename_set or any(
                 m.endswith("/settings.py") or m == "settings.py" for m in marker_set
             ):
@@ -1249,12 +1285,6 @@ def inspect_deploy_zip_apiview(request):
             elif "package.json" in basename_set:
                 suggested_config["platform"] = "node"
                 detection_raw.setdefault("framework", "node")
-            elif "go.mod" in basename_set:
-                suggested_config["platform"] = "go"
-            elif "cargo.toml" in basename_set:
-                suggested_config["platform"] = "rust"
-            elif "pom.xml" in basename_set or "build.gradle" in basename_set:
-                suggested_config["platform"] = "java"
             elif any(
                 m in basename_set for m in ("app.py", "wsgi.py", "asgi.py")
             ) and (
@@ -1276,9 +1306,13 @@ def inspect_deploy_zip_apiview(request):
                 "suggested_config": suggested_config,
                 "markers": markers,
                 "raw": detection_raw,
+                "worker_count": suggested_config.get("worker_count"),
+                "plan_cpu": plan_cpu_f,
+                "plan_ram": plan_ram_f,
             },
             status=status.HTTP_200_OK,
         )
+
     finally:
         # Cleanup — never leave temp files behind.
         if tmp_dir and os.path.isdir(tmp_dir):

@@ -32,6 +32,11 @@ from deployments.core.state.locks import acquire_service_deployment_lock
 from services.models import Volume  # type: ignore
 
 from deployments.common import parse_config, as_bool, as_int
+from deployments.common.config import (
+    suggest_worker_count,
+    apply_workers_to_command,
+    parse_workers_from_command,
+)
 from deployments.common.exceptions import (
     InvalidServiceStateError,
     OrchestratorDeploymentError,
@@ -252,18 +257,58 @@ class DeployService:
 
         celery_app = cfg.get("celery_app") or cfg.get("celery_module") or None
 
-        worker_count = as_int(
-            cfg.get("worker_count") or cfg.get("workers")
-            or getattr(deploy_item, "worker_count", None)
-            or getattr(service, "worker_count", None),
-            default=1, minimum=1,
+        # ------------------------------------------------------------------
+        # worker_count resolution
+        # ------------------------------------------------------------------
+        # Priority:
+        #   1. Explicit Deploy.config["worker_count"] / ["workers"]
+        #   2. Plan-based suggestion from max_cpu + max_ram
+        #   3. --workers N inside entry_point (detector default)
+        #   4. default 1
+        #
+        # When we auto-pick from the plan, also rewrite entry_point so a
+        # hard-coded "gunicorn … --workers 3" does not ignore the plan.
+        explicit_workers = (
+            "worker_count" in cfg
+            or "workers" in cfg
+            or getattr(deploy_item, "worker_count", None) not in (None, "")
         )
+        plan = getattr(service, "plan", None)
+        plan_cpu = getattr(plan, "max_cpu", None) if plan is not None else None
+        plan_ram = getattr(plan, "max_ram", None) if plan is not None else None
+
+        if explicit_workers:
+            worker_count = as_int(
+                cfg.get("worker_count") or cfg.get("workers")
+                or getattr(deploy_item, "worker_count", None),
+                default=1,
+                minimum=1,
+            )
+        else:
+            from_cmd = parse_workers_from_command(entry_point)
+            from_plan = suggest_worker_count(
+                plan_cpu, plan_ram, platform=platform, default=1,
+            )
+            # Prefer plan over detector hard-code when plan resources exist.
+            if plan_cpu is not None or plan_ram is not None:
+                worker_count = from_plan
+            elif from_cmd:
+                worker_count = from_cmd
+            else:
+                worker_count = from_plan
+
+            if entry_point and (
+                parse_workers_from_command(entry_point) != worker_count
+            ):
+                entry_point = apply_workers_to_command(entry_point, worker_count)
 
         logger.info(
             "Orchestrator options for %s: platform=%s celery=%s celery_beat=%s "
-            "server_type=%s entry_point=%s celery_app=%s worker_count=%s",
+            "server_type=%s entry_point=%s celery_app=%s worker_count=%s "
+            "(explicit=%s plan_cpu=%s plan_ram=%s)",
             container_name, platform, celery, celery_beat,
             server_type, entry_point, celery_app, worker_count,
+            explicit_workers, plan_cpu, plan_ram,
         )
 
         networks: list[tuple[str, str]] = []
