@@ -207,8 +207,32 @@ def validate_db_config(platform: str, cfg: dict) -> list[str]:
             p = int(port)
             if not (1 <= p <= 65535):
                 errors.append(f"port {port} is out of range (1–65535).")
+            else:
+                # Warn (not error) if port doesn't match the platform default —
+                # e.g. user sets port=6379 (Redis) for a MySQL deploy.  This is
+                # technically valid (host port can be anything) but almost
+                # always a copy-paste mistake.
+                default = _DEFAULT_PORTS.get(platform)
+                if default and p != default and p in _DEFAULT_PORTS.values():
+                    errors.append(
+                        f"port {p} is the default port for a different "
+                        f"database platform; did you mean port {default} "
+                        f"for {platform}?"
+                    )
         except (TypeError, ValueError):
             errors.append(f"port '{port}' is not a valid integer.")
+
+    # Reserved database names — MySQL/MariaDB reserve several names for
+    # system databases.  Creating a user database with one of these names
+    # can cause init failures or silent data corruption.
+    if platform in ("mysql", "mariadb"):
+        reserved = {"mysql", "sys", "information_schema", "performance_schema"}
+        db_name = str(cfg.get("database") or "").strip().lower()
+        if db_name in reserved:
+            errors.append(
+                f"database name '{db_name}' is reserved by {platform} "
+                f"as a system database; choose a different name."
+            )
 
     return errors
 
@@ -412,30 +436,108 @@ class DBDeployer:
         # ------------------------------------------------------------------
         # 10. Build host config (resource limits + binds + ports)
         # ------------------------------------------------------------------
+        # DB containers need:
+        #   * read_only=False (they write data — this is already set below)
+        #   * init=True (PID 1 init process via tini) — MySQL/MariaDB/
+        #     PostgreSQL entrypoint scripts expect a proper init system.
+        #     Without it, MySQL 8.0.36+ fails with "Inappropriate ioctl
+        #     for device" when the entrypoint tries to check if mysqld is
+        #     running.  This is the root cause of the user's reported bug.
+        #   * /var/run/mysqld in tmpfs for MySQL/MariaDB — the official
+        #     image declares it as a VOLUME, but on some hosts the
+        #     anonymous volume isn't created in time for the entrypoint.
+        #   * /var/run/postgresql in tmpfs for PostgreSQL — same reason.
+        #   * restart_policy=unless-stopped so the DB auto-recovers after
+        #     a host reboot or crash.
+        tmpfs: dict[str, str] = {
+            "/tmp": "rw,noexec,nosuid,size=64m",
+            "/var/tmp": "rw,noexec,nosuid,size=32m",
+        }
+        if platform in ("mysql", "mariadb"):
+            tmpfs["/var/run/mysqld"] = "rw,noexec,nosuid,size=8m"
+        elif platform == "postgresql":
+            tmpfs["/var/run/postgresql"] = "rw,noexec,nosuid,size=8m"
+
         hc_kwargs: dict[str, Any] = {
             "binds":         volume_binds or None,
             "port_bindings": port_bindings or None,
             "read_only":     False,   # DB containers must write data
-            # Ephemeral tmpfs – some DB images / init scripts still touch /tmp
-            "tmpfs": {
-                "/tmp": "rw,noexec,nosuid,size=64m",
-                "/var/tmp": "rw,noexec,nosuid,size=32m",
-            },
+            "tmpfs":          tmpfs,
+            "init":          True,    # tini as PID 1 — fixes MySQL ioctl bug
+            "restart_policy": {"Name": "unless-stopped"},
         }
+        # CPU limit — use nano_cpus exclusively (NOT cpu_quota+cpu_period).
+        # Setting cpu_quota without cpu_period, or both nano_cpus AND
+        # cpu_period, causes Docker HTTP 400 "Conflicting options".  See
+        # container_manager.py for the full rationale.
         max_cpu = cfg.get("max_cpu")
         max_ram = cfg.get("max_ram")
         if max_cpu is not None:
             try:
-                hc_kwargs["cpu_quota"] = int(float(max_cpu) * 100_000)
+                cpu_float = float(max_cpu)
+                if cpu_float > 0:
+                    hc_kwargs["nano_cpus"] = int(cpu_float * 1_000_000_000)
             except (TypeError, ValueError):
                 pass
         if max_ram is not None:
             try:
-                hc_kwargs["mem_limit"] = f"{int(max_ram)}m"
+                ram_mb = int(max_ram)
+                if ram_mb > 0:
+                    mem_bytes = ram_mb * 1024 * 1024
+                    hc_kwargs["mem_limit"] = mem_bytes
+                    hc_kwargs["memswap_limit"] = mem_bytes  # no swap
             except (TypeError, ValueError):
                 pass
 
-        host_config = client.api.create_host_config(**hc_kwargs)
+        # Progressive fallback chain — same design as container_manager.py.
+        # If the engine rejects one option, retry without it.  The final
+        # "bare" stage keeps only binds + ports + read_only so a DB deploy
+        # can NEVER be blocked by a host_config rejection.
+        fallbacks = [
+            ("full config", lambda kw: kw),
+            ("without memswap_limit", lambda kw: {k: v for k, v in kw.items() if k != "memswap_limit"}),
+            ("without nano_cpus", lambda kw: {k: v for k, v in kw.items() if k != "nano_cpus"}),
+            ("without mem_limit", lambda kw: {k: v for k, v in kw.items() if k != "mem_limit"}),
+            ("without tmpfs", lambda kw: {k: v for k, v in kw.items() if k != "tmpfs"}),
+            ("without restart_policy", lambda kw: {k: v for k, v in kw.items() if k != "restart_policy"}),
+            ("without init", lambda kw: {k: v for k, v in kw.items() if k != "init"}),
+            ("bare (binds+ports+read_only+init only)", lambda kw: {
+                k: v for k, v in kw.items()
+                if k in ("binds", "port_bindings", "read_only", "init")
+            }),
+        ]
+
+        host_config = None
+        last_hc_error: Exception | None = None
+        for stage_desc, mutator in fallbacks:
+            attempt_kwargs = mutator(dict(hc_kwargs))
+            try:
+                host_config = client.api.create_host_config(**attempt_kwargs)
+                logger.info(
+                    "DB host_config built (stage='%s') for '%s'.",
+                    stage_desc, container_name,
+                )
+                break
+            except (TypeError, APIError, docker.errors.DockerException) as exc:
+                last_hc_error = exc
+                logger.warning(
+                    "create_host_config failed in stage '%s' for DB '%s': "
+                    "%s. Trying next fallback.",
+                    stage_desc, container_name, exc,
+                )
+                continue
+
+        if host_config is None:
+            msg = (
+                f"Failed to build host_config for DB container "
+                f"'{container_name}' after exhausting all fallbacks. "
+                f"Last error: {last_hc_error}"
+            )
+            log.error("container_creation", msg, progress=100)
+            return DBDeployResult(
+                success=False, message=msg, container_name=container_name,
+                platform=platform, error=str(last_hc_error),
+            )
 
         # ------------------------------------------------------------------
         # 11. Create container
@@ -503,30 +605,51 @@ class DBDeployer:
 
         if final_status != "running":
             log_tail = ""
+            exit_code = None
             try:
                 c = client.containers.get(container_name)
-                raw = c.logs(tail=30)
+                raw = c.logs(tail=50)
                 log_tail = (
                     raw.decode("utf-8", "replace")
                     if isinstance(raw, bytes)
                     else str(raw)
                 )
+                # Capture the exit code — it often tells you exactly why
+                # the DB failed (e.g. MySQL exit code 1 = generic error,
+                # 137 = OOM kill, 139 = segfault).
+                try:
+                    exit_code = c.attrs.get("State", {}).get("ExitCode")
+                except Exception:
+                    pass
             except Exception:
                 pass
+            # Include the actual DB container logs in the user-visible
+            # message — the previous "did not reach running state" message
+            # gave the operator no clue WHY it failed.
             msg = (
                 f"DB container did not reach running state "
-                f"(final status: '{final_status}')."
+                f"(final status: '{final_status}'"
+                f"{f', exit code: {exit_code}' if exit_code is not None else ''}). "
+                f"Container logs (last 50 lines):\n{log_tail[-2000:]}"
             )
             log.error(
                 "health_check",
                 msg,
                 progress=100,
-                details={"final_status": final_status, "logs": log_tail[-2000:]},
+                details={
+                    "final_status": final_status,
+                    "exit_code": exit_code,
+                    "logs": log_tail[-2000:],
+                },
             )
             return DBDeployResult(
                 success=False, message=msg, container_name=container_name,
                 platform=platform, error=msg,
-                details={"final_status": final_status, "logs": log_tail[-2000:]},
+                details={
+                    "final_status": final_status,
+                    "exit_code": exit_code,
+                    "logs": log_tail[-2000:],
+                },
             )
 
         log.info(
