@@ -169,7 +169,17 @@ def _collect_service_volumes(service: Service) -> list[dict]:
     seen: set[str] = set()
 
     def _add(vol) -> None:
-        name = getattr(vol, "name", None)
+        # Prefer the Docker volume name (vol-{id}-{name}), matching
+        # deploy_service / signals.  Fall back to the human name only if
+        # the helper is missing.
+        getter = getattr(vol, "get_docker_volume_name", None)
+        if callable(getter):
+            try:
+                name = getter()
+            except Exception:
+                name = getattr(vol, "name", None)
+        else:
+            name = getattr(vol, "name", None)
         if not name or name in seen:
             return
         bind = getattr(vol, "bind", None) or getattr(vol, "default_bind", None)
@@ -306,7 +316,11 @@ def _ensure_default_db_volume(platform: str, service: Service) -> dict | None:
         att = atts.get(str(service.pk), {}) if isinstance(atts, dict) else {}
         bind = att.get("bind") or getattr(existing, "default_bind", "") or default_bind
         return {
-            "source": existing.name,
+            "source": (
+                existing.get_docker_volume_name()
+                if hasattr(existing, "get_docker_volume_name")
+                else existing.name
+            ),
             "target": bind,
             "mode": att.get("mode") or getattr(existing, "default_mode", "") or "rw",
         }
@@ -412,7 +426,11 @@ def _ensure_default_db_volume(platform: str, service: Service) -> dict | None:
         return None
 
     return {
-        "source": vol.name,
+        "source": (
+            vol.get_docker_volume_name()
+            if hasattr(vol, "get_docker_volume_name")
+            else vol.name
+        ),
         "target": default_bind,
         "mode": "rw",
     }
@@ -457,13 +475,55 @@ def _build_db_cfg(deploy: Deploy, service: Service) -> dict[str, Any]:
         if cfg.get("max_ram") is None and getattr(plan, "max_ram", None) is not None:
             cfg["max_ram"] = plan.max_ram
 
-    if not cfg.get("networks"):
-        networks: list[str] = []
-        net = getattr(service, "network", None)
-        if net is not None and getattr(net, "name", None):
-            networks.append(net.name)
-        networks.append("proxy_net")
-        cfg["networks"] = networks
+    # Networks: always use the Docker-side name from PrivateNetwork
+    # (get_docker_network_name → "net-{idhex}-{name}"), same pattern as
+    # get_docker_service_name / get_docker_volume_name for containers/volumes.
+    # Using PrivateNetwork.name alone does not match the real Docker network
+    # and leaves the DB container unreachable from other services.
+    networks: list[str] = []
+    seen_nets: set[str] = set()
+
+    def _add_net(name: str) -> None:
+        n = str(name or "").strip()
+        if n and n not in seen_nets:
+            seen_nets.add(n)
+            networks.append(n)
+
+    for n in cfg.get("networks") or []:
+        if isinstance(n, str):
+            _add_net(n)
+        elif isinstance(n, dict):
+            _add_net(n.get("name") or n.get("network") or "")
+
+    net = getattr(service, "network", None)
+    if net is not None:
+        docker_net = None
+        getter = getattr(net, "get_docker_network_name", None)
+        if callable(getter):
+            try:
+                docker_net = getter()
+            except Exception:
+                logger.exception(
+                    "get_docker_network_name failed for service %s network",
+                    getattr(service, "pk", None),
+                )
+        if not docker_net:
+            docker_net = getattr(net, "name", None)
+        if docker_net:
+            # Ensure private network is first so it is the primary DNS domain.
+            if docker_net in seen_nets:
+                networks.remove(docker_net)
+                seen_nets.discard(docker_net)
+            networks.insert(0, str(docker_net))
+            seen_nets.add(str(docker_net))
+
+    _add_net("proxy_net")
+    cfg["networks"] = networks
+    logger.info(
+        "DB networks for service=%s: %s",
+        getattr(service, "pk", None),
+        networks,
+    )
 
     if not cfg.get("volumes"):
         vols = _collect_service_volumes(service)
