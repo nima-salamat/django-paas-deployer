@@ -1154,6 +1154,324 @@ def _apply_php_document_root(dockerfile: str, document_root_rel: str) -> str:
 
 
 
+def _detect_php_project(tar_stream) -> dict:
+    """
+    Inspect the deployment archive for PHP framework / schema signals.
+
+    Returns keys:
+      is_laravel, has_composer, has_artisan, schema_files, has_vendor.
+    """
+    info = {
+        "is_laravel": False,
+        "has_composer": False,
+        "has_artisan": False,
+        "schema_files": [],
+        "has_vendor": False,
+    }
+    if tar_stream is None:
+        return info
+    try:
+        import tarfile as _tf
+        import json as _json
+
+        tar_stream.seek(0)
+        with _tf.open(fileobj=tar_stream, mode="r:*") as tar:
+            names = []
+            for member in tar.getmembers():
+                n = member.name.replace("\\", "/").lstrip("./")
+                if not n or n in {".", ".."} or "/../" in f"/{n}/":
+                    continue
+                names.append(n)
+
+            for n in names:
+                base = n.rsplit("/", 1)[-1]
+                depth = 0 if "/" not in n else n.count("/")
+                if base == "composer.json" and depth <= 2:
+                    info["has_composer"] = True
+                    try:
+                        m = next(
+                            (
+                                x
+                                for x in tar.getmembers()
+                                if x.name.replace("\\", "/").lstrip("./") == n
+                            ),
+                            None,
+                        )
+                        if m is not None:
+                            fobj = tar.extractfile(m)
+                            if fobj is not None:
+                                pkg = _json.loads(
+                                    fobj.read().decode("utf-8", "ignore")
+                                )
+                                req = {
+                                    **(pkg.get("require") or {}),
+                                    **(pkg.get("require-dev") or {}),
+                                }
+                                if any(k.startswith("laravel/") for k in req):
+                                    info["is_laravel"] = True
+                    except Exception:
+                        pass
+                if base == "artisan" and depth <= 2:
+                    info["has_artisan"] = True
+                    info["is_laravel"] = True
+                if n.endswith("vendor/autoload.php"):
+                    info["has_vendor"] = True
+
+            schema_candidates = (
+                "schema.sql",
+                "database.sql",
+                "db.sql",
+                "init.sql",
+                "migrate.sql",
+                "migrations.sql",
+                "sql/schema.sql",
+                "sql/init.sql",
+                "database/schema.sql",
+                "database/init.sql",
+                "install/schema.sql",
+                "install.sql",
+            )
+            name_set = set(names)
+            for cand in schema_candidates:
+                if cand in name_set:
+                    info["schema_files"].append(cand)
+                    continue
+                for n in names:
+                    if n.endswith("/" + cand) and n.count("/") <= 2:
+                        info["schema_files"].append(n)
+                        break
+
+            sql_files = sorted(
+                n
+                for n in names
+                if n.endswith(".sql")
+                and n.count("/") <= 2
+                and not n.startswith("vendor/")
+                and "test" not in n.lower()
+            )
+            for n in sql_files:
+                if n not in info["schema_files"] and len(info["schema_files"]) < 5:
+                    info["schema_files"].append(n)
+
+        tar_stream.seek(0)
+    except Exception:
+        try:
+            tar_stream.seek(0)
+        except Exception:
+            pass
+    return info
+
+
+def _php_entrypoint_script(
+    *,
+    is_laravel: bool,
+    schema_files: list,
+    doc_root_rel: str = "",
+) -> str:
+    """
+    Shell entrypoint that waits for DB, runs migrations/schema, then Apache.
+    """
+    app_root = "/var/www/html"
+    if doc_root_rel:
+        if doc_root_rel.endswith("/public"):
+            parent = doc_root_rel[: -len("/public")].rstrip("/")
+            app_root = f"/var/www/html/{parent}" if parent else "/var/www/html"
+        elif doc_root_rel == "public":
+            app_root = "/var/www/html"
+        else:
+            app_root = f"/var/www/html/{doc_root_rel}".rstrip("/") or "/var/www/html"
+
+    safe_schemas = [
+        s for s in (schema_files or [])
+        if s and ".." not in s and not s.startswith("/") and not s.startswith("\\")
+    ]
+    schema_list = " ".join(f'"{s}"' for s in safe_schemas)
+
+    lines = [
+        "#!/bin/bash",
+        "set -e",
+        f'APP_ROOT="{app_root}"',
+        'cd "$APP_ROOT" 2>/dev/null || cd /var/www/html || true',
+        "",
+        'DB_HOST="${DB_HOST:-${MYSQL_HOST:-}}"',
+        'DB_PORT="${DB_PORT:-${MYSQL_PORT:-3306}}"',
+        'DB_USER="${DB_USERNAME:-${DB_USER:-${MYSQL_USER:-root}}}"',
+        'DB_PASS="${DB_PASSWORD:-${MYSQL_PASSWORD:-${MYSQL_ROOT_PASSWORD:-}}}"',
+        'DB_NAME="${DB_DATABASE:-${MYSQL_DATABASE:-}}"',
+        "",
+        "wait_for_db() {",
+        '  if [ -z "$DB_HOST" ]; then return 0; fi',
+        '  echo "[entrypoint] Waiting for database at $DB_HOST:$DB_PORT ..."',
+        "  for i in $(seq 1 60); do",
+        "    if php -r '",
+        '      $h=getenv("DB_HOST")?:getenv("MYSQL_HOST");',
+        '      $p=(int)(getenv("DB_PORT")?:getenv("MYSQL_PORT")?:3306);',
+        '      $u=getenv("DB_USERNAME")?:getenv("DB_USER")?:getenv("MYSQL_USER")?:"root";',
+        '      $w=getenv("DB_PASSWORD")?:getenv("MYSQL_PASSWORD")?:getenv("MYSQL_ROOT_PASSWORD")?:"";',
+        '      $d=getenv("DB_DATABASE")?:getenv("MYSQL_DATABASE")?:"";',
+        "      try { $m=@new mysqli($h,$u,$w,$d?:\"\",$p); if($m&&!$m->connect_errno){$m->close();exit(0);} } catch(Throwable $e){}",
+        "      exit(1);",
+        "    ' 2>/dev/null; then",
+        '      echo "[entrypoint] Database is reachable."; return 0;',
+        "    fi",
+        "    sleep 2",
+        "  done",
+        '  echo "[entrypoint] WARNING: database not reachable after 120s; continuing."',
+        "  return 0",
+        "}",
+        "",
+        "run_laravel_migrate() {",
+        '  if [ ! -f "$APP_ROOT/artisan" ]; then return 0; fi',
+        '  echo "[entrypoint] Running Laravel migrations..."',
+        '  php "$APP_ROOT/artisan" migrate --force || {',
+        '    echo "[entrypoint] WARNING: artisan migrate failed; app will still start."',
+        "    return 0",
+        "  }",
+        '  echo "[entrypoint] Laravel migrations finished."',
+        "}",
+        "",
+        "run_schema_sql() {",
+        f'  SCHEMA_FILES="{schema_list}"',
+        '  if [ -z "$SCHEMA_FILES" ]; then return 0; fi',
+        '  if [ -z "$DB_HOST" ] || [ -z "$DB_NAME" ]; then',
+        '    echo "[entrypoint] Skipping schema import (DB_HOST/DB_DATABASE not set)."',
+        "    return 0",
+        "  fi",
+        '  MARKER="/tmp/.paas_schema_imported"',
+        '  if [ -f "$MARKER" ]; then',
+        '    echo "[entrypoint] Schema already imported; skipping."',
+        "    return 0",
+        "  fi",
+        '  echo "[entrypoint] Importing SQL schema files..."',
+        "  for f in $SCHEMA_FILES; do",
+        '    path=""',
+        '    if [ -f "$APP_ROOT/$f" ]; then path="$APP_ROOT/$f"',
+        '    elif [ -f "/var/www/html/$f" ]; then path="/var/www/html/$f"; fi',
+        '    if [ -z "$path" ]; then echo "[entrypoint] Schema not found: $f"; continue; fi',
+        '    echo "[entrypoint] Importing $path ..."',
+        "    php -r '",
+        '      $h=getenv("DB_HOST")?:getenv("MYSQL_HOST");',
+        '      $p=(int)(getenv("DB_PORT")?:getenv("MYSQL_PORT")?:3306);',
+        '      $u=getenv("DB_USERNAME")?:getenv("DB_USER")?:getenv("MYSQL_USER")?:"root";',
+        '      $w=getenv("DB_PASSWORD")?:getenv("MYSQL_PASSWORD")?:getenv("MYSQL_ROOT_PASSWORD")?:"";',
+        '      $d=getenv("DB_DATABASE")?:getenv("MYSQL_DATABASE");',
+        "      $file=$argv[1];",
+        "      $m=new mysqli($h,$u,$w,$d,$p);",
+        '      if($m->connect_errno){fwrite(STDERR,$m->connect_error);exit(1);}',
+        '      $sql=file_get_contents($file);',
+        '      if($sql===false){fwrite(STDERR,"cannot read");exit(1);}',
+        "      if($m->multi_query($sql)){do{if($r=$m->store_result()){$r->free();}}while($m->more_results()&&$m->next_result());}",
+        '      if($m->errno){fwrite(STDERR,$m->error);exit(1);}',
+        "      $m->close(); echo \"OK\\n\";",
+        "    ' \"$path\" || echo \"[entrypoint] WARNING: failed to import $path\"",
+        "  done",
+        '  touch "$MARKER" 2>/dev/null || true',
+        '  echo "[entrypoint] Schema import finished."',
+        "}",
+        "",
+        "wait_for_db",
+    ]
+
+    if is_laravel:
+        lines.append("run_laravel_migrate")
+    else:
+        lines.append("run_schema_sql")
+
+    lines.extend(
+        [
+            'echo "[entrypoint] Starting Apache..."',
+            "exec apache2-foreground",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _inject_php_runtime(
+    dockerfile: str,
+    *,
+    info: dict,
+    doc_root_rel: str = "",
+    logger=None,
+) -> str:
+    """Inject composer (build) + migration entrypoint (runtime) into PHP image."""
+    is_laravel = bool(info.get("is_laravel") or info.get("has_artisan"))
+    has_composer = bool(info.get("has_composer"))
+    schema_files = list(info.get("schema_files") or [])
+    writable_dirs = list(info.get("writable_dirs") or [])
+    if is_laravel:
+        for d in ("storage", "bootstrap/cache"):
+            if d not in writable_dirs:
+                writable_dirs.append(d)
+
+    if has_composer and not info.get("has_vendor"):
+        composer_block = (
+            "\n# --- Composer dependencies (injected by deployer) ---\n"
+            "COPY --from=composer:2 /usr/bin/composer /usr/bin/composer\n"
+            "RUN cd /var/www/html "
+            "&& if [ -f composer.json ]; then "
+            "composer install --no-dev --optimize-autoloader --no-interaction --prefer-dist || "
+            "composer install --no-interaction --prefer-dist; "
+            "fi\n"
+        )
+        if re.search(r"^COPY\s+\.\s+/var/www/html/?\s*$", dockerfile, re.MULTILINE):
+            dockerfile = re.sub(
+                r"^(COPY\s+\.\s+/var/www/html/?\s*)$",
+                lambda m: m.group(1) + "\n" + composer_block,
+                dockerfile,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            dockerfile = dockerfile.rstrip() + "\n" + composer_block
+
+    if writable_dirs:
+        safe_dirs = [
+            d.strip().lstrip("./")
+            for d in writable_dirs
+            if d and ".." not in str(d) and not str(d).startswith("/")
+        ]
+        if safe_dirs:
+            dirs_str = " ".join(f"/var/www/html/{d}" for d in safe_dirs)
+            chmod_block = (
+                "\n# --- Writable dirs (Laravel storage etc.) ---\n"
+                f"RUN mkdir -p {dirs_str} "
+                f"&& chown -R www-data:www-data {dirs_str} "
+                f"&& chmod -R ug+rwx {dirs_str}\n"
+            )
+            dockerfile = dockerfile.rstrip() + "\n" + chmod_block
+
+    need_entrypoint = is_laravel or bool(schema_files)
+    if need_entrypoint:
+        script = _php_entrypoint_script(
+            is_laravel=is_laravel,
+            schema_files=schema_files,
+            doc_root_rel=doc_root_rel or "",
+        )
+        b64 = base64.b64encode(script.encode("utf-8")).decode("ascii")
+        entry_block = (
+            "\n# --- PHP DB bootstrap entrypoint (injected by deployer) ---\n"
+            f"RUN echo '{b64}' | base64 -d > /usr/local/bin/paas-php-entrypoint.sh \\\n"
+            "    && chmod +x /usr/local/bin/paas-php-entrypoint.sh\n"
+            'ENTRYPOINT ["/usr/local/bin/paas-php-entrypoint.sh"]\n'
+        )
+        dockerfile = _strip_cmd_entrypoint(dockerfile)
+        dockerfile = dockerfile.rstrip() + "\n" + entry_block
+
+    if logger:
+        logger.info(
+            "dockerfile_generation",
+            "PHP runtime bootstrap configured.",
+            progress=15,
+            details={
+                "is_laravel": is_laravel,
+                "has_composer": has_composer,
+                "schema_files": schema_files,
+                "entrypoint": need_entrypoint,
+            },
+        )
+    return dockerfile
+
 def _render_php(dockerfile_template, tar_stream, config, logger):
     entry_point_override = None
     if config is not None:
@@ -1229,7 +1547,42 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
         )
 
     rendered = _apply_php_document_root(rendered, doc_root_rel)
+
+    # Detect Laravel / schema.sql and inject composer + migrate entrypoint.
+    # Prefer official platform plugin signals (LaravelPlatform.defaults migrate=True)
+    # when enrich_config_from_project has attached ProjectConfig.
+    php_info = _detect_php_project(tar_stream)
+    if project_cfg is not None:
+        fw = (getattr(project_cfg, "framework", None) or "").lower()
+        platform_name = (getattr(project_cfg, "platform", None) or "").lower()
+        if fw == "laravel" or platform_name == "laravel":
+            php_info["is_laravel"] = True
+            php_info["has_artisan"] = True
+    # Also honour Deploy.config platform=laravel even without project_cfg
+    cfg_platform = ""
+    if config is not None:
+        cfg_platform = (getattr(config, "platform", None) or "").lower()
+    if cfg_platform == "laravel":
+        php_info["is_laravel"] = True
+        # Explicit migrate flag from LaravelPlatform.defaults()
+        migrate_flag = getattr(project_cfg, "migrate", None)
+        if migrate_flag is None and isinstance(getattr(project_cfg, "extra", None), dict):
+            migrate_flag = project_cfg.extra.get("migrate")
+        if migrate_flag is True:
+            php_info["is_laravel"] = True
+        # Writable dirs for storage/bootstrap/cache
+        extra = getattr(project_cfg, "extra", None) or {}
+        if isinstance(extra, dict) and extra.get("writable_dirs"):
+            php_info["writable_dirs"] = list(extra["writable_dirs"])
+
+    rendered = _inject_php_runtime(
+        rendered,
+        info=php_info,
+        doc_root_rel=doc_root_rel or "",
+        logger=logger,
+    )
     return rendered
+
 
 
 def _render_generic(platform, dockerfile_template, tar_stream, config, logger):
