@@ -680,3 +680,46 @@ class StaffTicketDeleteAPIView(APIView):
                     return err("Forbidden", status.HTTP_403_FORBIDDEN)
         ticket.delete()
         return ok("Ticket deleted")
+
+
+class TicketMarkReadAPIView(APIView):
+    """
+    POST /api/tickets/<pk>/read/
+    Marks messages from the other party as seen and updates TicketReadState.
+    """
+    permission_classes = [IsAuthenticated, IsTicketOwnerOrStaff]
+
+    def post(self, request, pk):
+        try:
+            ticket = Ticket.objects.get(pk=pk)
+        except Ticket.DoesNotExist:
+            raise Http404
+        self.check_object_permissions(request, ticket)
+        user = request.user
+        now = timezone.now()
+        # Owner marks staff replies seen; staff marks user messages seen
+        if user.is_staff or user.is_superuser:
+            if ticket.user_id == user.id and not user.is_superuser:
+                # owner who is also staff: mark staff replies from others
+                qs = ticket.messages.filter(is_staff_reply=True, seen_at__isnull=True).exclude(author=user)
+            else:
+                qs = ticket.messages.filter(is_staff_reply=False, seen_at__isnull=True)
+        else:
+            qs = ticket.messages.filter(is_staff_reply=True, seen_at__isnull=True)
+
+        updated = qs.update(seen_at=now)
+        from .models import TicketReadState
+        TicketReadState.objects.update_or_create(
+            ticket=ticket, user=user, defaults={"last_read_at": now}
+        )
+        # Broadcast seen event
+        try:
+            from .consumers import broadcast_ticket_event
+            broadcast_ticket_event(
+                "ticket.seen",
+                ticket,
+                extra={"reader_id": user.id, "marked": updated, "is_staff": bool(user.is_staff or user.is_superuser)},
+            )
+        except Exception:
+            pass
+        return ok("Marked as read", data={"marked": updated, "last_read_at": now.isoformat()})

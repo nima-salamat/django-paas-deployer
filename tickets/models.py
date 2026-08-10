@@ -132,6 +132,8 @@ class TicketMessage(models.Model):
     author = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="ticket_messages")
     body = models.TextField()
     is_staff_reply = models.BooleanField(default=False)
+    # When the other party (owner vs staff) has read this message
+    seen_at = models.DateTimeField(null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -141,6 +143,19 @@ class TicketMessage(models.Model):
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
         Ticket.objects.filter(pk=self.ticket_id).update(last_message_at=self.created_at, updated_at=timezone.now())
+
+
+class TicketReadState(models.Model):
+    """Per-user last-read cursor on a ticket (messenger-style)."""
+    ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name="read_states")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="ticket_read_states")
+    last_read_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [("ticket", "user")]
+        indexes = [models.Index(fields=["user", "last_read_at"])]
+
 
 class TicketAttachment(models.Model):
     ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name="attachments")

@@ -1,4 +1,4 @@
-"""Staff/admin ticket live updates — hardened Channels consumer."""
+"""Ticket WebSockets: staff events + personal notify channel."""
 from __future__ import annotations
 
 import logging
@@ -43,14 +43,11 @@ def _origin_allowed(scope) -> bool:
         if h and h != "*":
             allowed.add(f"https://{h}")
             allowed.add(f"http://{h}")
-    domain = getattr(settings, "DOMAIN_NAME", None) or ""
-    if domain:
-        allowed.add(f"https://{domain}")
-        allowed.add(f"http://{domain}")
-    api_domain = getattr(settings, "API_DOMAIN_NAME", None) or ""
-    if api_domain:
-        allowed.add(f"https://{api_domain}")
-        allowed.add(f"http://{api_domain}")
+    for attr in ("DOMAIN_NAME", "API_DOMAIN_NAME"):
+        d = getattr(settings, attr, None) or ""
+        if d:
+            allowed.add(f"https://{d}")
+            allowed.add(f"http://{d}")
     for o in getattr(settings, "CORS_ALLOWED_ORIGINS", None) or []:
         allowed.add(str(o).rstrip("/"))
     if not allowed:
@@ -70,7 +67,7 @@ def _is_token_blacklisted(jti: str) -> bool:
 
 
 @database_sync_to_async
-def _get_staff_user(user_id: int):
+def _get_user(user_id: int):
     return User.objects.only(
         "id", "is_active", "is_staff", "is_superuser", "username"
     ).get(pk=user_id)
@@ -86,103 +83,79 @@ def _dept_ids_for(user_id: int):
     )
 
 
+@database_sync_to_async
+def _user_owns_ticket(user_id: int, ticket_id: int) -> bool:
+    from .models import Ticket
+    return Ticket.objects.filter(pk=ticket_id, user_id=user_id).exists()
+
+
+async def _authenticate(scope):
+    if not _origin_allowed(scope):
+        return None, CODE_BAD_ORIGIN
+    query = scope.get("query_string", b"").decode("utf-8")
+    params = urllib.parse.parse_qs(query)
+    access_token = (params.get("token") or [None])[0]
+    if not access_token or len(access_token) > 4096:
+        return None, CODE_NO_TOKEN
+    ip = _client_ip(scope)
+    rl_key = f"ws:tickets:conn:{ip}"
+    try:
+        n = cache.get(rl_key)
+        if n is not None and int(n) >= 40:
+            return None, CODE_RATE_LIMIT
+        if n is None:
+            cache.set(rl_key, 1, timeout=60)
+        else:
+            try:
+                cache.incr(rl_key)
+            except ValueError:
+                cache.set(rl_key, 1, timeout=60)
+    except Exception:
+        pass
+    try:
+        validated = AccessToken(access_token)
+        user_id = validated["user_id"]
+        jti = validated.get("jti")
+    except (InvalidToken, TokenError, KeyError):
+        return None, CODE_BAD_TOKEN
+    if await _is_token_blacklisted(jti):
+        return None, CODE_BAD_TOKEN
+    try:
+        user = await _get_user(user_id)
+    except User.DoesNotExist:
+        return None, CODE_BAD_TOKEN
+    if not user.is_active:
+        return None, CODE_FORBIDDEN
+    return user, None
+
+
 class TicketEventsConsumer(AsyncJsonWebsocketConsumer):
-    """JWT staff-only ticket events. Minimal payloads, dept-scoped groups."""
+    """Staff/admin department-scoped live ticket feed."""
 
     async def connect(self):
-        if not _origin_allowed(self.scope):
-            logger.warning("tickets.ws rejected origin ip=%s", _client_ip(self.scope))
-            await self.close(code=CODE_BAD_ORIGIN)
+        user, err = await _authenticate(self.scope)
+        if err:
+            await self.close(code=err)
             return
-
-        query = self.scope.get("query_string", b"").decode("utf-8")
-        params = urllib.parse.parse_qs(query)
-        access_token = (params.get("token") or [None])[0]
-        if not access_token or len(access_token) > 4096:
-            await self.close(code=CODE_NO_TOKEN)
-            return
-
-        ip = _client_ip(self.scope)
-        rl_key = f"ws:tickets:conn:{ip}"
-        try:
-            n = cache.get(rl_key)
-            if n is not None and int(n) >= 30:
-                await self.close(code=CODE_RATE_LIMIT)
-                return
-            if n is None:
-                cache.set(rl_key, 1, timeout=60)
-            else:
-                try:
-                    cache.incr(rl_key)
-                except ValueError:
-                    cache.set(rl_key, 1, timeout=60)
-        except Exception:
-            pass
-
-        try:
-            validated = AccessToken(access_token)
-            user_id = validated["user_id"]
-            jti = validated.get("jti")
-        except (InvalidToken, TokenError, KeyError) as exc:
-            logger.info("tickets.ws bad token ip=%s err=%s", ip, type(exc).__name__)
-            await self.close(code=CODE_BAD_TOKEN)
-            return
-
-        if await _is_token_blacklisted(jti):
-            await self.close(code=CODE_BAD_TOKEN)
-            return
-
-        try:
-            self.user = await _get_staff_user(user_id)
-        except User.DoesNotExist:
-            await self.close(code=CODE_BAD_TOKEN)
-            return
-
-        if not self.user.is_active or not (self.user.is_staff or self.user.is_superuser):
+        if not (user.is_staff or user.is_superuser):
             await self.close(code=CODE_FORBIDDEN)
             return
-
-        user_rl = f"ws:tickets:user:{self.user.id}"
-        self._user_rl_key = None
-        try:
-            uc = cache.get(user_rl)
-            if uc is not None and int(uc) >= 5:
-                await self.close(code=CODE_RATE_LIMIT)
-                return
-            cache.set(user_rl, int(uc or 0) + 1, timeout=3600)
-            self._user_rl_key = user_rl
-        except Exception:
-            pass
-
+        self.user = user
         self.groups_joined = []
-        if self.user.is_superuser:
+        if user.is_superuser:
             await self.channel_layer.group_add("tickets_staff_all", self.channel_name)
             self.groups_joined.append("tickets_staff_all")
         else:
-            dept_ids = await _dept_ids_for(self.user.id)
-            if not dept_ids:
-                await self.accept()
-                await self.send_json({"type": "connected", "groups": 0, "warning": "no_departments"})
-                return
-            for did in dept_ids:
+            for did in await _dept_ids_for(user.id):
                 g = f"tickets_dept_{did}"
                 await self.channel_layer.group_add(g, self.channel_name)
                 self.groups_joined.append(g)
-
         await self.accept()
-        await self.send_json({"type": "connected", "groups": len(self.groups_joined)})
+        await self.send_json({"type": "connected", "channel": "staff", "groups": len(self.groups_joined)})
 
     async def disconnect(self, code):
         for g in getattr(self, "groups_joined", []):
             await self.channel_layer.group_discard(g, self.channel_name)
-        key = getattr(self, "_user_rl_key", None)
-        if key:
-            try:
-                n = cache.get(key)
-                if n is not None and int(n) > 0:
-                    cache.decr(key)
-            except Exception:
-                pass
 
     async def receive_json(self, content, **kwargs):
         if isinstance(content, dict) and content.get("type") == "ping":
@@ -200,6 +173,70 @@ class TicketEventsConsumer(AsyncJsonWebsocketConsumer):
             if dept_id is not None and str(dept_id) not in allowed:
                 return
         await self.send_json(data)
+
+
+class TicketNotifyConsumer(AsyncJsonWebsocketConsumer):
+    """
+    Personal notification channel for any authenticated user.
+    Joins tickets_user_<id> and optionally tickets_ticket_<id> via subscribe.
+    """
+
+    async def connect(self):
+        user, err = await _authenticate(self.scope)
+        if err:
+            await self.close(code=err)
+            return
+        self.user = user
+        self.groups_joined = []
+        g = f"tickets_user_{user.id}"
+        await self.channel_layer.group_add(g, self.channel_name)
+        self.groups_joined.append(g)
+        if user.is_staff or user.is_superuser:
+            if user.is_superuser:
+                await self.channel_layer.group_add("tickets_staff_all", self.channel_name)
+                self.groups_joined.append("tickets_staff_all")
+            else:
+                for did in await _dept_ids_for(user.id):
+                    dg = f"tickets_dept_{did}"
+                    await self.channel_layer.group_add(dg, self.channel_name)
+                    self.groups_joined.append(dg)
+        await self.accept()
+        await self.send_json({"type": "connected", "channel": "notify"})
+
+    async def disconnect(self, code):
+        for g in getattr(self, "groups_joined", []):
+            await self.channel_layer.group_discard(g, self.channel_name)
+
+    async def receive_json(self, content, **kwargs):
+        if not isinstance(content, dict):
+            return
+        t = content.get("type")
+        if t == "ping":
+            await self.send_json({"type": "pong"})
+            return
+        if t == "subscribe_ticket":
+            tid = content.get("ticket_id")
+            if not tid:
+                return
+            # Owner or staff may subscribe
+            owns = await _user_owns_ticket(self.user.id, int(tid))
+            if not owns and not (self.user.is_staff or self.user.is_superuser):
+                return
+            g = f"tickets_ticket_{tid}"
+            if g not in self.groups_joined:
+                await self.channel_layer.group_add(g, self.channel_name)
+                self.groups_joined.append(g)
+            await self.send_json({"type": "subscribed", "ticket_id": tid})
+            return
+        if t == "unsubscribe_ticket":
+            tid = content.get("ticket_id")
+            g = f"tickets_ticket_{tid}"
+            if g in self.groups_joined:
+                await self.channel_layer.group_discard(g, self.channel_name)
+                self.groups_joined.remove(g)
+
+    async def ticket_event(self, event):
+        await self.send_json(event.get("data") or {})
 
 
 def broadcast_ticket_event(event_type: str, ticket, extra=None):
@@ -228,7 +265,7 @@ def broadcast_ticket_event(event_type: str, ticket, extra=None):
     except Exception:
         pass
     if extra:
-        for k in ("message_id", "is_staff_reply", "author_id"):
+        for k in ("message_id", "is_staff_reply", "author_id", "reader_id", "marked", "is_staff", "preview"):
             if k in extra:
                 payload[k] = extra[k]
 
@@ -236,3 +273,6 @@ def broadcast_ticket_event(event_type: str, ticket, extra=None):
     async_to_sync(layer.group_send)("tickets_staff_all", message)
     if getattr(ticket, "department_id", None):
         async_to_sync(layer.group_send)(f"tickets_dept_{ticket.department_id}", message)
+    if getattr(ticket, "user_id", None):
+        async_to_sync(layer.group_send)(f"tickets_user_{ticket.user_id}", message)
+    async_to_sync(layer.group_send)(f"tickets_ticket_{ticket.id}", message)
