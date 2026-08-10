@@ -433,12 +433,16 @@ class AuthCodeAdmin(admin.ModelAdmin):
 
     @admin.display(boolean=True, description="Expired")
     def is_expired_display(self, obj):
+        if obj is None or getattr(obj, "pk", None) is None:
+            return False
         return obj.is_expired()
 
     @admin.display(boolean=True, description="Locked")
     def is_locked_display(self, obj):
+        if obj is None or getattr(obj, "pk", None) is None:
+            return False
         return obj.is_locked()
-
+    
     @admin.action(description="Invalidate (delete) selected codes")
     def invalidate_codes(self, request, queryset):
         count = queryset.count()

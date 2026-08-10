@@ -449,6 +449,8 @@ class AuthCode(models.Model):
         return f"AuthCode({target}, {self.purpose}, {self.code})"
 
     def is_expired(self):
+        if self.updated_at is None:
+            return False
         s = LoginSettings.get_solo()
         expire_time = self.updated_at + timedelta(minutes=s.otp_expire_minutes)
         return timezone.now() > expire_time
@@ -457,9 +459,11 @@ class AuthCode(models.Model):
         return not self.is_expired()
 
     def is_locked(self):
+        if self.pk is None:
+            return False
         s = LoginSettings.get_solo()
         return self.attempts >= s.otp_max_attempts
-
+        
     def update_code(self):
         s = LoginSettings.get_solo()
         length = s.otp_length or 8
