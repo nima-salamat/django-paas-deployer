@@ -1,6 +1,6 @@
 ARG DOCKERFILE_DOCKER_MIRROR=docker.io
 ARG DOCKERFILE_PYTHON_MIRROR=https://pypi.org/simple
-
+ARG DOCKERFILE_PYTHON_VERSION=3.10-slim-trixie
 FROM ${DOCKERFILE_DOCKER_MIRROR}/python:${DOCKERFILE_PYTHON_VERSION}
 
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -9,7 +9,7 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 ARG DOCKERFILE_LINUX_MIRROR=http://deb.debian.org/debian
-
+ARG CODENAME=trixie
 # Configure Debian Linux mirror
 RUN set -eux; \
     . /etc/os-release; \
