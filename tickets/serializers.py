@@ -1,4 +1,3 @@
-
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import Department, DepartmentMembership, Ticket, TicketMessage, TicketAttachment
@@ -41,10 +40,19 @@ class TicketAttachmentSerializer(serializers.ModelSerializer):
 class TicketMessageSerializer(serializers.ModelSerializer):
     author = UserBriefSerializer(read_only=True)
     attachments = TicketAttachmentSerializer(many=True, read_only=True)
+    is_seen = serializers.SerializerMethodField()
+
     class Meta:
         model = TicketMessage
-        fields = ("id","author","body","is_staff_reply","created_at","updated_at","attachments")
+        fields = (
+            "id", "author", "body", "is_staff_reply",
+            "seen_at", "is_seen",
+            "created_at", "updated_at", "attachments",
+        )
         read_only_fields = fields
+
+    def get_is_seen(self, obj):
+        return bool(obj.seen_at)
 
 class TicketListSerializer(serializers.ModelSerializer):
     department = DepartmentSerializer(read_only=True)

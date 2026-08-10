@@ -7,6 +7,7 @@ urlpatterns = [
     path("", apis.MyTicketListCreateAPIView.as_view(), name="my-tickets"),
     path("<int:pk>/", apis.TicketDetailAPIView.as_view(), name="ticket-detail"),
     path("<int:pk>/close/", apis.TicketCloseAPIView.as_view(), name="ticket-close"),
+    path("<int:pk>/read/", apis.TicketMarkReadAPIView.as_view(), name="ticket-read"),
     path("<int:pk>/messages/", apis.TicketMessageCreateAPIView.as_view(), name="ticket-messages"),
     path("attachments/<int:pk>/download/", apis.AttachmentDownloadAPIView.as_view(), name="ticket-attachment-download"),
     # Staff
