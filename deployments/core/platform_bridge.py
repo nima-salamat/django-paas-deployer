@@ -14,7 +14,13 @@ import zipfile
 from dataclasses import replace
 from typing import Any
 
-from deployments.common.security import is_safe_archive_name, is_zip_symlink, safe_join
+from deployments.common.security import (
+    is_safe_archive_name,
+    is_zip_symlink,
+    safe_join,
+    validate_final_app_layout,
+)
+from deployments.common.exceptions import DeploymentSecurityError
 
 from .types import DeploymentConfig
 
@@ -58,10 +64,16 @@ def extract_zip_to_temp(zip_path: str) -> tuple[str, str]:
                     )
                 name = info.filename.replace("\\", "/")
                 if not is_safe_archive_name(name):
-                    raise ValueError(f"Unsafe path in ZIP: {info.filename}")
+                    raise DeploymentSecurityError(
+                        f"Unsafe path in ZIP: {info.filename}",
+                        stage="archive_validation",
+                        details={"filename": info.filename},
+                    )
                 if is_zip_symlink(info):
-                    raise ValueError(
-                        f"Refusing to extract symlink member '{info.filename}'."
+                    raise DeploymentSecurityError(
+                        f"Refusing to extract symlink member '{info.filename}'.",
+                        stage="archive_validation",
+                        details={"filename": info.filename},
                     )
                 # Cap on uncompressed size — guards against zip bombs.
                 total_bytes += info.file_size
@@ -91,6 +103,14 @@ def extract_zip_to_temp(zip_path: str) -> tuple[str, str]:
         project_root = os.path.join(temp_dir, entries[0])
     else:
         project_root = temp_dir
+
+    # Post-extract gate: refuse any path that escaped the temp root
+    # or still contains ".." segments (defense in depth after safe_join).
+    try:
+        validate_final_app_layout(project_root)
+    except DeploymentSecurityError:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
 
     return temp_dir, project_root
 

@@ -354,6 +354,30 @@ class DeploymentOrchestrator:
         rollback_performed = False
         rollback_failed = False
 
+        # Capture internal logs if a new container was started then cancelled.
+        if new_container_started:
+            try:
+                from deployments.core.container_logs import capture_logs_for_deploy
+
+                capture_logs_for_deploy(
+                    config.name,
+                    deploy_id=self.logger.deployment_id,
+                    reason=exc.message or "deployment cancelled",
+                )
+            except Exception:
+                pass
+            try:
+                failed = Container(config.name)
+                if failed.exists():
+                    failed.stop(timeout=config.stop_timeout)
+                    failed.remove()
+            except Exception as cleanup_exc:
+                self.logger.warning(
+                    "cleanup",
+                    f"Failed to remove cancelled new container: {cleanup_exc}",
+                    progress=97,
+                )
+
         # If the new container was started but cancelled mid-health-check,
         # we still try to roll back to the previous image.
         if snapshot.image_ref and not new_container_started:
@@ -442,7 +466,19 @@ class DeploymentOrchestrator:
 
         # If the new container was started but failed health check, we
         # must stop+remove it before rolling back so the name is free.
+        # Capture internal container logs FIRST so operators can see why
+        # the process exited (marked as deployment.container_logs).
         if new_container_started:
+            try:
+                from deployments.core.container_logs import capture_logs_for_deploy
+
+                capture_logs_for_deploy(
+                    config.name,
+                    deploy_id=self.logger.deployment_id,
+                    reason=detailed_message or exc.message or "deploy failure",
+                )
+            except Exception:
+                pass
             try:
                 failed_container = Container(config.name)
                 if failed_container.exists():

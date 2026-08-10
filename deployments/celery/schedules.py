@@ -41,6 +41,9 @@ logger = logging.getLogger(__name__)
 # (MySQL/MariaDB official entrypoint can take 30-120 s after the container
 # is "running").  Monitor must NOT fail the deploy for a missing /
 # non-running container during these stages.
+# Stages where a container is not expected to exist yet (build / prepare).
+# health_check / credentials / container_startup are excluded: by then a
+# container should exist and a missing one is a real failure.
 PRE_CONTAINER_STAGES = frozenset({
     "",
     "idle",
@@ -55,11 +58,9 @@ PRE_CONTAINER_STAGES = frozenset({
     "cancelled",
     "image_pull",
     "volume_creation",
+    "network_creation",
     "container_replacement",
     "container_creation",
-    "container_startup",
-    "health_check",
-    "credentials",
 })
 
 
@@ -229,7 +230,7 @@ def _reconcile_active_deploy(deploy: Deploy) -> None:
                 progress = int(locked.progress or 0)
                 still_building = (
                     stage_name in PRE_CONTAINER_STAGES
-                    or progress < 95
+                    or progress < 85
                 )
                 if still_building:
                     # Let the worker finish; timeout handler covers stuck builds.
