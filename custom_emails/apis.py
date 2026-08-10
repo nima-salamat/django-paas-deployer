@@ -24,8 +24,15 @@ def err(message, http_status=400, extra=None):
     return Response(body, status=http_status)
 
 class IsStaffUser(IsAuthenticated):
+    """Legacy: staff or superuser."""
     def has_permission(self, request, view):
         return bool(super().has_permission(request, view) and (request.user.is_staff or request.user.is_superuser))
+
+
+class IsAdminUser(IsAuthenticated):
+    """Email management is admin-only (superuser)."""
+    def has_permission(self, request, view):
+        return bool(super().has_permission(request, view) and request.user.is_superuser)
 
 class StandardPagination(PageNumberPagination):
     page_size = 20
@@ -33,7 +40,7 @@ class StandardPagination(PageNumberPagination):
     max_page_size = 100
 
 class EmailTemplateListCreateAPIView(APIView):
-    permission_classes = [IsStaffUser]
+    permission_classes = [IsAdminUser]
     def get(self, request):
         qs = EmailTemplate.objects.all()
         search = request.query_params.get("search","").strip()
@@ -48,7 +55,7 @@ class EmailTemplateListCreateAPIView(APIView):
         return ok("Created", data=EmailTemplateSerializer(obj).data, http_status=201)
 
 class EmailTemplateDetailAPIView(APIView):
-    permission_classes = [IsStaffUser]
+    permission_classes = [IsAdminUser]
     def get_object(self, pk):
         try: return EmailTemplate.objects.get(pk=pk)
         except EmailTemplate.DoesNotExist: return None
@@ -71,7 +78,7 @@ class EmailTemplateDetailAPIView(APIView):
         return ok("Deactivated")
 
 class EmailTemplatePreviewAPIView(APIView):
-    permission_classes = [IsStaffUser]
+    permission_classes = [IsAdminUser]
     def post(self, request):
         ser = EmailTemplatePreviewSerializer(data=request.data)
         if not ser.is_valid(): return err("Validation failed", extra={"errors": ser.errors})
@@ -86,7 +93,7 @@ class EmailTemplatePreviewAPIView(APIView):
         return ok(data={"subject": subject, "body": body, "context": ctx})
 
 class EmailSendAPIView(APIView):
-    permission_classes = [IsStaffUser]
+    permission_classes = [IsAdminUser]
     def post(self, request):
         if not check_rate_limit(f"email_send:{request.user.id}", 30, 3600):
             return err("Rate limit exceeded", 429)
@@ -130,7 +137,7 @@ class EmailSendAPIView(APIView):
         return ok(f"Queued {len(log_ids)} emails", data={"queued": len(log_ids)}, http_status=202)
 
 class EmailLogListAPIView(APIView):
-    permission_classes = [IsStaffUser]
+    permission_classes = [IsAdminUser]
     def get(self, request):
         qs = EmailLog.objects.select_related("recipient","template").all()
         if request.query_params.get("status"): qs = qs.filter(status=request.query_params["status"])
@@ -141,8 +148,61 @@ class EmailLogListAPIView(APIView):
         return paginator.get_paginated_response(EmailLogSerializer(page, many=True).data)
 
 class EmailLogDetailAPIView(APIView):
-    permission_classes = [IsStaffUser]
+    permission_classes = [IsAdminUser]
     def get(self, request, pk):
         try: log = EmailLog.objects.select_related("recipient","template").get(pk=pk)
         except EmailLog.DoesNotExist: return err("Not found", 404)
         return ok(data=EmailLogSerializer(log).data)
+
+
+class EmailStatsAPIView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        from django.utils import timezone
+        from datetime import timedelta
+        now = timezone.now()
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week = today - timedelta(days=7)
+        qs = EmailLog.objects.all()
+        data = {
+            "sent": qs.filter(status=EmailLog.Status.SENT).count(),
+            "pending": qs.filter(status__in=[EmailLog.Status.PENDING, EmailLog.Status.SENDING]).count(),
+            "failed": qs.filter(status=EmailLog.Status.FAILED).count(),
+            "today": qs.filter(created_at__gte=today).count(),
+            "this_week": qs.filter(created_at__gte=week).count(),
+            "sent_today": qs.filter(status=EmailLog.Status.SENT, sent_at__gte=today).count(),
+            "failed_today": qs.filter(status=EmailLog.Status.FAILED, created_at__gte=today).count(),
+        }
+        return ok(data=data)
+
+
+class EmailLogRetryAPIView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, pk):
+        try:
+            log = EmailLog.objects.get(pk=pk)
+        except EmailLog.DoesNotExist:
+            return err("Not found", 404)
+        if log.status != EmailLog.Status.FAILED:
+            return err("Only failed emails can be retried.")
+        log.status = EmailLog.Status.PENDING
+        log.error_message = ""
+        log.failed_at = None
+        log.save(update_fields=["status", "error_message", "failed_at"])
+        send_email_log_task.delay(log.id)
+        return ok("Retry queued", data={"log_id": log.id})
+
+
+class AdminUserSearchAPIView(APIView):
+    """Search users for email recipient picker. Admin only."""
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        q = request.query_params.get("search", "").strip()
+        qs = User.objects.filter(is_active=True).exclude(email__isnull=True).exclude(email="")
+        if q:
+            qs = qs.filter(Q(username__icontains=q) | Q(email__icontains=q))
+        qs = qs.order_by("username")[:30]
+        return ok(data=[{"id": u.id, "username": u.username, "email": u.email} for u in qs])

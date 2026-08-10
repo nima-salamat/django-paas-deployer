@@ -71,7 +71,7 @@ INSTALLED_APPS = [
     "deployments",
     "services",
     "core",
-    "tickets",
+    "tickets.apps.TicketsConfig",
     "custom_emails",
 ]
 

@@ -7,4 +7,7 @@ urlpatterns = [
     path("send/", apis.EmailSendAPIView.as_view()),
     path("logs/", apis.EmailLogListAPIView.as_view()),
     path("logs/<int:pk>/", apis.EmailLogDetailAPIView.as_view()),
+    path("logs/<int:pk>/retry/", apis.EmailLogRetryAPIView.as_view()),
+    path("stats/", apis.EmailStatsAPIView.as_view()),
+    path("users/", apis.AdminUserSearchAPIView.as_view()),
 ]
