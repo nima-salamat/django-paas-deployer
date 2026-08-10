@@ -35,3 +35,5 @@ daphne==4.2.2
 channels-redis==4.3.0
 
 resend
+
+requests[socks]
