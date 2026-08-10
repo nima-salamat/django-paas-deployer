@@ -16,6 +16,9 @@ from .apis import (
     InviteCreateAPIView,
     InviteListAPIView,
     InviteDeactivateAPIView,
+    AdminAuthCodeListAPIView,
+    AdminAuthCodeDeleteAPIView,
+    AdminAuthCodePurgeAPIView,
     # legacy aliases
     LoginAPIView,
     SignupOrLoginAPIView,
@@ -48,6 +51,9 @@ urlpatterns = [
     path("api/invite/deactivate/", InviteDeactivateAPIView.as_view(), name="invite_deactivate"),
 
     # ---- Token check ----
+    path("api/admin/auth-codes/", AdminAuthCodeListAPIView.as_view(), name="admin_auth_codes"),
+    path("api/admin/auth-codes/purge/", AdminAuthCodePurgeAPIView.as_view(), name="admin_auth_codes_purge"),
+    path("api/admin/auth-codes/<int:pk>/", AdminAuthCodeDeleteAPIView.as_view(), name="admin_auth_code_delete"),
     path("api/validateToken/", ValidateToken.as_view(), name="validate_token"),
 
     # JWT — register BOTH with and without trailing slash to avoid POST redirect issues

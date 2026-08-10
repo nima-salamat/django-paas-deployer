@@ -16,6 +16,7 @@ urlpatterns = [
     path("staff/<int:pk>/priority/", apis.StaffTicketPriorityAPIView.as_view(), name="staff-ticket-priority"),
     path("staff/<int:pk>/department/", apis.StaffTicketAssignDepartmentAPIView.as_view(), name="staff-ticket-department"),
     path("staff/<int:pk>/assign/", apis.StaffTicketAssignAPIView.as_view(), name="staff-ticket-assign"),
+    path("staff/<int:pk>/delete/", apis.StaffTicketDeleteAPIView.as_view(), name="staff-ticket-delete"),
     # Admin departments / staff
     path("admin/departments/", apis.AdminDepartmentListCreateAPIView.as_view(), name="admin-departments"),
     path("admin/departments/<int:pk>/", apis.AdminDepartmentDetailAPIView.as_view(), name="admin-department-detail"),

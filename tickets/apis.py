@@ -658,3 +658,25 @@ class DepartmentStaffListAPIView(APIView):
             if m.user.is_active
         ]
         return ok(data=data)
+
+
+class StaffTicketDeleteAPIView(APIView):
+    """Hard-delete a ticket (superuser or staff with department manager / tickets.delete rule)."""
+    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+
+    def delete(self, request, pk):
+        try:
+            ticket = Ticket.objects.get(pk=pk)
+        except Ticket.DoesNotExist:
+            raise Http404
+        user = request.user
+        if not user.is_superuser:
+            from users.admin_apis import user_has_rule
+            if not user_has_rule(user, "tickets.delete"):
+                from .models import DepartmentMembership
+                if not DepartmentMembership.objects.filter(
+                    user=user, department_id=ticket.department_id, is_manager=True
+                ).exists():
+                    return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        ticket.delete()
+        return ok("Ticket deleted")

@@ -877,3 +877,79 @@ class AuthAPIView(FinalAuthAPIView):
 
 class ValidateAPIView(ValidateOTPAPIView):
     pass
+
+
+# ---------------------------------------------------------------------------
+# Admin: Auth codes list / delete
+# ---------------------------------------------------------------------------
+class AdminAuthCodeListAPIView(APIView):
+    """GET /auth/api/admin/auth-codes/ – list OTP codes (staff with permission / admin)."""
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+    def get(self, request):
+        from django.utils import timezone as tz
+        qs = AuthCode.objects.select_related("user").order_by("-created_at")
+        search = (request.query_params.get("search") or "").strip()
+        if search:
+            qs = qs.filter(
+                Q(user__username__icontains=search)
+                | Q(user__email__icontains=search)
+                | Q(contact__icontains=search)
+                | Q(code__icontains=search)
+            )
+        purpose = (request.query_params.get("purpose") or "").strip()
+        if purpose:
+            qs = qs.filter(purpose=purpose)
+        # Pagination simple
+        try:
+            page = max(int(request.query_params.get("page", 1)), 1)
+        except ValueError:
+            page = 1
+        page_size = 25
+        total = qs.count()
+        start = (page - 1) * page_size
+        items = []
+        for c in qs[start : start + page_size]:
+            items.append({
+                "id": c.id,
+                "user_id": c.user_id,
+                "username": getattr(c.user, "username", None) if c.user_id else None,
+                "contact": getattr(c, "contact", None) or "",
+                "purpose": c.purpose,
+                "code": c.code,
+                "attempts": getattr(c, "attempts", 0),
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+                "updated_at": c.updated_at.isoformat() if getattr(c, "updated_at", None) else None,
+                "is_expired": c.is_expired(),
+                "is_locked": c.is_locked(),
+            })
+        return ok(
+            _("success::auth codes"),
+            {"results": items, "count": total, "page": page, "page_size": page_size},
+        )
+
+
+class AdminAuthCodeDeleteAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+    def delete(self, request, pk):
+        deleted, _ = AuthCode.objects.filter(pk=pk).delete()
+        if not deleted:
+            return err(_("error::not found"), status.HTTP_404_NOT_FOUND)
+        return ok(_("success::deleted"))
+
+
+class AdminAuthCodePurgeAPIView(APIView):
+    """DELETE expired/used codes."""
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+    def post(self, request):
+        # OTP expiry is computed from updated_at + LoginSettings.otp_expire_minutes
+        from django.utils import timezone as tz
+        from datetime import timedelta
+        from .models import LoginSettings
+        minutes = LoginSettings.get_solo().otp_expire_minutes or 5
+        cutoff = tz.now() - timedelta(minutes=minutes)
+        qs = AuthCode.objects.filter(updated_at__lt=cutoff)
+        n, _ = qs.delete()
+        return ok(_("success::purged"), {"deleted": n})
