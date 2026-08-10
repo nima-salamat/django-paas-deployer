@@ -71,6 +71,8 @@ INSTALLED_APPS = [
     "deployments",
     "services",
     "core",
+    "tickets",
+    "custom_emails",
 ]
 
 

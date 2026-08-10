@@ -12,7 +12,9 @@ urlpatterns = [
     path("api/networks/", include("services.network_api_urls")),
     path("deploy/", include("deploy.urls")),
     path("api/system/", include("core.settings_urls")),
-    path("media/", include("core.urls"))
+    path("media/", include("core.urls")),
+    path("api/tickets/", include("tickets.urls")),
+    path("api/emails/", include("custom_emails.urls")),
     
 ]
 

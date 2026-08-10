@@ -14,7 +14,7 @@ app = Celery('config')
 app.config_from_object('django.conf:settings', namespace='CELERY')
 
 
-app.autodiscover_tasks(['deploy.tasks', 'deployments.celery', 'core.tasks.email'])
+app.autodiscover_tasks(['deploy.tasks', 'deployments.celery', 'core.tasks.email', 'custom_emails.tasks'])
 
 
 @app.task(bind=True)
