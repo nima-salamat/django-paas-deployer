@@ -31,11 +31,13 @@ RUN set -eux; \
 
 COPY requirements.txt .
 
+ARG DOCKERFILE_PYTHON_MIRROR
+
 RUN pip install \
-        --index-url "${DOCKERFILE_PYTHON_MIRROR}" \
+        --index-url "${DOCKERFILE_PYTHON_MIRROR:-https://pypi.org/simple}" \
         --upgrade pip \
     && pip install \
-        --index-url "${DOCKERFILE_PYTHON_MIRROR}" \
+        --index-url "${DOCKERFILE_PYTHON_MIRROR:-https://pypi.org/simple}" \
         --no-cache-dir \
         -r requirements.txt
 
