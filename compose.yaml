@@ -107,6 +107,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        DOCKERFILE_DOCKER_MIRROR: ${DOCKERFILE_DOCKER_MIRROR}
+        DOCKERFILE_PYTHON_VERSION: ${DOCKERFILE_PYTHON_VERSION}
+        DOCKERFILE_PYTHON_MIRROR: ${DOCKERFILE_PYTHON_MIRROR}
+        DOCKERFILE_LINUX_MIRROR: ${DOCKERFILE_LINUX_MIRROR}
+        CODENAME: ${CODENAME}
 
     container_name: deploy-web
     restart: unless-stopped
