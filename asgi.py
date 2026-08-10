@@ -14,9 +14,9 @@ import deployments.routing
 import tickets.routing
 
 combined_ws = (
-    services.routing.websocket_urlpatterns +
-    deployments.routing.websocket_urlpatterns +
-    tickets.routing.websocket_urlpatterns
+    services.routing.websocket_urlpatterns
+    + deployments.routing.websocket_urlpatterns
+    + tickets.routing.websocket_urlpatterns
 )
 
 application = ProtocolTypeRouter({
