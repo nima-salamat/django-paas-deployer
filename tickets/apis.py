@@ -697,29 +697,33 @@ class TicketMarkReadAPIView(APIView):
         self.check_object_permissions(request, ticket)
         user = request.user
         now = timezone.now()
-        # Owner marks staff replies seen; staff marks user messages seen
-        if user.is_staff or user.is_superuser:
-            if ticket.user_id == user.id and not user.is_superuser:
-                # owner who is also staff: mark staff replies from others
-                qs = ticket.messages.filter(is_staff_reply=True, seen_at__isnull=True).exclude(author=user)
-            else:
-                qs = ticket.messages.filter(is_staff_reply=False, seen_at__isnull=True)
-        else:
-            qs = ticket.messages.filter(is_staff_reply=True, seen_at__isnull=True)
-
-        updated = qs.update(seen_at=now)
+        # Messenger-style: any message not written by me becomes seen when I open the thread
+        qs = ticket.messages.filter(seen_at__isnull=True).exclude(author_id=user.id)
+        marked_ids = list(qs.values_list("id", flat=True)[:200])
+        updated = qs.update(seen_at=now) if marked_ids else 0
         from .models import TicketReadState
         TicketReadState.objects.update_or_create(
             ticket=ticket, user=user, defaults={"last_read_at": now}
         )
-        # Broadcast seen event
         try:
             from .consumers import broadcast_ticket_event
             broadcast_ticket_event(
                 "ticket.seen",
                 ticket,
-                extra={"reader_id": user.id, "marked": updated, "is_staff": bool(user.is_staff or user.is_superuser)},
+                extra={
+                    "reader_id": user.id,
+                    "marked": updated,
+                    "message_ids": marked_ids,
+                    "is_staff": bool(user.is_staff or user.is_superuser),
+                },
             )
         except Exception:
             pass
-        return ok("Marked as read", data={"marked": updated, "last_read_at": now.isoformat()})
+        return ok(
+            "Marked as read",
+            data={
+                "marked": updated,
+                "message_ids": marked_ids,
+                "last_read_at": now.isoformat(),
+            },
+        )

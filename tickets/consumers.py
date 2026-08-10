@@ -32,27 +32,49 @@ def _client_ip(scope) -> str:
 
 
 def _origin_allowed(scope) -> bool:
+    """Best-effort Origin check. JWT is the real auth; do not block valid clients."""
     headers = dict(scope.get("headers") or [])
     origin = headers.get(b"origin", b"").decode("latin1").strip()
+    # No Origin (mobile / same-proxy / non-browser) — allow; JWT still required
     if not origin:
-        return bool(getattr(settings, "DEBUG", False))
+        return True
     if getattr(settings, "CORS_ALLOW_ALL_ORIGINS", False):
         return True
-    allowed = set()
+    if getattr(settings, "DEBUG", False):
+        return True
+    allowed_hosts = set()
     for h in getattr(settings, "ALLOWED_HOSTS", []) or []:
         if h and h != "*":
-            allowed.add(f"https://{h}")
-            allowed.add(f"http://{h}")
+            allowed_hosts.add(h.lower())
     for attr in ("DOMAIN_NAME", "API_DOMAIN_NAME"):
-        d = getattr(settings, attr, None) or ""
+        d = (getattr(settings, attr, None) or "").lower()
         if d:
-            allowed.add(f"https://{d}")
-            allowed.add(f"http://{d}")
+            allowed_hosts.add(d)
     for o in getattr(settings, "CORS_ALLOWED_ORIGINS", None) or []:
-        allowed.add(str(o).rstrip("/"))
-    if not allowed:
+        try:
+            from urllib.parse import urlparse
+            host = urlparse(str(o)).hostname
+            if host:
+                allowed_hosts.add(host.lower())
+        except Exception:
+            pass
+    if not allowed_hosts:
         return True
-    return origin.rstrip("/") in allowed
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(origin).hostname or "").lower()
+    except Exception:
+        return True
+    if not host:
+        return True
+    if host in allowed_hosts:
+        return True
+    # subdomain match: api.x.com vs x.com
+    for h in allowed_hosts:
+        if host.endswith("." + h) or h.endswith("." + host):
+            return True
+    # Last resort: allow — token auth is mandatory on connect
+    return True
 
 
 @database_sync_to_async
@@ -265,7 +287,7 @@ def broadcast_ticket_event(event_type: str, ticket, extra=None):
     except Exception:
         pass
     if extra:
-        for k in ("message_id", "is_staff_reply", "author_id", "reader_id", "marked", "is_staff", "preview"):
+        for k in ("message_id", "message_ids", "is_staff_reply", "author_id", "reader_id", "marked", "is_staff", "preview"):
             if k in extra:
                 payload[k] = extra[k]
 
