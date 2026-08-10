@@ -10,11 +10,13 @@ dotenv.load_dotenv()
 
 import os 
 
+def env_bool(name, default=False): return os.environ.get(name, str(default)).lower() in ( "1", "true", "yes", "on", "True")
+
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY=os.environ.get("SECRET_KEY")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = int(os.environ.get("DEBUG", "0")) if os.environ.get("DEBUG") is not None else False
+DEBUG = env_bool("DEBUG",False)
 # Allow DEBUG to be boolean-like strings; default False
 if isinstance(DEBUG, int):
     DEBUG = bool(DEBUG)
@@ -32,6 +34,10 @@ CSRF_TRUSTED_ORIGINS = [
     f"https://{DOMAIN_NAME}",
 
 ]
+
+# send email with proxy envs
+SEND_EMAIL_WITH_PROXY = env_bool( "SEND_EMAIL_WITH_PROXY", False, )
+EMAIL_PROXY = os.environ.get("EMAIL_PROXY", "")
 
 # Application definition
 INSTALLED_APPS = [
