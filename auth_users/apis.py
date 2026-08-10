@@ -839,11 +839,25 @@ class PasswordRecoveryConfirmAPIView(APIView):
 class ValidateToken(APIView):
     permission_classes = [IsAuthenticated]
 
+    def _payload(self, request):
+        u = request.user
+        return {
+            "status": "valid access token",
+            "success": True,
+            "user": {
+                "id": u.id,
+                "username": getattr(u, "username", None),
+                "email": getattr(u, "email", None),
+                "is_staff": bool(getattr(u, "is_staff", False)),
+                "is_superuser": bool(getattr(u, "is_superuser", False)),
+            },
+        }
+
     def post(self, request):
-        return Response({"status": "valid access token"}, status=status.HTTP_200_OK)
+        return Response(self._payload(request), status=status.HTTP_200_OK)
 
     def get(self, request):
-        return Response({"status": "valid access token"}, status=status.HTTP_200_OK)
+        return Response(self._payload(request), status=status.HTTP_200_OK)
 
 
 # ---------------------------------------------------------------------------
