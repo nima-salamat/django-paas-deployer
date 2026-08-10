@@ -13,13 +13,14 @@ class LoginSettingsAdmin(admin.ModelAdmin):
     list_display = (
         "id",
         "status_badge",
+        "login_status_badge",
         "identifiers_summary",
         "factors_summary",
         "signup_summary",
         "otp_summary",
         "updated_at",
     )
-    list_filter = ("is_active",)
+    list_filter = ("is_active", "allow_login", "allow_password_recovery")
     readonly_fields = ("updated_at",)
     actions = None
 
@@ -55,12 +56,41 @@ class LoginSettingsAdmin(admin.ModelAdmin):
             },
         ),
         (
+            "Login master switch",
+            {
+                "fields": (
+                    "allow_login",
+                    "custom_login_closed_title",
+                    "custom_login_closed_message",
+                ),
+                "description": (
+                    "When allow_login=False the entire login/signup UI is blocked "
+                    "and the custom title + message are shown to users."
+                ),
+            },
+        ),
+        (
             "Username recovery",
             {
                 "fields": (
                     "allow_username_recovery",
                     "recovery_via_email",
                     "recovery_via_phone",
+                ),
+            },
+        ),
+        (
+            "Password recovery (Forgot Password)",
+            {
+                "fields": (
+                    "allow_password_recovery",
+                    "password_recovery_via_email",
+                    "password_recovery_via_phone",
+                    "require_confirm_password",
+                    "min_password_length",
+                ),
+                "description": (
+                    "Enable/disable forgot-password flow and control channels + password rules."
                 ),
             },
         ),
@@ -95,6 +125,12 @@ class LoginSettingsAdmin(admin.ModelAdmin):
         return format_html(
             '<span class="badge badge-gray">Inactive</span>'
         )
+
+    @admin.display(description="Login", ordering="allow_login")
+    def login_status_badge(self, obj):
+        if obj.allow_login:
+            return format_html('<span class="badge badge-success">Open</span>')
+        return format_html('<span class="badge badge-danger">Closed</span>')
 
     @admin.display(description="Identifiers")
     def identifiers_summary(self, obj):
@@ -365,6 +401,7 @@ class AuthCodeAdmin(admin.ModelAdmin):
             "login": "badge-primary",
             "signup": "badge-success",
             "recovery": "badge-warning",
+            "password_reset": "badge-danger",
         }
         cls = colors.get(obj.purpose, "badge-gray")
         return format_html(

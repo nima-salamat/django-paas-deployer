@@ -100,11 +100,50 @@ class LoginSettings(models.Model):
     )
     recovery_via_email = models.BooleanField(
         default=True,
-        help_text="Allow recovery by sending OTP to email",
+        help_text="Allow username recovery by sending OTP to email",
     )
     recovery_via_phone = models.BooleanField(
         default=True,
-        help_text="Allow recovery by sending OTP to phone",
+        help_text="Allow username recovery by sending OTP to phone",
+    )
+
+    # ---------- Password recovery (forgot password) ----------
+    allow_password_recovery = models.BooleanField(
+        default=True,
+        help_text="Enable 'forgot password' / reset password flow",
+    )
+    password_recovery_via_email = models.BooleanField(
+        default=True,
+        help_text="Allow password reset by sending OTP to email",
+    )
+    password_recovery_via_phone = models.BooleanField(
+        default=True,
+        help_text="Allow password reset by sending OTP to phone",
+    )
+    require_confirm_password = models.BooleanField(
+        default=True,
+        help_text="Require 'confirm password' field when setting or resetting password",
+    )
+    min_password_length = models.PositiveSmallIntegerField(
+        default=6,
+        help_text="Minimum password length enforced on set/reset",
+    )
+
+    # ---------- Login control ----------
+    allow_login = models.BooleanField(
+        default=True,
+        help_text="Master switch: if False, all login/signup is blocked and custom message is shown",
+    )
+    custom_login_closed_message = models.TextField(
+        blank=True,
+        default="",
+        help_text="Message shown on login page when allow_login=False. Supports plain text.",
+    )
+    custom_login_closed_title = models.CharField(
+        max_length=200,
+        blank=True,
+        default="Login temporarily unavailable",
+        help_text="Title shown when login is closed",
     )
 
     # ---------- OTP settings ----------
@@ -144,6 +183,14 @@ class LoginSettings(models.Model):
             raise ValidationError(
                 "Username recovery is enabled but no recovery channel is selected."
             )
+        if self.allow_password_recovery and not any(
+            [self.password_recovery_via_email, self.password_recovery_via_phone]
+        ):
+            raise ValidationError(
+                "Password recovery is enabled but no recovery channel is selected."
+            )
+        if self.min_password_length < 4:
+            raise ValidationError("Minimum password length must be at least 4.")
 
     def save(self, *args, **kwargs):
         self.full_clean()
@@ -359,10 +406,12 @@ class AuthCode(models.Model):
     PURPOSE_LOGIN = "login"
     PURPOSE_SIGNUP = "signup"
     PURPOSE_RECOVERY = "recovery"
+    PURPOSE_PASSWORD_RESET = "password_reset"
     PURPOSE_CHOICES = [
         (PURPOSE_LOGIN, "Login / Verify"),
         (PURPOSE_SIGNUP, "Signup"),
         (PURPOSE_RECOVERY, "Username Recovery"),
+        (PURPOSE_PASSWORD_RESET, "Password Reset"),
     ]
 
     user = models.ForeignKey(

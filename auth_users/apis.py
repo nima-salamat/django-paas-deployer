@@ -65,6 +65,14 @@ class LoginSettingsAPIView(APIView):
                     "allow_username_recovery": s.allow_username_recovery,
                     "recovery_via_email": s.recovery_via_email,
                     "recovery_via_phone": s.recovery_via_phone,
+                    "allow_password_recovery": s.allow_password_recovery,
+                    "password_recovery_via_email": s.password_recovery_via_email,
+                    "password_recovery_via_phone": s.password_recovery_via_phone,
+                    "require_confirm_password": s.require_confirm_password,
+                    "min_password_length": s.min_password_length,
+                    "allow_login": s.allow_login,
+                    "custom_login_closed_title": s.custom_login_closed_title or "Login temporarily unavailable",
+                    "custom_login_closed_message": s.custom_login_closed_message or "",
                     "otp_length": s.otp_length,
                     "otp_expire_minutes": s.otp_expire_minutes,
                 }
@@ -225,6 +233,13 @@ class StartAuthAPIView(APIView):
 
     def post(self, request):
         settings = LoginSettings.get_solo()
+        if not settings.allow_login:
+            return err(
+                settings.custom_login_closed_message
+                or _("error::login is temporarily closed"),
+                status.HTTP_403_FORBIDDEN,
+            )
+
         data = {k: (v or "").strip() if isinstance(v, str) else v for k, v in request.data.items()}
         invite_token = (data.get("invite") or data.get("invite_token") or "").strip()
 
@@ -332,6 +347,13 @@ class ValidateOTPAPIView(APIView):
 
     def post(self, request):
         settings = LoginSettings.get_solo()
+        if not settings.allow_login:
+            return err(
+                settings.custom_login_closed_message
+                or _("error::login is temporarily closed"),
+                status.HTTP_403_FORBIDDEN,
+            )
+
         data = {k: (v or "").strip() if isinstance(v, str) else v for k, v in request.data.items()}
         code = data.get("code", "")
 
@@ -421,6 +443,13 @@ class FinalAuthAPIView(APIView):
 
     def post(self, request):
         settings = LoginSettings.get_solo()
+        if not settings.allow_login:
+            return err(
+                settings.custom_login_closed_message
+                or _("error::login is temporarily closed"),
+                status.HTTP_403_FORBIDDEN,
+            )
+
         data = {k: (v or "").strip() if isinstance(v, str) else v for k, v in request.data.items()}
         password = data.get("password", "")
         code = data.get("code", "")
@@ -490,12 +519,29 @@ class SetPasswordAPIView(APIView):
 
     def post(self, request):
         settings = LoginSettings.get_solo()
+        if not settings.allow_login:
+            return err(
+                settings.custom_login_closed_message
+                or _("error::login is temporarily closed"),
+                status.HTTP_403_FORBIDDEN,
+            )
+
         data = {k: (v or "").strip() if isinstance(v, str) else v for k, v in request.data.items()}
         password = data.get("password", "")
+        password_confirm = data.get("password_confirm", data.get("confirm_password", ""))
         code = data.get("code", "")
 
-        if not password or len(password) < 6:
-            return err(_("error::password must be at least 6 characters"))
+        min_len = settings.min_password_length or 6
+        if not password or len(password) < min_len:
+            return err(
+                _("error::password must be at least %(n)s characters")
+                % {"n": min_len}
+            )
+        if settings.require_confirm_password:
+            if not password_confirm:
+                return err(_("error::password confirmation is required"))
+            if password != password_confirm:
+                return err(_("error::passwords do not match"))
 
         user, lookup_err = resolve_user_from_identifiers(data, settings)
         if user is None:
@@ -550,6 +596,13 @@ class RecoveryRequestAPIView(APIView):
 
     def post(self, request):
         settings = LoginSettings.get_solo()
+        if not settings.allow_login:
+            return err(
+                settings.custom_login_closed_message
+                or _("error::login is temporarily closed"),
+                status.HTTP_403_FORBIDDEN,
+            )
+
         if not settings.allow_username_recovery:
             return err(_("error::username recovery is disabled"), status.HTTP_403_FORBIDDEN)
 
@@ -594,6 +647,13 @@ class RecoveryConfirmAPIView(APIView):
 
     def post(self, request):
         settings = LoginSettings.get_solo()
+        if not settings.allow_login:
+            return err(
+                settings.custom_login_closed_message
+                or _("error::login is temporarily closed"),
+                status.HTTP_403_FORBIDDEN,
+            )
+
         if not settings.allow_username_recovery:
             return err(_("error::username recovery is disabled"), status.HTTP_403_FORBIDDEN)
 
@@ -631,6 +691,145 @@ class RecoveryConfirmAPIView(APIView):
                 if settings.allow_phone
                 else None,
             },
+        )
+
+
+
+# ---------------------------------------------------------------------------
+# Password recovery (Forgot Password)
+# ---------------------------------------------------------------------------
+class PasswordRecoveryRequestAPIView(APIView):
+    """
+    POST /api/password-recovery/request/
+    Body: { "email": "..." }  or  { "phone_number": "..." }
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        settings = LoginSettings.get_solo()
+        if not settings.allow_login:
+            return err(
+                settings.custom_login_closed_message
+                or _("error::login is temporarily closed"),
+                status.HTTP_403_FORBIDDEN,
+            )
+        if not settings.allow_password_recovery:
+            return err(_("error::password recovery is disabled"), status.HTTP_403_FORBIDDEN)
+
+        email = (request.data.get("email") or "").strip().lower()
+        phone = (request.data.get("phone_number") or "").strip()
+
+        if not email and not phone:
+            return err(_("error::email or phone is required"))
+
+        if email and not settings.password_recovery_via_email:
+            return err(_("error::email password recovery is disabled"))
+        if phone and not settings.password_recovery_via_phone:
+            return err(_("error::phone password recovery is disabled"))
+
+        q = Q()
+        if email:
+            q |= Q(email=email)
+        if phone:
+            q |= Q(phone_number=phone)
+        users = User.objects.filter(q)
+        if not users.exists():
+            return ok(_("success::if the account exists a code was sent"))
+
+        user = users.first()
+        channel = "email" if email else "phone"
+        contact = email or phone
+
+        send_otp(
+            user=user,
+            contact=contact,
+            channel=channel,
+            purpose=AuthCode.PURPOSE_PASSWORD_RESET,
+        )
+        return ok(
+            _("success::code sent"),
+            {"channel": channel, "next_step": "password_recovery_otp"},
+        )
+
+
+class PasswordRecoveryConfirmAPIView(APIView):
+    """
+    POST /api/password-recovery/confirm/
+    Body: email/phone_number + code + password + password_confirm
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        settings = LoginSettings.get_solo()
+        if not settings.allow_login:
+            return err(
+                settings.custom_login_closed_message
+                or _("error::login is temporarily closed"),
+                status.HTTP_403_FORBIDDEN,
+            )
+        if not settings.allow_password_recovery:
+            return err(_("error::password recovery is disabled"), status.HTTP_403_FORBIDDEN)
+
+        data = {k: (v or "").strip() if isinstance(v, str) else v for k, v in request.data.items()}
+        email = (data.get("email") or "").strip().lower()
+        phone = (data.get("phone_number") or "").strip()
+        code = (data.get("code") or "").strip()
+        password = data.get("password", "")
+        password_confirm = data.get("password_confirm", data.get("confirm_password", ""))
+
+        if not code:
+            return err(_("error::code is required"))
+        if not email and not phone:
+            return err(_("error::email or phone is required"))
+
+        min_len = settings.min_password_length or 6
+        if not password or len(password) < min_len:
+            return err(
+                _("error::password must be at least %(n)s characters")
+                % {"n": min_len}
+            )
+        if settings.require_confirm_password:
+            if not password_confirm:
+                return err(_("error::password confirmation is required"))
+            if password != password_confirm:
+                return err(_("error::passwords do not match"))
+
+        q = Q()
+        if email:
+            q |= Q(email=email)
+        if phone:
+            q |= Q(phone_number=phone)
+        user = User.objects.filter(q).first()
+        if not user:
+            return err(_("error::invalid code or contact"))
+
+        is_valid, instance = AuthCode.validate(
+            user=user, code=code, purpose=AuthCode.PURPOSE_PASSWORD_RESET
+        )
+        if not is_valid:
+            return err(_("error::code is incorrect or expired"))
+
+        instance.consume()
+        user.set_password(password)
+        if settings.activate_after_successful_otp:
+            user.is_active = True
+        if email and hasattr(user, "email_verified"):
+            user.email_verified = True
+        if phone and hasattr(user, "phone_number_verified"):
+            user.phone_number_verified = True
+        user.save()
+        AuthCode.objects.filter(user=user).delete()
+
+        if not user.is_active:
+            return err(
+                _("error::account is inactive. contact admin"),
+                status.HTTP_403_FORBIDDEN,
+            )
+
+        tokens = get_tokens_for_user(user)
+        return ok(
+            _("success::password reset and logged in"),
+            {**tokens, "next_step": "done"},
         )
 
 

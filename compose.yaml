@@ -272,7 +272,7 @@ services:
     networks:
       - app-network
       - proxy_net
-
+  
 
   # ============================================================
   # CELERY BEAT
@@ -341,6 +341,28 @@ services:
     networks:
       - app-network
       - proxy_net
+
+  xray:
+    image: ${DOCKER_MIRROR:-docker.io}/teddysun/xray:latest
+    container_name: deploy-xray
+    restart: unless-stopped
+
+    volumes:
+      - ./xray/config.json:/etc/xray/config.json:ro
+
+    entrypoint:
+      - xray
+
+    command:
+      - run
+      - -config
+      - /etc/xray/config.json
+
+    expose:
+      - "10808"
+
+    networks:
+      - app-network
 
 
 # ==============================================================

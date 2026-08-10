@@ -9,6 +9,8 @@ from .apis import (
     SetPasswordAPIView,
     RecoveryRequestAPIView,
     RecoveryConfirmAPIView,
+    PasswordRecoveryRequestAPIView,
+    PasswordRecoveryConfirmAPIView,
     ValidateToken,
     InviteValidateAPIView,
     InviteCreateAPIView,
@@ -34,6 +36,10 @@ urlpatterns = [
     # ---- Username recovery ----
     path("api/recovery/request/", RecoveryRequestAPIView.as_view(), name="recovery_request"),
     path("api/recovery/confirm/", RecoveryConfirmAPIView.as_view(), name="recovery_confirm"),
+
+    # ---- Password recovery (Forgot Password) ----
+    path("api/password-recovery/request/", PasswordRecoveryRequestAPIView.as_view(), name="password_recovery_request"),
+    path("api/password-recovery/confirm/", PasswordRecoveryConfirmAPIView.as_view(), name="password_recovery_confirm"),
 
     # ---- Invite system ----
     path("api/invite/validate/", InviteValidateAPIView.as_view(), name="invite_validate"),
