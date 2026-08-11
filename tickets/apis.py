@@ -1,4 +1,3 @@
-"""Ticket REST API."""
 from __future__ import annotations
 import logging
 from django.db.models import Count, Prefetch, Q
@@ -12,161 +11,175 @@ from rest_framework.views import APIView
 from rest_framework.pagination import PageNumberPagination
 from .models import Department, DepartmentMembership, Ticket, TicketMessage, TicketAttachment
 from .permissions import IsTicketOwnerOrStaff, IsStaffOrSuperuser, CanManageTicket
-from .serializers import (
-    DepartmentSerializer, TicketListSerializer, TicketDetailSerializer,
-    TicketCreateSerializer, TicketMessageCreateSerializer, TicketMessageSerializer,
-    TicketStatusSerializer, TicketPrioritySerializer, TicketAssignDepartmentSerializer,
-)
+from .serializers import DepartmentSerializer, TicketListSerializer, TicketDetailSerializer, TicketCreateSerializer, TicketMessageCreateSerializer, TicketMessageSerializer, TicketStatusSerializer, TicketPrioritySerializer, TicketAssignDepartmentSerializer
 from .utils import check_rate_limit, get_ticket_setting, validate_upload_file, safe_filename
 from core.throttling import ScopedRateThrottle, check_scope, throttle_response, user_scope
 from asgiref.sync import sync_to_async
+logger = logging.getLogger('tickets.apis')
 
-logger = logging.getLogger("tickets.apis")
-
-def ok(message="success", data=None, http_status=status.HTTP_200_OK):
-    body = {"success": True, "message": message}
+def ok(message='success', data=None, http_status=status.HTTP_200_OK):
+    body = {'success': True, 'message': message}
     if data is not None:
-        body["data"] = data
+        body['data'] = data
     return Response(body, status=http_status)
 
 def err(message, http_status=status.HTTP_400_BAD_REQUEST, extra=None):
-    body = {"success": False, "message": message}
+    body = {'success': False, 'message': message}
     if extra:
         body.update(extra)
     return Response(body, status=http_status)
 
 class TicketPagination(PageNumberPagination):
     page_size = 15
-    page_size_query_param = "page_size"
+    page_size_query_param = 'page_size'
     max_page_size = 50
 
+@async_api_view
 class DepartmentListAPIView(APIView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'tickets'
+    throttle_rate = '60/min'
     permission_classes = [IsAuthenticated]
-    def get(self, request):
-        qs = Department.objects.filter(is_active=True).order_by("order", "name")
-        if (request.user.is_staff or request.user.is_superuser) and request.query_params.get("all") == "1":
-            qs = Department.objects.all().order_by("order", "name")
-        return ok(data=DepartmentSerializer(qs, many=True).data)
 
+    async def get(self, request):
 
+        def _run():
+            qs = Department.objects.filter(is_active=True).order_by('order', 'name')
+            if (request.user.is_staff or request.user.is_superuser) and request.query_params.get('all') == '1':
+                qs = Department.objects.all().order_by('order', 'name')
+            return ok(data=DepartmentSerializer(qs, many=True).data)
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+@async_api_view
 class MyTicketContextAPIView(APIView):
     """User's services and deploys for optional ticket linking."""
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'tickets'
+    throttle_rate = '60/min'
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):
-        from services.models import Service
-        from deploy.models import Deploy
+    async def get(self, request):
 
-        services = Service.objects.filter(user=request.user).order_by("name").only("id", "name")
-        service_id = request.query_params.get("service_id")
-        deploys_qs = Deploy.objects.filter(service__user=request.user).select_related("service")
-        if service_id:
-            deploys_qs = deploys_qs.filter(service_id=service_id)
-        deploys_qs = deploys_qs.order_by("-created_at")[:50]
+        def _run():
+            from services.models import Service
+            from deploy.models import Deploy
+            services = Service.objects.filter(user=request.user).order_by('name').only('id', 'name')
+            service_id = request.query_params.get('service_id')
+            deploys_qs = Deploy.objects.filter(service__user=request.user).select_related('service')
+            if service_id:
+                deploys_qs = deploys_qs.filter(service_id=service_id)
+            deploys_qs = deploys_qs.order_by('-created_at')[:50]
 
-        def deploy_label(d):
-            name = getattr(d, "name", None)
-            if name:
-                return name
-            ver = getattr(d, "version", None)
-            if ver is not None and str(ver) != "":
-                return f"v{ver}"
-            return str(d.id)[:8]
+            def deploy_label(d):
+                name = getattr(d, 'name', None)
+                if name:
+                    return name
+                ver = getattr(d, 'version', None)
+                if ver is not None and str(ver) != '':
+                    return f'v{ver}'
+                return str(d.id)[:8]
+            return ok(data={'services': [{'id': str(s.id), 'name': s.name} for s in services], 'deploys': [{'id': str(d.id), 'name': deploy_label(d), 'version': str(getattr(d, 'version', '') or ''), 'status': getattr(d, 'status', '') or '', 'service_id': str(d.service_id)} for d in deploys_qs]})
+        return await sync_to_async(_run, thread_sensitive=True)()
 
-        return ok(data={
-            "services": [{"id": str(s.id), "name": s.name} for s in services],
-            "deploys": [{
-                "id": str(d.id),
-                "name": deploy_label(d),
-                "version": str(getattr(d, "version", "") or ""),
-                "status": getattr(d, "status", "") or "",
-                "service_id": str(d.service_id),
-            } for d in deploys_qs],
-        })
-
+@async_api_view
 class MyTicketListCreateAPIView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [JSONParser, MultiPartParser, FormParser]
     throttle_classes = [ScopedRateThrottle]
-    throttle_scope = "tickets.list_create"
-    throttle_rate = "30/min"
-    def get(self, request):
-        qs = Ticket.objects.filter(user=request.user).select_related("department", "user", "service", "deploy").annotate(message_count=Count("messages"))
-        if request.query_params.get("status"):
-            qs = qs.filter(status=request.query_params["status"])
-        if request.query_params.get("priority"):
-            qs = qs.filter(priority=request.query_params["priority"])
-        if request.query_params.get("department"):
-            qs = qs.filter(department_id=request.query_params["department"])
-        search = request.query_params.get("search", "").strip()
-        if search:
-            qs = qs.filter(Q(subject__icontains=search) | Q(public_id__icontains=search))
-        paginator = TicketPagination()
-        page = paginator.paginate_queryset(qs, request)
-        return paginator.get_paginated_response(TicketListSerializer(page, many=True, context={"request": request}).data)
+    throttle_scope = 'tickets.list_create'
+    throttle_rate = '30/min'
 
-    def post(self, request):
-        user = request.user
-        max_open = int(get_ticket_setting("tickets.max_open_per_user", 10))
-        open_count = Ticket.objects.filter(user=user, status__in=[Ticket.Status.OPEN, Ticket.Status.IN_PROGRESS, Ticket.Status.WAITING_USER]).count()
-        if open_count >= max_open:
-            return err(f"Open ticket limit reached ({max_open}).", status.HTTP_429_TOO_MANY_REQUESTS)
-        if not check_rate_limit(f"ticket_create:{user.id}", int(get_ticket_setting("tickets.create_rate_limit", 5)), int(get_ticket_setting("tickets.create_rate_window", 3600))):
-            return err("Rate limit exceeded.", status.HTTP_429_TOO_MANY_REQUESTS)
-        ser = TicketCreateSerializer(data=request.data, context={"request": request})
-        if not ser.is_valid():
-            return err("Validation failed", extra={"errors": ser.errors})
-        data = ser.validated_data
-        ticket = Ticket.objects.create(
-            user=user,
-            department_id=data["department_id"],
-            subject=data["subject"],
-            priority=data.get("priority", Ticket.Priority.NORMAL),
-            service_id=data.get("service_id"),
-            deploy_id=data.get("deploy_id"),
-            last_message_at=timezone.now(),
-        )
-        msg = TicketMessage.objects.create(ticket=ticket, author=user, body=data["body"], is_staff_reply=False)
-        files = request.FILES.getlist("attachments") or request.FILES.getlist("file")
-        max_files = int(get_ticket_setting("tickets.max_attachments_per_message", 5))
-        if len(files) > max_files:
-            return err(f"Max {max_files} attachments.")
-        for f in files:
-            try:
-                validate_upload_file(f)
-            except Exception as e:
-                return err(str(e))
-            TicketAttachment.objects.create(ticket=ticket, message=msg, uploaded_by=user, file=f, original_filename=safe_filename(f.name), content_type=getattr(f, "content_type", "") or "", size=f.size)
-        return ok("Ticket created", data=TicketDetailSerializer(ticket, context={"request": request}).data, http_status=status.HTTP_201_CREATED)
+    async def get(self, request):
 
+        def _run():
+            qs = Ticket.objects.filter(user=request.user).select_related('department', 'user', 'service', 'deploy').annotate(message_count=Count('messages'))
+            if request.query_params.get('status'):
+                qs = qs.filter(status=request.query_params['status'])
+            if request.query_params.get('priority'):
+                qs = qs.filter(priority=request.query_params['priority'])
+            if request.query_params.get('department'):
+                qs = qs.filter(department_id=request.query_params['department'])
+            search = request.query_params.get('search', '').strip()
+            if search:
+                qs = qs.filter(Q(subject__icontains=search) | Q(public_id__icontains=search))
+            paginator = TicketPagination()
+            page = paginator.paginate_queryset(qs, request)
+            return paginator.get_paginated_response(TicketListSerializer(page, many=True, context={'request': request}).data)
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    async def post(self, request):
+
+        def _run():
+            user = request.user
+            max_open = int(get_ticket_setting('tickets.max_open_per_user', 10))
+            open_count = Ticket.objects.filter(user=user, status__in=[Ticket.Status.OPEN, Ticket.Status.IN_PROGRESS, Ticket.Status.WAITING_USER]).count()
+            if open_count >= max_open:
+                return err(f'Open ticket limit reached ({max_open}).', status.HTTP_429_TOO_MANY_REQUESTS)
+            if not check_rate_limit(f'ticket_create:{user.id}', int(get_ticket_setting('tickets.create_rate_limit', 5)), int(get_ticket_setting('tickets.create_rate_window', 3600))):
+                return err('Rate limit exceeded.', status.HTTP_429_TOO_MANY_REQUESTS)
+            ser = TicketCreateSerializer(data=request.data, context={'request': request})
+            if not ser.is_valid():
+                return err('Validation failed', extra={'errors': ser.errors})
+            data = ser.validated_data
+            ticket = Ticket.objects.create(user=user, department_id=data['department_id'], subject=data['subject'], priority=data.get('priority', Ticket.Priority.NORMAL), service_id=data.get('service_id'), deploy_id=data.get('deploy_id'), last_message_at=timezone.now())
+            msg = TicketMessage.objects.create(ticket=ticket, author=user, body=data['body'], is_staff_reply=False)
+            files = request.FILES.getlist('attachments') or request.FILES.getlist('file')
+            max_files = int(get_ticket_setting('tickets.max_attachments_per_message', 5))
+            if len(files) > max_files:
+                return err(f'Max {max_files} attachments.')
+            for f in files:
+                try:
+                    validate_upload_file(f)
+                except Exception as e:
+                    return err(str(e))
+                TicketAttachment.objects.create(ticket=ticket, message=msg, uploaded_by=user, file=f, original_filename=safe_filename(f.name), content_type=getattr(f, 'content_type', '') or '', size=f.size)
+            return ok('Ticket created', data=TicketDetailSerializer(ticket, context={'request': request}).data, http_status=status.HTTP_201_CREATED)
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+@async_api_view
 class TicketDetailAPIView(APIView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'tickets'
+    throttle_rate = '60/min'
     permission_classes = [IsAuthenticated, IsTicketOwnerOrStaff]
+
     def get_object(self, pk):
         try:
-            return Ticket.objects.select_related("department", "user", "assigned_to", "service", "deploy").prefetch_related(
-                Prefetch("messages", queryset=TicketMessage.objects.select_related("author").prefetch_related("attachments")), "attachments"
-            ).get(pk=pk)
+            return Ticket.objects.select_related('department', 'user', 'assigned_to', 'service', 'deploy').prefetch_related(Prefetch('messages', queryset=TicketMessage.objects.select_related('author').prefetch_related('attachments')), 'attachments').get(pk=pk)
         except Ticket.DoesNotExist:
             raise Http404
-    def get(self, request, pk):
-        ticket = self.get_object(pk)
-        self.check_object_permissions(request, ticket)
-        return ok(data=TicketDetailSerializer(ticket, context={"request": request}).data)
 
+    async def get(self, request, pk):
+
+        def _run():
+            ticket = self.get_object(pk)
+            self.check_object_permissions(request, ticket)
+            return ok(data=TicketDetailSerializer(ticket, context={'request': request}).data)
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+@async_api_view
 class TicketCloseAPIView(APIView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'tickets'
+    throttle_rate = '60/min'
     permission_classes = [IsAuthenticated, IsTicketOwnerOrStaff]
-    def post(self, request, pk):
-        try:
-            ticket = Ticket.objects.get(pk=pk)
-        except Ticket.DoesNotExist:
-            raise Http404
-        self.check_object_permissions(request, ticket)
-        if ticket.status == Ticket.Status.CLOSED:
-            return err("Already closed.")
-        ticket.status = Ticket.Status.CLOSED
-        ticket.closed_at = timezone.now()
-        ticket.save(update_fields=["status", "closed_at", "updated_at"])
-        return ok("Ticket closed", data=TicketDetailSerializer(ticket, context={"request": request}).data)
+
+    async def post(self, request, pk):
+
+        def _run():
+            try:
+                ticket = Ticket.objects.get(pk=pk)
+            except Ticket.DoesNotExist:
+                raise Http404
+            self.check_object_permissions(request, ticket)
+            if ticket.status == Ticket.Status.CLOSED:
+                return err('Already closed.')
+            ticket.status = Ticket.Status.CLOSED
+            ticket.closed_at = timezone.now()
+            ticket.save(update_fields=['status', 'closed_at', 'updated_at'])
+            return ok('Ticket closed', data=TicketDetailSerializer(ticket, context={'request': request}).data)
+        return await sync_to_async(_run, thread_sensitive=True)()
+
 
 class TicketMessageCreateAPIView(APIView):
     permission_classes = [IsAuthenticated, IsTicketOwnerOrStaff]
@@ -174,6 +187,7 @@ class TicketMessageCreateAPIView(APIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "tickets.message"
     throttle_rate = "30/min"
+
     def post(self, request, pk):
         try:
             ticket = Ticket.objects.select_related("department").get(pk=pk)
@@ -182,13 +196,22 @@ class TicketMessageCreateAPIView(APIView):
         self.check_object_permissions(request, ticket)
         if ticket.status == Ticket.Status.CLOSED:
             return err("Cannot reply to closed ticket.")
-        if not check_rate_limit(f"ticket_msg:{request.user.id}", int(get_ticket_setting("tickets.message_rate_limit", 20)), int(get_ticket_setting("tickets.message_rate_window", 3600))):
+        if not check_rate_limit(
+            f"ticket_msg:{request.user.id}",
+            int(get_ticket_setting("tickets.message_rate_limit", 20)),
+            int(get_ticket_setting("tickets.message_rate_window", 3600)),
+        ):
             return err("Message rate limit exceeded.", status.HTTP_429_TOO_MANY_REQUESTS)
         ser = TicketMessageCreateSerializer(data=request.data)
         if not ser.is_valid():
             return err("Validation failed", extra={"errors": ser.errors})
         is_staff_reply = bool(request.user.is_staff or request.user.is_superuser) and ticket.user_id != request.user.id
-        msg = TicketMessage.objects.create(ticket=ticket, author=request.user, body=ser.validated_data["body"], is_staff_reply=is_staff_reply)
+        msg = TicketMessage.objects.create(
+            ticket=ticket,
+            author=request.user,
+            body=ser.validated_data["body"],
+            is_staff_reply=is_staff_reply,
+        )
         if is_staff_reply and ticket.status in (Ticket.Status.OPEN, Ticket.Status.WAITING_USER):
             ticket.status = Ticket.Status.IN_PROGRESS
             ticket.save(update_fields=["status", "updated_at"])
@@ -196,30 +219,51 @@ class TicketMessageCreateAPIView(APIView):
             ticket.status = Ticket.Status.IN_PROGRESS
             ticket.save(update_fields=["status", "updated_at"])
         files = request.FILES.getlist("attachments") or request.FILES.getlist("file")
-        for f in files[:int(get_ticket_setting("tickets.max_attachments_per_message", 5))]:
+        for f in files[: int(get_ticket_setting("tickets.max_attachments_per_message", 5))]:
             try:
                 validate_upload_file(f)
             except Exception as e:
                 return err(str(e))
-            TicketAttachment.objects.create(ticket=ticket, message=msg, uploaded_by=request.user, file=f, original_filename=safe_filename(f.name), content_type=getattr(f, "content_type", "") or "", size=f.size)
-        return ok("Message sent", data=TicketMessageSerializer(msg, context={"request": request}).data, http_status=status.HTTP_201_CREATED)
+            TicketAttachment.objects.create(
+                ticket=ticket,
+                message=msg,
+                uploaded_by=request.user,
+                file=f,
+                original_filename=safe_filename(f.name),
+                content_type=getattr(f, "content_type", "") or "",
+                size=f.size,
+            )
+        return ok(
+            "Message sent",
+            data=TicketMessageSerializer(msg, context={"request": request}).data,
+            http_status=status.HTTP_201_CREATED,
+        )
 
+@async_api_view
 class AttachmentDownloadAPIView(APIView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'tickets'
+    throttle_rate = '60/min'
     permission_classes = [IsAuthenticated, IsTicketOwnerOrStaff]
-    def get(self, request, pk):
-        try:
-            att = TicketAttachment.objects.select_related("ticket").get(pk=pk)
-        except TicketAttachment.DoesNotExist:
-            raise Http404
-        self.check_object_permissions(request, att)
-        if not att.file or not att.file.storage.exists(att.file.name):
-            raise Http404("File not found.")
-        handle = att.file.open("rb")
-        response = FileResponse(handle, as_attachment=True, filename=att.original_filename or "attachment")
-        if att.content_type:
-            response["Content-Type"] = att.content_type
-        return response
 
+    async def get(self, request, pk):
+
+        def _run():
+            try:
+                att = TicketAttachment.objects.select_related('ticket').get(pk=pk)
+            except TicketAttachment.DoesNotExist:
+                raise Http404
+            self.check_object_permissions(request, att)
+            if not att.file or not att.file.storage.exists(att.file.name):
+                raise Http404('File not found.')
+            handle = att.file.open('rb')
+            response = FileResponse(handle, as_attachment=True, filename=att.original_filename or 'attachment')
+            if att.content_type:
+                response['Content-Type'] = att.content_type
+            return response
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+@async_api_view
 class StaffTicketListAPIView(APIView):
     """
     Advanced filters:
@@ -230,291 +274,255 @@ class StaffTicketListAPIView(APIView):
       service_id, has_attachments (1/0)
       ordering: -last_message_at (default), created_at, priority, status
     """
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'tickets'
+    throttle_rate = '60/min'
     permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
 
-    def get(self, request):
-        from django.utils.dateparse import parse_date, parse_datetime
+    async def get(self, request):
 
-        qs = Ticket.objects.select_related(
-            "department", "user", "service", "deploy", "assigned_to"
-        ).annotate(message_count=Count("messages"))
+        def _run():
+            from django.utils.dateparse import parse_date, parse_datetime
+            qs = Ticket.objects.select_related('department', 'user', 'service', 'deploy', 'assigned_to').annotate(message_count=Count('messages'))
+            if not request.user.is_superuser:
+                dept_ids = list(DepartmentMembership.objects.filter(user=request.user).values_list('department_id', flat=True))
+                qs = qs.filter(department_id__in=dept_ids)
+            status_raw = request.query_params.get('status', '').strip()
+            if status_raw:
+                statuses = [s.strip() for s in status_raw.split(',') if s.strip()]
+                qs = qs.filter(status__in=statuses) if len(statuses) > 1 else qs.filter(status=statuses[0])
+            priority_raw = request.query_params.get('priority', '').strip()
+            if priority_raw:
+                priorities = [p.strip() for p in priority_raw.split(',') if p.strip()]
+                qs = qs.filter(priority__in=priorities) if len(priorities) > 1 else qs.filter(priority=priorities[0])
+            if request.query_params.get('department'):
+                qs = qs.filter(department_id=request.query_params['department'])
+            if request.query_params.get('service_id'):
+                qs = qs.filter(service_id=request.query_params['service_id'])
+            search = request.query_params.get('search', '').strip()
+            if search:
+                qs = qs.filter(Q(subject__icontains=search) | Q(public_id__icontains=search) | Q(user__username__icontains=search) | Q(user__email__icontains=search))
+            assigned = request.query_params.get('assigned_to')
+            if assigned == 'me':
+                qs = qs.filter(assigned_to=request.user)
+            elif assigned == 'unassigned':
+                qs = qs.filter(assigned_to__isnull=True)
+            elif assigned:
+                qs = qs.filter(assigned_to_id=assigned)
 
-        if not request.user.is_superuser:
-            dept_ids = list(
-                DepartmentMembership.objects.filter(user=request.user).values_list(
-                    "department_id", flat=True
-                )
-            )
-            qs = qs.filter(department_id__in=dept_ids)
-
-        status_raw = request.query_params.get("status", "").strip()
-        if status_raw:
-            statuses = [s.strip() for s in status_raw.split(",") if s.strip()]
-            qs = qs.filter(status__in=statuses) if len(statuses) > 1 else qs.filter(status=statuses[0])
-
-        priority_raw = request.query_params.get("priority", "").strip()
-        if priority_raw:
-            priorities = [p.strip() for p in priority_raw.split(",") if p.strip()]
-            qs = qs.filter(priority__in=priorities) if len(priorities) > 1 else qs.filter(priority=priorities[0])
-
-        if request.query_params.get("department"):
-            qs = qs.filter(department_id=request.query_params["department"])
-
-        if request.query_params.get("service_id"):
-            qs = qs.filter(service_id=request.query_params["service_id"])
-
-        search = request.query_params.get("search", "").strip()
-        if search:
-            qs = qs.filter(
-                Q(subject__icontains=search)
-                | Q(public_id__icontains=search)
-                | Q(user__username__icontains=search)
-                | Q(user__email__icontains=search)
-            )
-
-        assigned = request.query_params.get("assigned_to")
-        if assigned == "me":
-            qs = qs.filter(assigned_to=request.user)
-        elif assigned == "unassigned":
-            qs = qs.filter(assigned_to__isnull=True)
-        elif assigned:
-            qs = qs.filter(assigned_to_id=assigned)
-
-        def _parse_dt(val):
-            if not val:
+            def _parse_dt(val):
+                if not val:
+                    return None
+                dt = parse_datetime(val)
+                if dt:
+                    return dt
+                d = parse_date(val)
+                if d:
+                    from datetime import datetime, time
+                    from django.utils import timezone as tz
+                    return tz.make_aware(datetime.combine(d, time.min))
                 return None
-            dt = parse_datetime(val)
-            if dt:
-                return dt
-            d = parse_date(val)
-            if d:
-                from datetime import datetime, time
-                from django.utils import timezone as tz
-                return tz.make_aware(datetime.combine(d, time.min))
-            return None
+            created_from = _parse_dt(request.query_params.get('created_from'))
+            created_to = _parse_dt(request.query_params.get('created_to'))
+            updated_from = _parse_dt(request.query_params.get('updated_from'))
+            if created_from:
+                qs = qs.filter(created_at__gte=created_from)
+            if created_to:
+                qs = qs.filter(created_at__lte=created_to)
+            if updated_from:
+                qs = qs.filter(updated_at__gte=updated_from)
+            has_att = request.query_params.get('has_attachments')
+            if has_att in ('1', 'true', 'True'):
+                qs = qs.filter(attachments__isnull=False).distinct()
+            elif has_att in ('0', 'false', 'False'):
+                qs = qs.filter(attachments__isnull=True)
+            ordering = request.query_params.get('ordering', '-last_message_at').strip()
+            allowed_order = {'created_at', '-created_at', 'last_message_at', '-last_message_at', 'priority', '-priority', 'status', '-status', 'updated_at', '-updated_at'}
+            if ordering in allowed_order:
+                qs = qs.order_by(ordering, '-id')
+            else:
+                qs = qs.order_by('-last_message_at', '-id')
+            paginator = TicketPagination()
+            page = paginator.paginate_queryset(qs, request)
+            return paginator.get_paginated_response(TicketListSerializer(page, many=True, context={'request': request}).data)
+        return await sync_to_async(_run, thread_sensitive=True)()
 
-        created_from = _parse_dt(request.query_params.get("created_from"))
-        created_to = _parse_dt(request.query_params.get("created_to"))
-        updated_from = _parse_dt(request.query_params.get("updated_from"))
-        if created_from:
-            qs = qs.filter(created_at__gte=created_from)
-        if created_to:
-            qs = qs.filter(created_at__lte=created_to)
-        if updated_from:
-            qs = qs.filter(updated_at__gte=updated_from)
-
-        has_att = request.query_params.get("has_attachments")
-        if has_att in ("1", "true", "True"):
-            qs = qs.filter(attachments__isnull=False).distinct()
-        elif has_att in ("0", "false", "False"):
-            qs = qs.filter(attachments__isnull=True)
-
-        ordering = request.query_params.get("ordering", "-last_message_at").strip()
-        allowed_order = {
-            "created_at", "-created_at",
-            "last_message_at", "-last_message_at",
-            "priority", "-priority",
-            "status", "-status",
-            "updated_at", "-updated_at",
-        }
-        if ordering in allowed_order:
-            qs = qs.order_by(ordering, "-id")
-        else:
-            qs = qs.order_by("-last_message_at", "-id")
-
-        paginator = TicketPagination()
-        page = paginator.paginate_queryset(qs, request)
-        return paginator.get_paginated_response(
-            TicketListSerializer(page, many=True, context={"request": request}).data
-        )
-
-
+@async_api_view
 class StaffTicketStatusAPIView(APIView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'tickets'
+    throttle_rate = '60/min'
     permission_classes = [IsAuthenticated, IsStaffOrSuperuser, CanManageTicket]
-    def post(self, request, pk):
-        try:
-            ticket = Ticket.objects.get(pk=pk)
-        except Ticket.DoesNotExist:
-            raise Http404
-        self.check_object_permissions(request, ticket)
-        ser = TicketStatusSerializer(data=request.data)
-        if not ser.is_valid():
-            return err("Validation failed", extra={"errors": ser.errors})
-        ticket.status = ser.validated_data["status"]
-        ticket.closed_at = timezone.now() if ticket.status in (Ticket.Status.CLOSED, Ticket.Status.RESOLVED) else None
-        ticket.save(update_fields=["status", "closed_at", "updated_at"])
-        return ok("Status updated", data=TicketDetailSerializer(ticket, context={"request": request}).data)
 
+    async def post(self, request, pk):
+
+        def _run():
+            try:
+                ticket = Ticket.objects.get(pk=pk)
+            except Ticket.DoesNotExist:
+                raise Http404
+            self.check_object_permissions(request, ticket)
+            ser = TicketStatusSerializer(data=request.data)
+            if not ser.is_valid():
+                return err('Validation failed', extra={'errors': ser.errors})
+            ticket.status = ser.validated_data['status']
+            ticket.closed_at = timezone.now() if ticket.status in (Ticket.Status.CLOSED, Ticket.Status.RESOLVED) else None
+            ticket.save(update_fields=['status', 'closed_at', 'updated_at'])
+            return ok('Status updated', data=TicketDetailSerializer(ticket, context={'request': request}).data)
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+@async_api_view
 class StaffTicketPriorityAPIView(APIView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'tickets'
+    throttle_rate = '60/min'
     permission_classes = [IsAuthenticated, IsStaffOrSuperuser, CanManageTicket]
-    def post(self, request, pk):
-        try:
-            ticket = Ticket.objects.get(pk=pk)
-        except Ticket.DoesNotExist:
-            raise Http404
-        self.check_object_permissions(request, ticket)
-        ser = TicketPrioritySerializer(data=request.data)
-        if not ser.is_valid():
-            return err("Validation failed", extra={"errors": ser.errors})
-        ticket.priority = ser.validated_data["priority"]
-        ticket.save(update_fields=["priority", "updated_at"])
-        return ok("Priority updated", data={"priority": ticket.priority})
 
+    async def post(self, request, pk):
+
+        def _run():
+            try:
+                ticket = Ticket.objects.get(pk=pk)
+            except Ticket.DoesNotExist:
+                raise Http404
+            self.check_object_permissions(request, ticket)
+            ser = TicketPrioritySerializer(data=request.data)
+            if not ser.is_valid():
+                return err('Validation failed', extra={'errors': ser.errors})
+            ticket.priority = ser.validated_data['priority']
+            ticket.save(update_fields=['priority', 'updated_at'])
+            return ok('Priority updated', data={'priority': ticket.priority})
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+@async_api_view
 class StaffTicketAssignDepartmentAPIView(APIView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'tickets'
+    throttle_rate = '60/min'
     permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
-    def post(self, request, pk):
-        try:
-            ticket = Ticket.objects.get(pk=pk)
-        except Ticket.DoesNotExist:
-            raise Http404
-        if not request.user.is_superuser:
-            if not DepartmentMembership.objects.filter(user=request.user, department_id=ticket.department_id, is_manager=True).exists():
-                return err("Permission denied.", status.HTTP_403_FORBIDDEN)
-        ser = TicketAssignDepartmentSerializer(data=request.data)
-        if not ser.is_valid():
-            return err("Validation failed", extra={"errors": ser.errors})
-        ticket.department_id = ser.validated_data["department_id"]
-        ticket.save(update_fields=["department_id", "updated_at"])
-        return ok("Department updated", data=TicketDetailSerializer(ticket, context={"request": request}).data)
 
+    async def post(self, request, pk):
 
-# ---------------------------------------------------------------------------
-# Dashboard stats
-# ---------------------------------------------------------------------------
+        def _run():
+            try:
+                ticket = Ticket.objects.get(pk=pk)
+            except Ticket.DoesNotExist:
+                raise Http404
+            if not request.user.is_superuser:
+                if not DepartmentMembership.objects.filter(user=request.user, department_id=ticket.department_id, is_manager=True).exists():
+                    return err('Permission denied.', status.HTTP_403_FORBIDDEN)
+            ser = TicketAssignDepartmentSerializer(data=request.data)
+            if not ser.is_valid():
+                return err('Validation failed', extra={'errors': ser.errors})
+            ticket.department_id = ser.validated_data['department_id']
+            ticket.save(update_fields=['department_id', 'updated_at'])
+            return ok('Department updated', data=TicketDetailSerializer(ticket, context={'request': request}).data)
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+@async_api_view
 class StaffTicketStatsAPIView(APIView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'tickets'
+    throttle_rate = '60/min'
     permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
 
-    def get(self, request):
-        user = request.user
-        qs = Ticket.objects.all()
-        if not user.is_superuser:
-            dept_ids = DepartmentMembership.objects.filter(user=user).values_list("department_id", flat=True)
-            qs = qs.filter(department_id__in=dept_ids)
+    async def get(self, request):
 
-        def c(status=None, **extra):
-            q = qs
-            if status:
-                q = q.filter(status=status)
-            return q.filter(**extra).count() if extra else q.count()
+        def _run():
+            user = request.user
+            qs = Ticket.objects.all()
+            if not user.is_superuser:
+                dept_ids = DepartmentMembership.objects.filter(user=user).values_list('department_id', flat=True)
+                qs = qs.filter(department_id__in=dept_ids)
 
-        by_dept = list(
-            qs.values("department_id", "department__name")
-            .annotate(total=Count("id"), open=Count("id", filter=Q(status=Ticket.Status.OPEN)))
-            .order_by("department__name")
-        )
-        data = {
-            "total": qs.count(),
-            "open": c(Ticket.Status.OPEN),
-            "in_progress": c(Ticket.Status.IN_PROGRESS),
-            "waiting_user": c(Ticket.Status.WAITING_USER),
-            "resolved": c(Ticket.Status.RESOLVED),
-            "closed": c(Ticket.Status.CLOSED),
-            "urgent": qs.filter(priority=Ticket.Priority.URGENT).exclude(
-                status__in=[Ticket.Status.CLOSED, Ticket.Status.RESOLVED]
-            ).count(),
-            "unassigned": qs.filter(assigned_to__isnull=True).exclude(
-                status__in=[Ticket.Status.CLOSED, Ticket.Status.RESOLVED]
-            ).count(),
-            "by_department": [
-                {
-                    "department_id": r["department_id"],
-                    "name": r["department__name"],
-                    "total": r["total"],
-                    "open": r["open"],
-                }
-                for r in by_dept
-            ],
-        }
-        return ok(data=data)
+            def c(status=None, **extra):
+                q = qs
+                if status:
+                    q = q.filter(status=status)
+                return q.filter(**extra).count() if extra else q.count()
+            by_dept = list(qs.values('department_id', 'department__name').annotate(total=Count('id'), open=Count('id', filter=Q(status=Ticket.Status.OPEN))).order_by('department__name'))
+            data = {'total': qs.count(), 'open': c(Ticket.Status.OPEN), 'in_progress': c(Ticket.Status.IN_PROGRESS), 'waiting_user': c(Ticket.Status.WAITING_USER), 'resolved': c(Ticket.Status.RESOLVED), 'closed': c(Ticket.Status.CLOSED), 'urgent': qs.filter(priority=Ticket.Priority.URGENT).exclude(status__in=[Ticket.Status.CLOSED, Ticket.Status.RESOLVED]).count(), 'unassigned': qs.filter(assigned_to__isnull=True).exclude(status__in=[Ticket.Status.CLOSED, Ticket.Status.RESOLVED]).count(), 'by_department': [{'department_id': r['department_id'], 'name': r['department__name'], 'total': r['total'], 'open': r['open']} for r in by_dept]}
+            return ok(data=data)
+        return await sync_to_async(_run, thread_sensitive=True)()
 
-
-# ---------------------------------------------------------------------------
-# Assign ticket to staff
-# ---------------------------------------------------------------------------
+@async_api_view
 class StaffTicketAssignAPIView(APIView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'tickets'
+    throttle_rate = '60/min'
     permission_classes = [IsAuthenticated, IsStaffOrSuperuser, CanManageTicket]
 
-    def post(self, request, pk):
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-        try:
-            ticket = Ticket.objects.get(pk=pk)
-        except Ticket.DoesNotExist:
-            raise Http404
-        self.check_object_permissions(request, ticket)
-        assignee_id = request.data.get("assigned_to_id")
-        if assignee_id in (None, "", "null"):
-            ticket.assigned_to = None
-            ticket.save(update_fields=["assigned_to", "updated_at"])
-            return ok("Unassigned", data=TicketDetailSerializer(ticket, context={"request": request}).data)
-        try:
-            assignee = User.objects.get(pk=assignee_id, is_staff=True, is_active=True)
-        except User.DoesNotExist:
-            return err("Staff user not found.")
-        # Assignee should belong to ticket department (unless superuser assigning)
-        if not request.user.is_superuser:
-            if not DepartmentMembership.objects.filter(user=assignee, department_id=ticket.department_id).exists():
-                return err("Assignee is not a member of this department.")
-        ticket.assigned_to = assignee
-        ticket.save(update_fields=["assigned_to", "updated_at"])
-        return ok("Assigned", data=TicketDetailSerializer(ticket, context={"request": request}).data)
+    async def post(self, request, pk):
 
+        def _run():
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            try:
+                ticket = Ticket.objects.get(pk=pk)
+            except Ticket.DoesNotExist:
+                raise Http404
+            self.check_object_permissions(request, ticket)
+            assignee_id = request.data.get('assigned_to_id')
+            if assignee_id in (None, '', 'null'):
+                ticket.assigned_to = None
+                ticket.save(update_fields=['assigned_to', 'updated_at'])
+                return ok('Unassigned', data=TicketDetailSerializer(ticket, context={'request': request}).data)
+            try:
+                assignee = User.objects.get(pk=assignee_id, is_staff=True, is_active=True)
+            except User.DoesNotExist:
+                return err('Staff user not found.')
+            if not request.user.is_superuser:
+                if not DepartmentMembership.objects.filter(user=assignee, department_id=ticket.department_id).exists():
+                    return err('Assignee is not a member of this department.')
+            ticket.assigned_to = assignee
+            ticket.save(update_fields=['assigned_to', 'updated_at'])
+            return ok('Assigned', data=TicketDetailSerializer(ticket, context={'request': request}).data)
+        return await sync_to_async(_run, thread_sensitive=True)()
 
-# ---------------------------------------------------------------------------
-# Admin: Department CRUD
-# ---------------------------------------------------------------------------
 class IsSuperuserOnly(IsAuthenticated):
+
     def has_permission(self, request, view):
         return bool(super().has_permission(request, view) and request.user.is_superuser)
 
-
+@async_api_view
 class AdminDepartmentListCreateAPIView(APIView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'tickets'
+    throttle_rate = '60/min'
     permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
 
-    def get(self, request):
-        # Superuser: all; staff: only their departments with stats
-        if request.user.is_superuser:
-            qs = Department.objects.all().order_by("order", "name")
-        else:
-            ids = DepartmentMembership.objects.filter(user=request.user).values_list("department_id", flat=True)
-            qs = Department.objects.filter(id__in=ids).order_by("order", "name")
-        qs = qs.annotate(
-            staff_count=Count("memberships", distinct=True),
-            open_tickets=Count(
-                "tickets",
-                filter=Q(tickets__status__in=[Ticket.Status.OPEN, Ticket.Status.IN_PROGRESS, Ticket.Status.WAITING_USER]),
-                distinct=True,
-            ),
-            total_tickets=Count("tickets", distinct=True),
-        )
-        data = []
-        for d in qs:
-            data.append({
-                "id": d.id,
-                "name": d.name,
-                "slug": d.slug,
-                "description": d.description,
-                "is_active": d.is_active,
-                "order": d.order,
-                "staff_count": d.staff_count,
-                "open_tickets": d.open_tickets,
-                "total_tickets": d.total_tickets,
-                "created_at": d.created_at,
-                "updated_at": d.updated_at,
-            })
-        return ok(data=data)
+    async def get(self, request):
 
-    def post(self, request):
-        if not request.user.is_superuser:
-            return err("Only admin can create departments.", status.HTTP_403_FORBIDDEN)
-        ser = DepartmentSerializer(data=request.data)
-        if not ser.is_valid():
-            return err("Validation failed", extra={"errors": ser.errors})
-        obj = ser.save()
-        return ok("Created", data=DepartmentSerializer(obj).data, http_status=status.HTTP_201_CREATED)
+        def _run():
+            if request.user.is_superuser:
+                qs = Department.objects.all().order_by('order', 'name')
+            else:
+                ids = DepartmentMembership.objects.filter(user=request.user).values_list('department_id', flat=True)
+                qs = Department.objects.filter(id__in=ids).order_by('order', 'name')
+            qs = qs.annotate(staff_count=Count('memberships', distinct=True), open_tickets=Count('tickets', filter=Q(tickets__status__in=[Ticket.Status.OPEN, Ticket.Status.IN_PROGRESS, Ticket.Status.WAITING_USER]), distinct=True), total_tickets=Count('tickets', distinct=True))
+            data = []
+            for d in qs:
+                data.append({'id': d.id, 'name': d.name, 'slug': d.slug, 'description': d.description, 'is_active': d.is_active, 'order': d.order, 'staff_count': d.staff_count, 'open_tickets': d.open_tickets, 'total_tickets': d.total_tickets, 'created_at': d.created_at, 'updated_at': d.updated_at})
+            return ok(data=data)
+        return await sync_to_async(_run, thread_sensitive=True)()
 
+    async def post(self, request):
 
+        def _run():
+            if not request.user.is_superuser:
+                return err('Only admin can create departments.', status.HTTP_403_FORBIDDEN)
+            ser = DepartmentSerializer(data=request.data)
+            if not ser.is_valid():
+                return err('Validation failed', extra={'errors': ser.errors})
+            obj = ser.save()
+            return ok('Created', data=DepartmentSerializer(obj).data, http_status=status.HTTP_201_CREATED)
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+@async_api_view
 class AdminDepartmentDetailAPIView(APIView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'tickets'
+    throttle_rate = '60/min'
     permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
 
     def get_object(self, pk):
@@ -523,220 +531,189 @@ class AdminDepartmentDetailAPIView(APIView):
         except Department.DoesNotExist:
             return None
 
-    def get(self, request, pk):
-        obj = self.get_object(pk)
-        if not obj:
-            return err("Not found", status.HTTP_404_NOT_FOUND)
-        if not request.user.is_superuser:
-            if not DepartmentMembership.objects.filter(user=request.user, department=obj).exists():
-                return err("Forbidden", status.HTTP_403_FORBIDDEN)
-        members = list(
-            DepartmentMembership.objects.filter(department=obj)
-            .select_related("user")
-            .values("id", "user_id", "user__username", "user__email", "is_manager", "created_at")
-        )
-        data = DepartmentSerializer(obj).data
-        data["memberships"] = [
-            {
-                "id": m["id"],
-                "user_id": m["user_id"],
-                "username": m["user__username"],
-                "email": m["user__email"],
-                "is_manager": m["is_manager"],
-                "created_at": m["created_at"],
-            }
-            for m in members
-        ]
-        return ok(data=data)
+    async def get(self, request, pk):
 
-    def put(self, request, pk):
-        if not request.user.is_superuser:
-            return err("Only admin can edit departments.", status.HTTP_403_FORBIDDEN)
-        obj = self.get_object(pk)
-        if not obj:
-            return err("Not found", status.HTTP_404_NOT_FOUND)
-        ser = DepartmentSerializer(obj, data=request.data, partial=True)
-        if not ser.is_valid():
-            return err("Validation failed", extra={"errors": ser.errors})
-        ser.save()
-        return ok("Updated", data=ser.data)
+        def _run():
+            obj = self.get_object(pk)
+            if not obj:
+                return err('Not found', status.HTTP_404_NOT_FOUND)
+            if not request.user.is_superuser:
+                if not DepartmentMembership.objects.filter(user=request.user, department=obj).exists():
+                    return err('Forbidden', status.HTTP_403_FORBIDDEN)
+            members = list(DepartmentMembership.objects.filter(department=obj).select_related('user').values('id', 'user_id', 'user__username', 'user__email', 'is_manager', 'created_at'))
+            data = DepartmentSerializer(obj).data
+            data['memberships'] = [{'id': m['id'], 'user_id': m['user_id'], 'username': m['user__username'], 'email': m['user__email'], 'is_manager': m['is_manager'], 'created_at': m['created_at']} for m in members]
+            return ok(data=data)
+        return await sync_to_async(_run, thread_sensitive=True)()
 
-    def delete(self, request, pk):
-        if not request.user.is_superuser:
-            return err("Only admin can deactivate departments.", status.HTTP_403_FORBIDDEN)
-        obj = self.get_object(pk)
-        if not obj:
-            return err("Not found", status.HTTP_404_NOT_FOUND)
-        obj.is_active = False
-        obj.save(update_fields=["is_active", "updated_at"])
-        return ok("Deactivated")
+    async def put(self, request, pk):
 
+        def _run():
+            if not request.user.is_superuser:
+                return err('Only admin can edit departments.', status.HTTP_403_FORBIDDEN)
+            obj = self.get_object(pk)
+            if not obj:
+                return err('Not found', status.HTTP_404_NOT_FOUND)
+            ser = DepartmentSerializer(obj, data=request.data, partial=True)
+            if not ser.is_valid():
+                return err('Validation failed', extra={'errors': ser.errors})
+            ser.save()
+            return ok('Updated', data=ser.data)
+        return await sync_to_async(_run, thread_sensitive=True)()
 
+    async def delete(self, request, pk):
+
+        def _run():
+            if not request.user.is_superuser:
+                return err('Only admin can deactivate departments.', status.HTTP_403_FORBIDDEN)
+            obj = self.get_object(pk)
+            if not obj:
+                return err('Not found', status.HTTP_404_NOT_FOUND)
+            obj.is_active = False
+            obj.save(update_fields=['is_active', 'updated_at'])
+            return ok('Deactivated')
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+@async_api_view
 class AdminDepartmentMembershipAPIView(APIView):
     """Add/remove staff from department. Admin only."""
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'tickets'
+    throttle_rate = '60/min'
     permission_classes = [IsSuperuserOnly]
 
-    def post(self, request, pk):
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-        try:
-            dept = Department.objects.get(pk=pk)
-        except Department.DoesNotExist:
-            return err("Department not found", status.HTTP_404_NOT_FOUND)
-        user_id = request.data.get("user_id")
-        is_manager = bool(request.data.get("is_manager", False))
-        try:
-            staff = User.objects.get(pk=user_id, is_staff=True)
-        except User.DoesNotExist:
-            return err("Staff user not found.")
-        mem, created = DepartmentMembership.objects.get_or_create(
-            user=staff, department=dept, defaults={"is_manager": is_manager}
-        )
-        if not created:
-            mem.is_manager = is_manager
-            mem.save(update_fields=["is_manager"])
-        return ok(
-            "Membership saved",
-            data={"id": mem.id, "user_id": staff.id, "username": staff.username, "is_manager": mem.is_manager},
-            http_status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
-        )
+    async def post(self, request, pk):
 
-    def delete(self, request, pk):
-        user_id = request.data.get("user_id") or request.query_params.get("user_id")
-        deleted, _ = DepartmentMembership.objects.filter(department_id=pk, user_id=user_id).delete()
-        if not deleted:
-            return err("Membership not found", status.HTTP_404_NOT_FOUND)
-        return ok("Removed")
+        def _run():
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            try:
+                dept = Department.objects.get(pk=pk)
+            except Department.DoesNotExist:
+                return err('Department not found', status.HTTP_404_NOT_FOUND)
+            user_id = request.data.get('user_id')
+            is_manager = bool(request.data.get('is_manager', False))
+            try:
+                staff = User.objects.get(pk=user_id, is_staff=True)
+            except User.DoesNotExist:
+                return err('Staff user not found.')
+            mem, created = DepartmentMembership.objects.get_or_create(user=staff, department=dept, defaults={'is_manager': is_manager})
+            if not created:
+                mem.is_manager = is_manager
+                mem.save(update_fields=['is_manager'])
+            return ok('Membership saved', data={'id': mem.id, 'user_id': staff.id, 'username': staff.username, 'is_manager': mem.is_manager}, http_status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+        return await sync_to_async(_run, thread_sensitive=True)()
 
+    async def delete(self, request, pk):
 
+        def _run():
+            user_id = request.data.get('user_id') or request.query_params.get('user_id')
+            deleted, _ = DepartmentMembership.objects.filter(department_id=pk, user_id=user_id).delete()
+            if not deleted:
+                return err('Membership not found', status.HTTP_404_NOT_FOUND)
+            return ok('Removed')
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+@async_api_view
 class AdminStaffListAPIView(APIView):
     """List staff users with their department memberships. Admin only."""
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'tickets'
+    throttle_rate = '60/min'
     permission_classes = [IsSuperuserOnly]
 
-    def get(self, request):
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-        qs = User.objects.filter(is_staff=True).order_by("username")
-        search = request.query_params.get("search", "").strip()
-        if search:
-            qs = qs.filter(Q(username__icontains=search) | Q(email__icontains=search))
-        data = []
-        for u in qs[:100]:
-            memberships = list(
-                DepartmentMembership.objects.filter(user=u).select_related("department")
-            )
-            data.append({
-                "id": u.id,
-                "username": u.username,
-                "email": u.email,
-                "is_active": u.is_active,
-                "is_superuser": u.is_superuser,
-                "departments": [
-                    {
-                        "id": m.department_id,
-                        "name": m.department.name,
-                        "is_manager": m.is_manager,
-                    }
-                    for m in memberships
-                ],
-                "assigned_open": Ticket.objects.filter(
-                    assigned_to=u
-                ).exclude(status__in=[Ticket.Status.CLOSED, Ticket.Status.RESOLVED]).count(),
-            })
-        return ok(data=data)
+    async def get(self, request):
 
+        def _run():
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            qs = User.objects.filter(is_staff=True).order_by('username')
+            search = request.query_params.get('search', '').strip()
+            if search:
+                qs = qs.filter(Q(username__icontains=search) | Q(email__icontains=search))
+            data = []
+            for u in qs[:100]:
+                memberships = list(DepartmentMembership.objects.filter(user=u).select_related('department'))
+                data.append({'id': u.id, 'username': u.username, 'email': u.email, 'is_active': u.is_active, 'is_superuser': u.is_superuser, 'departments': [{'id': m.department_id, 'name': m.department.name, 'is_manager': m.is_manager} for m in memberships], 'assigned_open': Ticket.objects.filter(assigned_to=u).exclude(status__in=[Ticket.Status.CLOSED, Ticket.Status.RESOLVED]).count()})
+            return ok(data=data)
+        return await sync_to_async(_run, thread_sensitive=True)()
 
+@async_api_view
 class DepartmentStaffListAPIView(APIView):
     """Staff members of a department (for assignment dropdown)."""
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'tickets'
+    throttle_rate = '60/min'
     permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
 
-    def get(self, request, pk):
-        if not request.user.is_superuser:
-            if not DepartmentMembership.objects.filter(user=request.user, department_id=pk).exists():
-                return err("Forbidden", status.HTTP_403_FORBIDDEN)
-        members = DepartmentMembership.objects.filter(department_id=pk).select_related("user")
-        data = [
-            {
-                "id": m.user_id,
-                "username": m.user.username,
-                "email": m.user.email,
-                "is_manager": m.is_manager,
-            }
-            for m in members
-            if m.user.is_active
-        ]
-        return ok(data=data)
+    async def get(self, request, pk):
 
+        def _run():
+            if not request.user.is_superuser:
+                if not DepartmentMembership.objects.filter(user=request.user, department_id=pk).exists():
+                    return err('Forbidden', status.HTTP_403_FORBIDDEN)
+            members = DepartmentMembership.objects.filter(department_id=pk).select_related('user')
+            data = [{'id': m.user_id, 'username': m.user.username, 'email': m.user.email, 'is_manager': m.is_manager} for m in members if m.user.is_active]
+            return ok(data=data)
+        return await sync_to_async(_run, thread_sensitive=True)()
 
+@async_api_view
 class StaffTicketDeleteAPIView(APIView):
     """Hard-delete a ticket (superuser or staff with department manager / tickets.delete rule)."""
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'tickets'
+    throttle_rate = '60/min'
     permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
 
-    def delete(self, request, pk):
-        try:
-            ticket = Ticket.objects.get(pk=pk)
-        except Ticket.DoesNotExist:
-            raise Http404
-        user = request.user
-        if not user.is_superuser:
-            from users.admin_apis import user_has_rule
-            if not user_has_rule(user, "tickets.delete"):
-                from .models import DepartmentMembership
-                if not DepartmentMembership.objects.filter(
-                    user=user, department_id=ticket.department_id, is_manager=True
-                ).exists():
-                    return err("Forbidden", status.HTTP_403_FORBIDDEN)
-        ticket.delete()
-        return ok("Ticket deleted")
+    async def delete(self, request, pk):
+
+        def _run():
+            try:
+                ticket = Ticket.objects.get(pk=pk)
+            except Ticket.DoesNotExist:
+                raise Http404
+            user = request.user
+            if not user.is_superuser:
+                from users.admin_apis import user_has_rule
+                if not user_has_rule(user, 'tickets.delete'):
+                    from .models import DepartmentMembership
+                    if not DepartmentMembership.objects.filter(user=user, department_id=ticket.department_id, is_manager=True).exists():
+                        return err('Forbidden', status.HTTP_403_FORBIDDEN)
+            ticket.delete()
+            return ok('Ticket deleted')
+        return await sync_to_async(_run, thread_sensitive=True)()
 
 
 class TicketMarkReadAPIView(APIView):
     """
     POST /api/tickets/<pk>/read/
     Marks messages from the other party as seen and updates TicketReadState.
-
-    IMPORTANT: Being online / connected to the WebSocket is NOT enough.
-    This endpoint must be called explicitly when the user is viewing the ticket.
-    We only broadcast ticket.seen when at least one message was newly marked.
+    Only call this when the user is actually viewing the ticket (not merely online).
     """
     permission_classes = [IsAuthenticated, IsTicketOwnerOrStaff]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "tickets.read"
     throttle_rate = "60/min"
 
-    async def post(self, request, pk):
-        # Scoped throttle (user)
-        scope = f"tickets:read:user:{getattr(request.user, 'pk', 'anon')}"
-        if not await sync_to_async(check_scope)(scope, 60, 60):
-            return throttle_response(scope, 60, 60)
-
+    def post(self, request, pk):
         try:
-            ticket = await sync_to_async(Ticket.objects.get)(pk=pk)
+            ticket = Ticket.objects.get(pk=pk)
         except Ticket.DoesNotExist:
             raise Http404
-        # object permissions (sync helper)
-        await sync_to_async(self.check_object_permissions)(request, ticket)
+        self.check_object_permissions(request, ticket)
         user = request.user
         now = timezone.now()
-
-        def _mark():
-            qs = ticket.messages.filter(seen_at__isnull=True).exclude(author_id=user.id)
-            marked_ids = list(qs.values_list("id", flat=True)[:200])
-            updated = qs.update(seen_at=now) if marked_ids else 0
-            from .models import TicketReadState
-            TicketReadState.objects.update_or_create(
-                ticket=ticket, user=user, defaults={"last_read_at": now}
-            )
-            return marked_ids, updated
-
-        marked_ids, updated = await sync_to_async(_mark)()
-
-        # Only notify the other party when something actually became seen.
-        # Online presence alone must never emit ticket.seen.
+        qs = ticket.messages.filter(seen_at__isnull=True).exclude(author_id=user.id)
+        marked_ids = list(qs.values_list("id", flat=True)[:200])
+        updated = qs.update(seen_at=now) if marked_ids else 0
+        from .models import TicketReadState
+        TicketReadState.objects.update_or_create(
+            ticket=ticket, user=user, defaults={"last_read_at": now}
+        )
         if updated > 0:
             try:
                 from .consumers import broadcast_ticket_event
-                await sync_to_async(broadcast_ticket_event)(
+                broadcast_ticket_event(
                     "ticket.seen",
                     ticket,
                     extra={
@@ -748,7 +725,6 @@ class TicketMarkReadAPIView(APIView):
                 )
             except Exception:
                 logger.exception("ticket.seen broadcast failed")
-
         return ok(
             "Marked as read",
             data={

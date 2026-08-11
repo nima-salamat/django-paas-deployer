@@ -32,6 +32,7 @@ def ticket_message_saved(sender, instance, created, **kwargs):
     try:
         from .consumers import broadcast_ticket_event
         ticket = instance.ticket
+        author = instance.author
         broadcast_ticket_event(
             "ticket.message",
             ticket,
@@ -40,6 +41,7 @@ def ticket_message_saved(sender, instance, created, **kwargs):
                 "is_staff_reply": instance.is_staff_reply,
                 "author_id": instance.author_id,
                 "preview": _preview(instance.body),
+                "username": getattr(author, "username", None) if author else None,
             },
         )
     except Exception:
