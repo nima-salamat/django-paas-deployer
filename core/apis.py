@@ -122,26 +122,62 @@ class ProtectedMediaView(APIView):
 
         user = self._authenticate(request)
         if not user:
-            raise Http404("Authentication required")
+            # Return JSON 404 so the frontend can detect the failure cleanly
+            # (an <img> tag will fire onerror and the UI can show a fallback).
+            from rest_framework.response import Response
+            from rest_framework import status as drf_status
+            return Response(
+                {"detail": "Authentication required."},
+                status=drf_status.HTTP_404_NOT_FOUND,
+            )
 
         # Allow only whitelisted prefixes (prevents serving arbitrary files
         # from MEDIA_ROOT — e.g. deployment zips, which have their own authed
         # download endpoint).
         if not any(path.startswith(p) for p in self.ALLOWED_PREFIXES):
-            raise Http404
+            from rest_framework.response import Response
+            from rest_framework import status as drf_status
+            return Response(
+                {"detail": "Not found."},
+                status=drf_status.HTTP_404_NOT_FOUND,
+            )
 
-        media_root = str(settings.MEDIA_ROOT)
-        # Normalize and prevent directory traversal
-        full_path = Path(media_root) / path
+        media_root = Path(settings.MEDIA_ROOT).resolve()
+        # Normalize and prevent directory traversal. We do NOT use
+        # resolve(strict=True) because that raises if the file doesn't exist
+        # — but we want to fall through to the is_file() check below so the
+        # error path is uniform.
         try:
-            full_path = full_path.resolve(strict=True)
+            full_path = (media_root / path).resolve()
         except Exception:
-            raise Http404
+            from rest_framework.response import Response
+            from rest_framework import status as drf_status
+            return Response(
+                {"detail": "Not found."},
+                status=drf_status.HTTP_404_NOT_FOUND,
+            )
 
-        if not str(full_path).startswith(media_root):
-            raise Http404
+        # Confirm the resolved path is still inside MEDIA_ROOT (prevents ../../).
+        try:
+            full_path.relative_to(media_root)
+        except ValueError:
+            from rest_framework.response import Response
+            from rest_framework import status as drf_status
+            return Response(
+                {"detail": "Not found."},
+                status=drf_status.HTTP_404_NOT_FOUND,
+            )
+
         if not full_path.is_file():
-            raise Http404
+            # File no longer exists on disk (e.g. deleted profile photo, stale
+            # URL cached in the client). Return a clean 404 — the frontend
+            # should detect this and show the fallback avatar (initial letter).
+            from rest_framework.response import Response
+            from rest_framework import status as drf_status
+            return Response(
+                {"detail": "File not found."},
+                status=drf_status.HTTP_404_NOT_FOUND,
+            )
 
         # Detect content type
         ext = full_path.suffix.lower()
@@ -153,17 +189,40 @@ class ProtectedMediaView(APIView):
             ".mov": "video/quicktime",
             ".mp3": "audio/mpeg", ".ogg": "audio/ogg",
             ".wav": "audio/wav", ".m4a": "audio/mp4", ".aac": "audio/aac",
+            ".pdf": "application/pdf",
+            ".txt": "text/plain", ".md": "text/markdown", ".csv": "text/csv",
+            ".json": "application/json",
         }
         content_type = ct_map.get(ext, "application/octet-stream")
 
         try:
             fh = open(str(full_path), "rb")
         except Exception:
-            raise Http404
+            from rest_framework.response import Response
+            from rest_framework import status as drf_status
+            return Response(
+                {"detail": "File not accessible."},
+                status=drf_status.HTTP_404_NOT_FOUND,
+            )
+
+        # Content-Disposition: inline for inline viewing (images/videos/audio),
+        # attachment for everything else (downloads).
+        inline_exts = {
+            ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
+            ".mp4", ".webm", ".mov",
+            ".mp3", ".ogg", ".wav", ".m4a", ".aac",
+            ".pdf",
+        }
+        disposition = "inline" if ext in inline_exts else "attachment"
 
         resp = FileResponse(fh, content_type=content_type)
         # Cache for 1 hour on the client (URL contains a unique uuid so caching
         # is safe — a new avatar upload will produce a new URL).
         resp["Cache-Control"] = "public, max-age=3600"
         resp["Expires"] = "3600"
+        resp["Content-Disposition"] = f'{disposition}; filename="{full_path.name}"'
+        # Support HTTP Range requests for media (seeking in video/audio)
+        # — FileResponse already handles this on Django >= 4.2 if the file
+        # supports seek(), but we set the header explicitly to be safe.
+        resp["Accept-Ranges"] = "bytes"
         return resp
