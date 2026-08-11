@@ -137,3 +137,25 @@ def broadcast_reaction(msg, user, emoji, action):
         "action": action,
     }
     _send(f"messenger_conv_{msg.conversation_id}", data)
+
+
+def broadcast_read(conversation_id, reader_user_id, receipts):
+    """Notify the conversation that some messages were just read by `reader_user_id`.
+    Senders flip their tick state from 'sent' → 'read'.
+    """
+    if not receipts:
+        return
+    data = {
+        "type": "message.read",
+        "conversation_id": conversation_id,
+        "reader_id": reader_user_id,
+        "message_ids": [r["message_id"] for r in receipts],
+    }
+    # Notify every participant (including the reader — harmless)
+    from .models import ConversationParticipant
+    for uid in ConversationParticipant.objects.filter(
+        conversation_id=conversation_id, left_at__isnull=True
+    ).values_list("user_id", flat=True):
+        if uid != reader_user_id:
+            _send(f"messenger_user_{uid}", data)
+    _send(f"messenger_conv_{conversation_id}", data)

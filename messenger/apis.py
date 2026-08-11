@@ -18,7 +18,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from .models import (
     Contact, Block, Conversation, ConversationParticipant, Message,
     MessageReaction, MessageAttachment, GroupInviteLink,
-    ProfilePhotoPrivacy, ProfilePhotoAllowed,
+    ProfilePhotoPrivacy, ProfilePhotoAllowed, MessageReadReceipt,
 )
 from .serializers import (
     UserMiniSerializer, MessageSerializer, ConversationListSerializer,
@@ -185,15 +185,28 @@ class ConversationListCreateAPIView(APIView):
                     queryset=ConversationParticipant.objects.filter(left_at__isnull=True).select_related("user"),
                 )
             )
-            .order_by("-last_message_at", "-created_at")
+        )
+        # Sort: pinned (per-user) first, then by last_message_at desc.
+        # We sort in Python because is_pinned is per-participant, not per-conversation.
+        items = list(qs[:200])
+        # Build a quick lookup of pin state for the current user
+        pin_map = {}
+        for c in items:
+            part = next((p for p in c.participants.all() if p.user_id == request.user.id), None)
+            pin_map[c.id] = bool(part and part.is_pinned)
+        items.sort(
+            key=lambda c: (
+                not pin_map.get(c.id, False),  # pinned first (False < True)
+                -(c.last_message_at.timestamp() if c.last_message_at else c.created_at.timestamp()),
+            )
         )
         page = int(request.query_params.get("page") or 1)
         page_size = min(50, int(request.query_params.get("page_size") or 30))
         start = (page - 1) * page_size
         end = start + page_size
-        total = qs.count()
-        items = qs[start:end]
-        ser = ConversationListSerializer(items, many=True, context={"request": request})
+        total = len(items)
+        page_items = items[start:end]
+        ser = ConversationListSerializer(page_items, many=True, context={"request": request})
         return ok(data={
             "results": ser.data,
             "page": page,
@@ -564,9 +577,37 @@ class MarkReadAPIView(APIView):
         ).first()
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
-        part.last_read_at = timezone.now()
+        now = timezone.now()
+        prev = part.last_read_at
+        part.last_read_at = now
         part.save(update_fields=["last_read_at"])
-        return ok("Read")
+        # Stamp MessageReadReceipt rows for every message in this conversation
+        # that the viewer hasn't already receipted and that arrived on/before now.
+        # Only stamp messages from OTHER senders (we don't receipt our own).
+        msg_qs = Message.objects.filter(
+            conversation_id=pk, is_deleted=False, is_system=False
+        ).exclude(sender=request.user)
+        if prev:
+            msg_qs = msg_qs.filter(created_at__gt=prev)
+        new_receipts = []
+        for m in msg_qs.values("id", "sender_id", "created_at").iterator():
+            _, created = MessageReadReceipt.objects.get_or_create(
+                message_id=m["id"], user=request.user,
+            )
+            if created:
+                new_receipts.append({
+                    "message_id": m["id"],
+                    "sender_id": m["sender_id"],
+                    "reader_id": request.user.id,
+                })
+        # Broadcast read event so the sender sees ticks flip in real time
+        if new_receipts:
+            try:
+                from .consumers import broadcast_read
+                broadcast_read(pk, request.user.id, new_receipts)
+            except Exception:
+                logger.exception("broadcast_read failed")
+        return ok("Read", data={"receipts": len(new_receipts)})
 
 
 
@@ -824,10 +865,36 @@ class UserProfileAPIView(APIView):
 
 
 class AttachmentDownloadAPIView(APIView):
+    """Attachment download — supports JWT via Authorization header OR ?token= query param.
+    The query-param fallback lets the browser load <img src="...?token=..."> without
+    custom headers (which the <img> tag cannot send).
+    """
     authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = []  # we authenticate manually inside get()
+
+    def _authenticate_via_token_query(self, request):
+        token = request.query_params.get("token")
+        if not token:
+            return None
+        try:
+            from rest_framework_simplejwt.tokens import AccessToken
+            from django.contrib.auth import get_user_model
+            validated = AccessToken(token)
+            user_id = validated["user_id"]
+            user = get_user_model().objects.only("id", "is_active").get(pk=user_id)
+            if user and user.is_active:
+                request.user = user
+                return user
+        except Exception:
+            return None
+        return None
 
     def get(self, request, pk):
+        # If no authenticated user yet, try ?token= query param
+        if not getattr(request, "user", None) or not getattr(request.user, "is_authenticated", False):
+            self._authenticate_via_token_query(request)
+        if not getattr(request, "user", None) or not getattr(request.user, "is_authenticated", False):
+            return err("Unauthorized", status.HTTP_401_UNAUTHORIZED)
         att = get_object_or_404(MessageAttachment, pk=pk)
         if not ConversationParticipant.objects.filter(
             conversation=att.conversation, user=request.user, left_at__isnull=True
@@ -835,3 +902,76 @@ class AttachmentDownloadAPIView(APIView):
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
         from django.http import FileResponse
         return FileResponse(att.file.open("rb"), as_attachment=True, filename=att.original_filename)
+
+
+class ConversationPinAPIView(APIView):
+    """Toggle pin/unpin of a conversation for the current user (per-user pin)."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        part = ConversationParticipant.objects.filter(
+            conversation_id=pk, user=request.user, left_at__isnull=True
+        ).first()
+        if not part:
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        part.is_pinned = not part.is_pinned
+        part.pinned_at = timezone.now() if part.is_pinned else None
+        part.save(update_fields=["is_pinned", "pinned_at"])
+        return ok(
+            "Pinned" if part.is_pinned else "Unpinned",
+            data={"is_pinned": part.is_pinned},
+        )
+
+
+class MessageReadersAPIView(APIView):
+    """Returns full read receipt breakdown for a single message:
+    { read: [...], unread: [...], conversation_id, sender_id, created_at }
+    Used by the "Seen by" right-click submenu.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        msg = get_object_or_404(Message, pk=pk, is_deleted=False)
+        if not ConversationParticipant.objects.filter(
+            conversation=msg.conversation, user=request.user, left_at__isnull=True
+        ).exists():
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+
+        participants = list(
+            ConversationParticipant.objects.filter(
+                conversation=msg.conversation, left_at__isnull=True
+            ).select_related("user")
+        )
+        # Build read set from MessageReadReceipt
+        receipt_users = {}  # user_id -> seen_at
+        for r in msg.read_receipts.all():
+            receipt_users[r.user_id] = r.seen_at
+        # Supplement with last_read_at
+        read_list = []
+        unread_list = []
+        for p in participants:
+            seen_at = receipt_users.get(p.user_id)
+            if not seen_at and p.last_read_at and p.last_read_at >= msg.created_at:
+                seen_at = p.last_read_at
+            entry = {
+                "user": UserMiniSerializer(p.user, context={"request": request}).data,
+                "seen_at": seen_at,
+                "role": p.role,
+            }
+            if seen_at:
+                read_list.append(entry)
+            elif p.user_id != msg.sender_id:
+                # Sender always implicitly "saw" their own message
+                unread_list.append(entry)
+            else:
+                read_list.append(entry)  # sender counts as read
+        return ok(data={
+            "message_id": msg.id,
+            "conversation_id": msg.conversation_id,
+            "sender_id": msg.sender_id,
+            "created_at": msg.created_at,
+            "read": read_list,
+            "unread": unread_list,
+        })

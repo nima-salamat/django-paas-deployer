@@ -144,12 +144,16 @@ class ConversationParticipant(models.Model):
     last_read_at = models.DateTimeField(null=True, blank=True)
     # Soft leave
     left_at = models.DateTimeField(null=True, blank=True)
+    # Per-user pin (chat appears at top of that user's list)
+    is_pinned = models.BooleanField(default=False)
+    pinned_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         unique_together = ("conversation", "user")
         indexes = [
             models.Index(fields=["user", "left_at"]),
             models.Index(fields=["conversation", "user"]),
+            models.Index(fields=["user", "is_pinned"]),
         ]
 
     def __str__(self):
@@ -235,6 +239,20 @@ class MessageReaction(models.Model):
     class Meta:
         unique_together = ("message", "user", "emoji")
         indexes = [models.Index(fields=["message", "emoji"])]
+
+
+class MessageReadReceipt(models.Model):
+    """
+    Per-message read receipt — records when each user read a specific message.
+    Used for "Seen by" lists and Telegram-style single/double ticks.
+    """
+    message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name="read_receipts")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="messenger_read_receipts")
+    seen_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("message", "user")
+        indexes = [models.Index(fields=["message", "user"])]
 
 
 class MessageAttachment(models.Model):

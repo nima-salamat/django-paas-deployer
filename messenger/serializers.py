@@ -4,6 +4,7 @@ from .models import (
     Contact, Block, Conversation, ConversationParticipant, Message,
     MessageReaction, MessageAttachment, GroupInviteLink,
     ProfilePhotoPrivacy, ProfilePhotoAllowed, PinnedMessage,
+    MessageReadReceipt,
 )
 from .utils import can_see_profile_photo, detect_kind
 
@@ -73,7 +74,12 @@ class MessageAttachmentSerializer(serializers.ModelSerializer):
     def get_url(self, obj):
         request = self.context.get("request")
         url = f"/api/messenger/attachments/{obj.pk}/download/"
-        return request.build_absolute_uri(url) if request else url
+        abs_url = request.build_absolute_uri(url) if request else url
+        # Pass JWT through query string so <img src=...> works without auth headers.
+        if request and "token" in request.query_params:
+            sep = "&" if "?" in abs_url else "?"
+            abs_url = f"{abs_url}{sep}token={request.query_params['token']}"
+        return abs_url
 
 
 class ReactionSerializer(serializers.ModelSerializer):
@@ -90,6 +96,8 @@ class MessageSerializer(serializers.ModelSerializer):
     reactions = serializers.SerializerMethodField()
     reply_to_preview = serializers.SerializerMethodField()
     forwarded_from_user = UserMiniSerializer(source="forwarded_from", read_only=True)
+    read_state = serializers.SerializerMethodField()
+    readers = serializers.SerializerMethodField()
 
     class Meta:
         model = Message
@@ -97,7 +105,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "id", "conversation", "sender", "body", "reply_to", "reply_to_preview",
             "forwarded_from", "forwarded_from_user", "forwarded_from_message",
             "is_edited", "is_system", "is_deleted", "created_at", "updated_at",
-            "attachments", "reactions",
+            "attachments", "reactions", "read_state", "readers",
         )
         read_only_fields = fields
 
@@ -118,6 +126,67 @@ class MessageSerializer(serializers.ModelSerializer):
             "sender": UserMiniSerializer(r.sender, context=self.context).data if r.sender else None,
         }
 
+    def get_read_state(self, obj):
+        """One of: 'sent' | 'read'.
+        - For sender's own message: 'read' if at least one non-sender participant has
+          last_read_at >= message.created_at (or a MessageReadReceipt from a non-sender exists).
+        - For other viewers: always 'read' (they're reading it now).
+        - System / others' messages: 'read'.
+        """
+        request = self.context.get("request")
+        viewer = getattr(request, "user", None) if request else None
+        if not viewer or not viewer.is_authenticated:
+            return "sent"
+        if obj.is_system or obj.is_deleted:
+            return "read"
+        # Only the sender cares about read state of their own message.
+        if obj.sender_id != viewer.id:
+            return "read"
+        # Sender's own message → check if any other participant has read it.
+        # Cheap path: MessageReadReceipt from any non-sender.
+        qs = MessageReadReceipt.objects.filter(message=obj).exclude(user_id=obj.sender_id)
+        if qs.exists():
+            return "read"
+        # Fallback: participant.last_read_at >= message.created_at (covers receipts
+        # created before this feature shipped).
+        participants = ConversationParticipant.objects.filter(
+            conversation_id=obj.conversation_id, left_at__isnull=True
+        ).exclude(user_id=obj.sender_id)
+        for p in participants:
+            if p.last_read_at and p.last_read_at >= obj.created_at:
+                return "read"
+        return "sent"
+
+    def get_readers(self, obj):
+        """List of {user, seen_at} for users who have read this message.
+        Includes the sender's own receipts from `last_read_at` (computed on the fly).
+        """
+        request = self.context.get("request")
+        out = []
+        seen_ids = set()
+        for r in obj.read_receipts.select_related("user")[:200]:
+            out.append({
+                "user": UserMiniSerializer(r.user, context=self.context).data,
+                "seen_at": r.seen_at,
+                "source": "receipt",
+            })
+            seen_ids.add(r.user_id)
+        # Supplement with participants whose last_read_at >= message.created_at.
+        participants = ConversationParticipant.objects.filter(
+            conversation_id=obj.conversation_id, left_at__isnull=True
+        ).select_related("user")
+        for p in participants:
+            if p.user_id in seen_ids:
+                continue
+            if p.last_read_at and p.last_read_at >= obj.created_at:
+                out.append({
+                    "user": UserMiniSerializer(p.user, context=self.context).data,
+                    "seen_at": p.last_read_at,
+                    "source": "last_read_at",
+                })
+                seen_ids.add(p.user_id)
+        return out
+
 
 class ParticipantSerializer(serializers.ModelSerializer):
     user = UserMiniSerializer(read_only=True)
@@ -128,6 +197,7 @@ class ParticipantSerializer(serializers.ModelSerializer):
             "id", "user", "role", "can_send_messages", "can_send_media",
             "can_add_members", "can_pin_messages", "can_change_info",
             "is_muted", "joined_at", "last_read_at", "left_at",
+            "is_pinned", "pinned_at",
         )
 
 
@@ -136,13 +206,14 @@ class ConversationListSerializer(serializers.ModelSerializer):
     last_message = serializers.SerializerMethodField()
     unread_count = serializers.SerializerMethodField()
     peer = serializers.SerializerMethodField()  # for private chats
+    is_pinned = serializers.SerializerMethodField()
 
     class Meta:
         model = Conversation
         fields = (
             "id", "public_id", "type", "title", "description", "avatar",
             "is_public", "is_closed", "members_can_add", "created_at", "updated_at", "last_message_at",
-            "participants", "last_message", "unread_count", "peer",
+            "participants", "last_message", "unread_count", "peer", "is_pinned",
         )
 
     def get_participants(self, obj):
@@ -187,6 +258,13 @@ class ConversationListSerializer(serializers.ModelSerializer):
         if other:
             return UserMiniSerializer(other.user, context=self.context).data
         return None
+
+    def get_is_pinned(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        part = obj.participants.filter(user=request.user, left_at__isnull=True).first()
+        return bool(part and part.is_pinned)
 
 
 class ConversationDetailSerializer(ConversationListSerializer):
