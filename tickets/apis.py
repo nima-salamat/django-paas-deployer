@@ -226,7 +226,18 @@ class TicketMessageCreateAPIView(APIView):
                 content_type=getattr(f, "content_type", "") or "",
                 size=f.size,
             )
-        return ok("Message sent", data=TicketMessageSerializer(msg, context={"request": request}).data, http_status=status.HTTP_201_CREATED)
+        # Re-fetch so attachments (with download_url) are included in the response
+        msg = (
+            TicketMessage.objects
+            .select_related("author")
+            .prefetch_related("attachments")
+            .get(pk=msg.pk)
+        )
+        return ok(
+            "Message sent",
+            data=TicketMessageSerializer(msg, context={"request": request}).data,
+            http_status=status.HTTP_201_CREATED,
+        )
 
 
 def user_can_access_ticket(user, ticket) -> bool:

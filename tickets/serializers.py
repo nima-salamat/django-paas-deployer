@@ -12,9 +12,27 @@ class DepartmentSerializer(serializers.ModelSerializer):
         read_only_fields = ("id","slug","created_at","updated_at")
 
 class UserBriefSerializer(serializers.ModelSerializer):
+    avatar = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ("id","username","email","color")
+        fields = ("id", "username", "email", "color", "avatar")
+
+    def get_avatar(self, obj):
+        try:
+            prof = (
+                obj.profile_set.filter(image__isnull=False)
+                .exclude(image="")
+                .order_by("id")
+                .first()
+            )
+            if not prof or not getattr(prof, "image", None):
+                return None
+            request = self.context.get("request")
+            url = prof.image.url
+            return request.build_absolute_uri(url) if request else url
+        except Exception:
+            return None
 
 class ServiceBriefSerializer(serializers.Serializer):
     id = serializers.UUIDField()
