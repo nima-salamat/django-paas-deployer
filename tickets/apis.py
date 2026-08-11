@@ -730,3 +730,109 @@ class TicketMarkReadAPIView(APIView):
                 "last_read_at": now.isoformat(),
             },
         )
+
+
+class AdminUserMembershipAPIView(APIView):
+    """
+    Manage department memberships for a single user (multi-department).
+    GET  /api/tickets/admin/users/<user_id>/memberships/
+    PUT  /api/tickets/admin/users/<user_id>/memberships/
+         body: { "memberships": [ {"department_id": 1, "is_manager": false}, ... ] }
+    """
+    permission_classes = [IsSuperuserOnly]
+
+    def get(self, request, user_id):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        try:
+            user = User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            return err("User not found", status.HTTP_404_NOT_FOUND)
+        memberships = list(
+            DepartmentMembership.objects.filter(user=user).select_related("department")
+        )
+        all_depts = list(Department.objects.filter(is_active=True).order_by("order", "name"))
+        return ok(data={
+            "user_id": user.id,
+            "username": user.username,
+            "is_staff": user.is_staff,
+            "memberships": [
+                {
+                    "id": m.id,
+                    "department_id": m.department_id,
+                    "department_name": m.department.name,
+                    "is_manager": m.is_manager,
+                }
+                for m in memberships
+            ],
+            "departments": [
+                {"id": d.id, "name": d.name, "slug": d.slug}
+                for d in all_depts
+            ],
+        })
+
+    def put(self, request, user_id):
+        from django.contrib.auth import get_user_model
+        from django.db import transaction
+        User = get_user_model()
+        try:
+            user = User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            return err("User not found", status.HTTP_404_NOT_FOUND)
+        raw = request.data.get("memberships")
+        if raw is None:
+            return err("memberships list required")
+        if not isinstance(raw, list):
+            return err("memberships must be a list")
+        # Normalize
+        wanted = {}
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            try:
+                did = int(item.get("department_id"))
+            except (TypeError, ValueError):
+                continue
+            wanted[did] = bool(item.get("is_manager", False))
+        valid_ids = set(
+            Department.objects.filter(id__in=wanted.keys(), is_active=True).values_list("id", flat=True)
+        )
+        wanted = {k: v for k, v in wanted.items() if k in valid_ids}
+        with transaction.atomic():
+            existing = {
+                m.department_id: m
+                for m in DepartmentMembership.objects.filter(user=user)
+            }
+            # delete removed
+            for did, mem in list(existing.items()):
+                if did not in wanted:
+                    mem.delete()
+            # create/update
+            for did, is_mgr in wanted.items():
+                if did in existing:
+                    mem = existing[did]
+                    if mem.is_manager != is_mgr:
+                        mem.is_manager = is_mgr
+                        mem.save(update_fields=["is_manager"])
+                else:
+                    DepartmentMembership.objects.create(
+                        user=user, department_id=did, is_manager=is_mgr
+                    )
+        memberships = list(
+            DepartmentMembership.objects.filter(user=user).select_related("department")
+        )
+        return ok(
+            "Memberships updated",
+            data={
+                "user_id": user.id,
+                "memberships": [
+                    {
+                        "id": m.id,
+                        "department_id": m.department_id,
+                        "department_name": m.department.name,
+                        "is_manager": m.is_manager,
+                    }
+                    for m in memberships
+                ],
+            },
+        )

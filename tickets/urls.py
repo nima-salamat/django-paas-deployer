@@ -24,4 +24,5 @@ urlpatterns = [
     path("admin/departments/<int:pk>/members/", apis.AdminDepartmentMembershipAPIView.as_view(), name="admin-department-members"),
     path("admin/departments/<int:pk>/staff/", apis.DepartmentStaffListAPIView.as_view(), name="department-staff"),
     path("admin/staff/", apis.AdminStaffListAPIView.as_view(), name="admin-staff-list"),
+    path("admin/users/<int:user_id>/memberships/", apis.AdminUserMembershipAPIView.as_view(), name="admin-user-memberships"),
 ]
