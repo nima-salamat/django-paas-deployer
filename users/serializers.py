@@ -253,9 +253,15 @@ class ProfileImagerSerializer(serializers.ModelSerializer):
     
                 
     def get_image_url(self, obj):
-        request = self.context.get("request", None)
-        if obj.image and request and hasattr(obj.image, "url"):
-            return request.build_absolute_uri(obj.image.url) if request else obj.image.url
+        # Return RELATIVE URL so the browser resolves against the current page
+        # origin (HTTPS). build_absolute_uri() returned http:// URLs when Django
+        # sat behind an HTTPS reverse proxy forwarding http:// in Host header,
+        # which caused Mixed Content errors on the messenger page.
+        if obj.image and hasattr(obj.image, "url"):
+            try:
+                return obj.image.url
+            except Exception:
+                return None
         return None
     
     

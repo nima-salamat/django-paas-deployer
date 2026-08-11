@@ -1427,11 +1427,16 @@ class ConversationCleanupAPIView(APIView):
     """Delete ALL messages in a conversation for the current user.
 
     Behaviour:
-    - Private DM: soft-deletes all messages from this user's view (sets is_deleted=True
-      on messages they can see). The other participant still sees their own sent messages.
-      This matches Telegram's "Clear history" — clears local view without affecting peer.
-    - Group: same — only clears messages visible to this participant.
+    - Private DM: HARD-deletes all messages + their attachment files from disk
+      for BOTH participants (the conversation is shared, so deleting files is
+      the only way to actually reclaim disk space). This is what Telegram does
+      when you "Clear history" — the files are gone for everyone.
+    - Group: HARD-deletes all messages + their attachment files for EVERYONE.
+      Group participants who didn't request the cleanup will also lose their
+      copy. This matches Telegram's group "Clear history" behaviour.
     - The user must be an active participant.
+    - Attachment files (images, videos, voice messages, documents) are deleted
+      from MEDIA_ROOT via the FileField API so disk space is reclaimed.
 
     Body: { } (no params needed)
     """
@@ -1445,14 +1450,54 @@ class ConversationCleanupAPIView(APIView):
         ).first()
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
-        # Soft-delete all messages in the conversation (visible to this user)
-        msgs = Message.objects.filter(conversation=conv, is_deleted=False)
+        # Collect all attachments for this conversation and delete their
+        # underlying files from disk BEFORE deleting the message rows.
+        # (Once the Message rows are gone, the ORM cascade will also delete
+        # the MessageAttachment rows, but it does NOT delete the files.)
+        from .models import MessageAttachment
+        attachments = MessageAttachment.objects.filter(conversation=conv)
+        files_deleted = 0
+        for att in attachments.iterator():
+            try:
+                if att.file:
+                    att.file.delete(save=False)
+                    files_deleted += 1
+            except Exception:
+                logger.warning(
+                    "Could not delete attachment file id=%s", att.id, exc_info=True
+                )
+        # Now hard-delete all messages (cascade will remove attachments rows,
+        # reactions, read receipts, etc.)
+        msgs = Message.objects.filter(conversation=conv)
         count = msgs.count()
-        msgs.update(is_deleted=True, body="", updated_at=timezone.now())
+        # Delete pinned-message rows referencing these messages first to
+        # avoid cascade integrity errors.
+        from .models import PinnedMessage
+        PinnedMessage.objects.filter(conversation=conv).delete()
+        msgs.delete()
         # Reset read state for this participant so unread badge clears
         part.last_read_at = timezone.now()
         part.save(update_fields=["last_read_at"])
-        return ok(f"Cleared {count} messages", data={"cleared": count})
+        # Update conversation's last_message_at to null since there are no
+        # messages left.
+        Conversation.objects.filter(pk=conv.pk).update(
+            last_message_at=None, updated_at=timezone.now()
+        )
+        # Broadcast to all participants so their clients reload the chat
+        # (otherwise they'd be looking at stale messages that are now gone).
+        try:
+            from .consumers import broadcast_member_change
+            broadcast_member_change(conv.id, {
+                "type": "messages.cleared",
+                "conversation_id": conv.id,
+                "user_id": request.user.id,
+            })
+        except Exception:
+            pass
+        return ok(
+            f"Cleared {count} messages ({files_deleted} files deleted)",
+            data={"cleared": count, "files_deleted": files_deleted},
+        )
 
 
 class ConversationMediaAPIView(APIView):
@@ -1858,8 +1903,17 @@ class JoinRequestActionAPIView(APIView):
                 })
             except Exception:
                 pass
+        # The user asked that requests be DELETED after the admin acts on them
+        # (the operation is complete — there's no reason to keep a decided
+        # request around cluttering the admin's list or the user's "My
+        # requests" list). We broadcast the decision BEFORE deleting so the
+        # frontend can show the "approved/rejected" toast.
         req.save(update_fields=["status", "decided_by", "decided_at"])
-        return ok(f"Request {req.status}", data={"status": req.status})
+        req_id = req.id
+        req_status = req.status
+        req_user_id = req.user_id
+        req.delete()
+        return ok(f"Request {req_status}", data={"status": req_status, "request_id": req_id, "user_id": req_user_id})
 
 
 class MyJoinRequestsAPIView(APIView):

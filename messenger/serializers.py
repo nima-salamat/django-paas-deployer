@@ -23,7 +23,15 @@ class UserMiniSerializer(serializers.ModelSerializer):
         fields = ("id", "username", "color", "avatar", "is_contact", "is_blocked", "is_online", "bio")
 
     def get_avatar(self, obj):
-        """Use existing users.Profile images only."""
+        """Use existing users.Profile images only.
+
+        Returns a RELATIVE URL (e.g. /media/users/profile_xxx.jpg) so the browser
+        resolves it against the current page origin (HTTPS). Returning absolute
+        http(s) URLs via build_absolute_uri() caused Mixed Content errors when
+        Django sat behind an HTTPS reverse proxy that forwarded http:// in the
+        Host header. The frontend's withTokenQuery() will append ?token=<jwt>
+        for same-origin relative URLs.
+        """
         request = self.context.get("request")
         viewer = getattr(request, "user", None) if request else None
         if not can_see_profile_photo(viewer, obj):
@@ -38,13 +46,13 @@ class UserMiniSerializer(serializers.ModelSerializer):
                 .first()
             )
             if prof and getattr(prof, "image", None):
-                url = prof.image.url
-                if request:
-                    try:
-                        return request.build_absolute_uri(url)
-                    except Exception:
-                        pass
-                return url
+                # Return RELATIVE url — never build_absolute_uri().
+                # This prevents Mixed Content errors when the page is HTTPS
+                # but Django receives http:// from the reverse proxy.
+                try:
+                    return prof.image.url
+                except Exception:
+                    return None
         except Exception:
             pass
         return None
@@ -91,14 +99,12 @@ class MessageAttachmentSerializer(serializers.ModelSerializer):
         )
 
     def get_url(self, obj):
-        request = self.context.get("request")
-        url = f"/api/messenger/attachments/{obj.pk}/download/"
-        abs_url = request.build_absolute_uri(url) if request else url
-        # Pass JWT through query string so <img src=...> works without auth headers.
-        if request and "token" in request.query_params:
-            sep = "&" if "?" in abs_url else "?"
-            abs_url = f"{abs_url}{sep}token={request.query_params['token']}"
-        return abs_url
+        # Return a RELATIVE URL so the browser resolves it against the current
+        # page origin (HTTPS). Returning absolute URLs via build_absolute_uri()
+        # caused Mixed Content errors when Django sat behind an HTTPS reverse
+        # proxy that forwarded http:// in the Host header.
+        # The frontend's withTokenQuery() will append ?token=<jwt> as needed.
+        return f"/api/messenger/attachments/{obj.pk}/download/"
 
 
 class ReactionSerializer(serializers.ModelSerializer):
@@ -240,13 +246,18 @@ class ConversationListSerializer(serializers.ModelSerializer):
         )
 
     def get_avatar_url(self, obj):
-        """Absolute URL for the group avatar (if set)."""
-        request = self.context.get("request")
+        """RELATIVE URL for the group avatar (if set).
+
+        Returns a path like /media/messenger/groups/group_xx.jpg — the browser
+        resolves it against the current page origin (HTTPS). Returning absolute
+        URLs caused Mixed Content errors when Django sat behind an HTTPS reverse
+        proxy that forwarded http:// in the Host header.
+        The frontend's withTokenQuery() will append ?token=<jwt>.
+        """
         if not obj.avatar:
             return None
         try:
-            url = obj.avatar.url
-            return request.build_absolute_uri(url) if request else url
+            return obj.avatar.url
         except Exception:
             return None
 
@@ -344,9 +355,10 @@ class GroupInviteLinkSerializer(serializers.ModelSerializer):
         fields = ("id", "code", "url", "is_active", "max_uses", "uses", "expires_at", "created_at")
 
     def get_url(self, obj):
-        request = self.context.get("request")
-        path = f"/messenger/join/{obj.code}"
-        return request.build_absolute_uri(path) if request else path
+        # Relative path so the browser resolves against current page origin.
+        # build_absolute_uri() caused Mixed Content errors when Django sat
+        # behind an HTTPS reverse proxy forwarding http://.
+        return f"/messenger/join/{obj.code}"
 
 
 class ContactSerializer(serializers.ModelSerializer):
@@ -365,11 +377,13 @@ class ProfilePhotoSerializer(serializers.Serializer):
     created_at = serializers.DateTimeField()
 
     def get_url(self, obj):
-        request = self.context.get("request")
+        # Relative URL — see MessageAttachmentSerializer.get_url for rationale.
         if not obj.image:
             return None
-        url = obj.image.url
-        return request.build_absolute_uri(url) if request else url
+        try:
+            return obj.image.url
+        except Exception:
+            return None
 
 
 class ProfilePhotoPrivacySerializer(serializers.ModelSerializer):
