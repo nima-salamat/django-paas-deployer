@@ -9,6 +9,8 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.authentication import SessionAuthentication
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.pagination import PageNumberPagination
 from .models import Department, DepartmentMembership, Ticket, TicketMessage, TicketAttachment
 from .permissions import IsTicketOwnerOrStaff, IsStaffOrSuperuser, CanManageTicket
@@ -199,25 +201,114 @@ class TicketMessageCreateAPIView(APIView):
             TicketAttachment.objects.create(ticket=ticket, message=msg, uploaded_by=request.user, file=f, original_filename=safe_filename(f.name), content_type=getattr(f, "content_type", "") or "", size=f.size)
         return ok("Message sent", data=TicketMessageSerializer(msg, context={"request": request}).data, http_status=status.HTTP_201_CREATED)
 
+
+def user_can_access_ticket(user, ticket) -> bool:
+    """
+    Strict access for ticket content (messages/attachments):
+    - authenticated + active
+    - superuser
+    - ticket owner
+    - staff assigned to this ticket
+    - staff with DepartmentMembership on ticket.department
+    """
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    if not getattr(user, "is_active", True):
+        return False
+    if getattr(user, "is_superuser", False):
+        return True
+    if ticket is None:
+        return False
+    if ticket.user_id == user.id:
+        return True
+    # staff-only paths below
+    if not getattr(user, "is_staff", False):
+        return False
+    if getattr(ticket, "assigned_to_id", None) and ticket.assigned_to_id == user.id:
+        return True
+    dept_id = getattr(ticket, "department_id", None)
+    if dept_id and DepartmentMembership.objects.filter(user=user, department_id=dept_id).exists():
+        return True
+    return False
+
+
 class AttachmentDownloadAPIView(APIView):
-    permission_classes = [IsAuthenticated, IsTicketOwnerOrStaff]
+    """
+    Download / preview a ticket attachment.
+    Auth: JWT or session. Access (strict):
+      - active user
+      - ticket owner, OR
+      - superuser, OR
+      - staff assigned to the ticket, OR
+      - staff member of the ticket's department
+    Random staff outside the department → 404.
+    Media (image/audio/video) served inline for chat preview.
+    """
+    authentication_classes = [SessionAuthentication, JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
+        from pathlib import Path as _Path
+        import mimetypes
+
+        att = (
+            TicketAttachment.objects
+            .select_related("ticket", "ticket__user", "ticket__department")
+            .filter(pk=pk)
+            .first()
+        )
+        if not att:
+            raise Http404("Attachment not found.")
+
+        ticket = att.ticket
+        if not user_can_access_ticket(request.user, ticket):
+            # Do not leak existence to unauthorized users
+            raise Http404("Attachment not found.")
+
+        if not att.file:
+            raise Http404("No file available for this attachment.")
+
         try:
-            att = TicketAttachment.objects.select_related("ticket").get(pk=pk)
-        except TicketAttachment.DoesNotExist:
-            raise Http404
-        self.check_object_permissions(request, att)
-        if not att.file or not att.file.storage.exists(att.file.name):
-            raise Http404("File not found.")
-        handle = att.file.open("rb")
-        filename = att.original_filename or "attachment"
-        ct = (att.content_type or "").lower()
-        inline = ct.startswith("image/") or ct.startswith("audio/") or ct.startswith("video/")
-        response = FileResponse(handle, as_attachment=not inline, filename=filename)
-        if att.content_type:
-            response["Content-Type"] = att.content_type
+            exists = att.file.storage.exists(att.file.name)
+        except Exception:
+            exists = False
+        if not exists:
+            raise Http404("File not found on storage.")
+
+        try:
+            file_handle = att.file.open("rb")
+        except Exception:
+            raise Http404("File not accessible.")
+
+        filename = att.original_filename or _Path(att.file.name).name or "attachment"
+        # Prefer stored content_type; fall back to guess from filename
+        content_type = (att.content_type or "").strip()
+        if not content_type:
+            guessed, _ = mimetypes.guess_type(filename)
+            content_type = guessed or "application/octet-stream"
+
+        ct_lower = content_type.lower()
+        name_lower = filename.lower()
+        inline = (
+            ct_lower.startswith("image/")
+            or ct_lower.startswith("audio/")
+            or ct_lower.startswith("video/")
+            or name_lower.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg",
+                                    ".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac",
+                                    ".mp4", ".webm", ".mov", ".mkv"))
+        )
+
+        response = FileResponse(
+            file_handle,
+            as_attachment=not inline,
+            filename=filename,
+            content_type=content_type,
+        )
+        # Explicit disposition helps browsers preview media in <img>/<audio>
         if inline:
             response["Content-Disposition"] = f'inline; filename="{filename}"'
+        response["Cache-Control"] = "private, max-age=3600"
+        response["X-Content-Type-Options"] = "nosniff"
         return response
 
 class StaffTicketListAPIView(APIView):
