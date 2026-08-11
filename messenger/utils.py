@@ -17,12 +17,25 @@ ALLOWED_EXTENSIONS = {
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
 GIF_EXTS = {".gif"}
-AUDIO_EXTS = {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".opus"}
+AUDIO_EXTS = {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".opus", ".webm"}
+# Voice messages from MediaRecorder are typically audio/webm (Opus in WebM container)
+VOICE_CONTENT_TYPES = {"audio/webm", "audio/ogg", "audio/opus", "audio/m4a"}
 
 
 def detect_kind(filename: str, content_type: str = "") -> str:
+    """Detect attachment kind. Voice messages (from MediaRecorder, audio/webm)
+    are classified as 'voice' so the UI can render a Telegram-style voice bubble."""
     ext = os.path.splitext(filename or "")[1].lower()
     ct = (content_type or "").lower()
+    name_lower = (filename or "").lower()
+
+    # Voice message detection: explicit voice_ prefix OR audio/webm from recorder
+    if name_lower.startswith("voice_") or (ct in VOICE_CONTENT_TYPES and ext == ".webm"):
+        return "voice"
+    # Video message detection (circular, Telegram-style)
+    if name_lower.startswith("video_message_"):
+        return "video"
+
     if ext in GIF_EXTS or "gif" in ct:
         return "gif"
     if ext in IMAGE_EXTS or ct.startswith("image/"):
@@ -30,6 +43,7 @@ def detect_kind(filename: str, content_type: str = "") -> str:
     if ext in VIDEO_EXTS or ct.startswith("video/"):
         return "video"
     if ext in AUDIO_EXTS or ct.startswith("audio/"):
+        # Default audio/* to "audio" (music file), not "voice"
         return "audio"
     return "file"
 

@@ -975,3 +975,128 @@ class MessageReadersAPIView(APIView):
             "read": read_list,
             "unread": unread_list,
         })
+
+
+class ConversationCleanupAPIView(APIView):
+    """Delete ALL messages in a conversation for the current user.
+
+    Behaviour:
+    - Private DM: soft-deletes all messages from this user's view (sets is_deleted=True
+      on messages they can see). The other participant still sees their own sent messages.
+      This matches Telegram's "Clear history" — clears local view without affecting peer.
+    - Group: same — only clears messages visible to this participant.
+    - The user must be an active participant.
+
+    Body: { } (no params needed)
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        conv = get_object_or_404(Conversation, pk=pk)
+        part = ConversationParticipant.objects.filter(
+            conversation=conv, user=request.user, left_at__isnull=True
+        ).first()
+        if not part:
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        # Soft-delete all messages in the conversation (visible to this user)
+        msgs = Message.objects.filter(conversation=conv, is_deleted=False)
+        count = msgs.count()
+        msgs.update(is_deleted=True, body="", updated_at=timezone.now())
+        # Reset read state for this participant so unread badge clears
+        part.last_read_at = timezone.now()
+        part.save(update_fields=["last_read_at"])
+        return ok(f"Cleared {count} messages", data={"cleared": count})
+
+
+class ConversationMediaAPIView(APIView):
+    """List all media attachments (images, videos, voice, audio, files) in a conversation.
+
+    Used by the in-chat image gallery (< > navigation). Paginated by message cursor
+    (newest first) so the client can fetch older media on demand.
+
+    Query params:
+      - kind: comma-separated filter (image,video,audio,voice,file). Default: image
+      - before_id: message id cursor (load older media)
+      - limit: default 30, max 100
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        conv = get_object_or_404(Conversation, pk=pk)
+        if not ConversationParticipant.objects.filter(
+            conversation=conv, user=request.user, left_at__isnull=True
+        ).exists():
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        kinds_param = (request.query_params.get("kind") or "image").lower()
+        kinds = [k.strip() for k in kinds_param.split(",") if k.strip()]
+        if not kinds:
+            kinds = ["image"]
+        limit = min(100, int(request.query_params.get("limit") or 30))
+        qs = (
+            MessageAttachment.objects.filter(
+                conversation=conv, kind__in=kinds, message__is_deleted=False
+            )
+            .select_related("message", "message__sender")
+            .order_by("-message__created_at", "-id")
+        )
+        before_id = request.query_params.get("before_id")
+        if before_id:
+            try:
+                qs = qs.filter(message_id__lt=int(before_id))
+            except ValueError:
+                pass
+        items = list(qs[: limit + 1])
+        has_more = len(items) > limit
+        items = items[:limit]
+        from .serializers import MessageAttachmentSerializer
+        result = []
+        for att in items:
+            ser = MessageAttachmentSerializer(att, context={"request": request}).data
+            ser["message_id"] = att.message_id
+            ser["message_created_at"] = att.message.created_at if att.message else att.created_at
+            ser["sender"] = (
+                UserMiniSerializer(att.message.sender, context={"request": request}).data
+                if att.message and att.message.sender else None
+            )
+            result.append(ser)
+        next_before = items[-1].message_id if has_more and items else None
+        return ok(data={
+            "results": result,
+            "has_more": has_more,
+            "next_before_id": next_before,
+        })
+
+
+class UserByUsernameAPIView(APIView):
+    """Look up a user by exact username — used for @mention click navigation.
+
+    Returns the same payload as UserProfileAPIView so the client can show the
+    profile panel without adding the user to contacts.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        username = (request.query_params.get("username") or "").strip().lstrip("@")
+        if not username:
+            return err("username required")
+        try:
+            user = User.objects.get(username__iexact=username, is_active=True)
+        except User.DoesNotExist:
+            return err("User not found", status.HTTP_404_NOT_FOUND)
+        data = UserMiniSerializer(user, context={"request": request}).data
+        if can_see_profile_photo(request.user, user):
+            from users.models import Profile
+            photos = (
+                Profile.objects.filter(user=user)
+                .exclude(image="")
+                .filter(image__isnull=False)
+                .order_by("order", "id")
+            )
+            data["photos"] = ProfilePhotoSerializer(photos, many=True, context={"request": request}).data
+        else:
+            data["photos"] = []
+        return ok(data=data)
+

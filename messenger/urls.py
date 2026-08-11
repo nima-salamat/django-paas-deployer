@@ -28,4 +28,7 @@ urlpatterns = [
     path("me/photos/", apis.MyProfilePhotosAPIView.as_view()),
     path("me/photo-privacy/", apis.ProfilePhotoPrivacyAPIView.as_view()),
     path("users/<int:user_id>/profile/", apis.UserProfileAPIView.as_view()),
+    path("users/by-username/", apis.UserByUsernameAPIView.as_view()),
+    path("conversations/<int:pk>/cleanup/", apis.ConversationCleanupAPIView.as_view()),
+    path("conversations/<int:pk>/media/", apis.ConversationMediaAPIView.as_view()),
 ]
