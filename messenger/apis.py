@@ -17,7 +17,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from .models import (
     Contact, Block, Conversation, ConversationParticipant, Message,
-    MessageReaction, MessageAttachment, GroupInviteLink, ProfilePhoto,
+    MessageReaction, MessageAttachment, GroupInviteLink,
     ProfilePhotoPrivacy, ProfilePhotoAllowed,
 )
 from .serializers import (
@@ -494,7 +494,47 @@ class MessageReactAPIView(APIView):
         return ok(action, data={"emoji": emoji, "action": action})
 
 
+
+class MessageEditAPIView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk):
+        msg = get_object_or_404(Message, pk=pk, is_deleted=False)
+        if msg.sender_id != request.user.id:
+            return err("Only the sender can edit this message", status.HTTP_403_FORBIDDEN)
+        raw = request.data.get("body")
+        if not isinstance(raw, str):
+            raw = "" if raw is None else str(raw)
+        body = raw.strip()[:10000]
+        if not body and not msg.attachments.exists():
+            return err("Body cannot be empty")
+        msg.body = body
+        msg.is_edited = True
+        msg.save(update_fields=["body", "is_edited", "updated_at"])
+        try:
+            from .consumers import broadcast_message
+            # reuse broadcast with type override via fresh payload
+            from .consumers import _send
+            _send(f"messenger_conv_{msg.conversation_id}", {
+                "type": "message.edited",
+                "conversation_id": msg.conversation_id,
+                "message_id": msg.id,
+                "body": body[:200],
+            })
+        except Exception:
+            pass
+        msg = (
+            Message.objects.filter(pk=msg.pk)
+            .select_related("sender", "reply_to", "reply_to__sender", "forwarded_from")
+            .prefetch_related("attachments", "reactions__user")
+            .first()
+        )
+        return ok("Edited", data=MessageSerializer(msg, context={"request": request}).data)
+
+
 class MessageDeleteAPIView(APIView):
+
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
@@ -527,7 +567,68 @@ class MarkReadAPIView(APIView):
         return ok("Read")
 
 
+
+class LeaveConversationAPIView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        part = ConversationParticipant.objects.filter(
+            conversation_id=pk, user=request.user, left_at__isnull=True
+        ).first()
+        if not part:
+            return err("Not a member", status.HTTP_404_NOT_FOUND)
+        if part.role == ConversationParticipant.Role.OWNER:
+            # transfer or require delete — for now block leave if sole owner of group
+            others = ConversationParticipant.objects.filter(
+                conversation_id=pk, left_at__isnull=True
+            ).exclude(user=request.user).count()
+            conv = part.conversation
+            if conv.type == Conversation.Type.GROUP and others == 0:
+                return err("Transfer ownership or delete the group first")
+        part.left_at = timezone.now()
+        part.save(update_fields=["left_at"])
+        return ok("Left")
+
+
+
+class DeleteConversationAPIView(APIView):
+    """
+    Private DM: both users leave (conversation hidden for both; deleted if empty).
+    Group: only owner (or admin) can hard-delete the whole group + messages + media.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, pk):
+        conv = get_object_or_404(Conversation, pk=pk)
+        part = ConversationParticipant.objects.filter(
+            conversation=conv, user=request.user, left_at__isnull=True
+        ).first()
+        if not part:
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+
+        if conv.type == Conversation.Type.PRIVATE:
+            # Hide for everyone in the DM and remove conversation
+            ConversationParticipant.objects.filter(conversation=conv).update(left_at=timezone.now())
+            # Hard delete conversation (cascades messages)
+            conv_id = conv.pk
+            conv.delete()
+            return ok("Chat deleted", data={"id": conv_id})
+
+        # Group: owner or admin may delete entire group
+        if part.role not in (
+            ConversationParticipant.Role.OWNER,
+            ConversationParticipant.Role.ADMIN,
+        ):
+            return err("Only group owner/admin can delete the group", status.HTTP_403_FORBIDDEN)
+        conv_id = conv.pk
+        conv.delete()
+        return ok("Group deleted", data={"id": conv_id})
+
+
 class InviteLinkCreateAPIView(APIView):
+
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
@@ -590,33 +691,26 @@ class JoinByInviteAPIView(APIView):
 
 
 class MyProfilePhotosAPIView(APIView):
+    """
+    Reads existing users.Profile images only.
+    Upload / reorder / delete stays in the users Profile UI — messenger does not own photos.
+    """
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        photos = ProfilePhoto.objects.filter(user=request.user).order_by("order", "id")
+        from users.models import Profile
+        photos = (
+            Profile.objects.filter(user=request.user)
+            .exclude(image="")
+            .filter(image__isnull=False)
+            .order_by("order", "id")
+        )
         privacy, _ = ProfilePhotoPrivacy.objects.get_or_create(user=request.user)
         return ok(data={
             "photos": ProfilePhotoSerializer(photos, many=True, context={"request": request}).data,
             "privacy": ProfilePhotoPrivacySerializer(privacy).data,
         })
-
-    def post(self, request):
-        f = request.FILES.get("image") or request.FILES.get("file")
-        if not f:
-            return err("image required")
-        order = int(request.data.get("order") or 0)
-        photo = ProfilePhoto.objects.create(user=request.user, image=f, order=order)
-        return ok(data=ProfilePhotoSerializer(photo, context={"request": request}).data, http_status=status.HTTP_201_CREATED)
-
-
-class ProfilePhotoDeleteAPIView(APIView):
-    authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
-
-    def delete(self, request, photo_id):
-        ProfilePhoto.objects.filter(pk=photo_id, user=request.user).delete()
-        return ok("Deleted")
 
 
 class ProfilePhotoPrivacyAPIView(APIView):
@@ -651,7 +745,13 @@ class UserProfileAPIView(APIView):
             return err("Not found", status.HTTP_404_NOT_FOUND)
         data = UserMiniSerializer(user, context={"request": request}).data
         if can_see_profile_photo(request.user, user):
-            photos = ProfilePhoto.objects.filter(user=user).order_by("order", "id")
+            from users.models import Profile
+            photos = (
+                Profile.objects.filter(user=user)
+                .exclude(image="")
+                .filter(image__isnull=False)
+                .order_by("order", "id")
+            )
             data["photos"] = ProfilePhotoSerializer(photos, many=True, context={"request": request}).data
         else:
             data["photos"] = []

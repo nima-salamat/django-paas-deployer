@@ -23,11 +23,6 @@ def messenger_attachment_path(instance, filename):
     return f"messenger/{conv_id}/{name}"
 
 
-def profile_photo_path(instance, filename):
-    ext = os.path.splitext(filename)[1].lower()
-    return f"messenger/profiles/{instance.user_id}/{uuid.uuid4().hex}{ext}"
-
-
 # ---------------------------------------------------------------------------
 # Contacts & Blocks
 # ---------------------------------------------------------------------------
@@ -68,6 +63,7 @@ class ProfilePhotoPrivacy(models.Model):
       - contacts
       - nobody
       - specific (use ProfilePhotoAllowed)
+    Applies to existing users.Profile images (not a separate photo store).
     """
     class Scope(models.TextChoices):
         EVERYONE = "everyone", _("Everyone")
@@ -91,17 +87,6 @@ class ProfilePhotoAllowed(models.Model):
     class Meta:
         unique_together = ("privacy", "user")
 
-
-class ProfilePhoto(models.Model):
-    """Ordered profile photos (Telegram-style multi-photo)."""
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="messenger_photos")
-    image = models.ImageField(upload_to=profile_photo_path)
-    order = models.PositiveIntegerField(default=0)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        ordering = ["order", "id"]
-        indexes = [models.Index(fields=["user", "order"])]
 
 
 # ---------------------------------------------------------------------------

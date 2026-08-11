@@ -2,7 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import (
     Contact, Block, Conversation, ConversationParticipant, Message,
-    MessageReaction, MessageAttachment, GroupInviteLink, ProfilePhoto,
+    MessageReaction, MessageAttachment, GroupInviteLink,
     ProfilePhotoPrivacy, ProfilePhotoAllowed, PinnedMessage,
 )
 from .utils import can_see_profile_photo, detect_kind
@@ -20,21 +20,16 @@ class UserMiniSerializer(serializers.ModelSerializer):
         fields = ("id", "username", "color", "avatar", "is_contact", "is_blocked")
 
     def get_avatar(self, obj):
+        """Use existing users.Profile images only (ordered by order, then id)."""
         request = self.context.get("request")
         viewer = getattr(request, "user", None) if request else None
         if not can_see_profile_photo(viewer, obj):
             return None
-        # Prefer messenger multi-photos first
-        photo = obj.messenger_photos.order_by("order", "id").first()
-        if photo and photo.image:
-            url = photo.image.url
-            return request.build_absolute_uri(url) if request else url
-        # Fallback to existing profile image if any
         try:
             prof = (
                 obj.profile_set.filter(image__isnull=False)
                 .exclude(image="")
-                .order_by("id")
+                .order_by("order", "id")
                 .first()
             )
             if prof and getattr(prof, "image", None):
@@ -143,7 +138,7 @@ class ConversationListSerializer(serializers.ModelSerializer):
         )
 
     def get_participants(self, obj):
-        qs = obj.participants.filter(left_at__isnull=True).select_related("user")[:20]
+        qs = obj.participants.filter(left_at__isnull=True).select_related("user")[:200]
         return ParticipantSerializer(qs, many=True, context=self.context).data
 
     def get_last_message(self, obj):
@@ -237,15 +232,17 @@ class ContactSerializer(serializers.ModelSerializer):
         fields = ("id", "contact", "nickname", "created_at")
 
 
-class ProfilePhotoSerializer(serializers.ModelSerializer):
+class ProfilePhotoSerializer(serializers.Serializer):
+    """Serializes existing users.Profile rows (not a messenger-owned model)."""
+    id = serializers.IntegerField()
     url = serializers.SerializerMethodField()
-
-    class Meta:
-        model = ProfilePhoto
-        fields = ("id", "url", "order", "created_at")
+    order = serializers.IntegerField()
+    created_at = serializers.DateTimeField()
 
     def get_url(self, obj):
         request = self.context.get("request")
+        if not obj.image:
+            return None
         url = obj.image.url
         return request.build_absolute_uri(url) if request else url
 

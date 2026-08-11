@@ -53,7 +53,7 @@ def validate_messenger_file(uploaded_file) -> None:
 
 
 def can_see_profile_photo(viewer, owner) -> bool:
-    """Check ProfilePhotoPrivacy for whether viewer can see owner's photos."""
+    """Check ProfilePhotoPrivacy for whether viewer can see owner's users.Profile photos."""
     if viewer is None or not getattr(viewer, "is_authenticated", False):
         return False
     if viewer.id == owner.id:
