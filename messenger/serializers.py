@@ -4,7 +4,7 @@ from .models import (
     Contact, Block, Conversation, ConversationParticipant, Message,
     MessageReaction, MessageAttachment, GroupInviteLink,
     ProfilePhotoPrivacy, ProfilePhotoAllowed, PinnedMessage,
-    MessageReadReceipt, UserBio,
+    MessageReadReceipt, UserBio, JoinRequest,
 )
 from .utils import can_see_profile_photo, detect_kind
 
@@ -233,7 +233,7 @@ class ConversationListSerializer(serializers.ModelSerializer):
         model = Conversation
         fields = (
             "id", "public_id", "type", "title", "description", "avatar", "avatar_url",
-            "is_public", "is_closed", "members_can_add", "only_admins_send",
+            "is_public", "is_closed", "requires_approval", "members_can_add", "only_admins_send",
             "history_visibility", "created_by",
             "created_at", "updated_at", "last_message_at",
             "participants", "last_message", "unread_count", "peer", "is_pinned",
@@ -381,3 +381,26 @@ class ProfilePhotoPrivacySerializer(serializers.ModelSerializer):
 
     def get_allowed_user_ids(self, obj):
         return list(obj.allowed_users.values_list("user_id", flat=True))
+
+
+class JoinRequestSerializer(serializers.ModelSerializer):
+    """Serializer for JoinRequest — used by both admins (seeing requests)
+    and users (seeing their own requests)."""
+    user = UserMiniSerializer(read_only=True)
+    conversation_title = serializers.SerializerMethodField()
+    decided_by = UserMiniSerializer(read_only=True)
+
+    class Meta:
+        model = JoinRequest
+        fields = (
+            "id", "conversation", "user", "status",
+            "decided_by", "decided_at", "created_at",
+            "conversation_title",
+        )
+        read_only_fields = ("id", "status", "decided_by", "decided_at", "created_at")
+
+    def get_conversation_title(self, obj):
+        try:
+            return obj.conversation.title or "Group"
+        except Exception:
+            return "Group"

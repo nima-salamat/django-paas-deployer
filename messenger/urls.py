@@ -15,6 +15,7 @@ urlpatterns = [
     path("conversations/<int:pk>/invite-links/", apis.InviteLinkCreateAPIView.as_view()),
     path("conversations/<int:pk>/invite-links/<int:link_id>/revoke/", apis.InviteLinkRevokeAPIView.as_view()),
     path("groups/search/", apis.PublicGroupSearchAPIView.as_view()),
+    path("groups/<int:pk>/join/", apis.PublicGroupJoinAPIView.as_view()),
     path("join/<str:code>/", apis.JoinByInviteAPIView.as_view()),
     path("messages/<int:pk>/forward/", apis.MessageForwardAPIView.as_view()),
     path("messages/<int:pk>/react/", apis.MessageReactAPIView.as_view()),
@@ -39,4 +40,11 @@ urlpatterns = [
     path("me/bio/", apis.UserBioAPIView.as_view()),
     # Group avatar upload/clear
     path("conversations/<int:pk>/avatar/", apis.GroupAvatarAPIView.as_view()),
+    # Join requests (Telegram-style — public groups that require admin approval)
+    path("conversations/<int:pk>/join-requests/", apis.JoinRequestListAPIView.as_view()),
+    path("conversations/<int:pk>/join-requests/<int:req_id>/action/", apis.JoinRequestActionAPIView.as_view()),
+    path("me/join-requests/", apis.MyJoinRequestsAPIView.as_view()),
+    path("join-requests/<int:req_id>/", apis.JoinRequestCancelAPIView.as_view()),
+    # Profile update broadcast (notifies all conversations of avatar/bio change)
+    path("me/profile-broadcast/", apis.ProfileUpdateBroadcastAPIView.as_view()),
 ]

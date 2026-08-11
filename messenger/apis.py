@@ -19,6 +19,7 @@ from .models import (
     Contact, Block, Conversation, ConversationParticipant, Message,
     MessageReaction, MessageAttachment, GroupInviteLink,
     ProfilePhotoPrivacy, ProfilePhotoAllowed, MessageReadReceipt, UserBio,
+    JoinRequest,
 )
 from .serializers import (
     UserMiniSerializer, MessageSerializer, ConversationListSerializer,
@@ -301,6 +302,9 @@ class ConversationDetailAPIView(APIView):
             conv.is_public = bool(request.data["is_public"])
         if "is_closed" in request.data and part.role == "owner":
             conv.is_closed = bool(request.data["is_closed"])
+        # Public-group approval mode — owner only (Telegram-style "requires approval to join")
+        if "requires_approval" in request.data and part.role == "owner":
+            conv.requires_approval = bool(request.data["requires_approval"])
         if "members_can_add" in request.data and part.role in ("owner", "admin"):
             conv.members_can_add = bool(request.data["members_can_add"])
         # Channel-like mode — only owner/admins can toggle
@@ -321,16 +325,57 @@ class ConversationDetailAPIView(APIView):
 
 
 class PublicGroupSearchAPIView(APIView):
+    """Search public groups.
+
+    Returns an EMPTY list when the query is empty — public groups are NEVER
+    listed automatically. Users must actively search by name/description to
+    discover them (Telegram-like behaviour for public groups/channels).
+
+    Includes `my_pending_request` flag for each group so the frontend can
+    show a "Request sent" / "Cancel request" button on groups that require
+    approval.
+    """
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         q = (request.query_params.get("q") or "").strip()
-        qs = Conversation.objects.filter(type=Conversation.Type.GROUP, is_public=True, is_closed=False)
-        if q:
-            qs = qs.filter(Q(title__icontains=q) | Q(description__icontains=q))
-        qs = qs.order_by("-last_message_at")[:50]
-        return ok(data=ConversationListSerializer(qs, many=True, context={"request": request}).data)
+        if len(q) < 1:
+            return ok(data=[])
+        qs = (
+            Conversation.objects.filter(
+                type=Conversation.Type.GROUP, is_public=True, is_closed=False,
+            )
+            .filter(Q(title__icontains=q) | Q(description__icontains=q))
+            .order_by("-last_message_at")[:50]
+        )
+        items = list(qs)
+        # Annotate each group with the viewer's pending join request (if any)
+        # and whether they're already a member.
+        my_pending_map = {}
+        my_member_map = {}
+        if items:
+            from .models import JoinRequest
+            pending = JoinRequest.objects.filter(
+                user=request.user,
+                conversation__in=items,
+                status=JoinRequest.Status.PENDING,
+            ).values_list("conversation_id", flat=True)
+            my_pending_map = set(pending)
+            my_member_map = set(
+                ConversationParticipant.objects.filter(
+                    user=request.user,
+                    conversation__in=items,
+                    left_at__isnull=True,
+                ).values_list("conversation_id", flat=True)
+            )
+        out = []
+        for c in items:
+            d = ConversationListSerializer(c, context={"request": request}).data
+            d["my_pending_request"] = c.id in my_pending_map
+            d["is_member"] = c.id in my_member_map
+            out.append(d)
+        return ok(data=out)
 
 
 class MessageListCreateAPIView(APIView):
@@ -1086,6 +1131,17 @@ class InviteLinkRevokeAPIView(APIView):
 
 
 class JoinByInviteAPIView(APIView):
+    """Join a group via invite link OR (if the group requires approval) create
+    a pending join request that admins can approve/reject.
+
+    If the group has `requires_approval=True`, this endpoint creates a
+    JoinRequest (PENDING) and returns 200 with a special payload
+    `{joined: False, pending: True}` so the frontend can show
+    "Request sent" instead of opening the chat.
+
+    If the group does not require approval, the user is added as a member
+    immediately.
+    """
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
@@ -1096,6 +1152,52 @@ class JoinByInviteAPIView(APIView):
         conv = link.conversation
         if conv.is_closed:
             return err("Group is closed")
+        # If user is already an active member, just return the conversation
+        existing = ConversationParticipant.objects.filter(
+            conversation=conv, user=request.user, left_at__isnull=True
+        ).first()
+        if existing:
+            return ok(
+                "Already a member",
+                data={
+                    "joined": True,
+                    "conversation": ConversationDetailSerializer(conv, context={"request": request}).data,
+                },
+            )
+        # If the group requires approval, create a pending join request
+        if getattr(conv, "requires_approval", False):
+            from .models import JoinRequest
+            # Delete any prior rejected request so a new pending one can be created
+            JoinRequest.objects.filter(
+                user=request.user, conversation=conv, status=JoinRequest.Status.REJECTED
+            ).delete()
+            req, created = JoinRequest.objects.get_or_create(
+                user=request.user, conversation=conv,
+                defaults={"status": JoinRequest.Status.PENDING},
+            )
+            if not created and req.status == JoinRequest.Status.PENDING:
+                return ok(
+                    "Request already pending",
+                    data={"joined": False, "pending": True, "request_id": req.id},
+                )
+            # Notify admins about the new request
+            try:
+                from .consumers import broadcast_join_request
+                broadcast_join_request(conv.id, {
+                    "type": "join_request.new",
+                    "conversation_id": conv.id,
+                    "request_id": req.id,
+                    "user_id": request.user.id,
+                })
+            except Exception:
+                pass
+            link.uses += 1
+            link.save(update_fields=["uses"])
+            return ok(
+                "Join request sent",
+                data={"joined": False, "pending": True, "request_id": req.id},
+            )
+        # No approval required — direct join
         part, created = ConversationParticipant.objects.get_or_create(
             conversation=conv,
             user=request.user,
@@ -1106,9 +1208,24 @@ class JoinByInviteAPIView(APIView):
             part.save(update_fields=["left_at"])
         link.uses += 1
         link.save(update_fields=["uses"])
+        # Post a system message about the new member
+        try:
+            msg = Message.objects.create(
+                conversation=conv,
+                sender=request.user,
+                body=f"{request.user.username} joined the group",
+                is_system=True,
+            )
+            from .consumers import broadcast_message
+            broadcast_message(msg)
+        except Exception:
+            pass
         return ok(
             "Joined",
-            data=ConversationDetailSerializer(conv, context={"request": request}).data,
+            data={
+                "joined": True,
+                "conversation": ConversationDetailSerializer(conv, context={"request": request}).data,
+            },
         )
 
 
@@ -1480,4 +1597,282 @@ class GroupAvatarAPIView(APIView):
             conv.avatar = None
             conv.save(update_fields=["avatar", "updated_at"])
         return ok("Avatar removed", data=ConversationDetailSerializer(conv, context={"request": request}).data)
+
+
+# ---------------------------------------------------------------------------
+# Join Requests (Telegram-style — for public groups that require approval)
+# ---------------------------------------------------------------------------
+
+class PublicGroupJoinAPIView(APIView):
+    """Join a public group directly (no invite code required).
+
+    If the group has `requires_approval=True`, this creates a pending
+    JoinRequest and returns `{joined: False, pending: True}`.
+
+    If the group does NOT require approval, the user is added as a member
+    immediately and the conversation payload is returned.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        conv = get_object_or_404(
+            Conversation, pk=pk,
+            type=Conversation.Type.GROUP, is_public=True, is_closed=False,
+        )
+        # Already an active member?
+        existing = ConversationParticipant.objects.filter(
+            conversation=conv, user=request.user, left_at__isnull=True
+        ).first()
+        if existing:
+            return ok(
+                "Already a member",
+                data={
+                    "joined": True,
+                    "conversation": ConversationDetailSerializer(conv, context={"request": request}).data,
+                },
+            )
+        # Approval required -> create a pending request
+        if getattr(conv, "requires_approval", False):
+            from .models import JoinRequest
+            # Clear any prior rejected request so a fresh pending one can be created
+            JoinRequest.objects.filter(
+                user=request.user, conversation=conv, status=JoinRequest.Status.REJECTED
+            ).delete()
+            req, created = JoinRequest.objects.get_or_create(
+                user=request.user, conversation=conv,
+                defaults={"status": JoinRequest.Status.PENDING},
+            )
+            if not created and req.status == JoinRequest.Status.PENDING:
+                return ok(
+                    "Request already pending",
+                    data={"joined": False, "pending": True, "request_id": req.id},
+                )
+            try:
+                from .consumers import broadcast_join_request
+                broadcast_join_request(conv.id, {
+                    "type": "join_request.new",
+                    "conversation_id": conv.id,
+                    "request_id": req.id,
+                    "user_id": request.user.id,
+                })
+            except Exception:
+                pass
+            return ok(
+                "Join request sent",
+                data={"joined": False, "pending": True, "request_id": req.id},
+            )
+        # Direct join
+        part, created = ConversationParticipant.objects.get_or_create(
+            conversation=conv,
+            user=request.user,
+            defaults={"role": ConversationParticipant.Role.MEMBER},
+        )
+        if not created and part.left_at:
+            part.left_at = None
+            part.save(update_fields=["left_at"])
+        # System message about the new member
+        try:
+            msg = Message.objects.create(
+                conversation=conv,
+                sender=request.user,
+                body=f"{request.user.username} joined the group",
+                is_system=True,
+            )
+            from .consumers import broadcast_message, broadcast_member_change
+            broadcast_message(msg)
+            broadcast_member_change(conv.id, {
+                "type": "member.joined",
+                "conversation_id": conv.id,
+                "user_id": request.user.id,
+            })
+        except Exception:
+            pass
+        return ok(
+            "Joined",
+            data={
+                "joined": True,
+                "conversation": ConversationDetailSerializer(conv, context={"request": request}).data,
+            },
+        )
+
+
+class JoinRequestListAPIView(APIView):
+    """List pending join requests for a group (admins only).
+
+    GET /conversations/<pk>/join-requests/   -> [{ id, user, status, created_at }, ...]
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        conv = get_object_or_404(Conversation, pk=pk, type=Conversation.Type.GROUP)
+        my_part = ConversationParticipant.objects.filter(
+            conversation=conv, user=request.user, left_at__isnull=True
+        ).first()
+        if not my_part or my_part.role not in ("owner", "admin"):
+            return err("Only admins can view join requests", status.HTTP_403_FORBIDDEN)
+        qs = (
+            conv.join_requests.filter(status=JoinRequest.Status.PENDING)
+            .select_related("user", "decided_by")
+            .order_by("-created_at")
+        )
+        from .serializers import JoinRequestSerializer
+        return ok(data=JoinRequestSerializer(qs, many=True, context={"request": request}).data)
+
+
+class JoinRequestActionAPIView(APIView):
+    """Approve or reject a pending join request (admins only).
+
+    POST /conversations/<pk>/join-requests/<req_id>/action/
+      body: { "action": "approve" | "reject" }
+
+    On approve: the requesting user is added as a member + the request is
+    marked APPROVED + a system message is posted + the user is notified
+    via their personal WS channel so their client opens the chat.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk, req_id):
+        conv = get_object_or_404(Conversation, pk=pk, type=Conversation.Type.GROUP)
+        my_part = ConversationParticipant.objects.filter(
+            conversation=conv, user=request.user, left_at__isnull=True
+        ).first()
+        if not my_part or my_part.role not in ("owner", "admin"):
+            return err("Only admins can act on join requests", status.HTTP_403_FORBIDDEN)
+        try:
+            req = conv.join_requests.get(pk=req_id)
+        except JoinRequest.DoesNotExist:
+            return err("Join request not found", status.HTTP_404_NOT_FOUND)
+        if req.status != JoinRequest.Status.PENDING:
+            return err(f"Request already {req.status}")
+        action = (request.data.get("action") or "").strip().lower()
+        if action not in ("approve", "reject"):
+            return err("action must be 'approve' or 'reject'")
+        req.decided_by = request.user
+        req.decided_at = timezone.now()
+        if action == "approve":
+            req.status = JoinRequest.Status.APPROVED
+            # Add the user as a member
+            part, created = ConversationParticipant.objects.get_or_create(
+                conversation=conv,
+                user=req.user,
+                defaults={"role": ConversationParticipant.Role.MEMBER},
+            )
+            if not created and part.left_at:
+                part.left_at = None
+                part.save(update_fields=["left_at"])
+            # System message
+            try:
+                msg = Message.objects.create(
+                    conversation=conv,
+                    sender=request.user,
+                    body=f"{req.user.username} joined the group",
+                    is_system=True,
+                )
+                from .consumers import broadcast_message, broadcast_member_change, broadcast_join_request
+                broadcast_message(msg)
+                broadcast_member_change(conv.id, {
+                    "type": "member.joined",
+                    "conversation_id": conv.id,
+                    "user_id": req.user_id,
+                })
+                # Notify the requester that they were approved
+                broadcast_join_request(conv.id, {
+                    "type": "join_request.approved",
+                    "conversation_id": conv.id,
+                    "request_id": req.id,
+                    "user_id": req.user_id,
+                })
+            except Exception:
+                pass
+        else:
+            req.status = JoinRequest.Status.REJECTED
+            try:
+                from .consumers import broadcast_join_request
+                broadcast_join_request(conv.id, {
+                    "type": "join_request.rejected",
+                    "conversation_id": conv.id,
+                    "request_id": req.id,
+                    "user_id": req.user_id,
+                })
+            except Exception:
+                pass
+        req.save(update_fields=["status", "decided_by", "decided_at"])
+        return ok(f"Request {req.status}", data={"status": req.status})
+
+
+class MyJoinRequestsAPIView(APIView):
+    """List all of the current user's join requests (any status).
+
+    GET /me/join-requests/  -> [{ id, conversation, conversation_title, status, created_at, ... }]
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qs = (
+            JoinRequest.objects.filter(user=request.user)
+            .select_related("conversation", "decided_by")
+            .order_by("-created_at")
+        )
+        from .serializers import JoinRequestSerializer
+        return ok(data=JoinRequestSerializer(qs, many=True, context={"request": request}).data)
+
+
+class JoinRequestCancelAPIView(APIView):
+    """Cancel (delete) the current user's own pending join request.
+
+    DELETE /join-requests/<req_id>/  -> 200 OK
+
+    The user can only cancel their OWN pending requests. Once approved or
+    rejected, the request can no longer be cancelled (the user can leave
+    the group separately if approved).
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, req_id):
+        try:
+            req = JoinRequest.objects.get(pk=req_id, user=request.user)
+        except JoinRequest.DoesNotExist:
+            return err("Join request not found", status.HTTP_404_NOT_FOUND)
+        if req.status != JoinRequest.Status.PENDING:
+            return err(f"Cannot cancel a {req.status} request")
+        conv_id = req.conversation_id
+        req.delete()
+        # Notify admins that the request was cancelled (so their UI updates)
+        try:
+            from .consumers import broadcast_join_request
+            broadcast_join_request(conv_id, {
+                "type": "join_request.cancelled",
+                "conversation_id": conv_id,
+                "user_id": request.user.id,
+            })
+        except Exception:
+            pass
+        return ok("Request cancelled")
+
+
+class ProfileUpdateBroadcastAPIView(APIView):
+    """Notify all conversations the current user is part of that their profile
+    has changed (avatar, bio, etc).
+
+    POST /me/profile-broadcast/  -> 200 OK
+
+    Called by the frontend after the user updates their profile photo, bio,
+    or username. The backend fans out a `profile.update` WebSocket event to
+    every conversation + the user's own personal channel.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            from .consumers import broadcast_profile_update
+            broadcast_profile_update(request.user.id)
+        except Exception:
+            pass
+        return ok("Broadcast sent")
 

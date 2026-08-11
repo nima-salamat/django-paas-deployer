@@ -239,7 +239,7 @@ def broadcast_member_change(conversation_id, data: dict):
     """
     from .models import ConversationParticipant
     _send(f"messenger_conv_{conversation_id}", data)
-    # Active participants
+    # Active participants (still in the group)
     active_ids = set(
         ConversationParticipant.objects.filter(
             conversation_id=conversation_id, left_at__isnull=True
@@ -253,3 +253,58 @@ def broadcast_member_change(conversation_id, data: dict):
         removed_uid = data.get("user_id")
         if removed_uid not in active_ids:
             _send(f"messenger_user_{removed_uid}", data)
+    # For "member.left" events, the leaver is still in active_ids at the time
+    # of broadcast (their `left_at` was set BEFORE broadcast), so they WILL
+    # receive the event via the loop above. We also explicitly send to them
+    # so their client redirects out even if they had already unsubscribed
+    # from the conversation channel.
+    if data.get("type") == "member.left" and data.get("user_id"):
+        leaver_uid = data.get("user_id")
+        _send(f"messenger_user_{leaver_uid}", data)
+
+
+def broadcast_profile_update(user_id: int):
+    """Notify all conversations the user is part of that their profile changed.
+
+    Frontend will reload conversation list + active conversation detail to pick
+    up the new avatar/username/bio. This makes profile photo changes propagate
+    to every chat, group, and channel the user is part of in real time.
+    """
+    from .models import ConversationParticipant
+    data = {
+        "type": "profile.update",
+        "user_id": user_id,
+    }
+    try:
+        conv_ids = list(
+            ConversationParticipant.objects.filter(
+                user_id=user_id, left_at__isnull=True
+            ).values_list("conversation_id", flat=True)
+        )
+    except Exception:
+        return
+    for cid in conv_ids:
+        _send(f"messenger_conv_{cid}", data)
+    # Also notify the user's own personal channel so other tabs update too
+    _send(f"messenger_user_{user_id}", data)
+
+
+def broadcast_join_request(conversation_id, data: dict):
+    """Notify admins of a group about a new join request (or status change).
+
+    Only owners/admins receive this — they see the request in their
+    "Join requests" panel.
+    """
+    from .models import ConversationParticipant
+    admin_ids = list(
+        ConversationParticipant.objects.filter(
+            conversation_id=conversation_id,
+            role__in=["owner", "admin"],
+            left_at__isnull=True,
+        ).values_list("user_id", flat=True)
+    )
+    for uid in admin_ids:
+        _send(f"messenger_user_{uid}", data)
+    # Also send to the requesting user so their "My Requests" panel updates
+    if data.get("user_id"):
+        _send(f"messenger_user_{data['user_id']}", data)

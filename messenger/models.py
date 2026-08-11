@@ -125,6 +125,9 @@ class Conversation(models.Model):
     avatar = models.ImageField(upload_to="messenger/groups/", null=True, blank=True)
     is_public = models.BooleanField(default=False, db_index=True)  # appears in search
     is_closed = models.BooleanField(default=False)  # no new joins / messages
+    # If True, users must send a join request that admins approve/reject
+    # (Telegram-style "private public groups"). If False, anyone can join directly.
+    requires_approval = models.BooleanField(default=False)
     members_can_add = models.BooleanField(default=True)  # members may add contacts
     # Channel-like mode — only owner/admins can send messages
     only_admins_send = models.BooleanField(default=False)
@@ -213,6 +216,52 @@ class GroupInviteLink(models.Model):
 
     def __str__(self):
         return f"Invite {self.code} → {self.conversation_id}"
+
+
+# ---------------------------------------------------------------------------
+# Join Requests (Telegram-style — for public groups that require admin approval)
+# ---------------------------------------------------------------------------
+
+class JoinRequest(models.Model):
+    """A user's request to join a public group that requires approval.
+
+    Lifecycle:
+      - User creates a PENDING request via /conversations/<pk>/join-request/
+      - Admin sees pending requests via /conversations/<pk>/join-requests/
+      - Admin APPROVES -> user is added as a member + request marked APPROVED
+      - Admin REJECTS  -> request marked REJECTED (user can re-request later)
+      - User can CANCEL their own pending request via /join-requests/<pk>/
+        (deletes the request entirely so admins no longer see it)
+    """
+    class Status(models.TextChoices):
+        PENDING = "pending", _("Pending")
+        APPROVED = "approved", _("Approved")
+        REJECTED = "rejected", _("Rejected")
+
+    conversation = models.ForeignKey(
+        Conversation, on_delete=models.CASCADE, related_name="join_requests"
+    )
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="messenger_join_requests")
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING, db_index=True)
+    # Who acted on this request (set when approved/rejected)
+    decided_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="messenger_join_requests_decided",
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        # One active request per (conversation, user) — but allow re-requesting
+        # after rejection, so unique_together is on (conversation, user, status).
+        unique_together = [("conversation", "user", "status")]
+        indexes = [
+            models.Index(fields=["conversation", "status"]),
+            models.Index(fields=["user", "status"]),
+        ]
+
+    def __str__(self):
+        return f"JoinRequest({self.user_id} → {self.conversation_id}={self.status})"
 
 
 # ---------------------------------------------------------------------------
