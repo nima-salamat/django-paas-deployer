@@ -288,6 +288,8 @@ class ConversationDetailAPIView(APIView):
             conv.is_public = bool(request.data["is_public"])
         if "is_closed" in request.data and part.role == "owner":
             conv.is_closed = bool(request.data["is_closed"])
+        if "members_can_add" in request.data and part.role in ("owner", "admin"):
+            conv.members_can_add = bool(request.data["members_can_add"])
         conv.save()
         return ok(data=ConversationDetailSerializer(conv, context={"request": request}).data)
 
@@ -590,6 +592,69 @@ class LeaveConversationAPIView(APIView):
         part.save(update_fields=["left_at"])
         return ok("Left")
 
+
+
+
+class AddMembersAPIView(APIView):
+    """Add users to a group; posts a system message like Telegram."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        conv = get_object_or_404(Conversation, pk=pk, type=Conversation.Type.GROUP)
+        part = ConversationParticipant.objects.filter(
+            conversation=conv, user=request.user, left_at__isnull=True
+        ).first()
+        if not part:
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        if part.role not in ("owner", "admin"):
+            if not getattr(conv, "members_can_add", True) or not part.can_add_members:
+                return err("You cannot add members to this group", status.HTTP_403_FORBIDDEN)
+        ids = request.data.get("user_ids") or request.data.get("member_ids") or []
+        if not isinstance(ids, list) or not ids:
+            return err("user_ids required")
+        added = []
+        for uid in ids[:50]:
+            try:
+                u = User.objects.get(pk=uid, is_active=True)
+            except User.DoesNotExist:
+                continue
+            if u.id == request.user.id:
+                continue
+            if users_blocked(request.user, u):
+                continue
+            obj, created = ConversationParticipant.objects.get_or_create(
+                conversation=conv,
+                user=u,
+                defaults={"role": ConversationParticipant.Role.MEMBER},
+            )
+            if not created and obj.left_at:
+                obj.left_at = None
+                obj.save(update_fields=["left_at"])
+                created = True
+            if created:
+                added.append(u)
+        for u in added:
+            body = f"{request.user.username} added {u.username}"
+            msg = Message.objects.create(
+                conversation=conv,
+                sender=request.user,
+                body=body,
+                is_system=True,
+            )
+            try:
+                from .consumers import broadcast_message
+                broadcast_message(msg)
+            except Exception:
+                pass
+        detail = ConversationDetailSerializer(conv, context={"request": request}).data
+        return ok(
+            "Members added" if added else "No new members",
+            data={
+                "added": [{"id": u.id, "username": u.username} for u in added],
+                "conversation": detail,
+            },
+        )
 
 
 class DeleteConversationAPIView(APIView):

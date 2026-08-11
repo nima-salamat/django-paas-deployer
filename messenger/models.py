@@ -105,6 +105,7 @@ class Conversation(models.Model):
     avatar = models.ImageField(upload_to="messenger/groups/", null=True, blank=True)
     is_public = models.BooleanField(default=False, db_index=True)  # appears in search
     is_closed = models.BooleanField(default=False)  # no new joins / messages
+    members_can_add = models.BooleanField(default=True)  # members may add contacts
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="created_conversations")
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -203,6 +204,7 @@ class Message(models.Model):
         "self", on_delete=models.SET_NULL, null=True, blank=True, related_name="forwards"
     )
     is_edited = models.BooleanField(default=False)
+    is_system = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)  # soft delete for others
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)

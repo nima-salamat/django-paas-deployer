@@ -20,24 +20,32 @@ class UserMiniSerializer(serializers.ModelSerializer):
         fields = ("id", "username", "color", "avatar", "is_contact", "is_blocked")
 
     def get_avatar(self, obj):
-        """Use existing users.Profile images only (ordered by order, then id)."""
+        """Use existing users.Profile images only."""
         request = self.context.get("request")
         viewer = getattr(request, "user", None) if request else None
         if not can_see_profile_photo(viewer, obj):
             return None
         try:
+            from users.models import Profile
             prof = (
-                obj.profile_set.filter(image__isnull=False)
+                Profile.objects.filter(user=obj)
+                .exclude(image__isnull=True)
                 .exclude(image="")
                 .order_by("order", "id")
                 .first()
             )
             if prof and getattr(prof, "image", None):
                 url = prof.image.url
-                return request.build_absolute_uri(url) if request else url
+                if request:
+                    try:
+                        return request.build_absolute_uri(url)
+                    except Exception:
+                        pass
+                return url
         except Exception:
             pass
         return None
+
 
     def get_is_contact(self, obj):
         request = self.context.get("request")
@@ -88,7 +96,7 @@ class MessageSerializer(serializers.ModelSerializer):
         fields = (
             "id", "conversation", "sender", "body", "reply_to", "reply_to_preview",
             "forwarded_from", "forwarded_from_user", "forwarded_from_message",
-            "is_edited", "is_deleted", "created_at", "updated_at",
+            "is_edited", "is_system", "is_deleted", "created_at", "updated_at",
             "attachments", "reactions",
         )
         read_only_fields = fields
@@ -133,7 +141,7 @@ class ConversationListSerializer(serializers.ModelSerializer):
         model = Conversation
         fields = (
             "id", "public_id", "type", "title", "description", "avatar",
-            "is_public", "is_closed", "created_at", "updated_at", "last_message_at",
+            "is_public", "is_closed", "members_can_add", "created_at", "updated_at", "last_message_at",
             "participants", "last_message", "unread_count", "peer",
         )
 

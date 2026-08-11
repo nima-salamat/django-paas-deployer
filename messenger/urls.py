@@ -20,6 +20,7 @@ urlpatterns = [
     path("messages/<int:pk>/edit/", apis.MessageEditAPIView.as_view()),
     path("messages/<int:pk>/", apis.MessageDeleteAPIView.as_view()),
     path("conversations/<int:pk>/leave/", apis.LeaveConversationAPIView.as_view()),
+    path("conversations/<int:pk>/members/", apis.AddMembersAPIView.as_view()),
     path("conversations/<int:pk>/delete/", apis.DeleteConversationAPIView.as_view()),
     path("attachments/<int:pk>/download/", apis.AttachmentDownloadAPIView.as_view()),
     path("me/photos/", apis.MyProfilePhotosAPIView.as_view()),
