@@ -46,6 +46,7 @@ from .models import Deploy, DeployLog
 from .serializers import DeployLogSerializer, DeploySerializer
 from services.models import Service
 from core.utils import make_uuid4
+from core.throttling import ScopedRateThrottle
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +165,9 @@ def _parse_cursor(value):
 
 
 class DeployViewSet(ModelViewSet):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "deploy.action"
+    throttle_rate = "20/min"
     queryset = Deploy.objects.all()
     serializer_class = DeploySerializer
     authentication_classes = [JWTAuthentication]

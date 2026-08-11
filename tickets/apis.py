@@ -18,6 +18,8 @@ from .serializers import (
     TicketStatusSerializer, TicketPrioritySerializer, TicketAssignDepartmentSerializer,
 )
 from .utils import check_rate_limit, get_ticket_setting, validate_upload_file, safe_filename
+from core.throttling import ScopedRateThrottle, check_scope, throttle_response, user_scope
+from asgiref.sync import sync_to_async
 
 logger = logging.getLogger("tickets.apis")
 
@@ -85,6 +87,9 @@ class MyTicketContextAPIView(APIView):
 class MyTicketListCreateAPIView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [JSONParser, MultiPartParser, FormParser]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "tickets.list_create"
+    throttle_rate = "30/min"
     def get(self, request):
         qs = Ticket.objects.filter(user=request.user).select_related("department", "user", "service", "deploy").annotate(message_count=Count("messages"))
         if request.query_params.get("status"):
@@ -166,6 +171,9 @@ class TicketCloseAPIView(APIView):
 class TicketMessageCreateAPIView(APIView):
     permission_classes = [IsAuthenticated, IsTicketOwnerOrStaff]
     parser_classes = [JSONParser, MultiPartParser, FormParser]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "tickets.message"
+    throttle_rate = "30/min"
     def post(self, request, pk):
         try:
             ticket = Ticket.objects.select_related("department").get(pk=pk)
@@ -686,39 +694,61 @@ class TicketMarkReadAPIView(APIView):
     """
     POST /api/tickets/<pk>/read/
     Marks messages from the other party as seen and updates TicketReadState.
+
+    IMPORTANT: Being online / connected to the WebSocket is NOT enough.
+    This endpoint must be called explicitly when the user is viewing the ticket.
+    We only broadcast ticket.seen when at least one message was newly marked.
     """
     permission_classes = [IsAuthenticated, IsTicketOwnerOrStaff]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "tickets.read"
+    throttle_rate = "60/min"
 
-    def post(self, request, pk):
+    async def post(self, request, pk):
+        # Scoped throttle (user)
+        scope = f"tickets:read:user:{getattr(request.user, 'pk', 'anon')}"
+        if not await sync_to_async(check_scope)(scope, 60, 60):
+            return throttle_response(scope, 60, 60)
+
         try:
-            ticket = Ticket.objects.get(pk=pk)
+            ticket = await sync_to_async(Ticket.objects.get)(pk=pk)
         except Ticket.DoesNotExist:
             raise Http404
-        self.check_object_permissions(request, ticket)
+        # object permissions (sync helper)
+        await sync_to_async(self.check_object_permissions)(request, ticket)
         user = request.user
         now = timezone.now()
-        # Messenger-style: any message not written by me becomes seen when I open the thread
-        qs = ticket.messages.filter(seen_at__isnull=True).exclude(author_id=user.id)
-        marked_ids = list(qs.values_list("id", flat=True)[:200])
-        updated = qs.update(seen_at=now) if marked_ids else 0
-        from .models import TicketReadState
-        TicketReadState.objects.update_or_create(
-            ticket=ticket, user=user, defaults={"last_read_at": now}
-        )
-        try:
-            from .consumers import broadcast_ticket_event
-            broadcast_ticket_event(
-                "ticket.seen",
-                ticket,
-                extra={
-                    "reader_id": user.id,
-                    "marked": updated,
-                    "message_ids": marked_ids,
-                    "is_staff": bool(user.is_staff or user.is_superuser),
-                },
+
+        def _mark():
+            qs = ticket.messages.filter(seen_at__isnull=True).exclude(author_id=user.id)
+            marked_ids = list(qs.values_list("id", flat=True)[:200])
+            updated = qs.update(seen_at=now) if marked_ids else 0
+            from .models import TicketReadState
+            TicketReadState.objects.update_or_create(
+                ticket=ticket, user=user, defaults={"last_read_at": now}
             )
-        except Exception:
-            pass
+            return marked_ids, updated
+
+        marked_ids, updated = await sync_to_async(_mark)()
+
+        # Only notify the other party when something actually became seen.
+        # Online presence alone must never emit ticket.seen.
+        if updated > 0:
+            try:
+                from .consumers import broadcast_ticket_event
+                await sync_to_async(broadcast_ticket_event)(
+                    "ticket.seen",
+                    ticket,
+                    extra={
+                        "reader_id": user.id,
+                        "marked": updated,
+                        "message_ids": marked_ids,
+                        "is_staff": bool(user.is_staff or user.is_superuser),
+                    },
+                )
+            except Exception:
+                logger.exception("ticket.seen broadcast failed")
+
         return ok(
             "Marked as read",
             data={
