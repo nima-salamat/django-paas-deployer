@@ -256,8 +256,8 @@ class JoinRequest(models.Model):
         # after rejection, so unique_together is on (conversation, user, status).
         unique_together = [("conversation", "user", "status")]
         indexes = [
-            models.Index(fields=["conversation", "status"]),
-            models.Index(fields=["user", "status"]),
+            models.Index(fields=["conversation", "status"], name="messenger_jr_conv_status_idx"),
+            models.Index(fields=["user", "status"], name="messenger_jr_user_status_idx"),
         ]
 
     def __str__(self):

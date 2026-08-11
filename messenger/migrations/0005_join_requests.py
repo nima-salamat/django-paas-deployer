@@ -56,8 +56,8 @@ class Migration(migrations.Migration):
             ],
             options={
                 "indexes": [
-                    models.Index(fields=["conversation", "status"]),
-                    models.Index(fields=["user", "status"]),
+                    models.Index(fields=["conversation", "status"], name="messenger_jr_conv_status_idx"),
+                    models.Index(fields=["user", "status"], name="messenger_jr_user_status_idx"),
                 ],
                 "unique_together": {("conversation", "user", "status")},
             },
