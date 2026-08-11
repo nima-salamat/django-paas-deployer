@@ -176,7 +176,11 @@ class TicketMessageCreateAPIView(APIView):
             return err("Cannot reply to closed ticket.")
         if not check_rate_limit(f"ticket_msg:{request.user.id}", int(get_ticket_setting("tickets.message_rate_limit", 20)), int(get_ticket_setting("tickets.message_rate_window", 3600))):
             return err("Message rate limit exceeded.", status.HTTP_429_TOO_MANY_REQUESTS)
-        ser = TicketMessageCreateSerializer(data=request.data)
+        files = request.FILES.getlist("attachments") or request.FILES.getlist("file")
+        body_raw = (request.data.get("body") or "").strip()
+        if not body_raw and not files:
+            return err("Body or attachments required.")
+        ser = TicketMessageCreateSerializer(data={"body": body_raw or "<p></p>"})
         if not ser.is_valid():
             return err("Validation failed", extra={"errors": ser.errors})
         is_staff_reply = bool(request.user.is_staff or request.user.is_superuser) and ticket.user_id != request.user.id
@@ -187,7 +191,6 @@ class TicketMessageCreateAPIView(APIView):
         elif not is_staff_reply and ticket.status == Ticket.Status.WAITING_USER:
             ticket.status = Ticket.Status.IN_PROGRESS
             ticket.save(update_fields=["status", "updated_at"])
-        files = request.FILES.getlist("attachments") or request.FILES.getlist("file")
         for f in files[:int(get_ticket_setting("tickets.max_attachments_per_message", 5))]:
             try:
                 validate_upload_file(f)
@@ -207,9 +210,14 @@ class AttachmentDownloadAPIView(APIView):
         if not att.file or not att.file.storage.exists(att.file.name):
             raise Http404("File not found.")
         handle = att.file.open("rb")
-        response = FileResponse(handle, as_attachment=True, filename=att.original_filename or "attachment")
+        filename = att.original_filename or "attachment"
+        ct = (att.content_type or "").lower()
+        inline = ct.startswith("image/") or ct.startswith("audio/") or ct.startswith("video/")
+        response = FileResponse(handle, as_attachment=not inline, filename=filename)
         if att.content_type:
             response["Content-Type"] = att.content_type
+        if inline:
+            response["Content-Disposition"] = f'inline; filename="{filename}"'
         return response
 
 class StaffTicketListAPIView(APIView):
