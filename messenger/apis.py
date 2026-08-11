@@ -321,6 +321,18 @@ class ConversationDetailAPIView(APIView):
         if "clear_avatar" in request.data and request.data["clear_avatar"]:
             conv.avatar = None
         conv.save()
+        # Broadcast the change so all participants reload — important for
+        # history_visibility changes (clients need to refetch messages with
+        # the new filter) and for channel-mode / requires_approval toggles.
+        try:
+            from .consumers import broadcast_member_change
+            broadcast_member_change(conv.id, {
+                "type": "group.settings_changed",
+                "conversation_id": conv.id,
+                "changed_by": request.user.id,
+            })
+        except Exception:
+            pass
         return ok(data=ConversationDetailSerializer(conv, context={"request": request}).data)
 
 
@@ -397,20 +409,21 @@ class MessageListCreateAPIView(APIView):
             .order_by("-created_at")
         )
         # === History visibility for new members (group only) ===
-        # If the group's history_visibility is "none" or "from_join", restrict
-        # the messages the requesting user can see based on their join time.
+        # Restrict messages based on the group's history_visibility setting:
+        #   - "all"        : new members see full history (default)
+        #   - "from_join"  : only messages sent at or after their joined_at
+        #   - "none"       : no messages from before joined_at (same effect as
+        #                    from_join, but the UI may present it differently —
+        #                    e.g. show an empty state instead of "no messages")
+        # Owners and admins ALWAYS see full history so they can moderate.
         if conv.type == Conversation.Type.GROUP and part.role not in ("owner", "admin"):
             visibility = getattr(conv, "history_visibility", "all") or "all"
-            if visibility == "none":
-                # Hide all messages sent BEFORE the user joined the group.
-                # They can still see system messages + their own + post-join ones.
-                if part.joined_at:
-                    qs = qs.filter(created_at__gte=part.joined_at)
-            elif visibility == "from_join":
-                # Only messages sent at or after the user's join time.
-                if part.joined_at:
-                    qs = qs.filter(created_at__gte=part.joined_at)
-            # 'all' -> no filter
+            if visibility in ("none", "from_join") and part.joined_at:
+                # Filter to only messages sent AT OR AFTER the user's join time.
+                # This includes the system "X joined" message that was posted
+                # when they joined (since it has created_at >= joined_at).
+                qs = qs.filter(created_at__gte=part.joined_at)
+            # 'all' -> no filter (full history)
         before_id = request.query_params.get("before_id")
         if before_id:
             try:
@@ -1577,8 +1590,47 @@ class GroupAvatarAPIView(APIView):
         # Basic size check (10MB)
         if getattr(f, "size", 0) > 10 * 1024 * 1024:
             return err("Image too large (max 10MB)")
+        # Validate it is actually an image (Django ImageField requires Pillow;
+        # we use a FileField, so do a manual content-type sanity check).
+        ctype = (getattr(f, "content_type", "") or "").lower()
+        if ctype and not ctype.startswith("image/"):
+            return err("File must be an image")
+        # Delete the previous avatar file from storage (if any) BEFORE
+        # assigning the new one — otherwise the old file lingers and may
+        # conflict with the new name on case-insensitive filesystems.
+        old_avatar = conv.avatar
+        if old_avatar:
+            try:
+                old_avatar.delete(save=False)
+            except Exception:
+                logger.warning("Could not delete previous group avatar", exc_info=True)
+        # Assign new file. Django's FileField.save() will write the file
+        # to MEDIA_ROOT/messenger/groups/<unique-name> using the storage backend.
+        # We use a deterministic, unique filename to avoid collisions and
+        # make the URL predictable for the client.
+        import os
+        import uuid
+        ext = os.path.splitext(f.name)[1].lower() or ".jpg"
+        if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"):
+            ext = ".jpg"
+        safe_name = f"group_{conv.pk}_{uuid.uuid4().hex[:12]}{ext}"
+        f.name = safe_name
         conv.avatar = f
         conv.save(update_fields=["avatar", "updated_at"])
+        # Force a refresh from DB so the serializer returns the committed path
+        conv.refresh_from_db()
+        # Verify the file actually exists on disk (debug aid — surfaces
+        # misconfigured MEDIA_ROOT / volume mounts early).
+        try:
+            from django.conf import settings
+            path = conv.avatar.path if hasattr(conv.avatar, "path") else None
+            if path and not os.path.exists(path):
+                logger.error(
+                    "Group avatar file missing after save: %s (MEDIA_ROOT=%s)",
+                    path, getattr(settings, "MEDIA_ROOT", "<unset>"),
+                )
+        except Exception:
+            pass
         return ok("Avatar updated", data=ConversationDetailSerializer(conv, context={"request": request}).data)
 
     def delete(self, request, pk):
