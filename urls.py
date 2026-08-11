@@ -24,5 +24,10 @@ from django.conf import settings
 
 if settings.DEBUG:
     from django.conf.urls.static import static
-    
+
     urlpatterns += static(settings.STATIC_URL, document_root= settings.STATIC_ROOT)
+    # Also serve media files in DEBUG mode for convenience.
+    # NOTE: /media/messenger/<path> is already served by ProtectedMediaView
+    # (in core/urls.py) in BOTH debug and production, so this static() entry
+    # only matters for other media paths (e.g. /media/deploys/...).
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

@@ -1615,8 +1615,15 @@ class GroupAvatarAPIView(APIView):
             ext = ".jpg"
         safe_name = f"group_{conv.pk}_{uuid.uuid4().hex[:12]}{ext}"
         f.name = safe_name
-        conv.avatar = f
-        conv.save(update_fields=["avatar", "updated_at"])
+        try:
+            conv.avatar = f
+            conv.save(update_fields=["avatar", "updated_at"])
+        except Exception as save_exc:
+            logger.error("Group avatar save failed: %s", save_exc, exc_info=True)
+            return err(
+                f"Could not save image: {save_exc}",
+                status.HTTP_400_BAD_REQUEST,
+            )
         # Force a refresh from DB so the serializer returns the committed path
         conv.refresh_from_db()
         # Verify the file actually exists on disk (debug aid — surfaces

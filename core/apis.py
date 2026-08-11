@@ -5,13 +5,14 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
 from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 
 from deploy.models import Deploy
 
 
 class DeploymentDownloadAPIView(APIView):
     authentication_classes = [
-        SessionAuthentication,  
+        SessionAuthentication,
         JWTAuthentication,
     ]
     permission_classes = [
@@ -64,3 +65,97 @@ class DeploymentDownloadAPIView(APIView):
         response["Expires"] = "0"
 
         return response
+
+
+class ProtectedMediaView(APIView):
+    """Serve media files from MEDIA_ROOT with JWT auth.
+
+    Accepts Authorization: Bearer <token> header OR ?token=<token> query.
+    Used for group avatars and other media that <img> tags can't auth with
+    headers. Only allows paths under messenger/.
+
+    Mounted at: /media/messenger/<path:path>
+    """
+
+    # No authentication_classes / permission_classes: we authenticate manually
+    # so we can accept ?token= query (which the standard DRF JWT auth doesn't).
+
+    def _authenticate(self, request):
+        from rest_framework_simplejwt.tokens import AccessToken
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        # 1. Authorization header
+        auth = request.META.get("HTTP_AUTHORIZATION", "")
+        if auth.startswith("Bearer "):
+            tok = auth[7:].strip()
+            try:
+                access = AccessToken(tok)
+                user_id = access.get("user_id") or access.get("user")
+                if user_id:
+                    return User.objects.filter(pk=user_id).first()
+            except Exception:
+                return None
+        # 2. ?token= query
+        tok = request.GET.get("token")
+        if tok:
+            try:
+                access = AccessToken(tok)
+                user_id = access.get("user_id") or access.get("user")
+                if user_id:
+                    return User.objects.filter(pk=user_id).first()
+            except Exception:
+                return None
+        # 3. Session auth (logged-in via browser)
+        if request.user and request.user.is_authenticated:
+            return request.user
+        return None
+
+    def get(self, request, path):
+        from django.conf import settings
+
+        user = self._authenticate(request)
+        if not user:
+            raise Http404("Authentication required")
+
+        # Only allow files under messenger/
+        if not path.startswith("messenger/"):
+            raise Http404
+
+        media_root = str(settings.MEDIA_ROOT)
+        # Normalize and prevent directory traversal
+        full_path = Path(media_root) / path
+        try:
+            full_path = full_path.resolve(strict=True)
+        except Exception:
+            raise Http404
+
+        if not str(full_path).startswith(media_root):
+            raise Http404
+        if not full_path.is_file():
+            raise Http404
+
+        # Detect content type
+        ext = full_path.suffix.lower()
+        ct_map = {
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".png": "image/png", ".gif": "image/gif",
+            ".webp": "image/webp", ".bmp": "image/bmp",
+            ".mp4": "video/mp4", ".webm": "video/webm",
+            ".mov": "video/quicktime",
+            ".mp3": "audio/mpeg", ".ogg": "audio/ogg",
+            ".wav": "audio/wav", ".m4a": "audio/mp4", ".aac": "audio/aac",
+        }
+        content_type = ct_map.get(ext, "application/octet-stream")
+
+        try:
+            fh = open(str(full_path), "rb")
+        except Exception:
+            raise Http404
+
+        resp = FileResponse(fh, content_type=content_type)
+        # Cache for 1 hour on the client (URL contains a unique uuid so caching
+        # is safe — a new avatar upload will produce a new URL).
+        resp["Cache-Control"] = "public, max-age=3600"
+        resp["Expires"] = "3600"
+        return resp
