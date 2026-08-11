@@ -1,3 +1,5 @@
+from core.async_api import async_api_view
+
 from __future__ import annotations
 import logging
 from django.db.models import Count, Prefetch, Q
