@@ -17,9 +17,6 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
-from core.async_api import async_api_view
-from core.throttling import ScopedRateThrottle
-
 from .models import (
     Contact, Block, Conversation, ConversationParticipant, Message,
     MessageReaction, MessageAttachment, GroupInviteLink,
@@ -395,13 +392,9 @@ class PublicGroupSearchAPIView(APIView):
         return ok(data=out)
 
 
-@async_api_view
 class MessageListCreateAPIView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
-    throttle_classes = [ScopedRateThrottle]
-    throttle_scope = "messenger.messages"
-    throttle_rate = "90/min"
 
     def get_participant(self, conv, user):
         return conv.participants.filter(user=user, left_at__isnull=True).first()
@@ -1336,7 +1329,6 @@ class UserProfileAPIView(APIView):
         return ok(data=data)
 
 
-@async_api_view
 class AttachmentDownloadAPIView(APIView):
     """Attachment download — supports JWT via Authorization header OR ?token= query param.
     The query-param fallback lets the browser load <img src="...?token=..."> without
@@ -1344,9 +1336,6 @@ class AttachmentDownloadAPIView(APIView):
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = []  # we authenticate manually inside get()
-    throttle_classes = [ScopedRateThrottle]
-    throttle_scope = "messenger.attachment"
-    throttle_rate = "240/min"
 
     def _authenticate_via_token_query(self, request):
         token = request.query_params.get("token")
