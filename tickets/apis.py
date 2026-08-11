@@ -192,7 +192,13 @@ class TicketMessageCreateAPIView(APIView):
         if not check_rate_limit(f"ticket_msg:{request.user.id}", int(get_ticket_setting("tickets.message_rate_limit", 20)), int(get_ticket_setting("tickets.message_rate_window", 3600))):
             return err("Message rate limit exceeded.", status.HTTP_429_TOO_MANY_REQUESTS)
         files = request.FILES.getlist("attachments") or request.FILES.getlist("file")
-        body_raw = (request.data.get("body") or "").strip()
+        raw_body = request.data.get("body")
+        # Ensure we always work with a plain string (avoids [object Object] downstream)
+        if isinstance(raw_body, (list, tuple)):
+            raw_body = raw_body[0] if raw_body else ""
+        if not isinstance(raw_body, str):
+            raw_body = "" if raw_body is None else str(raw_body)
+        body_raw = raw_body.strip()
         if not body_raw and not files:
             return err("Body or attachments required.")
         ser = TicketMessageCreateSerializer(data={"body": body_raw or "<p></p>"})

@@ -1,0 +1,80 @@
+from __future__ import annotations
+
+import os
+from django.conf import settings
+from django.core.exceptions import ValidationError
+
+DEFAULT_MAX_VIDEO = 100 * 1024 * 1024  # 100 MB
+DEFAULT_MAX_FILE = 25 * 1024 * 1024
+
+ALLOWED_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
+    ".mp4", ".mov", ".mkv", ".webm",
+    ".mp3", ".wav", ".ogg", ".m4a", ".aac", ".opus",
+    ".pdf", ".txt", ".zip", ".doc", ".docx", ".xls", ".xlsx",
+}
+
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
+GIF_EXTS = {".gif"}
+AUDIO_EXTS = {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".opus"}
+
+
+def detect_kind(filename: str, content_type: str = "") -> str:
+    ext = os.path.splitext(filename or "")[1].lower()
+    ct = (content_type or "").lower()
+    if ext in GIF_EXTS or "gif" in ct:
+        return "gif"
+    if ext in IMAGE_EXTS or ct.startswith("image/"):
+        return "image"
+    if ext in VIDEO_EXTS or ct.startswith("video/"):
+        return "video"
+    if ext in AUDIO_EXTS or ct.startswith("audio/"):
+        return "audio"
+    return "file"
+
+
+def validate_messenger_file(uploaded_file) -> None:
+    name = getattr(uploaded_file, "name", "") or ""
+    ext = os.path.splitext(name)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise ValidationError(f"File type {ext or '(none)'} not allowed.")
+    kind = detect_kind(name, getattr(uploaded_file, "content_type", "") or "")
+    max_size = DEFAULT_MAX_VIDEO if kind == "video" else DEFAULT_MAX_FILE
+    if uploaded_file.size > max_size:
+        mb = max_size // (1024 * 1024)
+        raise ValidationError(f"File size exceeds limit ({mb}MB).")
+    # Basic executable check
+    uploaded_file.seek(0)
+    header = uploaded_file.read(8)
+    uploaded_file.seek(0)
+    if header[:2] == b"MZ" or header[:4] == b"\x7fELF":
+        raise ValidationError("Executable files not allowed.")
+
+
+def can_see_profile_photo(viewer, owner) -> bool:
+    """Check ProfilePhotoPrivacy for whether viewer can see owner's photos."""
+    if viewer is None or not getattr(viewer, "is_authenticated", False):
+        return False
+    if viewer.id == owner.id:
+        return True
+    try:
+        privacy = owner.messenger_photo_privacy
+    except Exception:
+        return True  # default everyone
+    scope = privacy.scope
+    if scope == "everyone":
+        return True
+    if scope == "nobody":
+        return False
+    if scope == "contacts":
+        from .models import Contact
+        return Contact.objects.filter(owner=owner, contact=viewer).exists()
+    if scope == "specific":
+        return privacy.allowed_users.filter(user=viewer).exists()
+    return True
+
+
+def users_blocked(a, b) -> bool:
+    from .models import Block
+    return Block.objects.filter(blocker=a, blocked=b).exists() or Block.objects.filter(blocker=b, blocked=a).exists()

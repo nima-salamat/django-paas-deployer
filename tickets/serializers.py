@@ -141,6 +141,8 @@ class TicketCreateSerializer(serializers.Serializer):
 class TicketMessageCreateSerializer(serializers.Serializer):
     body = serializers.CharField()
     def validate_body(self, value):
+        if not isinstance(value, str):
+            value = "" if value is None else str(value)
         if not value or not value.strip():
             raise serializers.ValidationError("Body required.")
         return sanitize_html(value)

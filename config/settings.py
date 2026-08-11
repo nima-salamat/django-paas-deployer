@@ -72,6 +72,7 @@ INSTALLED_APPS = [
     "services",
     "core",
     "tickets.apps.TicketsConfig",
+    "messenger.apps.MessengerConfig",
     "custom_emails",
 ]
 

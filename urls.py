@@ -15,6 +15,7 @@ urlpatterns = [
     path("media/", include("core.urls")),
     path("api/tickets/", include("tickets.urls")),
     path("api/emails/", include("custom_emails.urls")),
+    path("api/messenger/", include("messenger.urls")),
     
 ]
 

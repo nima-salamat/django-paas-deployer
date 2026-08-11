@@ -12,11 +12,13 @@ from channels.routing import ProtocolTypeRouter, URLRouter
 import services.routing
 import deployments.routing
 import tickets.routing
+import messenger.routing
 
 combined_ws = (
     services.routing.websocket_urlpatterns
     + deployments.routing.websocket_urlpatterns
     + tickets.routing.websocket_urlpatterns
+    + messenger.routing.websocket_urlpatterns
 )
 
 application = ProtocolTypeRouter({
