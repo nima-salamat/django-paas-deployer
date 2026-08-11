@@ -35,4 +35,8 @@ urlpatterns = [
     path("users/by-username/", apis.UserByUsernameAPIView.as_view()),
     path("conversations/<int:pk>/cleanup/", apis.ConversationCleanupAPIView.as_view()),
     path("conversations/<int:pk>/media/", apis.ConversationMediaAPIView.as_view()),
+    # User bio (Telegram-style 'about')
+    path("me/bio/", apis.UserBioAPIView.as_view()),
+    # Group avatar upload/clear
+    path("conversations/<int:pk>/avatar/", apis.GroupAvatarAPIView.as_view()),
 ]

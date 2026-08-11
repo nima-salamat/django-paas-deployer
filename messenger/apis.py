@@ -18,7 +18,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from .models import (
     Contact, Block, Conversation, ConversationParticipant, Message,
     MessageReaction, MessageAttachment, GroupInviteLink,
-    ProfilePhotoPrivacy, ProfilePhotoAllowed, MessageReadReceipt,
+    ProfilePhotoPrivacy, ProfilePhotoAllowed, MessageReadReceipt, UserBio,
 )
 from .serializers import (
     UserMiniSerializer, MessageSerializer, ConversationListSerializer,
@@ -303,6 +303,19 @@ class ConversationDetailAPIView(APIView):
             conv.is_closed = bool(request.data["is_closed"])
         if "members_can_add" in request.data and part.role in ("owner", "admin"):
             conv.members_can_add = bool(request.data["members_can_add"])
+        # Channel-like mode — only owner/admins can toggle
+        if "only_admins_send" in request.data and part.role in ("owner", "admin"):
+            conv.only_admins_send = bool(request.data["only_admins_send"])
+        # History visibility for new members — owner only
+        if "history_visibility" in request.data and part.role == "owner":
+            v = str(request.data["history_visibility"]).lower()
+            if v in ("all", "from_join", "none"):
+                conv.history_visibility = v
+        # Group avatar upload
+        if "avatar" in request.FILES:
+            conv.avatar = request.FILES["avatar"]
+        if "clear_avatar" in request.data and request.data["clear_avatar"]:
+            conv.avatar = None
         conv.save()
         return ok(data=ConversationDetailSerializer(conv, context={"request": request}).data)
 
@@ -329,7 +342,8 @@ class MessageListCreateAPIView(APIView):
 
     def get(self, request, pk):
         conv = get_object_or_404(Conversation, pk=pk)
-        if not self.get_participant(conv, request.user):
+        part = self.get_participant(conv, request.user)
+        if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
         qs = (
             Message.objects.filter(conversation=conv, is_deleted=False)
@@ -337,6 +351,21 @@ class MessageListCreateAPIView(APIView):
             .prefetch_related("attachments", "reactions__user")
             .order_by("-created_at")
         )
+        # === History visibility for new members (group only) ===
+        # If the group's history_visibility is "none" or "from_join", restrict
+        # the messages the requesting user can see based on their join time.
+        if conv.type == Conversation.Type.GROUP and part.role not in ("owner", "admin"):
+            visibility = getattr(conv, "history_visibility", "all") or "all"
+            if visibility == "none":
+                # Hide all messages sent BEFORE the user joined the group.
+                # They can still see system messages + their own + post-join ones.
+                if part.joined_at:
+                    qs = qs.filter(created_at__gte=part.joined_at)
+            elif visibility == "from_join":
+                # Only messages sent at or after the user's join time.
+                if part.joined_at:
+                    qs = qs.filter(created_at__gte=part.joined_at)
+            # 'all' -> no filter
         before_id = request.query_params.get("before_id")
         if before_id:
             try:
@@ -365,6 +394,9 @@ class MessageListCreateAPIView(APIView):
             return err("Conversation is closed")
         if not part.can_send_messages:
             return err("You cannot send messages in this chat")
+        # Channel-like mode — only owner/admins can send messages
+        if getattr(conv, "only_admins_send", False) and part.role not in ("owner", "admin"):
+            return err("Only admins can send messages in this group", status.HTTP_403_FORBIDDEN)
 
         raw_body = request.data.get("body")
         if isinstance(raw_body, (list, tuple)):
@@ -1383,4 +1415,69 @@ class UserByUsernameAPIView(APIView):
         else:
             data["photos"] = []
         return ok(data=data)
+
+
+class UserBioAPIView(APIView):
+    """Get or set the current user's bio (Telegram-style 'about' field).
+
+    GET  /me/bio/         -> {text: "..."}
+    PATCH /me/bio/        -> {text: "new bio"}  (max 255 chars)
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        bio, _ = UserBio.objects.get_or_create(user=request.user)
+        return ok(data={"text": bio.text or ""})
+
+    def patch(self, request):
+        text = str(request.data.get("text") or "")[:255]
+        bio, _ = UserBio.objects.get_or_create(user=request.user)
+        bio.text = text
+        bio.save(update_fields=["text", "updated_at"])
+        return ok("Bio updated", data={"text": bio.text})
+
+
+class GroupAvatarAPIView(APIView):
+    """Upload or clear a group's avatar (owner/admin only).
+
+    POST   /conversations/<pk>/avatar/   (multipart: avatar=<file>)   -> upload
+    DELETE /conversations/<pk>/avatar/                                -> clear
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        conv = get_object_or_404(Conversation, pk=pk, type=Conversation.Type.GROUP)
+        part = ConversationParticipant.objects.filter(
+            conversation=conv, user=request.user, left_at__isnull=True
+        ).first()
+        if not part or part.role not in ("owner", "admin"):
+            return err("Only admins can change the group avatar", status.HTTP_403_FORBIDDEN)
+        f = request.FILES.get("avatar")
+        if not f:
+            return err("avatar file required")
+        # Basic size check (10MB)
+        if getattr(f, "size", 0) > 10 * 1024 * 1024:
+            return err("Image too large (max 10MB)")
+        conv.avatar = f
+        conv.save(update_fields=["avatar", "updated_at"])
+        return ok("Avatar updated", data=ConversationDetailSerializer(conv, context={"request": request}).data)
+
+    def delete(self, request, pk):
+        conv = get_object_or_404(Conversation, pk=pk, type=Conversation.Type.GROUP)
+        part = ConversationParticipant.objects.filter(
+            conversation=conv, user=request.user, left_at__isnull=True
+        ).first()
+        if not part or part.role not in ("owner", "admin"):
+            return err("Only admins can change the group avatar", status.HTTP_403_FORBIDDEN)
+        if conv.avatar:
+            # Delete the file from storage
+            try:
+                conv.avatar.delete(save=False)
+            except Exception:
+                pass
+            conv.avatar = None
+            conv.save(update_fields=["avatar", "updated_at"])
+        return ok("Avatar removed", data=ConversationDetailSerializer(conv, context={"request": request}).data)
 

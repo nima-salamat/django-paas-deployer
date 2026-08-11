@@ -4,7 +4,7 @@ from .models import (
     Contact, Block, Conversation, ConversationParticipant, Message,
     MessageReaction, MessageAttachment, GroupInviteLink,
     ProfilePhotoPrivacy, ProfilePhotoAllowed, PinnedMessage,
-    MessageReadReceipt,
+    MessageReadReceipt, UserBio,
 )
 from .utils import can_see_profile_photo, detect_kind
 
@@ -16,10 +16,11 @@ class UserMiniSerializer(serializers.ModelSerializer):
     is_contact = serializers.SerializerMethodField()
     is_blocked = serializers.SerializerMethodField()
     is_online = serializers.SerializerMethodField()
+    bio = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ("id", "username", "color", "avatar", "is_contact", "is_blocked", "is_online")
+        fields = ("id", "username", "color", "avatar", "is_contact", "is_blocked", "is_online", "bio")
 
     def get_avatar(self, obj):
         """Use existing users.Profile images only."""
@@ -67,6 +68,16 @@ class UserMiniSerializer(serializers.ModelSerializer):
             return is_user_online(obj.id)
         except Exception:
             return False
+
+    def get_bio(self, obj):
+        """Return the user's bio text (Telegram-style 'about')."""
+        try:
+            bio = getattr(obj, "messenger_bio", None)
+            if bio:
+                return bio.text or ""
+        except Exception:
+            pass
+        return ""
 
 
 class MessageAttachmentSerializer(serializers.ModelSerializer):
@@ -216,15 +227,28 @@ class ConversationListSerializer(serializers.ModelSerializer):
     peer = serializers.SerializerMethodField()  # for private chats
     is_pinned = serializers.SerializerMethodField()
     created_by = serializers.SerializerMethodField()
+    avatar_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Conversation
         fields = (
-            "id", "public_id", "type", "title", "description", "avatar",
-            "is_public", "is_closed", "members_can_add", "created_by",
+            "id", "public_id", "type", "title", "description", "avatar", "avatar_url",
+            "is_public", "is_closed", "members_can_add", "only_admins_send",
+            "history_visibility", "created_by",
             "created_at", "updated_at", "last_message_at",
             "participants", "last_message", "unread_count", "peer", "is_pinned",
         )
+
+    def get_avatar_url(self, obj):
+        """Absolute URL for the group avatar (if set)."""
+        request = self.context.get("request")
+        if not obj.avatar:
+            return None
+        try:
+            url = obj.avatar.url
+            return request.build_absolute_uri(url) if request else url
+        except Exception:
+            return None
 
     def get_participants(self, obj):
         qs = obj.participants.filter(left_at__isnull=True).select_related("user")[:200]

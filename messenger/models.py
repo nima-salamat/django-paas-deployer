@@ -1,3 +1,6 @@
+"""
+Telegram-like messenger models.
+"""
 from __future__ import annotations
 
 import os
@@ -18,6 +21,20 @@ def messenger_attachment_path(instance, filename):
     name = f"{uuid.uuid4().hex}_{safe}{ext}"
     conv_id = getattr(instance, "conversation_id", None) or "tmp"
     return f"messenger/{conv_id}/{name}"
+
+
+# ---------------------------------------------------------------------------
+# User Bio (Messenger-owned — does not modify the core User model)
+# ---------------------------------------------------------------------------
+
+class UserBio(models.Model):
+    """Per-user bio shown on their profile (Telegram-style 'about' field)."""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="messenger_bio")
+    text = models.CharField(max_length=255, blank=True, default="")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Bio({self.user_id}): {self.text[:40]}"
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +112,12 @@ class Conversation(models.Model):
         PRIVATE = "private", _("Private")
         GROUP = "group", _("Group")
 
+    class HistoryVisibility(models.TextChoices):
+        """Who can see messages sent BEFORE they joined the group."""
+        ALL = "all", _("All new members see history")
+        FROM_JOIN = "from_join", _("Only messages from join-time onward")
+        NONE = "none", _("No history for new members")
+
     public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
     type = models.CharField(max_length=10, choices=Type.choices, default=Type.PRIVATE, db_index=True)
     title = models.CharField(max_length=255, blank=True, default="")  # groups only
@@ -103,6 +126,13 @@ class Conversation(models.Model):
     is_public = models.BooleanField(default=False, db_index=True)  # appears in search
     is_closed = models.BooleanField(default=False)  # no new joins / messages
     members_can_add = models.BooleanField(default=True)  # members may add contacts
+    # Channel-like mode — only owner/admins can send messages
+    only_admins_send = models.BooleanField(default=False)
+    # History visibility for new members (group only)
+    history_visibility = models.CharField(
+        max_length=12, choices=HistoryVisibility.choices,
+        default=HistoryVisibility.ALL,
+    )
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="created_conversations")
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)

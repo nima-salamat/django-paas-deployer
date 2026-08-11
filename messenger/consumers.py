@@ -232,10 +232,24 @@ def broadcast_read(conversation_id, reader_user_id, receipts):
 def broadcast_member_change(conversation_id, data: dict):
     """Broadcast a member-level change (remove, role change, transfer, leave)
     to all participants of the conversation so they reload the detail.
+
+    For removals, we ALSO send the event to the removed user's personal channel
+    (even though they're no longer an active participant) so their client can
+    redirect them out of the chat.
     """
     from .models import ConversationParticipant
     _send(f"messenger_conv_{conversation_id}", data)
-    for uid in ConversationParticipant.objects.filter(
-        conversation_id=conversation_id, left_at__isnull=True
-    ).values_list("user_id", flat=True):
+    # Active participants
+    active_ids = set(
+        ConversationParticipant.objects.filter(
+            conversation_id=conversation_id, left_at__isnull=True
+        ).values_list("user_id", flat=True)
+    )
+    for uid in active_ids:
         _send(f"messenger_user_{uid}", data)
+    # If this is a removal, also notify the removed user (now inactive).
+    # Their `left_at` is set, so the loop above skipped them.
+    if data.get("type") == "member.removed" and data.get("user_id"):
+        removed_uid = data.get("user_id")
+        if removed_uid not in active_ids:
+            _send(f"messenger_user_{removed_uid}", data)
