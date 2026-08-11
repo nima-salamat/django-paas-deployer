@@ -1,1 +1,0 @@
-Run: python manage.py makemigrations tickets custom_emails
