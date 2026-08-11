@@ -1,4 +1,10 @@
-"""Messenger WebSocket — personal + per-conversation rooms."""
+"""Messenger WebSocket — personal + per-conversation rooms.
+
+Presence tracking: when a user connects, we set a cache key and broadcast a
+`presence.update` event to all conversations that user is part of. When they
+disconnect, we clear the key and broadcast again. This powers the green online
+dot on avatars in the chat list, chat header, and profile views.
+"""
 from __future__ import annotations
 
 import logging
@@ -9,11 +15,66 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.layers import get_channel_layer
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.tokens import AccessToken
 
 User = get_user_model()
 logger = logging.getLogger("messenger.ws")
+
+# Cache key helpers — TTL of 120s; refreshed by ping
+ONLINE_KEY = "messenger:online:{uid}"
+ONLINE_TTL = 120  # seconds
+
+
+def set_user_online(user_id: int):
+    """Mark a user as online in cache and broadcast presence to their conversations."""
+    try:
+        cache.set(ONLINE_KEY.format(uid=user_id), True, ONLINE_TTL)
+    except Exception:
+        pass
+    _broadcast_presence(user_id, True)
+
+
+def set_user_offline(user_id: int):
+    """Mark a user as offline and broadcast presence."""
+    try:
+        cache.delete(ONLINE_KEY.format(uid=user_id))
+    except Exception:
+        pass
+    _broadcast_presence(user_id, False)
+
+
+def is_user_online(user_id: int) -> bool:
+    """Check if a user is currently online (cache-based)."""
+    if not user_id:
+        return False
+    try:
+        return bool(cache.get(ONLINE_KEY.format(uid=user_id)))
+    except Exception:
+        return False
+
+
+def _broadcast_presence(user_id: int, online: bool):
+    """Send presence.update to every conversation the user is part of."""
+    from .models import ConversationParticipant
+    try:
+        conv_ids = list(
+            ConversationParticipant.objects.filter(
+                user_id=user_id, left_at__isnull=True
+            ).values_list("conversation_id", flat=True)
+        )
+    except Exception:
+        return
+    data = {
+        "type": "presence.update",
+        "user_id": user_id,
+        "online": online,
+    }
+    for cid in conv_ids:
+        _send(f"messenger_conv_{cid}", data)
+    # Also notify the user's personal channel (so other tabs update)
+    _send(f"messenger_user_{user_id}", data)
 
 
 async def authenticate_from_scope(scope):
@@ -51,16 +112,23 @@ class MessengerConsumer(AsyncJsonWebsocketConsumer):
         self.groups_joined.append(g)
         await self.accept()
         await self.send_json({"type": "connected", "user_id": user.id})
+        # Presence: mark online and broadcast
+        await database_sync_to_async(set_user_online)(user.id)
 
     async def disconnect(self, code):
         for g in getattr(self, "groups_joined", []):
             await self.channel_layer.group_discard(g, self.channel_name)
+        if getattr(self, "user", None):
+            await database_sync_to_async(set_user_offline)(self.user.id)
 
     async def receive_json(self, content, **kwargs):
         if not isinstance(content, dict):
             return
         t = content.get("type")
         if t == "ping":
+            # Refresh online presence on ping
+            if getattr(self, "user", None):
+                await database_sync_to_async(set_user_online)(self.user.id)
             await self.send_json({"type": "pong"})
             return
         if t == "subscribe":
@@ -141,7 +209,7 @@ def broadcast_reaction(msg, user, emoji, action):
 
 def broadcast_read(conversation_id, reader_user_id, receipts):
     """Notify the conversation that some messages were just read by `reader_user_id`.
-    Senders flip their tick state from 'sent' → 'read'.
+    Senders flip their tick state from 'sent' -> 'read'.
     """
     if not receipts:
         return
@@ -159,3 +227,15 @@ def broadcast_read(conversation_id, reader_user_id, receipts):
         if uid != reader_user_id:
             _send(f"messenger_user_{uid}", data)
     _send(f"messenger_conv_{conversation_id}", data)
+
+
+def broadcast_member_change(conversation_id, data: dict):
+    """Broadcast a member-level change (remove, role change, transfer, leave)
+    to all participants of the conversation so they reload the detail.
+    """
+    from .models import ConversationParticipant
+    _send(f"messenger_conv_{conversation_id}", data)
+    for uid in ConversationParticipant.objects.filter(
+        conversation_id=conversation_id, left_at__isnull=True
+    ).values_list("user_id", flat=True):
+        _send(f"messenger_user_{uid}", data)

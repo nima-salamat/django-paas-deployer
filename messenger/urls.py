@@ -23,6 +23,10 @@ urlpatterns = [
     path("messages/<int:pk>/", apis.MessageDeleteAPIView.as_view()),
     path("conversations/<int:pk>/leave/", apis.LeaveConversationAPIView.as_view()),
     path("conversations/<int:pk>/members/", apis.AddMembersAPIView.as_view()),
+    # Group management — remove member, change role, transfer ownership
+    path("conversations/<int:pk>/members/<int:user_id>/", apis.RemoveMemberAPIView.as_view()),
+    path("conversations/<int:pk>/members/<int:user_id>/role/", apis.MemberRoleAPIView.as_view()),
+    path("conversations/<int:pk>/transfer-ownership/", apis.TransferOwnershipAPIView.as_view()),
     path("conversations/<int:pk>/delete/", apis.DeleteConversationAPIView.as_view()),
     path("attachments/<int:pk>/download/", apis.AttachmentDownloadAPIView.as_view()),
     path("me/photos/", apis.MyProfilePhotosAPIView.as_view()),

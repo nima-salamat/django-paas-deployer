@@ -611,7 +611,53 @@ class MarkReadAPIView(APIView):
 
 
 
+def _auto_transfer_or_cleanup(conv, leaving_part):
+    """When the owner/creator leaves a group:
+    - If other members exist, transfer ownership to the oldest admin,
+      or if no admins, the oldest remaining member.
+    - If no members remain, hard-delete the group and all its contents.
+
+    For private DMs, the caller handles deletion separately.
+
+    Returns (transferred_to_user_id or None, deleted: bool).
+    """
+    remaining = list(
+        ConversationParticipant.objects.filter(
+            conversation=conv, left_at__isnull=True
+        ).exclude(user_id=leaving_part.user_id).order_by("joined_at")
+    )
+    if not remaining:
+        # No one left — delete the group entirely (messages, attachments, etc.)
+        conv_id = conv.pk
+        conv.delete()
+        return None, True
+    # Pick the oldest admin; if none, the oldest member
+    new_owner = next(
+        (p for p in remaining if p.role == ConversationParticipant.Role.ADMIN),
+        remaining[0],
+    )
+    new_owner.role = ConversationParticipant.Role.OWNER
+    new_owner.can_add_members = True
+    new_owner.can_pin_messages = True
+    new_owner.can_change_info = True
+    new_owner.save(update_fields=[
+        "role", "can_add_members", "can_pin_messages", "can_change_info",
+    ])
+    return new_owner.user_id, False
+
+
 class LeaveConversationAPIView(APIView):
+    """Leave a conversation.
+
+    Groups:
+    - If the leaver is the owner/creator, ownership auto-transfers to the oldest
+      admin (or oldest member if no admins). The group stays alive.
+    - If the leaver is the LAST member, the group + all messages are deleted.
+    - The leaver's previously-sent messages STAY in the group (Telegram behaviour).
+
+    Private DMs:
+    - Both sides leave; the conversation is hard-deleted.
+    """
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
@@ -621,17 +667,255 @@ class LeaveConversationAPIView(APIView):
         ).first()
         if not part:
             return err("Not a member", status.HTTP_404_NOT_FOUND)
-        if part.role == ConversationParticipant.Role.OWNER:
-            # transfer or require delete — for now block leave if sole owner of group
-            others = ConversationParticipant.objects.filter(
-                conversation_id=pk, left_at__isnull=True
-            ).exclude(user=request.user).count()
-            conv = part.conversation
-            if conv.type == Conversation.Type.GROUP and others == 0:
-                return err("Transfer ownership or delete the group first")
+        conv = part.conversation
         part.left_at = timezone.now()
         part.save(update_fields=["left_at"])
-        return ok("Left")
+
+        transferred_to = None
+        deleted = False
+        if conv.type == Conversation.Type.GROUP:
+            if part.role == ConversationParticipant.Role.OWNER:
+                transferred_to, deleted = _auto_transfer_or_cleanup(conv, part)
+                if deleted:
+                    try:
+                        from .consumers import broadcast_member_change
+                        broadcast_member_change(pk, {
+                            "type": "conversation.deleted",
+                            "conversation_id": pk,
+                        })
+                    except Exception:
+                        pass
+                    return ok("Left — group deleted (no members remained)")
+            # Post a system message about the leave
+            try:
+                msg = Message.objects.create(
+                    conversation=conv,
+                    sender=request.user,
+                    body=f"{request.user.username} left the group",
+                    is_system=True,
+                )
+                from .consumers import broadcast_message
+                broadcast_message(msg)
+            except Exception:
+                pass
+            if transferred_to:
+                try:
+                    new_owner = User.objects.only("id", "username").get(pk=transferred_to)
+                    msg = Message.objects.create(
+                        conversation=conv,
+                        sender=request.user,
+                        body=f"Ownership transferred to {new_owner.username}",
+                        is_system=True,
+                    )
+                    from .consumers import broadcast_message
+                    broadcast_message(msg)
+                except Exception:
+                    pass
+            # Broadcast member change so other clients reload
+            try:
+                from .consumers import broadcast_member_change
+                broadcast_member_change(pk, {
+                    "type": "member.left",
+                    "conversation_id": pk,
+                    "user_id": request.user.id,
+                    "transferred_to": transferred_to,
+                })
+            except Exception:
+                pass
+        else:
+            # Private DM: hide for both and hard-delete
+            ConversationParticipant.objects.filter(conversation=conv).update(left_at=timezone.now())
+            conv.delete()
+            return ok("Left")
+        return ok("Left", data={"transferred_to": transferred_to})
+
+
+class RemoveMemberAPIView(APIView):
+    """Remove a member from a group (owner/admin only).
+
+    The removed member's messages STAY in the group (Telegram behaviour).
+    Their `left_at` is set to now so they can no longer access the group.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, pk, user_id):
+        conv = get_object_or_404(Conversation, pk=pk, type=Conversation.Type.GROUP)
+        my_part = ConversationParticipant.objects.filter(
+            conversation=conv, user=request.user, left_at__isnull=True
+        ).first()
+        if not my_part:
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        if my_part.role not in ("owner", "admin"):
+            return err("Only admins can remove members", status.HTTP_403_FORBIDDEN)
+        target = ConversationParticipant.objects.filter(
+            conversation=conv, user_id=user_id, left_at__isnull=True
+        ).first()
+        if not target:
+            return err("Member not found", status.HTTP_404_NOT_FOUND)
+        # Cannot remove another owner/admin unless you're the owner
+        if target.role in ("owner", "admin") and my_part.role != "owner":
+            return err("Only the group owner can remove other admins", status.HTTP_403_FORBIDDEN)
+        if target.role == "owner":
+            return err("Cannot remove the group owner", status.HTTP_403_FORBIDDEN)
+        target.left_at = timezone.now()
+        target.save(update_fields=["left_at"])
+        # System message
+        try:
+            removed_user = User.objects.only("id", "username").get(pk=user_id)
+            msg = Message.objects.create(
+                conversation=conv,
+                sender=request.user,
+                body=f"{request.user.username} removed {removed_user.username}",
+                is_system=True,
+            )
+            from .consumers import broadcast_message
+            broadcast_message(msg)
+        except Exception:
+            pass
+        # Broadcast so other clients reload the member list
+        try:
+            from .consumers import broadcast_member_change
+            broadcast_member_change(pk, {
+                "type": "member.removed",
+                "conversation_id": pk,
+                "user_id": user_id,
+            })
+        except Exception:
+            pass
+        detail = ConversationDetailSerializer(conv, context={"request": request}).data
+        return ok("Member removed", data={"conversation": detail})
+
+
+class MemberRoleAPIView(APIView):
+    """Promote/demote a group member.
+
+    POST body: { "role": "admin" | "member" }
+    Only the group owner can promote/demote.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk, user_id):
+        conv = get_object_or_404(Conversation, pk=pk, type=Conversation.Type.GROUP)
+        my_part = ConversationParticipant.objects.filter(
+            conversation=conv, user=request.user, left_at__isnull=True
+        ).first()
+        if not my_part:
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        if my_part.role != "owner":
+            return err("Only the group owner can change roles", status.HTTP_403_FORBIDDEN)
+        new_role = (request.data.get("role") or "").strip().lower()
+        if new_role not in ("admin", "member"):
+            return err("role must be 'admin' or 'member'")
+        target = ConversationParticipant.objects.filter(
+            conversation=conv, user_id=user_id, left_at__isnull=True
+        ).first()
+        if not target:
+            return err("Member not found", status.HTTP_404_NOT_FOUND)
+        if target.role == "owner":
+            return err("Cannot change the owner's role", status.HTTP_403_FORBIDDEN)
+        target.role = new_role
+        if new_role == "admin":
+            target.can_add_members = True
+            target.can_pin_messages = True
+            target.can_change_info = True
+        else:
+            target.can_add_members = False
+            target.can_pin_messages = False
+            target.can_change_info = False
+        target.save(update_fields=[
+            "role", "can_add_members", "can_pin_messages", "can_change_info",
+        ])
+        try:
+            target_user = User.objects.only("id", "username").get(pk=user_id)
+            action = "promoted to admin" if new_role == "admin" else "demoted to member"
+            msg = Message.objects.create(
+                conversation=conv,
+                sender=request.user,
+                body=f"{target_user.username} {action}",
+                is_system=True,
+            )
+            from .consumers import broadcast_message
+            broadcast_message(msg)
+        except Exception:
+            pass
+        try:
+            from .consumers import broadcast_member_change
+            broadcast_member_change(pk, {
+                "type": "member.role_changed",
+                "conversation_id": pk,
+                "user_id": user_id,
+                "role": new_role,
+            })
+        except Exception:
+            pass
+        detail = ConversationDetailSerializer(conv, context={"request": request}).data
+        return ok(f"Role changed to {new_role}", data={"conversation": detail})
+
+
+class TransferOwnershipAPIView(APIView):
+    """Transfer group ownership to another member.
+
+    The current owner becomes an admin; the target member becomes the owner.
+    Only the current owner can call this.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        conv = get_object_or_404(Conversation, pk=pk, type=Conversation.Type.GROUP)
+        my_part = ConversationParticipant.objects.filter(
+            conversation=conv, user=request.user, left_at__isnull=True
+        ).first()
+        if not my_part or my_part.role != "owner":
+            return err("Only the owner can transfer ownership", status.HTTP_403_FORBIDDEN)
+        target_id = request.data.get("user_id")
+        if not target_id:
+            return err("user_id required")
+        target = ConversationParticipant.objects.filter(
+            conversation=conv, user_id=target_id, left_at__isnull=True
+        ).first()
+        if not target:
+            return err("Member not found", status.HTTP_404_NOT_FOUND)
+        if target.user_id == request.user.id:
+            return err("You already own this group")
+        # Swap roles
+        my_part.role = ConversationParticipant.Role.ADMIN
+        my_part.save(update_fields=["role"])
+        target.role = ConversationParticipant.Role.OWNER
+        target.can_add_members = True
+        target.can_pin_messages = True
+        target.can_change_info = True
+        target.save(update_fields=[
+            "role", "can_add_members", "can_pin_messages", "can_change_info",
+        ])
+        # Update created_by on the conversation so the new owner is shown as creator
+        conv.created_by = target.user
+        conv.save(update_fields=["created_by"])
+        try:
+            target_user = User.objects.only("id", "username").get(pk=target_id)
+            msg = Message.objects.create(
+                conversation=conv,
+                sender=request.user,
+                body=f"Ownership transferred to {target_user.username}",
+                is_system=True,
+            )
+            from .consumers import broadcast_message
+            broadcast_message(msg)
+        except Exception:
+            pass
+        try:
+            from .consumers import broadcast_member_change
+            broadcast_member_change(pk, {
+                "type": "ownership.transferred",
+                "conversation_id": pk,
+                "new_owner_id": target_id,
+            })
+        except Exception:
+            pass
+        detail = ConversationDetailSerializer(conv, context={"request": request}).data
+        return ok("Ownership transferred", data={"conversation": detail})
 
 
 

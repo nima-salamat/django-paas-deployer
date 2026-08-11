@@ -15,10 +15,11 @@ class UserMiniSerializer(serializers.ModelSerializer):
     avatar = serializers.SerializerMethodField()
     is_contact = serializers.SerializerMethodField()
     is_blocked = serializers.SerializerMethodField()
+    is_online = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ("id", "username", "color", "avatar", "is_contact", "is_blocked")
+        fields = ("id", "username", "color", "avatar", "is_contact", "is_blocked", "is_online")
 
     def get_avatar(self, obj):
         """Use existing users.Profile images only."""
@@ -47,7 +48,6 @@ class UserMiniSerializer(serializers.ModelSerializer):
             pass
         return None
 
-
     def get_is_contact(self, obj):
         request = self.context.get("request")
         if not request or not request.user.is_authenticated:
@@ -59,6 +59,14 @@ class UserMiniSerializer(serializers.ModelSerializer):
         if not request or not request.user.is_authenticated:
             return False
         return Block.objects.filter(blocker=request.user, blocked=obj).exists()
+
+    def get_is_online(self, obj):
+        """Check cache-based presence for this user."""
+        try:
+            from .consumers import is_user_online
+            return is_user_online(obj.id)
+        except Exception:
+            return False
 
 
 class MessageAttachmentSerializer(serializers.ModelSerializer):
@@ -142,7 +150,7 @@ class MessageSerializer(serializers.ModelSerializer):
         # Only the sender cares about read state of their own message.
         if obj.sender_id != viewer.id:
             return "read"
-        # Sender's own message → check if any other participant has read it.
+        # Sender's own message -> check if any other participant has read it.
         # Cheap path: MessageReadReceipt from any non-sender.
         qs = MessageReadReceipt.objects.filter(message=obj).exclude(user_id=obj.sender_id)
         if qs.exists():
@@ -207,12 +215,14 @@ class ConversationListSerializer(serializers.ModelSerializer):
     unread_count = serializers.SerializerMethodField()
     peer = serializers.SerializerMethodField()  # for private chats
     is_pinned = serializers.SerializerMethodField()
+    created_by = serializers.SerializerMethodField()
 
     class Meta:
         model = Conversation
         fields = (
             "id", "public_id", "type", "title", "description", "avatar",
-            "is_public", "is_closed", "members_can_add", "created_at", "updated_at", "last_message_at",
+            "is_public", "is_closed", "members_can_add", "created_by",
+            "created_at", "updated_at", "last_message_at",
             "participants", "last_message", "unread_count", "peer", "is_pinned",
         )
 
@@ -265,6 +275,11 @@ class ConversationListSerializer(serializers.ModelSerializer):
             return False
         part = obj.participants.filter(user=request.user, left_at__isnull=True).first()
         return bool(part and part.is_pinned)
+
+    def get_created_by(self, obj):
+        if not obj.created_by_id:
+            return None
+        return UserMiniSerializer(obj.created_by, context=self.context).data
 
 
 class ConversationDetailSerializer(ConversationListSerializer):
