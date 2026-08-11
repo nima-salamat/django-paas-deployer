@@ -19,16 +19,19 @@ urlpatterns = [
     path(
         "messenger/<path:path>",
         ProtectedMediaView.as_view(),
+        {"media_prefix": "messenger/"},
         name="protected-media",
     ),
     path(
         "images/<path:path>",
         ProtectedMediaView.as_view(),
+        {"media_prefix": "images/"},
         name="protected-media-images",
     ),
     path(
         "tickets/<path:path>",
         ProtectedMediaView.as_view(),
+        {"media_prefix": "tickets/"},
         name="protected-media-tickets",
     ),
 ]

@@ -51,6 +51,8 @@ def detect_kind(filename: str, content_type: str = "") -> str:
 def validate_messenger_file(uploaded_file) -> None:
     name = getattr(uploaded_file, "name", "") or ""
     ext = os.path.splitext(name)[1].lower()
+    if getattr(uploaded_file, "size", 0) <= 0:
+        raise ValidationError("Empty files are not allowed.")
     if ext not in ALLOWED_EXTENSIONS:
         raise ValidationError(f"File type {ext or '(none)'} not allowed.")
     kind = detect_kind(name, getattr(uploaded_file, "content_type", "") or "")

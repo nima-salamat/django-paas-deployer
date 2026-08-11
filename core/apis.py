@@ -117,7 +117,7 @@ class ProtectedMediaView(APIView):
             return request.user
         return None
 
-    def get(self, request, path):
+    def get(self, request, path, media_prefix=""):
         from django.conf import settings
 
         user = self._authenticate(request)
@@ -130,6 +130,9 @@ class ProtectedMediaView(APIView):
                 {"detail": "Authentication required."},
                 status=drf_status.HTTP_404_NOT_FOUND,
             )
+
+        if media_prefix and not path.startswith(media_prefix):
+            path = f"{media_prefix}{path}"
 
         # Allow only whitelisted prefixes (prevents serving arbitrary files
         # from MEDIA_ROOT — e.g. deployment zips, which have their own authed
@@ -218,11 +221,11 @@ class ProtectedMediaView(APIView):
         resp = FileResponse(fh, content_type=content_type)
         # Cache for 1 hour on the client (URL contains a unique uuid so caching
         # is safe — a new avatar upload will produce a new URL).
-        resp["Cache-Control"] = "public, max-age=3600"
-        resp["Expires"] = "3600"
+        resp["Cache-Control"] = "private, max-age=3600"
         resp["Content-Disposition"] = f'{disposition}; filename="{full_path.name}"'
         # Support HTTP Range requests for media (seeking in video/audio)
-        # — FileResponse already handles this on Django >= 4.2 if the file
-        # supports seek(), but we set the header explicitly to be safe.
         resp["Accept-Ranges"] = "bytes"
+        # Cross-origin <img>/<video>/<audio>/wavesurfer need these exposed
+        resp["Access-Control-Expose-Headers"] = "Content-Range, Accept-Ranges, Content-Length, Content-Type"
+        resp["X-Content-Type-Options"] = "nosniff"
         return resp

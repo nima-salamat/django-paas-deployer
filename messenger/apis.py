@@ -1331,40 +1331,65 @@ class UserProfileAPIView(APIView):
 
 class AttachmentDownloadAPIView(APIView):
     """Attachment download — supports JWT via Authorization header OR ?token= query param.
-    The query-param fallback lets the browser load <img src="...?token=..."> without
-    custom headers (which the <img> tag cannot send).
-    """
-    authentication_classes = [JWTAuthentication]
-    permission_classes = []  # we authenticate manually inside get()
+    The query-param fallback lets the browser load <img src="...?token=..."> and
+    <audio>/<video> without custom headers (which those tags cannot send).
 
-    def _authenticate_via_token_query(self, request):
-        token = request.query_params.get("token")
-        if not token:
-            return None
-        try:
-            from rest_framework_simplejwt.tokens import AccessToken
-            from django.contrib.auth import get_user_model
-            validated = AccessToken(token)
-            user_id = validated["user_id"]
-            user = get_user_model().objects.only("id", "is_active").get(pk=user_id)
-            if user and user.is_active:
-                request.user = user
-                return user
-        except Exception:
-            return None
+    IMPORTANT: authentication_classes is empty so an expired Authorization header
+    cannot short-circuit the request before we try ?token= (common when a page
+    still has an old header from a previous SPA session / service worker).
+    """
+    authentication_classes = []  # fully manual — see _authenticate()
+    permission_classes = []
+
+    def _authenticate(self, request):
+        from rest_framework_simplejwt.tokens import AccessToken
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+
+        # 1) Authorization: Bearer <access>
+        auth = request.META.get("HTTP_AUTHORIZATION", "") or ""
+        if auth.startswith("Bearer "):
+            tok = auth[7:].strip()
+            try:
+                access = AccessToken(tok)
+                user_id = access.get("user_id") or access.get("user")
+                if user_id:
+                    user = User.objects.filter(pk=user_id, is_active=True).first()
+                    if user:
+                        return user
+            except Exception:
+                pass
+
+        # 2) ?token=<access>  (img / audio / video tags)
+        tok = request.GET.get("token") or request.query_params.get("token")
+        if tok:
+            try:
+                access = AccessToken(tok)
+                user_id = access.get("user_id") or access.get("user")
+                if user_id:
+                    user = User.objects.filter(pk=user_id, is_active=True).first()
+                    if user:
+                        return user
+            except Exception:
+                pass
+
+        # 3) Session auth
+        if getattr(request, "user", None) and getattr(request.user, "is_authenticated", False):
+            return request.user
         return None
 
     def get(self, request, pk):
-        # If no authenticated user yet, try ?token= query param
-        if not getattr(request, "user", None) or not getattr(request.user, "is_authenticated", False):
-            self._authenticate_via_token_query(request)
-        if not getattr(request, "user", None) or not getattr(request.user, "is_authenticated", False):
+        user = self._authenticate(request)
+        if not user:
             return err("Unauthorized", status.HTTP_401_UNAUTHORIZED)
+        request.user = user
+
         att = get_object_or_404(MessageAttachment, pk=pk)
         if not ConversationParticipant.objects.filter(
-            conversation=att.conversation, user=request.user, left_at__isnull=True
+            conversation=att.conversation, user=user, left_at__isnull=True
         ).exists():
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+
         from django.http import FileResponse
         content_type = (
             att.content_type
@@ -1372,16 +1397,25 @@ class AttachmentDownloadAPIView(APIView):
             or "application/octet-stream"
         )
         inline_kinds = {"image", "gif", "video", "audio", "voice"}
+        try:
+            fh = att.file.open("rb")
+        except Exception:
+            return err("File not found", status.HTTP_404_NOT_FOUND)
+
         response = FileResponse(
-            att.file.open("rb"),
+            fh,
             as_attachment=att.kind not in inline_kinds,
-            filename=att.original_filename,
+            filename=att.original_filename or (getattr(att.file, "name", None) or "file").rsplit("/", 1)[-1],
             content_type=content_type,
         )
         disposition = "inline" if att.kind in inline_kinds else "attachment"
-        response["Content-Disposition"] = f'{disposition}; filename="{att.original_filename}"'
+        safe_name = (att.original_filename or "file").replace('"', "")
+        response["Content-Disposition"] = f'{disposition}; filename="{safe_name}"'
         response["Accept-Ranges"] = "bytes"
         response["X-Content-Type-Options"] = "nosniff"
+        # Help cross-origin <video>/<audio>/wavesurfer range requests
+        response["Access-Control-Expose-Headers"] = "Content-Range, Accept-Ranges, Content-Length, Content-Type"
+        response["Cache-Control"] = "private, max-age=3600"
         return response
 
 

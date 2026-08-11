@@ -297,6 +297,18 @@ CACHES = {
 
 # 
 CORS_ALLOW_ALL_ORIGINS = True
+CORS_EXPOSE_HEADERS = [
+    "Content-Range",
+    "Accept-Ranges",
+    "Content-Length",
+    "Content-Type",
+    "Content-Disposition",
+]
+CORS_ALLOW_HEADERS = list(getattr(__import__("corsheaders.defaults", fromlist=["default_headers"]), "default_headers", [])) + [
+    "range",
+    "authorization",
+    "content-type",
+]
 
 # CORS_ALLOWED_ORIGINS = [
 #     "http://localhost:3000",  # or whatever your React app runs on
