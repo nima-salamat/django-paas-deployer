@@ -27,7 +27,8 @@ if settings.DEBUG:
 
     urlpatterns += static(settings.STATIC_URL, document_root= settings.STATIC_ROOT)
     # Also serve media files in DEBUG mode for convenience.
-    # NOTE: /media/messenger/<path> is already served by ProtectedMediaView
-    # (in core/urls.py) in BOTH debug and production, so this static() entry
-    # only matters for other media paths (e.g. /media/deploys/...).
+    # NOTE: /media/messenger/<path>, /media/images/<path> and /media/tickets/<path>
+    # are served by ProtectedMediaView (in core/urls.py) in BOTH debug and
+    # production, so this static() entry only matters for other media paths
+    # (e.g. /media/deployments/... which has its own authed download endpoint).
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

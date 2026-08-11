@@ -71,14 +71,20 @@ class ProtectedMediaView(APIView):
     """Serve media files from MEDIA_ROOT with JWT auth.
 
     Accepts Authorization: Bearer <token> header OR ?token=<token> query.
-    Used for group avatars and other media that <img> tags can't auth with
-    headers. Only allows paths under messenger/.
+    Used for group avatars, user profile photos, ticket attachments and
+    other media that <img> tags can't auth with headers.
 
-    Mounted at: /media/messenger/<path:path>
+    Mounted at multiple URLs (see core/urls.py):
+      /media/messenger/<path:path>  → group avatars + message attachments
+      /media/images/<path:path>     → user profile photos
+      /media/tickets/<path:path>    → ticket attachments
     """
 
     # No authentication_classes / permission_classes: we authenticate manually
     # so we can accept ?token= query (which the standard DRF JWT auth doesn't).
+
+    # Allowed path prefixes under MEDIA_ROOT. Anything outside these is 404.
+    ALLOWED_PREFIXES = ("messenger/", "images/", "tickets/")
 
     def _authenticate(self, request):
         from rest_framework_simplejwt.tokens import AccessToken
@@ -118,8 +124,10 @@ class ProtectedMediaView(APIView):
         if not user:
             raise Http404("Authentication required")
 
-        # Only allow files under messenger/
-        if not path.startswith("messenger/"):
+        # Allow only whitelisted prefixes (prevents serving arbitrary files
+        # from MEDIA_ROOT — e.g. deployment zips, which have their own authed
+        # download endpoint).
+        if not any(path.startswith(p) for p in self.ALLOWED_PREFIXES):
             raise Http404
 
         media_root = str(settings.MEDIA_ROOT)
