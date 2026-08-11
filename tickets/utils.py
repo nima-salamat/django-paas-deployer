@@ -8,15 +8,14 @@ from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.utils.html import strip_tags
 
-# Images + audio + video + common docs
+# Per-file default 10MB; per-ticket total default 100MB (also enforced in apis)
+DEFAULT_MAX_FILE = 10 * 1024 * 1024
+DEFAULT_MAX_TICKET = 100 * 1024 * 1024
+
 ALLOWED_EXTENSIONS = {
-    # images
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg",
-    # audio
     ".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac", ".webm", ".opus",
-    # video
-    ".mp4", ".mov", ".mkv", ".webm",
-    # documents
+    ".mp4", ".mov", ".mkv",
     ".pdf", ".txt", ".csv", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".log", ".md",
 }
 
@@ -30,7 +29,7 @@ ALLOWED_MIME_PREFIXES = (
     "application/vnd.",
     "application/zip",
     "application/x-zip",
-    "application/octet-stream",  # some browsers send this for audio; extension still checked
+    "application/octet-stream",
 )
 
 _SCRIPT_RE = re.compile(r"<\s*script[^>]*>.*?<\s*/\s*script\s*>", re.I | re.S)
@@ -97,10 +96,10 @@ def check_rate_limit(key: str, limit: int, window_seconds: int) -> bool:
 
 
 def validate_upload_file(uploaded_file) -> None:
-    # Default 15MB so short audio/voice notes fit
-    max_size = int(get_ticket_setting("tickets.max_attachment_size", 15 * 1024 * 1024))
+    max_size = int(get_ticket_setting("tickets.max_attachment_size", DEFAULT_MAX_FILE))
     if uploaded_file.size > max_size:
-        raise ValidationError(f"File size exceeds limit ({max_size // (1024 * 1024)}MB).")
+        mb = max(1, max_size // (1024 * 1024))
+        raise ValidationError(f"File size exceeds limit ({mb}MB).")
     name = getattr(uploaded_file, "name", "") or ""
     ext = os.path.splitext(name)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
@@ -116,6 +115,29 @@ def validate_upload_file(uploaded_file) -> None:
     uploaded_file.seek(0)
     if header[:2] == b"MZ" or header[:4] == b"\x7fELF":
         raise ValidationError("Executable files not allowed.")
+
+
+def ticket_attachments_total_size(ticket_id: int) -> int:
+    from .models import TicketAttachment
+    from django.db.models import Sum
+    total = (
+        TicketAttachment.objects.filter(ticket_id=ticket_id)
+        .aggregate(s=Sum("size"))
+        .get("s")
+    )
+    return int(total or 0)
+
+
+def validate_ticket_quota(ticket_id: int, incoming_sizes: list[int]) -> None:
+    """Enforce total attachment size per ticket (default 100MB)."""
+    max_ticket = int(get_ticket_setting("tickets.max_ticket_attachments_size", DEFAULT_MAX_TICKET))
+    current = ticket_attachments_total_size(ticket_id)
+    incoming = sum(int(s or 0) for s in incoming_sizes)
+    if current + incoming > max_ticket:
+        mb = max(1, max_ticket // (1024 * 1024))
+        raise ValidationError(
+            f"Ticket attachment quota exceeded (max {mb}MB per ticket)."
+        )
 
 
 def safe_filename(name: str) -> str:

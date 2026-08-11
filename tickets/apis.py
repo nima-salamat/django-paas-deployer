@@ -19,7 +19,7 @@ from .serializers import (
     TicketCreateSerializer, TicketMessageCreateSerializer, TicketMessageSerializer,
     TicketStatusSerializer, TicketPrioritySerializer, TicketAssignDepartmentSerializer,
 )
-from .utils import check_rate_limit, get_ticket_setting, validate_upload_file, safe_filename
+from .utils import check_rate_limit, get_ticket_setting, validate_upload_file, safe_filename, validate_ticket_quota
 
 logger = logging.getLogger("tickets.apis")
 
@@ -133,7 +133,20 @@ class MyTicketListCreateAPIView(APIView):
                 validate_upload_file(f)
             except Exception as e:
                 return err(str(e))
-            TicketAttachment.objects.create(ticket=ticket, message=msg, uploaded_by=user, file=f, original_filename=safe_filename(f.name), content_type=getattr(f, "content_type", "") or "", size=f.size)
+        try:
+            validate_ticket_quota(ticket.id, [getattr(f, "size", 0) for f in files])
+        except Exception as e:
+            return err(str(e))
+        for f in files:
+            TicketAttachment.objects.create(
+                ticket=ticket,
+                message=msg,
+                uploaded_by=user,
+                file=f,
+                original_filename=safe_filename(f.name),
+                content_type=getattr(f, "content_type", "") or "",
+                size=f.size,
+            )
         return ok("Ticket created", data=TicketDetailSerializer(ticket, context={"request": request}).data, http_status=status.HTTP_201_CREATED)
 
 class TicketDetailAPIView(APIView):
@@ -193,12 +206,26 @@ class TicketMessageCreateAPIView(APIView):
         elif not is_staff_reply and ticket.status == Ticket.Status.WAITING_USER:
             ticket.status = Ticket.Status.IN_PROGRESS
             ticket.save(update_fields=["status", "updated_at"])
-        for f in files[:int(get_ticket_setting("tickets.max_attachments_per_message", 5))]:
+        files = files[: int(get_ticket_setting("tickets.max_attachments_per_message", 5))]
+        for f in files:
             try:
                 validate_upload_file(f)
             except Exception as e:
                 return err(str(e))
-            TicketAttachment.objects.create(ticket=ticket, message=msg, uploaded_by=request.user, file=f, original_filename=safe_filename(f.name), content_type=getattr(f, "content_type", "") or "", size=f.size)
+        try:
+            validate_ticket_quota(ticket.id, [getattr(f, "size", 0) for f in files])
+        except Exception as e:
+            return err(str(e))
+        for f in files:
+            TicketAttachment.objects.create(
+                ticket=ticket,
+                message=msg,
+                uploaded_by=request.user,
+                file=f,
+                original_filename=safe_filename(f.name),
+                content_type=getattr(f, "content_type", "") or "",
+                size=f.size,
+            )
         return ok("Message sent", data=TicketMessageSerializer(msg, context={"request": request}).data, http_status=status.HTTP_201_CREATED)
 
 
@@ -232,6 +259,18 @@ def user_can_access_ticket(user, ticket) -> bool:
     return False
 
 
+
+class JWTQueryOrHeaderAuthentication(JWTAuthentication):
+    """Accept Bearer header OR ?token= / ?access= query (for <img>/<audio> tags)."""
+
+    def authenticate(self, request):
+        raw = request.GET.get("token") or request.GET.get("access")
+        if raw:
+            validated = self.get_validated_token(raw)
+            return self.get_user(validated), validated
+        return super().authenticate(request)
+
+
 class AttachmentDownloadAPIView(APIView):
     """
     Download / preview a ticket attachment.
@@ -244,7 +283,7 @@ class AttachmentDownloadAPIView(APIView):
     Random staff outside the department → 404.
     Media (image/audio/video) served inline for chat preview.
     """
-    authentication_classes = [SessionAuthentication, JWTAuthentication]
+    authentication_classes = [JWTQueryOrHeaderAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
@@ -262,7 +301,6 @@ class AttachmentDownloadAPIView(APIView):
 
         ticket = att.ticket
         if not user_can_access_ticket(request.user, ticket):
-            # Do not leak existence to unauthorized users
             raise Http404("Attachment not found.")
 
         if not att.file:
