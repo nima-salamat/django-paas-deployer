@@ -4,7 +4,9 @@ Messenger REST API — infinite-scroll friendly.
 from __future__ import annotations
 
 import logging
+import mimetypes
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db.models import Q, Count, Prefetch
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -14,6 +16,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
+
+from core.async_api import async_api_view
+from core.throttling import ScopedRateThrottle
 
 from .models import (
     Contact, Block, Conversation, ConversationParticipant, Message,
@@ -390,9 +395,13 @@ class PublicGroupSearchAPIView(APIView):
         return ok(data=out)
 
 
+@async_api_view
 class MessageListCreateAPIView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "messenger.messages"
+    throttle_rate = "90/min"
 
     def get_participant(self, conv, user):
         return conv.participants.filter(user=user, left_at__isnull=True).first()
@@ -475,6 +484,26 @@ class MessageListCreateAPIView(APIView):
         if files and not part.can_send_media:
             return err("You cannot send media")
 
+        valid_files = []
+        invalid_files = []
+        for f in files[:10]:
+            try:
+                validate_messenger_file(f)
+            except ValidationError as exc:
+                invalid_files.append(f"{getattr(f, 'name', 'file')}: {'; '.join(exc.messages)}")
+                continue
+            except Exception as exc:
+                invalid_files.append(f"{getattr(f, 'name', 'file')}: {exc}")
+                continue
+            valid_files.append(f)
+
+        if files and not valid_files:
+            return err(
+                "No valid attachments were uploaded",
+                status.HTTP_400_BAD_REQUEST,
+                extra={"errors": invalid_files},
+            )
+
         msg = Message.objects.create(
             conversation=conv,
             sender=request.user,
@@ -482,19 +511,16 @@ class MessageListCreateAPIView(APIView):
             reply_to=reply_to,
         )
 
-        for f in files[:10]:
-            try:
-                validate_messenger_file(f)
-            except Exception:
-                continue
-            kind = detect_kind(f.name, getattr(f, "content_type", "") or "")
+        for f in valid_files:
+            content_type = getattr(f, "content_type", "") or mimetypes.guess_type(getattr(f, "name", ""))[0] or ""
+            kind = detect_kind(f.name, content_type)
             MessageAttachment.objects.create(
                 conversation=conv,
                 message=msg,
                 uploaded_by=request.user,
                 file=f,
                 original_filename=getattr(f, "name", "file")[:255],
-                content_type=getattr(f, "content_type", "") or "",
+                content_type=content_type,
                 size=getattr(f, "size", 0) or 0,
                 kind=kind,
             )
@@ -1310,6 +1336,7 @@ class UserProfileAPIView(APIView):
         return ok(data=data)
 
 
+@async_api_view
 class AttachmentDownloadAPIView(APIView):
     """Attachment download — supports JWT via Authorization header OR ?token= query param.
     The query-param fallback lets the browser load <img src="...?token=..."> without
@@ -1317,6 +1344,9 @@ class AttachmentDownloadAPIView(APIView):
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = []  # we authenticate manually inside get()
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "messenger.attachment"
+    throttle_rate = "240/min"
 
     def _authenticate_via_token_query(self, request):
         token = request.query_params.get("token")
@@ -1347,7 +1377,23 @@ class AttachmentDownloadAPIView(APIView):
         ).exists():
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
         from django.http import FileResponse
-        return FileResponse(att.file.open("rb"), as_attachment=True, filename=att.original_filename)
+        content_type = (
+            att.content_type
+            or mimetypes.guess_type(att.original_filename or att.file.name)[0]
+            or "application/octet-stream"
+        )
+        inline_kinds = {"image", "gif", "video", "audio", "voice"}
+        response = FileResponse(
+            att.file.open("rb"),
+            as_attachment=att.kind not in inline_kinds,
+            filename=att.original_filename,
+            content_type=content_type,
+        )
+        disposition = "inline" if att.kind in inline_kinds else "attachment"
+        response["Content-Disposition"] = f'{disposition}; filename="{att.original_filename}"'
+        response["Accept-Ranges"] = "bytes"
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
 
 
 class ConversationPinAPIView(APIView):
@@ -1988,4 +2034,3 @@ class ProfileUpdateBroadcastAPIView(APIView):
         except Exception:
             pass
         return ok("Broadcast sent")
-
