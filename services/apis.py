@@ -34,7 +34,63 @@ from deployments.core.manager.container_manager import Container
 from deployments.core.manager.client_manager import Client
 from docker.errors import NotFound as DockerNotFound
 
+
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Permission helpers (aligned with users.admin_apis Rule system)
+# ---------------------------------------------------------------------------
+def _user_rules(user) -> list:
+    try:
+        return list(user.rule.rules or [])
+    except Exception:
+        return []
+
+
+def _user_has_rule(user, code: str) -> bool:
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    if user.is_superuser:
+        return True
+    return code in _user_rules(user)
+
+
+def _can_view_all_services(user) -> bool:
+    """Admin panel: list/inspect any user's services."""
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    if user.is_superuser:
+        return True
+    if not user.is_staff:
+        return False
+    return _user_has_rule(user, "services.view") or _user_has_rule(user, "services.manage")
+
+
+def _can_manage_all_services(user) -> bool:
+    """Admin panel: mutate any user's services / volumes / networks."""
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    if user.is_superuser:
+        return True
+    if not user.is_staff:
+        return False
+    return (
+        _user_has_rule(user, "services.manage")
+        or _user_has_rule(user, "services.delete")
+        or _user_has_rule(user, "volumes.manage")
+        or _user_has_rule(user, "networks.manage")
+    )
+
+
+def _can_delete_services(user) -> bool:
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    if user.is_superuser:
+        return True
+    if not user.is_staff:
+        return False
+    return _user_has_rule(user, "services.delete") or _user_has_rule(user, "services.manage")
 
 
 def _service_is_mutable(service) -> tuple:
@@ -108,17 +164,25 @@ def _docker_volume_exists(volume) -> bool:
         return False
 
 
-def _get_service_for_user(request, service_id, *, for_update=False):
+def _get_service_for_user(request, service_id, *, for_update=False, require_manage=False):
     """
     Resolve a service by id for the current user.
-    Superuser/staff may act on any user's service (admin panel).
+
+    - Normal users (and staff without admin rules): only own services.
+    - Superuser or staff with services.view/manage: any service (admin panel).
+    - If require_manage=True, staff needs services.manage (not just view).
     """
     qs = Service.objects.all()
     if for_update:
         qs = qs.select_for_update()
-    if request.user.is_superuser or request.user.is_staff:
+    user = request.user
+    if require_manage:
+        allowed = _can_manage_all_services(user)
+    else:
+        allowed = _can_view_all_services(user)
+    if allowed:
         return qs.get(id=service_id)
-    return qs.get(id=service_id, user=request.user)
+    return qs.get(id=service_id, user=user)
 
 
 def _purge_service_runtime(service) -> dict:
@@ -241,14 +305,14 @@ class ServiceViewSet(ModelViewSet):
     pagination_class = ServiceAdminPagination
 
     def get_queryset(self):
+        """
+        User-facing endpoint: ALWAYS scoped to the authenticated user.
+
+        Staff who also have admin rules still only see *their own* services here.
+        Cross-user listing lives under /admin/services/ (see AdminServiceViewSet).
+        """
         queryset = super().get_queryset()
-        # Superusers / staff can manage all users' services (admin panel)
-        if self.request.user.is_superuser or self.request.user.is_staff:
-            user_id = self.request.query_params.get("user_id") or self.request.query_params.get("user")
-            if user_id:
-                queryset = queryset.filter(user_id=user_id)
-            return queryset.select_related("user", "network")
-        return queryset.filter(user=self.request.user)
+        return queryset.filter(user=self.request.user).select_related("user", "network", "plan")
 
     def list(self, request, *args, **kwargs):
         query = self.get_queryset()
@@ -361,13 +425,9 @@ class PrivateNetworkViewSet(ModelViewSet):
     pagination_class = ServiceAdminPagination
 
     def get_queryset(self):
+        """User-facing: only the authenticated user's networks."""
         qs = super().get_queryset()
-        if self.request.user.is_superuser or self.request.user.is_staff:
-            user_id = self.request.query_params.get("user_id") or self.request.query_params.get("user")
-            if user_id:
-                qs = qs.filter(user_id=user_id)
-            return qs.select_related("user")
-        return qs.filter(user=self.request.user)
+        return qs.filter(user=self.request.user).select_related("user")
 
     def list(self, request, *args, **kwargs):
         page = self.paginate_queryset(self.get_queryset())
@@ -375,20 +435,26 @@ class PrivateNetworkViewSet(ModelViewSet):
         return self.get_paginated_response(serializer.data)
 
     def create(self, request, *args, **kwargs):
-        is_staff = request.user.is_superuser or request.user.is_staff
+        # User-facing create: always own network.
+        # Cross-user create is only via admin panel APIs.
         owner = request.user
-        if is_staff:
-            target_user_id = request.data.get("user_id") or request.data.get("user")
-            if target_user_id:
-                from django.contrib.auth import get_user_model
-                User = get_user_model()
-                try:
-                    owner = User.objects.get(pk=target_user_id)
-                except User.DoesNotExist:
-                    return Response(
-                        {"error": _("Target user not found.")},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
+        if (request.data.get("user_id") or request.data.get("user")) and str(
+            request.data.get("user_id") or request.data.get("user")
+        ) != str(request.user.id):
+            if not _can_manage_all_services(request.user):
+                return Response(
+                    {"error": _("Not allowed to create resources for other users.")},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            try:
+                owner = User.objects.get(pk=request.data.get("user_id") or request.data.get("user"))
+            except User.DoesNotExist:
+                return Response(
+                    {"error": _("Target user not found.")},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         # Force ownership to the real user (never staff unless creating for self)
         if hasattr(request.data, "_mutable"):
             request.data._mutable = True
@@ -473,13 +539,9 @@ class VolumeViewSet(ModelViewSet):
     pagination_class = ServiceAdminPagination
 
     def get_queryset(self):
+        """User-facing: only the authenticated user's volumes."""
         queryset = super().get_queryset()
-        if self.request.user.is_superuser or self.request.user.is_staff:
-            user_id = self.request.query_params.get("user_id") or self.request.query_params.get("user")
-            if user_id:
-                queryset = queryset.filter(user_id=user_id)
-            return queryset.select_related("user", "service")
-        return queryset.filter(user=self.request.user)
+        return queryset.filter(user=self.request.user).select_related("user", "service")
 
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
@@ -531,34 +593,19 @@ class VolumeViewSet(ModelViewSet):
             )
 
         service_obj = serializer.validated_data.get("service")
-        is_staff = request.user.is_superuser or request.user.is_staff
-        # Staff can create volumes owned by the service owner (or explicit user_id)
+        # User-facing: volume always owned by the authenticated user.
         owner = request.user
-        if is_staff:
-            target_user_id = request.data.get("user_id") or request.data.get("user")
-            if service_obj is not None:
-                owner = service_obj.user
-            elif target_user_id:
-                from django.contrib.auth import get_user_model
-                User = get_user_model()
-                try:
-                    owner = User.objects.get(pk=target_user_id)
-                except User.DoesNotExist:
-                    return Response(
-                        {"error": _("Target user not found.")},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-        if service_obj and service_obj.user != owner and not is_staff:
-            return Response(
-                {
-                    "error": _(
-                        "Selected service does not belong to the authenticated user."
-                    )
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if service_obj and is_staff and service_obj.user_id != owner.id:
-            # Align owner with the service's real user
+        if service_obj is not None and service_obj.user_id != owner.id:
+            if not _can_manage_all_services(request.user):
+                return Response(
+                    {
+                        "error": _(
+                            "Selected service does not belong to the authenticated user."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            # Admin acting for another user → ownership follows the service owner
             owner = service_obj.user
 
         # If creating already assigned to a service, service must be mutable
@@ -619,7 +666,7 @@ class VolumeViewSet(ModelViewSet):
         touching_service = service_raw != "__omit__"
         if touching_service and service_raw not in (None, "", "null"):
             target_service = get_object_or_404(
-                Service.objects.all() if (request.user.is_superuser or request.user.is_staff) else Service.objects.filter(user=request.user), pk=service_raw
+                Service.objects.all() if _can_manage_all_services(request.user) else Service.objects.filter(user=request.user), pk=service_raw
             )
 
         # Mutability for any change tied to a service (current owner or target)
@@ -871,7 +918,7 @@ class VolumeViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         target = get_object_or_404(
-            Service.objects.all() if (request.user.is_superuser or request.user.is_staff) else Service.objects.filter(user=request.user), pk=service_raw
+            Service.objects.all() if _can_manage_all_services(request.user) else Service.objects.filter(user=request.user), pk=service_raw
         )
         ok, reason = _service_is_mutable(target)
         if not ok:
@@ -1460,7 +1507,7 @@ def purge_service_runtime_apiview(request):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def service_logs_apiview(request, pk):
-    if request.user.is_superuser or request.user.is_staff:
+    if _can_view_all_services(request.user):
         service = get_object_or_404(Service.objects.all(), pk=pk)
     else:
         service = get_object_or_404(Service.objects.filter(user=request.user), pk=pk)
@@ -2067,3 +2114,162 @@ def service_status_apiview(request):
         },
         status=status.HTTP_200_OK,
     )
+
+
+
+# ===========================================================================
+# Admin panel ViewSets — cross-user access gated by Rule permissions
+# ===========================================================================
+from rest_framework.permissions import BasePermission
+
+
+class HasServicesViewRule(BasePermission):
+    """Superuser OR staff with services.view / services.manage."""
+
+    def has_permission(self, request, view):
+        return _can_view_all_services(request.user)
+
+
+class HasServicesManageRule(BasePermission):
+    """Superuser OR staff with services.manage / services.delete."""
+
+    def has_permission(self, request, view):
+        return _can_manage_all_services(request.user)
+
+
+class AdminServiceViewSet(ModelViewSet):
+    """
+    /admin/services/ — list/inspect all services (or filter by user_id).
+
+    GET requires services.view (or manage).
+    Write operations require services.manage.
+    """
+
+    queryset = Service.objects.all().select_related("user", "network", "plan")
+    serializer_class = ServiceSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, HasServicesViewRule]
+    pagination_class = ServiceAdminPagination
+    http_method_names = ["get", "patch", "put", "delete", "head", "options"]
+
+    def get_permissions(self):
+        if self.action in ("update", "partial_update", "destroy", "create"):
+            return [IsAuthenticated(), HasServicesManageRule()]
+        return [IsAuthenticated(), HasServicesViewRule()]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user_id = (
+            self.request.query_params.get("user_id")
+            or self.request.query_params.get("user")
+        )
+        if user_id:
+            qs = qs.filter(user_id=user_id)
+        q = self.request.query_params.get("q_search") or self.request.query_params.get("q")
+        if q:
+            from django.db.models import Q
+
+            qs = qs.filter(
+                Q(name__icontains=q) | Q(user__username__icontains=q)
+            )
+        return qs.order_by("-id")
+
+    def list(self, request, *args, **kwargs):
+        page = self.paginate_queryset(self.get_queryset())
+        serializer = GetServiceSerializer(page, many=True)
+        return self.get_paginated_response(serializer.data)
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        data = GetServiceSerializer(instance).data
+        try:
+            data["storage"] = instance.storage_quota_summary()
+        except Exception:
+            pass
+        return Response(data)
+
+    def destroy(self, request, *args, **kwargs):
+        if not _can_delete_services(request.user):
+            return Response(
+                {"result": "error", "detail": _("Missing permission services.delete.")},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        service = self.get_object()
+        status_now = str(getattr(service, "status", "") or "").lower().strip()
+        blocked = {"queued", "deploying", "stopping", "running"}
+        if status_now in blocked:
+            return Response(
+                {
+                    "result": "error",
+                    "detail": _(
+                        "Service is '%(s)s'. Stop it and remove the runtime "
+                        "before deleting the service."
+                    )
+                    % {"s": status_now},
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        try:
+            _purge_service_runtime(service)
+        except Exception as exc:
+            logger.warning("admin purge before service delete failed: %s", exc)
+        service.delete()
+        return Response(
+            {"success": _("Service deleted.")}, status=status.HTTP_200_OK
+        )
+
+
+class AdminPrivateNetworkViewSet(ModelViewSet):
+    """ /admin/networks/ — all networks for staff with networks.manage or services.manage """
+
+    queryset = PrivateNetwork.objects.all().select_related("user")
+    serializer_class = PrivateNetworkSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, HasServicesViewRule]
+    pagination_class = ServiceAdminPagination
+    http_method_names = ["get", "patch", "put", "delete", "head", "options"]
+
+    def get_permissions(self):
+        if self.action in ("update", "partial_update", "destroy", "create"):
+            return [IsAuthenticated(), HasServicesManageRule()]
+        return [IsAuthenticated(), HasServicesViewRule()]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user_id = (
+            self.request.query_params.get("user_id")
+            or self.request.query_params.get("user")
+        )
+        if user_id:
+            qs = qs.filter(user_id=user_id)
+        return qs.order_by("-id")
+
+
+class AdminVolumeViewSet(ModelViewSet):
+    """ /admin/volumes/ — all volumes for staff with volumes.manage or services.manage """
+
+    queryset = Volume.objects.all().select_related("user", "service")
+    serializer_class = VolumeSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, HasServicesViewRule]
+    pagination_class = ServiceAdminPagination
+    http_method_names = ["get", "patch", "put", "delete", "head", "options"]
+
+    def get_permissions(self):
+        if self.action in ("update", "partial_update", "destroy", "create"):
+            return [IsAuthenticated(), HasServicesManageRule()]
+        return [IsAuthenticated(), HasServicesViewRule()]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user_id = (
+            self.request.query_params.get("user_id")
+            or self.request.query_params.get("user")
+        )
+        service_id = self.request.query_params.get("service")
+        if user_id:
+            qs = qs.filter(user_id=user_id)
+        if service_id:
+            qs = qs.filter(service_id=service_id)
+        return qs.order_by("-id")
+
