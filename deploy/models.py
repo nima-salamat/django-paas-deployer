@@ -60,6 +60,8 @@ class Deploy(BaseModel):
     network_status = models.CharField(_("Network Status"), max_length=64, blank=True, default="")
     cancel_requested = models.BooleanField(_("Cancel Requested"), default=False)
     MAX_ZIP_SIZE_MB = 100
+    # Set by admin API path to skip the zip size cap for staff/superuser uploads
+    skip_zip_size_limit = False
 
     class Meta:
         verbose_name = _("Deploy")
@@ -67,12 +69,17 @@ class Deploy(BaseModel):
     
     def clean(self):
         super().clean()
+        if getattr(self, "skip_zip_size_limit", False):
+            return
         if self.zip_file and self.zip_file.size > self.MAX_ZIP_SIZE_MB * 1024 * 1024:
             raise ValidationError({
                 "zip_file": _(f"ZIP file size must be under {self.MAX_ZIP_SIZE_MB} MB.")
             })
     
     def save(self, *args, **kwargs):
+        skip = bool(kwargs.pop("skip_zip_size_limit", False) or getattr(self, "skip_zip_size_limit", False))
+        if skip:
+            self.skip_zip_size_limit = True
         self.full_clean()
         
         file_changed = False

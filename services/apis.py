@@ -108,6 +108,19 @@ def _docker_volume_exists(volume) -> bool:
         return False
 
 
+def _get_service_for_user(request, service_id, *, for_update=False):
+    """
+    Resolve a service by id for the current user.
+    Superuser/staff may act on any user's service (admin panel).
+    """
+    qs = Service.objects.all()
+    if for_update:
+        qs = qs.select_for_update()
+    if request.user.is_superuser or request.user.is_staff:
+        return qs.get(id=service_id)
+    return qs.get(id=service_id, user=request.user)
+
+
 def _purge_service_runtime(service) -> dict:
     """Force-stop/remove container and related images. Always best-effort."""
     name = service.get_docker_service_name()
@@ -229,13 +242,23 @@ class ServiceViewSet(ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        # Superusers / staff can manage all users' services (admin panel)
+        if self.request.user.is_superuser or self.request.user.is_staff:
+            user_id = self.request.query_params.get("user_id") or self.request.query_params.get("user")
+            if user_id:
+                queryset = queryset.filter(user_id=user_id)
+            return queryset.select_related("user", "network")
         return queryset.filter(user=self.request.user)
 
     def list(self, request, *args, **kwargs):
         query = self.get_queryset()
-        q_search_param = request.query_params.get("q_search")
+        q_search_param = request.query_params.get("q_search") or request.query_params.get("q")
         if q_search_param:
-            query = query.filter(name__contains=q_search_param)
+            from django.db.models import Q
+            query = query.filter(
+                Q(name__icontains=q_search_param)
+                | Q(user__username__icontains=q_search_param)
+            )
 
         page = self.paginate_queryset(query)
         serializer = GetServiceSerializer(page, many=True)
@@ -1347,9 +1370,8 @@ def purge_service_runtime_apiview(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
     try:
-        service = Service.objects.select_related("plan").get(
-            id=service_id, user=request.user
-        )
+        service = _get_service_for_user(request, service_id)
+        service = Service.objects.select_related("plan").get(pk=service.pk)
     except Service.DoesNotExist:
         return Response(
             {"result": "error", "detail": _("Service not found.")},
@@ -1388,7 +1410,10 @@ def purge_service_runtime_apiview(request):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def service_logs_apiview(request, pk):
-    service = get_object_or_404(Service.objects.filter(user=request.user), pk=pk)
+    if request.user.is_superuser or request.user.is_staff:
+        service = get_object_or_404(Service.objects.all(), pk=pk)
+    else:
+        service = get_object_or_404(Service.objects.filter(user=request.user), pk=pk)
     container_name = service.get_docker_service_name()
     try:
         client = Client()().containers.get(container_name)
@@ -1434,10 +1459,7 @@ def start_service_apiview(request):
 
     try:
         with transaction.atomic():
-            service_item = Service.objects.select_for_update().get(
-                id=service_id,
-                user=request.user,
-            )
+            service_item = _get_service_for_user(request, service_id, for_update=True)
             deploy_item = service_item.selected_deploy
             if deploy_item is None:
                 return Response(
@@ -1563,9 +1585,7 @@ def stop_service_apiview(request):
 
     try:
         with transaction.atomic():
-            service_item = Service.objects.select_for_update().get(
-                id=service_id, user=request.user
-            )
+            service_item = _get_service_for_user(request, service_id, for_update=True)
 
             if service_item.status in (
                 SERVICE_STATUS_CHOICES.QUEUED,

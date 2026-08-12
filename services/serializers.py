@@ -115,6 +115,8 @@ class GetServiceSerializer(serializers.ModelSerializer):
     service_name = serializers.SerializerMethodField(read_only=True)
     service_host = serializers.SerializerMethodField(read_only=True)
     storage = serializers.SerializerMethodField(read_only=True)
+    user_username = serializers.SerializerMethodField(read_only=True)
+    user_info = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Service
@@ -126,6 +128,8 @@ class GetServiceSerializer(serializers.ModelSerializer):
             "storage",
             "service_name",
             "service_host",
+            "user_username",
+            "user_info",
         ]
 
     def get_service_name(self, obj):
@@ -133,6 +137,25 @@ class GetServiceSerializer(serializers.ModelSerializer):
 
     def get_service_host(self, obj):
         return _service_host(obj)
+
+    def get_user_username(self, obj):
+        try:
+            return getattr(obj.user, "username", None)
+        except Exception:
+            return None
+
+    def get_user_info(self, obj):
+        try:
+            u = obj.user
+            if not u:
+                return None
+            return {
+                "id": str(getattr(u, "pk", "") or ""),
+                "username": getattr(u, "username", None),
+                "email": getattr(u, "email", None),
+            }
+        except Exception:
+            return None
 
     def get_storage(self, obj):
         try:

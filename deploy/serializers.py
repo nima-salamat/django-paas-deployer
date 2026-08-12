@@ -64,3 +64,21 @@ class DeploySerializer(serializers.ModelSerializer):
             .order_by("-created_at")[:20]
         )
         return DeployLogSerializer(reversed(list(logs)), many=True).data
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        instance = Deploy(**validated_data)
+        if request and (request.user.is_superuser or request.user.is_staff):
+            instance.skip_zip_size_limit = True
+        instance.save()
+        return instance
+
+    def update(self, instance, validated_data):
+        request = self.context.get("request")
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        if request and (request.user.is_superuser or request.user.is_staff):
+            instance.skip_zip_size_limit = True
+        instance.save()
+        return instance
+

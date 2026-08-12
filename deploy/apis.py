@@ -178,7 +178,7 @@ class DeployViewSet(ModelViewSet):
         qs = super().get_queryset().select_related(
             "service", "service__user", "service__plan"
         )
-        if self.request.user.is_superuser:
+        if self.request.user.is_superuser or self.request.user.is_staff:
             return qs
         return qs.filter(service__user=self.request.user)
 
@@ -193,7 +193,7 @@ class DeployViewSet(ModelViewSet):
         return self.get_paginated_response(serializer.data)
 
     def create(self, request, *args, **kwargs):
-        if not request.user.is_superuser:
+        if not (request.user.is_superuser or request.user.is_staff):
             service_id = request.data.get("service")
             if not service_id or not Service.objects.filter(id=service_id, user=request.user).exists():
                 return Response(
@@ -321,7 +321,7 @@ class DeployViewSet(ModelViewSet):
             self.get_queryset().select_related("service", "service__plan"),
             pk=pk,
         )
-        if not request.user.is_superuser and deploy.service.user_id != request.user.id:
+        if not (request.user.is_superuser or request.user.is_staff) and deploy.service.user_id != request.user.id:
             return Response(
                 {"result": "error", "detail": _("Only owner can start deploy.")},
                 status=status.HTTP_403_FORBIDDEN,
@@ -421,7 +421,7 @@ class DeployViewSet(ModelViewSet):
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
         deploy = get_object_or_404(self.get_queryset(), pk=pk)
-        if not request.user.is_superuser and deploy.service.user_id != request.user.id:
+        if not (request.user.is_superuser or request.user.is_staff) and deploy.service.user_id != request.user.id:
             return Response(
                 {"result": "error", "detail": _("Only owner can cancel deploy.")},
                 status=status.HTTP_403_FORBIDDEN,
@@ -453,7 +453,7 @@ class DeployViewSet(ModelViewSet):
     @action(detail=True, methods=["post"])
     def rollback(self, request, pk=None):
         deploy = get_object_or_404(self.get_queryset(), pk=pk)
-        if not request.user.is_superuser and deploy.service.user_id != request.user.id:
+        if not (request.user.is_superuser or request.user.is_staff) and deploy.service.user_id != request.user.id:
             return Response(
                 {"result": "error", "detail": _("Only owner can rollback deploy.")},
                 status=status.HTTP_403_FORBIDDEN,
@@ -488,7 +488,7 @@ class DeployViewSet(ModelViewSet):
             self.get_queryset().select_related("service", "service__plan"),
             pk=pk,
         )
-        if not request.user.is_superuser and deploy.service.user_id != request.user.id:
+        if not (request.user.is_superuser or request.user.is_staff) and deploy.service.user_id != request.user.id:
             return Response(
                 {"result": "error", "detail": _("Only owner can rebuild.")},
                 status=status.HTTP_403_FORBIDDEN,
@@ -602,7 +602,7 @@ class DeployViewSet(ModelViewSet):
             self.get_queryset().select_related("service", "service__plan"),
             pk=pk,
         )
-        if not request.user.is_superuser and deploy.service.user_id != request.user.id:
+        if not (request.user.is_superuser or request.user.is_staff) and deploy.service.user_id != request.user.id:
             return Response(
                 {"result": "error", "detail": _("Only owner can update DB config.")},
                 status=status.HTTP_403_FORBIDDEN,
@@ -754,7 +754,7 @@ class DeployViewSet(ModelViewSet):
             self.get_queryset().select_related("service", "service__plan"),
             pk=pk,
         )
-        if not request.user.is_superuser and deploy.service.user_id != request.user.id:
+        if not (request.user.is_superuser or request.user.is_staff) and deploy.service.user_id != request.user.id:
             return Response(
                 {"result": "error", "detail": _("Only owner can reveal DB credentials.")},
                 status=status.HTTP_403_FORBIDDEN,
@@ -823,7 +823,7 @@ def deploy_logs_apiview(request, pk):
         Deploy.objects.select_related("service", "service__user"),
         pk=pk,
     )
-    if not request.user.is_superuser and deploy.service.user_id != request.user.id:
+    if not (request.user.is_superuser or request.user.is_staff) and deploy.service.user_id != request.user.id:
         return Response(
             {"result": "error", "detail": _("Only owner can view deployment logs.")},
             status=status.HTTP_403_FORBIDDEN,
@@ -929,9 +929,10 @@ def set_deploy_apiview(request):
 
     try:
         with transaction.atomic():
-            service_item = Service.objects.select_for_update().get(
-                id=service_id,
-                user=request.user,
+            service_item = (
+                Service.objects.select_for_update().get(id=service_id)
+                if (request.user.is_superuser or request.user.is_staff)
+                else Service.objects.select_for_update().get(id=service_id, user=request.user)
             )
 
             if service_item.status in (
@@ -958,7 +959,7 @@ def set_deploy_apiview(request):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            if deploy_item.service.user_id != request.user.id:
+            if deploy_item.service.user_id != request.user.id and not (request.user.is_superuser or request.user.is_staff):
                 return Response(
                     {
                         "result": "error",
@@ -1011,9 +1012,10 @@ def unset_deploy_apiview(request):
 
     try:
         with transaction.atomic():
-            service_item = Service.objects.select_for_update().get(
-                id=service_id,
-                user=request.user,
+            service_item = (
+                Service.objects.select_for_update().get(id=service_id)
+                if (request.user.is_superuser or request.user.is_staff)
+                else Service.objects.select_for_update().get(id=service_id, user=request.user)
             )
 
             if service_item.status in (
@@ -1031,7 +1033,7 @@ def unset_deploy_apiview(request):
 
             deploy_item = Deploy.objects.select_related("service").get(id=deploy_id)
 
-            if deploy_item.service.user_id != request.user.id:
+            if deploy_item.service.user_id != request.user.id and not (request.user.is_superuser or request.user.is_staff):
                 return Response(
                     {
                         "result": "error",
