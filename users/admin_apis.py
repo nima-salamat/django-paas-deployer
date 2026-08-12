@@ -16,21 +16,33 @@ User = get_user_model()
 
 # Canonical permission codes stored in Rule.rules (ArrayField)
 KNOWN_PERMISSIONS = [
+    # Tickets
     "tickets.view",
     "tickets.manage",
     "tickets.delete",
+    # Users
     "users.view",
     "users.manage",
+    # Invites & auth codes
     "invites.manage",
     "auth_codes.view",
+    "auth_codes.manage",
+    # Emails & departments
     "emails.manage",
     "departments.manage",
+    # Services stack
     "services.view",
     "services.manage",
     "services.delete",
     "deploys.manage",
     "volumes.manage",
     "networks.manage",
+    # Plans
+    "plans.view",
+    "plans.manage",
+    # Login system
+    "login_settings.view",
+    "login_settings.manage",
 ]
 
 
@@ -302,3 +314,30 @@ class AdminUserRulesAPIView(APIView):
         clean = [r for r in rules if r in KNOWN_PERMISSIONS]
         Rule.objects.update_or_create(user=u, defaults={"rules": clean})
         return ok("Rules updated", data={"rules": clean})
+
+
+class MePermissionsAPIView(APIView):
+    """
+    GET /api/users/admin/me/permissions/
+    Current staff identity + effective rules for the React admin shell.
+    Any authenticated staff (or superuser) can call this.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        u = request.user
+        if not (u.is_staff or u.is_superuser):
+            return err("Staff only", status.HTTP_403_FORBIDDEN)
+        rules = list(KNOWN_PERMISSIONS) if u.is_superuser else user_rules(u)
+        return ok(
+            data={
+                "id": u.id,
+                "username": u.username,
+                "email": getattr(u, "email", None),
+                "is_staff": bool(u.is_staff),
+                "is_superuser": bool(u.is_superuser),
+                "is_active": bool(u.is_active),
+                "rules": rules,
+                "all_permissions": KNOWN_PERMISSIONS,
+            }
+        )

@@ -1,5 +1,6 @@
 from django.urls import path
 from rest_framework_simplejwt import views as jwt_views
+from .admin_login_settings import AdminLoginSettingsAPIView
 
 from .apis import (
     LoginSettingsAPIView,
@@ -29,6 +30,7 @@ from .apis import (
 urlpatterns = [
     # ---- Settings ----
     path("api/settings/", LoginSettingsAPIView.as_view(), name="login_settings"),
+    path("api/admin/login-settings/", AdminLoginSettingsAPIView.as_view(), name="admin_login_settings"),
 
     # ---- Auth flow ----
     path("api/authentication/", StartAuthAPIView.as_view(), name="start_auth"),

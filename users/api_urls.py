@@ -17,6 +17,7 @@ urlpatterns = [
     path("remove-password/", RemovePasswordAPIView.as_view(), name="remove_password"),
     # Admin panel
     path("admin/permissions/", admin_apis.AdminPermissionCatalogAPIView.as_view(), name="admin_permissions"),
+    path("admin/me/permissions/", admin_apis.MePermissionsAPIView.as_view(), name="admin_me_permissions"),
     path("admin/users/", admin_apis.AdminUserListAPIView.as_view(), name="admin_users"),
     path("admin/users/<int:pk>/", admin_apis.AdminUserDetailAPIView.as_view(), name="admin_user_detail"),
     path("admin/users/<int:pk>/rules/", admin_apis.AdminUserRulesAPIView.as_view(), name="admin_user_rules"),

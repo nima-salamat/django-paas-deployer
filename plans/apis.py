@@ -5,27 +5,98 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from rest_framework.permissions import IsAuthenticated, BasePermission, AllowAny
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from core.global_settings import config
 from core.utils import is_valid_uuid4
 from django.utils.translation import gettext as _
+from django.db.models import Q
+from django.db import transaction
+
+
+# ---------------------------------------------------------------------------
+# Permission helpers (aligned with users.admin_apis Rule system)
+# ---------------------------------------------------------------------------
+def _user_rules(user) -> list:
+    try:
+        return list(user.rule.rules or [])
+    except Exception:
+        return []
+
+
+def _user_has_rule(user, code: str) -> bool:
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    if getattr(user, "is_superuser", False):
+        return True
+    return code in _user_rules(user)
+
+
+class HasPlansViewRule(BasePermission):
+    def has_permission(self, request, view):
+        u = request.user
+        if not u or not u.is_authenticated:
+            return False
+        if u.is_superuser:
+            return True
+        if not u.is_staff:
+            return False
+        return _user_has_rule(u, "plans.view") or _user_has_rule(u, "plans.manage")
+
+
+class HasPlansManageRule(BasePermission):
+    def has_permission(self, request, view):
+        u = request.user
+        if not u or not u.is_authenticated:
+            return False
+        if u.is_superuser:
+            return True
+        if not u.is_staff:
+            return False
+        return _user_has_rule(u, "plans.manage")
+
+
+class PlanAdminPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 100
 
 
 class PlanAdminViewSet(ViewSet):
-    authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated, IsAdminUser]
+    """
+    Admin CRUD for plans.
 
-    # def get_permissions(self):
-    #     if self.request.method in ['POST', 'PUT', 'PATCH', 'DELETE']:
-    #         # Only admin users can create, update, delete
-    #         return [IsAuthenticated(), IsAdminUser()]
-    #     return [IsAuthenticated()]
-    
+    GET list/retrieve  → plans.view (or manage)
+    POST/PUT/PATCH/DELETE → plans.manage
+    Superuser bypasses all checks.
+    """
+    authentication_classes = [JWTAuthentication]
+    pagination_class = PlanAdminPagination
+
+    def get_permissions(self):
+        if self.action in ("create", "update", "destroy"):
+            return [IsAuthenticated(), HasPlansManageRule()]
+        return [IsAuthenticated(), HasPlansViewRule()]
+
+    def get_authenticators(self):
+        return [auth() for auth in self.authentication_classes]
+
     def list(self, request):
-        plan = Plan.objects.all()
-        serializer = PlanSerializer(plan, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        qs = Plan.objects.all().order_by("name", "platform")
+        q = (request.query_params.get("q") or request.query_params.get("q_search") or "").strip()
+        platform = (request.query_params.get("platform") or "").strip()
+        plan_type = (request.query_params.get("plan_type") or "").strip()
+        if q:
+            qs = qs.filter(Q(name__icontains=q) | Q(platform__icontains=q))
+        if platform:
+            qs = qs.filter(platform=platform)
+        if plan_type:
+            qs = qs.filter(plan_type=plan_type)
+
+        paginator = PlanAdminPagination()
+        page = paginator.paginate_queryset(qs, request)
+        serializer = PlanSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
     def retrieve(self, request, pk=None):
         try:
@@ -39,8 +110,14 @@ class PlanAdminViewSet(ViewSet):
         serializer = PlanSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"success": True, "message": _("Plan created."), "data": serializer.data},
+                status=status.HTTP_201_CREATED,
+            )
+        return Response(
+            {"success": False, "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     def update(self, request, pk=None):
         try:
@@ -50,18 +127,38 @@ class PlanAdminViewSet(ViewSet):
         serializer = PlanSerializer(plan, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"success": True, "message": _("Plan updated."), "data": serializer.data}
+            )
+        return Response(
+            {"success": False, "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     def destroy(self, request, pk=None):
         try:
             plan = Plan.objects.get(pk=pk)
         except Plan.DoesNotExist:
             return Response({"error": _("Not found.")}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            from services.models import Service
+            if Service.objects.filter(plan=plan).exists():
+                return Response(
+                    {
+                        "success": False,
+                        "message": _("Cannot delete: plan is still assigned to one or more services."),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+        except Exception:
+            pass
         plan.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response(
+            {"success": True, "message": _("Plan deleted.")},
+            status=status.HTTP_200_OK,
+        )
 
-    
+
 class PlatformPlansAPIView(APIView):
     def get(self, request):
         return Response(data=config.PLATFORM_CHOICES, status=status.HTTP_200_OK)
