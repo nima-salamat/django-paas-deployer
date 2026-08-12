@@ -673,6 +673,24 @@ class MessageDeleteAPIView(APIView):
         msg.is_deleted = True
         msg.body = ""
         msg.save(update_fields=["is_deleted", "body", "updated_at"])
+        try:
+            from .consumers import _send
+            _send(f"messenger_conv_{msg.conversation_id}", {
+                "type": "message.deleted",
+                "conversation_id": msg.conversation_id,
+                "message_id": msg.id,
+            })
+            # personal channels for participants so list previews update
+            for uid in ConversationParticipant.objects.filter(
+                conversation_id=msg.conversation_id, left_at__isnull=True
+            ).values_list("user_id", flat=True):
+                _send(f"messenger_user_{uid}", {
+                    "type": "message.deleted",
+                    "conversation_id": msg.conversation_id,
+                    "message_id": msg.id,
+                })
+        except Exception:
+            logger.exception("broadcast delete failed")
         return ok("Deleted")
 
 
