@@ -25,6 +25,12 @@ KNOWN_PERMISSIONS = [
     "auth_codes.view",
     "emails.manage",
     "departments.manage",
+    "services.view",
+    "services.manage",
+    "services.delete",
+    "deploys.manage",
+    "volumes.manage",
+    "networks.manage",
 ]
 
 

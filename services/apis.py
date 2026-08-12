@@ -361,7 +361,13 @@ class PrivateNetworkViewSet(ModelViewSet):
     pagination_class = ServiceAdminPagination
 
     def get_queryset(self):
-        return super().get_queryset().filter(user=self.request.user)
+        qs = super().get_queryset()
+        if self.request.user.is_superuser or self.request.user.is_staff:
+            user_id = self.request.query_params.get("user_id") or self.request.query_params.get("user")
+            if user_id:
+                qs = qs.filter(user_id=user_id)
+            return qs.select_related("user")
+        return qs.filter(user=self.request.user)
 
     def list(self, request, *args, **kwargs):
         page = self.paginate_queryset(self.get_queryset())
