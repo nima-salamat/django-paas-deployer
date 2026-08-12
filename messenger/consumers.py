@@ -155,6 +155,32 @@ class MessengerConsumer(AsyncJsonWebsocketConsumer):
             if g in self.groups_joined:
                 await self.channel_layer.group_discard(g, self.channel_name)
                 self.groups_joined.remove(g)
+            return
+
+        if t == "typing":
+            # { type: "typing", conversation_id, is_typing: true|false }
+            try:
+                cid = int(content.get("conversation_id"))
+            except (TypeError, ValueError):
+                return
+            if not getattr(self, "user", None):
+                return
+            allowed = await database_sync_to_async(self._can_subscribe)(cid)
+            if not allowed:
+                return
+            is_typing = bool(content.get("is_typing", True))
+            username = getattr(self.user, "username", "") or ""
+            data = {
+                "type": "typing",
+                "conversation_id": cid,
+                "user_id": self.user.id,
+                "username": username,
+                "is_typing": is_typing,
+            }
+            await self.channel_layer.group_send(
+                f"messenger_conv_{cid}",
+                {"type": "messenger.event", "data": data},
+            )
 
     def _can_subscribe(self, conversation_id: int) -> bool:
         from .models import ConversationParticipant
@@ -163,7 +189,11 @@ class MessengerConsumer(AsyncJsonWebsocketConsumer):
         ).exists()
 
     async def messenger_event(self, event):
-        await self.send_json(event.get("data") or {})
+        data = event.get("data") or {}
+        # Don't echo typing events back to the sender
+        if data.get("type") == "typing" and data.get("user_id") == getattr(self.user, "id", None):
+            return
+        await self.send_json(data)
 
 
 def _send(group: str, data: dict):

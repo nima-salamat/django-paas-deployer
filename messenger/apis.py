@@ -681,24 +681,59 @@ class MarkReadAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
+        """Mark messages as read.
+
+        Preferred (viewport-accurate):
+          { "message_ids": [1, 2, 3] }
+        Explicit mark-all from chat list:
+          { "force_all": true }
+        Without either, do not bulk-mark downloaded history.
+        """
         part = ConversationParticipant.objects.filter(
             conversation_id=pk, user=request.user, left_at__isnull=True
         ).first()
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
-        now = timezone.now()
-        prev = part.last_read_at
-        part.last_read_at = now
-        part.save(update_fields=["last_read_at"])
-        # Stamp MessageReadReceipt rows for every message in this conversation
-        # that the viewer hasn't already receipted and that arrived on/before now.
-        # Only stamp messages from OTHER senders (we don't receipt our own).
+
+        raw_ids = request.data.get("message_ids")
+        up_to = request.data.get("up_to_message_id")
+        force_all = bool(request.data.get("force_all"))
+        message_ids = []
+        if isinstance(raw_ids, (list, tuple)):
+            for x in raw_ids:
+                try:
+                    message_ids.append(int(x))
+                except (TypeError, ValueError):
+                    pass
+
         msg_qs = Message.objects.filter(
             conversation_id=pk, is_deleted=False, is_system=False
         ).exclude(sender=request.user)
-        if prev:
-            msg_qs = msg_qs.filter(created_at__gt=prev)
+
+        if message_ids:
+            msg_qs = msg_qs.filter(id__in=message_ids)
+        elif up_to is not None:
+            try:
+                up_to_i = int(up_to)
+            except (TypeError, ValueError):
+                return err("Invalid up_to_message_id", status.HTTP_400_BAD_REQUEST)
+            up_msg = (
+                Message.objects.filter(pk=up_to_i, conversation_id=pk)
+                .values("created_at")
+                .first()
+            )
+            if not up_msg:
+                return ok("Read", data={"receipts": 0})
+            msg_qs = msg_qs.filter(created_at__lte=up_msg["created_at"])
+        elif force_all:
+            prev = part.last_read_at
+            if prev:
+                msg_qs = msg_qs.filter(created_at__gt=prev)
+        else:
+            return ok("Read", data={"receipts": 0, "skipped": True})
+
         new_receipts = []
+        latest_created = None
         for m in msg_qs.values("id", "sender_id", "created_at").iterator():
             _, created = MessageReadReceipt.objects.get_or_create(
                 message_id=m["id"], user=request.user,
@@ -709,7 +744,17 @@ class MarkReadAPIView(APIView):
                     "sender_id": m["sender_id"],
                     "reader_id": request.user.id,
                 })
-        # Broadcast read event so the sender sees ticks flip in real time
+            if latest_created is None or m["created_at"] > latest_created:
+                latest_created = m["created_at"]
+
+        if latest_created and (not part.last_read_at or latest_created > part.last_read_at):
+            part.last_read_at = latest_created
+            part.save(update_fields=["last_read_at"])
+        elif force_all:
+            from django.utils import timezone as tz
+            part.last_read_at = tz.now()
+            part.save(update_fields=["last_read_at"])
+
         if new_receipts:
             try:
                 from .consumers import broadcast_read
