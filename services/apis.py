@@ -166,23 +166,19 @@ def _docker_volume_exists(volume) -> bool:
 
 def _get_service_for_user(request, service_id, *, for_update=False, require_manage=False):
     """
-    Resolve a service by id for the current user.
+    Resolve a service by id for the *current user only*.
 
-    - Normal users (and staff without admin rules): only own services.
-    - Superuser or staff with services.view/manage: any service (admin panel).
-    - If require_manage=True, staff needs services.manage (not just view).
+    This helper is used exclusively by user-facing endpoints
+    (/service/, start_service/, stop_service/, purge/, …).
+    Even superusers and staff with admin rules must only operate on
+    *their own* services here. Cross-user access lives under /admin/….
+    The require_manage flag is kept for API compatibility but is ignored
+    (ownership is always enforced).
     """
     qs = Service.objects.all()
     if for_update:
         qs = qs.select_for_update()
-    user = request.user
-    if require_manage:
-        allowed = _can_manage_all_services(user)
-    else:
-        allowed = _can_view_all_services(user)
-    if allowed:
-        return qs.get(id=service_id)
-    return qs.get(id=service_id, user=user)
+    return qs.get(id=service_id, user=request.user)
 
 
 def _purge_service_runtime(service) -> dict:
@@ -435,27 +431,9 @@ class PrivateNetworkViewSet(ModelViewSet):
         return self.get_paginated_response(serializer.data)
 
     def create(self, request, *args, **kwargs):
-        # User-facing create: always own network.
+        # User-facing create: ALWAYS own network (even for superuser/staff).
         # Cross-user create is only via admin panel APIs.
         owner = request.user
-        if (request.data.get("user_id") or request.data.get("user")) and str(
-            request.data.get("user_id") or request.data.get("user")
-        ) != str(request.user.id):
-            if not _can_manage_all_services(request.user):
-                return Response(
-                    {"error": _("Not allowed to create resources for other users.")},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-            from django.contrib.auth import get_user_model
-            User = get_user_model()
-            try:
-                owner = User.objects.get(pk=request.data.get("user_id") or request.data.get("user"))
-            except User.DoesNotExist:
-                return Response(
-                    {"error": _("Target user not found.")},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-        # Force ownership to the real user (never staff unless creating for self)
         if hasattr(request.data, "_mutable"):
             request.data._mutable = True
         try:
@@ -593,20 +571,18 @@ class VolumeViewSet(ModelViewSet):
             )
 
         service_obj = serializer.validated_data.get("service")
-        # User-facing: volume always owned by the authenticated user.
+        # User-facing: volume ALWAYS owned by the authenticated user
+        # (even for superuser/staff). Cross-user only via admin APIs.
         owner = request.user
         if service_obj is not None and service_obj.user_id != owner.id:
-            if not _can_manage_all_services(request.user):
-                return Response(
-                    {
-                        "error": _(
-                            "Selected service does not belong to the authenticated user."
-                        )
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            # Admin acting for another user → ownership follows the service owner
-            owner = service_obj.user
+            return Response(
+                {
+                    "error": _(
+                        "Selected service does not belong to the authenticated user."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # If creating already assigned to a service, service must be mutable
         if service_obj is not None:
@@ -666,7 +642,7 @@ class VolumeViewSet(ModelViewSet):
         touching_service = service_raw != "__omit__"
         if touching_service and service_raw not in (None, "", "null"):
             target_service = get_object_or_404(
-                Service.objects.all() if _can_manage_all_services(request.user) else Service.objects.filter(user=request.user), pk=service_raw
+                Service.objects.filter(user=request.user), pk=service_raw
             )
 
         # Mutability for any change tied to a service (current owner or target)
@@ -918,7 +894,7 @@ class VolumeViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         target = get_object_or_404(
-            Service.objects.all() if _can_manage_all_services(request.user) else Service.objects.filter(user=request.user), pk=service_raw
+            Service.objects.filter(user=request.user), pk=service_raw
         )
         ok, reason = _service_is_mutable(target)
         if not ok:
@@ -1507,10 +1483,8 @@ def purge_service_runtime_apiview(request):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def service_logs_apiview(request, pk):
-    if _can_view_all_services(request.user):
-        service = get_object_or_404(Service.objects.all(), pk=pk)
-    else:
-        service = get_object_or_404(Service.objects.filter(user=request.user), pk=pk)
+    # User-facing: always own service only (even for superuser/staff)
+    service = get_object_or_404(Service.objects.filter(user=request.user), pk=pk)
     container_name = service.get_docker_service_name()
     try:
         client = Client()().containers.get(container_name)
