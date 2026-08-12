@@ -6,3 +6,4 @@ env/
 media/*
 .idea
 helper-coomands.sh
+*.zip

@@ -375,12 +375,33 @@ class PrivateNetworkViewSet(ModelViewSet):
         return self.get_paginated_response(serializer.data)
 
     def create(self, request, *args, **kwargs):
-        request.data["user"] = request.user.id
-        serializer = self.get_serializer(data=request.data)
+        is_staff = request.user.is_superuser or request.user.is_staff
+        owner = request.user
+        if is_staff:
+            target_user_id = request.data.get("user_id") or request.data.get("user")
+            if target_user_id:
+                from django.contrib.auth import get_user_model
+                User = get_user_model()
+                try:
+                    owner = User.objects.get(pk=target_user_id)
+                except User.DoesNotExist:
+                    return Response(
+                        {"error": _("Target user not found.")},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+        # Force ownership to the real user (never staff unless creating for self)
+        if hasattr(request.data, "_mutable"):
+            request.data._mutable = True
+        try:
+            data = request.data.copy()
+        except Exception:
+            data = dict(request.data) if isinstance(request.data, dict) else {}
+        data["user"] = owner.id
+        serializer = self.get_serializer(data=data)
         if serializer.is_valid():
-            serializer.save(user=request.user)
+            serializer.save(user=owner)
             return Response(
-                {"success": _("Private Network created.")},
+                {"success": _("Private Network created."), "user": owner.username},
                 status=status.HTTP_201_CREATED,
             )
         return Response(
@@ -392,7 +413,7 @@ class PrivateNetworkViewSet(ModelViewSet):
         )
 
     def update(self, request, pk=None, *args, **kwargs):
-        network = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
+        network = get_object_or_404(self.get_queryset(), pk=pk)
         serializer = self.get_serializer(network, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
@@ -408,7 +429,7 @@ class PrivateNetworkViewSet(ModelViewSet):
         )
 
     def destroy(self, request, pk=None, *args, **kwargs):
-        network = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
+        network = get_object_or_404(self.get_queryset(), pk=pk)
 
         if Service.objects.filter(network=network).exists():
             return Response(
@@ -453,8 +474,11 @@ class VolumeViewSet(ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        if self.request.user.is_superuser:
-            return queryset
+        if self.request.user.is_superuser or self.request.user.is_staff:
+            user_id = self.request.query_params.get("user_id") or self.request.query_params.get("user")
+            if user_id:
+                queryset = queryset.filter(user_id=user_id)
+            return queryset.select_related("user", "service")
         return queryset.filter(user=self.request.user)
 
     def list(self, request, *args, **kwargs):
@@ -507,7 +531,24 @@ class VolumeViewSet(ModelViewSet):
             )
 
         service_obj = serializer.validated_data.get("service")
-        if service_obj and service_obj.user != request.user:
+        is_staff = request.user.is_superuser or request.user.is_staff
+        # Staff can create volumes owned by the service owner (or explicit user_id)
+        owner = request.user
+        if is_staff:
+            target_user_id = request.data.get("user_id") or request.data.get("user")
+            if service_obj is not None:
+                owner = service_obj.user
+            elif target_user_id:
+                from django.contrib.auth import get_user_model
+                User = get_user_model()
+                try:
+                    owner = User.objects.get(pk=target_user_id)
+                except User.DoesNotExist:
+                    return Response(
+                        {"error": _("Target user not found.")},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+        if service_obj and service_obj.user != owner and not is_staff:
             return Response(
                 {
                     "error": _(
@@ -516,6 +557,9 @@ class VolumeViewSet(ModelViewSet):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if service_obj and is_staff and service_obj.user_id != owner.id:
+            # Align owner with the service's real user
+            owner = service_obj.user
 
         # If creating already assigned to a service, service must be mutable
         if service_obj is not None:
@@ -524,7 +568,7 @@ class VolumeViewSet(ModelViewSet):
                 return Response({"error": reason}, status=status.HTTP_409_CONFLICT)
 
         try:
-            instance = serializer.save(user=request.user)
+            instance = serializer.save(user=owner)
         except Exception as exc:
             from django.core.exceptions import ValidationError as DjangoValidationError
 
@@ -565,7 +609,7 @@ class VolumeViewSet(ModelViewSet):
         - Quota: sum of ALL owned volumes (mounted + soft-detached) vs plan limit.
           Checked on create, size change, and attach. Soft-detach does NOT free quota.
         """
-        volume = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
+        volume = get_object_or_404(self.get_queryset(), pk=pk)
         data = dict(request.data) if hasattr(request.data, "keys") else {}
 
         docker_exists = _docker_volume_exists(volume)
@@ -575,7 +619,7 @@ class VolumeViewSet(ModelViewSet):
         touching_service = service_raw != "__omit__"
         if touching_service and service_raw not in (None, "", "null"):
             target_service = get_object_or_404(
-                Service.objects.filter(user=request.user), pk=service_raw
+                Service.objects.all() if (request.user.is_superuser or request.user.is_staff) else Service.objects.filter(user=request.user), pk=service_raw
             )
 
         # Mutability for any change tied to a service (current owner or target)
@@ -736,7 +780,7 @@ class VolumeViewSet(ModelViewSet):
           service → null, attachments → {}
           quota freed
         """
-        volume = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
+        volume = get_object_or_404(self.get_queryset(), pk=pk)
 
         release = str(
             request.query_params.get("release")
@@ -819,7 +863,7 @@ class VolumeViewSet(ModelViewSet):
         Attach volume to a service.
         POST /volume/{id}/attach/  body: { "service": "<uuid>" }
         """
-        volume = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
+        volume = get_object_or_404(self.get_queryset(), pk=pk)
         service_raw = request.data.get("service") or request.data.get("service_id")
         if not service_raw:
             return Response(
@@ -827,7 +871,7 @@ class VolumeViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         target = get_object_or_404(
-            Service.objects.filter(user=request.user), pk=service_raw
+            Service.objects.all() if (request.user.is_superuser or request.user.is_staff) else Service.objects.filter(user=request.user), pk=service_raw
         )
         ok, reason = _service_is_mutable(target)
         if not ok:
@@ -877,7 +921,7 @@ class VolumeViewSet(ModelViewSet):
         - Currently mounted on a service: only when that service is mutable
           (idle + no container). Soft-detach first if you only want to unmount.
         """
-        volume = get_object_or_404(self.get_queryset(), pk=pk, user=request.user)
+        volume = get_object_or_404(self.get_queryset(), pk=pk)
 
         is_mounted = False
         try:
