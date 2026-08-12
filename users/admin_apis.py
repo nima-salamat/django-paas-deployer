@@ -1,4 +1,21 @@
-"""Admin panel APIs: users, rules/permissions (Django-admin style in React)."""
+"""Admin panel APIs: users, rules/permissions (Django-admin style in React).
+
+Permission model
+----------------
+* Superuser bypasses everything.
+* Staff with `users.view`   → list/get users.
+* Staff with `users.create` → create users (NO rule assignment, NO staff/superuser flag toggle).
+* Staff with `users.manage` → update users, assign rules, deactivate, delete (soft).
+* Staff with `tables.view`  → browse registered Django tables (read-only).
+* Staff with `tables.manage` → also delete rows from deletable tables.
+
+New permission codes
+--------------------
+* ``users.create`` — allows creating users without granting ``users.manage``.
+  Useful for helpdesk-style staff who should onboard users but not change
+  permission rules or staff flags.
+* ``tables.view`` / ``tables.manage`` — DB tables browser (see admin_tables_api).
+"""
 from __future__ import annotations
 
 from django.contrib.auth import get_user_model
@@ -9,6 +26,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import BasePermission, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from .models import Rule
 
@@ -22,7 +40,8 @@ KNOWN_PERMISSIONS = [
     "tickets.delete",
     # Users
     "users.view",
-    "users.manage",
+    "users.create",     # NEW: limited create (no rules, no flags)
+    "users.manage",     # full manage: rules, staff flag, superuser flag (only superuser)
     # Invites & auth codes
     "invites.manage",
     "auth_codes.view",
@@ -43,6 +62,9 @@ KNOWN_PERMISSIONS = [
     # Login system
     "login_settings.view",
     "login_settings.manage",
+    # DB tables browser (NEW)
+    "tables.view",
+    "tables.manage",
 ]
 
 
@@ -125,12 +147,16 @@ def serialize_user(u: User, include_rules=True) -> dict:
 
 class AdminPermissionCatalogAPIView(APIView):
     """List known permission codes for the UI."""
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, HasAdminRule]
-    required_rule = "users.manage"
+    required_rule = "users.view"
 
     def get(self, request):
-        if not (request.user.is_superuser or user_has_rule(request.user, "users.manage") or user_has_rule(request.user, "users.view")):
-            # superuser always ok via HasAdminRule; staff needs view at least
+        if not (
+            request.user.is_superuser
+            or user_has_rule(request.user, "users.view")
+            or user_has_rule(request.user, "users.manage")
+        ):
             if not request.user.is_superuser:
                 return err("Forbidden", status.HTTP_403_FORBIDDEN)
         return ok(data={"permissions": KNOWN_PERMISSIONS})
@@ -139,8 +165,15 @@ class AdminPermissionCatalogAPIView(APIView):
 class AdminUserListAPIView(APIView):
     """
     GET  /api/users/admin/users/?search=&is_staff=&is_active=&page=
-    POST /api/users/admin/users/  (superuser or users.manage) create minimal user
+    POST /api/users/admin/users/  create minimal user.
+
+    Permission matrix for POST:
+      * superuser                              → can set is_staff / is_superuser / rules
+      * staff with users.manage                → can set is_staff (but not is_superuser) and rules
+      * staff with users.create (no manage)    → can ONLY create a basic user (no rules,
+                                                 no staff flag, no superuser flag, active=True)
     """
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, HasAdminRule]
     required_rule = "users.view"
 
@@ -150,6 +183,7 @@ class AdminUserListAPIView(APIView):
             u.is_superuser
             or user_has_rule(u, "users.view")
             or user_has_rule(u, "users.manage")
+            or user_has_rule(u, "users.create")
             or u.is_staff  # staff can list; edit still gated
         )
         if not allowed:
@@ -190,8 +224,13 @@ class AdminUserListAPIView(APIView):
         return paginator.get_paginated_response(results)
 
     def post(self, request):
-        if not (request.user.is_superuser or user_has_rule(request.user, "users.manage")):
-            return err("Missing permission users.manage", status.HTTP_403_FORBIDDEN)
+        u = request.user
+        is_su = bool(u.is_superuser)
+        can_manage = is_su or user_has_rule(u, "users.manage")
+        can_create = can_manage or user_has_rule(u, "users.create")
+        if not can_create:
+            return err("Missing permission users.create or users.manage", status.HTTP_403_FORBIDDEN)
+
         username = (request.data.get("username") or "").strip()
         email = (request.data.get("email") or "").strip() or None
         if not username:
@@ -200,33 +239,59 @@ class AdminUserListAPIView(APIView):
             return err("username already exists")
         if email and User.objects.filter(email=email).exists():
             return err("email already exists")
-        u = User(username=username, email=email)
+
+        u_new = User(username=username, email=email)
         password = request.data.get("password")
         if password:
-            u.set_password(password)
-        u.is_staff = bool(request.data.get("is_staff", False))
-        u.is_active = bool(request.data.get("is_active", True))
-        # never allow creating superuser via this unless requester is superuser
-        if request.user.is_superuser and request.data.get("is_superuser"):
-            u.is_superuser = True
-            u.is_staff = True
-        u.save()
-        rules = request.data.get("rules")
-        if isinstance(rules, list):
-            clean = [r for r in rules if r in KNOWN_PERMISSIONS]
-            Rule.objects.update_or_create(user=u, defaults={"rules": clean})
-        return ok("User created", data=serialize_user(u), http_status=status.HTTP_201_CREATED)
+            u_new.set_password(password)
+        u_new.is_active = bool(request.data.get("is_active", True))
+
+        # Limited staff without users.manage cannot set is_staff / is_superuser / rules
+        if can_manage:
+            u_new.is_staff = bool(request.data.get("is_staff", False))
+            # never allow creating superuser via this unless requester is superuser
+            if is_su and request.data.get("is_superuser"):
+                u_new.is_superuser = True
+                u_new.is_staff = True
+        else:
+            # users.create-only: force flags off
+            u_new.is_staff = False
+            u_new.is_superuser = False
+
+        u_new.save()
+
+        if can_manage:
+            rules = request.data.get("rules")
+            if isinstance(rules, list):
+                clean = [r for r in rules if r in KNOWN_PERMISSIONS]
+                Rule.objects.update_or_create(user=u_new, defaults={"rules": clean})
+        return ok(
+            "User created",
+            data=serialize_user(u_new),
+            http_status=status.HTTP_201_CREATED,
+        )
 
 
 class AdminUserDetailAPIView(APIView):
+    """
+    GET    /api/users/admin/users/<pk>/
+    PATCH  /api/users/admin/users/<pk>/
+    DELETE /api/users/admin/users/<pk>/  (soft-delete; hard with ?hard=1 superuser only)
+    """
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, HasAdminRule]
-    required_rule = "users.manage"
+    required_rule = "users.view"
 
     def _get(self, pk):
         return User.objects.get(pk=pk)
 
     def get(self, request, pk):
-        if not (request.user.is_superuser or user_has_rule(request.user, "users.view") or user_has_rule(request.user, "users.manage")):
+        if not (
+            request.user.is_superuser
+            or user_has_rule(request.user, "users.view")
+            or user_has_rule(request.user, "users.manage")
+            or user_has_rule(request.user, "users.create")
+        ):
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
         try:
             u = self._get(pk)
@@ -235,41 +300,73 @@ class AdminUserDetailAPIView(APIView):
         return ok(data=serialize_user(u))
 
     def patch(self, request, pk):
-        if not (request.user.is_superuser or user_has_rule(request.user, "users.manage")):
-            return err("Missing permission users.manage", status.HTTP_403_FORBIDDEN)
+        u_req = request.user
+        is_su = bool(u_req.is_superuser)
+        can_manage = is_su or user_has_rule(u_req, "users.manage")
+        can_create = can_manage or user_has_rule(u_req, "users.create")
+        if not can_create:
+            return err("Missing permission users.create or users.manage", status.HTTP_403_FORBIDDEN)
+
         try:
             u = self._get(pk)
         except User.DoesNotExist:
             return err("Not found", status.HTTP_404_NOT_FOUND)
 
         # Protect last superuser / self-demotion edge cases
-        if u.is_superuser and not request.user.is_superuser:
+        if u.is_superuser and not is_su:
             return err("Only superuser can edit another superuser", status.HTTP_403_FORBIDDEN)
 
         data = request.data
+
+        # ---- Fields everyone with users.create OR users.manage can edit ----
         if "email" in data:
             u.email = (data.get("email") or "").strip() or None
-        if "is_active" in data:
-            if u.id == request.user.id and not data.get("is_active"):
-                return err("Cannot deactivate yourself")
-            u.is_active = bool(data.get("is_active"))
+        if "phone_number" in data:
+            u.phone_number = (data.get("phone_number") or "").strip() or None
+        if "password" in data:
+            if data.get("password"):
+                u.set_password(data["password"])
+
+        # ---- Staff flag: requires users.manage (NOT users.create) ----
         if "is_staff" in data:
-            if u.id == request.user.id and not data.get("is_staff"):
+            if not can_manage:
+                return err("Missing permission users.manage to change staff flag", status.HTTP_403_FORBIDDEN)
+            if u.id == u_req.id and not data.get("is_staff"):
                 return err("Cannot remove your own staff flag")
             u.is_staff = bool(data.get("is_staff"))
-        if "is_superuser" in data and request.user.is_superuser:
-            if u.id == request.user.id and not data.get("is_superuser"):
+
+        # ---- Active flag: requires users.manage OR users.create ----
+        if "is_active" in data:
+            if u.id == u_req.id and not data.get("is_active"):
+                return err("Cannot deactivate yourself")
+            u.is_active = bool(data.get("is_active"))
+
+        # ---- Superuser flag: superuser only ----
+        if "is_superuser" in data and is_su:
+            if u.id == u_req.id and not data.get("is_superuser"):
                 return err("Cannot remove your own superuser flag")
             u.is_superuser = bool(data.get("is_superuser"))
             if u.is_superuser:
                 u.is_staff = True
-        if data.get("password") and (request.user.is_superuser or user_has_rule(request.user, "users.manage")):
-            u.set_password(data["password"])
+        elif "is_superuser" in data and not is_su:
+            return err("Only superuser can change superuser flag", status.HTTP_403_FORBIDDEN)
+
         u.save()
 
+        # ---- Rules: requires users.manage (NOT users.create) ----
         if "rules" in data and isinstance(data["rules"], list):
-            if not request.user.is_superuser and not user_has_rule(request.user, "users.manage"):
-                return err("Cannot set rules", status.HTTP_403_FORBIDDEN)
+            if not can_manage:
+                return err("Missing permission users.manage to update rules", status.HTTP_403_FORBIDDEN)
+            # Defense-in-depth: never let a non-superuser grant permissions they don't have.
+            requested = set(data["rules"])
+            allowed_to_grant = set(KNOWN_PERMISSIONS) if is_su else set(user_rules(u_req))
+            forbidden = requested - allowed_to_grant
+            if forbidden:
+                return err(
+                    "You cannot grant permissions you do not own.",
+                    status.HTTP_403_FORBIDDEN,
+                    extra={"forbidden": sorted(forbidden)},
+                )
             clean = [r for r in data["rules"] if r in KNOWN_PERMISSIONS]
             Rule.objects.update_or_create(user=u, defaults={"rules": clean})
 
@@ -277,18 +374,23 @@ class AdminUserDetailAPIView(APIView):
 
     def delete(self, request, pk):
         """Soft-delete: deactivate account (hard delete only for superuser with ?hard=1)."""
-        if not (request.user.is_superuser or user_has_rule(request.user, "users.manage")):
-            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        u_req = request.user
+        is_su = bool(u_req.is_superuser)
+        can_manage = is_su or user_has_rule(u_req, "users.manage")
+        can_create = can_manage or user_has_rule(u_req, "users.create")
+        # delete requires users.manage (not just users.create) — destructive op
+        if not can_manage:
+            return err("Missing permission users.manage to delete a user", status.HTTP_403_FORBIDDEN)
         try:
             u = self._get(pk)
         except User.DoesNotExist:
             return err("Not found", status.HTTP_404_NOT_FOUND)
-        if u.id == request.user.id:
+        if u.id == u_req.id:
             return err("Cannot delete yourself")
-        if u.is_superuser and not request.user.is_superuser:
+        if u.is_superuser and not is_su:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
         hard = request.query_params.get("hard") in ("1", "true")
-        if hard and request.user.is_superuser:
+        if hard and is_su:
             u.delete()
             return ok("User permanently deleted")
         u.is_active = False
@@ -297,13 +399,16 @@ class AdminUserDetailAPIView(APIView):
 
 
 class AdminUserRulesAPIView(APIView):
-    """PUT rules for a user."""
+    """PUT rules for a user. Requires users.manage (NOT users.create)."""
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, HasAdminRule]
     required_rule = "users.manage"
 
     def put(self, request, pk):
-        if not (request.user.is_superuser or user_has_rule(request.user, "users.manage")):
-            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        u_req = request.user
+        is_su = bool(u_req.is_superuser)
+        if not (is_su or user_has_rule(u_req, "users.manage")):
+            return err("Missing permission users.manage", status.HTTP_403_FORBIDDEN)
         try:
             u = User.objects.get(pk=pk)
         except User.DoesNotExist:
@@ -311,6 +416,15 @@ class AdminUserRulesAPIView(APIView):
         rules = request.data.get("rules")
         if not isinstance(rules, list):
             return err("rules must be a list")
+        requested = set(rules)
+        allowed_to_grant = set(KNOWN_PERMISSIONS) if is_su else set(user_rules(u_req))
+        forbidden = requested - allowed_to_grant
+        if forbidden:
+            return err(
+                "You cannot grant permissions you do not own.",
+                status.HTTP_403_FORBIDDEN,
+                extra={"forbidden": sorted(forbidden)},
+            )
         clean = [r for r in rules if r in KNOWN_PERMISSIONS]
         Rule.objects.update_or_create(user=u, defaults={"rules": clean})
         return ok("Rules updated", data={"rules": clean})
@@ -322,6 +436,7 @@ class MePermissionsAPIView(APIView):
     Current staff identity + effective rules for the React admin shell.
     Any authenticated staff (or superuser) can call this.
     """
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):

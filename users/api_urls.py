@@ -8,6 +8,7 @@ from .apis import (
     RemovePasswordAPIView,
 )
 from . import admin_apis
+from . import admin_tables_api
 
 urlpatterns = [
     path("user/", UserAPIView.as_view(), name="user_api"),
@@ -21,4 +22,8 @@ urlpatterns = [
     path("admin/users/", admin_apis.AdminUserListAPIView.as_view(), name="admin_users"),
     path("admin/users/<int:pk>/", admin_apis.AdminUserDetailAPIView.as_view(), name="admin_user_detail"),
     path("admin/users/<int:pk>/rules/", admin_apis.AdminUserRulesAPIView.as_view(), name="admin_user_rules"),
+    # Tables browser (NEW)
+    path("admin/tables/", admin_tables_api.AdminTableListView.as_view(), name="admin_tables_list"),
+    path("admin/tables/<str:model_key>/", admin_tables_api.AdminTableRowsView.as_view(), name="admin_table_rows"),
+    path("admin/tables/<str:model_key>/<str:pk>/", admin_tables_api.AdminTableRowView.as_view(), name="admin_table_row"),
 ]
