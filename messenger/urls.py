@@ -20,8 +20,10 @@ urlpatterns = [
     path("messages/<int:pk>/forward/", apis.MessageForwardAPIView.as_view()),
     path("messages/<int:pk>/react/", apis.MessageReactAPIView.as_view()),
     path("messages/<int:pk>/edit/", apis.MessageEditAPIView.as_view()),
+    path("messages/<int:pk>/pin/", apis.MessagePinAPIView.as_view()),
     path("messages/<int:pk>/readers/", apis.MessageReadersAPIView.as_view()),
     path("messages/<int:pk>/", apis.MessageDeleteAPIView.as_view()),
+    path("conversations/<int:pk>/pinned-messages/", apis.ConversationPinnedMessagesAPIView.as_view()),
     path("conversations/<int:pk>/leave/", apis.LeaveConversationAPIView.as_view()),
     path("conversations/<int:pk>/members/", apis.AddMembersAPIView.as_view()),
     # Group management — remove member, change role, transfer ownership

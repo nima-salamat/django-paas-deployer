@@ -338,3 +338,16 @@ def broadcast_join_request(conversation_id, data: dict):
     # Also send to the requesting user so their "My Requests" panel updates
     if data.get("user_id"):
         _send(f"messenger_user_{data['user_id']}", data)
+
+
+def broadcast_pin(conversation_id, data: dict):
+    """Broadcast a message pin/unpin event to all participants in a conversation.
+
+    Every participant's pinned-message bar should update in real-time.
+    """
+    from .models import ConversationParticipant
+    _send(f"messenger_conv_{conversation_id}", data)
+    for uid in ConversationParticipant.objects.filter(
+        conversation_id=conversation_id, left_at__isnull=True
+    ).values_list("user_id", flat=True):
+        _send(f"messenger_user_{uid}", data)
