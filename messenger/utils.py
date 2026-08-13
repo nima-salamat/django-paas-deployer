@@ -8,10 +8,24 @@ DEFAULT_MAX_VIDEO = 100 * 1024 * 1024  # 100 MB
 DEFAULT_MAX_FILE = 25 * 1024 * 1024
 
 ALLOWED_EXTENSIONS = {
-    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
+    # images
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", ".svg",
+    # video
     ".mp4", ".mov", ".mkv", ".webm",
-    ".mp3", ".wav", ".ogg", ".m4a", ".aac", ".opus",
-    ".pdf", ".txt", ".zip", ".doc", ".docx", ".xls", ".xlsx",
+    # audio
+    ".mp3", ".wav", ".ogg", ".m4a", ".aac", ".opus", ".flac",
+    # documents
+    ".pdf", ".txt", ".md", ".csv", ".rtf",
+    ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".zip", ".rar", ".7z", ".tar", ".gz",
+    # source / code (send-as-file from messenger editor)
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".json", ".html", ".htm", ".css",
+    ".scss", ".sass", ".less", ".java", ".kt", ".c", ".h", ".cpp", ".hpp",
+    ".cs", ".go", ".rs", ".rb", ".php", ".swift", ".m", ".mm",
+    ".sh", ".bash", ".zsh", ".ps1", ".sql", ".yml", ".yaml", ".toml",
+    ".ini", ".cfg", ".env", ".xml", ".gradle", ".dockerfile",
+    ".vue", ".svelte", ".dart", ".lua", ".r", ".pl", ".pm",
+    ".ipynb", ".graphql", ".gql", ".proto", ".wasm", ".map",
 }
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}

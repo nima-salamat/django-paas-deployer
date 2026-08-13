@@ -310,10 +310,11 @@ CORS_ALLOW_HEADERS = list(getattr(__import__("corsheaders.defaults", fromlist=["
     "content-type",
 ]
 
-# CORS_ALLOWED_ORIGINS = [
-#     "http://localhost:3000",  # or whatever your React app runs on
-# ]
+CORS_ALLOWED_ORIGINS = [
+    f"https://{DOMAIN_NAME}",
+]
 
+CORS_ALLOW_CREDENTIALS = True
 
 
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
