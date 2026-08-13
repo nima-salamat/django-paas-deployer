@@ -25,5 +25,10 @@ urlpatterns = [
     # Tables browser (NEW)
     path("admin/tables/", admin_tables_api.AdminTableListView.as_view(), name="admin_tables_list"),
     path("admin/tables/<str:model_key>/", admin_tables_api.AdminTableRowsView.as_view(), name="admin_table_rows"),
+    path("admin/tables/<str:model_key>/fk-search/", admin_tables_api.AdminTableFKSearchAPIView.as_view(), name="admin_table_fk_search"),
     path("admin/tables/<str:model_key>/<str:pk>/", admin_tables_api.AdminTableRowView.as_view(), name="admin_table_row"),
+    # Admin Profile image management (per-user)
+    path("admin/users/<int:pk>/profiles/", admin_apis.AdminProfileListCreateAPIView.as_view(), name="admin_user_profiles_list_create"),
+    path("admin/users/<int:pk>/profiles/reorder/", admin_apis.AdminProfileReorderAPIView.as_view(), name="admin_user_profiles_reorder"),
+    path("admin/users/<int:pk>/profiles/<int:profile_id>/", admin_apis.AdminProfileDetailAPIView.as_view(), name="admin_user_profile_detail"),
 ]

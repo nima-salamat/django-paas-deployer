@@ -3,17 +3,22 @@
 Permission model
 ----------------
 * Superuser bypasses everything.
-* Staff with `users.view`   → list/get users.
-* Staff with `users.create` → create users (NO rule assignment, NO staff/superuser flag toggle).
-* Staff with `users.manage` → update users, assign rules, deactivate, delete (soft).
-* Staff with `tables.view`  → browse registered Django tables (read-only).
-* Staff with `tables.manage` → also delete rows from deletable tables.
+* Staff with `users.view`         → list/get users.
+* Staff with `users.create`       → create users (NO rule assignment, NO staff/superuser flag toggle).
+* Staff with `users.manage`       → update users, assign rules, deactivate, delete (soft).
+* Staff with `users.manage_rules` → ONLY edit the `rules` array of other users
+                                    (cannot change email/password/staff/superuser).
+                                    Useful for helpdesk-style staff who should
+                                    fine-tune permissions but not touch identity fields.
+* Staff with `tables.view`        → browse registered Django tables (read-only).
+* Staff with `tables.manage`      → also delete rows from deletable tables.
 
 New permission codes
 --------------------
 * ``users.create`` — allows creating users without granting ``users.manage``.
-  Useful for helpdesk-style staff who should onboard users but not change
-  permission rules or staff flags.
+* ``users.manage_rules`` — allows editing only the rules array of other users.
+  Cannot be combined to escalate: a user with only ``users.manage_rules`` cannot
+  grant permissions they do not own (defense-in-depth).
 * ``tables.view`` / ``tables.manage`` — DB tables browser (see admin_tables_api).
 """
 from __future__ import annotations
@@ -28,7 +33,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
-from .models import Rule
+from .models import Rule, Profile
 
 User = get_user_model()
 
@@ -40,8 +45,9 @@ KNOWN_PERMISSIONS = [
     "tickets.delete",
     # Users
     "users.view",
-    "users.create",     # NEW: limited create (no rules, no flags)
-    "users.manage",     # full manage: rules, staff flag, superuser flag (only superuser)
+    "users.create",         # limited create (no rules, no flags)
+    "users.manage",         # full manage: rules, staff flag, superuser flag (only superuser)
+    "users.manage_rules",   # ONLY edit rules of others (no identity fields)
     # Invites & auth codes
     "invites.manage",
     "auth_codes.view",
@@ -140,6 +146,22 @@ def serialize_user(u: User, include_rules=True) -> dict:
         "date_joined": u.date_joined.isoformat() if u.date_joined else None,
         "balance": str(getattr(u, "balance", "0")),
     }
+    # Profile images (ordered by `order` then id)
+    try:
+        profiles = list(
+            Profile.objects.filter(user=u).order_by("order", "id")
+        )
+        data["profiles"] = [
+            {
+                "id": p.id,
+                "order": p.order,
+                "image": p.image.url if p.image else None,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+            }
+            for p in profiles
+        ]
+    except Exception:
+        data["profiles"] = []
     if include_rules:
         data["rules"] = user_rules(u)
     return data
@@ -304,8 +326,12 @@ class AdminUserDetailAPIView(APIView):
         is_su = bool(u_req.is_superuser)
         can_manage = is_su or user_has_rule(u_req, "users.manage")
         can_create = can_manage or user_has_rule(u_req, "users.create")
-        if not can_create:
-            return err("Missing permission users.create or users.manage", status.HTTP_403_FORBIDDEN)
+        can_manage_rules = is_su or user_has_rule(u_req, "users.manage_rules")
+        if not (can_create or can_manage_rules):
+            return err(
+                "Missing permission users.create, users.manage, or users.manage_rules",
+                status.HTTP_403_FORBIDDEN,
+            )
 
         try:
             u = self._get(pk)
@@ -317,6 +343,38 @@ class AdminUserDetailAPIView(APIView):
             return err("Only superuser can edit another superuser", status.HTTP_403_FORBIDDEN)
 
         data = request.data
+
+        # ─── users.manage_rules path — ONLY rules can be edited ───────────────
+        # If the caller has manage_rules but NOT users.create/users.manage, they
+        # can ONLY touch the rules array. Any other field in the payload is
+        # rejected with 403 to prevent privilege escalation.
+        if can_manage_rules and not can_create:
+            if "rules" not in data:
+                return err(
+                    "With users.manage_rules only you may only edit the rules array.",
+                    status.HTTP_403_FORBIDDEN,
+                )
+            extra_keys = set(data.keys()) - {"rules"}
+            if extra_keys:
+                return err(
+                    f"With users.manage_rules only you may not change: {sorted(extra_keys)}",
+                    status.HTTP_403_FORBIDDEN,
+                )
+            # Defense-in-depth: never let a non-superuser grant permissions they don't have.
+            requested = set(data["rules"])
+            allowed_to_grant = set(KNOWN_PERMISSIONS) if is_su else set(user_rules(u_req))
+            forbidden = requested - allowed_to_grant
+            if forbidden:
+                return err(
+                    "You cannot grant permissions you do not own.",
+                    status.HTTP_403_FORBIDDEN,
+                    extra={"forbidden": sorted(forbidden)},
+                )
+            clean = [r for r in data["rules"] if r in KNOWN_PERMISSIONS]
+            Rule.objects.update_or_create(user=u, defaults={"rules": clean})
+            return ok("Rules updated", data=serialize_user(u))
+
+        # ─── Normal path (users.create / users.manage) ────────────────────────
 
         # ---- Fields everyone with users.create OR users.manage can edit ----
         if "email" in data:
@@ -353,10 +411,13 @@ class AdminUserDetailAPIView(APIView):
 
         u.save()
 
-        # ---- Rules: requires users.manage (NOT users.create) ----
+        # ---- Rules: requires users.manage OR users.manage_rules ----
         if "rules" in data and isinstance(data["rules"], list):
-            if not can_manage:
-                return err("Missing permission users.manage to update rules", status.HTTP_403_FORBIDDEN)
+            if not (can_manage or can_manage_rules):
+                return err(
+                    "Missing permission users.manage or users.manage_rules to update rules",
+                    status.HTTP_403_FORBIDDEN,
+                )
             # Defense-in-depth: never let a non-superuser grant permissions they don't have.
             requested = set(data["rules"])
             allowed_to_grant = set(KNOWN_PERMISSIONS) if is_su else set(user_rules(u_req))
@@ -454,5 +515,199 @@ class MePermissionsAPIView(APIView):
                 "is_active": bool(u.is_active),
                 "rules": rules,
                 "all_permissions": KNOWN_PERMISSIONS,
+                "profiles": [
+                    {
+                        "id": p.id,
+                        "order": p.order,
+                        "image": p.image.url if p.image else None,
+                        "created_at": p.created_at.isoformat() if p.created_at else None,
+                    }
+                    for p in Profile.objects.filter(user=u).order_by("order", "id")
+                ],
             }
         )
+
+
+# ---------------------------------------------------------------------------
+# Admin Profile image management
+# ---------------------------------------------------------------------------
+# Endpoints (mounted under /api/users/admin/users/<pk>/profiles/...):
+#
+#   GET    /api/users/admin/users/<pk>/profiles/                  → list profiles
+#   POST   /api/users/admin/users/<pk>/profiles/                  → upload new image
+#   PATCH  /api/users/admin/users/<pk>/profiles/<profile_id>/     → update order
+#   DELETE /api/users/admin/users/<pk>/profiles/<profile_id>/     → delete image
+#   POST   /api/users/admin/users/<pk>/profiles/reorder/          → bulk reorder
+#                                                                  body: {orders: [{id, order}]}
+#
+# Permission:
+#   * superuser                       → everything
+#   * users.manage                    → everything
+#   * users.create                    → everything (basic create/manage staff can edit photos)
+#   * users.manage_rules              → NO access (rules-only permission)
+#   * otherwise                       → 403
+#
+# Notes:
+#   * Profile model enforces max 5 images per user via full_clean().
+#   * Image is validated by ImageValidator(size_kb=2048, max_w=2560, max_h=1440).
+#   * Deleting the last image is allowed (user just has no profile picture).
+
+
+class _AdminProfilePermission(BasePermission):
+    """Allows superuser / users.manage / users.create. NOT users.manage_rules."""
+
+    def has_permission(self, request, view):
+        u = request.user
+        if not u or not u.is_authenticated:
+            return False
+        if u.is_superuser:
+            return True
+        if not u.is_staff:
+            return False
+        return (
+            user_has_rule(u, "users.manage")
+            or user_has_rule(u, "users.create")
+        )
+
+
+def _serialize_profile(p: Profile) -> dict:
+    return {
+        "id": p.id,
+        "order": p.order,
+        "image": p.image.url if p.image else None,
+        "created_at": p.created_at.isoformat() if p.created_at else None,
+    }
+
+
+class AdminProfileListCreateAPIView(APIView):
+    """
+    GET  /api/users/admin/users/<pk>/profiles/    → list user's profile images
+    POST /api/users/admin/users/<pk>/profiles/    → upload a new profile image
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, _AdminProfilePermission]
+
+    def get(self, request, pk):
+        try:
+            u = User.objects.get(pk=pk)
+        except User.DoesNotExist:
+            return err("User not found", status.HTTP_404_NOT_FOUND)
+        qs = Profile.objects.filter(user=u).order_by("order", "id")
+        return ok(data={"profiles": [_serialize_profile(p) for p in qs], "count": qs.count()})
+
+    def post(self, request, pk):
+        try:
+            u = User.objects.get(pk=pk)
+        except User.DoesNotExist:
+            return err("User not found", status.HTTP_404_NOT_FOUND)
+
+        image = request.FILES.get("image")
+        if not image:
+            return err("image file is required")
+
+        # Determine next order
+        existing_max = (
+            Profile.objects.filter(user=u).order_by("-order").values_list("order", flat=True).first()
+            or 0
+        )
+        profile = Profile(user=u, image=image, order=existing_max + 1)
+        try:
+            profile.full_clean()
+        except Exception as exc:
+            return err(f"Validation failed: {exc}", status.HTTP_400_BAD_REQUEST)
+        try:
+            profile.save()
+        except Exception as exc:
+            return err(f"Save failed: {exc}", status.HTTP_400_BAD_REQUEST)
+        return ok(
+            "Profile image uploaded",
+            data=_serialize_profile(profile),
+            http_status=status.HTTP_201_CREATED,
+        )
+
+
+class AdminProfileDetailAPIView(APIView):
+    """
+    PATCH  /api/users/admin/users/<pk>/profiles/<profile_id>/   → update order
+    DELETE /api/users/admin/users/<pk>/profiles/<profile_id>/   → delete image
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, _AdminProfilePermission]
+
+    def _get(self, pk, profile_id):
+        try:
+            u = User.objects.get(pk=pk)
+        except User.DoesNotExist:
+            return None, err("User not found", status.HTTP_404_NOT_FOUND)
+        try:
+            return Profile.objects.get(pk=profile_id, user=u), None
+        except Profile.DoesNotExist:
+            return None, err("Profile image not found", status.HTTP_404_NOT_FOUND)
+
+    def patch(self, request, pk, profile_id):
+        profile, error = self._get(pk, profile_id)
+        if error:
+            return error
+        new_order = request.data.get("order")
+        if new_order is None:
+            return err("order is required")
+        try:
+            new_order = int(new_order)
+        except (TypeError, ValueError):
+            return err("order must be an integer")
+        profile.order = new_order
+        profile.save(update_fields=["order"])
+        return ok("Order updated", data=_serialize_profile(profile))
+
+    def delete(self, request, pk, profile_id):
+        profile, error = self._get(pk, profile_id)
+        if error:
+            return error
+        try:
+            profile.delete()
+        except Exception as exc:
+            return err(f"Delete failed: {exc}", status.HTTP_400_BAD_REQUEST)
+        return ok("Profile image deleted")
+
+
+class AdminProfileReorderAPIView(APIView):
+    """
+    POST /api/users/admin/users/<pk>/profiles/reorder/
+    Body: {orders: [{id: int, order: int}, ...]}
+
+    Bulk-reorders all profile images for the user in one transaction.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, _AdminProfilePermission]
+
+    def post(self, request, pk):
+        try:
+            u = User.objects.get(pk=pk)
+        except User.DoesNotExist:
+            return err("User not found", status.HTTP_404_NOT_FOUND)
+
+        orders = request.data.get("orders")
+        if not isinstance(orders, list):
+            return err("orders must be a list of {id, order}")
+
+        from django.db import transaction
+        try:
+            with transaction.atomic():
+                for entry in orders:
+                    if not isinstance(entry, dict):
+                        continue
+                    pid = entry.get("id")
+                    new_order = entry.get("order")
+                    if pid is None or new_order is None:
+                        continue
+                    try:
+                        pid = int(pid)
+                        new_order = int(new_order)
+                    except (TypeError, ValueError):
+                        continue
+                    Profile.objects.filter(pk=pid, user=u).update(order=new_order)
+        except Exception as exc:
+            return err(f"Reorder failed: {exc}", status.HTTP_400_BAD_REQUEST)
+
+        qs = Profile.objects.filter(user=u).order_by("order", "id")
+        return ok("Reordered", data={"profiles": [_serialize_profile(p) for p in qs]})

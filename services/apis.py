@@ -2123,7 +2123,7 @@ class AdminServiceViewSet(ModelViewSet):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, HasServicesViewRule]
     pagination_class = ServiceAdminPagination
-    http_method_names = ["get", "patch", "put", "delete", "head", "options"]
+    http_method_names = ["get", "post", "patch", "put", "delete", "head", "options"]
 
     def get_permissions(self):
         if self.action in ("update", "partial_update", "destroy", "create"):
@@ -2151,6 +2151,102 @@ class AdminServiceViewSet(ModelViewSet):
         page = self.paginate_queryset(self.get_queryset())
         serializer = GetServiceSerializer(page, many=True)
         return self.get_paginated_response(serializer.data)
+
+    def create(self, request, *args, **kwargs):
+        """
+        Create a service owned by a target user (admin impersonation).
+
+        Required payload:
+            user_id : int  — the owner of the new service
+            name    : str  — unique service name (max 30)
+            plan    : int  — Plan.id to bind
+
+        Optional:
+            network : int  — PrivateNetwork.id (must belong to the same user)
+            read_only : bool
+        """
+        data = dict(request.data) if hasattr(request.data, "keys") else {}
+        owner_id = data.get("user_id") or data.get("user")
+        if not owner_id:
+            return Response(
+                {"error": _("user_id is required.")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Validate owner exists
+        try:
+            from users.models import User
+
+            owner = User.objects.get(pk=owner_id)
+        except (User.DoesNotExist, ValueError, TypeError):
+            return Response(
+                {"error": _("Target user not found.")},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Validate plan
+        plan_id = data.get("plan")
+        if not plan_id:
+            return Response(
+                {"error": _("plan is required.")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            from plans.models import Plan
+
+            plan = Plan.objects.get(pk=plan_id)
+        except (Plan.DoesNotExist, ValueError, TypeError):
+            return Response(
+                {"error": _("Plan not found.")},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Optional network — must belong to the target user if provided
+        network_id = data.get("network")
+        if network_id:
+            try:
+                PrivateNetwork.objects.get(pk=network_id, user_id=owner.pk)
+            except (PrivateNetwork.DoesNotExist, ValueError, TypeError):
+                return Response(
+                    {"error": _(
+                        "Network not found or does not belong to the target user."
+                    )},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        # Build a clean payload
+        from django.conf import settings as _dj_settings
+
+        payload = {
+            "name": (data.get("name") or "").strip(),
+            "user": owner.pk,
+            "plan": plan.pk,
+            "network": network_id or None,
+            "read_only": data.get("read_only", not _dj_settings.DEBUG),
+            "status": SERVICE_STATUS_CHOICES.STOPPED.value,
+        }
+        if not payload["name"] or len(payload["name"]) > 30:
+            return Response(
+                {"error": _("name is required and must be ≤ 30 characters.")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = self.get_serializer(data=payload)
+        if serializer.is_valid():
+            instance = serializer.save()
+            return Response(
+                {
+                    "success": _("Service created."),
+                    "id": str(instance.pk),
+                    "pk": str(instance.pk),
+                    "data": GetServiceSerializer(instance).data,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+        return Response(
+            {"error": _("Validation failed."), "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()

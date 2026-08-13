@@ -1,5 +1,5 @@
 """
-Admin panel: read-only Django tables browser (with safe row delete).
+Admin panel: read-only Django tables browser (with safe row delete + FK search).
 
 Security model
 --------------
@@ -12,10 +12,13 @@ Hard delete is restricted to models whose `deletable=True`.
 
 Endpoints (mounted under /api/users/admin/tables/ in api_urls.py):
 
-    GET  tables/                        → list of registered models + schema
-    GET  tables/<model_key>/?page=&q=   → paginated rows
-    GET  tables/<model_key>/<pk>/       → single row
-    DELETE tables/<model_key>/<pk>/     → soft/hard delete (only if deletable)
+    GET  tables/                                       → list of registered models + schema
+    GET  tables/<model_key>/?page=&q=                  → paginated rows
+    GET  tables/<model_key>/<pk>/                      → single row
+    DELETE tables/<model_key>/<pk>/                    → soft/hard delete (only if deletable)
+    GET  tables/<model_key>/fk-search/?q=&field=&limit=→ search rows of a registered table
+                                                          for FK picker autocomplete.
+                                                          Returns [{pk, str}, ...].
 """
 from __future__ import annotations
 
@@ -554,3 +557,89 @@ class AdminTableRowView(APIView):
         except Exception as exc:
             return err(f"Delete failed: {exc}", status.HTTP_400_BAD_REQUEST)
         return ok(f"Deleted: {label}")
+
+
+class AdminTableFKSearchAPIView(APIView):
+    """
+    GET /api/users/admin/tables/<model_key>/fk-search/?q=&field=&limit=
+
+    Lightweight FK picker autocomplete. Searches any registered table by
+    any of its registered `search_fields` (or a single `field` query param)
+    and returns [{pk, str}, ...] — never full rows, never sensitive data.
+
+    Used by TablesPanel's create/edit dialogs to let the admin pick a FK
+    row by typing any field (e.g. username, email, name, public_id).
+
+    Query params:
+        q     : str   — search term (optional; empty → first N rows)
+        field : str   — restrict search to a single field (optional)
+        limit : int   — max results, default 25, hard cap 100
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, HasTablesViewRule]
+
+    def get(self, request, model_key):
+        Model, cfg, error = _get_table_config(model_key)
+        if error:
+            return err(error, status.HTTP_404_NOT_FOUND)
+
+        q = (request.query_params.get("q") or "").strip()
+        field = (request.query_params.get("field") or "").strip()
+        try:
+            limit = int(request.query_params.get("limit") or 25)
+        except (TypeError, ValueError):
+            limit = 25
+        limit = max(1, min(limit, 100))
+
+        qs = Model.objects.all()
+
+        if q:
+            from django.db.models import Q
+
+            if field:
+                # Single-field search: validate field exists on the model
+                valid_field_names = {f.name for f in Model._meta.get_fields()}
+                if field in valid_field_names:
+                    qs = qs.filter(**{f"{field}__icontains": q})
+                # else: no filter — return empty
+                else:
+                    return ok(data={"results": [], "model_key": model_key})
+            else:
+                # Multi-field search across registered search_fields
+                search_fields = cfg.get("search_fields") or []
+                if search_fields:
+                    q_obj = Q()
+                    for fname in search_fields:
+                        q_obj |= Q(**{f"{fname}__icontains": q})
+                    qs = qs.filter(q_obj)
+                else:
+                    # Fallback: search across all string fields
+                    q_obj = Q()
+                    for f in Model._meta.get_fields():
+                        if (
+                            getattr(f, "editable", False)
+                            and not getattr(f, "is_relation", False)
+                            and not _is_sensitive(f, cfg)
+                            and getattr(f, "max_length", None)
+                            and f.name != "id"
+                        ):
+                            q_obj |= Q(**{f"{f.name}__icontains": q})
+                    if q_obj:
+                        qs = qs.filter(q_obj)
+
+        # Ordering
+        try:
+            qs = qs.order_by("-id")
+        except Exception:
+            try:
+                qs = qs.order_by("-pk")
+            except Exception:
+                pass
+
+        qs = qs[:limit]
+
+        # Build {pk, str} pairs — never expose sensitive fields
+        results = []
+        for obj in qs:
+            results.append({"pk": obj.pk, "str": str(obj)[:200]})
+        return ok(data={"results": results, "model_key": model_key, "count": len(results)})
