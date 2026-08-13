@@ -268,7 +268,10 @@ class ConversationListCreateAPIView(APIView):
                 continue
             ConversationParticipant.objects.get_or_create(
                 conversation=conv, user=u,
-                defaults={"role": ConversationParticipant.Role.MEMBER},
+                defaults={
+                    "role": ConversationParticipant.Role.MEMBER,
+                    "can_pin_messages": True,
+                },
             )
         GroupInviteLink.objects.create(conversation=conv, created_by=request.user)
         return ok(
@@ -1125,7 +1128,10 @@ class AddMembersAPIView(APIView):
             obj, created = ConversationParticipant.objects.get_or_create(
                 conversation=conv,
                 user=u,
-                defaults={"role": ConversationParticipant.Role.MEMBER},
+                defaults={
+                    "role": ConversationParticipant.Role.MEMBER,
+                    "can_pin_messages": True,
+                },
             )
             if not created and obj.left_at:
                 obj.left_at = None
@@ -1298,7 +1304,10 @@ class JoinByInviteAPIView(APIView):
         part, created = ConversationParticipant.objects.get_or_create(
             conversation=conv,
             user=request.user,
-            defaults={"role": ConversationParticipant.Role.MEMBER},
+            defaults={
+                "role": ConversationParticipant.Role.MEMBER,
+                "can_pin_messages": True,
+            },
         )
         if not created and part.left_at:
             part.left_at = None
@@ -1524,9 +1533,12 @@ class MessagePinAPIView(APIView):
         ).first()
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
-        # Permission check: owner/admin always allowed, otherwise need can_pin_messages
-        if part.role not in ("owner", "admin") and not part.can_pin_messages:
-            return err("You don't have permission to pin messages", status.HTTP_403_FORBIDDEN)
+        # Permission check: owner/admin always allowed.
+        # In private (direct) chats, every participant can pin.
+        # In group chats, non-owner/admin needs explicit can_pin_messages.
+        if conv.type != Conversation.Type.PRIVATE:
+            if part.role not in ("owner", "admin") and not part.can_pin_messages:
+                return err("You don't have permission to pin messages", status.HTTP_403_FORBIDDEN)
 
         existing = PinnedMessage.objects.filter(conversation=conv, message=msg).first()
         if existing:
@@ -1580,7 +1592,7 @@ class ConversationPinnedMessagesAPIView(APIView):
         ).exists():
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
         pins = (
-            PinnedMessage.objects.filter(conversation=conv)
+            PinnedMessage.objects.filter(conversation=conv, message__is_deleted=False)
             .select_related("message", "message__sender", "pinned_by")
             .order_by("-pinned_at")
         )
@@ -1996,7 +2008,10 @@ class PublicGroupJoinAPIView(APIView):
         part, created = ConversationParticipant.objects.get_or_create(
             conversation=conv,
             user=request.user,
-            defaults={"role": ConversationParticipant.Role.MEMBER},
+            defaults={
+                "role": ConversationParticipant.Role.MEMBER,
+                "can_pin_messages": True,
+            },
         )
         if not created and part.left_at:
             part.left_at = None
@@ -2088,7 +2103,10 @@ class JoinRequestActionAPIView(APIView):
             part, created = ConversationParticipant.objects.get_or_create(
                 conversation=conv,
                 user=req.user,
-                defaults={"role": ConversationParticipant.Role.MEMBER},
+                defaults={
+                    "role": ConversationParticipant.Role.MEMBER,
+                    "can_pin_messages": True,
+                },
             )
             if not created and part.left_at:
                 part.left_at = None
