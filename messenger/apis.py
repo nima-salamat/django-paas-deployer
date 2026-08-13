@@ -673,6 +673,8 @@ class MessageDeleteAPIView(APIView):
         msg.is_deleted = True
         msg.body = ""
         msg.save(update_fields=["is_deleted", "body", "updated_at"])
+        # If the message was pinned, remove its pin row so the pinned bar stays clean
+        PinnedMessage.objects.filter(message=msg).delete()
         try:
             from .consumers import _send
             _send(f"messenger_conv_{msg.conversation_id}", {
