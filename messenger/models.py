@@ -365,3 +365,52 @@ class PinnedMessage(models.Model):
 
     class Meta:
         unique_together = ("conversation", "message")
+
+
+# ---------------------------------------------------------------------------
+# Voice / video call sessions (stored history + ring state)
+# ---------------------------------------------------------------------------
+
+class CallSession(models.Model):
+    """One outbound call attempt in a conversation (Telegram-style)."""
+
+    class Status(models.TextChoices):
+        RINGING = "ringing", _("Ringing")
+        ACTIVE = "active", _("Active")
+        ENDED = "ended", _("Ended")
+        MISSED = "missed", _("Missed")
+        DECLINED = "declined", _("Declined")
+        NO_ANSWER = "no_answer", _("No answer")
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
+    conversation = models.ForeignKey(
+        Conversation, on_delete=models.CASCADE, related_name="call_sessions"
+    )
+    initiator = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, related_name="messenger_calls_started"
+    )
+    is_video = models.BooleanField(default=False)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.RINGING, db_index=True)
+    room_name = models.CharField(max_length=120, blank=True, default="")
+    started_at = models.DateTimeField(auto_now_add=True)
+    answered_at = models.DateTimeField(null=True, blank=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    duration_seconds = models.PositiveIntegerField(default=0)
+    # System message rows linked for chat history
+    start_message = models.ForeignKey(
+        Message, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    end_message = models.ForeignKey(
+        Message, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+
+    class Meta:
+        ordering = ["-started_at"]
+        indexes = [
+            models.Index(fields=["conversation", "status"]),
+            models.Index(fields=["conversation", "-started_at"]),
+        ]
+
+    def __str__(self):
+        return f"Call {self.public_id} ({self.status})"
+
