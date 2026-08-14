@@ -27,6 +27,7 @@ from .serializers import (
     UserMiniSerializer, MessageSerializer, ConversationListSerializer,
     ConversationDetailSerializer, ContactSerializer,
     GroupInviteLinkSerializer, ProfilePhotoSerializer, ProfilePhotoPrivacySerializer,
+    build_message_list_context, build_user_mini_context,
 )
 from .utils import validate_messenger_file, detect_kind, users_blocked, can_see_profile_photo
 
@@ -410,7 +411,7 @@ class MessageListCreateAPIView(APIView):
         qs = (
             Message.objects.filter(conversation=conv, is_deleted=False)
             .select_related("sender", "reply_to", "reply_to__sender", "forwarded_from")
-            .prefetch_related("attachments", "reactions__user")
+            .prefetch_related("attachments")
             .order_by("-created_at")
         )
         # === History visibility for new members (group only) ===
@@ -440,7 +441,10 @@ class MessageListCreateAPIView(APIView):
         has_more = len(items) > limit
         items = items[:limit]
         items.reverse()
-        ser = MessageSerializer(items, many=True, context={"request": request})
+        # Bulk-build context: reaction aggregates + read_state caches + user mini maps
+        # → eliminates N+1 from reactions / readers / contacts / avatars.
+        ctx = build_message_list_context(request, items, conversation_id=conv.id)
+        ser = MessageSerializer(items, many=True, context=ctx)
         next_before = items[0].id if has_more and items else None
         return ok(data={
             "results": ser.data,
@@ -530,12 +534,13 @@ class MessageListCreateAPIView(APIView):
         msg = (
             Message.objects.filter(pk=msg.pk)
             .select_related("sender", "reply_to", "reply_to__sender")
-            .prefetch_related("attachments", "reactions")
+            .prefetch_related("attachments")
             .first()
         )
+        ctx = build_message_list_context(request, [msg], conversation_id=conv.id)
         return ok(
             "Sent",
-            data=MessageSerializer(msg, context={"request": request}).data,
+            data=MessageSerializer(msg, context=ctx).data,
             http_status=status.HTTP_201_CREATED,
         )
 
@@ -2232,3 +2237,161 @@ class ProfileUpdateBroadcastAPIView(APIView):
         except Exception:
             pass
         return ok("Broadcast sent")
+
+
+# ---------------------------------------------------------------------------
+# Jitsi video / audio calls
+# ---------------------------------------------------------------------------
+
+def _jitsi_config(request, conv: Conversation):
+    """Build Jitsi room config for a conversation.
+
+    Uses JITSI_BASE_URL from settings / .env. Room name is deterministic from
+    the conversation public_id so every participant joins the same room.
+    """
+    from django.conf import settings as dj_settings
+    from urllib.parse import urlparse
+
+    base = (getattr(dj_settings, "JITSI_BASE_URL", None) or "https://meet.jit.si").rstrip("/")
+    parsed = urlparse(base)
+    domain = parsed.netloc or "meet.jit.si"
+    # Room: messenger-<public_id> — stable, collision-free
+    room = f"messenger-{conv.public_id.hex}"
+    display_name = (
+        getattr(request.user, "username", None)
+        or getattr(request.user, "email", None)
+        or f"User-{request.user.id}"
+    )
+    # Full deep-link URL (optional JWT-less open)
+    join_url = f"{base}/{room}"
+    return {
+        "domain": domain,
+        "base_url": base,
+        "room": room,
+        "join_url": join_url,
+        "display_name": display_name,
+        "conversation_id": conv.id,
+        "conversation_public_id": str(conv.public_id),
+        "user_id": request.user.id,
+        # Client-side config hints (Telegram / Element-like defaults)
+        "config": {
+            "startWithAudioMuted": False,
+            "startWithVideoMuted": False,
+            "disableModeratorIndicator": False,
+            "enableClosePage": False,
+            "prejoinPageEnabled": False,
+            "disableDeepLinking": True,
+            "toolbarButtons": [
+                "microphone", "camera", "desktop", "fullscreen",
+                "fodeviceselection", "hangup", "profile", "chat",
+                "settings", "raisehand", "videoquality", "filmstrip",
+                "tileview", "select-background", "mute-everyone",
+            ],
+        },
+        "interface_config": {
+            "DISABLE_JOIN_LEAVE_NOTIFICATIONS": True,
+            "SHOW_JITSI_WATERMARK": False,
+            "SHOW_WATERMARK_FOR_GUESTS": False,
+            "TOOLBAR_ALWAYS_VISIBLE": True,
+        },
+    }
+
+
+class ConversationCallStartAPIView(APIView):
+    """Start (or rejoin) a Jitsi call for a conversation.
+
+    POST /conversations/<pk>/call/
+    Body (optional): { "video": true|false, "audio": true|false }
+
+    Returns Jitsi room config. Also broadcasts `call.started` over WebSocket
+    so other participants get an incoming-call UI.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        conv = get_object_or_404(Conversation, pk=pk)
+        part = ConversationParticipant.objects.filter(
+            conversation=conv, user=request.user, left_at__isnull=True
+        ).first()
+        if not part:
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+
+        video = request.data.get("video", True)
+        audio = request.data.get("audio", True)
+        if isinstance(video, str):
+            video = video.lower() in ("1", "true", "yes")
+        if isinstance(audio, str):
+            audio = audio.lower() in ("1", "true", "yes")
+
+        cfg = _jitsi_config(request, conv)
+        cfg["config"]["startWithVideoMuted"] = not bool(video)
+        cfg["config"]["startWithAudioMuted"] = not bool(audio)
+        cfg["media"] = {"video": bool(video), "audio": bool(audio)}
+        cfg["initiator"] = {
+            "id": request.user.id,
+            "username": getattr(request.user, "username", "") or "",
+        }
+
+        try:
+            from .consumers import broadcast_call_event
+            broadcast_call_event(conv.id, {
+                "type": "call.started",
+                "conversation_id": conv.id,
+                "room": cfg["room"],
+                "domain": cfg["domain"],
+                "join_url": cfg["join_url"],
+                "media": cfg["media"],
+                "initiator": cfg["initiator"],
+            }, exclude_user_id=request.user.id)
+        except Exception:
+            logger.exception("broadcast_call_event failed")
+
+        return ok("Call started", data=cfg)
+
+
+class ConversationCallJoinAPIView(APIView):
+    """Get Jitsi config to join an existing call (no broadcast).
+
+    GET /conversations/<pk>/call/
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        conv = get_object_or_404(Conversation, pk=pk)
+        part = ConversationParticipant.objects.filter(
+            conversation=conv, user=request.user, left_at__isnull=True
+        ).first()
+        if not part:
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        cfg = _jitsi_config(request, conv)
+        return ok(data=cfg)
+
+
+class ConversationCallEndAPIView(APIView):
+    """Notify peers that the current user left / ended the call.
+
+    POST /conversations/<pk>/call/end/
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        conv = get_object_or_404(Conversation, pk=pk)
+        part = ConversationParticipant.objects.filter(
+            conversation=conv, user=request.user, left_at__isnull=True
+        ).first()
+        if not part:
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        try:
+            from .consumers import broadcast_call_event
+            broadcast_call_event(conv.id, {
+                "type": "call.ended",
+                "conversation_id": conv.id,
+                "user_id": request.user.id,
+                "username": getattr(request.user, "username", "") or "",
+            })
+        except Exception:
+            logger.exception("broadcast call.ended failed")
+        return ok("Call ended")

@@ -319,3 +319,11 @@ CORS_ALLOW_CREDENTIALS = True
 
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 EMAIL_ADDR = os.getenv("EMAIL_ADDR", "onboarding@resend.dev")
+
+
+# ---------------------------------------------------------------------------
+# Jitsi Meet (messenger calls)
+# ---------------------------------------------------------------------------
+# Public base URL of the Jitsi deployment used for 1:1 and group calls.
+# Override via JITSI_BASE_URL in .env (e.g. https://meet.jit.si or self-hosted).
+JITSI_BASE_URL = (os.environ.get("JITSI_BASE_URL") or "https://meet.jit.si").rstrip("/")

@@ -237,6 +237,22 @@ def broadcast_reaction(msg, user, emoji, action):
     _send(f"messenger_conv_{msg.conversation_id}", data)
 
 
+
+
+def broadcast_call_event(conversation_id, data, exclude_user_id=None):
+    """Fan-out call.started / call.ended to conversation participants."""
+    from .models import ConversationParticipant
+    payload = dict(data)
+    payload.setdefault("conversation_id", conversation_id)
+    _send(f"messenger_conv_{conversation_id}", payload)
+    for uid in ConversationParticipant.objects.filter(
+        conversation_id=conversation_id, left_at__isnull=True
+    ).values_list("user_id", flat=True):
+        if exclude_user_id and uid == exclude_user_id:
+            continue
+        _send(f"messenger_user_{uid}", payload)
+
+
 def broadcast_read(conversation_id, reader_user_id, receipts):
     """Notify the conversation that some messages were just read by `reader_user_id`.
     Senders flip their tick state from 'sent' -> 'read'.

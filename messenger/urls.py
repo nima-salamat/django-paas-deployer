@@ -49,4 +49,8 @@ urlpatterns = [
     path("join-requests/<int:req_id>/", apis.JoinRequestCancelAPIView.as_view()),
     # Profile update broadcast (notifies all conversations of avatar/bio change)
     path("me/profile-broadcast/", apis.ProfileUpdateBroadcastAPIView.as_view()),
+    # Jitsi video/audio calls
+    path("conversations/<int:pk>/call/", apis.ConversationCallStartAPIView.as_view()),
+    path("conversations/<int:pk>/call/join/", apis.ConversationCallJoinAPIView.as_view()),
+    path("conversations/<int:pk>/call/end/", apis.ConversationCallEndAPIView.as_view()),
 ]
