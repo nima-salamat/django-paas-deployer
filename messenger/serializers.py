@@ -13,6 +13,32 @@ from .utils import can_see_profile_photo, detect_kind
 User = get_user_model()
 
 
+
+def _format_call_preview(body: str) -> str:
+    """Human-readable preview for call system messages in chat list."""
+    import json
+    try:
+        data = json.loads(body[9:])
+    except Exception:
+        return "Call"
+    is_video = bool(data.get("is_video"))
+    kind = "Video call" if is_video else "Voice call"
+    event = data.get("event")
+    status = data.get("status") or ""
+    dur = int(data.get("duration") or 0)
+    if event == "started":
+        return f"{kind} started"
+    if status in ("missed", "no_answer"):
+        return f"Missed {kind.lower()}"
+    if status == "declined":
+        return f"Declined {kind.lower()}"
+    if status == "busy":
+        return f"Busy · {kind.lower()}"
+    if dur > 0:
+        m, s = divmod(dur, 60)
+        return f"{kind} · {m}:{s:02d}"
+    return f"{kind} ended"
+
 class UserMiniSerializer(serializers.ModelSerializer):
     """Lightweight user card.
 
@@ -298,12 +324,16 @@ class ConversationListSerializer(serializers.ModelSerializer):
         has_att = getattr(msg, "_has_attachments", None)
         if has_att is None:
             has_att = msg.attachments.exists()
+        body = msg.body or ""
+        if body.startswith("__call__:"):
+            body = _format_call_preview(body)
         return {
             "id": msg.id,
-            "body": (msg.body or "")[:100],
+            "body": body[:100],
             "sender_id": msg.sender_id,
             "created_at": msg.created_at,
             "has_attachments": bool(has_att),
+            "is_system": bool(getattr(msg, "is_system", False)),
         }
 
     def get_unread_count(self, obj):

@@ -2309,7 +2309,7 @@ def _jitsi_config(request, conv: Conversation, room_name: str | None = None):
     }
 
 
-def _finish_call(session, status: str, ended_by_user=None):
+def _finish_call(session, status: str, ended_by_user=None, display_status: str | None = None):
     """Mark session finished, post system message, broadcast."""
     from .models import CallSession, Message
     from .consumers import broadcast_message, broadcast_call_event
@@ -2335,11 +2335,12 @@ def _finish_call(session, status: str, ended_by_user=None):
     if session.initiator_id:
         initiator_name = getattr(session.initiator, "username", None) or f"User-{session.initiator_id}"
 
+    shown = display_status or status
     payload = {
         "v": 1,
         "event": "ended",
         "call_id": str(session.public_id),
-        "status": status,
+        "status": shown,
         "is_video": bool(session.is_video),
         "duration": session.duration_seconds,
         "initiator_id": session.initiator_id,
@@ -2362,7 +2363,7 @@ def _finish_call(session, status: str, ended_by_user=None):
             "type": "call.ended",
             "conversation_id": session.conversation_id,
             "call_id": str(session.public_id),
-            "status": status,
+            "status": shown,
             "duration": session.duration_seconds,
             "is_video": bool(session.is_video),
             "user_id": getattr(ended_by_user, "id", None),
@@ -2577,6 +2578,7 @@ class ConversationCallEndAPIView(APIView):
             "no_answer": CallSession.Status.NO_ANSWER,
             "missed": CallSession.Status.MISSED,
             "ended": CallSession.Status.ENDED,
+            "busy": CallSession.Status.DECLINED,
         }
         # Caller cancels while ringing → missed for callee
         if session.status == CallSession.Status.RINGING:
@@ -2587,7 +2589,12 @@ class ConversationCallEndAPIView(APIView):
         else:
             final = status_map.get(reason, CallSession.Status.ENDED)
 
-        _finish_call(session, final, ended_by_user=request.user)
+        _finish_call(
+            session,
+            final,
+            ended_by_user=request.user,
+            display_status="busy" if reason == "busy" else None,
+        )
         return ok("Call ended", data={
             "call_id": str(session.public_id),
             "status": session.status,

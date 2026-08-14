@@ -114,6 +114,13 @@ class MessengerConsumer(AsyncJsonWebsocketConsumer):
         await self.send_json({"type": "connected", "user_id": user.id})
         # Presence: mark online and broadcast
         await database_sync_to_async(set_user_online)(user.id)
+        # Deliver any still-ringing calls (user was offline when call started)
+        try:
+            pending = await database_sync_to_async(_pending_ringing_for_user)(user.id)
+            for item in pending:
+                await self.send_json(item)
+        except Exception:
+            pass
 
     async def disconnect(self, code):
         for g in getattr(self, "groups_joined", []):
