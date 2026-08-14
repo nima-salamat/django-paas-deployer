@@ -136,6 +136,13 @@ class MessengerConsumer(AsyncJsonWebsocketConsumer):
             # Refresh online presence on ping
             if getattr(self, "user", None):
                 await database_sync_to_async(set_user_online)(self.user.id)
+                # Re-check ringing calls (covers offline→online within 30s window)
+                try:
+                    pending = await database_sync_to_async(_pending_ringing_for_user)(self.user.id)
+                    for item in pending:
+                        await self.send_json(item)
+                except Exception:
+                    pass
             await self.send_json({"type": "pong"})
             return
         if t == "subscribe":

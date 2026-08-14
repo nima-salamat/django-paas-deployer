@@ -2601,3 +2601,65 @@ class ConversationCallEndAPIView(APIView):
             "duration": session.duration_seconds,
         })
 
+
+
+class ConversationCallActiveAPIView(APIView):
+    """Return the current ringing/active call for this conversation (if any).
+
+    GET /conversations/<pk>/call/active/
+    Used so a user who opens the chat (or comes online mid-ring) can join.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        from .models import CallSession
+        from django.utils import timezone
+        from datetime import timedelta
+
+        conv = get_object_or_404(Conversation, pk=pk)
+        part = ConversationParticipant.objects.filter(
+            conversation=conv, user=request.user, left_at__isnull=True
+        ).first()
+        if not part:
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+
+        cutoff = timezone.now() - timedelta(seconds=40)
+        session = (
+            CallSession.objects.filter(
+                conversation=conv,
+                status__in=[CallSession.Status.RINGING, CallSession.Status.ACTIVE],
+                started_at__gte=cutoff,
+            )
+            .select_related("initiator")
+            .order_by("-started_at")
+            .first()
+        )
+        if not session:
+            return ok(data={"active": False})
+
+        initiator_name = ""
+        if session.initiator_id:
+            initiator_name = getattr(session.initiator, "username", None) or f"User-{session.initiator_id}"
+        elapsed = int((timezone.now() - session.started_at).total_seconds())
+        remaining = max(0, 30 - elapsed) if session.status == CallSession.Status.RINGING else None
+        cfg = _jitsi_config(request, conv, room_name=session.room_name or None)
+        return ok(data={
+            "active": True,
+            "call_id": str(session.public_id),
+            "status": session.status,
+            "is_video": bool(session.is_video),
+            "media": {"video": bool(session.is_video), "audio": True},
+            "room": session.room_name or cfg.get("room"),
+            "domain": cfg.get("domain"),
+            "join_url": cfg.get("join_url"),
+            "ring_remaining": remaining,
+            "initiator": {"id": session.initiator_id, "username": initiator_name},
+            "started_at": session.started_at.isoformat(),
+            "config": cfg.get("config"),
+            "interface_config": cfg.get("interface_config"),
+            "display_name": cfg.get("display_name"),
+            "conversation_id": conv.id,
+            "base_url": cfg.get("base_url"),
+        })
+

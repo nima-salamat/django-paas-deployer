@@ -52,5 +52,6 @@ urlpatterns = [
     # Jitsi video/audio calls
     path("conversations/<int:pk>/call/", apis.ConversationCallStartAPIView.as_view()),
     path("conversations/<int:pk>/call/join/", apis.ConversationCallJoinAPIView.as_view()),
+    path("conversations/<int:pk>/call/active/", apis.ConversationCallActiveAPIView.as_view()),
     path("conversations/<int:pk>/call/end/", apis.ConversationCallEndAPIView.as_view()),
 ]
