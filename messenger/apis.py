@@ -2571,8 +2571,7 @@ class ConversationCallEndAPIView(APIView):
                 })
             except Exception:
                 pass
-            return ok("Call ended")
-
+            return o
         status_map = {
             "declined": CallSession.Status.DECLINED,
             "no_answer": CallSession.Status.NO_ANSWER,
@@ -2595,4 +2594,3 @@ class ConversationCallEndAPIView(APIView):
             "duration": session.duration_seconds,
         })
 
-k("Call ended")
