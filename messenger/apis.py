@@ -51,6 +51,76 @@ def err(message, http_status=status.HTTP_400_BAD_REQUEST, extra=None):
     return Response(body, status=http_status)
 
 
+def _attach_list_side_data(conversations, user):
+    """Attach last_message + unread_count on each Conversation in O(1) queries.
+
+    Without this, ConversationListSerializer issues 2+ queries *per chat*
+    (last message + unread count) — the main reason the list felt "broken slow".
+    """
+    if not conversations:
+        return
+    conv_ids = [c.id for c in conversations]
+
+    # --- last non-deleted, non-scheduled message per conversation (1 query) ---
+    # DISTINCT ON is Postgres-specific; project already uses postgres.
+    last_rows = (
+        Message.objects.filter(
+            conversation_id__in=conv_ids,
+            is_deleted=False,
+            is_scheduled=False,
+        )
+        .order_by("conversation_id", "-created_at", "-id")
+        .distinct("conversation_id")
+        .only(
+            "id", "conversation_id", "body", "sender_id", "created_at",
+            "is_system", "is_scheduled",
+        )
+    )
+    last_by_conv = {m.conversation_id: m for m in last_rows}
+
+    # attachments existence for those last messages (1 query)
+    last_ids = [m.id for m in last_by_conv.values()]
+    att_ids = set()
+    if last_ids:
+        att_ids = set(
+            MessageAttachment.objects.filter(message_id__in=last_ids)
+            .values_list("message_id", flat=True)
+            .distinct()
+        )
+
+    # --- unread counts: one grouped SQL join (not N COUNT queries) ---
+    from django.db import connection
+    unread_map = {cid: 0 for cid in conv_ids}
+    if conv_ids:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT m.conversation_id, COUNT(*)
+                FROM messenger_message m
+                INNER JOIN messenger_conversationparticipant p
+                    ON p.conversation_id = m.conversation_id
+                   AND p.user_id = %s
+                   AND p.left_at IS NULL
+                WHERE m.conversation_id = ANY(%s)
+                  AND m.is_deleted = FALSE
+                  AND m.is_scheduled = FALSE
+                  AND (m.sender_id IS NULL OR m.sender_id <> %s)
+                  AND (p.last_read_at IS NULL OR m.created_at > p.last_read_at)
+                GROUP BY m.conversation_id
+                """,
+                [user.id, conv_ids, user.id],
+            )
+            for cid, cnt in cursor.fetchall():
+                unread_map[int(cid)] = int(cnt)
+
+    for c in conversations:
+        msg = last_by_conv.get(c.id)
+        if msg is not None:
+            msg._has_attachments = msg.id in att_ids
+        c._prefetched_last_message = msg
+        c.annotated_unread = unread_map.get(c.id, 0)
+
+
 class UserSearchPagination(PageNumberPagination):
     page_size = 20
     page_size_query_param = "page_size"
@@ -180,19 +250,13 @@ class ConversationListCreateAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-
-        try:
-            from .tasks import deliver_due_scheduled_messages
-            deliver_due_scheduled_messages(limit=30)
-        except Exception:
-            pass
+        # Scheduled delivery is handled by Celery beat — do NOT run it on every
+        # list request (that alone was adding tens/hundreds of ms per call).
 
         page = int(request.query_params.get("page") or 1)
         page_size = min(50, int(request.query_params.get("page_size") or 30))
 
         # ----- Hot path: per-user conversation list cache -----
-        # Stores the full ordered serialized list (max 200). Pagination is
-        # applied in-process so any page_size works without extra keys.
         try:
             from .message_cache import ConversationCacheService
             cached_list = ConversationCacheService.get_user_conv_list(request.user.id)
@@ -215,34 +279,38 @@ class ConversationListCreateAPIView(APIView):
                 participants__user=request.user, participants__left_at__isnull=True
             )
             .distinct()
+            .select_related("created_by")
             .prefetch_related(
                 Prefetch(
                     "participants",
                     queryset=ConversationParticipant.objects.filter(left_at__isnull=True).select_related("user"),
+                    to_attr="_prefetched_active_participants",
                 )
             )
         )
-        # Sort: pinned (per-user) first, then by last_message_at desc.
-        # We sort in Python because is_pinned is per-participant, not per-conversation.
         items = list(qs[:200])
-        # Build a quick lookup of pin state for the current user
         pin_map = {}
         for c in items:
-            part = next((p for p in c.participants.all() if p.user_id == request.user.id), None)
+            parts = getattr(c, "_prefetched_active_participants", None)
+            if parts is None:
+                parts = list(c.participants.all())
+            part = next((p for p in parts if p.user_id == request.user.id), None)
             pin_map[c.id] = bool(part and part.is_pinned)
         items.sort(
             key=lambda c: (
-                not pin_map.get(c.id, False),  # pinned first (False < True)
+                not pin_map.get(c.id, False),
                 -(c.last_message_at.timestamp() if c.last_message_at else c.created_at.timestamp()),
             )
         )
+
+        # ---- Kill N+1: bulk last_message + unread_count (2 queries total) ----
+        _attach_list_side_data(items, request.user)
+
         start = (page - 1) * page_size
         end = start + page_size
         total = len(items)
-        page_items = items[start:end]
         ser = ConversationListSerializer(items, many=True, context={"request": request})
         full_data = list(ser.data)
-        # Populate cache with the full ordered list (not just this page)
         try:
             from .message_cache import ConversationCacheService
             ConversationCacheService.set_user_conv_list(request.user.id, full_data)
@@ -441,12 +509,7 @@ class MessageListCreateAPIView(APIView):
         return conv.participants.filter(user=user, left_at__isnull=True).first()
 
     def get(self, request, pk):
-        # Deliver any due scheduled messages before listing (works even without celery beat)
-        try:
-            from .tasks import deliver_due_scheduled_messages
-            deliver_due_scheduled_messages(limit=50)
-        except Exception:
-            logger.exception("inline deliver_scheduled failed")
+        # Scheduled delivery is Celery-only on the hot path (see beat schedule).
         conv = get_object_or_404(Conversation, pk=pk)
         part = self.get_participant(conv, request.user)
         if not part:
@@ -461,8 +524,6 @@ class MessageListCreateAPIView(APIView):
                 pass
         limit = min(50, int(request.query_params.get("limit") or 40))
 
-        # History-visibility restrictions for ordinary group members prevent a
-        # pure cache hit (the cached window is the global latest messages).
         history_restricted = False
         if conv.type == Conversation.Type.GROUP and part.role not in ("owner", "admin"):
             visibility = getattr(conv, "history_visibility", "all") or "all"
@@ -470,7 +531,7 @@ class MessageListCreateAPIView(APIView):
                 history_restricted = True
 
         # ------------------------------------------------------------------
-        # Hot-cache path (latest N messages in Redis)
+        # Hot-cache path (latest N messages in Redis, per conversation)
         # ------------------------------------------------------------------
         if not history_restricted:
             try:
@@ -492,7 +553,7 @@ class MessageListCreateAPIView(APIView):
                 logger.exception("message cache read failed; falling back to DB")
 
         # ------------------------------------------------------------------
-        # Postgres path (source of truth) + opportunistic cache fill
+        # Postgres path (source of truth)
         # ------------------------------------------------------------------
         from django.db.models import Q
         qs = (
@@ -500,7 +561,7 @@ class MessageListCreateAPIView(APIView):
             .filter(Q(is_scheduled=False) | Q(is_scheduled=True, sender=request.user))
             .select_related("sender", "reply_to", "reply_to__sender", "forwarded_from")
             .prefetch_related("attachments", "reactions")
-            .order_by("-created_at")
+            .order_by("-id")  # id is monotonic with created_at and matches cache scores
         )
         if history_restricted:
             qs = qs.filter(created_at__gte=part.joined_at)
@@ -511,26 +572,19 @@ class MessageListCreateAPIView(APIView):
         items = items[:limit]
         items.reverse()
 
-        # When we served the latest page from DB, populate / refresh the
-        # Redis window so subsequent requests become cache hits.
+        # Populate Redis in background so this response is not delayed.
         if not history_restricted and before_id is None and items:
             try:
-                from .message_cache import MessageCacheService
-                from django.conf import settings as dj_settings
-                cache_size = int(getattr(dj_settings, "MESSAGE_CACHE_SIZE", 1000) or 1000)
-                # Fetch a full window for the cache (not just the page size)
-                window = list(
-                    Message.objects.filter(conversation=conv, is_deleted=False, is_scheduled=False)
-                    .select_related(
-                        "sender", "reply_to", "reply_to__sender", "forwarded_from"
-                    )
-                    .prefetch_related("attachments", "reactions")
-                    .order_by("-id")[:cache_size]
-                )
-                window.reverse()
-                MessageCacheService.cache_messages(conv.id, window)
+                from .message_cache import MessageCacheService, run_after_commit
+                conv_id = conv.id
+                # Seed with the page we already loaded (instant), then full rebuild.
+                try:
+                    MessageCacheService.cache_messages(conv_id, items)
+                except Exception:
+                    logger.exception("seed message cache failed")
+                run_after_commit(lambda: MessageCacheService.rebuild_chat_cache(conv_id))
             except Exception:
-                logger.exception("message cache populate failed")
+                logger.exception("message cache populate schedule failed")
 
         ctx = build_message_list_context(request, items, conversation_id=conv.id)
         ser = MessageSerializer(items, many=True, context=ctx)
