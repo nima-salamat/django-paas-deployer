@@ -36,7 +36,7 @@ def err(message, http_status=status.HTTP_400_BAD_REQUEST, extra=None):
     return Response(body, status=http_status)
 
 class TicketPagination(PageNumberPagination):
-    page_size = 15
+    page_size = 10
     page_size_query_param = "page_size"
     max_page_size = 50
 
@@ -98,6 +98,8 @@ class MyTicketListCreateAPIView(APIView):
         search = request.query_params.get("search", "").strip()
         if search:
             qs = qs.filter(Q(subject__icontains=search) | Q(public_id__icontains=search))
+        # Newest activity first (model Meta already orders by -last_message_at; keep explicit)
+        qs = qs.order_by("-last_message_at", "-created_at", "-id")
         paginator = TicketPagination()
         page = paginator.paginate_queryset(qs, request)
         return paginator.get_paginated_response(TicketListSerializer(page, many=True, context={"request": request}).data)
