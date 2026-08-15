@@ -180,6 +180,12 @@ class ConversationListCreateAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+
+        try:
+            from .tasks import deliver_due_scheduled_messages
+            deliver_due_scheduled_messages(limit=30)
+        except Exception:
+            pass
         qs = (
             Conversation.objects.filter(
                 participants__user=request.user, participants__left_at__isnull=True
@@ -406,6 +412,12 @@ class MessageListCreateAPIView(APIView):
         return conv.participants.filter(user=user, left_at__isnull=True).first()
 
     def get(self, request, pk):
+        # Deliver any due scheduled messages before listing (works even without celery beat)
+        try:
+            from .tasks import deliver_due_scheduled_messages
+            deliver_due_scheduled_messages(limit=50)
+        except Exception:
+            logger.exception("inline deliver_scheduled failed")
         conv = get_object_or_404(Conversation, pk=pk)
         part = self.get_participant(conv, request.user)
         if not part:
@@ -792,7 +804,7 @@ class MarkReadAPIView(APIView):
                     pass
 
         msg_qs = Message.objects.filter(
-            conversation_id=pk, is_deleted=False, is_system=False
+            conversation_id=pk, is_deleted=False, is_system=False, is_scheduled=False
         ).exclude(sender=request.user)
 
         if message_ids:

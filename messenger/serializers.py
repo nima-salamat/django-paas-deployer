@@ -318,8 +318,15 @@ class ConversationListSerializer(serializers.ModelSerializer):
     def get_last_message(self, obj):
         # Prefer annotation / prefetched last message
         msg = getattr(obj, "_prefetched_last_message", None)
+        # Never surface still-pending scheduled messages in the chat list
+        if msg is not None and getattr(msg, "is_scheduled", False):
+            msg = None
         if msg is None:
-            msg = obj.messages.filter(is_deleted=False).order_by("-created_at").first()
+            msg = (
+                obj.messages.filter(is_deleted=False, is_scheduled=False)
+                .order_by("-created_at")
+                .first()
+            )
         if not msg:
             return None
         has_att = getattr(msg, "_has_attachments", None)
@@ -347,10 +354,18 @@ class ConversationListSerializer(serializers.ModelSerializer):
             return 0
         part = obj.participants.filter(user=request.user, left_at__isnull=True).first()
         if not part or not part.last_read_at:
-            return obj.messages.filter(is_deleted=False).exclude(sender=request.user).count()
-        return obj.messages.filter(
-            is_deleted=False, created_at__gt=part.last_read_at
-        ).exclude(sender=request.user).count()
+            return (
+                obj.messages.filter(is_deleted=False, is_scheduled=False)
+                .exclude(sender=request.user)
+                .count()
+            )
+        return (
+            obj.messages.filter(
+                is_deleted=False, is_scheduled=False, created_at__gt=part.last_read_at
+            )
+            .exclude(sender=request.user)
+            .count()
+        )
 
     def get_peer(self, obj):
         if obj.type != Conversation.Type.PRIVATE:

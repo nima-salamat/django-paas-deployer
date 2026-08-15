@@ -27,32 +27,48 @@ def finalize_unanswered_call(call_public_id: str):
 
 
 
-@shared_task(name="messenger.tasks.deliver_scheduled_messages")
-def deliver_scheduled_messages():
-    """Publish due scheduled messages (run every ~30s via celery beat)."""
+def deliver_due_scheduled_messages(limit=100):
+    """Publish due scheduled messages. Safe to call from views (no broker required).
+
+    Returns number of messages delivered.
+    """
     from django.utils import timezone
-    from .models import Message
+    from .models import Message, Conversation
+
     now = timezone.now()
     due = list(
         Message.objects.filter(is_scheduled=True, is_deleted=False, scheduled_for__lte=now)
-        .select_related("sender", "conversation")[:100]
+        .select_related("sender", "conversation", "reply_to", "reply_to__sender")
+        .prefetch_related("attachments")[:limit]
     )
+    delivered = 0
     for msg in due:
         try:
-            msg.is_scheduled = False
-            # Refresh created_at to "now" so it appears at the bottom of the chat
-            Message.objects.filter(pk=msg.pk).update(
+            # Flip flag + bump timestamps so it lands at the bottom of the chat
+            Message.objects.filter(pk=msg.pk, is_scheduled=True).update(
                 is_scheduled=False,
                 created_at=now,
                 updated_at=now,
             )
             msg.refresh_from_db()
-            from .models import Conversation
+            if msg.is_scheduled:
+                # Lost a race with another worker — skip
+                continue
             Conversation.objects.filter(pk=msg.conversation_id).update(
                 last_message_at=now, updated_at=now
             )
-            from .consumers import broadcast_message
-            broadcast_message(msg)
+            try:
+                from .consumers import broadcast_message
+                broadcast_message(msg)
+            except Exception:
+                logger.exception("broadcast delivered scheduled message %s failed", msg.pk)
+            delivered += 1
         except Exception:
             logger.exception("deliver scheduled message %s failed", msg.pk)
-    return len(due)
+    return delivered
+
+
+@shared_task(name="messenger.tasks.deliver_scheduled_messages")
+def deliver_scheduled_messages():
+    """Celery entrypoint — also used by admin force-deliver."""
+    return deliver_due_scheduled_messages()

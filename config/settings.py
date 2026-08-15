@@ -283,6 +283,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "deployments.celery.schedules.monitor_services",
         "schedule": 20.0,
     },
+    "messenger_deliver_scheduled_messages": {
+        "task": "messenger.tasks.deliver_scheduled_messages",
+        "schedule": 15.0,  # every 15s
+    },
 }
 CACHES = {
     'default': {
