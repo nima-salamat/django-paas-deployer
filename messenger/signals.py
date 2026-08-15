@@ -42,21 +42,42 @@ def conversation_pre_delete(sender, instance, **kwargs):
 
 
 @receiver(pre_delete, sender=Message)
-def message_pre_delete_pin_cleanup(sender, instance, **kwargs):
-    """When a Message row is hard-deleted, remove its PinnedMessage row too.
+def message_pre_delete_cleanup(sender, instance, **kwargs):
+    """Hard-delete side effects for Message rows.
 
-    This covers:
-    - Cascade deletes from ConversationCleanupAPIView
-    - Any future hard-delete paths
-    - The ORM CASCADE on PinnedMessage.message already handles this, but
-      having an explicit signal ensures the pin row is gone BEFORE the
-      message row (avoids potential integrity issues) and makes the
-      behaviour visible/auditable.
-
-    For soft-deletes (is_deleted=True), the MessageDeleteAPIView handles
-    pin cleanup directly before setting is_deleted.
+    - Remove PinnedMessage rows explicitly (CASCADE would also do this;
+      signal keeps behaviour auditable and runs before the row is gone).
+    - Attachment files are cleaned by MessageAttachment.pre_delete via CASCADE.
     """
     try:
         PinnedMessage.objects.filter(message_id=instance.pk).delete()
     except Exception:
         logger.exception("pin cleanup for message %s failed", instance.pk)
+
+
+def soft_delete_message_side_effects(message):
+    """Shared cleanup for soft-deletes (API delete + cancel-schedule).
+
+    Removes pins and attachment files so cancelled scheduled messages never
+    leave orphan media, and soft-deleted messages drop pins consistently.
+    """
+    if not message or not getattr(message, "pk", None):
+        return
+    try:
+        PinnedMessage.objects.filter(message_id=message.pk).delete()
+    except Exception:
+        logger.exception("soft pin cleanup for message %s failed", message.pk)
+
+    try:
+        for att in MessageAttachment.objects.filter(message_id=message.pk):
+            try:
+                if att.file and getattr(att.file, "path", None):
+                    _delete_quietly(att.file.path)
+            except Exception:
+                logger.exception("soft attachment file cleanup failed")
+            try:
+                att.delete()
+            except Exception:
+                logger.exception("soft attachment row cleanup failed")
+    except Exception:
+        logger.exception("soft attachment cleanup for message %s failed", message.pk)

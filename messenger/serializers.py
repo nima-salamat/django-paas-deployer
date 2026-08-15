@@ -150,6 +150,7 @@ class ReactionSerializer(serializers.ModelSerializer):
 
 
 class MessageSerializer(serializers.ModelSerializer):
+    # scheduled_for / is_scheduled included via Meta fields
     """Optimized message payload.
 
     - reactions: aggregated list of {emoji, count, mine}  (no per-user payloads)
@@ -170,7 +171,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "forwarded_from", "forwarded_from_user", "forwarded_from_message",
             "is_edited", "is_system", "is_deleted", "created_at", "updated_at",
             "attachments", "reactions", "read_state",
-        )
+            "scheduled_for", "is_scheduled",)
         read_only_fields = fields
 
     def get_reactions(self, obj):

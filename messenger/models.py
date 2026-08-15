@@ -286,6 +286,9 @@ class Message(models.Model):
     is_edited = models.BooleanField(default=False)
     is_system = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)  # soft delete for others
+    # When set in the future, message is held (visible only to sender) until due.
+    scheduled_for = models.DateTimeField(null=True, blank=True, db_index=True)
+    is_scheduled = models.BooleanField(default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -294,10 +297,14 @@ class Message(models.Model):
         indexes = [
             models.Index(fields=["conversation", "created_at"]),
             models.Index(fields=["conversation", "id"]),
+            models.Index(fields=["is_scheduled", "scheduled_for"]),
         ]
 
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
+        # Do not bump conversation activity for still-pending scheduled messages
+        if self.is_scheduled and self.scheduled_for:
+            return
         Conversation.objects.filter(pk=self.conversation_id).update(
             last_message_at=self.created_at, updated_at=timezone.now()
         )

@@ -410,8 +410,10 @@ class MessageListCreateAPIView(APIView):
         part = self.get_participant(conv, request.user)
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        from django.db.models import Q
         qs = (
             Message.objects.filter(conversation=conv, is_deleted=False)
+            .filter(Q(is_scheduled=False) | Q(is_scheduled=True, sender=request.user))
             .select_related("sender", "reply_to", "reply_to__sender", "forwarded_from")
             .prefetch_related("attachments")
             .order_by("-created_at")
@@ -472,7 +474,21 @@ class MessageListCreateAPIView(APIView):
             raw_body = raw_body[0] if raw_body else ""
         if not isinstance(raw_body, str):
             raw_body = "" if raw_body is None else str(raw_body)
-        body = raw_body.strip()[:10000]
+        full_body = raw_body.strip()
+
+        # Optional schedule (ISO datetime). Message stays private to sender until due.
+        scheduled_raw = request.data.get("scheduled_for") or request.data.get("schedule_at")
+        scheduled_for = None
+        if scheduled_raw:
+            from django.utils.dateparse import parse_datetime
+            from django.utils import timezone as _tz
+            scheduled_for = parse_datetime(str(scheduled_raw))
+            if scheduled_for is None:
+                return err("Invalid scheduled_for datetime")
+            if _tz.is_naive(scheduled_for):
+                scheduled_for = _tz.make_aware(scheduled_for, _tz.get_current_timezone())
+            if scheduled_for <= _tz.now():
+                return err("scheduled_for must be in the future")
 
         reply_to_id = request.data.get("reply_to")
         reply_to = None
@@ -480,7 +496,7 @@ class MessageListCreateAPIView(APIView):
             reply_to = Message.objects.filter(pk=reply_to_id, conversation=conv).first()
 
         files = request.FILES.getlist("files") or request.FILES.getlist("file") or []
-        if not body and not files:
+        if not full_body and not files:
             return err("Message body or attachment required")
 
         if files and not part.can_send_media:
@@ -506,43 +522,77 @@ class MessageListCreateAPIView(APIView):
                 extra={"errors": invalid_files},
             )
 
-        msg = Message.objects.create(
-            conversation=conv,
-            sender=request.user,
-            body=body,
-            reply_to=reply_to,
-        )
+        # Split oversized text into multiple messages (DB TextField is fine, but
+        # keep a practical per-message cap for UX / WS payload size).
+        MAX_CHUNK = 4000
+        if full_body and len(full_body) > MAX_CHUNK and not valid_files:
+            chunks = []
+            rest = full_body
+            while rest:
+                if len(rest) <= MAX_CHUNK:
+                    chunks.append(rest)
+                    break
+                cut = rest.rfind("\n", 0, MAX_CHUNK)
+                if cut < MAX_CHUNK // 2:
+                    cut = MAX_CHUNK
+                chunks.append(rest[:cut])
+                rest = rest[cut:].lstrip("\n")
+        else:
+            chunks = [full_body[:10000]] if full_body else [""]
 
-        for f in valid_files:
-            content_type = getattr(f, "content_type", "") or mimetypes.guess_type(getattr(f, "name", ""))[0] or ""
-            kind = detect_kind(f.name, content_type)
-            MessageAttachment.objects.create(
+        created_msgs = []
+        is_sched = bool(scheduled_for)
+        for idx, chunk in enumerate(chunks):
+            msg = Message.objects.create(
                 conversation=conv,
-                message=msg,
-                uploaded_by=request.user,
-                file=f,
-                original_filename=getattr(f, "name", "file")[:255],
-                content_type=content_type,
-                size=getattr(f, "size", 0) or 0,
-                kind=kind,
+                sender=request.user,
+                body=chunk,
+                reply_to=reply_to if idx == 0 else None,
+                scheduled_for=scheduled_for if is_sched else None,
+                is_scheduled=is_sched,
             )
+            # Attach files only to the first chunk
+            if idx == 0:
+                for f in valid_files:
+                    content_type = getattr(f, "content_type", "") or mimetypes.guess_type(getattr(f, "name", ""))[0] or ""
+                    kind = detect_kind(f.name, content_type)
+                    MessageAttachment.objects.create(
+                        conversation=conv,
+                        message=msg,
+                        uploaded_by=request.user,
+                        file=f,
+                        original_filename=getattr(f, "name", "file")[:255],
+                        content_type=content_type,
+                        size=getattr(f, "size", 0) or 0,
+                        kind=kind,
+                    )
+            created_msgs.append(msg)
+            if not is_sched:
+                try:
+                    from .consumers import broadcast_message
+                    broadcast_message(msg)
+                except Exception:
+                    logger.exception("broadcast failed")
 
-        try:
-            from .consumers import broadcast_message
-            broadcast_message(msg)
-        except Exception:
-            logger.exception("broadcast failed")
-
-        msg = (
-            Message.objects.filter(pk=msg.pk)
+        # Return last created (or single) for UI
+        last = created_msgs[-1]
+        last = (
+            Message.objects.filter(pk=last.pk)
             .select_related("sender", "reply_to", "reply_to__sender")
             .prefetch_related("attachments")
             .first()
         )
-        ctx = build_message_list_context(request, [msg], conversation_id=conv.id)
+        ctx = build_message_list_context(request, created_msgs, conversation_id=conv.id)
+        payload = MessageSerializer(last, context=ctx).data
+        if len(created_msgs) > 1:
+            payload = {
+                **payload,
+                "split_count": len(created_msgs),
+                "messages": MessageSerializer(created_msgs, many=True, context=ctx).data,
+            }
         return ok(
-            "Sent",
-            data=MessageSerializer(msg, context=ctx).data,
+            "Scheduled" if is_sched else "Sent",
+            data=payload,
             http_status=status.HTTP_201_CREATED,
         )
 
@@ -681,10 +731,15 @@ class MessageDeleteAPIView(APIView):
             if not part or part.role not in ("owner", "admin"):
                 return err("Forbidden", status.HTTP_403_FORBIDDEN)
         msg.is_deleted = True
+        msg.is_scheduled = False
         msg.body = ""
-        msg.save(update_fields=["is_deleted", "body", "updated_at"])
-        # If the message was pinned, remove its pin row so the pinned bar stays clean
-        PinnedMessage.objects.filter(message=msg).delete()
+        msg.save(update_fields=["is_deleted", "is_scheduled", "body", "updated_at"])
+        # Pins + attachment files (important for cancelled schedules / soft delete)
+        try:
+            from .signals import soft_delete_message_side_effects
+            soft_delete_message_side_effects(msg)
+        except Exception:
+            PinnedMessage.objects.filter(message=msg).delete()
         try:
             from .consumers import _send
             _send(f"messenger_conv_{msg.conversation_id}", {
@@ -1141,8 +1196,10 @@ class AddMembersAPIView(APIView):
                 },
             )
             if not created and obj.left_at:
+                from django.utils import timezone as _tz
                 obj.left_at = None
-                obj.save(update_fields=["left_at"])
+                obj.joined_at = _tz.now()
+                obj.save(update_fields=["left_at", "joined_at"])
                 created = True
             if created:
                 added.append(u)
@@ -1317,8 +1374,10 @@ class JoinByInviteAPIView(APIView):
             },
         )
         if not created and part.left_at:
+            from django.utils import timezone as _tz
             part.left_at = None
-            part.save(update_fields=["left_at"])
+            part.joined_at = _tz.now()
+            part.save(update_fields=["left_at", "joined_at"])
         link.uses += 1
         link.save(update_fields=["uses"])
         # Post a system message about the new member
@@ -2021,8 +2080,10 @@ class PublicGroupJoinAPIView(APIView):
             },
         )
         if not created and part.left_at:
+            from django.utils import timezone as _tz
             part.left_at = None
-            part.save(update_fields=["left_at"])
+            part.joined_at = _tz.now()
+            part.save(update_fields=["left_at", "joined_at"])
         # System message about the new member
         try:
             msg = Message.objects.create(
@@ -2116,8 +2177,10 @@ class JoinRequestActionAPIView(APIView):
                 },
             )
             if not created and part.left_at:
+                from django.utils import timezone as _tz
                 part.left_at = None
-                part.save(update_fields=["left_at"])
+                part.joined_at = _tz.now()
+                part.save(update_fields=["left_at", "joined_at"])
             # System message
             try:
                 msg = Message.objects.create(
@@ -2663,3 +2726,78 @@ class ConversationCallActiveAPIView(APIView):
             "base_url": cfg.get("base_url"),
         })
 
+
+
+class MessageSearchAPIView(APIView):
+    """Search messages in a conversation (body contains query)."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        from django.db.models import Q
+        conv = get_object_or_404(Conversation, pk=pk)
+        part = conv.participants.filter(user=request.user, left_at__isnull=True).first()
+        if not part:
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        q = (request.query_params.get("q") or "").strip()
+        if len(q) < 1:
+            return ok(data={"results": [], "count": 0})
+        qs = Message.objects.filter(
+            conversation=conv, is_deleted=False, is_scheduled=False, is_system=False
+        ).filter(body__icontains=q).select_related("sender").order_by("-created_at")
+        if conv.type == Conversation.Type.GROUP and part.role not in ("owner", "admin"):
+            visibility = getattr(conv, "history_visibility", "all") or "all"
+            if visibility in ("none", "from_join") and part.joined_at:
+                qs = qs.filter(created_at__gte=part.joined_at)
+        limit = min(50, int(request.query_params.get("limit") or 30))
+        items = list(qs[:limit])
+        ctx = build_message_list_context(request, items, conversation_id=conv.id)
+        return ok(data={
+            "results": MessageSerializer(items, many=True, context=ctx).data,
+            "count": len(items),
+        })
+
+
+class ScheduledMessageCancelAPIView(APIView):
+    """Cancel a pending scheduled message (sender only). Soft-deletes so it never delivers."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        msg = get_object_or_404(Message, pk=pk)
+        if msg.sender_id != request.user.id:
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        if not msg.is_scheduled:
+            return err("Message is not scheduled")
+        msg.is_deleted = True
+        msg.is_scheduled = False
+        msg.body = ""
+        msg.save(update_fields=["is_deleted", "is_scheduled", "body", "updated_at"])
+        try:
+            from .signals import soft_delete_message_side_effects
+            soft_delete_message_side_effects(msg)
+        except Exception:
+            logger.exception("cancel-schedule cleanup failed for %s", msg.pk)
+        return ok("Scheduled message cancelled", data={"id": msg.id})
+
+
+class ScheduledMessageListAPIView(APIView):
+    """List pending scheduled messages for a conversation (sender only)."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        conv = get_object_or_404(Conversation, pk=pk)
+        part = conv.participants.filter(user=request.user, left_at__isnull=True).first()
+        if not part:
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        qs = (
+            Message.objects.filter(
+                conversation=conv, sender=request.user, is_scheduled=True, is_deleted=False
+            )
+            .select_related("sender")
+            .prefetch_related("attachments")
+            .order_by("scheduled_for")
+        )
+        ctx = build_message_list_context(request, list(qs), conversation_id=conv.id)
+        return ok(data=MessageSerializer(qs, many=True, context=ctx).data)
