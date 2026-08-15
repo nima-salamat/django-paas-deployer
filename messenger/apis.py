@@ -1843,7 +1843,7 @@ class ConversationMediaAPIView(APIView):
         limit = min(100, int(request.query_params.get("limit") or 30))
         qs = (
             MessageAttachment.objects.filter(
-                conversation=conv, kind__in=kinds, message__is_deleted=False
+                conversation=conv, kind__in=kinds, message__is_deleted=False, message__is_scheduled=False
             )
             .select_related("message", "message__sender")
             .order_by("-message__created_at", "-id")
