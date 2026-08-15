@@ -331,3 +331,15 @@ EMAIL_ADDR = os.getenv("EMAIL_ADDR", "onboarding@resend.dev")
 # Public base URL of the Jitsi deployment used for 1:1 and group calls.
 # Override via JITSI_BASE_URL in .env (e.g. https://meet.jit.si or self-hosted).
 JITSI_BASE_URL = (os.environ.get("JITSI_BASE_URL") or "https://meet.jit.si").rstrip("/")
+
+
+# ---------------------------------------------------------------------------
+# Messenger hot-cache (Redis) — keys are per-conversation or per-user
+# ---------------------------------------------------------------------------
+# Latest N messages kept in Redis *per conversation* (not per user).
+MESSAGE_CACHE_SIZE = int(os.environ.get("MESSAGE_CACHE_SIZE", "1000"))
+# TTL for message window keys (seconds). 0 = no expiry (not recommended).
+MESSAGE_CACHE_TTL = int(os.environ.get("MESSAGE_CACHE_TTL", str(6 * 3600)))
+# Short-lived caches for conversation list (per user) and conv meta/participants
+MESSENGER_LIST_CACHE_TTL = int(os.environ.get("MESSENGER_LIST_CACHE_TTL", "60"))
+MESSENGER_CONV_CACHE_TTL = int(os.environ.get("MESSENGER_CONV_CACHE_TTL", "120"))

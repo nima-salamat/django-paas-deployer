@@ -58,6 +58,11 @@ def deliver_due_scheduled_messages(limit=100):
                 last_message_at=now, updated_at=now
             )
             try:
+                from .message_cache import schedule_add_message
+                schedule_add_message(msg)
+            except Exception:
+                logger.exception("cache delivered scheduled message %s failed", msg.pk)
+            try:
                 from .consumers import broadcast_message
                 broadcast_message(msg)
             except Exception:

@@ -186,6 +186,30 @@ class ConversationListCreateAPIView(APIView):
             deliver_due_scheduled_messages(limit=30)
         except Exception:
             pass
+
+        page = int(request.query_params.get("page") or 1)
+        page_size = min(50, int(request.query_params.get("page_size") or 30))
+
+        # ----- Hot path: per-user conversation list cache -----
+        # Stores the full ordered serialized list (max 200). Pagination is
+        # applied in-process so any page_size works without extra keys.
+        try:
+            from .message_cache import ConversationCacheService
+            cached_list = ConversationCacheService.get_user_conv_list(request.user.id)
+            if cached_list is not None:
+                total = len(cached_list)
+                start = (page - 1) * page_size
+                end = start + page_size
+                return ok(data={
+                    "results": cached_list[start:end],
+                    "page": page,
+                    "page_size": page_size,
+                    "total": total,
+                    "has_more": end < total,
+                })
+        except Exception:
+            logger.exception("conversation list cache read failed")
+
         qs = (
             Conversation.objects.filter(
                 participants__user=request.user, participants__left_at__isnull=True
@@ -212,15 +236,20 @@ class ConversationListCreateAPIView(APIView):
                 -(c.last_message_at.timestamp() if c.last_message_at else c.created_at.timestamp()),
             )
         )
-        page = int(request.query_params.get("page") or 1)
-        page_size = min(50, int(request.query_params.get("page_size") or 30))
         start = (page - 1) * page_size
         end = start + page_size
         total = len(items)
         page_items = items[start:end]
-        ser = ConversationListSerializer(page_items, many=True, context={"request": request})
+        ser = ConversationListSerializer(items, many=True, context={"request": request})
+        full_data = list(ser.data)
+        # Populate cache with the full ordered list (not just this page)
+        try:
+            from .message_cache import ConversationCacheService
+            ConversationCacheService.set_user_conv_list(request.user.id, full_data)
+        except Exception:
+            logger.exception("conversation list cache write failed")
         return ok(data={
-            "results": ser.data,
+            "results": full_data[start:end],
             "page": page,
             "page_size": page_size,
             "total": total,
@@ -422,43 +451,87 @@ class MessageListCreateAPIView(APIView):
         part = self.get_participant(conv, request.user)
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+
+        before_id_raw = request.query_params.get("before_id")
+        before_id = None
+        if before_id_raw:
+            try:
+                before_id = int(before_id_raw)
+            except ValueError:
+                pass
+        limit = min(50, int(request.query_params.get("limit") or 40))
+
+        # History-visibility restrictions for ordinary group members prevent a
+        # pure cache hit (the cached window is the global latest messages).
+        history_restricted = False
+        if conv.type == Conversation.Type.GROUP and part.role not in ("owner", "admin"):
+            visibility = getattr(conv, "history_visibility", "all") or "all"
+            if visibility in ("none", "from_join") and part.joined_at:
+                history_restricted = True
+
+        # ------------------------------------------------------------------
+        # Hot-cache path (latest N messages in Redis)
+        # ------------------------------------------------------------------
+        if not history_restricted:
+            try:
+                from .message_cache import MessageCacheService
+                cached = MessageCacheService.get_cached_messages(
+                    conv.id, before_id, limit
+                )
+                if cached is not None:
+                    base_msgs, has_more, next_before = cached
+                    results = MessageCacheService.enrich_for_viewer(
+                        base_msgs, request, conv.id
+                    )
+                    return ok(data={
+                        "results": results,
+                        "has_more": has_more,
+                        "next_before_id": next_before,
+                    })
+            except Exception:
+                logger.exception("message cache read failed; falling back to DB")
+
+        # ------------------------------------------------------------------
+        # Postgres path (source of truth) + opportunistic cache fill
+        # ------------------------------------------------------------------
         from django.db.models import Q
         qs = (
             Message.objects.filter(conversation=conv, is_deleted=False)
             .filter(Q(is_scheduled=False) | Q(is_scheduled=True, sender=request.user))
             .select_related("sender", "reply_to", "reply_to__sender", "forwarded_from")
-            .prefetch_related("attachments")
+            .prefetch_related("attachments", "reactions")
             .order_by("-created_at")
         )
-        # === History visibility for new members (group only) ===
-        # Restrict messages based on the group's history_visibility setting:
-        #   - "all"        : new members see full history (default)
-        #   - "from_join"  : only messages sent at or after their joined_at
-        #   - "none"       : no messages from before joined_at (same effect as
-        #                    from_join, but the UI may present it differently —
-        #                    e.g. show an empty state instead of "no messages")
-        # Owners and admins ALWAYS see full history so they can moderate.
-        if conv.type == Conversation.Type.GROUP and part.role not in ("owner", "admin"):
-            visibility = getattr(conv, "history_visibility", "all") or "all"
-            if visibility in ("none", "from_join") and part.joined_at:
-                # Filter to only messages sent AT OR AFTER the user's join time.
-                # This includes the system "X joined" message that was posted
-                # when they joined (since it has created_at >= joined_at).
-                qs = qs.filter(created_at__gte=part.joined_at)
-            # 'all' -> no filter (full history)
-        before_id = request.query_params.get("before_id")
-        if before_id:
-            try:
-                qs = qs.filter(id__lt=int(before_id))
-            except ValueError:
-                pass
-        limit = min(50, int(request.query_params.get("limit") or 40))
+        if history_restricted:
+            qs = qs.filter(created_at__gte=part.joined_at)
+        if before_id is not None:
+            qs = qs.filter(id__lt=before_id)
         items = list(qs[: limit + 1])
         has_more = len(items) > limit
         items = items[:limit]
         items.reverse()
-        # Bulk-build context: reaction aggregates + read_state caches + user mini maps
-        # → eliminates N+1 from reactions / readers / contacts / avatars.
+
+        # When we served the latest page from DB, populate / refresh the
+        # Redis window so subsequent requests become cache hits.
+        if not history_restricted and before_id is None and items:
+            try:
+                from .message_cache import MessageCacheService
+                from django.conf import settings as dj_settings
+                cache_size = int(getattr(dj_settings, "MESSAGE_CACHE_SIZE", 1000) or 1000)
+                # Fetch a full window for the cache (not just the page size)
+                window = list(
+                    Message.objects.filter(conversation=conv, is_deleted=False, is_scheduled=False)
+                    .select_related(
+                        "sender", "reply_to", "reply_to__sender", "forwarded_from"
+                    )
+                    .prefetch_related("attachments", "reactions")
+                    .order_by("-id")[:cache_size]
+                )
+                window.reverse()
+                MessageCacheService.cache_messages(conv.id, window)
+            except Exception:
+                logger.exception("message cache populate failed")
+
         ctx = build_message_list_context(request, items, conversation_id=conv.id)
         ser = MessageSerializer(items, many=True, context=ctx)
         next_before = items[0].id if has_more and items else None
@@ -579,7 +652,13 @@ class MessageListCreateAPIView(APIView):
                         kind=kind,
                     )
             created_msgs.append(msg)
+            # Cache after DB commit (non-blocking for the HTTP response).
             if not is_sched:
+                try:
+                    from .message_cache import schedule_add_message
+                    schedule_add_message(msg)
+                except Exception:
+                    logger.exception("message cache schedule add failed")
                 try:
                     from .consumers import broadcast_message
                     broadcast_message(msg)
@@ -650,6 +729,11 @@ class MessageForwardAPIView(APIView):
                 duration=att.duration,
             )
         try:
+            from .message_cache import schedule_add_message
+            schedule_add_message(new_msg)
+        except Exception:
+            logger.exception("message cache schedule add (forward) failed")
+        try:
             from .consumers import broadcast_message
             broadcast_message(new_msg)
         except Exception:
@@ -682,6 +766,12 @@ class MessageReactAPIView(APIView):
             action = "removed"
         else:
             action = "added"
+        # Keep reaction aggregates inside the hot-cache in sync (after commit)
+        try:
+            from .message_cache import schedule_update_message
+            schedule_update_message(msg)
+        except Exception:
+            logger.exception("message cache schedule update (reaction) failed")
         try:
             from .consumers import broadcast_reaction
             broadcast_reaction(msg, request.user, emoji, action)
@@ -708,9 +798,13 @@ class MessageEditAPIView(APIView):
         msg.body = body
         msg.is_edited = True
         msg.save(update_fields=["body", "is_edited", "updated_at"])
+        # Sync Redis after DB commit (non-blocking); only touches hot window if present.
         try:
-            from .consumers import broadcast_message
-            # reuse broadcast with type override via fresh payload
+            from .message_cache import schedule_update_message
+            schedule_update_message(msg)
+        except Exception:
+            logger.exception("message cache schedule update (edit) failed")
+        try:
             from .consumers import _send
             _send(f"messenger_conv_{msg.conversation_id}", {
                 "type": "message.edited",
@@ -752,6 +846,12 @@ class MessageDeleteAPIView(APIView):
             soft_delete_message_side_effects(msg)
         except Exception:
             PinnedMessage.objects.filter(message=msg).delete()
+        # Remove from hot-cache after successful soft-delete (non-blocking)
+        try:
+            from .message_cache import schedule_delete_message
+            schedule_delete_message(msg.conversation_id, msg.id)
+        except Exception:
+            logger.exception("message cache schedule delete failed")
         try:
             from .consumers import _send
             _send(f"messenger_conv_{msg.conversation_id}", {
