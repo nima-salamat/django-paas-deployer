@@ -45,13 +45,27 @@ class ConversationParticipantInline(admin.TabularInline):
 class ConversationAdmin(admin.ModelAdmin):
     list_display = (
         "id", "type", "title", "is_public", "history_visibility",
-        "last_message_at", "created_at",
+        "last_message_at", "created_at", "cache_status",
     )
     list_filter = ("type", "is_public", "history_visibility", "requires_approval", "only_admins_send")
     search_fields = ("title", "public_id", "description")
     raw_id_fields = ("created_by",)
     inlines = [ConversationParticipantInline]
     readonly_fields = ("public_id", "created_at", "updated_at")
+
+    @admin.display(description="Cache")
+    def cache_status(self, obj):
+        try:
+            from .message_cache import MessageCacheService
+            meta = MessageCacheService.get_meta(obj.id)
+            if not meta or not meta.get("count"):
+                return format_html('<span style="color:#c33">MISS</span>')
+            return format_html(
+                '<a href="/admin/messenger/cache/?conv_id={}" style="color:#0a7">HIT {} msgs</a>',
+                obj.id, meta.get("count"),
+            )
+        except Exception:
+            return "—"
 
 
 @admin.register(ConversationParticipant)
@@ -231,3 +245,105 @@ try:
         raw_id_fields = ("user",)
 except Exception:
     pass
+
+
+# ---------------------------------------------------------------------------
+# Cache dashboard (staff-only)
+# ---------------------------------------------------------------------------
+
+from django.contrib.admin.views.decorators import staff_member_required
+from django.shortcuts import render, redirect
+from django.urls import path
+from django.contrib import messages as dj_messages
+
+
+@staff_member_required
+def cache_dashboard_view(request):
+    from .message_cache import (
+        get_cache_stats,
+        inspect_conversation_cache,
+        search_cache_keys,
+        reset_cache_stats,
+        MessageCacheService,
+        ConversationCacheService,
+    )
+
+    message = None
+    if request.method == "POST":
+        action = request.POST.get("action")
+        conv_id = request.POST.get("conv_id")
+        try:
+            conv_id_int = int(conv_id) if conv_id else None
+        except ValueError:
+            conv_id_int = None
+
+        if action == "reset_stats":
+            reset_cache_stats()
+            dj_messages.success(request, "Hit/miss counters reset.")
+            return redirect("messenger_cache_dashboard")
+        if action == "invalidate" and conv_id_int:
+            MessageCacheService.invalidate_chat_cache(conv_id_int)
+            ConversationCacheService.invalidate_conv_lists_for_conversation(conv_id_int)
+            dj_messages.success(request, f"Invalidated cache for conversation {conv_id_int}.")
+            return redirect(f"{request.path}?conv_id={conv_id_int}")
+        if action == "rebuild" and conv_id_int:
+            MessageCacheService.rebuild_chat_cache(conv_id_int)
+            dj_messages.success(request, f"Rebuilt message cache for conversation {conv_id_int}.")
+            return redirect(f"{request.path}?conv_id={conv_id_int}")
+
+    stats = get_cache_stats()
+    def rate(h, m):
+        t = h + m
+        return round(100.0 * h / t, 1) if t else 0.0
+
+    conv_id = request.GET.get("conv_id")
+    inspect = None
+    if conv_id:
+        try:
+            inspect = inspect_conversation_cache(int(conv_id))
+        except ValueError:
+            message = "Invalid conversation id"
+
+    pattern = request.GET.get("pattern") or ""
+    limit = 50
+    try:
+        limit = min(500, max(1, int(request.GET.get("limit") or 50)))
+    except ValueError:
+        pass
+    keys = search_cache_keys(pattern, limit) if pattern else []
+
+    return render(
+        request,
+        "admin/messenger/cache_dashboard.html",
+        {
+            "title": "Messenger Cache",
+            "stats": stats,
+            "msg_hit_rate": rate(stats.get("msg_hit", 0), stats.get("msg_miss", 0)),
+            "list_hit_rate": rate(stats.get("list_hit", 0), stats.get("list_miss", 0)),
+            "conv_id": conv_id,
+            "inspect": inspect,
+            "pattern": pattern,
+            "limit": limit,
+            "keys": keys,
+            "message": message,
+        },
+    )
+
+
+# Attach custom admin URLs
+_original_get_urls = admin.site.get_urls
+
+
+def _messenger_cache_urls():
+    urls = _original_get_urls()
+    custom = [
+        path(
+            "messenger/cache/",
+            admin.site.admin_view(cache_dashboard_view),
+            name="messenger_cache_dashboard",
+        ),
+    ]
+    return custom + urls
+
+
+admin.site.get_urls = _messenger_cache_urls

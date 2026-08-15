@@ -75,11 +75,17 @@ class MessageListCreateAPIView(APIView):
                     results = MessageCacheService.enrich_for_viewer(
                         base_msgs, request, conv.id
                     )
-                    return ok(data={
+                    resp = ok(data={
                         "results": results,
                         "has_more": has_more,
                         "next_before_id": next_before,
+                        "cache": "HIT",
                     })
+                    try:
+                        resp.headers["X-Messenger-Cache"] = "HIT"
+                    except Exception:
+                        pass
+                    return resp
             except Exception:
                 logger.exception("message cache read failed; falling back to DB")
 
@@ -120,11 +126,17 @@ class MessageListCreateAPIView(APIView):
         ctx = build_message_list_context(request, items, conversation_id=conv.id)
         ser = MessageSerializer(items, many=True, context=ctx)
         next_before = items[0].id if has_more and items else None
-        return ok(data={
+        resp = ok(data={
             "results": ser.data,
             "has_more": has_more,
             "next_before_id": next_before,
+            "cache": "MISS",
         })
+        try:
+            resp.headers["X-Messenger-Cache"] = "MISS"
+        except Exception:
+            pass
+        return resp
 
     def post(self, request, pk):
         conv = get_object_or_404(Conversation, pk=pk)

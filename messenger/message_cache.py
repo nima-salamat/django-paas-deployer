@@ -74,6 +74,158 @@ def _redis():
         return None
 
 
+STATS_KEY = f"{_PREFIX}:stats"
+
+
+def _incr_stat(field: str, amount: int = 1) -> None:
+    r = _redis()
+    if not r:
+        return
+    try:
+        r.hincrby(STATS_KEY, field, amount)
+    except Exception:
+        pass
+
+
+def record_hit(kind: str = "msg") -> None:
+    _incr_stat(f"{kind}_hit")
+
+
+def record_miss(kind: str = "msg") -> None:
+    _incr_stat(f"{kind}_miss")
+
+
+def get_cache_stats() -> dict:
+    """Return hit/miss counters and basic redis info for admin UI."""
+    r = _redis()
+    out = {
+        "redis_ok": False,
+        "msg_hit": 0,
+        "msg_miss": 0,
+        "list_hit": 0,
+        "list_miss": 0,
+        "cached_conversations": 0,
+        "message_cache_size": _cache_size(),
+        "message_cache_ttl": _cache_ttl(),
+        "redis_info": {},
+    }
+    if not r:
+        return out
+    try:
+        out["redis_ok"] = bool(r.ping())
+        raw = r.hgetall(STATS_KEY) or {}
+        def _i(k):
+            v = raw.get(k) or raw.get(k.encode() if isinstance(k, str) else k)
+            if v is None:
+                return 0
+            if isinstance(v, bytes):
+                v = v.decode()
+            return int(v)
+        out["msg_hit"] = _i("msg_hit")
+        out["msg_miss"] = _i("msg_miss")
+        out["list_hit"] = _i("list_hit")
+        out["list_miss"] = _i("list_miss")
+        # count meta keys
+        try:
+            # SCAN msgcache:*:meta
+            n = 0
+            for key in r.scan_iter(match=f"{_PREFIX}:*:meta", count=200):
+                n += 1
+                if n >= 5000:
+                    break
+            out["cached_conversations"] = n
+        except Exception:
+            pass
+        try:
+            info = r.info(section="memory")
+            out["redis_info"] = {
+                "used_memory_human": info.get("used_memory_human"),
+                "maxmemory_human": info.get("maxmemory_human"),
+            }
+        except Exception:
+            pass
+    except Exception:
+        logger.exception("get_cache_stats failed")
+    return out
+
+
+def inspect_conversation_cache(conv_id: int) -> dict:
+    """Detailed view of one conversation's hot window for admin."""
+    r = _redis()
+    result = {
+        "conversation_id": conv_id,
+        "redis_ok": bool(r),
+        "meta": None,
+        "message_ids": [],
+        "messages": [],
+        "ids_key": _ids_key(conv_id),
+        "meta_key": _meta_key(conv_id),
+    }
+    if not r:
+        return result
+    try:
+        result["meta"] = MessageCacheService.get_meta(conv_id)
+        raw_ids = r.zrange(_ids_key(conv_id), 0, -1)
+        ids = []
+        for x in raw_ids:
+            if isinstance(x, bytes):
+                x = x.decode()
+            ids.append(int(x))
+        result["message_ids"] = ids
+        pipe = r.pipeline(transaction=False)
+        for mid in ids[-50:]:  # last 50 for UI
+            pipe.get(_msg_key(conv_id, mid))
+        payloads = pipe.execute()
+        for mid, raw in zip(ids[-50:], payloads):
+            data = _json_loads(raw)
+            if data:
+                result["messages"].append({
+                    "id": data.get("id"),
+                    "body": (data.get("body") or "")[:120],
+                    "sender": data.get("sender"),
+                    "is_edited": data.get("is_edited"),
+                    "is_deleted": data.get("is_deleted"),
+                    "created_at": data.get("created_at"),
+                    "reactions_agg": data.get("reactions_agg"),
+                })
+    except Exception:
+        logger.exception("inspect_conversation_cache failed")
+    return result
+
+
+def search_cache_keys(pattern: str = "msgcache:*", limit: int = 100) -> list:
+    r = _redis()
+    if not r:
+        return []
+    out = []
+    try:
+        for key in r.scan_iter(match=pattern, count=200):
+            k = key.decode() if isinstance(key, bytes) else str(key)
+            try:
+                ktype = r.type(key)
+                if isinstance(ktype, bytes):
+                    ktype = ktype.decode()
+                ttl = r.ttl(key)
+            except Exception:
+                ktype, ttl = "?", -1
+            out.append({"key": k, "type": ktype, "ttl": ttl})
+            if len(out) >= limit:
+                break
+    except Exception:
+        logger.exception("search_cache_keys failed")
+    return out
+
+
+def reset_cache_stats() -> None:
+    r = _redis()
+    if not r:
+        return
+    try:
+        r.delete(STATS_KEY)
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Serialization helpers (base payload – no viewer-specific data)
 # ---------------------------------------------------------------------------
@@ -280,6 +432,7 @@ class MessageCacheService:
         if not r:
             return None
         if not MessageCacheService.is_range_cached(conv_id, before_id, limit):
+            record_miss("msg")
             return None
 
         try:
@@ -323,6 +476,7 @@ class MessageCacheService:
             # messages is newest→oldest; API returns oldest→newest
             messages.reverse()
             next_before = messages[0]["id"] if has_more and messages else None
+            record_hit("msg")
             return messages, has_more, next_before
         except Exception:
             logger.exception("message_cache.get_cached_messages failed conv=%s", conv_id)
@@ -567,8 +721,8 @@ class MessageCacheService:
     ) -> List[Dict]:
         """Turn base cache dicts into full API-compatible payloads.
 
-        Fills `reactions` (with mine) and `read_state`.  All other fields
-        are already present in the cached dict.
+        Uses reactions_agg from cache for counts; only one small query for
+        the viewer's own reactions (mine) and read receipts.
         """
         from .models import MessageReaction, MessageReadReceipt, ConversationParticipant
 
@@ -576,36 +730,19 @@ class MessageCacheService:
             return []
 
         viewer = getattr(request, "user", None) if request else None
-        viewer_id = getattr(viewer, "id", None) if viewer and viewer.is_authenticated else None
+        viewer_id = getattr(viewer, "id", None) if viewer and getattr(viewer, "is_authenticated", False) else None
         msg_ids = [m["id"] for m in base_messages]
 
-        # --- reactions with mine ---
-        reaction_rows = list(
-            MessageReaction.objects.filter(message_id__in=msg_ids).values(
-                "message_id", "emoji", "user_id"
-            )
-        )
-        # Build {msg_id: {emoji: {count, mine}}}
-        agg: Dict[int, Dict[str, Dict]] = {}
-        for row in reaction_rows:
-            mid = row["message_id"]
-            em = row["emoji"]
-            bucket = agg.setdefault(mid, {}).setdefault(em, {"count": 0, "mine": False})
-            bucket["count"] += 1
-            if viewer_id and row["user_id"] == viewer_id:
-                bucket["mine"] = True
+        # mine flags only (counts come from cache)
+        mine_map: Dict[int, set] = {mid: set() for mid in msg_ids}
+        if viewer_id and msg_ids:
+            for row in (
+                MessageReaction.objects.filter(message_id__in=msg_ids, user_id=viewer_id)
+                .values("message_id", "emoji")
+            ):
+                mine_map[row["message_id"]].add(row["emoji"])
 
-        # Fallback to cached aggregates when the live query returns nothing
-        # (should be rare; keeps consistency if reactions table is lagging)
-        for m in base_messages:
-            mid = m["id"]
-            if mid not in agg and m.get("reactions_agg"):
-                agg[mid] = {
-                    em: {"count": cnt, "mine": False}
-                    for em, cnt in m["reactions_agg"].items()
-                }
-
-        # --- read_state for viewer's own messages ---
+        # read_state for viewer's own messages
         own_ids = [
             m["id"]
             for m in base_messages
@@ -619,7 +756,6 @@ class MessageCacheService:
                 .values_list("message_id", flat=True)
                 .distinct()
             )
-            # participant last_read_at fallback
             others = list(
                 ConversationParticipant.objects.filter(
                     conversation_id=conversation_id, left_at__isnull=True
@@ -648,14 +784,14 @@ class MessageCacheService:
         for m in base_messages:
             out = dict(m)
             mid = out["id"]
-            by_emoji = agg.get(mid) or {}
+            agg = out.get("reactions_agg") or {}
+            mine = mine_map.get(mid) or set()
             out["reactions"] = [
-                {"emoji": em, "count": data["count"], "mine": data["mine"]}
-                for em, data in sorted(by_emoji.items())
+                {"emoji": em, "count": int(cnt), "mine": em in mine}
+                for em, cnt in sorted(agg.items())
             ]
             out.pop("reactions_agg", None)
 
-            # read_state
             if out.get("is_system") or out.get("is_deleted"):
                 out["read_state"] = "read"
             elif not viewer_id or not out.get("sender") or out["sender"].get("id") != viewer_id:
@@ -728,7 +864,12 @@ class ConversationCacheService:
             return None
         try:
             raw = r.get(_user_list_key(user_id))
-            return _json_loads(raw)
+            data = _json_loads(raw)
+            if data is None:
+                record_miss("list")
+            else:
+                record_hit("list")
+            return data
         except Exception:
             logger.exception("get_user_conv_list failed user=%s", user_id)
             return None
