@@ -1,26 +1,17 @@
-"""Messenger serializers — lean MethodFields (no hidden queries).
-
-All DB work must happen in the view / context builders via
-select_related / prefetch_related / annotate / bulk maps.
-SerializerMethodField only shapes already-loaded data.
-"""
-from __future__ import annotations
-
-from collections import defaultdict
-
-from django.contrib.auth import get_user_model
-from django.db.models import Prefetch
 from rest_framework import serializers
-
+from django.contrib.auth import get_user_model
+from django.db.models import Count, Prefetch, Q, Exists, OuterRef
+from collections import defaultdict
 from .models import (
     Contact, Block, Conversation, ConversationParticipant, Message,
     MessageReaction, MessageAttachment, GroupInviteLink,
     ProfilePhotoPrivacy, ProfilePhotoAllowed, PinnedMessage,
     MessageReadReceipt, UserBio, JoinRequest,
 )
-from .utils import can_see_profile_photo
+from .utils import can_see_profile_photo, detect_kind
 
 User = get_user_model()
+
 
 
 def _format_call_preview(body: str) -> str:
@@ -48,17 +39,15 @@ def _format_call_preview(body: str) -> str:
         return f"{kind} · {m}:{s:02d}"
     return f"{kind} ended"
 
-
-# ---------------------------------------------------------------------------
-# User mini — 100% context-driven (no per-row queries)
-# ---------------------------------------------------------------------------
-
 class UserMiniSerializer(serializers.ModelSerializer):
     """Lightweight user card.
 
-    Required bulk context (from build_user_mini_context):
-      contact_ids, blocked_ids, avatar_map, bio_map, online_ids
-    If maps are missing, returns safe defaults — never hits the DB.
+    Avoids N+1 when context provides:
+      - contact_ids: set of user ids that are contacts of the viewer
+      - blocked_ids: set of user ids blocked by the viewer
+      - avatar_map: {user_id: relative_url}
+      - bio_map: {user_id: text}
+      - online_ids: set of online user ids
     """
     avatar = serializers.SerializerMethodField()
     is_contact = serializers.SerializerMethodField()
@@ -68,39 +57,72 @@ class UserMiniSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = (
-            "id", "username", "color", "avatar",
-            "is_contact", "is_blocked", "is_online", "bio",
-        )
+        fields = ("id", "username", "color", "avatar", "is_contact", "is_blocked", "is_online", "bio")
 
     def get_avatar(self, obj):
         avatar_map = self.context.get("avatar_map")
         if avatar_map is not None:
             return avatar_map.get(obj.id)
+        request = self.context.get("request")
+        viewer = getattr(request, "user", None) if request else None
+        if not can_see_profile_photo(viewer, obj):
+            return None
+        try:
+            from users.models import Profile
+            prof = (
+                Profile.objects.filter(user=obj)
+                .exclude(image__isnull=True)
+                .exclude(image="")
+                .order_by("order", "id")
+                .first()
+            )
+            if prof and getattr(prof, "image", None):
+                try:
+                    return prof.image.url
+                except Exception:
+                    return None
+        except Exception:
+            pass
         return None
 
     def get_is_contact(self, obj):
         contact_ids = self.context.get("contact_ids")
         if contact_ids is not None:
             return obj.id in contact_ids
-        return False
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        return Contact.objects.filter(owner=request.user, contact=obj).exists()
 
     def get_is_blocked(self, obj):
         blocked_ids = self.context.get("blocked_ids")
         if blocked_ids is not None:
             return obj.id in blocked_ids
-        return False
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        return Block.objects.filter(blocker=request.user, blocked=obj).exists()
 
     def get_is_online(self, obj):
         online_ids = self.context.get("online_ids")
         if online_ids is not None:
             return obj.id in online_ids
-        return False
+        try:
+            from .consumers import is_user_online
+            return is_user_online(obj.id)
+        except Exception:
+            return False
 
     def get_bio(self, obj):
         bio_map = self.context.get("bio_map")
         if bio_map is not None:
-            return bio_map.get(obj.id, "") or ""
+            return bio_map.get(obj.id, "")
+        try:
+            bio = getattr(obj, "messenger_bio", None)
+            if bio:
+                return bio.text or ""
+        except Exception:
+            pass
         return ""
 
 
@@ -127,13 +149,14 @@ class ReactionSerializer(serializers.ModelSerializer):
         fields = ("id", "emoji", "user", "created_at")
 
 
-# ---------------------------------------------------------------------------
-# Message — reactions / read_state from bulk context only
-# ---------------------------------------------------------------------------
-
 class MessageSerializer(serializers.ModelSerializer):
-    """Message payload. Viewer-specific fields come from context maps only."""
+    # scheduled_for / is_scheduled included via Meta fields
+    """Optimized message payload.
 
+    - reactions: aggregated list of {emoji, count, mine}  (no per-user payloads)
+    - read_state: 'sent' | 'read'  (cheap; uses prefetched data when available)
+    - readers: REMOVED from list responses — fetch via GET /messages/<id>/readers/
+    """
     sender = UserMiniSerializer(read_only=True)
     attachments = MessageAttachmentSerializer(many=True, read_only=True)
     reactions = serializers.SerializerMethodField()
@@ -148,27 +171,31 @@ class MessageSerializer(serializers.ModelSerializer):
             "forwarded_from", "forwarded_from_user", "forwarded_from_message",
             "is_edited", "is_system", "is_deleted", "created_at", "updated_at",
             "attachments", "reactions", "read_state",
-            "scheduled_for", "is_scheduled",
-        )
+            "scheduled_for", "is_scheduled",)
         read_only_fields = fields
 
     def get_reactions(self, obj):
-        agg_map = self.context.get("reaction_agg")
+        """Aggregate reactions to {emoji, count, mine} — no user payloads."""
+        request = self.context.get("request")
+        viewer_id = getattr(getattr(request, "user", None), "id", None) if request else None
+
+        # Prefer prefetched cache built in to_representation / list view
+        agg_map = self.context.get("reaction_agg")  # {message_id: {emoji: {count, mine}}}
         if agg_map is not None:
             by_emoji = agg_map.get(obj.id) or {}
             return [
                 {"emoji": em, "count": data["count"], "mine": data["mine"]}
                 for em, data in sorted(by_emoji.items())
             ]
-        # Prefetched reactions without viewer aggregation
-        cache = getattr(obj, "_prefetched_objects_cache", {}) or {}
-        reactions = cache.get("reactions")
+
+        # Prefetched reactions (from Prefetch)
+        reactions = getattr(obj, "_prefetched_objects_cache", {}).get("reactions")
         if reactions is None:
-            return []
-        viewer_id = None
-        request = self.context.get("request")
-        if request and getattr(request, "user", None) and request.user.is_authenticated:
-            viewer_id = request.user.id
+            try:
+                reactions = list(obj.reactions.all())
+            except Exception:
+                reactions = []
+
         counts = defaultdict(lambda: {"count": 0, "mine": False})
         for r in reactions:
             counts[r.emoji]["count"] += 1
@@ -182,19 +209,23 @@ class MessageSerializer(serializers.ModelSerializer):
     def get_reply_to_preview(self, obj):
         if not obj.reply_to_id:
             return None
-        # Prefer select_related reply_to already on the instance
-        r = getattr(obj, "reply_to", None)
-        if r is None:
-            return {"id": obj.reply_to_id, "body": "", "sender": None}
-        if getattr(r, "is_deleted", False):
+        r = obj.reply_to
+        if not r or r.is_deleted:
             return {"id": obj.reply_to_id, "body": "Deleted message", "sender": None}
         return {
             "id": r.id,
             "body": (r.body or "")[:120],
-            "sender": UserMiniSerializer(r.sender, context=self.context).data if r.sender_id else None,
+            "sender": UserMiniSerializer(r.sender, context=self.context).data if r.sender else None,
         }
 
     def get_read_state(self, obj):
+        """One of: 'sent' | 'read'.
+
+        Only meaningful for the sender's own messages.
+        Uses context caches when available to avoid N+1:
+          - read_message_ids: set of message ids that have ≥1 non-sender receipt
+          - participant_last_reads: list of (user_id, last_read_at) for non-senders
+        """
         request = self.context.get("request")
         viewer = getattr(request, "user", None) if request else None
         if not viewer or not viewer.is_authenticated:
@@ -204,25 +235,35 @@ class MessageSerializer(serializers.ModelSerializer):
         if obj.sender_id != viewer.id:
             return "read"
 
+        # Fast path: precomputed set of message ids that are read by someone else
         read_ids = self.context.get("read_message_ids")
         if read_ids is not None:
             return "read" if obj.id in read_ids else "sent"
 
-        # Prefetched receipts only — no extra query
-        cache = getattr(obj, "_prefetched_objects_cache", {}) or {}
-        receipts = cache.get("read_receipts")
+        # Prefetched receipts
+        receipts = getattr(obj, "_prefetched_objects_cache", {}).get("read_receipts")
         if receipts is not None:
             for r in receipts:
                 if r.user_id != obj.sender_id:
                     return "read"
-            return "sent"
+        else:
+            if MessageReadReceipt.objects.filter(message=obj).exclude(user_id=obj.sender_id).exists():
+                return "read"
 
+        # Fallback: participant last_read_at
         last_reads = self.context.get("participant_last_reads")
         if last_reads is not None:
             for uid, lr in last_reads:
                 if uid != obj.sender_id and lr and lr >= obj.created_at:
                     return "read"
             return "sent"
+
+        participants = ConversationParticipant.objects.filter(
+            conversation_id=obj.conversation_id, left_at__isnull=True
+        ).exclude(user_id=obj.sender_id).only("last_read_at", "user_id")
+        for p in participants:
+            if p.last_read_at and p.last_read_at >= obj.created_at:
+                return "read"
         return "sent"
 
 
@@ -239,20 +280,7 @@ class ParticipantSerializer(serializers.ModelSerializer):
         )
 
 
-# ---------------------------------------------------------------------------
-# Conversation list — pure; all data from attrs set by the view
-# ---------------------------------------------------------------------------
-
 class ConversationListSerializer(serializers.ModelSerializer):
-    """Chat-list row.
-
-    The view MUST attach:
-      - _prefetched_active_participants  (list of ConversationParticipant)
-      - _prefetched_last_message         (Message | None)
-      - annotated_unread                 (int)
-    and pass build_user_mini_context for participant users.
-    MethodFields never issue queries.
-    """
     participants = serializers.SerializerMethodField()
     last_message = serializers.SerializerMethodField()
     unread_count = serializers.SerializerMethodField()
@@ -280,18 +308,30 @@ class ConversationListSerializer(serializers.ModelSerializer):
             return None
 
     def get_participants(self, obj):
+        # Prefer prefetched active participants
         parts = getattr(obj, "_prefetched_active_participants", None)
         if parts is None:
-            return []
+            qs = obj.participants.filter(left_at__isnull=True).select_related("user")[:200]
+            parts = list(qs)
         return ParticipantSerializer(parts, many=True, context=self.context).data
 
     def get_last_message(self, obj):
+        # Prefer annotation / prefetched last message
         msg = getattr(obj, "_prefetched_last_message", None)
+        # Never surface still-pending scheduled messages in the chat list
         if msg is not None and getattr(msg, "is_scheduled", False):
             msg = None
+        if msg is None:
+            msg = (
+                obj.messages.filter(is_deleted=False, is_scheduled=False)
+                .order_by("-created_at")
+                .first()
+            )
         if not msg:
             return None
-        has_att = bool(getattr(msg, "_has_attachments", False))
+        has_att = getattr(msg, "_has_attachments", None)
+        if has_att is None:
+            has_att = msg.attachments.exists()
         body = msg.body or ""
         if body.startswith("__call__:"):
             body = _format_call_preview(body)
@@ -300,48 +340,72 @@ class ConversationListSerializer(serializers.ModelSerializer):
             "body": body[:100],
             "sender_id": msg.sender_id,
             "created_at": msg.created_at,
-            "has_attachments": has_att,
+            "has_attachments": bool(has_att),
             "is_system": bool(getattr(msg, "is_system", False)),
         }
 
     def get_unread_count(self, obj):
+        # Prefer annotation from list view
         annotated = getattr(obj, "annotated_unread", None)
-        return int(annotated) if annotated is not None else 0
+        if annotated is not None:
+            return annotated
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return 0
+        part = obj.participants.filter(user=request.user, left_at__isnull=True).first()
+        if not part or not part.last_read_at:
+            return (
+                obj.messages.filter(is_deleted=False, is_scheduled=False)
+                .exclude(sender=request.user)
+                .count()
+            )
+        return (
+            obj.messages.filter(
+                is_deleted=False, is_scheduled=False, created_at__gt=part.last_read_at
+            )
+            .exclude(sender=request.user)
+            .count()
+        )
 
     def get_peer(self, obj):
         if obj.type != Conversation.Type.PRIVATE:
             return None
         request = self.context.get("request")
-        viewer_id = getattr(getattr(request, "user", None), "id", None) if request else None
-        parts = getattr(obj, "_prefetched_active_participants", None) or []
-        for p in parts:
-            if viewer_id is None or p.user_id != viewer_id:
-                user = getattr(p, "user", None)
-                if user is not None:
-                    return UserMiniSerializer(user, context=self.context).data
+        if not request:
+            return None
+        parts = getattr(obj, "_prefetched_active_participants", None)
+        if parts is not None:
+            for p in parts:
+                if p.user_id != request.user.id:
+                    return UserMiniSerializer(p.user, context=self.context).data
+            return None
+        other = (
+            obj.participants.filter(left_at__isnull=True)
+            .exclude(user=request.user)
+            .select_related("user")
+            .first()
+        )
+        if other:
+            return UserMiniSerializer(other.user, context=self.context).data
         return None
 
     def get_is_pinned(self, obj):
         request = self.context.get("request")
-        viewer_id = getattr(getattr(request, "user", None), "id", None) if request else None
-        if not viewer_id:
+        if not request or not request.user.is_authenticated:
             return False
-        parts = getattr(obj, "_prefetched_active_participants", None) or []
-        for p in parts:
-            if p.user_id == viewer_id:
-                return bool(p.is_pinned)
-        return False
+        parts = getattr(obj, "_prefetched_active_participants", None)
+        if parts is not None:
+            for p in parts:
+                if p.user_id == request.user.id:
+                    return bool(p.is_pinned)
+            return False
+        part = obj.participants.filter(user=request.user, left_at__isnull=True).first()
+        return bool(part and part.is_pinned)
 
     def get_created_by(self, obj):
         if not obj.created_by_id:
             return None
-        # Prefer select_related created_by
-        user = getattr(obj, "created_by", None)
-        if user is None:
-            return {"id": obj.created_by_id, "username": "", "color": None,
-                    "avatar": None, "is_contact": False, "is_blocked": False,
-                    "is_online": False, "bio": ""}
-        return UserMiniSerializer(user, context=self.context).data
+        return UserMiniSerializer(obj.created_by, context=self.context).data
 
 
 class ConversationDetailSerializer(ConversationListSerializer):
@@ -352,25 +416,25 @@ class ConversationDetailSerializer(ConversationListSerializer):
         fields = ConversationListSerializer.Meta.fields + ("invite_links", "pins")
 
     def get_invite_links(self, obj):
-        # Prefetched on the view as _prefetched_invite_links; empty if not admin
-        links = getattr(obj, "_prefetched_invite_links", None)
-        if links is None:
+        request = self.context.get("request")
+        if not request:
             return []
+        part = obj.participants.filter(user=request.user, left_at__isnull=True).first()
+        if not part or part.role not in ("owner", "admin"):
+            return []
+        links = obj.invite_links.filter(is_active=True)[:10]
         return GroupInviteLinkSerializer(links, many=True, context=self.context).data
 
     def get_pins(self, obj):
-        pins = getattr(obj, "_prefetched_pins", None)
-        if pins is None:
-            return []
-        out = []
-        for p in pins:
-            msg = p.message
-            out.append({
+        pins = obj.pins.select_related("message", "message__sender")[:5]
+        return [
+            {
                 "id": p.id,
-                "message": MessageSerializer(msg, context=self.context).data if msg else None,
+                "message": MessageSerializer(p.message, context=self.context).data,
                 "pinned_at": p.pinned_at,
-            })
-        return out
+            }
+            for p in pins
+        ]
 
 
 class GroupInviteLinkSerializer(serializers.ModelSerializer):
@@ -415,11 +479,6 @@ class ProfilePhotoPrivacySerializer(serializers.ModelSerializer):
         fields = ("scope", "allowed_user_ids", "updated_at")
 
     def get_allowed_user_ids(self, obj):
-        # Prefer prefetched allowed_users
-        cache = getattr(obj, "_prefetched_objects_cache", {}) or {}
-        allowed = cache.get("allowed_users")
-        if allowed is not None:
-            return [a.user_id for a in allowed]
         return list(obj.allowed_users.values_list("user_id", flat=True))
 
 
@@ -438,36 +497,31 @@ class JoinRequestSerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "status", "decided_by", "decided_at", "created_at")
 
     def get_conversation_title(self, obj):
-        conv = getattr(obj, "conversation", None)
-        if conv is not None:
-            return conv.title or "Group"
-        return "Group"
+        try:
+            return obj.conversation.title or "Group"
+        except Exception:
+            return "Group"
 
 
 # ---------------------------------------------------------------------------
-# Bulk context builders (the only place that hits the DB for serialization)
+# Helpers used by API views to build bulk context and avoid N+1
 # ---------------------------------------------------------------------------
 
 def build_user_mini_context(request, user_ids):
-    """Preload contact/block/avatar/bio/online maps for a set of user ids.
-
-    Always returns the map keys so UserMiniSerializer never falls back to DB.
-    """
+    """Preload contact/block/avatar/bio/online maps for a set of user ids."""
     ctx = {"request": request}
-    empty = {
-        "contact_ids": set(),
-        "blocked_ids": set(),
-        "avatar_map": {},
-        "bio_map": {},
-        "online_ids": set(),
-    }
     if not request or not getattr(request, "user", None) or not request.user.is_authenticated:
-        ctx.update(empty)
         return ctx
     viewer = request.user
     user_ids = list({int(uid) for uid in user_ids if uid})
     if not user_ids:
-        ctx.update(empty)
+        ctx.update({
+            "contact_ids": set(),
+            "blocked_ids": set(),
+            "avatar_map": {},
+            "bio_map": {},
+            "online_ids": set(),
+        })
         return ctx
 
     contact_ids = set(
@@ -485,26 +539,28 @@ def build_user_mini_context(request, user_ids):
     avatar_map = {}
     try:
         from users.models import Profile
+        # First profile image per user (ordered)
         profiles = (
             Profile.objects.filter(user_id__in=user_ids)
             .exclude(image__isnull=True)
             .exclude(image="")
             .order_by("user_id", "order", "id")
-            .only("user_id", "image", "order")
         )
         for p in profiles:
-            if p.user_id in avatar_map:
-                continue
-            try:
-                avatar_map[p.user_id] = p.image.url
-            except Exception:
-                pass
-        # Privacy: null out avatars the viewer cannot see
+            if p.user_id not in avatar_map:
+                try:
+                    avatar_map[p.user_id] = p.image.url
+                except Exception:
+                    pass
+        # Apply photo privacy: if viewer cannot see, null out
         for uid in list(avatar_map.keys()):
+            # cheap privacy check — only for non-self
             if uid == viewer.id:
                 continue
             try:
-                if not can_see_profile_photo(viewer, User(id=uid)):
+                target = User(id=uid)  # minimal stub for can_see
+                target.id = uid
+                if not can_see_profile_photo(viewer, target):
                     avatar_map[uid] = None
             except Exception:
                 pass
@@ -531,7 +587,7 @@ def build_user_mini_context(request, user_ids):
 
 
 def build_message_list_context(request, messages, conversation_id=None):
-    """Bulk context for message list/detail — reactions + read_state + user mini."""
+    """Build context for serializing a list of messages without N+1."""
     msg_ids = [m.id for m in messages]
     user_ids = set()
     for m in messages:
@@ -539,12 +595,12 @@ def build_message_list_context(request, messages, conversation_id=None):
             user_ids.add(m.sender_id)
         if m.forwarded_from_id:
             user_ids.add(m.forwarded_from_id)
-        reply = getattr(m, "reply_to", None)
-        if reply is not None and reply.sender_id:
-            user_ids.add(reply.sender_id)
+        if m.reply_to_id and getattr(m, "reply_to", None) and m.reply_to.sender_id:
+            user_ids.add(m.reply_to.sender_id)
 
     ctx = build_user_mini_context(request, user_ids)
 
+    # Aggregate reactions in one query
     reaction_agg = defaultdict(lambda: defaultdict(lambda: {"count": 0, "mine": False}))
     viewer_id = request.user.id if request and request.user.is_authenticated else None
     if msg_ids:
@@ -558,15 +614,17 @@ def build_message_list_context(request, messages, conversation_id=None):
                 bucket["mine"] = True
     ctx["reaction_agg"] = reaction_agg
 
+    # Read state for viewer's own messages
     own_msg_ids = [m.id for m in messages if m.sender_id == viewer_id]
     read_message_ids = set()
-    if own_msg_ids and viewer_id:
+    if own_msg_ids:
         read_message_ids = set(
             MessageReadReceipt.objects.filter(message_id__in=own_msg_ids)
             .exclude(user_id=viewer_id)
             .values_list("message_id", flat=True)
             .distinct()
         )
+        # Also check participant last_read_at for messages that may lack receipts
         if conversation_id:
             others = list(
                 ConversationParticipant.objects.filter(
@@ -579,45 +637,9 @@ def build_message_list_context(request, messages, conversation_id=None):
             for m in messages:
                 if m.id in read_message_ids or m.sender_id != viewer_id:
                     continue
-                for _uid, lr in others:
+                for uid, lr in others:
                     if lr and lr >= m.created_at:
                         read_message_ids.add(m.id)
                         break
     ctx["read_message_ids"] = read_message_ids
     return ctx
-
-
-def build_conversation_list_context(request, conversations):
-    """Bulk user-mini context for every participant + created_by on the list."""
-    user_ids = set()
-    for c in conversations:
-        if c.created_by_id:
-            user_ids.add(c.created_by_id)
-        parts = getattr(c, "_prefetched_active_participants", None) or []
-        for p in parts:
-            if p.user_id:
-                user_ids.add(p.user_id)
-    return build_user_mini_context(request, user_ids)
-
-
-def prepare_conversation_detail(conv, user):
-    """Attach invite links + pins for detail serializer (no N+1 inside serializer)."""
-    part = None
-    parts = getattr(conv, "_prefetched_active_participants", None)
-    if parts is not None:
-        part = next((p for p in parts if p.user_id == user.id), None)
-    else:
-        part = conv.participants.filter(user=user, left_at__isnull=True).first()
-
-    if part and part.role in ("owner", "admin"):
-        conv._prefetched_invite_links = list(conv.invite_links.filter(is_active=True)[:10])
-    else:
-        conv._prefetched_invite_links = []
-
-    conv._prefetched_pins = list(
-        conv.pins.select_related(
-            "message", "message__sender", "message__reply_to", "message__reply_to__sender",
-            "message__forwarded_from",
-        ).prefetch_related("message__attachments", "message__reactions")[:5]
-    )
-    return conv

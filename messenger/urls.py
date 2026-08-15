@@ -1,5 +1,5 @@
 from django.urls import path
-from . import apis
+from . import api as apis  # feature-split package (apis.py is a compat shim)
 
 urlpatterns = [
     path("users/search/", apis.UserSearchAPIView.as_view()),

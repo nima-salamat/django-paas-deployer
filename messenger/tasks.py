@@ -13,7 +13,7 @@ def finalize_unanswered_call(call_public_id: str):
     """If still ringing after 30s → no_answer + system message."""
     try:
         from .models import CallSession
-        from .apis import _finish_call
+        from .api.calls import _finish_call
         session = CallSession.objects.select_related("initiator").filter(
             public_id=call_public_id
         ).first()
