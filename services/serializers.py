@@ -110,8 +110,8 @@ class ServiceSerializer(serializers.ModelSerializer):
 
 class GetServiceSerializer(serializers.ModelSerializer):
     id = serializers.CharField(source="pk", read_only=True)
-    network = PrivateNetworkSerializer()
-    plan = PlanSerializer()
+    network = PrivateNetworkSerializer(allow_null=True, required=False)
+    plan = PlanSerializer(allow_null=True, required=False)
     service_name = serializers.SerializerMethodField(read_only=True)
     service_host = serializers.SerializerMethodField(read_only=True)
     storage = serializers.SerializerMethodField(read_only=True)

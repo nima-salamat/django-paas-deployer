@@ -78,6 +78,7 @@ class AdminServiceViewSet(ModelViewSet):
             return [IsAuthenticated(), HasServicesManageRule()]
         return [IsAuthenticated(), HasServicesViewRule()]
 
+
     def get_queryset(self):
         qs = super().get_queryset()
         user_id = (
@@ -96,38 +97,82 @@ class AdminServiceViewSet(ModelViewSet):
         status_val = (self.request.query_params.get("status") or "").strip()
         if status_val:
             qs = qs.filter(status=status_val)
-        return qs.order_by("-id")
+        return qs.order_by("-created_at", "-id")
 
     def list(self, request, *args, **kwargs):
-        from core.app_cache import (
-            cache_get, cache_set, service_admin_list_key,
-            SERVICE_ADMIN_TTL,
-        )
-        params = {k: request.query_params.get(k) or "" for k in ("q", "q_search", "page", "page_size", "user_id", "status")}
-        key = service_admin_list_key(params)
+        """
+        Admin service list with optional Redis cache.
+        Cache failures never break the response.
+        """
+        key = None
         try:
+            from core.app_cache import (
+                cache_get, cache_set, service_admin_list_key, SERVICE_ADMIN_TTL,
+            )
+            params = {
+                k: request.query_params.get(k) or ""
+                for k in ("q", "q_search", "page", "page_size", "user_id", "status")
+            }
+            key = service_admin_list_key(params)
             cached = cache_get(key)
-            if cached is not None:
+            if isinstance(cached, dict) and ("results" in cached or "count" in cached):
                 return Response(cached)
         except Exception:
-            pass
-        # Do NOT slice before paginate — sliced QS breaks Paginator.count()
-        qs = self.get_queryset()
-        page = self.paginate_queryset(qs)
-        serializer = GetServiceSerializer(page if page is not None else qs, many=True)
-        if page is not None:
-            resp = self.get_paginated_response(serializer.data)
-            try:
-                cache_set(key, resp.data, SERVICE_ADMIN_TTL)
-            except Exception:
-                pass
-            return resp
-        data = {"count": len(serializer.data), "next": None, "previous": None, "results": serializer.data}
+            logger.exception("admin services cache_get failed")
+
         try:
-            cache_set(key, data, SERVICE_ADMIN_TTL)
+            qs = self.get_queryset()
+            page = self.paginate_queryset(qs)
+            items = page if page is not None else list(qs[:50])
+            serializer = GetServiceSerializer(items, many=True)
+            payload = serializer.data
+            if page is not None:
+                resp = self.get_paginated_response(payload)
+                body = resp.data
+            else:
+                body = {
+                    "count": len(payload),
+                    "next": None,
+                    "previous": None,
+                    "results": payload,
+                }
+                resp = Response(body)
+            if key:
+                try:
+                    from core.app_cache import cache_set, SERVICE_ADMIN_TTL
+                    cache_set(key, body, SERVICE_ADMIN_TTL)
+                except Exception:
+                    logger.exception("admin services cache_set failed")
+            return resp if page is not None else resp
         except Exception:
-            pass
-        return Response(data)
+            logger.exception("admin services list failed")
+            # Last-resort minimal payload so admin UI does not hard-fail
+            try:
+                qs = Service.objects.all().select_related("user", "plan").order_by("-created_at")[:20]
+                results = []
+                for s in qs:
+                    results.append({
+                        "id": str(s.pk),
+                        "name": s.name,
+                        "status": s.status,
+                        "user": getattr(s.user, "id", None),
+                        "user_username": getattr(s.user, "username", None),
+                        "plan": str(s.plan_id) if s.plan_id else None,
+                        "created_at": s.created_at.isoformat() if s.created_at else None,
+                    })
+                return Response({
+                    "count": len(results),
+                    "next": None,
+                    "previous": None,
+                    "results": results,
+                    "warning": "degraded list response",
+                })
+            except Exception:
+                logger.exception("admin services degraded list also failed")
+                return Response(
+                    {"count": 0, "next": None, "previous": None, "results": [], "error": "list failed"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
 
     def create(self, request, *args, **kwargs):
         """
