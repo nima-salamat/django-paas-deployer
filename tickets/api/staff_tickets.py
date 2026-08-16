@@ -276,13 +276,3 @@ class StaffTicketAssignAPIView(APIView):
         ticket.assigned_to = assignee
         ticket.save(update_fields=["assigned_to", "updated_at"])
         return ok("Assigned", data=TicketDetailSerializer(ticket, context={"request": request}).data)
-
-
-# ---------------------------------------------------------------------------
-# Admin: Department CRUD
-# ---------------------------------------------------------------------------
-class IsSuperuserOnly(IsAuthenticated):
-    def has_permission(self, request, view):
-        return bool(super().has_permission(request, view) and request.user.is_superuser)
-
-

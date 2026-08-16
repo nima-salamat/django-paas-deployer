@@ -13,7 +13,7 @@ from rest_framework.authentication import SessionAuthentication
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.pagination import PageNumberPagination
 from ..models import Department, DepartmentMembership, Ticket, TicketMessage, TicketAttachment
-from ..permissions import IsTicketOwnerOrStaff, IsStaffOrSuperuser, CanManageTicket
+from ..permissions import IsTicketOwnerOrStaff, IsStaffOrSuperuser, CanManageTicket, IsSuperuserOnly
 from ..serializers import (
     DepartmentSerializer, TicketListSerializer, TicketDetailSerializer,
     TicketCreateSerializer, TicketMessageCreateSerializer, TicketMessageSerializer,

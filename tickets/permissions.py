@@ -84,3 +84,11 @@ class CanManageTicket(BasePermission):
         return DepartmentMembership.objects.filter(
             user=user, department_id=dept_id
         ).exists()
+
+
+class IsSuperuserOnly(BasePermission):
+    """Only authenticated superusers."""
+
+    def has_permission(self, request, view):
+        u = request.user
+        return bool(u and u.is_authenticated and getattr(u, "is_active", True) and u.is_superuser)

@@ -653,12 +653,3 @@ def service_status_apiview(request):
         },
         status=status.HTTP_200_OK,
     )
-
-
-
-# ===========================================================================
-# Admin panel ViewSets — cross-user access gated by Rule permissions
-# ===========================================================================
-from rest_framework.permissions import BasePermission
-
-
