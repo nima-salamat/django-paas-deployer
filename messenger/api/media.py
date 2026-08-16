@@ -93,25 +93,40 @@ class AttachmentDownloadAPIView(APIView):
         ).exists():
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
 
-        # View-once gate: recipients may download only if they already opened
-        # (open endpoint records the open then redirects/returns file).
+        # Purged view-once: file gone
+        if getattr(att, "is_purged", False) or not att.file:
+            return err("Media no longer available", status.HTTP_410_GONE)
+
+        # View-once: recipients need a live open window (15s) + matching once token
         if getattr(att, "is_view_once", False) and att.uploaded_by_id != user.id:
+            from django.utils import timezone as _tz
+            from django.core.cache import cache
             from ..models import AttachmentViewOnceOpen
-            opened = AttachmentViewOnceOpen.objects.filter(attachment=att, user=user).exists()
-            # Allow if ?once_token matches a short-lived open grant in cache
+
             once_tok = request.GET.get("once") or request.query_params.get("once")
+            key = f"messenger:view_once:{att.pk}:{user.id}"
             granted = False
             if once_tok:
                 try:
-                    from django.core.cache import cache
-                    key = f"messenger:view_once:{att.pk}:{user.id}"
                     granted = cache.get(key) == once_tok
                 except Exception:
                     granted = False
-            if not opened and not granted:
+            if not granted:
                 return err("View-once media locked", status.HTTP_403_FORBIDDEN)
-            if granted and not opened:
-                AttachmentViewOnceOpen.objects.get_or_create(attachment=att, user=user)
+
+            row = AttachmentViewOnceOpen.objects.filter(attachment=att, user=user).first()
+            if not row:
+                return err("View-once media locked", status.HTTP_403_FORBIDDEN)
+            now = _tz.now()
+            exp = row.expires_at
+            if exp is None:
+                exp = row.opened_at + _tz.timedelta(seconds=15)
+            if now >= exp:
+                try:
+                    cache.delete(key)
+                except Exception:
+                    pass
+                return err("View window expired", status.HTTP_410_GONE)
 
         from django.http import FileResponse
         content_type = (
@@ -280,12 +295,79 @@ class ConversationMediaAPIView(APIView):
         })
 
 
+VIEW_ONCE_SECONDS = 15
+
+
+def maybe_purge_view_once_attachment(att) -> bool:
+    """If every active recipient (except sender) has opened, delete file + bust caches.
+
+    Returns True when purged.
+    """
+    from django.utils import timezone as _tz
+    from ..models import AttachmentViewOnceOpen, ConversationParticipant
+
+    if not att or not getattr(att, "is_view_once", False) or getattr(att, "is_purged", False):
+        return False
+
+    recipient_ids = set(
+        ConversationParticipant.objects.filter(
+            conversation_id=att.conversation_id, left_at__isnull=True
+        )
+        .exclude(user_id=att.uploaded_by_id)
+        .values_list("user_id", flat=True)
+    )
+    if not recipient_ids:
+        # No recipients left — purge immediately
+        return _purge_attachment_file(att)
+
+    opened_ids = set(
+        AttachmentViewOnceOpen.objects.filter(attachment=att).values_list("user_id", flat=True)
+    )
+    if not recipient_ids.issubset(opened_ids):
+        return False
+    return _purge_attachment_file(att)
+
+
+def _purge_attachment_file(att) -> bool:
+    """Delete disk file, mark purged, refresh message cache."""
+    try:
+        if att.file:
+            try:
+                att.file.delete(save=False)
+            except Exception:
+                logger.exception("purge view-once file failed id=%s", att.id)
+        MessageAttachment.objects.filter(pk=att.pk).update(is_purged=True, file="")
+        att.is_purged = True
+        try:
+            from ..message_cache import MessageCacheService
+            if att.message_id:
+                MessageCacheService.update_message(
+                    type("M", (), {"id": att.message_id, "conversation_id": att.conversation_id})()
+                )
+        except Exception:
+            pass
+        # Prefer full message refresh
+        try:
+            from ..message_cache import MessageCacheService, schedule_update_message
+            from ..models import Message
+            msg = Message.objects.filter(pk=att.message_id).first()
+            if msg:
+                schedule_update_message(msg)
+        except Exception:
+            logger.exception("purge: cache update failed att=%s", att.id)
+        return True
+    except Exception:
+        logger.exception("_purge_attachment_file failed att=%s", getattr(att, "id", None))
+        return False
+
+
 class ViewOnceOpenAPIView(APIView):
-    """Open a view-once attachment (recipient only).
+    """Open a view-once attachment for exactly VIEW_ONCE_SECONDS (15s).
 
     POST /api/messenger/attachments/<pk>/view-once/
-    Returns a short-lived download URL with ?once=<token>. After open is
-    recorded, subsequent list payloads show view_once_state=opened and no URL.
+    - First open only; later calls → 410
+    - Returns download URL valid for 15 seconds
+    - When all recipients have opened, file is purged from disk + cache
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
@@ -293,38 +375,67 @@ class ViewOnceOpenAPIView(APIView):
     def post(self, request, pk):
         import secrets
         from django.core.cache import cache
+        from django.utils import timezone as _tz
         from ..models import AttachmentViewOnceOpen
 
         att = get_object_or_404(MessageAttachment, pk=pk)
         if not getattr(att, "is_view_once", False):
             return err("Not a view-once attachment")
+        if getattr(att, "is_purged", False) or not att.file:
+            return err("Media no longer available", status.HTTP_410_GONE)
         if not ConversationParticipant.objects.filter(
             conversation=att.conversation, user=request.user, left_at__isnull=True
         ).exists():
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+
         if att.uploaded_by_id == request.user.id:
-            # Sender always has access via normal download URL
             return ok(data={
                 "url": f"/api/messenger/attachments/{att.pk}/download/",
                 "view_once_state": "own",
+                "expires_in": None,
             })
 
         already = AttachmentViewOnceOpen.objects.filter(
             attachment=att, user=request.user
-        ).exists()
+        ).first()
         if already:
             return err("Already opened", status.HTTP_410_GONE, extra={
                 "view_once_state": "opened",
             })
 
+        now = _tz.now()
+        expires = now + _tz.timedelta(seconds=VIEW_ONCE_SECONDS)
         token = secrets.token_urlsafe(16)
         try:
-            cache.set(f"messenger:view_once:{att.pk}:{request.user.id}", token, 60)
+            cache.set(
+                f"messenger:view_once:{att.pk}:{request.user.id}",
+                token,
+                VIEW_ONCE_SECONDS + 2,
+            )
         except Exception:
             pass
-        AttachmentViewOnceOpen.objects.get_or_create(attachment=att, user=request.user)
+        AttachmentViewOnceOpen.objects.create(
+            attachment=att,
+            user=request.user,
+            expires_at=expires,
+        )
+
+        # Schedule purge check after this window (and try immediately if already complete)
+        try:
+            maybe_purge_view_once_attachment(att)
+        except Exception:
+            logger.exception("maybe_purge after open failed")
+        try:
+            from ..tasks import purge_view_once_if_complete
+            purge_view_once_if_complete.apply_async(
+                args=[att.pk], countdown=VIEW_ONCE_SECONDS + 1
+            )
+        except Exception:
+            pass
+
         return ok(data={
             "url": f"/api/messenger/attachments/{att.pk}/download/?once={token}",
             "view_once_state": "opened",
-            "expires_in": 60,
+            "expires_in": VIEW_ONCE_SECONDS,
+            "expires_at": expires.isoformat(),
         })

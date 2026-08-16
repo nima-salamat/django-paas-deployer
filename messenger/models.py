@@ -361,6 +361,7 @@ class MessageAttachment(models.Model):
     # Media privacy flags (Telegram-style)
     is_spoiler = models.BooleanField(default=False)  # blurred until recipient taps
     is_view_once = models.BooleanField(default=False)  # one open per recipient, then locked
+    is_purged = models.BooleanField(default=False)  # file deleted after all recipients viewed
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -368,12 +369,16 @@ class MessageAttachment(models.Model):
 
 
 class AttachmentViewOnceOpen(models.Model):
-    """Tracks which users have opened a view-once attachment."""
+    """Tracks which users have opened a view-once attachment.
+
+    Access is valid only until expires_at (opened_at + VIEW_ONCE_SECONDS).
+    """
     attachment = models.ForeignKey(
         MessageAttachment, on_delete=models.CASCADE, related_name="view_once_opens"
     )
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="view_once_opens")
     opened_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     class Meta:
         unique_together = ("attachment", "user")

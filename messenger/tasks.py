@@ -79,28 +79,15 @@ def deliver_scheduled_messages():
     return deliver_due_scheduled_messages()
 
 
-@shared_task(
-    name="messenger.tasks.sync_membership_cache",
-    ignore_result=True,
-    time_limit=30,
-    soft_time_limit=20,
-)
-def sync_membership_cache_task(conv_id: int, extra_user_ids=None, system_msg_id=None):
-    """Async cache sync after group membership changes.
-
-    Invalidates participants + conversation lists for all affected users,
-    and optionally pushes a system message into the message hot-cache.
-    """
+@shared_task(name="messenger.tasks.purge_view_once_if_complete", ignore_result=True)
+def purge_view_once_if_complete(attachment_id: int):
+    """After view windows elapse, delete file if all recipients already opened."""
     try:
-        from .message_cache import do_membership_cache_sync
-        return do_membership_cache_sync(
-            int(conv_id),
-            list(extra_user_ids or []),
-            int(system_msg_id) if system_msg_id else None,
-        )
+        from .models import MessageAttachment
+        from .api.media import maybe_purge_view_once_attachment
+        att = MessageAttachment.objects.filter(pk=attachment_id).first()
+        if att:
+            return maybe_purge_view_once_attachment(att)
     except Exception:
-        logger.exception(
-            "sync_membership_cache_task failed conv=%s extra=%s msg=%s",
-            conv_id, extra_user_ids, system_msg_id,
-        )
-        return None
+        logger.exception("purge_view_once_if_complete failed id=%s", attachment_id)
+    return False

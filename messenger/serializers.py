@@ -115,7 +115,7 @@ class MessageAttachmentSerializer(serializers.ModelSerializer):
         fields = (
             "id", "original_filename", "content_type", "size", "kind",
             "width", "height", "duration", "url", "created_at",
-            "is_spoiler", "is_view_once", "view_once_state",
+            "is_spoiler", "is_view_once", "is_purged", "view_once_state",
         )
 
     def _viewer(self):
@@ -134,9 +134,11 @@ class MessageAttachmentSerializer(serializers.ModelSerializer):
             return False
 
     def get_view_once_state(self, obj):
-        """none | pending | opened | own"""
+        """none | pending | opened | own | purged"""
         if not getattr(obj, "is_view_once", False):
             return "none"
+        if getattr(obj, "is_purged", False):
+            return "purged"
         viewer = self._viewer()
         if not viewer or not getattr(viewer, "is_authenticated", False):
             return "pending"
@@ -147,14 +149,14 @@ class MessageAttachmentSerializer(serializers.ModelSerializer):
         return "pending"
 
     def get_url(self, obj):
-        # View-once: only sender always has URL; recipients only before/during open API
+        if getattr(obj, "is_purged", False):
+            return None
+        # View-once: never put a durable URL in list/detail payloads.
+        # Sender may download without once-token; recipients must call open.
         if getattr(obj, "is_view_once", False):
             viewer = self._viewer()
-            if not viewer or not getattr(viewer, "is_authenticated", False):
-                return None
-            if obj.uploaded_by_id == viewer.id:
+            if viewer and getattr(viewer, "is_authenticated", False) and obj.uploaded_by_id == viewer.id:
                 return f"/api/messenger/attachments/{obj.pk}/download/"
-            # Recipient: never expose URL in list payload (must call open endpoint)
             return None
         return f"/api/messenger/attachments/{obj.pk}/download/"
 
