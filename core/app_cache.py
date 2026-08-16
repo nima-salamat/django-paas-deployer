@@ -1,15 +1,16 @@
 """Shared Redis JSON cache helpers for services / plans / tickets / users.
 
-Uses django-redis (CACHES['default']). Soft-fail: cache errors never break APIs.
+Uses the raw redis client (same as messenger.message_cache) so keys are
+stored without django-redis version prefixes and scan/delete_pattern work
+reliably. Soft-fail: cache errors never break APIs.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import logging
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
-from django.core.cache import cache
 from django.core.serializers.json import DjangoJSONEncoder
 
 logger = logging.getLogger("core.app_cache")
@@ -30,6 +31,16 @@ TICKET_ADMIN_LIMIT = 100
 USER_ADMIN_LIMIT = 100
 
 
+def _redis():
+    """Return raw redis-py client (django-redis db, same as messenger)."""
+    try:
+        from django_redis import get_redis_connection
+        return get_redis_connection("default")
+    except Exception:
+        logger.exception("app_cache: cannot obtain redis connection")
+        return None
+
+
 def _dumps(obj: Any) -> str:
     return json.dumps(obj, cls=DjangoJSONEncoder, separators=(",", ":"), ensure_ascii=False)
 
@@ -41,6 +52,8 @@ def _loads(raw: Any) -> Any:
         return raw
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8")
+    if not isinstance(raw, str):
+        return None
     try:
         return json.loads(raw)
     except Exception:
@@ -48,16 +61,26 @@ def _loads(raw: Any) -> Any:
 
 
 def cache_get(key: str) -> Any:
+    r = _redis()
+    if not r:
+        return None
     try:
-        return _loads(cache.get(key))
+        return _loads(r.get(key))
     except Exception:
         logger.exception("cache_get failed key=%s", key)
         return None
 
 
 def cache_set(key: str, value: Any, ttl: int) -> bool:
+    r = _redis()
+    if not r:
+        return False
     try:
-        cache.set(key, _dumps(value) if not isinstance(value, str) else value, timeout=ttl)
+        payload = value if isinstance(value, str) else _dumps(value)
+        if ttl and ttl > 0:
+            r.setex(key, int(ttl), payload)
+        else:
+            r.set(key, payload)
         return True
     except Exception:
         logger.exception("cache_set failed key=%s", key)
@@ -65,24 +88,38 @@ def cache_set(key: str, value: Any, ttl: int) -> bool:
 
 
 def cache_delete(*keys: str) -> None:
+    r = _redis()
+    if not r or not keys:
+        return
     try:
-        if keys:
-            cache.delete_many(list(keys))
+        r.delete(*keys)
     except Exception:
         logger.exception("cache_delete failed")
 
 
 def cache_delete_pattern(pattern: str) -> None:
-    """Best-effort delete by pattern (django-redis delete_pattern)."""
+    """Best-effort delete by pattern via SCAN + DELETE (raw redis)."""
+    r = _redis()
+    if not r:
+        return
     try:
-        if hasattr(cache, "delete_pattern"):
-            cache.delete_pattern(pattern)
-        else:
-            # Fallback: try raw redis client
-            from django_redis import get_redis_connection
-            r = get_redis_connection("default")
-            for key in r.scan_iter(match=pattern, count=200):
-                r.delete(key)
+        # Also clear any legacy django-redis version-prefixed keys (:1:...)
+        patterns = [pattern]
+        if not pattern.startswith(":"):
+            patterns.append(f":1:{pattern}")
+            patterns.append(f"*:{pattern}")
+        pipe = r.pipeline(transaction=False)
+        n = 0
+        for pat in patterns:
+            for key in r.scan_iter(match=pat, count=200):
+                pipe.delete(key)
+                n += 1
+                if n >= 5000:
+                    break
+            if n >= 5000:
+                break
+        if n:
+            pipe.execute()
     except Exception:
         logger.exception("cache_delete_pattern failed pattern=%s", pattern)
 
@@ -163,19 +200,24 @@ def invalidate_all_users_admin() -> None:
     cache_delete_pattern("usr:admin:*")
 
 
-
 def scan_app_cache_keys(prefix: str = "", limit: int = 100) -> list:
     """List app-cache related keys for admin UI (svc:, plan:, tkt:, usr:)."""
     out = []
+    r = _redis()
+    if not r:
+        return out
     try:
-        from django_redis import get_redis_connection
-        r = get_redis_connection("default")
-        patterns = [f"{prefix}*"] if prefix else ["svc:*", "plan:*", "tkt:*", "usr:*"]
+        if prefix:
+            patterns = [f"{prefix}*", f":1:{prefix}*", f"*:{prefix}*"]
+        else:
+            patterns = [
+                "svc:*", "plan:*", "tkt:*", "usr:*",
+                ":1:svc:*", ":1:plan:*", ":1:tkt:*", ":1:usr:*",
+            ]
         seen = set()
         for pat in patterns:
             for key in r.scan_iter(match=pat, count=200):
                 k = key.decode() if isinstance(key, bytes) else str(key)
-                # django-redis may prefix keys; show as stored
                 if k in seen:
                     continue
                 seen.add(k)
@@ -205,14 +247,25 @@ def get_app_cache_overview() -> dict:
         "msgcache": 0,
         "memory": {},
     }
+    r = _redis()
+    if not r:
+        return overview
     try:
-        from django_redis import get_redis_connection
-        r = get_redis_connection("default")
         overview["redis_ok"] = bool(r.ping())
-        for ns, field in (("svc:", "svc"), ("plan:", "plan"), ("tkt:", "tkt"), ("usr:", "usr"), ("msgcache:", "msgcache")):
+        for ns, field in (
+            ("svc:", "svc"),
+            ("plan:", "plan"),
+            ("tkt:", "tkt"),
+            ("usr:", "usr"),
+            ("msgcache:", "msgcache"),
+        ):
             n = 0
-            for _ in r.scan_iter(match=f"{ns}*", count=200):
-                n += 1
+            # Match both raw keys and legacy django-redis version-prefixed keys
+            for pat in (f"{ns}*", f":1:{ns}*"):
+                for _ in r.scan_iter(match=pat, count=200):
+                    n += 1
+                    if n >= 5000:
+                        break
                 if n >= 5000:
                     break
             overview[field] = n

@@ -93,7 +93,8 @@ class MyTicketListCreateAPIView(APIView):
         key = ticket_user_list_key(request.user.id, params)
         cached = cache_get(key)
         if cached is not None:
-            return ok(data=cached)
+            # Must match the uncached response shape (paginated body, not ok() wrapper)
+            return Response(cached)
         qs = Ticket.objects.filter(user=request.user).select_related("department", "user", "service", "deploy").annotate(message_count=Count("messages"))
         if request.query_params.get("status"):
             qs = qs.filter(status=request.query_params["status"])
