@@ -64,7 +64,7 @@ class ServiceViewSet(ModelViewSet):
     def list(self, request, *args, **kwargs):
         from core.app_cache import (
             cache_get, cache_set, service_user_list_key,
-            SERVICE_USER_TTL,
+            SERVICE_USER_TTL, SERVICE_USER_LIMIT,
         )
         params = {
             "q": request.query_params.get("q_search") or request.query_params.get("q") or "",
@@ -72,14 +72,10 @@ class ServiceViewSet(ModelViewSet):
             "page_size": request.query_params.get("page_size") or "",
         }
         key = service_user_list_key(request.user.id, params)
-        try:
-            cached = cache_get(key)
-            if isinstance(cached, dict) and ("results" in cached or "count" in cached):
-                return Response(cached)
-        except Exception:
-            pass
+        cached = cache_get(key)
+        if cached is not None:
+            return Response(cached)
 
-        # CRITICAL: never slice QS before paginate_queryset
         query = self.get_queryset()
         q_search_param = params["q"]
         if q_search_param:
@@ -93,16 +89,10 @@ class ServiceViewSet(ModelViewSet):
         serializer = GetServiceSerializer(page if page is not None else query, many=True)
         if page is not None:
             resp = self.get_paginated_response(serializer.data)
-            try:
-                cache_set(key, resp.data, SERVICE_USER_TTL)
-            except Exception:
-                pass
+            cache_set(key, resp.data, SERVICE_USER_TTL)
             return resp
-        data = {"count": len(serializer.data), "next": None, "previous": None, "results": serializer.data}
-        try:
-            cache_set(key, data, SERVICE_USER_TTL)
-        except Exception:
-            pass
+        data = {"count": len(serializer.data), "results": serializer.data}
+        cache_set(key, data, SERVICE_USER_TTL)
         return Response(data)
 
     def create(self, request, *args, **kwargs):

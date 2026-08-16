@@ -102,10 +102,7 @@ class PlanAdminViewSet(ViewSet):
         page = paginator.paginate_queryset(qs, request)
         serializer = PlanSerializer(page, many=True)
         resp = paginator.get_paginated_response(serializer.data)
-        try:
-            cache_set(key, resp.data, PLAN_TTL)
-        except Exception:
-            pass
+        cache_set(key, resp.data, PLAN_TTL)
         return resp
 
     def retrieve(self, request, pk=None):

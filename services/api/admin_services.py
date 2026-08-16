@@ -99,50 +99,72 @@ class AdminServiceViewSet(ModelViewSet):
         return qs.order_by("-created_at", "-id")
 
     def list(self, request, *args, **kwargs):
-        """Admin service list. Cache is optional; never raises from cache layer."""
-        key = None
+        """
+        Admin service list.
+
+        IMPORTANT: never slice the queryset before paginate_queryset —
+        Django Paginator.count() raises / misbehaves on sliced querysets
+        and that was the root cause of HTTP 500 on this endpoint.
+        """
+        # ---- optional cache (soft-fail) ----
+        cache_key = None
         try:
-            from core.app_cache import (
-                cache_get, cache_set, service_admin_list_key, SERVICE_ADMIN_TTL,
-            )
+            from core.app_cache import cache_get, cache_set, service_admin_list_key, SERVICE_ADMIN_TTL
             params = {
                 k: request.query_params.get(k) or ""
                 for k in ("q", "q_search", "page", "page_size", "user_id", "status")
             }
-            key = service_admin_list_key(params)
-            cached = cache_get(key)
-            if isinstance(cached, dict) and ("results" in cached or "count" in cached):
+            cache_key = service_admin_list_key(params)
+            cached = cache_get(cache_key)
+            if isinstance(cached, dict) and "results" in cached:
                 return Response(cached)
         except Exception:
-            logger.exception("admin services cache_get failed")
+            logger.exception("admin services: cache read failed")
+            cache_key = None
 
-        # CRITICAL: never slice QS before paginate_queryset (breaks Paginator.count)
-        qs = self.get_queryset()
-        page = self.paginate_queryset(qs)
-        serializer = GetServiceSerializer(page if page is not None else list(qs[:50]), many=True)
-        if page is not None:
-            resp = self.get_paginated_response(serializer.data)
-            body = resp.data
-            if key:
-                try:
-                    from core.app_cache import cache_set, SERVICE_ADMIN_TTL
-                    cache_set(key, body, SERVICE_ADMIN_TTL)
-                except Exception:
-                    logger.exception("admin services cache_set failed")
-            return resp
-        body = {
-            "count": len(serializer.data),
-            "next": None,
-            "previous": None,
-            "results": serializer.data,
-        }
-        if key:
+        # ---- DB + pagination (no pre-slice) ----
+        try:
+            qs = self.get_queryset()
+            page = self.paginate_queryset(qs)
+            ser = GetServiceSerializer(page if page is not None else qs, many=True)
+            data = ser.data
+            if page is not None:
+                resp = self.get_paginated_response(data)
+                body = resp.data
+            else:
+                body = {"count": len(data), "next": None, "previous": None, "results": data}
+                resp = Response(body)
+        except Exception:
+            logger.exception("admin services: list serialization failed")
+            # Minimal fallback so admin panel is not completely blocked
+            try:
+                rows = []
+                for s in Service.objects.select_related("user", "plan").order_by("-created_at")[:20]:
+                    rows.append({
+                        "id": str(s.pk),
+                        "name": s.name,
+                        "status": getattr(s, "status", None),
+                        "user": getattr(s, "user_id", None),
+                        "user_username": getattr(getattr(s, "user", None), "username", None),
+                        "plan": str(s.plan_id) if getattr(s, "plan_id", None) else None,
+                        "created_at": s.created_at.isoformat() if getattr(s, "created_at", None) else None,
+                    })
+                body = {"count": len(rows), "next": None, "previous": None, "results": rows}
+                resp = Response(body)
+            except Exception:
+                logger.exception("admin services: fallback list also failed")
+                return Response(
+                    {"count": 0, "next": None, "previous": None, "results": [], "error": "list failed"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+        if cache_key is not None:
             try:
                 from core.app_cache import cache_set, SERVICE_ADMIN_TTL
-                cache_set(key, body, SERVICE_ADMIN_TTL)
+                cache_set(cache_key, body, SERVICE_ADMIN_TTL)
             except Exception:
-                pass
-        return Response(body)
+                logger.exception("admin services: cache write failed")
+        return resp
 
     def create(self, request, *args, **kwargs):
         """
