@@ -6,4 +6,9 @@ class ServicesConfig(AppConfig):
     name = 'services'
 
     def ready(self):
+        try:
+            from . import cache_signals  # noqa: F401
+        except Exception:
+            pass
+
         import services.signals

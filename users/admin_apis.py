@@ -200,6 +200,9 @@ class AdminUserListAPIView(APIView):
     required_rule = "users.view"
 
     def get(self, request):
+        from core.app_cache import (
+            cache_get, cache_set, user_admin_list_key, USER_ADMIN_TTL, USER_ADMIN_LIMIT,
+        )
         u = request.user
         allowed = (
             u.is_superuser
@@ -211,39 +214,47 @@ class AdminUserListAPIView(APIView):
         if not allowed:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
 
+        params = {k: request.query_params.get(k) or "" for k in ("search", "is_staff", "is_active", "is_superuser", "page", "page_size")}
+        key = user_admin_list_key(params)
+        cached = cache_get(key)
+        if cached is not None:
+            return Response(cached)
+
         qs = User.objects.all().order_by("-date_joined")
-        search = (request.query_params.get("search") or "").strip()
+        search = (params.get("search") or "").strip()
         if search:
             qs = qs.filter(
                 Q(username__icontains=search)
                 | Q(email__icontains=search)
                 | Q(phone_number__icontains=search)
             )
-        if request.query_params.get("is_staff") in ("1", "true", "True"):
+        if params.get("is_staff") in ("1", "true", "True"):
             qs = qs.filter(is_staff=True)
-        elif request.query_params.get("is_staff") in ("0", "false", "False"):
+        elif params.get("is_staff") in ("0", "false", "False"):
             qs = qs.filter(is_staff=False)
-        if request.query_params.get("is_active") in ("1", "true", "True"):
+        if params.get("is_active") in ("1", "true", "True"):
             qs = qs.filter(is_active=True)
-        elif request.query_params.get("is_active") in ("0", "false", "False"):
+        elif params.get("is_active") in ("0", "false", "False"):
             qs = qs.filter(is_active=False)
-        if request.query_params.get("is_superuser") in ("1", "true"):
+        if params.get("is_superuser") in ("1", "true"):
             qs = qs.filter(is_superuser=True)
 
+        qs = qs[:USER_ADMIN_LIMIT]
         paginator = AdminPagination()
         page = paginator.paginate_queryset(qs, request)
-        # Prefetch rules
-        user_ids = [u.id for u in page]
+        user_ids = [x.id for x in page]
         rules_map = {
             r.user_id: list(r.rules or [])
             for r in Rule.objects.filter(user_id__in=user_ids)
         }
         results = []
-        for u in page:
-            d = serialize_user(u, include_rules=False)
-            d["rules"] = rules_map.get(u.id, [])
+        for x in page:
+            d = serialize_user(x, include_rules=False)
+            d["rules"] = rules_map.get(x.id, [])
             results.append(d)
-        return paginator.get_paginated_response(results)
+        resp = paginator.get_paginated_response(results)
+        cache_set(key, resp.data, USER_ADMIN_TTL)
+        return resp
 
     def post(self, request):
         u = request.user
@@ -281,6 +292,11 @@ class AdminUserListAPIView(APIView):
             u_new.is_superuser = False
 
         u_new.save()
+        try:
+            from core.app_cache import invalidate_all_users_admin
+            invalidate_all_users_admin()
+        except Exception:
+            pass
 
         if can_manage:
             rules = request.data.get("rules")

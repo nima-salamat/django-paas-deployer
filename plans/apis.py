@@ -82,21 +82,29 @@ class PlanAdminViewSet(ViewSet):
         return [auth() for auth in self.authentication_classes]
 
     def list(self, request):
+        from core.app_cache import cache_get, cache_set, plan_admin_list_key, PLAN_TTL
+        params = {k: (request.query_params.get(k) or "") for k in ("q", "q_search", "platform", "plan_type", "page", "page_size")}
+        key = plan_admin_list_key(params)
+        cached = cache_get(key)
+        if cached is not None:
+            return Response(cached)
         qs = Plan.objects.all().order_by("name", "platform")
-        q = (request.query_params.get("q") or request.query_params.get("q_search") or "").strip()
-        platform = (request.query_params.get("platform") or "").strip()
-        plan_type = (request.query_params.get("plan_type") or "").strip()
+        q = (params.get("q") or params.get("q_search") or "").strip()
+        platform = (params.get("platform") or "").strip()
+        plan_type = (params.get("plan_type") or "").strip()
         if q:
             qs = qs.filter(Q(name__icontains=q) | Q(platform__icontains=q))
         if platform:
             qs = qs.filter(platform=platform)
         if plan_type:
             qs = qs.filter(plan_type=plan_type)
-
+        qs = qs[:100]
         paginator = PlanAdminPagination()
         page = paginator.paginate_queryset(qs, request)
         serializer = PlanSerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        resp = paginator.get_paginated_response(serializer.data)
+        cache_set(key, resp.data, PLAN_TTL)
+        return resp
 
     def retrieve(self, request, pk=None):
         try:
@@ -110,6 +118,11 @@ class PlanAdminViewSet(ViewSet):
         serializer = PlanSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
+            try:
+                from core.app_cache import invalidate_all_plans
+                invalidate_all_plans()
+            except Exception:
+                pass
             return Response(
                 {"success": True, "message": _("Plan created."), "data": serializer.data},
                 status=status.HTTP_201_CREATED,
@@ -127,6 +140,11 @@ class PlanAdminViewSet(ViewSet):
         serializer = PlanSerializer(plan, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
+            try:
+                from core.app_cache import invalidate_all_plans
+                invalidate_all_plans()
+            except Exception:
+                pass
             return Response(
                 {"success": True, "message": _("Plan updated."), "data": serializer.data}
             )
@@ -153,6 +171,11 @@ class PlanAdminViewSet(ViewSet):
         except Exception:
             pass
         plan.delete()
+        try:
+            from core.app_cache import invalidate_all_plans
+            invalidate_all_plans()
+        except Exception:
+            pass
         return Response(
             {"success": True, "message": _("Plan deleted.")},
             status=status.HTTP_200_OK,
@@ -190,8 +213,13 @@ class PlansApiView(APIView):
         GET /plans/?id=1,2,3 
         GET /plans/?id=1   
         """
+        from core.app_cache import cache_get, cache_set, plan_list_key, plan_detail_key, PLAN_TTL
         ids = request.query_params.get("id", "")
         if not ids:
+            key = plan_list_key({"page": request.query_params.get("page") or "1"})
+            cached = cache_get(key)
+            if cached is not None:
+                return Response(cached)
             plans = Plan.objects.all().order_by("platform")
         else:
             if "," in ids:
@@ -223,7 +251,13 @@ class PlansApiView(APIView):
         paginator = PageNumberPagination()
         paginated_plans = paginator.paginate_queryset(plans, request)
         serializer = PlanSerializer(paginated_plans, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        resp = paginator.get_paginated_response(serializer.data)
+        try:
+            from core.app_cache import cache_set, plan_list_key, PLAN_TTL
+            cache_set(plan_list_key({"page": request.query_params.get("page") or "1"}), resp.data, PLAN_TTL)
+        except Exception:
+            pass
+        return resp
 
 
 class PlanApplyAPIView(APIView):

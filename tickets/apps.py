@@ -8,6 +8,11 @@ class TicketsConfig(AppConfig):
 
     def ready(self):
         try:
+            from . import cache_signals  # noqa: F401
+        except Exception:
+            pass
+
+        try:
             from . import signals  # noqa: F401
         except ImportError:
             pass
