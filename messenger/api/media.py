@@ -320,11 +320,22 @@ def maybe_purge_view_once_attachment(att) -> bool:
         # No recipients left — purge immediately
         return _purge_attachment_file(att)
 
-    opened_ids = set(
-        AttachmentViewOnceOpen.objects.filter(attachment=att).values_list("user_id", flat=True)
+    opens = list(
+        AttachmentViewOnceOpen.objects.filter(attachment=att).only(
+            "user_id", "opened_at", "expires_at"
+        )
     )
+    opened_ids = {o.user_id for o in opens}
     if not recipient_ids.issubset(opened_ids):
         return False
+    # Wait until every open window has expired (15s) so the last viewer can still load bytes
+    now = _tz.now()
+    for o in opens:
+        exp = o.expires_at
+        if exp is None:
+            exp = o.opened_at + _tz.timedelta(seconds=15)
+        if now < exp:
+            return False
     return _purge_attachment_file(att)
 
 

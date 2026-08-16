@@ -263,6 +263,11 @@ def _user_mini(user) -> Optional[Dict[str, Any]]:
 
 
 def _attachment_dict(att) -> Dict[str, Any]:
+    is_vo = bool(getattr(att, "is_view_once", False))
+    is_purged = bool(getattr(att, "is_purged", False))
+    # Never put a durable download URL for view-once in the shared cache;
+    # enrich_for_viewer fills viewer-specific fields.
+    url = None if (is_vo or is_purged) else f"/api/messenger/attachments/{att.id}/download/"
     return {
         "id": att.id,
         "original_filename": att.original_filename,
@@ -272,10 +277,11 @@ def _attachment_dict(att) -> Dict[str, Any]:
         "width": att.width,
         "height": att.height,
         "duration": att.duration,
-        "url": f"/api/messenger/attachments/{att.id}/download/",
+        "url": url,
         "is_spoiler": bool(getattr(att, "is_spoiler", False)),
-        "is_view_once": bool(getattr(att, "is_view_once", False)),
-        "view_once_state": "none",
+        "is_view_once": is_vo,
+        "is_purged": is_purged,
+        "view_once_state": "purged" if is_purged else ("pending" if is_vo else "none"),
         "created_at": _dt(att.created_at),
     }
 
@@ -734,6 +740,25 @@ class MessageCacheService:
         viewer_id = getattr(viewer, "id", None) if viewer and getattr(viewer, "is_authenticated", False) else None
         msg_ids = [m["id"] for m in base_messages]
 
+        # Which view-once attachments this viewer already opened
+        vo_opened_ids = set()
+        if viewer_id:
+            try:
+                from .models import AttachmentViewOnceOpen
+                att_ids = []
+                for m in base_messages:
+                    for a in (m.get("attachments") or []):
+                        if isinstance(a, dict) and a.get("is_view_once") and a.get("id"):
+                            att_ids.append(int(a["id"]))
+                if att_ids:
+                    vo_opened_ids = set(
+                        AttachmentViewOnceOpen.objects.filter(
+                            attachment_id__in=att_ids, user_id=viewer_id
+                        ).values_list("attachment_id", flat=True)
+                    )
+            except Exception:
+                logger.exception("enrich_for_viewer: view-once opens lookup failed")
+
         # mine flags only (counts come from cache)
         mine_map: Dict[int, set] = {mid: set() for mid in msg_ids}
         if viewer_id and msg_ids:
@@ -784,6 +809,7 @@ class MessageCacheService:
         result = []
         for m in base_messages:
             out = dict(m)
+            out["_vo_opened"] = vo_opened_ids
             mid = out["id"]
             agg = out.get("reactions_agg") or {}
             mine = mine_map.get(mid) or set()
@@ -793,6 +819,32 @@ class MessageCacheService:
             ]
             out.pop("reactions_agg", None)
 
+            # View-once attachment states for viewer
+            atts = out.get("attachments")
+            if isinstance(atts, list) and atts:
+                patched = []
+                for a in atts:
+                    if not isinstance(a, dict):
+                        patched.append(a)
+                        continue
+                    ad = dict(a)
+                    if ad.get("is_purged"):
+                        ad["url"] = None
+                        ad["view_once_state"] = "purged"
+                    elif ad.get("is_view_once"):
+                        snd = (out.get("sender") or {}).get("id")
+                        if viewer_id and snd and int(viewer_id) == int(snd):
+                            ad["view_once_state"] = "own"
+                            ad["url"] = f"/api/messenger/attachments/{ad.get('id')}/download/"
+                        elif ad.get("id") in (out.get("_vo_opened") or set()):
+                            ad["view_once_state"] = "opened"
+                            ad["url"] = None
+                        else:
+                            ad["view_once_state"] = "pending"
+                            ad["url"] = None
+                    patched.append(ad)
+                out["attachments"] = patched
+
             if out.get("is_system") or out.get("is_deleted"):
                 out["read_state"] = "read"
             elif not viewer_id or not out.get("sender") or out["sender"].get("id") != viewer_id:
@@ -800,6 +852,7 @@ class MessageCacheService:
             else:
                 out["read_state"] = "read" if mid in read_ids else "sent"
 
+            out.pop("_vo_opened", None)
             result.append(out)
         return result
 
