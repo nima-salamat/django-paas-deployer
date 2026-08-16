@@ -31,6 +31,17 @@ from ..serializers import (
 from ..utils import validate_messenger_file, detect_kind, users_blocked, can_see_profile_photo
 from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger
 
+
+def _schedule_member_cache(conv_id, extra_user_ids=None, system_msg=None):
+    """Fire-and-forget membership cache sync (Celery after commit)."""
+    try:
+        from ..message_cache import schedule_membership_cache_sync
+        mid = getattr(system_msg, "id", None) if system_msg is not None else None
+        schedule_membership_cache_sync(conv_id, extra_user_ids=extra_user_ids, system_msg_id=mid)
+    except Exception:
+        pass
+
+
 User = get_user_model()
 def _auto_transfer_or_cleanup(conv, leaving_part):
     """When the owner/creator leaves a group:
@@ -117,6 +128,11 @@ class LeaveConversationAPIView(APIView):
                 )
                 from ..consumers import broadcast_message
                 broadcast_message(msg)
+                try:
+                    from ..message_cache import schedule_add_message
+                    schedule_add_message(msg)
+                except Exception:
+                    pass
             except Exception:
                 pass
             if transferred_to:
@@ -143,6 +159,7 @@ class LeaveConversationAPIView(APIView):
                 })
             except Exception:
                 pass
+            _schedule_member_cache(pk, extra_user_ids=[request.user.id])
         else:
             # Private DM: hide for both and hard-delete
             ConversationParticipant.objects.filter(conversation=conv).update(left_at=timezone.now())
@@ -192,6 +209,11 @@ class RemoveMemberAPIView(APIView):
             )
             from ..consumers import broadcast_message
             broadcast_message(msg)
+            try:
+                from ..message_cache import schedule_add_message
+                schedule_add_message(msg)
+            except Exception:
+                pass
         except Exception:
             pass
         # Broadcast so other clients reload the member list
@@ -204,6 +226,7 @@ class RemoveMemberAPIView(APIView):
             })
         except Exception:
             pass
+        _schedule_member_cache(pk, extra_user_ids=[user_id])
         detail = ConversationDetailSerializer(conv, context={"request": request}).data
         return ok("Member removed", data={"conversation": detail})
 
@@ -271,6 +294,7 @@ class MemberRoleAPIView(APIView):
             })
         except Exception:
             pass
+            _schedule_member_cache(pk)
         detail = ConversationDetailSerializer(conv, context={"request": request}).data
         return ok(f"Role changed to {new_role}", data={"conversation": detail})
 
@@ -394,10 +418,22 @@ class AddMembersAPIView(APIView):
                 is_system=True,
             )
             try:
-                from ..consumers import broadcast_message
+                from ..consumers import broadcast_message, broadcast_member_change
                 broadcast_message(msg)
+                broadcast_member_change(pk, {
+                    "type": "member.joined",
+                    "conversation_id": pk,
+                    "user_id": u.id,
+                })
             except Exception:
                 pass
+            try:
+                from ..message_cache import schedule_add_message
+                schedule_add_message(msg)
+            except Exception:
+                pass
+        if added:
+            _schedule_member_cache(pk, extra_user_ids=[u.id for u in added])
         detail = ConversationDetailSerializer(conv, context={"request": request}).data
         return ok(
             "Members added" if added else "No new members",

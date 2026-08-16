@@ -77,3 +77,30 @@ def deliver_due_scheduled_messages(limit=100):
 def deliver_scheduled_messages():
     """Celery entrypoint — also used by admin force-deliver."""
     return deliver_due_scheduled_messages()
+
+
+@shared_task(
+    name="messenger.tasks.sync_membership_cache",
+    ignore_result=True,
+    time_limit=30,
+    soft_time_limit=20,
+)
+def sync_membership_cache_task(conv_id: int, extra_user_ids=None, system_msg_id=None):
+    """Async cache sync after group membership changes.
+
+    Invalidates participants + conversation lists for all affected users,
+    and optionally pushes a system message into the message hot-cache.
+    """
+    try:
+        from .message_cache import do_membership_cache_sync
+        return do_membership_cache_sync(
+            int(conv_id),
+            list(extra_user_ids or []),
+            int(system_msg_id) if system_msg_id else None,
+        )
+    except Exception:
+        logger.exception(
+            "sync_membership_cache_task failed conv=%s extra=%s msg=%s",
+            conv_id, extra_user_ids, system_msg_id,
+        )
+        return None

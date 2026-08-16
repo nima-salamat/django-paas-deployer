@@ -243,30 +243,22 @@ def _dt(val) -> Optional[str]:
 def _user_mini(user) -> Optional[Dict[str, Any]]:
     if user is None:
         return None
-    # Shape matches UserMiniSerializer. Avatars live on users.Profile (not User.avatar).
-    # Privacy is applied later in enrich_for_viewer per requesting user.
+    # Keep the same shape UserMiniSerializer produces for list views.
+    # Avatar URL resolution is left to the live serializer when possible;
+    # we store the raw fields so the cache stays self-contained.
+    avatar = getattr(user, "avatar", None)
     avatar_url = None
-    try:
-        from users.models import Profile
-        p = (
-            Profile.objects.filter(user_id=user.id)
-            .exclude(image__isnull=True)
-            .exclude(image="")
-            .order_by("order", "id")
-            .only("image")
-            .first()
-        )
-        if p is not None and p.image:
-            avatar_url = p.image.url
-    except Exception:
-        avatar_url = None
+    if avatar:
+        try:
+            avatar_url = avatar.url
+        except Exception:
+            avatar_url = None
     return {
         "id": user.id,
         "username": getattr(user, "username", None) or "",
         "first_name": getattr(user, "first_name", None) or "",
         "last_name": getattr(user, "last_name", None) or "",
         "avatar": avatar_url,
-        "color": getattr(user, "color", None),
     }
 
 
@@ -791,52 +783,6 @@ class MessageCacheService:
                         read_ids.add(m["id"])
                         break
 
-        # ---- Avatars / online / bio for senders (viewer-aware privacy) ----
-        user_ids = set()
-        for m in base_messages:
-            s = m.get("sender") or {}
-            if s.get("id"):
-                user_ids.add(int(s["id"]))
-            rp = (m.get("reply_to_preview") or {}).get("sender") or {}
-            if rp.get("id"):
-                user_ids.add(int(rp["id"]))
-            ff = m.get("forwarded_from_user") or {}
-            if ff.get("id"):
-                user_ids.add(int(ff["id"]))
-
-        avatar_map = {}
-        bio_map = {}
-        online_ids = set()
-        contact_ids = set()
-        blocked_ids = set()
-        if request is not None and user_ids:
-            try:
-                from .serializers import build_user_mini_context
-                uctx = build_user_mini_context(request, list(user_ids))
-                avatar_map = uctx.get("avatar_map") or {}
-                bio_map = uctx.get("bio_map") or {}
-                online_ids = uctx.get("online_ids") or set()
-                contact_ids = uctx.get("contact_ids") or set()
-                blocked_ids = uctx.get("blocked_ids") or set()
-            except Exception:
-                logger.exception("enrich_for_viewer: build_user_mini_context failed")
-
-        def _patch_user(u):
-            if not isinstance(u, dict) or not u.get("id"):
-                return u
-            uid = int(u["id"])
-            out_u = dict(u)
-            # Always override from viewer-aware map when available
-            if uid in avatar_map:
-                out_u["avatar"] = avatar_map.get(uid)
-            elif "avatar" not in out_u:
-                out_u["avatar"] = None
-            out_u["bio"] = bio_map.get(uid, out_u.get("bio") or "") or ""
-            out_u["is_online"] = uid in online_ids
-            out_u["is_contact"] = uid in contact_ids
-            out_u["is_blocked"] = uid in blocked_ids
-            return out_u
-
         result = []
         for m in base_messages:
             out = dict(m)
@@ -848,16 +794,6 @@ class MessageCacheService:
                 for em, cnt in sorted(agg.items())
             ]
             out.pop("reactions_agg", None)
-
-            if out.get("sender"):
-                out["sender"] = _patch_user(out["sender"])
-            rtp = out.get("reply_to_preview")
-            if isinstance(rtp, dict) and rtp.get("sender"):
-                rtp = dict(rtp)
-                rtp["sender"] = _patch_user(rtp["sender"])
-                out["reply_to_preview"] = rtp
-            if out.get("forwarded_from_user"):
-                out["forwarded_from_user"] = _patch_user(out["forwarded_from_user"])
 
             if out.get("is_system") or out.get("is_deleted"):
                 out["read_state"] = "read"
@@ -1085,5 +1021,113 @@ def schedule_delete_message(conv_id: int, msg_id: int) -> None:
     def _job():
         MessageCacheService.delete_message(conv_id, msg_id)
         ConversationCacheService.invalidate_conv_lists_for_conversation(conv_id)
+
+    run_after_commit(_job)
+
+
+def invalidate_user_lists(user_ids) -> None:
+    """Drop conversation-list cache for the given user ids."""
+    for uid in {int(u) for u in (user_ids or []) if u is not None}:
+        try:
+            ConversationCacheService.invalidate_user_conv_list(uid)
+        except Exception:
+            logger.exception("invalidate_user_lists failed user=%s", uid)
+
+
+def do_membership_cache_sync(
+    conv_id: int,
+    extra_user_ids: list | None = None,
+    system_msg_id: int | None = None,
+) -> dict:
+    """Synchronous membership cache sync (used by Celery task + fallback).
+
+    * Drops participants cache for the conversation
+    * Drops conversation-list cache for every known participant (active + left)
+      plus any extra user ids (newly joined / removed / left)
+    * Optionally seeds the message hot-window with a system message
+    """
+    stats = {"participants": False, "lists": 0, "system_msg": False}
+    try:
+        ConversationCacheService.invalidate_participants(int(conv_id))
+        stats["participants"] = True
+    except Exception:
+        logger.exception("do_membership_cache_sync: participants failed conv=%s", conv_id)
+
+    uids = set()
+    for u in (extra_user_ids or []):
+        try:
+            uids.add(int(u))
+        except (TypeError, ValueError):
+            pass
+    try:
+        from .models import ConversationParticipant
+        uids.update(
+            ConversationParticipant.objects.filter(conversation_id=conv_id)
+            .values_list("user_id", flat=True)
+        )
+    except Exception:
+        logger.exception("do_membership_cache_sync: load participants failed conv=%s", conv_id)
+
+    for uid in uids:
+        try:
+            ConversationCacheService.invalidate_user_conv_list(uid)
+            stats["lists"] += 1
+        except Exception:
+            logger.exception("do_membership_cache_sync: list invalidate user=%s", uid)
+
+    if system_msg_id:
+        try:
+            from .models import Message
+            fresh = (
+                Message.objects.filter(pk=system_msg_id)
+                .select_related(
+                    "sender", "reply_to", "reply_to__sender", "forwarded_from"
+                )
+                .prefetch_related("attachments", "reactions")
+                .first()
+            )
+            if fresh:
+                MessageCacheService.add_message(fresh)
+                stats["system_msg"] = True
+        except Exception:
+            logger.exception(
+                "do_membership_cache_sync: system msg cache failed id=%s", system_msg_id
+            )
+    return stats
+
+
+def schedule_membership_cache_sync(
+    conv_id: int,
+    extra_user_ids: list | None = None,
+    system_msg_id: int | None = None,
+) -> None:
+    """Non-blocking: after DB commit, enqueue Celery (or run inline fallback).
+
+    Call this after join / leave / remove / add-members / role change / join-approve.
+    HTTP response is not delayed by Redis work.
+    """
+    extra = []
+    for u in (extra_user_ids or []):
+        try:
+            extra.append(int(u))
+        except (TypeError, ValueError):
+            pass
+    cid = int(conv_id)
+    mid = int(system_msg_id) if system_msg_id else None
+
+    def _job():
+        try:
+            from .tasks import sync_membership_cache_task
+            sync_membership_cache_task.delay(cid, extra, mid)
+            return
+        except Exception:
+            logger.exception(
+                "schedule_membership_cache_sync: celery unavailable; inline fallback conv=%s",
+                cid,
+            )
+        try:
+            do_membership_cache_sync(cid, extra, mid)
+        except Exception:
+            logger.exception("schedule_membership_cache_sync: inline failed conv=%s", cid)
 
     run_after_commit(_job)

@@ -31,6 +31,17 @@ from ..serializers import (
 from ..utils import validate_messenger_file, detect_kind, users_blocked, can_see_profile_photo
 from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger
 
+
+def _schedule_member_cache(conv_id, extra_user_ids=None, system_msg=None):
+    """Fire-and-forget membership cache sync (Celery after commit)."""
+    try:
+        from ..message_cache import schedule_membership_cache_sync
+        mid = getattr(system_msg, "id", None) if system_msg is not None else None
+        schedule_membership_cache_sync(conv_id, extra_user_ids=extra_user_ids, system_msg_id=mid)
+    except Exception:
+        pass
+
+
 User = get_user_model()
 class InviteLinkCreateAPIView(APIView):
 
@@ -159,8 +170,22 @@ class JoinByInviteAPIView(APIView):
                 body=f"{request.user.username} joined the group",
                 is_system=True,
             )
-            from ..consumers import broadcast_message
+            from ..consumers import broadcast_message, broadcast_member_change
             broadcast_message(msg)
+            try:
+                broadcast_member_change(conv.id, {
+                    "type": "member.joined",
+                    "conversation_id": conv.id,
+                    "user_id": request.user.id,
+                })
+            except Exception:
+                pass
+            try:
+                from ..message_cache import schedule_add_message
+                schedule_add_message(msg)
+            except Exception:
+                pass
+            _schedule_member_cache(conv.id, extra_user_ids=[request.user.id], system_msg=msg)
         except Exception:
             pass
         return ok(
