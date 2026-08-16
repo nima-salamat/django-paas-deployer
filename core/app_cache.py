@@ -130,7 +130,8 @@ def service_user_list_key(user_id: int, params: dict | None = None) -> str:
 
 
 def service_user_detail_key(user_id: int, service_id: str) -> str:
-    return f"svc:user:{user_id}:id:{service_id}"
+    # Align with list keys from make_query_key (prefix:u:{user_id}:...)
+    return f"svc:user:u:{user_id}:id:{service_id}"
 
 
 def service_admin_list_key(params: dict | None = None) -> str:
@@ -138,6 +139,10 @@ def service_admin_list_key(params: dict | None = None) -> str:
 
 
 def invalidate_user_services(user_id: int) -> None:
+    # List keys: svc:user:u:{user_id}:q:{digest}
+    # Detail keys: svc:user:u:{user_id}:id:{service_id}
+    # Also clear any legacy keys that used svc:user:{user_id}:...
+    cache_delete_pattern(f"svc:user:u:{user_id}:*")
     cache_delete_pattern(f"svc:user:{user_id}:*")
     cache_delete_pattern("svc:admin:*")
 
@@ -172,6 +177,9 @@ def ticket_admin_list_key(params: dict | None = None) -> str:
 
 
 def invalidate_user_tickets(user_id: int) -> None:
+    # List keys: tkt:user:u:{user_id}:q:{digest}
+    # Also clear any legacy keys that used tkt:user:{user_id}:...
+    cache_delete_pattern(f"tkt:user:u:{user_id}:*")
     cache_delete_pattern(f"tkt:user:{user_id}:*")
     cache_delete_pattern("tkt:admin:*")
 

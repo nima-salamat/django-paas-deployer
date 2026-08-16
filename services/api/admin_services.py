@@ -277,7 +277,16 @@ class AdminServiceViewSet(ModelViewSet):
             _purge_service_runtime(service)
         except Exception as exc:
             logger.warning("admin purge before service delete failed: %s", exc)
+        owner_id = getattr(service, "user_id", None)
         service.delete()
+        try:
+            from core.app_cache import invalidate_user_services, invalidate_all_services
+            if owner_id:
+                invalidate_user_services(owner_id)
+            else:
+                invalidate_all_services()
+        except Exception:
+            pass
         return Response(
             {"success": _("Service deleted.")}, status=status.HTTP_200_OK
         )
