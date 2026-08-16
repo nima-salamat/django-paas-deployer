@@ -1,15 +1,14 @@
 """Shared Redis JSON cache helpers for services / plans / tickets / users.
 
-Uses the raw redis client (same as messenger.message_cache) so keys are
-stored without django-redis version prefixes and scan/delete_pattern work
-reliably. Soft-fail: cache errors never break APIs.
+Uses the raw redis client (same as messenger.message_cache).
+Soft-fail: cache errors never break APIs.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from django.core.serializers.json import DjangoJSONEncoder
 
@@ -196,13 +195,10 @@ def scan_app_cache_keys(prefix: str = "", limit: int = 100) -> list:
     if not r:
         return out
     try:
-        if prefix:
-            patterns = [f"{prefix}*", f":1:{prefix}*", f"*:{prefix}*"]
-        else:
-            patterns = [
-                "svc:*", "plan:*", "tkt:*", "usr:*",
-                ":1:svc:*", ":1:plan:*", ":1:tkt:*", ":1:usr:*",
-            ]
+        patterns = [f"{prefix}*", f":1:{prefix}*"] if prefix else [
+            "svc:*", "plan:*", "tkt:*", "usr:*",
+            ":1:svc:*", ":1:plan:*", ":1:tkt:*", ":1:usr:*",
+        ]
         seen = set()
         for pat in patterns:
             for key in r.scan_iter(match=pat, count=200):
@@ -226,9 +222,7 @@ def scan_app_cache_keys(prefix: str = "", limit: int = 100) -> list:
 
 
 def get_app_cache_overview() -> dict:
-    overview = {
-        "redis_ok": False, "svc": 0, "plan": 0, "tkt": 0, "usr": 0, "msgcache": 0, "memory": {},
-    }
+    overview = {"redis_ok": False, "svc": 0, "plan": 0, "tkt": 0, "usr": 0, "msgcache": 0, "memory": {}}
     r = _redis()
     if not r:
         return overview
@@ -259,10 +253,8 @@ def get_app_cache_overview() -> dict:
 
 def invalidate_namespace(ns: str) -> None:
     if ns == "all":
-        cache_delete_pattern("svc:*")
-        cache_delete_pattern("plan:*")
-        cache_delete_pattern("tkt:*")
-        cache_delete_pattern("usr:*")
+        for p in ("svc:*", "plan:*", "tkt:*", "usr:*"):
+            cache_delete_pattern(p)
         return
     mapping = {"svc": "svc:*", "plan": "plan:*", "tkt": "tkt:*", "usr": "usr:*"}
     pat = mapping.get(ns)

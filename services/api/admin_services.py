@@ -42,7 +42,16 @@ logger = logging.getLogger(__name__)
 # Permission helpers (aligned with users.admin_apis Rule system)
 # ---------------------------------------------------------------------------
 
-from .common import *  # noqa: F401,F403
+from .common import (  # explicit: import * skips names starting with _
+    ServiceAdminPagination,
+    _can_view_all_services,
+    _can_manage_all_services,
+    _can_delete_services,
+    _purge_service_runtime,
+    _service_is_mutable,
+    _resolve_platform,
+    _parse_deploy_config,
+)
 
 class HasServicesViewRule(BasePermission):
     """Superuser OR staff with services.view / services.manage."""
@@ -99,14 +108,7 @@ class AdminServiceViewSet(ModelViewSet):
         return qs.order_by("-created_at", "-id")
 
     def list(self, request, *args, **kwargs):
-        """
-        Admin service list.
-
-        IMPORTANT: never slice the queryset before paginate_queryset —
-        Django Paginator.count() raises / misbehaves on sliced querysets
-        and that was the root cause of HTTP 500 on this endpoint.
-        """
-        # ---- optional cache (soft-fail) ----
+        """Admin service list. Never slice QS before paginate."""
         cache_key = None
         try:
             from core.app_cache import cache_get, cache_set, service_admin_list_key, SERVICE_ADMIN_TTL
@@ -122,41 +124,15 @@ class AdminServiceViewSet(ModelViewSet):
             logger.exception("admin services: cache read failed")
             cache_key = None
 
-        # ---- DB + pagination (no pre-slice) ----
-        try:
-            qs = self.get_queryset()
-            page = self.paginate_queryset(qs)
-            ser = GetServiceSerializer(page if page is not None else qs, many=True)
-            data = ser.data
-            if page is not None:
-                resp = self.get_paginated_response(data)
-                body = resp.data
-            else:
-                body = {"count": len(data), "next": None, "previous": None, "results": data}
-                resp = Response(body)
-        except Exception:
-            logger.exception("admin services: list serialization failed")
-            # Minimal fallback so admin panel is not completely blocked
-            try:
-                rows = []
-                for s in Service.objects.select_related("user", "plan").order_by("-created_at")[:20]:
-                    rows.append({
-                        "id": str(s.pk),
-                        "name": s.name,
-                        "status": getattr(s, "status", None),
-                        "user": getattr(s, "user_id", None),
-                        "user_username": getattr(getattr(s, "user", None), "username", None),
-                        "plan": str(s.plan_id) if getattr(s, "plan_id", None) else None,
-                        "created_at": s.created_at.isoformat() if getattr(s, "created_at", None) else None,
-                    })
-                body = {"count": len(rows), "next": None, "previous": None, "results": rows}
-                resp = Response(body)
-            except Exception:
-                logger.exception("admin services: fallback list also failed")
-                return Response(
-                    {"count": 0, "next": None, "previous": None, "results": [], "error": "list failed"},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
+        qs = self.get_queryset()
+        page = self.paginate_queryset(qs)
+        serializer = GetServiceSerializer(page if page is not None else qs, many=True)
+        if page is not None:
+            resp = self.get_paginated_response(serializer.data)
+            body = resp.data
+        else:
+            body = {"count": len(serializer.data), "next": None, "previous": None, "results": serializer.data}
+            resp = Response(body)
 
         if cache_key is not None:
             try:
