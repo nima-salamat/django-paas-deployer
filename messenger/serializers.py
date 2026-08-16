@@ -106,15 +106,56 @@ class UserMiniSerializer(serializers.ModelSerializer):
 
 class MessageAttachmentSerializer(serializers.ModelSerializer):
     url = serializers.SerializerMethodField()
+    is_spoiler = serializers.BooleanField(read_only=True)
+    is_view_once = serializers.BooleanField(read_only=True)
+    view_once_state = serializers.SerializerMethodField()
 
     class Meta:
         model = MessageAttachment
         fields = (
             "id", "original_filename", "content_type", "size", "kind",
             "width", "height", "duration", "url", "created_at",
+            "is_spoiler", "is_view_once", "view_once_state",
         )
 
+    def _viewer(self):
+        req = self.context.get("request")
+        return getattr(req, "user", None) if req else None
+
+    def _view_once_opened(self, obj, viewer):
+        if not viewer or not getattr(viewer, "is_authenticated", False):
+            return False
+        opens = getattr(obj, "_prefetched_view_once_opens", None)
+        if opens is not None:
+            return any(o.user_id == viewer.id for o in opens)
+        try:
+            return obj.view_once_opens.filter(user_id=viewer.id).exists()
+        except Exception:
+            return False
+
+    def get_view_once_state(self, obj):
+        """none | pending | opened | own"""
+        if not getattr(obj, "is_view_once", False):
+            return "none"
+        viewer = self._viewer()
+        if not viewer or not getattr(viewer, "is_authenticated", False):
+            return "pending"
+        if obj.uploaded_by_id and obj.uploaded_by_id == viewer.id:
+            return "own"
+        if self._view_once_opened(obj, viewer):
+            return "opened"
+        return "pending"
+
     def get_url(self, obj):
+        # View-once: only sender always has URL; recipients only before/during open API
+        if getattr(obj, "is_view_once", False):
+            viewer = self._viewer()
+            if not viewer or not getattr(viewer, "is_authenticated", False):
+                return None
+            if obj.uploaded_by_id == viewer.id:
+                return f"/api/messenger/attachments/{obj.pk}/download/"
+            # Recipient: never expose URL in list payload (must call open endpoint)
+            return None
         return f"/api/messenger/attachments/{obj.pk}/download/"
 
 

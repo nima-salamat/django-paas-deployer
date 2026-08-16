@@ -93,6 +93,26 @@ class AttachmentDownloadAPIView(APIView):
         ).exists():
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
 
+        # View-once gate: recipients may download only if they already opened
+        # (open endpoint records the open then redirects/returns file).
+        if getattr(att, "is_view_once", False) and att.uploaded_by_id != user.id:
+            from ..models import AttachmentViewOnceOpen
+            opened = AttachmentViewOnceOpen.objects.filter(attachment=att, user=user).exists()
+            # Allow if ?once_token matches a short-lived open grant in cache
+            once_tok = request.GET.get("once") or request.query_params.get("once")
+            granted = False
+            if once_tok:
+                try:
+                    from django.core.cache import cache
+                    key = f"messenger:view_once:{att.pk}:{user.id}"
+                    granted = cache.get(key) == once_tok
+                except Exception:
+                    granted = False
+            if not opened and not granted:
+                return err("View-once media locked", status.HTTP_403_FORBIDDEN)
+            if granted and not opened:
+                AttachmentViewOnceOpen.objects.get_or_create(attachment=att, user=user)
+
         from django.http import FileResponse
         content_type = (
             att.content_type
@@ -241,20 +261,14 @@ class ConversationMediaAPIView(APIView):
         items = list(qs[: limit + 1])
         has_more = len(items) > limit
         items = items[:limit]
-        from ..serializers import MessageAttachmentSerializer, build_user_mini_context
-        sender_ids = [
-            att.message.sender_id
-            for att in items
-            if att.message and att.message.sender_id
-        ]
-        mini_ctx = build_user_mini_context(request, sender_ids)
+        from ..serializers import MessageAttachmentSerializer
         result = []
         for att in items:
             ser = MessageAttachmentSerializer(att, context={"request": request}).data
             ser["message_id"] = att.message_id
             ser["message_created_at"] = att.message.created_at if att.message else att.created_at
             ser["sender"] = (
-                UserMiniSerializer(att.message.sender, context=mini_ctx).data
+                UserMiniSerializer(att.message.sender, context={"request": request}).data
                 if att.message and att.message.sender else None
             )
             result.append(ser)
@@ -266,4 +280,51 @@ class ConversationMediaAPIView(APIView):
         })
 
 
+class ViewOnceOpenAPIView(APIView):
+    """Open a view-once attachment (recipient only).
 
+    POST /api/messenger/attachments/<pk>/view-once/
+    Returns a short-lived download URL with ?once=<token>. After open is
+    recorded, subsequent list payloads show view_once_state=opened and no URL.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        import secrets
+        from django.core.cache import cache
+        from ..models import AttachmentViewOnceOpen
+
+        att = get_object_or_404(MessageAttachment, pk=pk)
+        if not getattr(att, "is_view_once", False):
+            return err("Not a view-once attachment")
+        if not ConversationParticipant.objects.filter(
+            conversation=att.conversation, user=request.user, left_at__isnull=True
+        ).exists():
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        if att.uploaded_by_id == request.user.id:
+            # Sender always has access via normal download URL
+            return ok(data={
+                "url": f"/api/messenger/attachments/{att.pk}/download/",
+                "view_once_state": "own",
+            })
+
+        already = AttachmentViewOnceOpen.objects.filter(
+            attachment=att, user=request.user
+        ).exists()
+        if already:
+            return err("Already opened", status.HTTP_410_GONE, extra={
+                "view_once_state": "opened",
+            })
+
+        token = secrets.token_urlsafe(16)
+        try:
+            cache.set(f"messenger:view_once:{att.pk}:{request.user.id}", token, 60)
+        except Exception:
+            pass
+        AttachmentViewOnceOpen.objects.get_or_create(attachment=att, user=request.user)
+        return ok(data={
+            "url": f"/api/messenger/attachments/{att.pk}/download/?once={token}",
+            "view_once_state": "opened",
+            "expires_in": 60,
+        })

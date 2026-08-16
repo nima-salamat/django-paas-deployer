@@ -235,9 +235,23 @@ class MessageListCreateAPIView(APIView):
             )
             # Attach files only to the first chunk
             if idx == 0:
+                # Media flags (apply to all files in this message)
+                def _flag(name):
+                    v = request.data.get(name)
+                    if isinstance(v, (list, tuple)):
+                        v = v[0] if v else False
+                    if isinstance(v, str):
+                        return v.strip().lower() in ("1", "true", "yes", "on")
+                    return bool(v)
+
+                is_spoiler = _flag("is_spoiler") or _flag("spoiler")
+                is_view_once = _flag("is_view_once") or _flag("view_once")
+                # view_once only meaningful for image/video/gif
                 for f in valid_files:
                     content_type = getattr(f, "content_type", "") or mimetypes.guess_type(getattr(f, "name", ""))[0] or ""
                     kind = detect_kind(f.name, content_type)
+                    att_spoiler = is_spoiler and kind in ("image", "gif", "video")
+                    att_once = is_view_once and kind in ("image", "gif", "video")
                     MessageAttachment.objects.create(
                         conversation=conv,
                         message=msg,
@@ -247,6 +261,8 @@ class MessageListCreateAPIView(APIView):
                         content_type=content_type,
                         size=getattr(f, "size", 0) or 0,
                         kind=kind,
+                        is_spoiler=att_spoiler,
+                        is_view_once=att_once,
                     )
             created_msgs.append(msg)
             # Cache after DB commit (non-blocking for the HTTP response).

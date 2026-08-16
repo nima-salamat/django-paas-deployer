@@ -24,7 +24,7 @@ from .profile import (
     UserByUsernameAPIView, UserBioAPIView, ProfileUpdateBroadcastAPIView,
 )
 from .media import (
-    AttachmentDownloadAPIView, ConversationCleanupAPIView, ConversationMediaAPIView,
+    AttachmentDownloadAPIView, ConversationCleanupAPIView, ConversationMediaAPIView, ViewOnceOpenAPIView,
 )
 from .pins import (
     ConversationPinAPIView, MessagePinAPIView,
@@ -54,7 +54,7 @@ __all__ = [
     "InviteLinkCreateAPIView", "InviteLinkRevokeAPIView", "JoinByInviteAPIView",
     "MyProfilePhotosAPIView", "ProfilePhotoPrivacyAPIView", "UserProfileAPIView",
     "UserByUsernameAPIView", "UserBioAPIView", "ProfileUpdateBroadcastAPIView",
-    "AttachmentDownloadAPIView", "ConversationCleanupAPIView", "ConversationMediaAPIView",
+    "AttachmentDownloadAPIView", "ConversationCleanupAPIView", "ConversationMediaAPIView", "ViewOnceOpenAPIView",
     "ConversationPinAPIView", "MessagePinAPIView",
     "ConversationPinnedMessagesAPIView", "MessageReadersAPIView",
     "PublicGroupSearchAPIView", "GroupAvatarAPIView", "PublicGroupJoinAPIView",

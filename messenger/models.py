@@ -358,10 +358,26 @@ class MessageAttachment(models.Model):
     width = models.PositiveIntegerField(null=True, blank=True)
     height = models.PositiveIntegerField(null=True, blank=True)
     duration = models.FloatField(null=True, blank=True)  # seconds for video/audio
+    # Media privacy flags (Telegram-style)
+    is_spoiler = models.BooleanField(default=False)  # blurred until recipient taps
+    is_view_once = models.BooleanField(default=False)  # one open per recipient, then locked
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["created_at"]
+
+
+class AttachmentViewOnceOpen(models.Model):
+    """Tracks which users have opened a view-once attachment."""
+    attachment = models.ForeignKey(
+        MessageAttachment, on_delete=models.CASCADE, related_name="view_once_opens"
+    )
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="view_once_opens")
+    opened_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("attachment", "user")
+        indexes = [models.Index(fields=["attachment", "user"])]
 
 
 class PinnedMessage(models.Model):

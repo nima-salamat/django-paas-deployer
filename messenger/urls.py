@@ -35,6 +35,7 @@ urlpatterns = [
     path("conversations/<int:pk>/transfer-ownership/", apis.TransferOwnershipAPIView.as_view()),
     path("conversations/<int:pk>/delete/", apis.DeleteConversationAPIView.as_view()),
     path("attachments/<int:pk>/download/", apis.AttachmentDownloadAPIView.as_view()),
+    path("attachments/<int:pk>/view-once/", apis.ViewOnceOpenAPIView.as_view()),
     path("me/photos/", apis.MyProfilePhotosAPIView.as_view()),
     path("me/photo-privacy/", apis.ProfilePhotoPrivacyAPIView.as_view()),
     path("users/<int:user_id>/profile/", apis.UserProfileAPIView.as_view()),
