@@ -78,7 +78,6 @@ class AdminServiceViewSet(ModelViewSet):
             return [IsAuthenticated(), HasServicesManageRule()]
         return [IsAuthenticated(), HasServicesViewRule()]
 
-
     def get_queryset(self):
         qs = super().get_queryset()
         user_id = (
@@ -100,10 +99,7 @@ class AdminServiceViewSet(ModelViewSet):
         return qs.order_by("-created_at", "-id")
 
     def list(self, request, *args, **kwargs):
-        """
-        Admin service list with optional Redis cache.
-        Cache failures never break the response.
-        """
+        """Admin service list. Cache is optional; never raises from cache layer."""
         key = None
         try:
             from core.app_cache import (
@@ -120,59 +116,33 @@ class AdminServiceViewSet(ModelViewSet):
         except Exception:
             logger.exception("admin services cache_get failed")
 
-        try:
-            qs = self.get_queryset()
-            page = self.paginate_queryset(qs)
-            items = page if page is not None else list(qs[:50])
-            serializer = GetServiceSerializer(items, many=True)
-            payload = serializer.data
-            if page is not None:
-                resp = self.get_paginated_response(payload)
-                body = resp.data
-            else:
-                body = {
-                    "count": len(payload),
-                    "next": None,
-                    "previous": None,
-                    "results": payload,
-                }
-                resp = Response(body)
+        # CRITICAL: never slice QS before paginate_queryset (breaks Paginator.count)
+        qs = self.get_queryset()
+        page = self.paginate_queryset(qs)
+        serializer = GetServiceSerializer(page if page is not None else list(qs[:50]), many=True)
+        if page is not None:
+            resp = self.get_paginated_response(serializer.data)
+            body = resp.data
             if key:
                 try:
                     from core.app_cache import cache_set, SERVICE_ADMIN_TTL
                     cache_set(key, body, SERVICE_ADMIN_TTL)
                 except Exception:
                     logger.exception("admin services cache_set failed")
-            return resp if page is not None else resp
-        except Exception:
-            logger.exception("admin services list failed")
-            # Last-resort minimal payload so admin UI does not hard-fail
+            return resp
+        body = {
+            "count": len(serializer.data),
+            "next": None,
+            "previous": None,
+            "results": serializer.data,
+        }
+        if key:
             try:
-                qs = Service.objects.all().select_related("user", "plan").order_by("-created_at")[:20]
-                results = []
-                for s in qs:
-                    results.append({
-                        "id": str(s.pk),
-                        "name": s.name,
-                        "status": s.status,
-                        "user": getattr(s.user, "id", None),
-                        "user_username": getattr(s.user, "username", None),
-                        "plan": str(s.plan_id) if s.plan_id else None,
-                        "created_at": s.created_at.isoformat() if s.created_at else None,
-                    })
-                return Response({
-                    "count": len(results),
-                    "next": None,
-                    "previous": None,
-                    "results": results,
-                    "warning": "degraded list response",
-                })
+                from core.app_cache import cache_set, SERVICE_ADMIN_TTL
+                cache_set(key, body, SERVICE_ADMIN_TTL)
             except Exception:
-                logger.exception("admin services degraded list also failed")
-                return Response(
-                    {"count": 0, "next": None, "previous": None, "results": [], "error": "list failed"},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
+                pass
+        return Response(body)
 
     def create(self, request, *args, **kwargs):
         """

@@ -15,15 +15,13 @@ from django.core.serializers.json import DjangoJSONEncoder
 
 logger = logging.getLogger("core.app_cache")
 
-# TTLs (seconds)
-SERVICE_USER_TTL = 3600          # 1 hour
+SERVICE_USER_TTL = 3600
 SERVICE_ADMIN_TTL = 3600
-PLAN_TTL = 86400                 # 24 hours
+PLAN_TTL = 86400
 TICKET_USER_TTL = 3600
 TICKET_ADMIN_TTL = 3600
 USER_ADMIN_TTL = 3600
 
-# Limits
 SERVICE_USER_LIMIT = 50
 SERVICE_ADMIN_LIMIT = 100
 TICKET_USER_LIMIT = 50
@@ -32,7 +30,6 @@ USER_ADMIN_LIMIT = 100
 
 
 def _redis():
-    """Return raw redis-py client (django-redis db, same as messenger)."""
     try:
         from django_redis import get_redis_connection
         return get_redis_connection("default")
@@ -98,7 +95,6 @@ def cache_delete(*keys: str) -> None:
 
 
 def cache_delete_pattern(pattern: str) -> None:
-    """Best-effort delete by pattern via SCAN + DELETE (raw redis)."""
     r = _redis()
     if not r:
         return
@@ -124,14 +120,12 @@ def cache_delete_pattern(pattern: str) -> None:
 
 
 def make_query_key(prefix: str, user_id: Any, params: dict) -> str:
-    """Stable key for filtered list queries."""
     items = sorted((str(k), str(v)) for k, v in (params or {}).items() if v not in (None, ""))
     raw = "&".join(f"{k}={v}" for k, v in items)
     digest = hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
     return f"{prefix}:u:{user_id}:q:{digest}"
 
 
-# ----- Services -----
 def service_user_list_key(user_id: int, params: dict | None = None) -> str:
     return make_query_key("svc:user", user_id, params or {})
 
@@ -154,7 +148,6 @@ def invalidate_all_services() -> None:
     cache_delete_pattern("svc:admin:*")
 
 
-# ----- Plans -----
 def plan_list_key(params: dict | None = None) -> str:
     return make_query_key("plan:pub", "all", params or {})
 
@@ -171,7 +164,6 @@ def invalidate_all_plans() -> None:
     cache_delete_pattern("plan:*")
 
 
-# ----- Tickets -----
 def ticket_user_list_key(user_id: int, params: dict | None = None) -> str:
     return make_query_key("tkt:user", user_id, params or {})
 
@@ -190,7 +182,6 @@ def invalidate_all_tickets() -> None:
     cache_delete_pattern("tkt:admin:*")
 
 
-# ----- Users (admin) -----
 def user_admin_list_key(params: dict | None = None) -> str:
     return make_query_key("usr:admin", "all", params or {})
 
@@ -200,7 +191,6 @@ def invalidate_all_users_admin() -> None:
 
 
 def scan_app_cache_keys(prefix: str = "", limit: int = 100) -> list:
-    """List app-cache related keys for admin UI (svc:, plan:, tkt:, usr:)."""
     out = []
     r = _redis()
     if not r:
@@ -236,28 +226,15 @@ def scan_app_cache_keys(prefix: str = "", limit: int = 100) -> list:
 
 
 def get_app_cache_overview() -> dict:
-    """Counts of keys per namespace for admin dashboard."""
     overview = {
-        "redis_ok": False,
-        "svc": 0,
-        "plan": 0,
-        "tkt": 0,
-        "usr": 0,
-        "msgcache": 0,
-        "memory": {},
+        "redis_ok": False, "svc": 0, "plan": 0, "tkt": 0, "usr": 0, "msgcache": 0, "memory": {},
     }
     r = _redis()
     if not r:
         return overview
     try:
         overview["redis_ok"] = bool(r.ping())
-        for ns, field in (
-            ("svc:", "svc"),
-            ("plan:", "plan"),
-            ("tkt:", "tkt"),
-            ("usr:", "usr"),
-            ("msgcache:", "msgcache"),
-        ):
+        for ns, field in (("svc:", "svc"), ("plan:", "plan"), ("tkt:", "tkt"), ("usr:", "usr"), ("msgcache:", "msgcache")):
             n = 0
             for pat in (f"{ns}*", f":1:{ns}*"):
                 for _ in r.scan_iter(match=pat, count=200):
@@ -281,19 +258,13 @@ def get_app_cache_overview() -> dict:
 
 
 def invalidate_namespace(ns: str) -> None:
-    """ns in svc, plan, tkt, usr, all."""
     if ns == "all":
         cache_delete_pattern("svc:*")
         cache_delete_pattern("plan:*")
         cache_delete_pattern("tkt:*")
         cache_delete_pattern("usr:*")
         return
-    mapping = {
-        "svc": "svc:*",
-        "plan": "plan:*",
-        "tkt": "tkt:*",
-        "usr": "usr:*",
-    }
+    mapping = {"svc": "svc:*", "plan": "plan:*", "tkt": "tkt:*", "usr": "usr:*"}
     pat = mapping.get(ns)
     if pat:
         cache_delete_pattern(pat)

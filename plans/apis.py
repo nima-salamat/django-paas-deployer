@@ -98,7 +98,6 @@ class PlanAdminViewSet(ViewSet):
             qs = qs.filter(platform=platform)
         if plan_type:
             qs = qs.filter(plan_type=plan_type)
-        # Do NOT slice before paginate — sliced QS breaks Paginator.count()
         paginator = PlanAdminPagination()
         page = paginator.paginate_queryset(qs, request)
         serializer = PlanSerializer(page, many=True)

@@ -242,7 +242,6 @@ class AdminUserListAPIView(APIView):
         if params.get("is_superuser") in ("1", "true"):
             qs = qs.filter(is_superuser=True)
 
-        # Do NOT slice before paginate — sliced QS breaks Paginator.count()
         paginator = AdminPagination()
         page = paginator.paginate_queryset(qs, request)
         user_ids = [x.id for x in page]

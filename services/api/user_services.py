@@ -74,12 +74,12 @@ class ServiceViewSet(ModelViewSet):
         key = service_user_list_key(request.user.id, params)
         try:
             cached = cache_get(key)
-            if cached is not None:
+            if isinstance(cached, dict) and ("results" in cached or "count" in cached):
                 return Response(cached)
         except Exception:
             pass
 
-        # Do NOT slice before paginate — sliced QS breaks Paginator.count()
+        # CRITICAL: never slice QS before paginate_queryset
         query = self.get_queryset()
         q_search_param = params["q"]
         if q_search_param:
