@@ -64,7 +64,7 @@ class ServiceViewSet(ModelViewSet):
     def list(self, request, *args, **kwargs):
         from core.app_cache import (
             cache_get, cache_set, service_user_list_key,
-            SERVICE_USER_TTL, SERVICE_USER_LIMIT,
+            SERVICE_USER_TTL,
         )
         params = {
             "q": request.query_params.get("q_search") or request.query_params.get("q") or "",
@@ -72,27 +72,37 @@ class ServiceViewSet(ModelViewSet):
             "page_size": request.query_params.get("page_size") or "",
         }
         key = service_user_list_key(request.user.id, params)
-        cached = cache_get(key)
-        if cached is not None:
-            return Response(cached)
+        try:
+            cached = cache_get(key)
+            if cached is not None:
+                return Response(cached)
+        except Exception:
+            pass
 
-        query = self.get_queryset()[:SERVICE_USER_LIMIT]
+        # Do NOT slice before paginate — sliced QS breaks Paginator.count()
+        query = self.get_queryset()
         q_search_param = params["q"]
         if q_search_param:
             from django.db.models import Q
-            query = self.get_queryset().filter(
+            query = query.filter(
                 Q(name__icontains=q_search_param)
                 | Q(user__username__icontains=q_search_param)
-            )[:SERVICE_USER_LIMIT]
+            )
 
         page = self.paginate_queryset(query)
         serializer = GetServiceSerializer(page if page is not None else query, many=True)
         if page is not None:
             resp = self.get_paginated_response(serializer.data)
-            cache_set(key, resp.data, SERVICE_USER_TTL)
+            try:
+                cache_set(key, resp.data, SERVICE_USER_TTL)
+            except Exception:
+                pass
             return resp
-        data = {"count": len(serializer.data), "results": serializer.data}
-        cache_set(key, data, SERVICE_USER_TTL)
+        data = {"count": len(serializer.data), "next": None, "previous": None, "results": serializer.data}
+        try:
+            cache_set(key, data, SERVICE_USER_TTL)
+        except Exception:
+            pass
         return Response(data)
 
     def create(self, request, *args, **kwargs):

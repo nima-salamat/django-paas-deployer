@@ -93,24 +93,41 @@ class AdminServiceViewSet(ModelViewSet):
             qs = qs.filter(
                 Q(name__icontains=q) | Q(user__username__icontains=q)
             )
+        status_val = (self.request.query_params.get("status") or "").strip()
+        if status_val:
+            qs = qs.filter(status=status_val)
         return qs.order_by("-id")
 
     def list(self, request, *args, **kwargs):
         from core.app_cache import (
             cache_get, cache_set, service_admin_list_key,
-            SERVICE_ADMIN_TTL, SERVICE_ADMIN_LIMIT,
+            SERVICE_ADMIN_TTL,
         )
         params = {k: request.query_params.get(k) or "" for k in ("q", "q_search", "page", "page_size", "user_id", "status")}
         key = service_admin_list_key(params)
-        cached = cache_get(key)
-        if cached is not None:
-            return Response(cached)
-        qs = self.get_queryset()[:SERVICE_ADMIN_LIMIT]
+        try:
+            cached = cache_get(key)
+            if cached is not None:
+                return Response(cached)
+        except Exception:
+            pass
+        # Do NOT slice before paginate — sliced QS breaks Paginator.count()
+        qs = self.get_queryset()
         page = self.paginate_queryset(qs)
         serializer = GetServiceSerializer(page if page is not None else qs, many=True)
-        resp = self.get_paginated_response(serializer.data)
-        cache_set(key, resp.data, SERVICE_ADMIN_TTL)
-        return resp
+        if page is not None:
+            resp = self.get_paginated_response(serializer.data)
+            try:
+                cache_set(key, resp.data, SERVICE_ADMIN_TTL)
+            except Exception:
+                pass
+            return resp
+        data = {"count": len(serializer.data), "next": None, "previous": None, "results": serializer.data}
+        try:
+            cache_set(key, data, SERVICE_ADMIN_TTL)
+        except Exception:
+            pass
+        return Response(data)
 
     def create(self, request, *args, **kwargs):
         """

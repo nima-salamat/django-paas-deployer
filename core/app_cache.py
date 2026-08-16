@@ -103,7 +103,6 @@ def cache_delete_pattern(pattern: str) -> None:
     if not r:
         return
     try:
-        # Also clear any legacy django-redis version-prefixed keys (:1:...)
         patterns = [pattern]
         if not pattern.startswith(":"):
             patterns.append(f":1:{pattern}")
@@ -260,7 +259,6 @@ def get_app_cache_overview() -> dict:
             ("msgcache:", "msgcache"),
         ):
             n = 0
-            # Match both raw keys and legacy django-redis version-prefixed keys
             for pat in (f"{ns}*", f":1:{ns}*"):
                 for _ in r.scan_iter(match=pat, count=200):
                     n += 1

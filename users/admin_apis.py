@@ -216,9 +216,12 @@ class AdminUserListAPIView(APIView):
 
         params = {k: request.query_params.get(k) or "" for k in ("search", "is_staff", "is_active", "is_superuser", "page", "page_size")}
         key = user_admin_list_key(params)
-        cached = cache_get(key)
-        if cached is not None:
-            return Response(cached)
+        try:
+            cached = cache_get(key)
+            if cached is not None:
+                return Response(cached)
+        except Exception:
+            pass
 
         qs = User.objects.all().order_by("-date_joined")
         search = (params.get("search") or "").strip()
@@ -239,7 +242,7 @@ class AdminUserListAPIView(APIView):
         if params.get("is_superuser") in ("1", "true"):
             qs = qs.filter(is_superuser=True)
 
-        qs = qs[:USER_ADMIN_LIMIT]
+        # Do NOT slice before paginate — sliced QS breaks Paginator.count()
         paginator = AdminPagination()
         page = paginator.paginate_queryset(qs, request)
         user_ids = [x.id for x in page]
@@ -253,7 +256,10 @@ class AdminUserListAPIView(APIView):
             d["rules"] = rules_map.get(x.id, [])
             results.append(d)
         resp = paginator.get_paginated_response(results)
-        cache_set(key, resp.data, USER_ADMIN_TTL)
+        try:
+            cache_set(key, resp.data, USER_ADMIN_TTL)
+        except Exception:
+            pass
         return resp
 
     def post(self, request):

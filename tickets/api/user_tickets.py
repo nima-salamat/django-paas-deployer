@@ -106,7 +106,8 @@ class MyTicketListCreateAPIView(APIView):
         if search:
             qs = qs.filter(Q(subject__icontains=search) | Q(public_id__icontains=search))
         # Newest activity first (model Meta already orders by -last_message_at; keep explicit)
-        qs = qs.order_by("-last_message_at", "-created_at", "-id")[:TICKET_USER_LIMIT]
+        # Do NOT slice before paginate — sliced QS breaks Paginator.count()
+        qs = qs.order_by("-last_message_at", "-created_at", "-id")
         paginator = TicketPagination()
         page = paginator.paginate_queryset(qs, request)
         data = TicketListSerializer(page, many=True, context={"request": request}).data
