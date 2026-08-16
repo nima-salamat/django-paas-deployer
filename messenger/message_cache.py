@@ -243,22 +243,29 @@ def _dt(val) -> Optional[str]:
 def _user_mini(user) -> Optional[Dict[str, Any]]:
     if user is None:
         return None
-    # Keep the same shape UserMiniSerializer produces for list views.
-    # Avatar URL resolution is left to the live serializer when possible;
-    # we store the raw fields so the cache stays self-contained.
-    avatar = getattr(user, "avatar", None)
+    # Avatars live on users.Profile (not User.avatar). Privacy applied in enrich_for_viewer.
     avatar_url = None
-    if avatar:
-        try:
-            avatar_url = avatar.url
-        except Exception:
-            avatar_url = None
+    try:
+        from users.models import Profile
+        p = (
+            Profile.objects.filter(user_id=user.id)
+            .exclude(image__isnull=True)
+            .exclude(image="")
+            .order_by("order", "id")
+            .only("image")
+            .first()
+        )
+        if p is not None and p.image:
+            avatar_url = p.image.url
+    except Exception:
+        avatar_url = None
     return {
         "id": user.id,
         "username": getattr(user, "username", None) or "",
         "first_name": getattr(user, "first_name", None) or "",
         "last_name": getattr(user, "last_name", None) or "",
         "avatar": avatar_url,
+        "color": getattr(user, "color", None),
     }
 
 
@@ -806,6 +813,51 @@ class MessageCacheService:
                         read_ids.add(m["id"])
                         break
 
+
+        # Viewer-aware avatars / online / bio
+        user_ids = set()
+        for m in base_messages:
+            s = m.get("sender") or {}
+            if s.get("id"):
+                user_ids.add(int(s["id"]))
+            rp = (m.get("reply_to_preview") or {}).get("sender") or {}
+            if rp.get("id"):
+                user_ids.add(int(rp["id"]))
+            ff = m.get("forwarded_from_user") or {}
+            if ff.get("id"):
+                user_ids.add(int(ff["id"]))
+        avatar_map = {}
+        bio_map = {}
+        online_ids = set()
+        contact_ids = set()
+        blocked_ids = set()
+        if request is not None and user_ids:
+            try:
+                from .serializers import build_user_mini_context
+                uctx = build_user_mini_context(request, list(user_ids))
+                avatar_map = uctx.get("avatar_map") or {}
+                bio_map = uctx.get("bio_map") or {}
+                online_ids = uctx.get("online_ids") or set()
+                contact_ids = uctx.get("contact_ids") or set()
+                blocked_ids = uctx.get("blocked_ids") or set()
+            except Exception:
+                logger.exception("enrich_for_viewer: build_user_mini_context failed")
+
+        def _patch_user(u):
+            if not isinstance(u, dict) or not u.get("id"):
+                return u
+            uid = int(u["id"])
+            out_u = dict(u)
+            if uid in avatar_map:
+                out_u["avatar"] = avatar_map.get(uid)
+            elif "avatar" not in out_u:
+                out_u["avatar"] = None
+            out_u["bio"] = bio_map.get(uid, out_u.get("bio") or "") or ""
+            out_u["is_online"] = uid in online_ids
+            out_u["is_contact"] = uid in contact_ids
+            out_u["is_blocked"] = uid in blocked_ids
+            return out_u
+
         result = []
         for m in base_messages:
             out = dict(m)
@@ -844,6 +896,16 @@ class MessageCacheService:
                             ad["url"] = None
                     patched.append(ad)
                 out["attachments"] = patched
+
+            if out.get("sender"):
+                out["sender"] = _patch_user(out["sender"])
+            rtp = out.get("reply_to_preview")
+            if isinstance(rtp, dict) and rtp.get("sender"):
+                rtp = dict(rtp)
+                rtp["sender"] = _patch_user(rtp["sender"])
+                out["reply_to_preview"] = rtp
+            if out.get("forwarded_from_user"):
+                out["forwarded_from_user"] = _patch_user(out["forwarded_from_user"])
 
             if out.get("is_system") or out.get("is_deleted"):
                 out["read_state"] = "read"

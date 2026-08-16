@@ -276,14 +276,20 @@ class ConversationMediaAPIView(APIView):
         items = list(qs[: limit + 1])
         has_more = len(items) > limit
         items = items[:limit]
-        from ..serializers import MessageAttachmentSerializer
+        from ..serializers import MessageAttachmentSerializer, build_user_mini_context
+        sender_ids = [
+            att.message.sender_id
+            for att in items
+            if att.message and att.message.sender_id
+        ]
+        mini_ctx = build_user_mini_context(request, sender_ids)
         result = []
         for att in items:
             ser = MessageAttachmentSerializer(att, context={"request": request}).data
             ser["message_id"] = att.message_id
             ser["message_created_at"] = att.message.created_at if att.message else att.created_at
             ser["sender"] = (
-                UserMiniSerializer(att.message.sender, context={"request": request}).data
+                UserMiniSerializer(att.message.sender, context=mini_ctx).data
                 if att.message and att.message.sender else None
             )
             result.append(ser)
