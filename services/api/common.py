@@ -5,10 +5,10 @@ import tarfile
 import tempfile
 from django.db import transaction
 from django.http import FileResponse
-from .models import Service, PrivateNetwork, Volume
+from ..models import Service, PrivateNetwork, Volume
 from deploy.models import Deploy
 from django.shortcuts import get_object_or_404
-from .serializers import (
+from ..serializers import (
     PrivateNetworkSerializer,
     ServiceSerializer,
     VolumeSerializer,

@@ -12,14 +12,14 @@ from rest_framework.views import APIView
 from rest_framework.authentication import SessionAuthentication
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.pagination import PageNumberPagination
-from .models import Department, DepartmentMembership, Ticket, TicketMessage, TicketAttachment
-from .permissions import IsTicketOwnerOrStaff, IsStaffOrSuperuser, CanManageTicket
-from .serializers import (
+from ..models import Department, DepartmentMembership, Ticket, TicketMessage, TicketAttachment
+from ..permissions import IsTicketOwnerOrStaff, IsStaffOrSuperuser, CanManageTicket
+from ..serializers import (
     DepartmentSerializer, TicketListSerializer, TicketDetailSerializer,
     TicketCreateSerializer, TicketMessageCreateSerializer, TicketMessageSerializer,
     TicketStatusSerializer, TicketPrioritySerializer, TicketAssignDepartmentSerializer,
 )
-from .utils import check_rate_limit, get_ticket_setting, validate_upload_file, safe_filename, validate_ticket_quota
+from ..utils import check_rate_limit, get_ticket_setting, validate_upload_file, safe_filename, validate_ticket_quota
 
 logger = logging.getLogger("tickets.apis")
 
