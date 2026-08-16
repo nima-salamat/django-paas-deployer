@@ -328,22 +328,3 @@ def cache_dashboard_view(request):
             "message": message,
         },
     )
-
-
-# Attach custom admin URLs
-_original_get_urls = admin.site.get_urls
-
-
-def _messenger_cache_urls():
-    urls = _original_get_urls()
-    custom = [
-        path(
-            "messenger/cache/",
-            admin.site.admin_view(cache_dashboard_view),
-            name="messenger_cache_dashboard",
-        ),
-    ]
-    return custom + urls
-
-
-admin.site.get_urls = _messenger_cache_urls

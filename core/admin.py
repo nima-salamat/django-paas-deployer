@@ -61,3 +61,75 @@ class SystemSettingAdmin(admin.ModelAdmin):
             f"Seeded {n} setting(s), {d} dockerfile template(s).",
             level=messages.SUCCESS,
         )
+
+
+
+# ---------------------------------------------------------------------------
+# Cache dashboards (core app cache + messenger message cache)
+# ---------------------------------------------------------------------------
+from django.contrib.admin.views.decorators import staff_member_required
+from django.shortcuts import render, redirect
+from django.urls import path
+from django.contrib import messages as dj_messages
+
+
+@staff_member_required
+def app_cache_dashboard_view(request):
+    from core.app_cache import (
+        get_app_cache_overview,
+        scan_app_cache_keys,
+        invalidate_namespace,
+    )
+    if request.method == "POST" and request.POST.get("action") == "flush":
+        ns = request.POST.get("ns") or "all"
+        invalidate_namespace(ns)
+        dj_messages.success(request, f"Flushed cache namespace: {ns}")
+        return redirect("core_app_cache_dashboard")
+
+    pattern = request.GET.get("pattern") or ""
+    try:
+        limit = min(500, max(1, int(request.GET.get("limit") or 80)))
+    except ValueError:
+        limit = 80
+    keys = scan_app_cache_keys(pattern, limit) if pattern else []
+    return render(
+        request,
+        "admin/core/cache_dashboard.html",
+        {
+            "title": "App Cache",
+            "overview": get_app_cache_overview(),
+            "pattern": pattern,
+            "limit": limit,
+            "keys": keys,
+        },
+    )
+
+
+def _patched_admin_get_urls():
+    from django.contrib import admin as dj_admin
+    # Call the real unbound method stored once
+    urls = _ADMIN_GET_URLS_ORIG()
+    custom = [
+        path(
+            "core/cache/",
+            dj_admin.site.admin_view(app_cache_dashboard_view),
+            name="core_app_cache_dashboard",
+        ),
+    ]
+    try:
+        from messenger.admin import cache_dashboard_view
+        custom.append(
+            path(
+                "messenger/cache/",
+                dj_admin.site.admin_view(cache_dashboard_view),
+                name="messenger_cache_dashboard",
+            )
+        )
+    except Exception:
+        pass
+    return custom + urls
+
+
+from django.contrib import admin as _admin_mod
+_ADMIN_GET_URLS_ORIG = _admin_mod.site.get_urls
+_admin_mod.site.get_urls = _patched_admin_get_urls

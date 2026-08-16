@@ -161,3 +161,88 @@ def user_admin_list_key(params: dict | None = None) -> str:
 
 def invalidate_all_users_admin() -> None:
     cache_delete_pattern("usr:admin:*")
+
+
+
+def scan_app_cache_keys(prefix: str = "", limit: int = 100) -> list:
+    """List app-cache related keys for admin UI (svc:, plan:, tkt:, usr:)."""
+    out = []
+    try:
+        from django_redis import get_redis_connection
+        r = get_redis_connection("default")
+        patterns = [f"{prefix}*"] if prefix else ["svc:*", "plan:*", "tkt:*", "usr:*"]
+        seen = set()
+        for pat in patterns:
+            for key in r.scan_iter(match=pat, count=200):
+                k = key.decode() if isinstance(key, bytes) else str(key)
+                # django-redis may prefix keys; show as stored
+                if k in seen:
+                    continue
+                seen.add(k)
+                try:
+                    ktype = r.type(key)
+                    if isinstance(ktype, bytes):
+                        ktype = ktype.decode()
+                    ttl = r.ttl(key)
+                except Exception:
+                    ktype, ttl = "?", -1
+                out.append({"key": k, "type": ktype, "ttl": ttl})
+                if len(out) >= limit:
+                    return out
+    except Exception:
+        logger.exception("scan_app_cache_keys failed")
+    return out
+
+
+def get_app_cache_overview() -> dict:
+    """Counts of keys per namespace for admin dashboard."""
+    overview = {
+        "redis_ok": False,
+        "svc": 0,
+        "plan": 0,
+        "tkt": 0,
+        "usr": 0,
+        "msgcache": 0,
+        "memory": {},
+    }
+    try:
+        from django_redis import get_redis_connection
+        r = get_redis_connection("default")
+        overview["redis_ok"] = bool(r.ping())
+        for ns, field in (("svc:", "svc"), ("plan:", "plan"), ("tkt:", "tkt"), ("usr:", "usr"), ("msgcache:", "msgcache")):
+            n = 0
+            for _ in r.scan_iter(match=f"{ns}*", count=200):
+                n += 1
+                if n >= 5000:
+                    break
+            overview[field] = n
+        try:
+            info = r.info(section="memory")
+            overview["memory"] = {
+                "used_memory_human": info.get("used_memory_human"),
+                "maxmemory_human": info.get("maxmemory_human"),
+            }
+        except Exception:
+            pass
+    except Exception:
+        logger.exception("get_app_cache_overview failed")
+    return overview
+
+
+def invalidate_namespace(ns: str) -> None:
+    """ns in svc, plan, tkt, usr, all."""
+    if ns == "all":
+        cache_delete_pattern("svc:*")
+        cache_delete_pattern("plan:*")
+        cache_delete_pattern("tkt:*")
+        cache_delete_pattern("usr:*")
+        return
+    mapping = {
+        "svc": "svc:*",
+        "plan": "plan:*",
+        "tkt": "tkt:*",
+        "usr": "usr:*",
+    }
+    pat = mapping.get(ns)
+    if pat:
+        cache_delete_pattern(pat)
