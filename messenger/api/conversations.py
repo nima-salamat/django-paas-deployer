@@ -95,6 +95,7 @@ class ConversationListCreateAPIView(APIView):
         # ---- Kill N+1: bulk last_message + unread_count (2 queries total) ----
         _attach_list_side_data(items, request.user)
         ctx = build_conversation_list_context(request, items)
+        ctx["lean_list"] = True
 
         start = (page - 1) * page_size
         end = start + page_size

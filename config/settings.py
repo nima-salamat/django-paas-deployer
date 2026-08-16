@@ -341,5 +341,5 @@ MESSAGE_CACHE_SIZE = int(os.environ.get("MESSAGE_CACHE_SIZE", "1000"))
 # TTL for message window keys (seconds). 0 = no expiry (not recommended).
 MESSAGE_CACHE_TTL = int(os.environ.get("MESSAGE_CACHE_TTL", str(6 * 3600)))
 # Short-lived caches for conversation list (per user) and conv meta/participants
-MESSENGER_LIST_CACHE_TTL = int(os.environ.get("MESSENGER_LIST_CACHE_TTL", "60"))
+MESSENGER_LIST_CACHE_TTL = int(os.environ.get("MESSENGER_LIST_CACHE_TTL", "300"))
 MESSENGER_CONV_CACHE_TTL = int(os.environ.get("MESSENGER_CONV_CACHE_TTL", "120"))

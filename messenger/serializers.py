@@ -283,6 +283,24 @@ class ConversationListSerializer(serializers.ModelSerializer):
         parts = getattr(obj, "_prefetched_active_participants", None)
         if parts is None:
             return []
+        # Chat list only needs a tiny subset (peer / self). Full member lists
+        # for big groups made every list request multi-megabyte and slow.
+        if self.context.get("lean_list"):
+            request = self.context.get("request")
+            viewer_id = getattr(getattr(request, "user", None), "id", None) if request else None
+            if obj.type == Conversation.Type.PRIVATE:
+                slim = [p for p in parts if viewer_id is None or p.user_id != viewer_id][:1]
+                if viewer_id:
+                    self_p = next((p for p in parts if p.user_id == viewer_id), None)
+                    if self_p:
+                        slim = [self_p] + slim
+                parts = slim
+            else:
+                # group: only current user's participant row (permissions / pin)
+                if viewer_id is not None:
+                    parts = [p for p in parts if p.user_id == viewer_id][:1]
+                else:
+                    parts = parts[:1]
         return ParticipantSerializer(parts, many=True, context=self.context).data
 
     def get_last_message(self, obj):

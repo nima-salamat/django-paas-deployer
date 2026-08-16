@@ -125,6 +125,8 @@ def get_cache_stats() -> dict:
         out["msg_miss"] = _i("msg_miss")
         out["list_hit"] = _i("list_hit")
         out["list_miss"] = _i("list_miss")
+        out["list_set_ok"] = _i("list_set_ok")
+        out["list_set_fail"] = _i("list_set_fail")
         # count meta keys
         try:
             # SCAN msgcache:*:meta
@@ -337,7 +339,8 @@ def message_to_cache_dict(msg) -> Dict[str, Any]:
 
 
 def _json_dumps(obj: Any) -> str:
-    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+    from django.core.serializers.json import DjangoJSONEncoder
+    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False, cls=DjangoJSONEncoder)
 
 
 def _json_loads(raw: Any) -> Optional[Dict]:
@@ -878,14 +881,18 @@ class ConversationCacheService:
     def set_user_conv_list(user_id: int, payload: List[Dict]) -> None:
         r = _redis()
         if not r:
+            _incr_stat("list_set_fail")
             return
         try:
             ttl = _list_ttl()
             key = _user_list_key(user_id)
-            r.set(key, _json_dumps(payload))
+            raw = _json_dumps(payload)
+            r.set(key, raw)
             if ttl > 0:
                 r.expire(key, ttl)
+            _incr_stat("list_set_ok")
         except Exception:
+            _incr_stat("list_set_fail")
             logger.exception("set_user_conv_list failed user=%s", user_id)
 
     @staticmethod
@@ -994,16 +1001,18 @@ def schedule_add_message(msg) -> None:
 
 
 def schedule_update_message(msg) -> None:
+    """Update one message in the hot window. Does NOT bust conversation-list cache.
+
+    List previews only need last_message text on *new* messages / deletes;
+    reactions and body edits of older rows should not force a full list rebuild.
+    """
     msg_id = getattr(msg, "id", None)
-    conv_id = getattr(msg, "conversation_id", None)
 
     def _job():
         from .models import Message
         fresh = Message.objects.filter(pk=msg_id).first()
         if fresh:
             MessageCacheService.update_message(fresh)
-        if conv_id:
-            ConversationCacheService.invalidate_conv_lists_for_conversation(conv_id)
 
     run_after_commit(_job)
 

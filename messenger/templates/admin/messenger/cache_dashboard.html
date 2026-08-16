@@ -52,7 +52,7 @@
     <div class="mc-card">
       <h3>List HIT / MISS</h3>
       <div class="v">{{ stats.list_hit }} / {{ stats.list_miss }}</div>
-      <div class="mc-muted">rate: {{ list_hit_rate }}%</div>
+      <div class="mc-muted">rate: {{ list_hit_rate }}% · set ok/fail {{ stats.list_set_ok|default:0 }}/{{ stats.list_set_fail|default:0 }}</div>
     </div>
     <div class="mc-card">
       <h3>Cached chats</h3>
