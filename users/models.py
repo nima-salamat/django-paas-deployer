@@ -1,5 +1,5 @@
 from django.db import models, transaction
-from django.contrib.auth.models import AbstractBaseUser, UserManager
+from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, UserManager
 from phonenumber_field.modelfields import PhoneNumberField
 from django.core.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
@@ -42,7 +42,7 @@ def get_color():
     return random.choice(COLOR_CHOICES)[0]
     
 
-class User(AbstractBaseUser, PermissionMixin):
+class User(AbstractBaseUser, PermissionsMixin):
     class ThemeChoices(models.TextChoices):
         DARK  = "dark",  _("Dark")
         LIGHT = "light", _("Light")
@@ -51,6 +51,9 @@ class User(AbstractBaseUser, PermissionMixin):
     username = models.CharField(_("username"), unique=True, max_length=32, 
         help_text=_("Required. 32 characters or fewer. Include numbers, letters and ./-/_ characters."),
     )
+    # Required by Wagtail user forms (optional for our API)
+    first_name = models.CharField(_("first name"), max_length=150, blank=True, default="")
+    last_name = models.CharField(_("last name"), max_length=150, blank=True, default="")
     password = models.CharField(_("password"), max_length=128, blank=True, null=True)
     email = models.EmailField(_("email address"), max_length=255, null=True, blank=True, unique=True)
     email_verified = models.BooleanField(_("email verified"), default=False)

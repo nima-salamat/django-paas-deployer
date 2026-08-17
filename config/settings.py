@@ -45,7 +45,10 @@ INSTALLED_APPS = [
     "daphne",
     "channels",
 
-    # Wagtail (must load before django.contrib.admin for admin skinning)
+    # Custom user app MUST appear before wagtail.users
+    "users",
+
+    # Wagtail
     "wagtail.contrib.forms",
     "wagtail.contrib.redirects",
     "wagtail.embeds",
@@ -81,7 +84,6 @@ INSTALLED_APPS = [
     "django_bootstrap5",
 
     # Local apps
-    "users",
     "auth_users",
     "plans",
     "deploy",
@@ -367,6 +369,12 @@ MESSENGER_CONV_CACHE_TTL = int(os.environ.get("MESSENGER_CONV_CACHE_TTL", "120")
 # ---------------------------------------------------------------------------
 # Wagtail (admin panel) — production-ready defaults
 # ---------------------------------------------------------------------------
+
+# Custom user forms (no first_name/last_name on users.User)
+WAGTAIL_USER_EDIT_FORM = "cms.forms.CustomUserEditForm"
+WAGTAIL_USER_CREATION_FORM = "cms.forms.CustomUserCreationForm"
+WAGTAIL_USER_CUSTOM_FIELDS: list[str] = []
+
 WAGTAIL_SITE_NAME = os.environ.get("WAGTAIL_SITE_NAME", "PaaS Control Panel")
 WAGTAILADMIN_BASE_URL = os.environ.get(
     "WAGTAILADMIN_BASE_URL",
