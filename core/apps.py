@@ -7,20 +7,10 @@ class CoreConfig(AppConfig):
     name = "core"
 
     def ready(self):
-        # Seed system settings after migrations (ignore errors during migrate)
+        # Defer heavy DB seeding until after migrations via post_migrate signal
+        # Import the signals module to ensure receivers are registered.
         try:
-            from django.db.utils import OperationalError, ProgrammingError
-            from core.initial_config import (
-                seed_system_settings,
-                seed_dockerfile_templates_from_config,
-            )
-
-            seed_system_settings(update_existing=False)
-            seed_dockerfile_templates_from_config()
-        except (OperationalError, ProgrammingError):
-            pass
+            import core.signals  # noqa: F401
         except Exception:
-            # Never block startup
-            import logging
-
-            logging.getLogger(__name__).exception("SystemSetting seed skipped")
+            # Never block startup if signals can't be imported
+            pass
