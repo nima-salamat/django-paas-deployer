@@ -328,9 +328,30 @@ AUTH_USER_MODEL = "users.User"
 
 # Celery settings
 # Celery settings (use REDIS_URL if provided by environment)
-REDIS_URL = os.environ.get("REDIS_URL") or os.environ.get("CELERY_BROKER_URL") or "redis://127.0.0.1:6379"
-CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", f"{REDIS_URL}/0")
-CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", f"{REDIS_URL}/1")
+from urllib.parse import urlsplit, urlunsplit
+
+
+def _redis_db_url(base_url: str, db: int) -> str:
+    """Return a Redis URL with exactly one database suffix."""
+    raw = (base_url or "").strip()
+    if not raw:
+        raw = "redis://127.0.0.1:6379"
+    if "://" not in raw:
+        raw = f"redis://{raw}"
+    parts = urlsplit(raw)
+    path = f"/{db}"
+    return urlunsplit((parts.scheme or "redis", parts.netloc, path, parts.query, parts.fragment))
+
+
+_raw_redis_url = (
+    os.environ.get("REDIS_URL")
+    or os.environ.get("CELERY_BROKER_URL")
+    or "redis://127.0.0.1:6379"
+)
+# Keep a defined, normalized base Redis URL for cache/other consumers.
+REDIS_URL = _redis_db_url(_raw_redis_url, 0)
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL") or REDIS_URL
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND") or _redis_db_url(_raw_redis_url, 1)
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers.DatabaseScheduler'
@@ -347,7 +368,7 @@ CELERY_BEAT_SCHEDULE = {
 CACHES = {
     'default': {
         'BACKEND': 'django_redis.cache.RedisCache',
-        'LOCATION': f'{REDIS_URL}/2',
+        'LOCATION': _redis_db_url(_raw_redis_url, 2),
         'OPTIONS': {
             'CLIENT_CLASS': 'django_redis.client.DefaultClient',
         }

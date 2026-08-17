@@ -1,7 +1,11 @@
 from rest_framework import serializers
+from django.db import OperationalError, InterfaceError, ProgrammingError
+import logging
 
 from deployments.core.db_deployer import DB_PLATFORMS, SENSITIVE_CONFIG_KEYS
 from .models import Deploy, DeployLog
+
+logger = logging.getLogger(__name__)
 
 
 class MaskedDBConfigField(serializers.JSONField):
@@ -57,13 +61,24 @@ class DeploySerializer(serializers.ModelSerializer):
     def get_recent_logs(self, obj):
         from django.conf import settings
 
-        logs = (
-            DeployLog.objects
-            .using(settings.DEPLOYMENT_LOG_DB_ALIAS)
-            .filter(deploy_id=obj.pk)
-            .order_by("-created_at")[:20]
-        )
-        return DeployLogSerializer(reversed(list(logs)), many=True).data
+        try:
+            logs = (
+                DeployLog.objects
+                .using(settings.DEPLOYMENT_LOG_DB_ALIAS)
+                .filter(deploy_id=obj.pk)
+                .order_by("-created_at")[:20]
+            )
+            return DeployLogSerializer(reversed(list(logs)), many=True).data
+        except (OperationalError, InterfaceError, ProgrammingError) as exc:
+            # A dedicated deployment-log DB must never make the primary
+            # deploy/service API unavailable. Surface an empty log list and
+            # leave the details in server logs rather than leaking DB errors.
+            logger.warning(
+                "Deployment log database unavailable for deploy %s: %s",
+                getattr(obj, "pk", None),
+                exc,
+            )
+            return []
 
     def create(self, validated_data):
         request = self.context.get("request")

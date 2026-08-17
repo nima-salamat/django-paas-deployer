@@ -63,9 +63,17 @@ def service_logs_apiview(request, pk):
             status=status.HTTP_200_OK,
         )
     except DockerNotFound:
+        # A stopped/not-yet-deployed service has no container logs. Treat this
+        # as an empty log stream so the service page does not surface a noisy
+        # HTTP 404 while the deployment is being created or rebuilt.
         return Response(
-            {"result": "error", "detail": _("Service container not found.")},
-            status=status.HTTP_404_NOT_FOUND,
+            {
+                "result": "success",
+                "logs": [],
+                "container_available": False,
+                "detail": _("No service container is currently running."),
+            },
+            status=status.HTTP_200_OK,
         )
     except Exception as exc:
         return Response(
@@ -200,6 +208,18 @@ def start_service_apiview(request):
                 "detail": _(f"Service with this ID:{service_id} not found."),
             },
             status=status.HTTP_404_NOT_FOUND,
+        )
+    except Exception as exc:
+        # Broker/network/database failures from transaction.on_commit must not
+        # become opaque HTTP 500s. The DB changes are rolled back while the
+        # client receives an actionable, sanitized response.
+        logger.exception("Failed to queue service start for %s", service_id)
+        return Response(
+            {
+                "result": "error",
+                "detail": _("Could not queue the service operation."),
+            },
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
     action_word = "Rebuild" if force_rebuild else "Start"

@@ -837,7 +837,24 @@ def deploy_logs_apiview(request, pk):
     before = request.query_params.get("before")
     after = request.query_params.get("after")
 
-    base_qs = DeployLog.objects.using(settings.DEPLOYMENT_LOG_DB_ALIAS).filter(deploy_id=deploy.pk)
+    try:
+        base_qs = DeployLog.objects.using(settings.DEPLOYMENT_LOG_DB_ALIAS).filter(deploy_id=deploy.pk)
+        # Force a lightweight connection/table check now so the API can return
+        # a stable service response instead of an uncaught DB exception.
+        list(base_qs.values_list("id", flat=True)[:1])
+    except Exception as exc:
+        logger.warning("Deployment log database unavailable: %s", exc)
+        return Response(
+            {
+                "result": "success",
+                "deploy": DeploySerializer(deploy).data,
+                "logs": [],
+                "log_store_available": False,
+                "detail": _("Deployment logs are temporarily unavailable."),
+                "direction": "backward",
+            },
+            status=status.HTTP_200_OK,
+        )
 
     if after:
         after_dt = _parse_cursor(after)
