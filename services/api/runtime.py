@@ -4,6 +4,7 @@ import os
 import tarfile
 import tempfile
 from django.db import transaction
+from django.conf import settings
 from django.http import FileResponse
 from ..models import Service, PrivateNetwork, Volume
 from deploy.models import Deploy
@@ -51,7 +52,12 @@ def _invalidate_service_cache_soft(user_id):
 # Permission helpers (aligned with users.admin_apis Rule system)
 # ---------------------------------------------------------------------------
 
-from .common import *  # noqa
+from .common import (
+    _get_service_for_user,
+    _parse_deploy_config,
+    _resolve_platform,
+    _get_docker_volume,
+)
 
 @api_view(["GET"])
 @authentication_classes([JWTAuthentication])
