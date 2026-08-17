@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from django.utils.translation import gettext_lazy as _
 
-from auth_users.models import AuthCode, InviteLink, InviteUsage, LoginSettings
+from auth_users.models import AuthCode, InviteLink, InviteUsage, LoginSettings, LoginLog
 from cms.wagtail_admin.utils import panels_for
 from wagtail.admin.panels import FieldPanel, MultiFieldPanel
 from wagtail.snippets.views.snippets import SnippetViewSet, SnippetViewSetGroup
@@ -141,12 +141,49 @@ class AuthCodeViewSet(SnippetViewSet):
     )
 
 
+
+
+class LoginLogViewSet(SnippetViewSet):
+    model = LoginLog
+    icon = "time"
+    menu_label = _("Login logs")
+    menu_order = 124
+    list_display = [
+        "created_at",
+        "username",
+        "event",
+        "method",
+        "success",
+        "ip_address",
+        "identifier",
+    ]
+    list_filter = ["event", "success", "method", "created_at"]
+    search_fields = ["username", "identifier", "ip_address", "user__username"]
+    ordering = ["-created_at"]
+    panels = panels_for(
+        editable=[],
+        read_only=[
+            "user",
+            "username",
+            "identifier",
+            "event",
+            "method",
+            "success",
+            "ip_address",
+            "user_agent",
+            "failure_reason",
+            "extra",
+            "created_at",
+        ],
+    )
+
 class AuthUsersGroup(SnippetViewSetGroup):
     items = (
         LoginSettingsViewSet,
         InviteLinkViewSet,
         InviteUsageViewSet,
         AuthCodeViewSet,
+        LoginLogViewSet,
     )
     menu_label = _("Auth")
     menu_icon = "lock"

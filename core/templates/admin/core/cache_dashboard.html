@@ -14,13 +14,15 @@
   .ac-card .v{font-size:20px;font-weight:700}
   .ac-ok{color:#0a7}.ac-bad{color:#c33}
   .ac-table{width:100%;border-collapse:collapse;margin-top:8px}
-  .ac-table th,.ac-table td{border:1px solid #ddd;padding:6px 8px;font-size:13px;text-align:left}
+  .ac-table th,.ac-table td{border:1px solid #ddd;padding:6px 8px;font-size:13px;text-align:left;vertical-align:middle}
   .ac-table th{background:#f5f5f5}
   .ac-row{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:12px 0}
   .ac-row input{padding:6px 8px;min-width:200px}
   .ac-muted{color:#888;font-size:12px}
   .ac-body{max-width:1100px}
   .ac-actions form{display:inline;margin-right:8px}
+  .ac-preview{background:#0d1117;color:#e6edf3;border-radius:8px;padding:12px 14px;margin:12px 0;font-family:ui-monospace,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all}
+  .ac-btn-sm{padding:2px 8px;font-size:12px;cursor:pointer}
 </style>
 <div class="ac-body">
   <h1>App Cache Dashboard</h1>
@@ -88,15 +90,37 @@
   </form>
   <p class="ac-muted">Examples: <code>svc:</code> · <code>plan:</code> · <code>tkt:user:</code> · <code>usr:admin:</code></p>
 
+  {% if preview %}
+  <h3>Key preview</h3>
+  <div class="ac-preview">key: {{ preview.key }}
+type: {{ preview.type }} · ttl: {% if preview.ttl == -1 %}∞{% elif preview.ttl == -2 %}gone{% else %}{{ preview.ttl }}s{% endif %} · exists: {{ preview.exists }}
+
+{{ preview.value|default:"(no value)" }}</div>
+  {% endif %}
+
   {% if keys %}
   <table class="ac-table">
-    <thead><tr><th>Key</th><th>Type</th><th>TTL</th></tr></thead>
+    <thead><tr><th>Key</th><th>Type</th><th>TTL</th><th>Actions</th></tr></thead>
     <tbody>
       {% for k in keys %}
       <tr>
         <td><code>{{ k.key }}</code></td>
         <td>{{ k.type }}</td>
         <td>{% if k.ttl == -1 %}∞{% elif k.ttl == -2 %}gone{% else %}{{ k.ttl }}s{% endif %}</td>
+        <td>
+          <form method="get" style="display:inline">
+            <input type="hidden" name="pattern" value="{{ pattern }}" />
+            <input type="hidden" name="limit" value="{{ limit }}" />
+            <input type="hidden" name="preview" value="{{ k.key }}" />
+            <button type="submit" class="button ac-btn-sm">Preview</button>
+          </form>
+          <form method="post" style="display:inline" onsubmit="return confirm('Delete this key?');">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="delete_key" />
+            <input type="hidden" name="key" value="{{ k.key }}" />
+            <button type="submit" class="button ac-btn-sm" style="color:#c33">Delete</button>
+          </form>
+        </td>
       </tr>
       {% endfor %}
     </tbody>

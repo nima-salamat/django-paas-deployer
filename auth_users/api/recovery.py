@@ -10,7 +10,7 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from users.serializers import CreateUserSerializer
-from ..models import LoginSettings, AuthCode, InviteLink, InviteUsage
+from ..models import LoginSettings, AuthCode, InviteLink, InviteUsage, LoginLog
 from ..services import (
     get_tokens_for_user,
     resolve_user_from_identifiers,
@@ -278,6 +278,18 @@ class PasswordRecoveryConfirmAPIView(APIView):
             )
 
         tokens = get_tokens_for_user(user)
+        LoginLog.record(
+            user=user,
+            request=request,
+            event=LoginLog.EVENT_PASSWORD_RESET,
+            method=LoginLog.METHOD_PASSWORD,
+            success=True,
+            identifier=(
+                (data.get("email") or data.get("phone_number") or data.get("username") or "")[:255]
+                if isinstance(data, dict)
+                else ""
+            ),
+        )
         return ok(
             _("success::password reset and logged in"),
             {**tokens, "next_step": "done"},

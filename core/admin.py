@@ -79,12 +79,43 @@ def app_cache_dashboard_view(request):
         get_app_cache_overview,
         scan_app_cache_keys,
         invalidate_namespace,
+        get_cache_key_preview,
+        delete_cache_keys,
     )
-    if request.method == "POST" and request.POST.get("action") == "flush":
-        ns = request.POST.get("ns") or "all"
-        invalidate_namespace(ns)
-        dj_messages.success(request, f"Flushed cache namespace: {ns}")
-        return redirect("core_app_cache_dashboard")
+    if request.method == "POST":
+        action = request.POST.get("action") or ""
+        if action == "flush":
+            ns = request.POST.get("ns") or "all"
+            invalidate_namespace(ns)
+            dj_messages.success(request, f"Flushed cache namespace: {ns}")
+            return redirect("core_app_cache_dashboard")
+        if action == "delete_key":
+            key = (request.POST.get("key") or "").strip()
+            if key:
+                n = delete_cache_keys(key)
+                dj_messages.success(request, f"Deleted {n} key(s): {key}")
+            return redirect(request.get_full_path() if request.GET else "core_app_cache_dashboard")
+        if action == "preview_key":
+            key = (request.POST.get("key") or "").strip()
+            pattern = request.GET.get("pattern") or ""
+            try:
+                limit = min(500, max(1, int(request.GET.get("limit") or 80)))
+            except ValueError:
+                limit = 80
+            keys = scan_app_cache_keys(pattern, limit) if pattern else []
+            preview = get_cache_key_preview(key) if key else None
+            return render(
+                request,
+                "admin/core/cache_dashboard.html",
+                {
+                    "title": "App Cache",
+                    "overview": get_app_cache_overview(),
+                    "pattern": pattern,
+                    "limit": limit,
+                    "keys": keys,
+                    "preview": preview,
+                },
+            )
 
     pattern = request.GET.get("pattern") or ""
     try:
@@ -92,6 +123,8 @@ def app_cache_dashboard_view(request):
     except ValueError:
         limit = 80
     keys = scan_app_cache_keys(pattern, limit) if pattern else []
+    preview_key = (request.GET.get("preview") or "").strip()
+    preview = get_cache_key_preview(preview_key) if preview_key else None
     return render(
         request,
         "admin/core/cache_dashboard.html",
@@ -101,6 +134,7 @@ def app_cache_dashboard_view(request):
             "pattern": pattern,
             "limit": limit,
             "keys": keys,
+            "preview": preview,
         },
     )
 

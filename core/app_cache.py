@@ -268,3 +268,44 @@ def invalidate_namespace(ns: str) -> None:
     pat = mapping.get(ns)
     if pat:
         cache_delete_pattern(pat)
+
+
+def get_cache_key_preview(key: str, max_len: int = 400) -> dict:
+    """Return type, ttl and truncated value for a single key."""
+    r = _redis()
+    out = {"key": key, "type": "?", "ttl": -2, "value": None, "exists": False}
+    if not r:
+        return out
+    try:
+        ktype = r.type(key)
+        if isinstance(ktype, bytes):
+            ktype = ktype.decode()
+        out["type"] = ktype
+        out["ttl"] = r.ttl(key)
+        if ktype == "none":
+            return out
+        out["exists"] = True
+        raw = r.get(key) if ktype == "string" else None
+        if raw is not None:
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", errors="replace")
+            if len(raw) > max_len:
+                out["value"] = raw[:max_len] + "…"
+            else:
+                out["value"] = raw
+        else:
+            out["value"] = f"<{ktype} value not previewed>"
+    except Exception:
+        logger.exception("get_cache_key_preview failed key=%s", key)
+    return out
+
+
+def delete_cache_keys(*keys: str) -> int:
+    r = _redis()
+    if not r or not keys:
+        return 0
+    try:
+        return int(r.delete(*keys) or 0)
+    except Exception:
+        logger.exception("delete_cache_keys failed")
+        return 0

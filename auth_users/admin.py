@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.utils.html import format_html
 from django.utils import timezone
 from django.urls import reverse
-from .models import LoginSettings, AuthCode, InviteLink, InviteUsage
+from .models import LoginSettings, AuthCode, InviteLink, InviteUsage, LoginLog
 
 
 # ─────────────────────────────────────────────────────────────
@@ -448,3 +448,113 @@ class AuthCodeAdmin(admin.ModelAdmin):
         count = queryset.count()
         queryset.delete()
         self.message_user(request, f"{count} auth code(s) deleted.")
+
+
+# ─────────────────────────────────────────────────────────────
+# Login Logs (audit)
+# ─────────────────────────────────────────────────────────────
+@admin.register(LoginLog)
+class LoginLogAdmin(admin.ModelAdmin):
+    list_display = (
+        "created_at",
+        "user_display",
+        "event_badge",
+        "method",
+        "success_badge",
+        "ip_address",
+        "identifier_short",
+        "ua_short",
+    )
+    list_filter = ("event", "success", "method", "created_at")
+    search_fields = (
+        "username",
+        "identifier",
+        "ip_address",
+        "user__username",
+        "user__email",
+        "failure_reason",
+    )
+    readonly_fields = (
+        "user",
+        "username",
+        "identifier",
+        "event",
+        "method",
+        "success",
+        "ip_address",
+        "user_agent",
+        "failure_reason",
+        "extra",
+        "created_at",
+    )
+    date_hierarchy = "created_at"
+    ordering = ("-created_at",)
+    list_per_page = 50
+    actions = ["delete_selected"]
+
+    fieldsets = (
+        (
+            None,
+            {
+                "fields": (
+                    "user",
+                    "username",
+                    "identifier",
+                    "event",
+                    "method",
+                    "success",
+                ),
+            },
+        ),
+        (
+            "Request",
+            {
+                "fields": ("ip_address", "user_agent", "failure_reason", "extra"),
+            },
+        ),
+        (
+            "Timestamps",
+            {"fields": ("created_at",)},
+        ),
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    @admin.display(description="User", ordering="username")
+    def user_display(self, obj):
+        if obj.user_id:
+            return obj.user.username
+        return obj.username or "—"
+
+    @admin.display(description="Event", ordering="event")
+    def event_badge(self, obj):
+        colors = {
+            "success": "#22c55e",
+            "failed": "#ef4444",
+            "logout": "#8b949e",
+            "password_reset": "#3b82f6",
+        }
+        c = colors.get(obj.event, "#8b949e")
+        return format_html(
+            '<span style="color:{};font-weight:600;">{}</span>',
+            c,
+            obj.get_event_display(),
+        )
+
+    @admin.display(description="OK", boolean=True, ordering="success")
+    def success_badge(self, obj):
+        return obj.success
+
+    @admin.display(description="Identifier")
+    def identifier_short(self, obj):
+        s = obj.identifier or ""
+        return (s[:40] + "…") if len(s) > 40 else (s or "—")
+
+    @admin.display(description="User-Agent")
+    def ua_short(self, obj):
+        ua = obj.user_agent or ""
+        return (ua[:50] + "…") if len(ua) > 50 else (ua or "—")

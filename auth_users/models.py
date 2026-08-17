@@ -518,3 +518,117 @@ class AuthCode(models.Model):
 
     def consume(self):
         self.delete()
+
+
+# ---------------------------------------------------------------------------
+# Login audit log
+# ---------------------------------------------------------------------------
+class LoginLog(models.Model):
+    """
+    Records successful and failed authentication attempts for admin audit.
+    """
+
+    EVENT_SUCCESS = "success"
+    EVENT_FAILED = "failed"
+    EVENT_LOGOUT = "logout"
+    EVENT_PASSWORD_RESET = "password_reset"
+    EVENT_CHOICES = [
+        (EVENT_SUCCESS, "Login success"),
+        (EVENT_FAILED, "Login failed"),
+        (EVENT_LOGOUT, "Logout"),
+        (EVENT_PASSWORD_RESET, "Password reset login"),
+    ]
+
+    METHOD_OTP = "otp"
+    METHOD_PASSWORD = "password"
+    METHOD_OTP_PASSWORD = "otp_password"
+    METHOD_TOKEN = "token"
+    METHOD_OTHER = "other"
+    METHOD_CHOICES = [
+        (METHOD_OTP, "OTP only"),
+        (METHOD_PASSWORD, "Password only"),
+        (METHOD_OTP_PASSWORD, "OTP + Password"),
+        (METHOD_TOKEN, "Token / session"),
+        (METHOD_OTHER, "Other"),
+    ]
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="login_logs",
+    )
+    # Snapshot so logs remain useful if user is deleted
+    username = models.CharField(max_length=150, blank=True, default="", db_index=True)
+    identifier = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Email / phone / username used at login time",
+    )
+    event = models.CharField(max_length=20, choices=EVENT_CHOICES, default=EVENT_SUCCESS, db_index=True)
+    method = models.CharField(max_length=20, choices=METHOD_CHOICES, default=METHOD_OTHER)
+    success = models.BooleanField(default=True, db_index=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True, db_index=True)
+    user_agent = models.CharField(max_length=500, blank=True, default="")
+    failure_reason = models.CharField(max_length=255, blank=True, default="")
+    extra = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Login Log"
+        verbose_name_plural = "Login Logs"
+        indexes = [
+            models.Index(fields=["-created_at", "event"]),
+            models.Index(fields=["user", "-created_at"]),
+        ]
+
+    def __str__(self):
+        who = self.username or (self.user.username if self.user_id else self.identifier) or "?"
+        status = "OK" if self.success else "FAIL"
+        return f"LoginLog({who} {self.event} {status} @ {self.created_at})"
+
+    @classmethod
+    def record(
+        cls,
+        *,
+        user=None,
+        request=None,
+        event=EVENT_SUCCESS,
+        method=METHOD_OTHER,
+        success=True,
+        identifier="",
+        failure_reason="",
+        extra=None,
+    ):
+        """
+        Soft-fail helper: never raises into the auth flow.
+        """
+        try:
+            ip = _get_client_ip(request) if request is not None else None
+            ua = ""
+            if request is not None:
+                ua = (request.META.get("HTTP_USER_AGENT", "") or "")[:500]
+            username = ""
+            if user is not None:
+                username = getattr(user, "username", "") or ""
+            return cls.objects.create(
+                user=user if user is not None and getattr(user, "pk", None) else None,
+                username=username,
+                identifier=(identifier or "")[:255],
+                event=event,
+                method=method,
+                success=bool(success),
+                ip_address=ip,
+                user_agent=ua,
+                failure_reason=(failure_reason or "")[:255],
+                extra=extra or {},
+            )
+        except Exception:
+            # Never break authentication because of audit logging
+            import logging
+
+            logging.getLogger("auth_users.login_log").exception("LoginLog.record failed")
+            return None

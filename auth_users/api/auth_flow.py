@@ -10,7 +10,7 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from users.serializers import CreateUserSerializer
-from ..models import LoginSettings, AuthCode, InviteLink, InviteUsage
+from ..models import LoginSettings, AuthCode, InviteLink, InviteUsage, LoginLog
 from ..services import (
     get_tokens_for_user,
     resolve_user_from_identifiers,
@@ -37,6 +37,38 @@ def ok(msg, data=None, http_status=status.HTTP_200_OK):
     if data:
         body.update(data)
     return Response(body, status=http_status)
+
+
+def _identifier_from_data(data):
+    for k in ("email", "phone_number", "username"):
+        v = (data.get(k) or "").strip() if isinstance(data.get(k), str) else data.get(k)
+        if v:
+            return str(v)[:255]
+    return ""
+
+
+def _log_success(user, request, data, method):
+    LoginLog.record(
+        user=user,
+        request=request,
+        event=LoginLog.EVENT_SUCCESS,
+        method=method,
+        success=True,
+        identifier=_identifier_from_data(data),
+    )
+
+
+def _log_failed(request, data, reason, user=None):
+    LoginLog.record(
+        user=user,
+        request=request,
+        event=LoginLog.EVENT_FAILED,
+        method=LoginLog.METHOD_OTHER,
+        success=False,
+        identifier=_identifier_from_data(data),
+        failure_reason=reason,
+    )
+
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +171,7 @@ class StartAuthAPIView(APIView):
                     status.HTTP_403_FORBIDDEN,
                 )
             tokens = get_tokens_for_user(user)
+            _log_success(user, request, data, LoginLog.METHOD_OTHER)
             return ok(_("success::logged in"), tokens)
 
         if settings.require_otp and channel:
@@ -202,6 +235,7 @@ class ValidateOTPAPIView(APIView):
             )
 
         if not is_valid:
+            _log_failed(request, data, "otp incorrect or expired", user=user)
             return err(_("error::code is incorrect or expired"))
 
         if settings.activate_after_successful_otp:
@@ -249,6 +283,7 @@ class ValidateOTPAPIView(APIView):
                 status.HTTP_403_FORBIDDEN,
             )
         tokens = get_tokens_for_user(user)
+        _log_success(user, request, data, LoginLog.METHOD_OTP)
         return ok(
             _("success::user is valid"),
             {
@@ -304,6 +339,7 @@ class FinalAuthAPIView(APIView):
             if not password:
                 return err(_("error::password is required"))
             if not user.has_usable_password() or not user.check_password(password):
+                _log_failed(request, data, "password incorrect", user=user)
                 return err(_("error::password is incorrect"))
 
         if settings.require_otp and code:
@@ -324,6 +360,8 @@ class FinalAuthAPIView(APIView):
             )
 
         tokens = get_tokens_for_user(user)
+        method = LoginLog.METHOD_OTP_PASSWORD if settings.require_otp else LoginLog.METHOD_PASSWORD
+        _log_success(user, request, data, method)
         return ok(_("success::user logged in"), tokens)
 
 
@@ -410,6 +448,7 @@ class SetPasswordAPIView(APIView):
             )
 
         tokens = get_tokens_for_user(user)
+        _log_success(user, request, data, LoginLog.METHOD_PASSWORD)
         return ok(_("success::password set and logged in"), {**tokens, "next_step": "done"})
 
 
