@@ -38,6 +38,15 @@ from docker.errors import NotFound as DockerNotFound
 logger = logging.getLogger(__name__)
 
 
+def _invalidate_service_cache_soft(user_id):
+    """Invalidate service list/detail cache without making start/stop fail."""
+    try:
+        from core.app_cache import invalidate_user_services
+        invalidate_user_services(user_id)
+    except Exception:
+        logger.exception("Service cache invalidation failed for user=%s", user_id)
+
+
 # ---------------------------------------------------------------------------
 # Permission helpers (aligned with users.admin_apis Rule system)
 # ---------------------------------------------------------------------------
@@ -184,22 +193,27 @@ def start_service_apiview(request):
                 cancel_requested=False,
             )
 
-            if is_db:
-                transaction.on_commit(
-                    functools.partial(
-                        run_db_deploy.apply_async,
+            def _enqueue_after_commit() -> None:
+                # Queue delivery is deliberately best-effort here. If Redis/Celery
+                # is temporarily unavailable, the DB state remains QUEUED/PENDING
+                # and the deployment monitor will retry enqueueing automatically.
+                try:
+                    task = run_db_deploy if is_db else start_service
+                    task.apply_async(
                         args=[str(deploy_item.id)],
                         task_id=task_id,
                     )
-                )
-            else:
-                transaction.on_commit(
-                    functools.partial(
-                        start_service.apply_async,
-                        args=[str(deploy_item.id)],
-                        task_id=task_id,
+                except Exception:
+                    logger.exception(
+                        "Celery enqueue failed after commit for deploy=%s service=%s; "
+                        "leaving operation queued for monitor retry",
+                        deploy_item.id, service_id,
                     )
-                )
+
+            transaction.on_commit(_enqueue_after_commit)
+            transaction.on_commit(
+                lambda: _invalidate_service_cache_soft(request.user.pk)
+            )
 
     except Service.DoesNotExist:
         return Response(

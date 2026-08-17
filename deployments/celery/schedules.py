@@ -6,6 +6,7 @@ from celery import shared_task
 from celery.result import AsyncResult
 from django.db import transaction
 from django.utils import timezone
+from core.utils import make_uuid4
 
 from core.global_settings.config import MAX_DEPLOY_TIME_MINUTE, SERVICE_STATUS_CHOICES
 from deployments.core.manager.container_manager import Container
@@ -127,6 +128,7 @@ def monitor_services():
     # ------------------------------------------------------------------
     # 2. Services that need runtime reconciliation
     # ------------------------------------------------------------------
+    _retry_orphaned_queued_deploys()
     services = (
         Service.objects
         .select_related("selected_deploy")
@@ -144,6 +146,51 @@ def monitor_services():
         len(services),
         extra={"event": "monitor_tick", "deployments": len(deployments), "services": len(services)},
     )
+
+
+def _retry_orphaned_queued_deploys() -> None:
+    """Re-enqueue deployments whose DB transaction committed but Celery did not.
+
+    This makes Redis/Celery outages non-fatal to the API request: the operation
+    stays QUEUED/PENDING and is picked up automatically once the broker returns.
+    """
+    from deployments.celery.tasks import deploy as app_deploy, run_db_deploy
+    from deployments.core.db_deployer import DB_PLATFORMS
+    from deployments.common import parse_config
+
+    cutoff = timezone.now() - timedelta(seconds=25)
+    candidates = (
+        Deploy.objects
+        .select_related("service", "service__plan")
+        .filter(status=DeploymentStatusChoices.PENDING, created_at__lt=cutoff)
+        .order_by("created_at")[:50]
+    )
+    for deploy in candidates:
+        service = deploy.service
+        if service is None or service.status != SERVICE_STATUS_CHOICES.QUEUED:
+            continue
+        lock_id = make_uuid4()
+        try:
+            cfg = parse_config(deploy.config) if isinstance(deploy.config, dict) else {}
+            platform = str(
+                cfg.get("platform")
+                or getattr(getattr(service, "plan", None), "platform", "")
+                or ""
+            ).strip().lower()
+            task = run_db_deploy if platform in DB_PLATFORMS else app_deploy
+            task.apply_async(args=[str(deploy.id)], task_id=lock_id)
+            Deploy.objects.filter(pk=deploy.pk, status=DeploymentStatusChoices.PENDING).update(
+                status_message="Deployment re-queued after temporary broker unavailability.",
+            )
+            service.__class__.objects.filter(
+                pk=service.pk, status=SERVICE_STATUS_CHOICES.QUEUED
+            ).update(task_id=lock_id)
+            logger.info("Re-queued orphaned deployment %s with task_id=%s", deploy.pk, lock_id)
+        except Exception:
+            logger.warning(
+                "Unable to re-queue deployment %s; broker may still be unavailable.",
+                deploy.pk, exc_info=True,
+            )
 
 
 def _reconcile_active_deploy(deploy: Deploy) -> None:
