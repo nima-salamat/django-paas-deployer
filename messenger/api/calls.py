@@ -7,9 +7,10 @@ import logging
 import mimetypes
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import Q, Count, Prefetch
 from django.shortcuts import get_object_or_404
-from django.utils import timezone
+from django.utils import timezone as _tz
 from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
@@ -189,21 +190,35 @@ class ConversationCallStartAPIView(APIView):
         video = bool(request.data.get("video", True))
         audio = bool(request.data.get("audio", True))
 
-        # End any still-ringing/active session in this conversation first
-        for old in CallSession.objects.filter(
-            conversation=conv,
-            status__in=[CallSession.Status.RINGING, CallSession.Status.ACTIVE],
-        ):
-            _finish_call(old, CallSession.Status.ENDED, ended_by_user=request.user)
+        # Serialize call creation per conversation. A stale ringing session is
+        # terminal after the ring window, while an active call remains active
+        # until an explicit hang-up/end arrives.
+        with transaction.atomic():
+            locked = list(
+                CallSession.objects.select_for_update()
+                .filter(
+                    conversation=conv,
+                    status__in=[CallSession.Status.RINGING, CallSession.Status.ACTIVE],
+                )
+                .order_by("started_at")
+            )
+            now = _tz.now()
+            for old in locked:
+                if old.status == CallSession.Status.RINGING and old.started_at:
+                    age = (now - old.started_at).total_seconds()
+                    if age >= 30:
+                        _finish_call(old, CallSession.Status.NO_ANSWER, ended_by_user=request.user)
+                        continue
+                return err("Call already in progress", status.HTTP_409_CONFLICT)
 
-        room = f"messenger-{conv.public_id.hex}-{secrets.token_hex(4)}"
-        session = CallSession.objects.create(
-            conversation=conv,
-            initiator=request.user,
-            is_video=video,
-            status=CallSession.Status.RINGING,
-            room_name=room,
-        )
+            room = f"messenger-{conv.public_id.hex}-{secrets.token_hex(4)}"
+            session = CallSession.objects.create(
+                conversation=conv,
+                initiator=request.user,
+                is_video=video,
+                status=CallSession.Status.RINGING,
+                room_name=room,
+            )
 
         initiator_name = getattr(request.user, "username", "") or f"User-{request.user.id}"
         start_payload = {
@@ -291,33 +306,34 @@ class ConversationCallJoinAPIView(APIView):
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
 
         call_id = request.query_params.get("call_id") or request.query_params.get("call")
-        qs = CallSession.objects.filter(conversation=conv).order_by("-started_at")
-        if call_id:
-            session = qs.filter(public_id=call_id).first()
-        else:
-            session = qs.filter(
-                status__in=[CallSession.Status.RINGING, CallSession.Status.ACTIVE]
-            ).first()
+        with transaction.atomic():
+            qs = CallSession.objects.select_for_update().filter(conversation=conv).order_by("-started_at")
+            if call_id:
+                session = qs.filter(public_id=call_id).first()
+            else:
+                session = qs.filter(
+                    status__in=[CallSession.Status.RINGING, CallSession.Status.ACTIVE]
+                ).first()
 
-        if not session:
-            return err("No active call", status.HTTP_404_NOT_FOUND)
-        if session.status not in (CallSession.Status.RINGING, CallSession.Status.ACTIVE):
-            return err("Call already ended", status.HTTP_409_CONFLICT)
+            if not session:
+                return err("No active call", status.HTTP_404_NOT_FOUND)
+            if session.status not in (CallSession.Status.RINGING, CallSession.Status.ACTIVE):
+                return err("Call already ended", status.HTTP_409_CONFLICT)
 
-        if session.status == CallSession.Status.RINGING:
-            session.status = CallSession.Status.ACTIVE
-            session.answered_at = _tz.now()
-            session.save(update_fields=["status", "answered_at"])
-            try:
-                broadcast_call_event(conv.id, {
-                    "type": "call.answered",
-                    "conversation_id": conv.id,
-                    "call_id": str(session.public_id),
-                    "user_id": request.user.id,
-                    "username": getattr(request.user, "username", "") or "",
-                })
-            except Exception:
-                logger.exception("broadcast call.answered failed")
+            if session.status == CallSession.Status.RINGING:
+                session.status = CallSession.Status.ACTIVE
+                session.answered_at = _tz.now()
+                session.save(update_fields=["status", "answered_at"])
+                try:
+                    broadcast_call_event(conv.id, {
+                        "type": "call.answered",
+                        "conversation_id": conv.id,
+                        "call_id": str(session.public_id),
+                        "user_id": request.user.id,
+                        "username": getattr(request.user, "username", "") or "",
+                    })
+                except Exception:
+                    logger.exception("broadcast call.answered failed")
 
         cfg = _jitsi_config(request, conv, room_name=session.room_name or None)
         cfg["call_id"] = str(session.public_id)
@@ -348,28 +364,6 @@ class ConversationCallEndAPIView(APIView):
 
         call_id = request.data.get("call_id")
         reason = (request.data.get("reason") or "ended").strip().lower()
-        qs = CallSession.objects.filter(conversation=conv).order_by("-started_at")
-        if call_id:
-            session = qs.filter(public_id=call_id).first()
-        else:
-            session = qs.filter(
-                status__in=[CallSession.Status.RINGING, CallSession.Status.ACTIVE]
-            ).first()
-
-        if not session:
-            # Still notify peers to stop ringing UI
-            try:
-                from ..consumers import broadcast_call_event
-                broadcast_call_event(conv.id, {
-                    "type": "call.ended",
-                    "conversation_id": conv.id,
-                    "user_id": request.user.id,
-                    "username": getattr(request.user, "username", "") or "",
-                    "status": reason,
-                })
-            except Exception:
-                pass
-            return o
         status_map = {
             "declined": CallSession.Status.DECLINED,
             "no_answer": CallSession.Status.NO_ANSWER,
@@ -377,26 +371,59 @@ class ConversationCallEndAPIView(APIView):
             "ended": CallSession.Status.ENDED,
             "busy": CallSession.Status.DECLINED,
         }
-        # Caller cancels while ringing → missed for callee
-        if session.status == CallSession.Status.RINGING:
-            if session.initiator_id == request.user.id:
-                final = CallSession.Status.MISSED
-            else:
-                final = status_map.get(reason, CallSession.Status.DECLINED)
-        else:
-            final = status_map.get(reason, CallSession.Status.ENDED)
 
-        _finish_call(
-            session,
-            final,
-            ended_by_user=request.user,
-            display_status="busy" if reason == "busy" else None,
-        )
-        return ok("Call ended", data={
-            "call_id": str(session.public_id),
-            "status": session.status,
-            "duration": session.duration_seconds,
-        })
+        with transaction.atomic():
+            qs = CallSession.objects.select_for_update().filter(conversation=conv).order_by("-started_at")
+            if call_id:
+                session = qs.filter(public_id=call_id).first()
+            else:
+                session = qs.filter(
+                    status__in=[CallSession.Status.RINGING, CallSession.Status.ACTIVE]
+                ).first()
+
+            if not session:
+                # Still notify peers to stop ringing UI. This is idempotent: the
+                # caller may have already finalized the session on another device.
+                try:
+                    from ..consumers import broadcast_call_event
+                    broadcast_call_event(conv.id, {
+                        "type": "call.ended",
+                        "conversation_id": conv.id,
+                        "user_id": request.user.id,
+                        "username": getattr(request.user, "username", "") or "",
+                        "status": reason,
+                    })
+                except Exception:
+                    logger.exception("broadcast idempotent call.ended failed")
+                return ok("Call already ended", data={"active": False})
+
+            if session.status not in (CallSession.Status.RINGING, CallSession.Status.ACTIVE):
+                return ok("Call already ended", data={
+                    "active": False,
+                    "call_id": str(session.public_id),
+                    "status": session.status,
+                })
+
+            # Caller cancels while ringing → missed for callee.
+            if session.status == CallSession.Status.RINGING:
+                if session.initiator_id == request.user.id:
+                    final = CallSession.Status.MISSED
+                else:
+                    final = status_map.get(reason, CallSession.Status.DECLINED)
+            else:
+                final = status_map.get(reason, CallSession.Status.ENDED)
+
+            _finish_call(
+                session,
+                final,
+                ended_by_user=request.user,
+                display_status="busy" if reason == "busy" else None,
+            )
+            return ok("Call ended", data={
+                "call_id": str(session.public_id),
+                "status": session.status,
+                "duration": session.duration_seconds,
+            })
 
 
 
@@ -411,7 +438,6 @@ class ConversationCallActiveAPIView(APIView):
 
     def get(self, request, pk):
         from ..models import CallSession
-        from django.utils import timezone
         from datetime import timedelta
 
         conv = get_object_or_404(Conversation, pk=pk)
@@ -421,12 +447,30 @@ class ConversationCallActiveAPIView(APIView):
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
 
-        cutoff = timezone.now() - timedelta(seconds=40)
+        cutoff = _tz.now() - timedelta(seconds=30)
+        # Self-heal abandoned ringing sessions when Celery/websocket delivery
+        # was interrupted. This makes the server authoritative for call state.
+        stale_ringing = (
+            CallSession.objects.filter(
+                conversation=conv,
+                status=CallSession.Status.RINGING,
+                started_at__lt=cutoff,
+            )
+            .order_by("started_at")
+        )
+        for stale in stale_ringing[:20]:
+            try:
+                with transaction.atomic():
+                    locked = CallSession.objects.select_for_update().get(pk=stale.pk)
+                    if locked.status == CallSession.Status.RINGING and locked.started_at < cutoff:
+                        _finish_call(locked, CallSession.Status.NO_ANSWER, ended_by_user=locked.initiator)
+            except Exception:
+                logger.exception("stale ringing call cleanup failed for %s", stale.public_id)
+
         session = (
             CallSession.objects.filter(
                 conversation=conv,
                 status__in=[CallSession.Status.RINGING, CallSession.Status.ACTIVE],
-                started_at__gte=cutoff,
             )
             .select_related("initiator")
             .order_by("-started_at")
@@ -438,7 +482,7 @@ class ConversationCallActiveAPIView(APIView):
         initiator_name = ""
         if session.initiator_id:
             initiator_name = getattr(session.initiator, "username", None) or f"User-{session.initiator_id}"
-        elapsed = int((timezone.now() - session.started_at).total_seconds())
+        elapsed = int((_tz.now() - session.started_at).total_seconds())
         remaining = max(0, 30 - elapsed) if session.status == CallSession.Status.RINGING else None
         cfg = _jitsi_config(request, conv, room_name=session.room_name or None)
         return ok(data={

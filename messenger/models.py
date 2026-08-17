@@ -438,6 +438,13 @@ class CallSession(models.Model):
             models.Index(fields=["conversation", "status"]),
             models.Index(fields=["conversation", "-started_at"]),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["conversation"],
+                condition=models.Q(status__in=["ringing", "active"]),
+                name="uniq_active_call_per_conversation",
+            ),
+        ]
 
     def __str__(self):
         return f"Call {self.public_id} ({self.status})"
