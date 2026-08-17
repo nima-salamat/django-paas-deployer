@@ -45,14 +45,31 @@ INSTALLED_APPS = [
     "daphne",
     "channels",
 
+    # Wagtail (must load before django.contrib.admin for admin skinning)
+    "wagtail.contrib.forms",
+    "wagtail.contrib.redirects",
+    "wagtail.embeds",
+    "wagtail.sites",
+    "wagtail.users",
+    "wagtail.snippets",
+    "wagtail.documents",
+    "wagtail.images",
+    "wagtail.search",
+    "wagtail.admin",
+    "wagtail",
+    "modelcluster",
+    "taggit",
+
     # Django core
+    "cms",
+
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "django.contrib.postgres", 
+    "django.contrib.postgres",
 
     # Third party
     "corsheaders",
@@ -86,6 +103,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    # Wagtail
+    'wagtail.contrib.redirects.middleware.RedirectMiddleware',
 ]
 
 ROOT_URLCONF = 'urls'
@@ -343,3 +362,45 @@ MESSAGE_CACHE_TTL = int(os.environ.get("MESSAGE_CACHE_TTL", str(6 * 3600)))
 # Short-lived caches for conversation list (per user) and conv meta/participants
 MESSENGER_LIST_CACHE_TTL = int(os.environ.get("MESSENGER_LIST_CACHE_TTL", "300"))
 MESSENGER_CONV_CACHE_TTL = int(os.environ.get("MESSENGER_CONV_CACHE_TTL", "120"))
+
+
+# ---------------------------------------------------------------------------
+# Wagtail (admin panel) — production-ready defaults
+# ---------------------------------------------------------------------------
+WAGTAIL_SITE_NAME = os.environ.get("WAGTAIL_SITE_NAME", "PaaS Control Panel")
+WAGTAILADMIN_BASE_URL = os.environ.get(
+    "WAGTAILADMIN_BASE_URL",
+    f"https://{API_DOMAIN_NAME}" if API_DOMAIN_NAME else "http://localhost:8000",
+)
+
+# Documents / images storage under MEDIA_ROOT
+WAGTAILDOCS_EXTENSIONS = [
+    "csv", "docx", "key", "odt", "pdf", "pptx", "rtf", "txt", "xlsx", "zip",
+]
+WAGTAILIMAGES_EXTENSIONS = ["gif", "jpg", "jpeg", "png", "webp", "svg"]
+
+# Search backend (DB is fine for admin-scale; swap to Elasticsearch later if needed)
+WAGTAILSEARCH_BACKENDS = {
+    "default": {
+        "BACKEND": "wagtail.search.backends.database",
+    }
+}
+
+# Do not expose draft pages publicly in production APIs
+WAGTAIL_ENABLE_UPDATE_CHECK = True
+WAGTAIL_I18N_ENABLED = False
+
+# Password required for sensitive Wagtail actions in production
+WAGTAIL_PRIVATE_PASSWORD_REQUIRED = not DEBUG
+
+# Email notifications from Wagtail admin
+WAGTAILADMIN_NOTIFICATION_USE_HTML = True
+
+# Production security hardenings when DEBUG is off
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_BROWSER_XSS_FILTER = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    X_FRAME_OPTIONS = "DENY"

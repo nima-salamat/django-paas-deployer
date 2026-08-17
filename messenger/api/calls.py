@@ -139,6 +139,13 @@ def _finish_call(session, status: str, ended_by_user=None, display_status: str |
     )
     session.end_message = msg
     session.save(update_fields=["end_message"])
+    # Keep Redis/message cache in sync so hang-up / missed / declined
+    # system messages appear immediately on next fetch.
+    try:
+        from ..message_cache import schedule_add_message
+        schedule_add_message(msg)
+    except Exception:
+        logger.exception("schedule_add_message for call end failed")
     try:
         broadcast_message(msg)
     except Exception:
@@ -216,6 +223,11 @@ class ConversationCallStartAPIView(APIView):
         )
         session.start_message = start_msg
         session.save(update_fields=["start_message"])
+        try:
+            from ..message_cache import schedule_add_message
+            schedule_add_message(start_msg)
+        except Exception:
+            logger.exception("schedule_add_message for call start failed")
         try:
             broadcast_message(start_msg)
         except Exception:

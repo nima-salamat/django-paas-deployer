@@ -39,3 +39,6 @@ resend
 requests[socks]
 
 bleach==6.2.0
+
+# Wagtail CMS (admin panel)
+wagtail>=6.3,<7.0

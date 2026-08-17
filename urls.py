@@ -2,7 +2,15 @@ from django.contrib import admin
 from django.urls import path, include
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    # Wagtail admin (primary control panel)
+    path("admin/", include("wagtail.admin.urls")),
+    path("documents/", include("wagtail.documents.urls")),
+    # Optional: public Wagtail pages (usually unused in API-first deploy)
+    path("pages/", include("wagtail.urls")),
+
+    # Legacy Django admin (staff fallback) — optional
+    path("django-admin/", admin.site.urls),
+
     path("users/", include("users.urls")),
     path("api/users/", include("users.api_urls")),
     path("auth/", include("auth_users.urls")),
@@ -16,16 +24,15 @@ urlpatterns = [
     path("api/tickets/", include("tickets.urls")),
     path("api/emails/", include("custom_emails.urls")),
     path("api/messenger/", include("messenger.urls")),
-    
 ]
 
-# ===DENUG TRUE===
+# ===DEBUG TRUE===
 from django.conf import settings
 
 if settings.DEBUG:
     from django.conf.urls.static import static
 
-    urlpatterns += static(settings.STATIC_URL, document_root= settings.STATIC_ROOT)
+    urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
     # Also serve media files in DEBUG mode for convenience.
     # NOTE: /media/messenger/<path>, /media/images/<path> and /media/tickets/<path>
     # are served by ProtectedMediaView (in core/urls.py) in BOTH debug and
