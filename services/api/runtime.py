@@ -56,7 +56,6 @@ from .common import (
     _get_service_for_user,
     _parse_deploy_config,
     _resolve_platform,
-    _get_docker_volume,
 )
 
 @api_view(["GET"])

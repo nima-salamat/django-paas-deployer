@@ -153,14 +153,23 @@ def _service_is_mutable(service) -> tuple:
 
 
 def _docker_volume_exists(volume) -> bool:
-    """True if the underlying Docker volume is present."""
+    """True if the underlying Docker volume is present.
+
+    Import the resolver lazily to avoid coupling common.py to volume_files.py
+    (volume_files.py itself imports common helpers).
+    """
     try:
+        from .volume_files import _get_docker_volume
         _get_docker_volume(volume)
         return True
     except DockerNotFound:
         return False
     except Exception as exc:
-        logger.warning("docker volume exists check failed for %s: %s", getattr(volume, "name", "?"), exc)
+        logger.warning(
+            "docker volume exists check failed for %s: %s",
+            getattr(volume, "name", "?"),
+            exc,
+        )
         return False
 
 
