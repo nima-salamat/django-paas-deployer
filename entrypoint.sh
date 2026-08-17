@@ -12,7 +12,7 @@ echo "Collecting static files..."
 python manage.py collectstatic --noinput
 
 echo "Migrating deployment log database..."
-python manage.py migrate --database=deployment_logs
+python manage.py setup_deployment_log_db
 
 echo "Starting application..."
 exec "$@"
