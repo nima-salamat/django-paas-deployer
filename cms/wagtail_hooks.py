@@ -28,8 +28,8 @@ from __future__ import annotations
 # the custom ``users.User`` model is intentionally NOT registered as a snippet.
 #
 # ``deploy.DeployLog`` is stored in a separate database
-# (DEPLOYMENT_LOG_DB_ALIAS) and is intentionally NOT registered as a snippet
-# (a snippet view set queries the default database).
+# (DEPLOYMENT_LOG_DB_ALIAS). It IS registered here as a read-only snippet whose
+# view set routes to that database alias, mirroring the Django admin behaviour.
 
 import plans.wagtail_hooks  # noqa: F401
 import services.wagtail_hooks  # noqa: F401
