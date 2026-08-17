@@ -39,3 +39,11 @@ if settings.DEBUG:
     # production, so this static() entry only matters for other media paths
     # (e.g. /media/deployments/... which has its own authed download endpoint).
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
+
+# Sanitized public error pages. Never expose Django/DRF debug tracebacks or
+# infrastructure details to API/web clients when DEBUG is disabled.
+handler400 = "core.production_errors.error_400"
+handler403 = "core.production_errors.error_403"
+handler404 = "core.production_errors.error_404"
+handler500 = "core.production_errors.error_500"

@@ -260,9 +260,20 @@ def get_app_cache_overview() -> dict:
 
 
 def invalidate_namespace(ns: str) -> None:
+    """Flush one logical cache namespace, including Messenger when requested."""
+    if ns == "messenger":
+        from messenger.message_cache import invalidate_all_cache
+        invalidate_all_cache(reset_stats=False)
+        return
     if ns == "all":
         for p in ("svc:*", "plan:*", "tkt:*", "usr:*"):
             cache_delete_pattern(p)
+        # Messenger owns its cache layout and therefore its invalidation logic.
+        try:
+            from messenger.message_cache import invalidate_all_cache
+            invalidate_all_cache(reset_stats=False)
+        except Exception:
+            logger.exception("invalidate_namespace: messenger cache flush failed")
         return
     mapping = {"svc": "svc:*", "plan": "plan:*", "tkt": "tkt:*", "usr": "usr:*"}
     pat = mapping.get(ns)

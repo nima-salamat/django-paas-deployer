@@ -228,6 +228,34 @@ def reset_cache_stats() -> None:
         pass
 
 
+def invalidate_all_cache(reset_stats: bool = False) -> int:
+    """Delete every Messenger-owned Redis key safely using SCAN.
+
+    Returns the approximate number of deleted keys. The operation is bounded by
+    Redis SCAN and never uses KEYS, so it is suitable for production Redis.
+    """
+    r = _redis()
+    if not r:
+        return 0
+    deleted = 0
+    try:
+        pipe = r.pipeline(transaction=False)
+        batch = 0
+        for key in r.scan_iter(match=f"{_PREFIX}:*", count=500):
+            pipe.delete(key)
+            batch += 1
+            if batch >= 500:
+                deleted += int(sum(pipe.execute()) or 0)
+                batch = 0
+        if batch:
+            deleted += int(sum(pipe.execute()) or 0)
+        if reset_stats:
+            reset_cache_stats()
+    except Exception:
+        logger.exception("message_cache.invalidate_all_cache failed")
+    return deleted
+
+
 # ---------------------------------------------------------------------------
 # Serialization helpers (base payload – no viewer-specific data)
 # ---------------------------------------------------------------------------

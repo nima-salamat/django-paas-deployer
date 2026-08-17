@@ -210,7 +210,13 @@ REST_FRAMEWORK = {
     ),
     
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 10
+    'PAGE_SIZE': 10,
+    # Production APIs return JSON only; BrowsableAPIRenderer is intentionally
+    # disabled so the framework UI is never exposed as a public API surface.
+    'DEFAULT_RENDERER_CLASSES': (
+        'core.api_renderers.ProductionJSONRenderer',
+    ),
+    'EXCEPTION_HANDLER': 'core.api_renderers.production_exception_handler',
 
 }
 

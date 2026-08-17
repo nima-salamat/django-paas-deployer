@@ -1,175 +1,93 @@
-{% extends "admin/base_site.html" %}
-{% load static %}
+{% extends "wagtailadmin/base.html" %}
+{% load i18n %}
 
-{% block title %}Messenger Cache{% endblock %}
-
-{% block breadcrumbs %}
-<div class="breadcrumbs">
-  <a href="{% url 'admin:index' %}">Home</a>
-  &rsaquo; <a href="{% url 'admin:app_list' app_label='messenger' %}">Messenger</a>
-  &rsaquo; Cache Dashboard
-</div>
-{% endblock %}
-
+{% block titletag %}Messenger Cache{% endblock %}
 {% block content %}
-<style>
-  .mc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 16px 0 24px; }
-  .mc-card { background: var(--body-bg, #fff); border: 1px solid var(--border, #ccc); border-radius: 8px; padding: 14px 16px; }
-  .mc-card h3 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; color: #666; font-weight: 600; }
-  .mc-card .v { font-size: 22px; font-weight: 700; }
-  .mc-ok { color: #0a7; } .mc-bad { color: #c33; }
-  .mc-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-  .mc-table th, .mc-table td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; font-size: 13px; }
-  .mc-table th { background: #f5f5f5; }
-  .mc-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin: 12px 0; }
-  .mc-row label { display: block; font-size: 12px; color: #555; }
-  .mc-row input, .mc-row select { padding: 6px 8px; min-width: 180px; }
-  .mc-actions form { display: inline; }
-  .mc-muted { color: #888; font-size: 12px; }
-  .mc-body { max-width: 1100px; }
-  pre.mc-json { background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 6px; overflow: auto; max-height: 420px; font-size: 12px; }
-</style>
-
-<div class="mc-body">
-  <h1>Messenger Cache Dashboard</h1>
-  <p class="mc-muted">
-    Redis hot-cache for messages (per conversation) and conversation lists (per user).
-    PostgreSQL remains source of truth.
-  </p>
-
-  <div class="mc-grid">
-    <div class="mc-card">
-      <h3>Redis</h3>
-      <div class="v {% if stats.redis_ok %}mc-ok{% else %}mc-bad{% endif %}">
-        {% if stats.redis_ok %}Connected{% else %}DOWN{% endif %}
-      </div>
+<header class="w-mb-6">
+  <div class="w-flex w-items-center w-justify-between w-gap-4 w-flex-wrap">
+    <div>
+      <h1 class="w-text-2xl w-font-bold">Messenger Cache</h1>
+      <p class="w-text-secondary">Production-safe Redis hot-cache controls for Messenger.</p>
     </div>
-    <div class="mc-card">
-      <h3>Msg HIT / MISS</h3>
-      <div class="v">{{ stats.msg_hit }} / {{ stats.msg_miss }}</div>
-      <div class="mc-muted">rate: {{ msg_hit_rate }}%</div>
-    </div>
-    <div class="mc-card">
-      <h3>List HIT / MISS</h3>
-      <div class="v">{{ stats.list_hit }} / {{ stats.list_miss }}</div>
-      <div class="mc-muted">rate: {{ list_hit_rate }}% · set ok/fail {{ stats.list_set_ok|default:0 }}/{{ stats.list_set_fail|default:0 }}</div>
-    </div>
-    <div class="mc-card">
-      <h3>Cached chats</h3>
-      <div class="v">{{ stats.cached_conversations }}</div>
-      <div class="mc-muted">window size {{ stats.message_cache_size }} · TTL {{ stats.message_cache_ttl }}s</div>
-    </div>
-    <div class="mc-card">
-      <h3>Redis memory</h3>
-      <div class="v" style="font-size:16px">{{ stats.redis_info.used_memory_human|default:"—" }}</div>
-    </div>
-  </div>
-
-  <div class="mc-actions">
-    <form method="post">{% csrf_token %}
-      <input type="hidden" name="action" value="reset_stats">
-      <button type="submit" class="button">Reset hit/miss counters</button>
+    <form method="post" onsubmit="return confirm('Clear all Messenger cache entries?');">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="flush_all">
+      <button type="submit" class="button button-secondary no">
+        Clear Messenger cache
+      </button>
     </form>
   </div>
+</header>
 
-  <hr>
+{% if status %}
+  <div class="messages"><ul><li class="success">
+    {% if status == 'flushed' %}Messenger cache cleared ({{ deleted }} keys).{% endif %}
+    {% if status == 'stats-reset' %}Cache counters reset.{% endif %}
+    {% if status == 'rebuilt' %}Conversation cache rebuilt.{% endif %}
+    {% if status == 'invalidated' %}Conversation cache invalidated.{% endif %}
+  </li></ul></div>
+{% endif %}
 
-  <h2>Inspect conversation message cache</h2>
-  <form method="get" class="mc-row">
+<div class="w-grid w-grid-cols-1 w-md:grid-cols-2 w-xl:grid-cols-4 w-gap-4 w-mb-8">
+  <div class="w-panel w-p-4"><div class="w-text-secondary">Redis</div><div class="w-text-xl w-font-bold">{% if stats.redis_ok %}Connected{% else %}Unavailable{% endif %}</div></div>
+  <div class="w-panel w-p-4"><div class="w-text-secondary">Message cache</div><div class="w-text-xl w-font-bold">{{ stats.msg_hit }} / {{ stats.msg_miss }}</div><div class="w-text-secondary">HIT / MISS · {{ msg_hit_rate }}%</div></div>
+  <div class="w-panel w-p-4"><div class="w-text-secondary">Conversation lists</div><div class="w-text-xl w-font-bold">{{ stats.list_hit }} / {{ stats.list_miss }}</div><div class="w-text-secondary">HIT / MISS · {{ list_hit_rate }}%</div></div>
+  <div class="w-panel w-p-4"><div class="w-text-secondary">Cached conversations</div><div class="w-text-xl w-font-bold">{{ stats.cached_conversations }}</div><div class="w-text-secondary">window {{ stats.message_cache_size }} · TTL {{ stats.message_cache_ttl }}s</div></div>
+</div>
+
+<section class="w-panel w-p-5 w-mb-8">
+  <h2 class="w-text-lg w-font-bold w-mb-3">Conversation cache</h2>
+  <form method="get" class="w-flex w-gap-3 w-items-end w-flex-wrap">
     <div>
-      <label>Conversation ID</label>
-      <input type="number" name="conv_id" value="{{ conv_id|default:'' }}" placeholder="e.g. 12" required>
+      <label for="conv_id">Conversation ID</label>
+      <input id="conv_id" type="number" name="conv_id" value="{{ conv_id|default:'' }}" min="1" required>
     </div>
-    <button type="submit" class="button default">Inspect</button>
+    <button type="submit" class="button button-primary">Inspect</button>
   </form>
 
   {% if inspect %}
-  <div class="mc-card">
-    <h3>Conversation {{ inspect.conversation_id }}</h3>
-    {% if inspect.meta %}
-      <p>
-        min_id=<strong>{{ inspect.meta.min_id }}</strong>
-        max_id=<strong>{{ inspect.meta.max_id }}</strong>
-        count=<strong>{{ inspect.meta.count }}</strong>
-      </p>
-      <p class="mc-muted">keys: {{ inspect.ids_key }} · {{ inspect.meta_key }}</p>
-      <p>{{ inspect.message_ids|length }} ids in ZSET
-        {% if inspect.message_ids %}
-          ({{ inspect.message_ids.0 }} … {{ inspect.message_ids|last }})
-        {% endif %}
-      </p>
-    {% else %}
-      <p class="mc-bad">No meta — this chat is <strong>not</strong> in the hot cache (MISS until someone loads the latest page).</p>
-    {% endif %}
+    <div class="w-mt-5">
+      <p><strong>Conversation {{ inspect.conversation_id }}</strong></p>
+      {% if inspect.meta %}
+        <p class="w-text-secondary">{{ inspect.message_ids|length }} cached message IDs; range {{ inspect.meta.min_id }}–{{ inspect.meta.max_id }}.</p>
+      {% else %}
+        <p class="help-block">This conversation is not currently cached.</p>
+      {% endif %}
+      <form method="post" class="w-flex w-gap-2 w-mt-3">
+        {% csrf_token %}
+        <input type="hidden" name="conv_id" value="{{ inspect.conversation_id }}">
+        <button class="button button-primary" name="action" value="rebuild">Rebuild cache</button>
+        <button class="button button-secondary" name="action" value="invalidate">Clear conversation cache</button>
+      </form>
+    </div>
+  {% endif %}
+</section>
 
-    {% if inspect.messages %}
-    <table class="mc-table">
-      <thead>
-        <tr><th>ID</th><th>Body</th><th>Sender</th><th>Edited</th><th>Created</th><th>Reactions</th></tr>
-      </thead>
-      <tbody>
-        {% for m in inspect.messages %}
-        <tr>
-          <td>{{ m.id }}</td>
-          <td>{{ m.body }}</td>
-          <td>{% if m.sender %}{{ m.sender.username }} ({{ m.sender.id }}){% else %}—{% endif %}</td>
-          <td>{{ m.is_edited }}</td>
-          <td>{{ m.created_at }}</td>
-          <td>{{ m.reactions_agg }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% endif %}
-
-    <form method="post" style="margin-top:12px">{% csrf_token %}
-      <input type="hidden" name="action" value="rebuild">
-      <input type="hidden" name="conv_id" value="{{ inspect.conversation_id }}">
-      <button type="submit" class="button">Rebuild cache from PostgreSQL</button>
-    </form>
-    <form method="post" style="margin-top:8px">{% csrf_token %}
-      <input type="hidden" name="action" value="invalidate">
-      <input type="hidden" name="conv_id" value="{{ inspect.conversation_id }}">
-      <button type="submit" class="button">Invalidate this chat cache</button>
+<section class="w-panel w-p-5">
+  <div class="w-flex w-items-center w-justify-between w-gap-3 w-flex-wrap">
+    <div>
+      <h2 class="w-text-lg w-font-bold">Cache keys</h2>
+      <p class="w-text-secondary">Use Redis SCAN; no KEYS operation is exposed.</p>
+    </div>
+    <form method="get" class="w-flex w-gap-2 w-items-end">
+      <input type="hidden" name="search" value="1">
+      <div><label for="pattern">Pattern</label><input id="pattern" type="text" name="pattern" value="{{ pattern|default:'msgcache:*' }}"></div>
+      <div><label for="limit">Limit</label><input id="limit" type="number" name="limit" value="{{ limit }}" min="1" max="500"></div>
+      <button type="submit" class="button">Search</button>
     </form>
   </div>
-  {% endif %}
-
-  <hr>
-
-  <h2>Search Redis keys</h2>
-  <form method="get" class="mc-row">
-    <div>
-      <label>Pattern (Redis SCAN MATCH)</label>
-      <input type="text" name="pattern" value="{{ pattern|default:'msgcache:*' }}" style="min-width:280px">
-    </div>
-    <div>
-      <label>Limit</label>
-      <input type="number" name="limit" value="{{ limit|default:50 }}" min="1" max="500" style="min-width:80px">
-    </div>
-    <button type="submit" class="button">Search</button>
-  </form>
-  <p class="mc-muted">Examples: <code>msgcache:*:meta</code> · <code>msgcache:12:*</code> · <code>msgcache:user:*:conv_list</code></p>
-
   {% if keys %}
-  <table class="mc-table">
-    <thead><tr><th>Key</th><th>Type</th><th>TTL (s)</th></tr></thead>
-    <tbody>
-      {% for k in keys %}
-      <tr>
-        <td><code>{{ k.key }}</code></td>
-        <td>{{ k.type }}</td>
-        <td>{% if k.ttl == -1 %}∞{% elif k.ttl == -2 %}gone{% else %}{{ k.ttl }}{% endif %}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% elif pattern %}
-  <p class="mc-muted">No keys matched.</p>
-  {% endif %}
+    <div class="nice-padding"><table class="listing"><thead><tr><th>Key</th><th>Type</th><th>TTL</th></tr></thead><tbody>
+    {% for k in keys %}<tr><td><code>{{ k.key }}</code></td><td>{{ k.type }}</td><td>{% if k.ttl == -1 %}∞{% elif k.ttl == -2 %}gone{% else %}{{ k.ttl }}s{% endif %}</td></tr>{% endfor %}
+    </tbody></table></div>
+  {% elif pattern and request.GET.search %}<p class="w-text-secondary w-mt-4">No keys matched.</p>{% endif %}
+</section>
 
-  {% if message %}
-  <p><strong>{{ message }}</strong></p>
-  {% endif %}
-</div>
+<section class="w-mt-6">
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="reset_stats">
+    <button type="submit" class="button button-secondary">Reset hit/miss counters</button>
+  </form>
+</section>
 {% endblock %}

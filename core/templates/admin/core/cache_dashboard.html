@@ -27,9 +27,8 @@
 <div class="ac-body">
   <h1>App Cache Dashboard</h1>
   <p class="ac-muted">
-    Redis keys for <code>svc:</code> services · <code>plan:</code> plans · <code>tkt:</code> tickets · <code>usr:</code> admin users ·
-    <code>msgcache:</code> messenger (see also <a href="/admin/messenger/cache/">Messenger Cache</a>).
-    Invalidation runs via <strong>post_save / post_delete signals</strong> (Django admin + API).
+    Application caches are isolated by subsystem. Messenger has its own cache controls and can be cleared independently.
+    Invalidation runs via model signals where applicable.
   </p>
 
   <div class="ac-grid">
@@ -43,7 +42,7 @@
     <div class="ac-card"><h3>plan:* keys</h3><div class="v">{{ overview.plan }}</div></div>
     <div class="ac-card"><h3>tkt:* keys</h3><div class="v">{{ overview.tkt }}</div></div>
     <div class="ac-card"><h3>usr:* keys</h3><div class="v">{{ overview.usr }}</div></div>
-    <div class="ac-card"><h3>msgcache:*</h3><div class="v">{{ overview.msgcache }}</div></div>
+    <div class="ac-card"><h3>Messenger cache</h3><div class="v">{{ overview.msgcache }}</div></div>
     <div class="ac-card"><h3>Memory</h3><div class="v" style="font-size:15px">{{ overview.memory.used_memory_human|default:"—" }}</div></div>
   </div>
 
@@ -67,6 +66,11 @@
       <input type="hidden" name="action" value="flush" />
       <input type="hidden" name="ns" value="usr" />
       <button type="submit" class="button">Flush users admin</button>
+    </form>
+    <form method="post" onsubmit="return confirm('Clear all Messenger cache entries?');">{% csrf_token %}
+      <input type="hidden" name="action" value="flush" />
+      <input type="hidden" name="ns" value="messenger" />
+      <button type="submit" class="button">Flush Messenger</button>
     </form>
     <form method="post">{% csrf_token %}
       <input type="hidden" name="action" value="flush" />

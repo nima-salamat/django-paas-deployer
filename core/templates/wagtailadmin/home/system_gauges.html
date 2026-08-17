@@ -3,8 +3,7 @@
   <div class="w-panel__header">
     <h2 class="w-panel__heading">{% trans "System resources" %}</h2>
     <p class="w-panel__subtitle" style="margin:0;opacity:.7;font-size:.85rem;">
-      {% trans "Live CPU &amp; RAM usage on this host" %}
-      <span id="sg-host" style="margin-left:.5rem;opacity:.6;"></span>
+      {% trans "Live resource usage" %}
     </p>
   </div>
   <div class="w-panel__content">
@@ -17,7 +16,7 @@
           </svg>
           <div class="sg-center">
             <div class="sg-pct" id="sg-cpu-pct">—</div>
-            <div class="sg-label">CPU</div>
+            <div class="sg-label">CPU Load</div>
           </div>
         </div>
         <div class="sg-meta" id="sg-cpu-meta">{% trans "Polling…" %}</div>
@@ -30,7 +29,7 @@
           </svg>
           <div class="sg-center">
             <div class="sg-pct" id="sg-ram-pct">—</div>
-            <div class="sg-label">RAM</div>
+            <div class="sg-label">RAM Usage</div>
           </div>
         </div>
         <div class="sg-meta" id="sg-ram-meta">{% trans "Polling…" %}</div>
@@ -120,7 +119,6 @@
   const ramPct = document.getElementById("sg-ram-pct");
   const cpuMeta = document.getElementById("sg-cpu-meta");
   const ramMeta = document.getElementById("sg-ram-meta");
-  const hostEl = document.getElementById("sg-host");
 
   function setArc(el, pct) {
     if (pct == null || isNaN(pct)) {
@@ -148,13 +146,13 @@
       setArc(ramArc, data.ram_percent);
       cpuPct.textContent = fmt(data.cpu_percent);
       ramPct.textContent = fmt(data.ram_percent);
-      cpuMeta.textContent = data.ok ? "live · " + (data.source || "") : "unavailable";
+      cpuMeta.textContent = data.ok ? "live" : "unavailable";
       if (data.ram_used_human && data.ram_total_human) {
         ramMeta.textContent = data.ram_used_human + " / " + data.ram_total_human;
       } else {
         ramMeta.textContent = data.ok ? "live" : "unavailable";
       }
-      if (hostEl && data.hostname) hostEl.textContent = "· " + data.hostname;
+
     } catch (e) {
       cpuMeta.textContent = "error";
       ramMeta.textContent = "error";

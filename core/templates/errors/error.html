@@ -1,0 +1,19 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ status_code }} · {{ title }}</title>
+  <style>
+    :root{color-scheme:light dark}body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f7f9;color:#16181d}.card{width:min(92vw,560px);padding:40px;border:1px solid #d8dbe1;border-radius:16px;background:#fff;box-shadow:0 10px 30px rgba(0,0,0,.06)}.code{font-size:56px;line-height:1;font-weight:800;margin:0 0 12px}.title{font-size:22px;font-weight:700;margin:0 0 10px}.message{margin:0;color:#5d6470}@media(prefers-color-scheme:dark){body{background:#111317;color:#f3f4f6}.card{background:#1b1e24;border-color:#2b3038}.message{color:#aeb5c0}}
+  </style>
+</head>
+<body>
+  <main class="card" role="main">
+    <p class="code">{{ status_code }}</p>
+    <h1 class="title">{{ title }}</h1>
+    <p class="message">{{ message }}</p>
+  </main>
+</body>
+</html>

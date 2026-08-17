@@ -77,7 +77,11 @@ def _fmt_bytes(n: int | float | None) -> str:
 
 
 def get_system_metrics() -> dict[str, Any]:
-    """Return a JSON-serialisable snapshot of CPU and RAM usage."""
+    """Return only the CPU/RAM data needed by the admin gauge.
+
+    Internal implementation details (hostname, OS/proc source, library name)
+    are intentionally omitted from the response.
+    """
     out: dict[str, Any] = {
         "ok": True,
         "cpu_percent": None,
@@ -88,20 +92,16 @@ def get_system_metrics() -> dict[str, Any]:
         "ram_used_human": "—",
         "ram_total_human": "—",
         "ram_available_human": "—",
-        "source": "unknown",
-        "hostname": os.uname().nodename if hasattr(os, "uname") else "",
     }
     try:
         import psutil  # type: ignore
 
-        # Non-blocking first call can return 0.0; short interval is fine for live gauge
         out["cpu_percent"] = round(float(psutil.cpu_percent(interval=0.15)), 1)
         vm = psutil.virtual_memory()
         out["ram_percent"] = round(float(vm.percent), 1)
         out["ram_used"] = int(vm.used)
         out["ram_total"] = int(vm.total)
         out["ram_available"] = int(vm.available)
-        out["source"] = "psutil"
     except Exception:
         cpu = _cpu_percent_proc()
         mem = _mem_from_proc()
@@ -111,7 +111,6 @@ def get_system_metrics() -> dict[str, Any]:
             out["ram_used"] = mem["used"]
             out["ram_total"] = mem["total"]
             out["ram_available"] = mem["available"]
-        out["source"] = "proc"
 
     out["ram_used_human"] = _fmt_bytes(out["ram_used"])
     out["ram_total_human"] = _fmt_bytes(out["ram_total"])
