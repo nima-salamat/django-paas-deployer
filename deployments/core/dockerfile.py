@@ -172,6 +172,71 @@ def _replace_cmd(dockerfile: str, new_cmd: str) -> str:
     return cleaned + f"\n\nCMD {json_array}\n"
 
 
+def _detect_node_package_manager_from_tar(tar_stream) -> str:
+    """Detect npm/pnpm/yarn/bun from lockfiles/package.json."""
+    try:
+        import json as _json
+        import tarfile as _tf
+        tar_stream.seek(0)
+        with _tf.open(fileobj=tar_stream, mode="r:*") as tar:
+            names = {m.name.replace("\\", "/").lstrip("./") for m in tar.getmembers()}
+            if any(n == "pnpm-lock.yaml" or n.endswith("/pnpm-lock.yaml") for n in names):
+                return "pnpm"
+            if any(n == "yarn.lock" or n.endswith("/yarn.lock") for n in names):
+                return "yarn"
+            if any(n in {"bun.lockb", "bun.lock"} or n.endswith("/bun.lockb") or n.endswith("/bun.lock") for n in names):
+                return "bun"
+            for m in tar.getmembers():
+                norm = m.name.replace("\\", "/").lstrip("./")
+                if norm not in {"package.json"} and not norm.endswith("/package.json"):
+                    continue
+                f = tar.extractfile(m)
+                if f is None:
+                    continue
+                try:
+                    pkg = _json.loads(f.read().decode("utf-8", "ignore"))
+                except Exception:
+                    continue
+                pm = str(pkg.get("packageManager") or "").split("@", 1)[0].lower()
+                if pm in {"npm", "pnpm", "yarn", "bun"}:
+                    return pm
+                break
+    except Exception:
+        pass
+    finally:
+        try:
+            tar_stream.seek(0)
+        except Exception:
+            pass
+    return "npm"
+
+
+def _prepare_node_package_manager(dockerfile: str, package_manager: str) -> str:
+    """Make non-npm package managers and their lockfiles available before install."""
+    pm = (package_manager or "npm").lower()
+    if pm not in {"pnpm", "yarn", "bun"}:
+        return dockerfile
+    setup = "RUN corepack enable" if pm in {"pnpm", "yarn"} else "RUN npm install -g bun"
+    if setup not in dockerfile:
+        dockerfile = re.sub(
+            r"(WORKDIR\s+/app\s*\n)",
+            lambda m: m.group(1) + setup + "\n",
+            dockerfile, count=1, flags=re.MULTILINE,
+        )
+    lock_copy = {
+        "pnpm": "COPY pnpm-lock.yaml ./",
+        "yarn": "COPY yarn.lock ./",
+        "bun": "COPY bun.lockb ./",
+    }[pm]
+    if lock_copy not in dockerfile:
+        dockerfile = re.sub(
+            r"(COPY\s+package\*\.json\s+\./\s*\n)",
+            lambda m: m.group(1) + lock_copy + "\n",
+            dockerfile, count=1, flags=re.MULTILINE,
+        )
+    return dockerfile
+
+
 def _swap_npm_install(dockerfile: str, install_cmd: str) -> str:
     """Replace generic npm install RUN with detector-provided command (pnpm/yarn/bun)."""
     patterns = [
@@ -337,6 +402,15 @@ def _render_django(dockerfile_template, tar_stream, config, logger):
             details={"module": module, "error": str(exc)},
         ) from exc
 
+    install_cmd = None
+    try:
+        from .platform_bridge import get_project_cfg
+        _pc = get_project_cfg(config) if config else None
+        install_cmd = getattr(_pc, "install_command", None) if _pc else None
+    except Exception:
+        pass
+    rendered = _prepare_python_dependency_install(rendered, tar_stream, install_cmd)
+
     workers = _worker_count_from_config(config)
 
     if entry_point_override and not use_celery:
@@ -388,6 +462,92 @@ def _render_django(dockerfile_template, tar_stream, config, logger):
     rendered = _replace_cmd(rendered, web_cmd)
     return rendered
 
+def _archive_names(tar_stream) -> set[str]:
+    try:
+        import tarfile as _tf
+        tar_stream.seek(0)
+        with _tf.open(fileobj=tar_stream, mode="r:*") as tar:
+            return {m.name.replace("\\", "/").lstrip("./") for m in tar.getmembers()}
+    except Exception:
+        return set()
+    finally:
+        try:
+            tar_stream.seek(0)
+        except Exception:
+            pass
+
+
+def _python_dependency_manifest(tar_stream) -> str:
+    names = _archive_names(tar_stream)
+    if any(n == "requirements.txt" or n.endswith("/requirements.txt") for n in names):
+        return "requirements"
+    if any(n == "Pipfile" or n.endswith("/Pipfile") for n in names):
+        return "pipenv"
+    if any(n == "pyproject.toml" or n.endswith("/pyproject.toml") for n in names):
+        return "pyproject"
+    return "requirements"
+
+
+def _prepare_python_dependency_install(dockerfile: str, tar_stream, install_cmd: str | None) -> str:
+    manifest = _python_dependency_manifest(tar_stream)
+    if manifest == "requirements":
+        return dockerfile
+
+    dockerfile = re.sub(r"^COPY\s+requirements\.txt\s+/app/?\s*$", "", dockerfile, flags=re.MULTILINE)
+    # Drop the stock pip -r requirements layer only; keep later runtime-package injection intact.
+    dockerfile = re.sub(
+        r"^RUN\s+pip install[^\n]*requirements\.txt[^\n]*(?:\n(?:\s{2,}.*))*",
+        "", dockerfile, count=1, flags=re.MULTILINE,
+    )
+    dockerfile = re.sub(r"^\s*&&\s*pip install .*?(?:gunicorn|uvicorn).*?$", "", dockerfile, flags=re.MULTILINE)
+
+    if manifest == "pipenv":
+        lock = "COPY Pipfile.lock /app/\n" if any(n == "Pipfile.lock" or n.endswith("/Pipfile.lock") for n in _archive_names(tar_stream)) else ""
+        block = (
+            "\n# --- Pipenv dependency install ---\n"
+            "WORKDIR /app\n"
+            "COPY Pipfile /app/\n" + lock +
+            "RUN pip install --no-cache-dir pipenv \
+"
+            "    && pipenv install --deploy --system\n"
+        )
+    else:
+        lock = "COPY poetry.lock /app/\n" if any(n == "poetry.lock" or n.endswith("/poetry.lock") for n in _archive_names(tar_stream)) else ""
+        if "poetry" in (install_cmd or "").lower() or lock:
+            block = (
+                "\n# --- Poetry dependency install ---\n"
+                "WORKDIR /app\n"
+                "COPY pyproject.toml /app/\n" + lock +
+                "RUN pip install --no-cache-dir poetry \
+"
+                "    && poetry config virtualenvs.create false \
+"
+                "    && poetry install --only main --no-interaction --no-ansi\n"
+            )
+        else:
+            block = (
+                "\n# --- PEP 517 dependency install ---\n"
+                "WORKDIR /app\n"
+                "COPY pyproject.toml /app/\n"
+            )
+            non_poetry_install = True
+
+    m=re.search(r"^COPY\s+\.\s+/app/?\s*$", dockerfile, flags=re.MULTILINE)
+    if m:
+        dockerfile=dockerfile[:m.start()]+block.rstrip()+"\n"+dockerfile[m.start():]
+        if 'non_poetry_install' in locals():
+            insert_at = m.start() + len(block.rstrip()) + 1 + len("COPY . /app")
+            # Avoid relying on the exact source COPY spelling by inserting after the first matched COPY line.
+            source_end = dockerfile.find("\n", m.start() + len(block.rstrip()) + 1)
+            if source_end != -1:
+                dockerfile = dockerfile[:source_end+1] + "RUN pip install --no-cache-dir .\n" + dockerfile[source_end+1:]
+    else:
+        dockerfile=dockerfile.rstrip()+"\n"+block
+        if 'non_poetry_install' in locals():
+            dockerfile += "RUN pip install --no-cache-dir .\n"
+    return dockerfile
+
+
 def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, logger):
     server_type_override = entry_point_override = None
     use_celery = use_beat = False
@@ -434,6 +594,15 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
     rendered = rendered.replace("{build_dir}", "dist")
     port = getattr(config, "port", None) if config is not None else None
     rendered = _ensure_port_placeholder(rendered, port)
+
+    install_cmd = None
+    try:
+        from .platform_bridge import get_project_cfg
+        _pc = get_project_cfg(config) if config else None
+        install_cmd = getattr(_pc, "install_command", None) if _pc else None
+    except Exception:
+        pass
+    rendered = _prepare_python_dependency_install(rendered, tar_stream, install_cmd)
 
     workers = _worker_count_from_config(config)
 
@@ -848,6 +1017,8 @@ def _render_node_family(platform, dockerfile_template, tar_stream, config, logge
 
     rendered = dockerfile_template.replace("{MIRROR_DOCKER}", MIRROR_DOCKER)
 
+    package_manager = (getattr(project_cfg, "package_manager", None) if project_cfg else None) or _detect_node_package_manager_from_tar(tar_stream)
+    rendered = _prepare_node_package_manager(rendered, package_manager)
     if project_cfg and project_cfg.install_command:
         rendered = _swap_npm_install(rendered, project_cfg.install_command)
 
@@ -910,18 +1081,28 @@ def _render_node_family(platform, dockerfile_template, tar_stream, config, logge
         return _replace_cmd(rendered, entry_point_override)
 
     if project_cfg and project_cfg.start_command:
+        detected_start = project_cfg.start_command
+        # The final runtime Node image always contains npm. When dependencies
+        # were installed with pnpm/yarn/bun, invoking that package manager in
+        # the final stage can fail because it is only needed in the builder.
+        # npm run <script> uses the same node_modules and avoids that runtime
+        # dependency.
+        if isinstance(detected_start, str):
+            m = re.match(r"^(?:pnpm|yarn|bun)(?:\s+run)?\s+(.+)$", detected_start.strip())
+            if m and not detected_start.strip().startswith(("npm ", "node ")):
+                detected_start = f"npm run {m.group(1).strip()}"
         if logger:
             logger.info(
                 "dockerfile_generation",
                 f"Using detected start command: {project_cfg.start_command}",
                 progress=15,
                 details={
-                    "start_command": project_cfg.start_command,
+                    "start_command": detected_start,
                     "build_dir": build_dir,
                     "framework": getattr(project_cfg, "framework", None),
                 },
             )
-        return _replace_cmd(rendered, project_cfg.start_command)
+        return _replace_cmd(rendered, detected_start)
 
     if logger:
         logger.info(
@@ -1154,6 +1335,83 @@ def _apply_php_document_root(dockerfile: str, document_root_rel: str) -> str:
 
 
 
+_PHP_EXT_PACKAGE_MAP = {
+    "intl": ("libicu-dev", "intl"),
+    "zip": ("libzip-dev", "zip"),
+    "gd": ("libfreetype6-dev libjpeg62-turbo-dev libpng-dev", "gd"),
+    "pgsql": ("libpq-dev", "pdo_pgsql"),
+    "pdo_pgsql": ("libpq-dev", "pdo_pgsql"),
+    "soap": ("libxml2-dev", "soap"),
+    "bcmath": ("", "bcmath"),
+    "mbstring": ("", "mbstring"),
+    "opcache": ("", "opcache"),
+    "mysqli": ("", "mysqli"),
+    "pdo_mysql": ("", "pdo_mysql"),
+}
+
+
+def _composer_info(tar_stream) -> dict:
+    info = {"php_constraint": None, "extensions": []}
+    try:
+        import json as _json
+        import tarfile as _tf
+        tar_stream.seek(0)
+        with _tf.open(fileobj=tar_stream, mode="r:*") as tar:
+            candidates = [m for m in tar.getmembers() if m.isfile() and m.name.replace("\\", "/").lstrip("./").endswith("composer.json")]
+            candidate = min(candidates, key=lambda m: m.name.count("/"), default=None)
+            if candidate is not None:
+                f = tar.extractfile(candidate)
+                if f is not None:
+                    data = _json.loads(f.read().decode("utf-8", "ignore"))
+                    req = dict(data.get("require") or {})
+                    info["php_constraint"] = str(req.get("php")) if req.get("php") else None
+                    info["extensions"] = sorted({str(k)[4:].lower() for k in req if str(k).lower().startswith("ext-")})
+    except Exception:
+        pass
+    finally:
+        try:
+            tar_stream.seek(0)
+        except Exception:
+            pass
+    return info
+
+
+def _php_min_version(constraint: str | None) -> str | None:
+    if not constraint:
+        return None
+    versions = re.findall(r"\b(8\.[0-9]+)\b", str(constraint))
+    if not versions:
+        return None
+    return max(versions, key=lambda v: tuple(map(int, v.split("."))))
+
+
+def _inject_php_extensions(dockerfile: str, extensions: list[str]) -> str:
+    apt_packages = set()
+    php_extensions = set()
+    for ext in extensions:
+        meta = _PHP_EXT_PACKAGE_MAP.get(ext)
+        if not meta:
+            continue
+        pkg, php_ext = meta
+        if pkg:
+            apt_packages.update(pkg.split())
+        php_extensions.add(php_ext)
+    if not php_extensions and not apt_packages:
+        return dockerfile
+    blocks = ["\n# --- Composer-required PHP extensions ---"]
+    if apt_packages:
+        blocks.append(
+            "RUN apt-get update && apt-get install -y --no-install-recommends "
+            + " ".join(sorted(apt_packages))
+            + " && rm -rf /var/lib/apt/lists/*"
+        )
+    existing = dockerfile.lower()
+    install = [e for e in sorted(php_extensions) if not re.search(r"docker-php-ext-install[^\n]*\b"+re.escape(e)+r"\b", existing, re.I)]
+    if install:
+        blocks.append("RUN docker-php-ext-install " + " ".join(install))
+    return dockerfile.rstrip() + "\n" + "\n".join(blocks) + "\n"
+
+
 def _detect_php_project(tar_stream) -> dict:
     """
     Inspect the deployment archive for PHP framework / schema signals.
@@ -1167,6 +1425,7 @@ def _detect_php_project(tar_stream) -> dict:
         "has_artisan": False,
         "schema_files": [],
         "has_vendor": False,
+        "composer": {"php_constraint": None, "extensions": []},
     }
     if tar_stream is None:
         return info
@@ -1254,6 +1513,8 @@ def _detect_php_project(tar_stream) -> dict:
                     info["schema_files"].append(n)
 
         tar_stream.seek(0)
+        info["composer"] = _composer_info(tar_stream)
+        tar_stream.seek(0)
     except Exception:
         try:
             tar_stream.seek(0)
@@ -1324,9 +1585,13 @@ def _php_entrypoint_script(
         '  if [ ! -f "$APP_ROOT/artisan" ]; then return 0; fi',
         '  echo "[entrypoint] Running Laravel migrations..."',
         '  php "$APP_ROOT/artisan" migrate --force || {',
-        '    echo "[entrypoint] WARNING: artisan migrate failed; app will still start."',
-        "    return 0",
-        "  }",
+        '    if [ -n "$DB_HOST" ] || [ -n "$DB_NAME" ]; then',
+        '      echo "[entrypoint] ERROR: artisan migrate failed while database settings are configured." >&2',
+        '      return 1',
+        '    fi',
+        '    echo "[entrypoint] Database settings are absent; skipping fatal migration check."',
+        '    return 0',
+        '  }',
         '  echo "[entrypoint] Laravel migrations finished."',
         "}",
         "",
@@ -1398,21 +1663,37 @@ def _inject_php_runtime(
     is_laravel = bool(info.get("is_laravel") or info.get("has_artisan"))
     has_composer = bool(info.get("has_composer"))
     schema_files = list(info.get("schema_files") or [])
+    composer_meta = info.get("composer") or {}
+    composer_exts = list(composer_meta.get("extensions") or [])
+    if composer_exts:
+        dockerfile = _inject_php_extensions(dockerfile, composer_exts)
     writable_dirs = list(info.get("writable_dirs") or [])
     if is_laravel:
         for d in ("storage", "bootstrap/cache"):
             if d not in writable_dirs:
                 writable_dirs.append(d)
 
+    # Archives often contain a single top-level project directory. The Apache
+    # document root may therefore be /var/www/html/<project>/public while
+    # composer/artisan must execute from /var/www/html/<project>.
+    app_root = "/var/www/html"
+    rel = (doc_root_rel or "").strip().strip("/")
+    if rel:
+        if rel == "public" or rel.endswith("/public"):
+            parent = rel[:-7].rstrip("/") if rel.endswith("/public") else ""
+            app_root = f"/var/www/html/{parent}" if parent else "/var/www/html"
+        else:
+            app_root = f"/var/www/html/{rel}"
+
     if has_composer and not info.get("has_vendor"):
         composer_block = (
             "\n# --- Composer dependencies (injected by deployer) ---\n"
-            "COPY --from=composer:2 /usr/bin/composer /usr/bin/composer\n"
-            "RUN cd /var/www/html "
-            "&& if [ -f composer.json ]; then "
-            "composer install --no-dev --optimize-autoloader --no-interaction --prefer-dist || "
-            "composer install --no-interaction --prefer-dist; "
-            "fi\n"
+            f"COPY --from={MIRROR_DOCKER}/composer:2 /usr/bin/composer /usr/bin/composer\n"
+            f"RUN cd {app_root} \
+"
+            "    && composer validate --no-check-publish --no-interaction \
+"
+            "    && composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader\n"
         )
         if re.search(r"^COPY\s+\.\s+/var/www/html/?\s*$", dockerfile, re.MULTILINE):
             dockerfile = re.sub(
@@ -1432,7 +1713,7 @@ def _inject_php_runtime(
             if d and ".." not in str(d) and not str(d).startswith("/")
         ]
         if safe_dirs:
-            dirs_str = " ".join(f"/var/www/html/{d}" for d in safe_dirs)
+            dirs_str = " ".join(f"{app_root}/{d}" for d in safe_dirs)
             chmod_block = (
                 "\n# --- Writable dirs (Laravel storage etc.) ---\n"
                 f"RUN mkdir -p {dirs_str} "
@@ -1552,6 +1833,14 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
     # Prefer official platform plugin signals (LaravelPlatform.defaults migrate=True)
     # when enrich_config_from_project has attached ProjectConfig.
     php_info = _detect_php_project(tar_stream)
+    composer_meta = php_info.get("composer") or {}
+    min_php = _php_min_version(composer_meta.get("php_constraint"))
+    if min_php:
+        rendered = re.sub(
+            r"(php:)[^\s/]+(-apache)",
+            lambda m: f"{m.group(1)}{min_php}{m.group(2)}",
+            rendered, count=1, flags=re.IGNORECASE,
+        )
     if project_cfg is not None:
         fw = (getattr(project_cfg, "framework", None) or "").lower()
         platform_name = (getattr(project_cfg, "platform", None) or "").lower()

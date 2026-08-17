@@ -45,6 +45,12 @@ class PythonPlatform(BasePlatform):
         result: dict[str, Any] = {}
         result["runtime_version"] = self._python_version(file_index)
         result["install_command"] = self._install_cmd(file_index)
+        if self._find("poetry.lock", file_index) or self._has_poetry_project(file_index):
+            result["package_manager"] = "poetry"
+        elif self._find("Pipfile", file_index):
+            result["package_manager"] = "pipenv"
+        else:
+            result["package_manager"] = "pip"
 
         # Detect popular frameworks from requirements
         deps = self._collect_deps(file_index)
@@ -102,14 +108,16 @@ class PythonPlatform(BasePlatform):
                 return m.group(1)
         return "3.11"
 
+    def _has_poetry_project(self, file_index: dict[str, str]) -> bool:
+        paths = self._find("pyproject.toml", file_index)
+        if not paths:
+            return False
+        text = self._read_text(file_index[paths[0]]).lower()
+        return "[tool.poetry]" in text or "poetry-core" in text
+
     def _install_cmd(self, file_index: dict[str, str]) -> str:
-        if self._find("poetry.lock", file_index) or (
-            self._find("pyproject.toml", file_index)
-            and "poetry" in self._read_text(
-                file_index[self._find("pyproject.toml", file_index)[0]]
-            ).lower()
-        ):
-            return "poetry install --no-dev --no-interaction"
-        if self._find("Pipfile", file_index):
-            return "pipenv install --deploy"
+        if self._find("poetry.lock", file_index) or self._has_poetry_project(file_index):
+            return "poetry install --only main --no-interaction"
+        if self._find("Pipfile.lock", file_index) or self._find("Pipfile", file_index):
+            return "pipenv install --deploy --system"
         return "pip install --no-cache-dir -r requirements.txt"

@@ -208,6 +208,10 @@ PLATFORMS_REQUIRING_REQUIREMENTS_TXT = frozenset({
     "django", "python", "flask", "fastapi",
 })
 
+PYTHON_DEPENDENCY_MARKERS = frozenset({
+    "requirements.txt", "pyproject.toml", "Pipfile",
+})
+
 PLATFORMS_REQUIRING_PACKAGE_JSON = frozenset({
     "nodejs", "nextjs", "react", "vuejs", "vue", "angular",
     "vite", "express",
@@ -215,21 +219,28 @@ PLATFORMS_REQUIRING_PACKAGE_JSON = frozenset({
 
 
 def check_requirements_txt(tar_stream, *, platform: str) -> None:
+    """Validate that a Python deployment contains a supported dependency manifest.
+
+    Older code required requirements.txt for every Python-family project, which
+    rejected valid Poetry and Pipenv applications before Docker build started.
+    """
     if platform not in PLATFORMS_REQUIRING_REQUIREMENTS_TXT:
         return
     tar_stream.seek(0)
     try:
         with tarfile.open(fileobj=tar_stream, mode="r:*") as tar:
-            names = tar.getnames()
+            names = [n.replace("\\", "/") for n in tar.getnames()]
     finally:
         tar_stream.seek(0)
-    found = [n for n in names if n.endswith("requirements.txt")]
+    found = [
+        n for n in names
+        if any(n == marker or n.endswith("/" + marker) for marker in PYTHON_DEPENDENCY_MARKERS)
+    ]
     if not found:
         raise DeploymentValidationError(
-            "requirements.txt not found in the deployment archive. "
-            "A requirements.txt file is required for Python-based platforms.",
+            "No supported Python dependency manifest was found. Add requirements.txt, pyproject.toml, or Pipfile.",
             stage="requirements_check",
-            details={"platform": platform},
+            details={"platform": platform, "accepted": sorted(PYTHON_DEPENDENCY_MARKERS)},
         )
 
 

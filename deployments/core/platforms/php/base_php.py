@@ -42,6 +42,8 @@ class PHPPlatform(BasePlatform):
             try:
                 data = json.loads(self._read_text(file_index[composer_paths[0]]))
                 require = {**(data.get("require") or {}), **(data.get("require-dev") or {})}
+                if require.get("php"):
+                    result["runtime_version"] = str(require["php"])
                 if "laravel/framework" in require:
                     result["framework"] = "laravel"
                 elif "symfony/framework-bundle" in require:
