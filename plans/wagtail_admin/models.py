@@ -5,7 +5,7 @@ from django.utils.translation import gettext_lazy as _
 
 from cms.wagtail_admin.utils import panels_for
 from plans.models import Plan
-from wagtail.snippets.views.snippets import SnippetViewSet
+from wagtail.snippets.views.snippets import SnippetViewSet, SnippetViewSetGroup
 
 
 class PlanViewSet(SnippetViewSet):
@@ -40,3 +40,10 @@ class PlanViewSet(SnippetViewSet):
         ],
         read_only=["id", "created_at", "updated_at"],
     )
+
+
+class PlansGroup(SnippetViewSetGroup):
+    items = (PlanViewSet,)
+    menu_label = _("Plans")
+    menu_icon = "doc-full-inverse"
+    menu_order = 100

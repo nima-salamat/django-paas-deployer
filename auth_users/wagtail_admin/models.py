@@ -6,7 +6,7 @@ from django.utils.translation import gettext_lazy as _
 from auth_users.models import AuthCode, InviteLink, InviteUsage, LoginSettings
 from cms.wagtail_admin.utils import panels_for
 from wagtail.admin.panels import FieldPanel, MultiFieldPanel
-from wagtail.snippets.views.snippets import SnippetViewSet
+from wagtail.snippets.views.snippets import SnippetViewSet, SnippetViewSetGroup
 
 
 class LoginSettingsViewSet(SnippetViewSet):
@@ -139,3 +139,15 @@ class AuthCodeViewSet(SnippetViewSet):
         editable=["user", "contact", "purpose"],
         read_only=["code", "attempts", "created_at", "updated_at"],
     )
+
+
+class AuthUsersGroup(SnippetViewSetGroup):
+    items = (
+        LoginSettingsViewSet,
+        InviteLinkViewSet,
+        InviteUsageViewSet,
+        AuthCodeViewSet,
+    )
+    menu_label = _("Auth")
+    menu_icon = "lock"
+    menu_order = 120

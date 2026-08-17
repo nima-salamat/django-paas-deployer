@@ -23,11 +23,20 @@ from __future__ import annotations
 #   tickets       -> tickets/wagtail_hooks.py
 #
 # Where each model appears in the Wagtail admin:
-#   * Models registered as individual snippets appear under the "Snippets"
-#     menu (plans, services/deploy helpers that are listed individually, core,
-#     auth_users, custom_emails, users companion models, deploy + deploy logs).
-#   * ``messenger``, ``tickets`` and ``services`` models are grouped and appear
-#     as their own top-level sidebar items with a submenu.
+#   * Every model is registered as a snippet inside an app-level
+#     ``SnippetViewSetGroup``, so each app appears as its own top-level sidebar
+#     item with a submenu of its models:
+#       - Plans      -> Plans
+#       - Services   -> Services, Volumes, Private networks
+#       - Deploy     -> Deployments, Deploy logs
+#       - System     -> System settings
+#       - Auth       -> Login settings, Invite links, Invite usage, Auth codes
+#       - Emails     -> Email templates, Email log
+#       - Users      -> Profiles, Receipts, User rules
+#       - Messenger  -> (conversations, messages, call sessions, ...)
+#       - Tickets    -> (tickets, departments, messages, ...)
+#   * Because every model has its own menu item, the generic "Snippets" index
+#     menu is empty and hidden (Wagtail does this automatically).
 #   * ``users.User`` is the custom AUTH_USER_MODEL and is administered by
 #     Wagtail's built-in Users interface (Settings -> Users), configured via
 #     ``cms.forms.CustomUserEditForm`` / ``CustomUserCreationForm``.

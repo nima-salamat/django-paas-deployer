@@ -5,7 +5,7 @@ from django.utils.translation import gettext_lazy as _
 
 from cms.wagtail_admin.utils import panels_for
 from core.models import SystemSetting
-from wagtail.snippets.views.snippets import SnippetViewSet
+from wagtail.snippets.views.snippets import SnippetViewSet, SnippetViewSetGroup
 
 
 class SystemSettingViewSet(SnippetViewSet):
@@ -38,3 +38,10 @@ class SystemSettingViewSet(SnippetViewSet):
         ],
         read_only=["key", "created_at", "updated_at"],
     )
+
+
+class CoreGroup(SnippetViewSetGroup):
+    items = (SystemSettingViewSet,)
+    menu_label = _("System")
+    menu_icon = "cog"
+    menu_order = 110

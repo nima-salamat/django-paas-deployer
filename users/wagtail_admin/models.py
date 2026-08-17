@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from cms.wagtail_admin.utils import panels_for
 from users.models import Profile, Receipt, Rule
-from wagtail.snippets.views.snippets import SnippetViewSet
+from wagtail.snippets.views.snippets import SnippetViewSet, SnippetViewSetGroup
 
 
 class ReceiptViewSet(SnippetViewSet):
@@ -50,3 +50,14 @@ class RuleViewSet(SnippetViewSet):
         editable=["user"],
         read_only=["rules", "created_at", "updated_at"],
     )
+
+
+class UsersGroup(SnippetViewSetGroup):
+    items = (
+        ProfileViewSet,
+        ReceiptViewSet,
+        RuleViewSet,
+    )
+    menu_label = "Users"
+    menu_icon = "user"
+    menu_order = 140

@@ -7,7 +7,7 @@ from django.utils.translation import gettext_lazy as _
 from cms.wagtail_admin.utils import panels_for, read_only_panels
 from deploy.models import Deploy, DeployLog
 from wagtail.permission_policies.base import ModelPermissionPolicy
-from wagtail.snippets.views.snippets import SnippetViewSet
+from wagtail.snippets.views.snippets import SnippetViewSet, SnippetViewSetGroup
 
 
 class DeployViewSet(SnippetViewSet):
@@ -110,3 +110,13 @@ class DeployLogViewSet(SnippetViewSet):
     def get_queryset(self, request):
         alias = getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", "default")
         return super().get_queryset(request).using(alias)
+
+
+class DeployGroup(SnippetViewSetGroup):
+    items = (
+        DeployViewSet,
+        DeployLogViewSet,
+    )
+    menu_label = _("Deploy")
+    menu_icon = "upload"
+    menu_order = 104

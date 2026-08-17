@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from cms.wagtail_admin.utils import panels_for
 from custom_emails.models import EmailLog, EmailTemplate
-from wagtail.snippets.views.snippets import SnippetViewSet
+from wagtail.snippets.views.snippets import SnippetViewSet, SnippetViewSetGroup
 
 
 class EmailTemplateViewSet(SnippetViewSet):
@@ -48,3 +48,13 @@ class EmailLogViewSet(SnippetViewSet):
             "celery_task_id",
         ],
     )
+
+
+class EmailsGroup(SnippetViewSetGroup):
+    items = (
+        EmailTemplateViewSet,
+        EmailLogViewSet,
+    )
+    menu_label = "Emails"
+    menu_icon = "mail"
+    menu_order = 130
