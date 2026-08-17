@@ -108,8 +108,11 @@ class DeployLogViewSet(SnippetViewSet):
     )
 
     def get_queryset(self, request):
+        # DeployLog lives in a separate database (DEPLOYMENT_LOG_DB_ALIAS).
+        # Return the model queryset routed to that alias so the list view
+        # reads the correct database.
         alias = getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", "default")
-        return super().get_queryset(request).using(alias)
+        return DeployLog.objects.using(alias).all()
 
 
 class DeployGroup(SnippetViewSetGroup):
