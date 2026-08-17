@@ -238,3 +238,19 @@ class TestSanitizeRouteName(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDeploymentHardeningRegression(unittest.TestCase):
+    def test_container_network_fallback_is_fail_closed(self):
+        from pathlib import Path
+        source = Path(__file__).resolve().parents[1] / "core" / "manager" / "container_manager.py"
+        text = source.read_text()
+        self.assertIn("Refusing to fall back to Docker's default", text)
+        self.assertIn("raise ContainerError", text)
+
+    def test_security_fallback_does_not_strip_no_new_privileges(self):
+        from pathlib import Path
+        source = Path(__file__).resolve().parents[1] / "core" / "manager" / "container_manager.py"
+        text = source.read_text()
+        self.assertNotIn('("without security_opt"', text)
+        self.assertNotIn('("bare (binds+ports+read_only only)"', text)

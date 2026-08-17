@@ -53,6 +53,7 @@ from docker.errors import APIError, NotFound
 from core.global_settings.config import MIRROR_DOCKER
 from deployments.core.exceptions import DeploymentError
 from deployments.core.manager.client_manager import Client
+from deployments.common.security import validate_bind_source, validate_docker_name
 
 
 logger = logging.getLogger(__name__)
@@ -1571,10 +1572,8 @@ class DBDeployer:
                 name = ""
 
             if name:
-
-                networks.append(
-                    str(name)
-                )
+                safe_name = validate_docker_name(str(name), field="network_name")
+                networks.append(safe_name)
 
         for network_name in networks:
 
@@ -1588,9 +1587,14 @@ class DBDeployer:
 
                 try:
 
+                    validate_docker_name(network_name, field="network_name")
                     client.networks.create(
                         network_name,
                         driver="bridge",
+                        internal=True,
+                        attachable=True,
+                        check_duplicate=True,
+                        labels={"managed-by": "django-paas-deployer"},
                     )
 
                 except (
@@ -1651,6 +1655,10 @@ class DBDeployer:
 
             source = str(source)
             target = str(target)
+
+            # Host bind mounts use the same allow-list as application deployments.
+            if source.startswith("/"):
+                source = validate_bind_source(source)
 
             volume_binds[source] = {
                 "bind": target,

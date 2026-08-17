@@ -8,7 +8,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 import dotenv
 dotenv.load_dotenv()
 
-import os 
+import os
+import re
 
 def env_bool(name, default=False): return os.environ.get(name, str(default)).lower() in ( "1", "true", "yes", "on", "True")
 
@@ -27,7 +28,35 @@ DEPLOYMENT_DOMAIN = os.environ.get("DEPLOYMENT_DOMAIN", "local")
 API_DOMAIN_NAME = os.environ.get("API_DOMAIN_NAME", "")
 
 
-ALLOWED_HOSTS = ["*", "localhost", "127.0.0.1", API_DOMAIN_NAME]
+def _admin_path(value: str, default: str) -> str:
+    """Normalize and validate an admin URL path segment from the environment."""
+    value = (value or default).strip().strip("/")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{2,127}", value):
+        raise ValueError(
+            "Admin URL path must be a single URL-safe segment (3-128 chars; "
+            "letters, numbers, dot, underscore, hyphen)."
+        )
+    return value
+
+
+# Keep the two administrative surfaces behind independently configurable,
+# non-obvious paths. Set these in .env; do not hard-code the public paths.
+WAGTAIL_ADMIN_PATH = _admin_path(os.environ.get("WAGTAIL_ADMIN_PATH"), "control-7x9k2m")
+DJANGO_ADMIN_PATH = _admin_path(os.environ.get("DJANGO_ADMIN_PATH"), "django-4p8n6v")
+
+
+# Never use a wildcard host allow-list in production. Keep only explicitly
+# configured public domains plus local development hosts.
+ALLOWED_HOSTS = [
+    host for host in {
+        API_DOMAIN_NAME,
+        DOMAIN_NAME,
+        "localhost",
+        "127.0.0.1",
+    } if host
+]
+if DEBUG and not ALLOWED_HOSTS:
+    ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 
 CSRF_TRUSTED_ORIGINS = [
     f"https://{API_DOMAIN_NAME}",

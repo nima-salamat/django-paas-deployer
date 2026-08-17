@@ -177,3 +177,14 @@ Frontend dashboard (React + Vite + MUI):
 ## License
 
 No license file is published in the repository yet. Add one if you intend to open the project for reuse.
+
+## Hidden admin URL paths
+
+The Wagtail and legacy Django admin surfaces are mounted behind configurable, non-obvious URL path segments. Set these in `.env`:
+
+```env
+WAGTAIL_ADMIN_PATH=your-random-wagtail-path
+DJANGO_ADMIN_PATH=your-random-django-path
+```
+
+Only URL-safe single path segments are accepted (letters, numbers, `.`, `_`, `-`). After changing them, restart the web application so Django reloads `settings.py`.

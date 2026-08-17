@@ -12,6 +12,11 @@
   .ac-card{border:1px solid #ccc;border-radius:8px;padding:12px 14px;background:#fff}
   .ac-card h3{margin:0 0 4px;font-size:11px;text-transform:uppercase;color:#666}
   .ac-card .v{font-size:20px;font-weight:700}
+  .ac-card--messenger{border-color:#8b5cf6;box-shadow:0 8px 24px rgba(139,92,246,.10)}
+  .ac-card__meta{margin-top:4px;font-size:11px;color:var(--text-muted)}
+  .ac-card__action{margin-top:10px}
+  .ac-danger-button{background:var(--danger)!important;border-color:var(--danger)!important}
+  .ac-danger-button:hover{background:#b91c1c!important}
   .ac-ok{color:#0a7}.ac-bad{color:#c33}
   .ac-table{width:100%;border-collapse:collapse;margin-top:8px}
   .ac-table th,.ac-table td{border:1px solid #ddd;padding:6px 8px;font-size:13px;text-align:left;vertical-align:middle}
@@ -42,7 +47,17 @@
     <div class="ac-card"><h3>plan:* keys</h3><div class="v">{{ overview.plan }}</div></div>
     <div class="ac-card"><h3>tkt:* keys</h3><div class="v">{{ overview.tkt }}</div></div>
     <div class="ac-card"><h3>usr:* keys</h3><div class="v">{{ overview.usr }}</div></div>
-    <div class="ac-card"><h3>Messenger cache</h3><div class="v">{{ overview.msgcache }}</div></div>
+    <div class="ac-card ac-card--messenger">
+      <h3>Messenger cache</h3>
+      <div class="v">{{ overview.msgcache }}</div>
+      <div class="ac-card__meta">message / conversation cache keys</div>
+      <form method="post" class="ac-card__action" onsubmit="return confirm('Clear all Messenger cache entries?');">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="flush" />
+        <input type="hidden" name="ns" value="messenger" />
+        <button type="submit" class="button ac-danger-button">Clear Messenger cache</button>
+      </form>
+    </div>
     <div class="ac-card"><h3>Memory</h3><div class="v" style="font-size:15px">{{ overview.memory.used_memory_human|default:"—" }}</div></div>
   </div>
 

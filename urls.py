@@ -1,15 +1,20 @@
+from django.conf import settings
 from django.contrib import admin
 from django.urls import path, include
+from django.views.generic import TemplateView
 
 urlpatterns = [
+    # Harmless decoy/joke page. The real Wagtail/Django admin routes remain
+    # behind the secret paths configured in settings.py.
+    path("admin/", TemplateView.as_view(template_name="core/admin_joke.html"), name="admin_joke"),
     # Wagtail admin (primary control panel)
-    path("admin/", include("wagtail.admin.urls")),
+    path(f"{settings.WAGTAIL_ADMIN_PATH}/", include("wagtail.admin.urls")),
     path("documents/", include("wagtail.documents.urls")),
     # Optional: public Wagtail pages (usually unused in API-first deploy)
     path("pages/", include("wagtail.urls")),
 
     # Legacy Django admin (staff fallback) — optional
-    path("django-admin/", admin.site.urls),
+    path(f"{settings.DJANGO_ADMIN_PATH}/", admin.site.urls),
 
     path("users/", include("users.urls")),
     path("api/users/", include("users.api_urls")),
@@ -27,8 +32,6 @@ urlpatterns = [
 ]
 
 # ===DEBUG TRUE===
-from django.conf import settings
-
 if settings.DEBUG:
     from django.conf.urls.static import static
 

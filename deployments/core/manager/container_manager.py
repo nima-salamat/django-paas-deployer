@@ -207,8 +207,7 @@ class Container(Client):
 
         # Security hardening — no-new-privileges prevents the container
         # process from gaining additional capabilities via setuid binaries.
-        # NOTE: older Docker engines (< 1.11) and rootless Docker sometimes
-        # reject this; the create() fallback path will retry without it.
+        # If the engine cannot accept this, the deployment fails closed.
         kwargs["security_opt"] = ["no-new-privileges:true"]
 
         # Allow callers (orchestrator, rollback) to extend the host
@@ -230,13 +229,16 @@ class Container(Client):
             }
             return self.client.api.create_networking_config(endpoints_config)
         except Exception as exc:
-            logger.warning(
+            logger.error(
                 "Could not build networking_config for container '%s' "
-                "networks=%s: %s. Falling back to no networking_config "
-                "(Docker will use the default network).",
+                "networks=%s: %s. Refusing to fall back to Docker's default "
+                "network because that could bypass the private-network policy.",
                 self.name, self.networks, exc,
             )
-            return None
+            raise ContainerError(
+                f"Failed to configure the required Docker networks for container '{self.name}'.",
+                details={"networks": list(self.networks), "error": str(exc)},
+            ) from exc
 
     def _labels(self):
         if self.labels is not None:
@@ -355,27 +357,18 @@ class Container(Client):
         networking_config = self._networking_config()
         labels = self._labels()
 
-        # Progressive fallback list.  Each entry is a tuple of
-        # (description, mutator) where mutator takes a copy of host_kwargs
-        # and returns a possibly-reduced copy.  Each stage strips one more
-        # option known to cause Docker HTTP 400 ("Conflicting options",
-        # "invalid ...") on some engine versions.  The final "bare" stage
-        # keeps only binds + ports + read_only, so a deploy can NEVER be
-        # blocked by a host_config rejection — better to deploy without
-        # resource limits than not to deploy at all.
+        # Progressive compatibility fallbacks. Security-critical controls
+        # (no-new-privileges and the private network) are intentionally never
+        # stripped. If the Docker engine cannot apply them, the deployment
+        # fails closed instead of silently running with weaker isolation.
         fallbacks = [
             ("full config", lambda kw: kw),
-            ("without security_opt", lambda kw: {k: v for k, v in kw.items() if k != "security_opt"}),
             ("without pids_limit", lambda kw: {k: v for k, v in kw.items() if k != "pids_limit"}),
             ("without memswap_limit", lambda kw: {k: v for k, v in kw.items() if k != "memswap_limit"}),
             ("without nano_cpus", lambda kw: {k: v for k, v in kw.items() if k != "nano_cpus"}),
             ("without mem_limit", lambda kw: {k: v for k, v in kw.items() if k != "mem_limit"}),
             ("without tmpfs", lambda kw: {k: v for k, v in kw.items() if k != "tmpfs"}),
             ("without restart_policy", lambda kw: {k: v for k, v in kw.items() if k != "restart_policy"}),
-            ("bare (binds+ports+read_only only)", lambda kw: {
-                k: v for k, v in kw.items()
-                if k in ("binds", "port_bindings", "read_only")
-            }),
         ]
 
         last_exc: Exception | None = None

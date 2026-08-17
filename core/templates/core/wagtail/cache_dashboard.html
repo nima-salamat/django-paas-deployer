@@ -9,6 +9,11 @@
   .ac-card{border:1px solid var(--w-color-border-furniture,#ccc);border-radius:10px;padding:12px 14px;background:var(--w-color-surface-panels,#fff)}
   .ac-card h3{margin:0 0 4px;font-size:11px;text-transform:uppercase;opacity:.65}
   .ac-card .v{font-size:20px;font-weight:700}
+  .ac-card--messenger{border-color:#8b5cf6;box-shadow:0 8px 24px rgba(139,92,246,.10)}
+  .ac-card__meta{margin-top:4px;font-size:11px;opacity:.68}
+  .ac-card__action{margin-top:12px}
+  .ac-danger-button{border:0;border-radius:7px;padding:7px 10px;font-weight:700;cursor:pointer;background:#dc2626;color:#fff}
+  .ac-danger-button:hover{background:#b91c1c}
   .ac-ok{color:#16a34a}.ac-bad{color:#dc2626}
   .ac-table{width:100%;border-collapse:collapse;margin-top:8px}
   .ac-table th,.ac-table td{border:1px solid var(--w-color-border-furniture,#ddd);padding:6px 8px;font-size:13px;text-align:left;vertical-align:middle}
@@ -33,7 +38,13 @@
 
 <div class="ac-body nice-padding">
   {% if flushed %}
-  <div class="ac-flash">Flushed cache namespace: <strong>{{ flushed }}</strong></div>
+  <div class="ac-flash">
+    {% if flushed == 'messenger' %}
+      Messenger cache was cleared successfully.
+    {% else %}
+      Flushed cache namespace: <strong>{{ flushed }}</strong>
+    {% endif %}
+  </div>
   {% endif %}
 
   <p class="ac-muted">
@@ -53,7 +64,17 @@
     <div class="ac-card"><h3>plan:* keys</h3><div class="v">{{ overview.plan }}</div></div>
     <div class="ac-card"><h3>tkt:* keys</h3><div class="v">{{ overview.tkt }}</div></div>
     <div class="ac-card"><h3>usr:* keys</h3><div class="v">{{ overview.usr }}</div></div>
-    <div class="ac-card"><h3>msgcache:*</h3><div class="v">{{ overview.msgcache }}</div></div>
+    <div class="ac-card ac-card--messenger">
+      <h3>Messenger cache</h3>
+      <div class="v">{{ overview.msgcache }}</div>
+      <div class="ac-card__meta">message / conversation cache keys</div>
+      <form method="post" class="ac-card__action" onsubmit="return confirm('Clear all Messenger cache entries?');">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="flush" />
+        <input type="hidden" name="ns" value="messenger" />
+        <button type="submit" class="ac-danger-button">Clear Messenger cache</button>
+      </form>
+    </div>
     <div class="ac-card"><h3>Memory</h3><div class="v" style="font-size:15px">{{ overview.memory.used_memory_human|default:"—" }}</div></div>
   </div>
 
@@ -77,6 +98,11 @@
       <input type="hidden" name="action" value="flush" />
       <input type="hidden" name="ns" value="usr" />
       <button type="submit" class="button">{% trans "Flush users admin" %}</button>
+    </form>
+    <form method="post" onsubmit="return confirm('Clear all Messenger cache entries?');">{% csrf_token %}
+      <input type="hidden" name="action" value="flush" />
+      <input type="hidden" name="ns" value="messenger" />
+      <button type="submit" class="button ac-danger-button">{% trans "Clear Messenger cache" %}</button>
     </form>
     <form method="post">{% csrf_token %}
       <input type="hidden" name="action" value="flush" />

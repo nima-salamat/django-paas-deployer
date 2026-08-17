@@ -207,7 +207,7 @@ def validate_shell_command(value: str, *, max_len: int = 4096) -> str:
         )
     # Reject obvious shell metacharacters that supervisord would interpret.
     forbidden = (";", "&", "|", "$", "`", "(", ")", "<", ">", "\n", "\r",
-                 "*", "?", "[", "]", "{", "}", "!", "#", "~", "=")
+                 "*", "?", "[", "]", "{", "}", "!", "#", "~")
     if any(ch in cleaned for ch in forbidden):
         raise DeploymentSecurityError(
             f"Shell command override contains forbidden metacharacters: '{cleaned}'.",
