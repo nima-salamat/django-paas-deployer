@@ -348,12 +348,41 @@ _raw_redis_url = (
     or os.environ.get("CELERY_BROKER_URL")
     or "redis://127.0.0.1:6379"
 )
-# Keep a defined, normalized base Redis URL for cache/other consumers.
+# Keep one canonical Redis endpoint and assign dedicated logical DBs.
 REDIS_URL = _redis_db_url(_raw_redis_url, 0)
-CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL") or REDIS_URL
-CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND") or _redis_db_url(_raw_redis_url, 1)
+
+_raw_broker_url = os.environ.get("CELERY_BROKER_URL") or REDIS_URL
+_raw_result_url = os.environ.get("CELERY_RESULT_BACKEND") or _redis_db_url(_raw_redis_url, 1)
+CELERY_BROKER_URL = _redis_db_url(_raw_broker_url, 0)
+CELERY_RESULT_BACKEND = _redis_db_url(_raw_result_url, 1)
+
+# Make broker connectivity explicit and resilient. These settings affect
+# publish/worker startup only; they do not make a broken Redis silently
+# successful. The API keeps the deployment QUEUED when publishing fails.
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_BROKER_CONNECTION_MAX_RETRIES = None
+CELERY_BROKER_HEARTBEAT = 30
+CELERY_BROKER_POOL_LIMIT = 10
+CELERY_TASK_PUBLISH_RETRY = True
+CELERY_TASK_PUBLISH_RETRY_POLICY = {
+    "max_retries": 5,
+    "interval_start": 0,
+    "interval_step": 0.5,
+    "interval_max": 3,
+}
+CELERY_TASK_DEFAULT_QUEUE = "celery"
+CELERY_TASK_DEFAULT_EXCHANGE = "celery"
+CELERY_TASK_DEFAULT_ROUTING_KEY = "celery"
+CELERY_IMPORTS = (
+    "deployments.celery.tasks",
+    "deploy.tasks",
+    "core.tasks.email",
+    "custom_emails.tasks",
+    "messenger.tasks",
+)
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers.DatabaseScheduler'
 CELERY_BEAT_SCHEDULE = {
     "monitor_services_every_minute": {

@@ -170,6 +170,8 @@ services:
       # Redis
       # ----------------------------------------------------------
       REDIS_URL: redis://redis:6379
+      CELERY_BROKER_URL: redis://redis:6379
+      CELERY_RESULT_BACKEND: redis://redis:6379
       CHANNEL_REDIS_URL: redis://redis:6379
 
       # ----------------------------------------------------------
@@ -273,6 +275,8 @@ services:
       # Redis
       # ----------------------------------------------------------
       REDIS_URL: redis://redis:6379
+      CELERY_BROKER_URL: redis://redis:6379
+      CELERY_RESULT_BACKEND: redis://redis:6379
       CHANNEL_REDIS_URL: redis://redis:6379
 
       # ----------------------------------------------------------
@@ -347,6 +351,8 @@ services:
       # Redis
       # ----------------------------------------------------------
       REDIS_URL: redis://redis:6379
+      CELERY_BROKER_URL: redis://redis:6379
+      CELERY_RESULT_BACKEND: redis://redis:6379
       CHANNEL_REDIS_URL: redis://redis:6379
 
       # ----------------------------------------------------------

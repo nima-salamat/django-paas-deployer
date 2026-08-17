@@ -194,14 +194,26 @@ def start_service_apiview(request):
             )
 
             def _enqueue_after_commit() -> None:
-                # Queue delivery is deliberately best-effort here. If Redis/Celery
-                # is temporarily unavailable, the DB state remains QUEUED/PENDING
-                # and the deployment monitor will retry enqueueing automatically.
+                # Publish only after the transaction is durable. Celery itself is
+                # configured with publish retries; this callback adds a bounded
+                # application-level retry for transient Redis connection failures.
+                task = run_db_deploy if is_db else start_service
                 try:
-                    task = run_db_deploy if is_db else start_service
                     task.apply_async(
                         args=[str(deploy_item.id)],
                         task_id=task_id,
+                        retry=True,
+                        retry_policy={
+                            "max_retries": 5,
+                            "interval_start": 0,
+                            "interval_step": 0.5,
+                            "interval_max": 3,
+                        },
+                    )
+                    logger.info(
+                        "Celery task published deploy=%s service=%s task_id=%s broker=%s",
+                        deploy_item.id, service_id, task_id,
+                        getattr(settings, "CELERY_BROKER_URL", "unknown"),
                     )
                 except Exception:
                     logger.exception(
