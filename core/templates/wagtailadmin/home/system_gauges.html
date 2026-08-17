@@ -1,0 +1,167 @@
+{% load i18n %}
+<section class="w-panel system-gauges-panel" aria-label="{% trans 'System resources' %}">
+  <div class="w-panel__header">
+    <h2 class="w-panel__heading">{% trans "System resources" %}</h2>
+    <p class="w-panel__subtitle" style="margin:0;opacity:.7;font-size:.85rem;">
+      {% trans "Live CPU &amp; RAM usage on this host" %}
+      <span id="sg-host" style="margin-left:.5rem;opacity:.6;"></span>
+    </p>
+  </div>
+  <div class="w-panel__content">
+    <div class="sg-row">
+      <div class="sg-card">
+        <div class="sg-gauge" data-gauge="cpu">
+          <svg viewBox="0 0 120 120" width="140" height="140" aria-hidden="true">
+            <circle class="sg-track" cx="60" cy="60" r="52" />
+            <circle class="sg-value" id="sg-cpu-arc" cx="60" cy="60" r="52" />
+          </svg>
+          <div class="sg-center">
+            <div class="sg-pct" id="sg-cpu-pct">—</div>
+            <div class="sg-label">CPU</div>
+          </div>
+        </div>
+        <div class="sg-meta" id="sg-cpu-meta">{% trans "Polling…" %}</div>
+      </div>
+      <div class="sg-card">
+        <div class="sg-gauge" data-gauge="ram">
+          <svg viewBox="0 0 120 120" width="140" height="140" aria-hidden="true">
+            <circle class="sg-track" cx="60" cy="60" r="52" />
+            <circle class="sg-value" id="sg-ram-arc" cx="60" cy="60" r="52" />
+          </svg>
+          <div class="sg-center">
+            <div class="sg-pct" id="sg-ram-pct">—</div>
+            <div class="sg-label">RAM</div>
+          </div>
+        </div>
+        <div class="sg-meta" id="sg-ram-meta">{% trans "Polling…" %}</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .system-gauges-panel { margin-bottom: 1.5rem; }
+  .sg-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    justify-content: flex-start;
+    padding: .5rem 0 1rem;
+  }
+  .sg-card {
+    background: var(--w-color-surface-panels, #fff);
+    border: 1px solid var(--w-color-border-furniture, #e5e7eb);
+    border-radius: 12px;
+    padding: 1rem 1.25rem 1.1rem;
+    min-width: 200px;
+    text-align: center;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04);
+  }
+  .sg-gauge {
+    position: relative;
+    width: 140px;
+    height: 140px;
+    margin: 0 auto .5rem;
+  }
+  .sg-gauge svg { display: block; transform: rotate(-90deg); }
+  .sg-track {
+    fill: none;
+    stroke: var(--w-color-border-furniture, #e5e7eb);
+    stroke-width: 10;
+  }
+  .sg-value {
+    fill: none;
+    stroke-width: 10;
+    stroke-linecap: round;
+    stroke-dasharray: 326.73;
+    stroke-dashoffset: 326.73;
+    transition: stroke-dashoffset .6s ease, stroke .3s ease;
+    stroke: #22c55e;
+  }
+  .sg-center {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+  .sg-pct {
+    font-size: 1.6rem;
+    font-weight: 700;
+    line-height: 1.1;
+    color: var(--w-color-text-label, #111);
+  }
+  .sg-label {
+    font-size: .75rem;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    opacity: .55;
+    margin-top: 2px;
+  }
+  .sg-meta {
+    font-size: .8rem;
+    opacity: .7;
+    min-height: 1.2em;
+  }
+  .sg-value.is-warn { stroke: #f59e0b; }
+  .sg-value.is-crit { stroke: #ef4444; }
+</style>
+
+<script>
+(function () {
+  const URL = "{{ metrics_url|escapejs }}";
+  const CIRC = 2 * Math.PI * 52; // r=52
+  const cpuArc = document.getElementById("sg-cpu-arc");
+  const ramArc = document.getElementById("sg-ram-arc");
+  const cpuPct = document.getElementById("sg-cpu-pct");
+  const ramPct = document.getElementById("sg-ram-pct");
+  const cpuMeta = document.getElementById("sg-cpu-meta");
+  const ramMeta = document.getElementById("sg-ram-meta");
+  const hostEl = document.getElementById("sg-host");
+
+  function setArc(el, pct) {
+    if (pct == null || isNaN(pct)) {
+      el.style.strokeDashoffset = CIRC;
+      el.classList.remove("is-warn", "is-crit");
+      return;
+    }
+    const clamped = Math.max(0, Math.min(100, pct));
+    el.style.strokeDashoffset = String(CIRC * (1 - clamped / 100));
+    el.classList.remove("is-warn", "is-crit");
+    if (clamped >= 90) el.classList.add("is-crit");
+    else if (clamped >= 70) el.classList.add("is-warn");
+  }
+
+  function fmt(n) {
+    return (n == null || isNaN(n)) ? "—" : (Math.round(n * 10) / 10) + "%";
+  }
+
+  async function tick() {
+    try {
+      const res = await fetch(URL, { credentials: "same-origin", headers: { "Accept": "application/json" } });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      setArc(cpuArc, data.cpu_percent);
+      setArc(ramArc, data.ram_percent);
+      cpuPct.textContent = fmt(data.cpu_percent);
+      ramPct.textContent = fmt(data.ram_percent);
+      cpuMeta.textContent = data.ok ? "live · " + (data.source || "") : "unavailable";
+      if (data.ram_used_human && data.ram_total_human) {
+        ramMeta.textContent = data.ram_used_human + " / " + data.ram_total_human;
+      } else {
+        ramMeta.textContent = data.ok ? "live" : "unavailable";
+      }
+      if (hostEl && data.hostname) hostEl.textContent = "· " + data.hostname;
+    } catch (e) {
+      cpuMeta.textContent = "error";
+      ramMeta.textContent = "error";
+    }
+  }
+
+  tick();
+  setInterval(tick, 2500);
+})();
+</script>
