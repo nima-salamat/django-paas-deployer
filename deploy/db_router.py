@@ -123,7 +123,8 @@ class DeploymentLogRouter:
             deployment_logs  -> blocked
 
         Other applications:
-            no restriction from this router
+            default         -> allowed by normal Django routing
+            deployment_logs -> blocked
         """
 
         # --------------------------------------------------------
@@ -144,4 +145,13 @@ class DeploymentLogRouter:
         # --------------------------------------------------------
         # Models from other applications
         # --------------------------------------------------------
+        # The deployment_logs database must contain ONLY DeployLog.
+        # Returning None here would allow Django to run migrations for
+        # Wagtail, auth, sessions, etc. on deployment_logs as well.
+        # That is especially dangerous for Wagtail because its migration
+        # history creates/updates wagtailcore_page and can leave the log DB
+        # in an inconsistent state.
+        if db == self.LOG_DATABASE:
+            return False
+
         return None
