@@ -32,6 +32,15 @@ from ..utils import validate_messenger_file, detect_kind, users_blocked, can_see
 from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger
 
 User = get_user_model()
+
+
+def _invalidate_user_scoped_messenger_cache(user_id):
+    """Invalidate viewer-specific conversation-list data after contact/block changes."""
+    try:
+        from ..message_cache import ConversationCacheService
+        ConversationCacheService.invalidate_user_conv_list(int(user_id))
+    except Exception:
+        logger.exception("failed to invalidate messenger list cache for user=%s", user_id)
 class UserSearchPagination(PageNumberPagination):
     page_size = 20
     page_size_query_param = "page_size"
@@ -87,6 +96,7 @@ class ContactListCreateAPIView(APIView):
             owner=request.user, contact=target,
             defaults={"nickname": (request.data.get("nickname") or "").strip()[:120]},
         )
+        _invalidate_user_scoped_messenger_cache(request.user.id)
         return ok(
             "Contact added" if created else "Already in contacts",
             data=ContactSerializer(obj, context={"request": request}).data,
@@ -100,6 +110,8 @@ class ContactDeleteAPIView(APIView):
 
     def delete(self, request, user_id):
         deleted, _ = Contact.objects.filter(owner=request.user, contact_id=user_id).delete()
+        if deleted:
+            _invalidate_user_scoped_messenger_cache(request.user.id)
         return ok("Removed" if deleted else "Not found")
 
 
@@ -124,6 +136,7 @@ class BlockListCreateAPIView(APIView):
             return err("Cannot block yourself")
         Block.objects.get_or_create(blocker=request.user, blocked=target)
         Contact.objects.filter(owner=request.user, contact=target).delete()
+        _invalidate_user_scoped_messenger_cache(request.user.id)
         return ok("Blocked", http_status=status.HTTP_201_CREATED)
 
 
@@ -132,7 +145,9 @@ class UnblockAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, user_id):
-        Block.objects.filter(blocker=request.user, blocked_id=user_id).delete()
+        deleted, _ = Block.objects.filter(blocker=request.user, blocked_id=user_id).delete()
+        if deleted:
+            _invalidate_user_scoped_messenger_cache(request.user.id)
         return ok("Unblocked")
 
 
