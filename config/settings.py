@@ -375,7 +375,6 @@ CELERY_TASK_DEFAULT_EXCHANGE = "celery"
 CELERY_TASK_DEFAULT_ROUTING_KEY = "celery"
 CELERY_IMPORTS = (
     "deployments.celery.tasks",
-    "deploy.tasks",
     "core.tasks.email",
     "custom_emails.tasks",
     "messenger.tasks",
