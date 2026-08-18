@@ -85,7 +85,7 @@ class UserProfileAPIView(APIView):
             user = User.objects.get(pk=user_id, is_active=True)
         except User.DoesNotExist:
             return err("Not found", status.HTTP_404_NOT_FOUND)
-        context = build_user_mini_context(request.user, [user], request=request)
+        context = build_user_mini_context(request, [user])
         data = UserMiniSerializer(user, context={"request": request, **context}).data
         if can_see_profile_photo(request.user, user):
             from users.models import Profile
@@ -119,7 +119,7 @@ class UserByUsernameAPIView(APIView):
             user = User.objects.get(username__iexact=username, is_active=True)
         except User.DoesNotExist:
             return err("User not found", status.HTTP_404_NOT_FOUND)
-        context = build_user_mini_context(request.user, [user], request=request)
+        context = build_user_mini_context(request, [user])
         data = UserMiniSerializer(user, context={"request": request, **context}).data
         if can_see_profile_photo(request.user, user):
             from users.models import Profile
