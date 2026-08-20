@@ -333,7 +333,18 @@ class ConversationListSerializer(serializers.ModelSerializer):
         for p in parts:
             if p.user_id == viewer_id:
                 return getattr(p, "draft_text", "") or ""
-        return ""
+        # Fallback when participants were not prefetched on this code path
+        try:
+            from .models import ConversationParticipant
+            p = (
+                ConversationParticipant.objects
+                .filter(conversation_id=obj.id, user_id=viewer_id, left_at__isnull=True)
+                .only("draft_text")
+                .first()
+            )
+            return (getattr(p, "draft_text", None) or "") if p else ""
+        except Exception:
+            return ""
 
     def get_participants(self, obj):
         parts = getattr(obj, "_prefetched_active_participants", None)
