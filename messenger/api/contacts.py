@@ -77,8 +77,11 @@ class ContactListCreateAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        qs = Contact.objects.filter(owner=request.user).select_related("contact").order_by("-created_at")
-        return ok(data=ContactSerializer(qs, many=True, context={"request": request}).data)
+        qs = list(Contact.objects.filter(owner=request.user).select_related("contact").order_by("-created_at"))
+        user_ids = [c.contact_id for c in qs if c.contact_id]
+        ctx = build_user_mini_context(request.user, user_ids)
+        ctx["request"] = request
+        return ok(data=ContactSerializer(qs, many=True, context=ctx).data)
 
     def post(self, request):
         uid = request.data.get("user_id")

@@ -195,12 +195,73 @@ class MessengerConsumer(AsyncJsonWebsocketConsumer):
                 f"messenger_conv_{cid}",
                 {"type": "messenger.event", "data": data},
             )
+            return
+
+        if t == "draft":
+            # { type: "draft", conversation_id, text }
+            try:
+                cid = int(content.get("conversation_id"))
+            except (TypeError, ValueError):
+                return
+            if not getattr(self, "user", None):
+                return
+            allowed = await database_sync_to_async(self._can_subscribe)(cid)
+            if not allowed:
+                return
+            draft_text = content.get("text")
+            if draft_text is None:
+                draft_text = ""
+            draft_text = str(draft_text)[:20000]
+            await database_sync_to_async(self._save_draft)(cid, draft_text)
+            # Push to this user's other devices (user channel group)
+            data = {
+                "type": "draft",
+                "conversation_id": cid,
+                "user_id": self.user.id,
+                "text": draft_text,
+            }
+            await self.channel_layer.group_send(
+                f"messenger_user_{self.user.id}",
+                {"type": "messenger.event", "data": data},
+            )
+            return
+
+        if t == "emoji_play":
+            # { type: "emoji_play", conversation_id, message_id }
+            try:
+                cid = int(content.get("conversation_id"))
+                mid = int(content.get("message_id"))
+            except (TypeError, ValueError):
+                return
+            if not getattr(self, "user", None):
+                return
+            allowed = await database_sync_to_async(self._can_subscribe)(cid)
+            if not allowed:
+                return
+            data = {
+                "type": "emoji_play",
+                "conversation_id": cid,
+                "message_id": mid,
+                "user_id": self.user.id,
+            }
+            await self.channel_layer.group_send(
+                f"messenger_conv_{cid}",
+                {"type": "messenger.event", "data": data},
+            )
+            return
 
     def _can_subscribe(self, conversation_id: int) -> bool:
         from .models import ConversationParticipant
         return ConversationParticipant.objects.filter(
             conversation_id=conversation_id, user_id=self.user.id, left_at__isnull=True
         ).exists()
+
+    def _save_draft(self, conversation_id: int, text: str) -> None:
+        from django.utils import timezone
+        from .models import ConversationParticipant
+        ConversationParticipant.objects.filter(
+            conversation_id=conversation_id, user_id=self.user.id, left_at__isnull=True
+        ).update(draft_text=text, draft_updated_at=timezone.now())
 
     async def messenger_event(self, event):
         data = event.get("data") or {}

@@ -303,6 +303,7 @@ class ConversationListSerializer(serializers.ModelSerializer):
     is_pinned = serializers.SerializerMethodField()
     created_by = serializers.SerializerMethodField()
     avatar_url = serializers.SerializerMethodField()
+    draft_text = serializers.SerializerMethodField()
 
     class Meta:
         model = Conversation
@@ -312,6 +313,7 @@ class ConversationListSerializer(serializers.ModelSerializer):
             "history_visibility", "created_by",
             "created_at", "updated_at", "last_message_at",
             "participants", "last_message", "unread_count", "peer", "is_pinned",
+            "draft_text",
         )
 
     def get_avatar_url(self, obj):
@@ -321,6 +323,17 @@ class ConversationListSerializer(serializers.ModelSerializer):
             return obj.avatar.url
         except Exception:
             return None
+
+    def get_draft_text(self, obj):
+        request = self.context.get("request")
+        viewer_id = getattr(getattr(request, "user", None), "id", None) if request else None
+        if viewer_id is None:
+            return ""
+        parts = getattr(obj, "_prefetched_active_participants", None) or []
+        for p in parts:
+            if p.user_id == viewer_id:
+                return getattr(p, "draft_text", "") or ""
+        return ""
 
     def get_participants(self, obj):
         parts = getattr(obj, "_prefetched_active_participants", None)

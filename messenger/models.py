@@ -177,6 +177,9 @@ class ConversationParticipant(models.Model):
     # Per-user pin (chat appears at top of that user's list)
     is_pinned = models.BooleanField(default=False)
     pinned_at = models.DateTimeField(null=True, blank=True)
+    # Unsent composer draft (synced across devices via WS)
+    draft_text = models.TextField(blank=True, default="")
+    draft_updated_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         unique_together = ("conversation", "user")
