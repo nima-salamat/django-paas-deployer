@@ -46,14 +46,19 @@ class MessageListCreateAPIView(APIView):
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
 
-        before_id_raw = request.query_params.get("before_id")
-        before_id = None
-        if before_id_raw:
+        def _parse_id(name):
+            raw = request.query_params.get(name)
+            if not raw:
+                return None
             try:
-                before_id = int(before_id_raw)
-            except ValueError:
-                pass
-        limit = min(50, int(request.query_params.get("limit") or 40))
+                return int(raw)
+            except (TypeError, ValueError):
+                return None
+
+        before_id = _parse_id("before_id")
+        after_id = _parse_id("after_id")
+        around_id = _parse_id("around_id")
+        limit = min(80, max(1, int(request.query_params.get("limit") or 40)))
 
         history_restricted = False
         if conv.type == Conversation.Type.GROUP and part.role not in ("owner", "admin"):
@@ -61,10 +66,8 @@ class MessageListCreateAPIView(APIView):
             if visibility in ("none", "from_join") and part.joined_at:
                 history_restricted = True
 
-        # ------------------------------------------------------------------
-        # Hot-cache path (latest N messages in Redis, per conversation)
-        # ------------------------------------------------------------------
-        if not history_restricted:
+        # Redis hot-cache only for the simple "latest page" / before_id path
+        if not history_restricted and around_id is None and after_id is None:
             try:
                 from ..message_cache import MessageCacheService
                 cached = MessageCacheService.get_cached_messages(
@@ -79,6 +82,8 @@ class MessageListCreateAPIView(APIView):
                         "results": results,
                         "has_more": has_more,
                         "next_before_id": next_before,
+                        "has_more_newer": False if before_id is None else True,
+                        "next_after_id": (base_msgs[-1].get("id") if base_msgs and before_id is not None else None),
                         "cache": "HIT",
                     })
                     try:
@@ -93,43 +98,108 @@ class MessageListCreateAPIView(APIView):
         # Postgres path (source of truth)
         # ------------------------------------------------------------------
         from django.db.models import Q
-        qs = (
+        base_qs = (
             Message.objects.filter(conversation=conv, is_deleted=False)
             .filter(Q(is_scheduled=False) | Q(is_scheduled=True, sender=request.user))
             .select_related("sender", "reply_to", "reply_to__sender", "forwarded_from")
             .prefetch_related("attachments", "reactions")
-            .order_by("-id")  # id is monotonic with created_at and matches cache scores
         )
         if history_restricted:
-            qs = qs.filter(created_at__gte=part.joined_at)
-        if before_id is not None:
-            qs = qs.filter(id__lt=before_id)
-        items = list(qs[: limit + 1])
-        has_more = len(items) > limit
-        items = items[:limit]
-        items.reverse()
+            base_qs = base_qs.filter(created_at__gte=part.joined_at)
 
-        # Populate Redis in background so this response is not delayed.
-        if not history_restricted and before_id is None and items:
-            try:
-                from ..message_cache import MessageCacheService, run_after_commit
-                conv_id = conv.id
-                # Seed with the page we already loaded (instant), then full rebuild.
+        has_more = False
+        has_more_newer = False
+        next_before = None
+        next_after = None
+        items = []
+
+        # ------------------------------------------------------------------
+        # around_id: window centered on a message (restore mid-history in 1 request)
+        # ------------------------------------------------------------------
+        if around_id is not None:
+            older_limit = max(1, limit // 2)
+            newer_limit = max(1, limit - older_limit)
+            older = list(
+                base_qs.filter(id__lte=around_id).order_by("-id")[: older_limit + 1]
+            )
+            has_more = len(older) > older_limit
+            older = older[:older_limit]
+            older.reverse()  # asc
+            newer = list(
+                base_qs.filter(id__gt=around_id).order_by("id")[: newer_limit + 1]
+            )
+            has_more_newer = len(newer) > newer_limit
+            newer = newer[:newer_limit]
+            items = older + newer
+            if has_more and older:
+                next_before = older[0].id
+            if has_more_newer and newer:
+                next_after = newer[-1].id
+            elif newer:
+                next_after = newer[-1].id
+            elif older:
+                next_after = older[-1].id
+
+        # ------------------------------------------------------------------
+        # after_id: load NEWER messages (scroll toward live edge from mid-history)
+        # ------------------------------------------------------------------
+        elif after_id is not None:
+            newer = list(
+                base_qs.filter(id__gt=after_id).order_by("id")[: limit + 1]
+            )
+            has_more_newer = len(newer) > limit
+            newer = newer[:limit]
+            items = newer
+            # Older history may still exist above the previous window
+            has_more = base_qs.filter(id__lte=after_id).exists()
+            if has_more:
+                next_before = after_id
+            if has_more_newer and newer:
+                next_after = newer[-1].id
+            elif newer:
+                next_after = newer[-1].id
+
+        # ------------------------------------------------------------------
+        # before_id / latest page (existing behavior)
+        # ------------------------------------------------------------------
+        else:
+            qs = base_qs.order_by("-id")
+            if before_id is not None:
+                qs = qs.filter(id__lt=before_id)
+            batch = list(qs[: limit + 1])
+            has_more = len(batch) > limit
+            batch = batch[:limit]
+            batch.reverse()
+            items = batch
+            next_before = items[0].id if has_more and items else None
+            # When paging older, there is always something newer than this window
+            # (at least the messages we already had below). For latest page, client
+            # is at the live edge.
+            has_more_newer = before_id is not None
+            if items:
+                next_after = items[-1].id
+
+            # Populate Redis in background so this response is not delayed.
+            if not history_restricted and before_id is None and items:
                 try:
-                    MessageCacheService.cache_messages(conv_id, items)
+                    from ..message_cache import MessageCacheService, run_after_commit
+                    conv_id = conv.id
+                    try:
+                        MessageCacheService.cache_messages(conv_id, items)
+                    except Exception:
+                        logger.exception("seed message cache failed")
+                    run_after_commit(lambda: MessageCacheService.rebuild_chat_cache(conv_id))
                 except Exception:
-                    logger.exception("seed message cache failed")
-                run_after_commit(lambda: MessageCacheService.rebuild_chat_cache(conv_id))
-            except Exception:
-                logger.exception("message cache populate schedule failed")
+                    logger.exception("message cache populate schedule failed")
 
         ctx = build_message_list_context(request, items, conversation_id=conv.id)
         ser = MessageSerializer(items, many=True, context=ctx)
-        next_before = items[0].id if has_more and items else None
         resp = ok(data={
             "results": ser.data,
             "has_more": has_more,
             "next_before_id": next_before,
+            "has_more_newer": has_more_newer,
+            "next_after_id": next_after,
             "cache": "MISS",
         })
         try:
