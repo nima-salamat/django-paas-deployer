@@ -1,23 +1,44 @@
 """
 Messenger hot-cache (Redis).
 
-Scope
------
-* Messages: sliding window of the latest MESSAGE_CACHE_SIZE messages
-  **per conversation** (not per user).  Keys:
-      msgcache:{conversation_id}:ids
-      msgcache:{conversation_id}:m:{msg_id}
-      msgcache:{conversation_id}:meta
+Architecture (messages)
+-----------------------
+Per conversation we keep a **contiguous suffix** of the newest
+``MESSAGE_CACHE_SIZE`` messages, as two layers:
+
+1. Ordered id index (list of message ids, score = id)::
+
+       msgcache:{conversation_id}:ids          Redis ZSET
+
+2. Message payloads (one key per id)::
+
+       msgcache:{conversation_id}:m:{msg_id}   Redis STRING (JSON)
+
+3. Bounds for O(1) range checks::
+
+       msgcache:{conversation_id}:meta         HASH {min_id, max_id, count}
+
+Reads never walk "page numbers".  A request is a **chunk by id**:
+
+* latest / ``before_id`` → ZREVRANGEBYSCORE then MGET payloads
+* ``after_id``           → ZRANGEBYSCORE then MGET
+* ``around_id``          → older half + newer half around that id
+
+When the window exceeds ``MESSAGE_CACHE_SIZE``, the oldest ids are trimmed
+from the ZSET and their payload keys are deleted (sliding window).
+
+Add / update / delete keep the ZSET and payloads in sync after DB commit
+(``transaction.on_commit``).  PostgreSQL remains the source of truth; Redis
+is a hot path only.  Ranges outside ``[min_id, max_id]`` fall through to DB.
+
+Also
+----
 * Conversation list: short-lived JSON **per user**
       msgcache:user:{user_id}:conv_list
 * Participants of a conversation:
       msgcache:{conversation_id}:participants
 
-PostgreSQL is always the source of truth.  Redis is never written before a
-successful DB commit.  Cache updates are scheduled with
-``transaction.on_commit`` so the HTTP response is not blocked by Redis.
-
-Viewer-specific fields (reactions.mine, read_state, unread_count) are either
+Viewer-specific fields (reactions.mine, read_state, unread_count) are
 recomputed per request or stored only in short-TTL user-scoped keys.
 """
 
@@ -437,26 +458,53 @@ class MessageCacheService:
         before_id: Optional[int],
         limit: int,
     ) -> bool:
-        """Return True when the requested window is fully covered by cache.
+        """Return True when a before_id / latest page is fully inside the hot window.
 
-        The cache always holds a contiguous suffix of the latest messages
-        (by id).  Therefore:
+        Cache holds a contiguous **suffix** of the latest messages (by id):
+          msgcache:{conv}:ids   → Redis ZSET  member=msg_id, score=msg_id
+          msgcache:{conv}:m:{id} → JSON payload per message
+          msgcache:{conv}:meta  → min_id / max_id / count
 
         * no before_id  → latest page is cached iff meta exists and count > 0
-        * before_id = X → cached iff X > min_id  (there is at least one
-          message with id < X still inside the window)
+        * before_id = X → cached iff min_id < X (at least one older id still in window)
         """
         meta = MessageCacheService.get_meta(conv_id)
         if not meta or meta["count"] <= 0 or meta["min_id"] is None:
             return False
         if before_id is None:
             return True
-        # Need messages with id < before_id.  Possible only if min_id < before_id.
         return meta["min_id"] < int(before_id)
 
     # ------------------------------------------------------------------
     # Read path
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _decode_id(x) -> int:
+        if isinstance(x, bytes):
+            x = x.decode()
+        return int(x)
+
+    @staticmethod
+    def _fetch_payloads(r, conv_id: int, msg_ids: List[int]) -> Optional[List[Dict]]:
+        """Pipeline-GET payloads; None if any id is missing (incomplete window)."""
+        if not msg_ids:
+            return []
+        pipe = r.pipeline(transaction=False)
+        for mid in msg_ids:
+            pipe.get(_msg_key(conv_id, mid))
+        payloads = pipe.execute()
+        messages: List[Dict] = []
+        for mid, raw in zip(msg_ids, payloads):
+            data = _json_loads(raw)
+            if data is None:
+                logger.warning(
+                    "message_cache: missing payload for msg %s in conv %s",
+                    mid, conv_id,
+                )
+                return None
+            messages.append(data)
+        return messages
 
     @staticmethod
     def get_cached_messages(
@@ -465,63 +513,234 @@ class MessageCacheService:
         limit: int,
     ) -> Optional[Tuple[List[Dict], bool, Optional[int]]]:
         """
-        Return (messages_asc, has_more, next_before_id) or None on miss/error.
+        Legacy helper: latest / before_id page.
 
-        messages_asc is a list of base cache dicts ordered oldest → newest
-        (same order the API returns after the final reverse).
+        Return (messages_asc, has_more_older, next_before_id) or None on miss.
+        Prefer ``get_message_window`` for around_id / after_id.
+        """
+        window = MessageCacheService.get_message_window(
+            conv_id,
+            before_id=before_id,
+            after_id=None,
+            around_id=None,
+            limit=limit,
+        )
+        if window is None:
+            return None
+        return window["messages"], window["has_more"], window["next_before_id"]
+
+    @staticmethod
+    def touch_window_ttl(conv_id: int) -> None:
+        """Refresh TTL on a live window so active chats stay hot."""
+        ttl = _cache_ttl()
+        if ttl <= 0:
+            return
+        r = _redis()
+        if not r:
+            return
+        try:
+            ids_key = _ids_key(conv_id)
+            meta_key = _meta_key(conv_id)
+            pipe = r.pipeline(transaction=False)
+            pipe.expire(ids_key, ttl)
+            pipe.expire(meta_key, ttl)
+            # Touch a sample of payload keys is expensive; ids+meta is enough
+            # to keep the index alive. Payloads keep their own TTL from write.
+            pipe.execute()
+        except Exception:
+            pass
+
+    @staticmethod
+    def get_message_window(
+        conv_id: int,
+        *,
+        before_id: Optional[int] = None,
+        after_id: Optional[int] = None,
+        around_id: Optional[int] = None,
+        limit: int = 40,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Serve a page from the hot window when the requested range is covered.
+
+        Architecture
+        ------------
+        * Ordered id index:  ZSET ``msgcache:{conv}:ids`` (score = id)
+        * Payloads:          STRING ``msgcache:{conv}:m:{id}``
+        * Bounds:            HASH  ``msgcache:{conv}:meta`` {min_id, max_id, count}
+
+        Window = contiguous **newest** ``MESSAGE_CACHE_SIZE`` messages.
+        Reads are id-range chunks (not fixed page numbers).
+
+        Returns dict:
+          messages, has_more, next_before_id, has_more_newer, next_after_id
+        or None on miss (caller uses Postgres).
         """
         r = _redis()
         if not r:
             return None
-        if not MessageCacheService.is_range_cached(conv_id, before_id, limit):
+
+        meta = MessageCacheService.get_meta(conv_id)
+        if not meta or meta["count"] <= 0 or meta["min_id"] is None or meta["max_id"] is None:
             record_miss("msg")
             return None
 
+        min_id = int(meta["min_id"])
+        max_id = int(meta["max_id"])
+        limit = max(1, min(int(limit or 40), _cache_size()))
+        ids_key = _ids_key(conv_id)
+
         try:
-            ids_key = _ids_key(conv_id)
-            # ZREVRANGEBYSCORE: highest scores first (newest first)
-            max_score = (int(before_id) - 1) if before_id else "+inf"
-            # Fetch limit+1 to detect has_more
+            # ==========================================================
+            # around_id
+            # ==========================================================
+            if around_id is not None:
+                around_id = int(around_id)
+                if around_id < min_id or around_id > max_id:
+                    record_miss("msg")
+                    return None
+
+                older_limit = max(1, limit // 2)
+                newer_limit = max(1, limit - older_limit)
+
+                older_raw = r.zrevrangebyscore(
+                    ids_key, around_id, min_id, start=0, num=older_limit + 1
+                ) or []
+                has_more = len(older_raw) > older_limit
+                older_ids = [
+                    MessageCacheService._decode_id(x) for x in older_raw[:older_limit]
+                ]
+                older_ids.reverse()
+
+                newer_raw = r.zrangebyscore(
+                    ids_key, around_id + 1, max_id, start=0, num=newer_limit + 1
+                ) or []
+                has_more_newer = len(newer_raw) > newer_limit
+                newer_ids = [
+                    MessageCacheService._decode_id(x) for x in newer_raw[:newer_limit]
+                ]
+
+                msg_ids = older_ids + newer_ids
+                messages = MessageCacheService._fetch_payloads(r, conv_id, msg_ids)
+                if messages is None:
+                    record_miss("msg")
+                    return None
+
+                # Older still in window above the first returned id?
+                if older_ids and older_ids[0] > min_id:
+                    has_more = True
+                next_before = older_ids[0] if has_more and older_ids else None
+
+                next_after = (
+                    newer_ids[-1] if newer_ids else (older_ids[-1] if older_ids else None)
+                )
+                # Newer still in window below last returned?
+                if next_after is not None and next_after < max_id:
+                    has_more_newer = True
+                elif next_after == max_id:
+                    has_more_newer = False
+
+                MessageCacheService.touch_window_ttl(conv_id)
+                record_hit("msg")
+                return {
+                    "messages": messages,
+                    "has_more": bool(has_more),
+                    "next_before_id": next_before,
+                    "has_more_newer": bool(has_more_newer),
+                    "next_after_id": next_after,
+                }
+
+            # ==========================================================
+            # after_id — newer messages toward live edge
+            # ==========================================================
+            if after_id is not None:
+                after_id = int(after_id)
+                if after_id >= max_id:
+                    # Live edge already — empty newer page from cache
+                    record_miss("msg")
+                    return None
+                # after_id must not leave a hole below the window
+                if after_id < min_id - 1:
+                    record_miss("msg")
+                    return None
+
+                raw = r.zrangebyscore(
+                    ids_key, after_id + 1, max_id, start=0, num=limit + 1
+                ) or []
+                if not raw:
+                    record_miss("msg")
+                    return None
+
+                has_more_newer = len(raw) > limit
+                msg_ids = [MessageCacheService._decode_id(x) for x in raw[:limit]]
+                messages = MessageCacheService._fetch_payloads(r, conv_id, msg_ids)
+                if messages is None:
+                    record_miss("msg")
+                    return None
+
+                next_after = msg_ids[-1]
+                if next_after >= max_id:
+                    has_more_newer = False
+                elif len(raw) > limit:
+                    has_more_newer = True
+                else:
+                    has_more_newer = next_after < max_id
+
+                # Client can still scroll up into older history
+                has_more = True
+                next_before = after_id
+
+                MessageCacheService.touch_window_ttl(conv_id)
+                record_hit("msg")
+                return {
+                    "messages": messages,
+                    "has_more": has_more,
+                    "next_before_id": next_before,
+                    "has_more_newer": bool(has_more_newer),
+                    "next_after_id": next_after,
+                }
+
+            # ==========================================================
+            # before_id / latest page
+            # ==========================================================
+            if not MessageCacheService.is_range_cached(conv_id, before_id, limit):
+                record_miss("msg")
+                return None
+
+            max_score = (int(before_id) - 1) if before_id is not None else "+inf"
             raw_ids = r.zrevrangebyscore(
                 ids_key, max_score, "-inf", start=0, num=limit + 1
-            )
+            ) or []
             if not raw_ids:
+                record_miss("msg")
                 return None
 
             has_more = len(raw_ids) > limit
-            raw_ids = raw_ids[:limit]
-            # Convert to ints, keep newest→oldest then reverse later
-            msg_ids = []
-            for x in raw_ids:
-                if isinstance(x, bytes):
-                    x = x.decode()
-                msg_ids.append(int(x))
+            msg_ids_desc = [MessageCacheService._decode_id(x) for x in raw_ids[:limit]]
+            msg_ids_asc = list(reversed(msg_ids_desc))
+            messages = MessageCacheService._fetch_payloads(r, conv_id, msg_ids_asc)
+            if messages is None:
+                record_miss("msg")
+                return None
 
-            # Pipeline GET for all message payloads
-            pipe = r.pipeline(transaction=False)
-            for mid in msg_ids:
-                pipe.get(_msg_key(conv_id, mid))
-            payloads = pipe.execute()
-
-            messages: List[Dict] = []
-            for mid, raw in zip(msg_ids, payloads):
-                data = _json_loads(raw)
-                if data is None:
-                    # Incomplete cache → treat as miss so we rebuild
-                    logger.warning(
-                        "message_cache: missing payload for msg %s in conv %s",
-                        mid, conv_id,
-                    )
-                    return None
-                messages.append(data)
-
-            # messages is newest→oldest; API returns oldest→newest
-            messages.reverse()
+            if messages and int(messages[0]["id"]) > min_id:
+                has_more = True
             next_before = messages[0]["id"] if has_more and messages else None
+            has_more_newer = before_id is not None
+            next_after = messages[-1]["id"] if messages else None
+
+            MessageCacheService.touch_window_ttl(conv_id)
             record_hit("msg")
-            return messages, has_more, next_before
+            return {
+                "messages": messages,
+                "has_more": bool(has_more),
+                "next_before_id": next_before,
+                "has_more_newer": bool(has_more_newer),
+                "next_after_id": next_after,
+            }
         except Exception:
-            logger.exception("message_cache.get_cached_messages failed conv=%s", conv_id)
+            logger.exception(
+                "message_cache.get_message_window failed conv=%s", conv_id
+            )
             return None
 
     # ------------------------------------------------------------------
@@ -546,11 +765,20 @@ class MessageCacheService:
             ids_key = _ids_key(conv_id)
             meta_key = _meta_key(conv_id)
 
+            # Drop previous id list + those payload keys (keep window tight)
+            try:
+                old_ids = r.zrange(ids_key, 0, -1) or []
+            except Exception:
+                old_ids = []
+            new_id_set = {str(m.id) for m in sorted_msgs}
+
             pipe = r.pipeline(transaction=True)
-            # Clear old window
             pipe.delete(ids_key)
-            # We intentionally leave orphan msg keys; they expire via TTL
-            # or are overwritten.  Cleaning them all would need a SCAN.
+            for x in old_ids:
+                if isinstance(x, bytes):
+                    x = x.decode()
+                if str(x) not in new_id_set:
+                    pipe.delete(_msg_key(conv_id, int(x)))
 
             for msg in sorted_msgs:
                 payload = message_to_cache_dict(msg)
@@ -579,8 +807,23 @@ class MessageCacheService:
 
     @staticmethod
     def rebuild_chat_cache(conv_id: int) -> None:
-        """Reload the latest MESSAGE_CACHE_SIZE messages from Postgres."""
+        """Reload the latest MESSAGE_CACHE_SIZE messages from Postgres.
+
+        Uses a short Redis lock so concurrent MISS traffic does not stampede
+        the database with identical rebuilds.
+        """
         from .models import Message
+
+        r = _redis()
+        lock_key = f"{_PREFIX}:{conv_id}:rebuild_lock"
+        if r:
+            try:
+                # nx + short TTL: only one rebuild at a time per conversation
+                got = r.set(lock_key, "1", nx=True, ex=45)
+                if not got:
+                    return
+            except Exception:
+                pass
 
         size = _cache_size()
         try:
@@ -598,6 +841,12 @@ class MessageCacheService:
             MessageCacheService.cache_messages(conv_id, msgs)
         except Exception:
             logger.exception("message_cache.rebuild_chat_cache failed conv=%s", conv_id)
+        finally:
+            if r:
+                try:
+                    r.delete(lock_key)
+                except Exception:
+                    pass
 
     # ------------------------------------------------------------------
     # Incremental updates (after successful DB commit)
@@ -605,7 +854,12 @@ class MessageCacheService:
 
     @staticmethod
     def add_message(msg) -> None:
-        """Insert a newly created message into the hot window (sliding)."""
+        """Insert a newly created message into the hot window (sliding).
+
+        List (ZSET) and payload (STRING) stay in sync: when the window exceeds
+        MESSAGE_CACHE_SIZE, the oldest ids are dropped from the ZSET **and**
+        their payload keys are deleted.
+        """
         r = _redis()
         if not r:
             return
@@ -613,7 +867,6 @@ class MessageCacheService:
         size = _cache_size()
         ttl = _cache_ttl()
         try:
-            # Ensure we have the full payload relations
             if not hasattr(msg, "_prefetched_objects_cache"):
                 from .models import Message
                 msg = (
@@ -633,22 +886,40 @@ class MessageCacheService:
             meta_key = _meta_key(conv_id)
             msg_key = _msg_key(conv_id, mid)
 
+            # Snapshot ids that will fall out of the window after this insert
+            # (rank 0 .. count-size-1 become excess once count becomes size+1)
+            try:
+                excess = r.zrange(ids_key, 0, -(size))  # may include ids to drop after add
+            except Exception:
+                excess = []
+
             pipe = r.pipeline(transaction=True)
             pipe.set(msg_key, _json_dumps(payload))
             pipe.zadd(ids_key, {str(mid): mid})
-            # Trim to size (remove oldest)
             pipe.zremrangebyrank(ids_key, 0, -(size + 1))
             if ttl > 0:
                 pipe.expire(msg_key, ttl)
                 pipe.expire(ids_key, ttl)
+            pipe.execute()
 
-            # Refresh meta from the ZSET
-            pipe.zrange(ids_key, 0, 0)          # min
-            pipe.zrange(ids_key, -1, -1)        # max
-            pipe.zcard(ids_key)
-            results = pipe.execute()
-            # results indices: set, zadd, zrem..., [expire...], zrange_min, zrange_max, zcard
-            # Because of optional expires the offsets vary; re-fetch cleanly.
+            # Delete payload keys for ids no longer in the ZSET
+            try:
+                still = set()
+                for x in r.zrange(ids_key, 0, -1) or []:
+                    if isinstance(x, bytes):
+                        x = x.decode()
+                    still.add(str(x))
+                drop = []
+                for x in excess or []:
+                    if isinstance(x, bytes):
+                        x = x.decode()
+                    if str(x) not in still and str(x) != str(mid):
+                        drop.append(_msg_key(conv_id, int(x)))
+                if drop:
+                    r.delete(*drop)
+            except Exception:
+                logger.exception("message_cache.add_message orphan cleanup failed")
+
             min_raw = r.zrange(ids_key, 0, 0)
             max_raw = r.zrange(ids_key, -1, -1)
             count = r.zcard(ids_key)

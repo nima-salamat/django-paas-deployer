@@ -58,7 +58,13 @@ class MessageListCreateAPIView(APIView):
         before_id = _parse_id("before_id")
         after_id = _parse_id("after_id")
         around_id = _parse_id("around_id")
-        limit = min(80, max(1, int(request.query_params.get("limit") or 40)))
+        try:
+            from django.conf import settings as _dj_settings
+            _cache_cap = int(getattr(_dj_settings, "MESSAGE_CACHE_SIZE", 1000) or 1000)
+        except Exception:
+            _cache_cap = 1000
+        # Never ask for more than the hot-window size in one shot
+        limit = min(80, _cache_cap, max(1, int(request.query_params.get("limit") or 40)))
 
         history_restricted = False
         if conv.type == Conversation.Type.GROUP and part.role not in ("owner", "admin"):
@@ -66,24 +72,30 @@ class MessageListCreateAPIView(APIView):
             if visibility in ("none", "from_join") and part.joined_at:
                 history_restricted = True
 
-        # Redis hot-cache only for the simple "latest page" / before_id path
-        if not history_restricted and around_id is None and after_id is None:
+        # Redis hot-window: id list (ZSET) + per-message payloads.
+        # Serves before_id / after_id / around_id when the chunk is inside the
+        # contiguous latest MESSAGE_CACHE_SIZE suffix; otherwise DB.
+        if not history_restricted:
             try:
                 from ..message_cache import MessageCacheService
-                cached = MessageCacheService.get_cached_messages(
-                    conv.id, before_id, limit
+                window = MessageCacheService.get_message_window(
+                    conv.id,
+                    before_id=before_id,
+                    after_id=after_id,
+                    around_id=around_id,
+                    limit=limit,
                 )
-                if cached is not None:
-                    base_msgs, has_more, next_before = cached
+                if window is not None:
+                    base_msgs = window["messages"]
                     results = MessageCacheService.enrich_for_viewer(
                         base_msgs, request, conv.id
                     )
                     resp = ok(data={
                         "results": results,
-                        "has_more": has_more,
-                        "next_before_id": next_before,
-                        "has_more_newer": False if before_id is None else True,
-                        "next_after_id": (base_msgs[-1].get("id") if base_msgs and before_id is not None else None),
+                        "has_more": window["has_more"],
+                        "next_before_id": window["next_before_id"],
+                        "has_more_newer": window["has_more_newer"],
+                        "next_after_id": window["next_after_id"],
                         "cache": "HIT",
                     })
                     try:
@@ -150,10 +162,10 @@ class MessageListCreateAPIView(APIView):
             has_more_newer = len(newer) > limit
             newer = newer[:limit]
             items = newer
-            # Older history may still exist above the previous window
-            has_more = base_qs.filter(id__lte=after_id).exists()
-            if has_more:
-                next_before = after_id
+            # Mid-history clients always keep has_more=true for older scroll;
+            # avoids an extra EXISTS round-trip on the hot path.
+            has_more = True
+            next_before = after_id
             if has_more_newer and newer:
                 next_after = newer[-1].id
             elif newer:
@@ -180,7 +192,8 @@ class MessageListCreateAPIView(APIView):
                 next_after = items[-1].id
 
             # Populate Redis in background so this response is not delayed.
-            if not history_restricted and before_id is None and items:
+            # Latest page seeds immediately; full rebuild fills up to MESSAGE_CACHE_SIZE.
+            if not history_restricted and before_id is None and around_id is None and after_id is None and items:
                 try:
                     from ..message_cache import MessageCacheService, run_after_commit
                     conv_id = conv.id
@@ -191,6 +204,16 @@ class MessageListCreateAPIView(APIView):
                     run_after_commit(lambda: MessageCacheService.rebuild_chat_cache(conv_id))
                 except Exception:
                     logger.exception("message cache populate schedule failed")
+            elif not history_restricted and items:
+                # Cold / partial window: rebuild once so subsequent before/after/around hit Redis
+                try:
+                    from ..message_cache import MessageCacheService, run_after_commit
+                    meta = MessageCacheService.get_meta(conv.id)
+                    if not meta or not meta.get("count"):
+                        conv_id = conv.id
+                        run_after_commit(lambda: MessageCacheService.rebuild_chat_cache(conv_id))
+                except Exception:
+                    logger.exception("message cache cold-rebuild schedule failed")
 
         ctx = build_message_list_context(request, items, conversation_id=conv.id)
         ser = MessageSerializer(items, many=True, context=ctx)
