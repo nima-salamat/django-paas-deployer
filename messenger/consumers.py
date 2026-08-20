@@ -22,27 +22,118 @@ from rest_framework_simplejwt.tokens import AccessToken
 User = get_user_model()
 logger = logging.getLogger("messenger.ws")
 
-# Cache key helpers — TTL of 120s; refreshed by ping
+# Presence: connection-counted + short TTL (refreshed by ping without rebroadcast)
 ONLINE_KEY = "messenger:online:{uid}"
-ONLINE_TTL = 120  # seconds
+ONLINE_CONNS_KEY = "messenger:online_conns:{uid}"
+ONLINE_TTL = 90  # seconds — must exceed client ping interval (~25s)
 
 
-def set_user_online(user_id: int):
-    """Mark a user as online in cache and broadcast presence to their conversations."""
+def _touch_online_flag(user_id: int) -> None:
     try:
         cache.set(ONLINE_KEY.format(uid=user_id), True, ONLINE_TTL)
     except Exception:
         pass
-    _broadcast_presence(user_id, True)
 
 
-def set_user_offline(user_id: int):
-    """Mark a user as offline and broadcast presence."""
+def set_user_online(user_id: int, *, broadcast: bool = True) -> None:
+    """Register one live WS connection. Broadcast only on 0 → 1 transition (or forced)."""
+    if not user_id:
+        return
+    key = ONLINE_CONNS_KEY.format(uid=user_id)
+    was_online = False
     try:
-        cache.delete(ONLINE_KEY.format(uid=user_id))
+        was_online = bool(cache.get(ONLINE_KEY.format(uid=user_id)))
+        # Increment connection count
+        try:
+            n = cache.incr(key)
+        except ValueError:
+            cache.set(key, 1, ONLINE_TTL + 60)
+            n = 1
+        except Exception:
+            n = 1
+            try:
+                cache.set(key, 1, ONLINE_TTL + 60)
+            except Exception:
+                pass
+        else:
+            try:
+                cache.touch(key, ONLINE_TTL + 60)
+            except Exception:
+                try:
+                    cache.set(key, n, ONLINE_TTL + 60)
+                except Exception:
+                    pass
+        _touch_online_flag(user_id)
+        # Only announce when newly online
+        if broadcast and (not was_online or n == 1):
+            _broadcast_presence(user_id, True)
     except Exception:
-        pass
-    _broadcast_presence(user_id, False)
+        logger.exception("set_user_online failed uid=%s", user_id)
+        _touch_online_flag(user_id)
+        if broadcast:
+            _broadcast_presence(user_id, True)
+
+
+def refresh_user_online(user_id: int) -> None:
+    """Ping heartbeat: extend TTL only — do NOT rebroadcast (avoids permanent 'online' spam)."""
+    if not user_id:
+        return
+    try:
+        conns = cache.get(ONLINE_CONNS_KEY.format(uid=user_id))
+        if not conns:
+            # Stale flag without connections — clear
+            try:
+                cache.delete(ONLINE_KEY.format(uid=user_id))
+            except Exception:
+                pass
+            return
+        _touch_online_flag(user_id)
+        try:
+            cache.touch(ONLINE_CONNS_KEY.format(uid=user_id), ONLINE_TTL + 60)
+        except Exception:
+            try:
+                cache.set(ONLINE_CONNS_KEY.format(uid=user_id), int(conns), ONLINE_TTL + 60)
+            except Exception:
+                pass
+    except Exception:
+        logger.exception("refresh_user_online failed uid=%s", user_id)
+
+
+def set_user_offline(user_id: int) -> None:
+    """Drop one connection. Broadcast offline only when the last connection closes."""
+    if not user_id:
+        return
+    key = ONLINE_CONNS_KEY.format(uid=user_id)
+    try:
+        try:
+            n = cache.decr(key)
+        except ValueError:
+            n = 0
+        except Exception:
+            n = 0
+        if n is None or n < 0:
+            n = 0
+        if n <= 0:
+            try:
+                cache.delete(key)
+            except Exception:
+                pass
+            try:
+                cache.delete(ONLINE_KEY.format(uid=user_id))
+            except Exception:
+                pass
+            _broadcast_presence(user_id, False)
+        else:
+            # Still have other tabs/devices
+            _touch_online_flag(user_id)
+    except Exception:
+        logger.exception("set_user_offline failed uid=%s", user_id)
+        try:
+            cache.delete(ONLINE_KEY.format(uid=user_id))
+            cache.delete(key)
+        except Exception:
+            pass
+        _broadcast_presence(user_id, False)
 
 
 def is_user_online(user_id: int) -> bool:
@@ -50,14 +141,20 @@ def is_user_online(user_id: int) -> bool:
     if not user_id:
         return False
     try:
-        return bool(cache.get(ONLINE_KEY.format(uid=user_id)))
+        if not bool(cache.get(ONLINE_KEY.format(uid=user_id))):
+            return False
+        conns = cache.get(ONLINE_CONNS_KEY.format(uid=user_id))
+        if conns is not None and int(conns) <= 0:
+            return False
+        return True
     except Exception:
         return False
 
 
-def _broadcast_presence(user_id: int, online: bool):
-    """Send presence.update to every conversation the user is part of."""
+def _broadcast_presence(user_id: int, online: bool) -> None:
+    """Notify conversation rooms AND every peer's personal channel (chat-list viewers)."""
     from .models import ConversationParticipant
+
     try:
         conv_ids = list(
             ConversationParticipant.objects.filter(
@@ -65,16 +162,36 @@ def _broadcast_presence(user_id: int, online: bool):
             ).values_list("conversation_id", flat=True)
         )
     except Exception:
-        return
+        conv_ids = []
+
     data = {
         "type": "presence.update",
-        "user_id": user_id,
-        "online": online,
+        "user_id": int(user_id),
+        "online": bool(online),
     }
     for cid in conv_ids:
         _send(f"messenger_conv_{cid}", data)
-    # Also notify the user's personal channel (so other tabs update)
+
+    # Peers on the conversation list may only be in messenger_user_{peer}
+    peer_ids = set()
+    if conv_ids:
+        try:
+            peer_ids = set(
+                ConversationParticipant.objects.filter(
+                    conversation_id__in=conv_ids,
+                    left_at__isnull=True,
+                )
+                .exclude(user_id=user_id)
+                .values_list("user_id", flat=True)
+                .distinct()[:2000]
+            )
+        except Exception:
+            peer_ids = set()
+    for pid in peer_ids:
+        _send(f"messenger_user_{pid}", data)
+    # Own other tabs
     _send(f"messenger_user_{user_id}", data)
+
 
 
 async def authenticate_from_scope(scope):
@@ -133,9 +250,9 @@ class MessengerConsumer(AsyncJsonWebsocketConsumer):
             return
         t = content.get("type")
         if t == "ping":
-            # Refresh online presence on ping
+            # Heartbeat only — do not rebroadcast online (that caused sticky presence)
             if getattr(self, "user", None):
-                await database_sync_to_async(set_user_online)(self.user.id)
+                await database_sync_to_async(refresh_user_online)(self.user.id)
                 # Re-check ringing calls (covers offline→online within 30s window)
                 try:
                     pending = await database_sync_to_async(_pending_ringing_for_user)(self.user.id)
