@@ -61,7 +61,33 @@ def _auto_transfer_or_cleanup(conv, leaving_part):
     if not remaining:
         # No one left — delete the group entirely (messages, attachments, etc.)
         conv_id = conv.pk
+        leaver_uid = leaving_part.user_id
+        # Unlink media files from disk before cascade-delete rows.
+        try:
+            for att in MessageAttachment.objects.filter(conversation=conv).iterator():
+                try:
+                    if att.file:
+                        att.file.delete(save=False)
+                except Exception:
+                    logger.warning(
+                        "auto_cleanup: could not delete file att=%s",
+                        att.id,
+                        exc_info=True,
+                    )
+        except Exception:
+            logger.exception(
+                "auto_cleanup: attachment file cleanup failed conv=%s", conv_id
+            )
         conv.delete()
+        try:
+            from ..message_cache import MessageCacheService, ConversationCacheService
+            MessageCacheService.invalidate_chat_cache(conv_id)
+            ConversationCacheService.invalidate_participants(conv_id)
+            ConversationCacheService.invalidate_user_conv_list(leaver_uid)
+        except Exception:
+            logger.exception(
+                "auto_cleanup: cache invalidation failed conv=%s", conv_id
+            )
         return None, True
     # Pick the oldest admin; if none, the oldest member
     new_owner = next(
@@ -162,8 +188,52 @@ class LeaveConversationAPIView(APIView):
             _schedule_member_cache(pk, extra_user_ids=[request.user.id])
         else:
             # Private DM: hide for both and hard-delete
-            ConversationParticipant.objects.filter(conversation=conv).update(left_at=timezone.now())
+            participant_uids = list(
+                ConversationParticipant.objects.filter(
+                    conversation=conv, left_at__isnull=True
+                ).values_list("user_id", flat=True)
+            )
+            ConversationParticipant.objects.filter(conversation=conv).update(
+                left_at=timezone.now()
+            )
+            try:
+                for att in MessageAttachment.objects.filter(conversation=conv).iterator():
+                    try:
+                        if att.file:
+                            att.file.delete(save=False)
+                    except Exception:
+                        logger.warning(
+                            "Leave DM: could not delete file att=%s",
+                            att.id,
+                            exc_info=True,
+                        )
+            except Exception:
+                logger.exception(
+                    "Leave DM: attachment file cleanup failed conv=%s", pk
+                )
             conv.delete()
+            try:
+                from ..message_cache import MessageCacheService, ConversationCacheService
+                MessageCacheService.invalidate_chat_cache(pk)
+                ConversationCacheService.invalidate_participants(pk)
+                for uid in participant_uids:
+                    ConversationCacheService.invalidate_user_conv_list(uid)
+            except Exception:
+                logger.exception(
+                    "Leave DM: cache invalidation failed conv=%s", pk
+                )
+            try:
+                from ..consumers import broadcast_member_change, _send
+                payload = {
+                    "type": "conversation.deleted",
+                    "conversation_id": pk,
+                    "user_id": request.user.id,
+                }
+                broadcast_member_change(pk, payload)
+                for uid in participant_uids:
+                    _send(f"messenger_user_{uid}", payload)
+            except Exception:
+                pass
             return ok("Left")
         return ok("Left", data={"transferred_to": transferred_to})
 
@@ -460,23 +530,84 @@ class DeleteConversationAPIView(APIView):
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
 
+        # Snapshot participant user ids BEFORE any leave/delete so we can
+        # invalidate their conversation-list caches after the row is gone.
+        participant_uids = list(
+            ConversationParticipant.objects.filter(
+                conversation=conv, left_at__isnull=True
+            ).values_list("user_id", flat=True)
+        )
+        conv_id = conv.pk
+
         if conv.type == Conversation.Type.PRIVATE:
             # Hide for everyone in the DM and remove conversation
-            ConversationParticipant.objects.filter(conversation=conv).update(left_at=timezone.now())
-            # Hard delete conversation (cascades messages)
-            conv_id = conv.pk
-            conv.delete()
-            return ok("Chat deleted", data={"id": conv_id})
+            ConversationParticipant.objects.filter(conversation=conv).update(
+                left_at=timezone.now()
+            )
+        else:
+            # Group: owner or admin may delete entire group
+            if part.role not in (
+                ConversationParticipant.Role.OWNER,
+                ConversationParticipant.Role.ADMIN,
+            ):
+                return err(
+                    "Only group owner/admin can delete the group",
+                    status.HTTP_403_FORBIDDEN,
+                )
 
-        # Group: owner or admin may delete entire group
-        if part.role not in (
-            ConversationParticipant.Role.OWNER,
-            ConversationParticipant.Role.ADMIN,
-        ):
-            return err("Only group owner/admin can delete the group", status.HTTP_403_FORBIDDEN)
-        conv_id = conv.pk
+        # Delete attachment files from disk (FileField does not auto-unlink).
+        try:
+            for att in MessageAttachment.objects.filter(conversation=conv).iterator():
+                try:
+                    if att.file:
+                        att.file.delete(save=False)
+                except Exception:
+                    logger.warning(
+                        "DeleteConversation: could not delete file att=%s",
+                        att.id,
+                        exc_info=True,
+                    )
+        except Exception:
+            logger.exception(
+                "DeleteConversation: attachment file cleanup failed conv=%s", conv_id
+            )
+
+        # Hard delete conversation (cascades messages, attachments rows, etc.)
         conv.delete()
-        return ok("Group deleted", data={"id": conv_id})
+
+        # Drop Redis caches so clients don't keep seeing a deleted chat.
+        try:
+            from ..message_cache import MessageCacheService, ConversationCacheService
+            MessageCacheService.invalidate_chat_cache(conv_id)
+            ConversationCacheService.invalidate_participants(conv_id)
+            # invalidate_conv_lists_for_conversation queries live participants;
+            # conversation is already gone, so clear lists by known user ids.
+            for uid in participant_uids:
+                ConversationCacheService.invalidate_user_conv_list(uid)
+        except Exception:
+            logger.exception(
+                "DeleteConversation: cache invalidation failed conv=%s", conv_id
+            )
+
+        # Notify participants so open clients close / refresh the chat.
+        try:
+            from ..consumers import broadcast_member_change, _send
+            payload = {
+                "type": "conversation.deleted",
+                "conversation_id": conv_id,
+                "user_id": request.user.id,
+            }
+            broadcast_member_change(conv_id, payload)
+            for uid in participant_uids:
+                _send(f"messenger_user_{uid}", payload)
+        except Exception:
+            logger.exception(
+                "DeleteConversation: broadcast failed conv=%s", conv_id
+            )
+
+        label = "Chat deleted" if conv.type == Conversation.Type.PRIVATE else "Group deleted"
+        # Note: conv.type was read before delete; object is gone but attrs remain on instance.
+        return ok(label, data={"id": conv_id})
 
 
 

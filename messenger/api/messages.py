@@ -110,13 +110,32 @@ class MessageListCreateAPIView(APIView):
         # Postgres path (source of truth)
         # ------------------------------------------------------------------
         from django.db.models import Q
+        from ..models import AttachmentViewOnceOpen
+        # Prefetch attachments + this viewer's view-once opens to avoid N+1
+        # (MessageAttachmentSerializer._view_once_opened falls back to .exists()).
+        att_qs = MessageAttachment.objects.prefetch_related(
+            Prefetch(
+                "view_once_opens",
+                queryset=AttachmentViewOnceOpen.objects.filter(
+                    user_id=request.user.id
+                ),
+                to_attr="_prefetched_view_once_opens",
+            )
+        )
         base_qs = (
             Message.objects.filter(conversation=conv, is_deleted=False)
             .filter(Q(is_scheduled=False) | Q(is_scheduled=True, sender=request.user))
             .select_related("sender", "reply_to", "reply_to__sender", "forwarded_from")
-            .prefetch_related("attachments", "reactions")
+            .prefetch_related(
+                Prefetch("attachments", queryset=att_qs),
+                "reactions",
+            )
         )
         if history_restricted:
+            # Channel/group history visibility for non-admins:
+            # from_join / none → only messages at or after the member's join time.
+            # before_id / after_id / around_id all go through this same filter so
+            # clients cannot scroll into pre-join history.
             base_qs = base_qs.filter(created_at__gte=part.joined_at)
 
         has_more = False

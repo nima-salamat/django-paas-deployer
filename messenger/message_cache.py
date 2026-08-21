@@ -722,8 +722,18 @@ class MessageCacheService:
                 record_miss("msg")
                 return None
 
-            if messages and int(messages[0]["id"]) > min_id:
-                has_more = True
+            # has_more (older) accuracy at the bottom of the hot window:
+            # - If oldest returned id is still above min_id, more exists in cache.
+            # - If oldest returned id == min_id, older messages may still exist in
+            #   Postgres (outside the MESSAGE_CACHE_SIZE suffix). Signal has_more
+            #   so the client issues another before_id request; that call misses
+            #   cache (is_range_cached → False) and DB returns the truth.
+            if messages:
+                oldest = int(messages[0]["id"])
+                if oldest > min_id:
+                    has_more = True
+                elif oldest == min_id:
+                    has_more = True
             next_before = messages[0]["id"] if has_more and messages else None
             has_more_newer = before_id is not None
             next_after = messages[-1]["id"] if messages else None

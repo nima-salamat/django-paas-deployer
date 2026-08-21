@@ -218,6 +218,17 @@ class ConversationCleanupAPIView(APIView):
         Conversation.objects.filter(pk=conv.pk).update(
             last_message_at=None, updated_at=timezone.now()
         )
+        # Drop Redis hot-cache for this chat + participant conversation lists.
+        # Without this, clients keep seeing the old messages until TTL/expiry.
+        try:
+            from ..message_cache import MessageCacheService, ConversationCacheService
+            MessageCacheService.invalidate_chat_cache(conv.id)
+            ConversationCacheService.invalidate_conv_lists_for_conversation(conv.id)
+            ConversationCacheService.invalidate_participants(conv.id)
+        except Exception:
+            logger.exception(
+                "ConversationCleanup: cache invalidation failed conv=%s", conv.id
+            )
         # Broadcast to all participants so their clients reload the chat
         # (otherwise they'd be looking at stale messages that are now gone).
         try:
