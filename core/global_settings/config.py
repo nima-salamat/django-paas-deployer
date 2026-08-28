@@ -83,7 +83,6 @@ class SERVICE_STATUS_CHOICES(models.TextChoices):
 # Code-level fallbacks (DB SystemSetting overrides these at runtime)
 MIRROR_DOCKER = "docker.arvancloud.ir"
 MIRROR_PYTHON = "https://mirror-pypi.runflare.com/simple"
-# Packagist/Composer mirror. Empty = official repo.packagist.org
 MIRROR_COMPOSER = "https://package-mirror.liara.ir/repository/composer/"
 
 DEFAULT_RUNTIME_VERSIONS = {
@@ -160,7 +159,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \
     && (grep -q '^ServerName ' /etc/apache2/apache2.conf || echo 'ServerName localhost' >> /etc/apache2/apache2.conf) \
     && echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache-laravel.ini \
-    && echo "opcache.memory_consumption=128" >> /usr/local/etc/php/conf.d/opcache-laravel.ini \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from={MIRROR_DOCKER}/composer:2 /usr/bin/composer /usr/bin/composer
@@ -171,7 +169,6 @@ RUN set -eux; \
       found=$(find /var/www/html -maxdepth 3 -type f -name composer.json | head -n1 || true); \
       if [ -n "$found" ]; then \
         appdir=$(dirname "$found"); \
-        echo "Promoting nested Laravel app from $appdir"; \
         tmp=/tmp/laravel-root; rm -rf "$tmp"; mkdir -p "$tmp"; \
         cp -a "$appdir"/. "$tmp"/; \
         find /var/www/html -mindepth 1 -maxdepth 1 ! -name . -exec rm -rf {{}} +; \
@@ -180,11 +177,8 @@ RUN set -eux; \
       fi; \
     fi; \
     cd /var/www/html; \
-    ls -la; \
     test -f composer.json; \
-    php -v; \
     if [ -n "{MIRROR_COMPOSER}" ]; then \
-      echo "Using Composer mirror: {MIRROR_COMPOSER}"; \
       composer config -g repo.packagist composer {MIRROR_COMPOSER}; \
       composer config -g secure-http false; \
     fi; \
@@ -194,10 +188,14 @@ RUN set -eux; \
       --no-dev --prefer-dist --no-interaction --optimize-autoloader --no-scripts \
       --ignore-platform-reqs; \
     test -f vendor/autoload.php; \
-    echo "Laravel composer install OK"; \
     mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache; \
+    # Critical: --no-scripts skips package:discover → "Target class [view] does not exist"
+    php artisan package:discover --ansi || true; \
+    php artisan config:clear || true; \
+    php artisan view:clear || true; \
     chown -R www-data:www-data /var/www/html; \
-    chmod -R ug+rwx storage bootstrap/cache
+    chmod -R ug+rwx storage bootstrap/cache; \
+    echo "Laravel composer install OK"
 
 EXPOSE {port}
 CMD ["apache2-foreground"]
