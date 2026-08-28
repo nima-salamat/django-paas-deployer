@@ -129,16 +129,24 @@ class DeploymentHelper:
         key = (platform or "").lower().strip()
         attr = DeploymentHelper._DOCKERFILE_ALIASES.get(key, key)
 
-        # 1) DB template if present
+        # Prefer in-code Config for PHP/Laravel.  DB-stored templates are
+        # often stale (no composer install, broken DocumentRoot sed).
+        _prefer_code = attr in ("php",) or key in (
+            "php", "laravel", "symfony", "codeigniter", "lumen",
+        )
+
         raw = None
-        try:
-            from core import settings_service as svc
+        if _prefer_code:
+            raw = getattr(Config, attr, None) or getattr(Config, key, None)
 
-            raw = svc.dockerfile_template(attr) or svc.dockerfile_template(key)
-        except Exception:
-            pass
+        if not raw:
+            try:
+                from core import settings_service as svc
 
-        # 2) Code Config class
+                raw = svc.dockerfile_template(attr) or svc.dockerfile_template(key)
+            except Exception:
+                pass
+
         if not raw:
             raw = getattr(Config, attr, None) or getattr(Config, key, None)
         if not raw:

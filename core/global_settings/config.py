@@ -3,14 +3,14 @@ from django.utils.translation import gettext_lazy as _
 
 
 APPLICATIONS = [
-    "php", "python", "django", "nextjs", "nodejs", "flask", "docker", "go",
+    "php", "laravel", "python", "django", "nextjs", "nodejs", "flask", "docker", "go",
     "statichtmlcss", "vuejs", "angular", "react", "dotnet",
 ]
 
 DBS = ["mysql", "postgresql", "mariadb", "mongodb", "redis", "oracle"]
 
 PLATFORM_CHOICES = [
-    ("php", "PHP"), ("python", "Python"), ("django", "Django"),
+    ("php", "PHP"), ("laravel", "Laravel"), ("python", "Python"), ("django", "Django"),
     ("nextjs", "Next.js"), ("nodejs", "Node.js"), ("flask", "Flask"),
     ("docker", "Docker"), ("go", "Go"), ("statichtmlcss", "Static HTML/CSS"),
     ("vuejs", "Vue.js"), ("angular", "Angular"), ("react", "React"),
@@ -21,7 +21,7 @@ PLATFORM_CHOICES = [
 
 # Fallback when DB settings are empty
 default_ports = {
-    "php": 80, "python": None, "django": 8000, "nextjs": 3000, "nodejs": 3000,
+    "php": 80, "laravel": 80, "python": None, "django": 8000, "nextjs": 3000, "nodejs": 3000,
     "flask": 5000, "docker": None, "go": None, "statichtmlcss": 80,
     "vuejs": 80, "angular": 80, "react": 80, "dotnet": 5000,
     "mysql": 3306, "postgresql": 5432, "mariadb": 3306, "mongodb": 27017,
@@ -106,17 +106,51 @@ class Config:
     php = """
 FROM {MIRROR_DOCKER}/php:{php_version}-apache
 
-ENV APACHE_DOCUMENT_ROOT=/var/www/html
+# DocumentRoot rewritten by deployer (_apply_php_document_root).
+ENV APACHE_DOCUMENT_ROOT=/var/www/html \
+    COMPOSER_ALLOW_SUPERUSER=1 \
+    COMPOSER_MEMORY_LIMIT=-1
+
+WORKDIR /var/www/html
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git unzip libzip-dev libpng-dev libjpeg62-turbo-dev libfreetype6-dev libicu-dev \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install -j$(nproc) mysqli pdo pdo_mysql opcache zip gd intl bcmath \
+    && a2enmod rewrite headers \
+    && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \
+    && (grep -q '^ServerName ' /etc/apache2/apache2.conf || echo 'ServerName localhost' >> /etc/apache2/apache2.conf) \
+    && echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache.ini \
+    && echo "opcache.memory_consumption=128" >> /usr/local/etc/php/conf.d/opcache.ini \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from={MIRROR_DOCKER}/composer:2 /usr/bin/composer /usr/bin/composer
+
 COPY . /var/www/html/
-RUN docker-php-ext-install mysqli pdo pdo_mysql opcache \\
-    && a2enmod rewrite headers \\
-    && sed -ri -e 's!/var/www/html!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/sites-available/*.conf \\
-    && sed -ri -e 's!/var/www/!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/apache2.conf /etc/apache2/conf-available/*.conf \\
-    && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \\
-    && echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache.ini
+
+# Laravel / any composer project: install deps at build time.
+RUN if [ -f composer.json ]; then \
+      composer install \
+        --no-dev \
+        --prefer-dist \
+        --no-interaction \
+        --no-progress \
+        --optimize-autoloader \
+        --no-scripts \
+      && test -f vendor/autoload.php \
+      && echo "composer install OK"; \
+    fi \
+    && mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache \
+    && chown -R www-data:www-data /var/www/html \
+    && chmod -R ug+rwx storage bootstrap/cache 2>/dev/null || true
+
 EXPOSE {port}
 CMD ["apache2-foreground"]
 """
+
+    # Laravel shares the PHP image; deployer forces DocumentRoot=public + migrate.
+    laravel = php
+
 
     python = """
 FROM {MIRROR_DOCKER}/python:{python_version}-slim

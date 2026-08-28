@@ -1713,21 +1713,24 @@ def _inject_php_runtime(
         else:
             app_root = f"/var/www/html/{rel}"
 
-    # Always run composer install when composer.json is present and
-    # vendor/autoload.php is missing.  This is the #1 Laravel failure mode
-    # (Fatal error: Failed opening required vendor/autoload.php).
-    if has_composer and not info.get("has_vendor"):
+    # Composer install: the PHP/Laravel template may already contain a
+    # `composer install` RUN. Only inject when the rendered Dockerfile does
+    # not already run composer (avoids duplicate layers / conflicts).
+    already_has_composer = bool(
+        re.search(r"\bcomposer\s+install\b", dockerfile, re.IGNORECASE)
+    )
+    if (
+        has_composer
+        and not info.get("has_vendor")
+        and not already_has_composer
+    ):
         composer_block = (
             "\n# --- Composer dependencies (injected by deployer) ---\n"
-            # System libs needed by composer (zip) and common Laravel packages
             "RUN apt-get update && apt-get install -y --no-install-recommends \\\n"
             "        git unzip libzip-dev \\\n"
             "    && docker-php-ext-install zip \\\n"
             "    && rm -rf /var/lib/apt/lists/*\n"
             f"COPY --from={MIRROR_DOCKER}/composer:2 /usr/bin/composer /usr/bin/composer\n"
-            # Run from the application root (parent of public/ for Laravel).
-            # COMPOSER_ALLOW_SUPERUSER avoids the root warning that can
-            # exit non-zero under some CI settings.
             f"RUN cd {app_root} \\\n"
             "    && test -f composer.json \\\n"
             "    && COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_MEMORY_LIMIT=-1 \\\n"
@@ -1741,7 +1744,6 @@ def _inject_php_runtime(
             "    && test -f vendor/autoload.php \\\n"
             "    && echo 'composer install OK'\n"
         )
-        # Prefer inserting right after COPY so vendor lands in the image layer
         if re.search(r"^COPY\s+\.\s+/var/www/html/?\s*$", dockerfile, re.MULTILINE):
             dockerfile = re.sub(
                 r"^(COPY\s+\.\s+/var/www/html/?\s*)$",
@@ -1752,6 +1754,12 @@ def _inject_php_runtime(
             )
         else:
             dockerfile = dockerfile.rstrip() + "\n" + composer_block
+    elif already_has_composer and logger:
+        logger.info(
+            "dockerfile_generation",
+            "Template already contains composer install; skip injection.",
+            progress=15,
+        )
 
     if writable_dirs:
         safe_dirs = [
@@ -1839,11 +1847,29 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
         except Exception:
             project_cfg = None
 
+    # Resolve platform early so Laravel gets forced defaults even when
+    # archive inspection is incomplete.
+    cfg_platform = ""
+    if config is not None:
+        cfg_platform = (getattr(config, "platform", None) or "").lower()
+    forced_laravel = cfg_platform in (
+        "laravel", "lumen", "symfony", "codeigniter",
+    )
+
     doc_root_rel = _detect_php_document_root(
         tar_stream,
         user_override=user_doc_root,
         project_cfg=project_cfg,
     )
+
+    # Laravel ALWAYS serves from public/ after flatten.  If detection
+    # returned "" but platform is laravel, force "public".
+    if forced_laravel and not doc_root_rel:
+        doc_root_rel = "public"
+    if project_cfg is not None and not doc_root_rel:
+        fw = (getattr(project_cfg, "framework", None) or "").lower()
+        if fw in ("laravel", "lumen", "symfony"):
+            doc_root_rel = "public"
 
     if logger:
         absolute = (
@@ -1856,7 +1882,8 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
             details={
                 "document_root": absolute,
                 "document_root_rel": doc_root_rel or "",
-                "platform": "php",
+                "platform": cfg_platform or "php",
+                "forced_laravel": forced_laravel,
             },
         )
 
@@ -1877,8 +1904,6 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
     rendered = _apply_php_document_root(rendered, doc_root_rel)
 
     # Detect Laravel / schema.sql and inject composer + migrate entrypoint.
-    # Prefer official platform plugin signals (LaravelPlatform.defaults migrate=True)
-    # when enrich_config_from_project has attached ProjectConfig.
     php_info = _detect_php_project(tar_stream)
     composer_meta = php_info.get("composer") or {}
     min_php = _php_min_version(composer_meta.get("php_constraint"))
@@ -1888,28 +1913,31 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
             lambda m: f"{m.group(1)}{min_php}{m.group(2)}",
             rendered, count=1, flags=re.IGNORECASE,
         )
+
+    # Force Laravel flags from platform name / project_cfg
     if project_cfg is not None:
         fw = (getattr(project_cfg, "framework", None) or "").lower()
         platform_name = (getattr(project_cfg, "platform", None) or "").lower()
         if fw == "laravel" or platform_name == "laravel":
             php_info["is_laravel"] = True
             php_info["has_artisan"] = True
-    # Also honour Deploy.config platform=laravel even without project_cfg
-    cfg_platform = ""
-    if config is not None:
-        cfg_platform = (getattr(config, "platform", None) or "").lower()
-    if cfg_platform == "laravel":
+            php_info["has_composer"] = True
+    if forced_laravel:
         php_info["is_laravel"] = True
-        # Explicit migrate flag from LaravelPlatform.defaults()
-        migrate_flag = getattr(project_cfg, "migrate", None)
-        if migrate_flag is None and isinstance(getattr(project_cfg, "extra", None), dict):
-            migrate_flag = project_cfg.extra.get("migrate")
-        if migrate_flag is True:
-            php_info["is_laravel"] = True
-        # Writable dirs for storage/bootstrap/cache
+        php_info["has_artisan"] = True
+        # Ensure composer runs even if archive inspection missed composer.json
+        php_info["has_composer"] = True
+        # Never skip install just because a partial vendor/ was in the zip
+        if not php_info.get("has_vendor"):
+            php_info["has_vendor"] = False
         extra = getattr(project_cfg, "extra", None) or {}
         if isinstance(extra, dict) and extra.get("writable_dirs"):
             php_info["writable_dirs"] = list(extra["writable_dirs"])
+        else:
+            php_info.setdefault("writable_dirs", [])
+            for d in ("storage", "bootstrap/cache"):
+                if d not in php_info["writable_dirs"]:
+                    php_info["writable_dirs"].append(d)
 
     rendered = _inject_php_runtime(
         rendered,
