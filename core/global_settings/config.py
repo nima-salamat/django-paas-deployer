@@ -3,14 +3,14 @@ from django.utils.translation import gettext_lazy as _
 
 
 APPLICATIONS = [
-    "php", "laravel", "python", "django", "nextjs", "nodejs", "flask", "docker", "go",
+    "php", "python", "django", "nextjs", "nodejs", "flask", "docker", "go",
     "statichtmlcss", "vuejs", "angular", "react", "dotnet",
 ]
 
 DBS = ["mysql", "postgresql", "mariadb", "mongodb", "redis", "oracle"]
 
 PLATFORM_CHOICES = [
-    ("php", "PHP"), ("laravel", "Laravel"), ("python", "Python"), ("django", "Django"),
+    ("php", "PHP"), ("python", "Python"), ("django", "Django"),
     ("nextjs", "Next.js"), ("nodejs", "Node.js"), ("flask", "Flask"),
     ("docker", "Docker"), ("go", "Go"), ("statichtmlcss", "Static HTML/CSS"),
     ("vuejs", "Vue.js"), ("angular", "Angular"), ("react", "React"),
@@ -21,7 +21,7 @@ PLATFORM_CHOICES = [
 
 # Fallback when DB settings are empty
 default_ports = {
-    "php": 80, "laravel": 80, "python": None, "django": 8000, "nextjs": 3000, "nodejs": 3000,
+    "php": 80, "python": None, "django": 8000, "nextjs": 3000, "nodejs": 3000,
     "flask": 5000, "docker": None, "go": None, "statichtmlcss": 80,
     "vuejs": 80, "angular": 80, "react": 80, "dotnet": 5000,
     "mysql": 3306, "postgresql": 5432, "mariadb": 3306, "mongodb": 27017,
@@ -104,20 +104,18 @@ class Config:
     """Dockerfile templates — placeholders filled by DeploymentHelper."""
 
     # ------------------------------------------------------------------
-    # Plain PHP (no framework) — DocumentRoot is /var/www/html by default.
-    # Deployer may rewrite DocumentRoot if index.php lives in a subfolder.
+    # Plain PHP — DocumentRoot defaults to /var/www/html
     # ------------------------------------------------------------------
     php = """
 FROM {MIRROR_DOCKER}/php:{php_version}-apache
 
-ENV APACHE_DOCUMENT_ROOT=/var/www/html \
-    COMPOSER_ALLOW_SUPERUSER=1 \
-    COMPOSER_MEMORY_LIMIT=-1
+ENV APACHE_DOCUMENT_ROOT=/var/www/html
+ENV COMPOSER_ALLOW_SUPERUSER=1
+ENV COMPOSER_MEMORY_LIMIT=-1
 
 WORKDIR /var/www/html
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        git unzip libzip-dev \
+RUN apt-get update && apt-get install -y --no-install-recommends git unzip libzip-dev \
     && docker-php-ext-install -j$(nproc) mysqli pdo pdo_mysql opcache zip \
     && a2enmod rewrite headers \
     && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \
@@ -129,7 +127,6 @@ COPY --from={MIRROR_DOCKER}/composer:2 /usr/bin/composer /usr/bin/composer
 
 COPY . /var/www/html/
 
-# Optional: only if this plain-PHP project ships composer.json
 RUN if [ -f composer.json ]; then \
       composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader --no-scripts \
       && test -f vendor/autoload.php \
@@ -142,24 +139,20 @@ CMD ["apache2-foreground"]
 """
 
     # ------------------------------------------------------------------
-    # Laravel — DIFFERENT from plain PHP:
-    #   * DocumentRoot = /var/www/html/public  (not project root)
-    #   * Full extension set (gd, intl, bcmath, zip)
-    #   * composer install is mandatory
-    #   * storage/ + bootstrap/cache must be writable
-    #   * Deployer injects entrypoint for migrate / package:discover
+    # Laravel — separate from plain PHP
+    # DocumentRoot = public/; composer is mandatory; storage writable
+    # Apache vhost is finalized by deployer (_apply_php_document_root)
     # ------------------------------------------------------------------
     laravel = """
 FROM {MIRROR_DOCKER}/php:{php_version}-apache
 
-ENV APACHE_DOCUMENT_ROOT=/var/www/html/public \
-    COMPOSER_ALLOW_SUPERUSER=1 \
-    COMPOSER_MEMORY_LIMIT=-1 \
-    LOG_CHANNEL=stderr
+ENV APACHE_DOCUMENT_ROOT=/var/www/html/public
+ENV COMPOSER_ALLOW_SUPERUSER=1
+ENV COMPOSER_MEMORY_LIMIT=-1
+ENV LOG_CHANNEL=stderr
 
 WORKDIR /var/www/html
 
-# Build deps + PHP extensions commonly required by Laravel
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git unzip libzip-dev libpng-dev libjpeg62-turbo-dev libfreetype6-dev \
         libicu-dev libonig-dev libxml2-dev \
@@ -169,38 +162,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && a2enmod rewrite headers \
     && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \
     && (grep -q '^ServerName ' /etc/apache2/apache2.conf || echo 'ServerName localhost' >> /etc/apache2/apache2.conf) \
-    && printf '%s\n' \
-        'opcache.enable=1' \
-        'opcache.memory_consumption=128' \
-        'opcache.validate_timestamps=0' \
-        > /usr/local/etc/php/conf.d/opcache-laravel.ini \
+    && echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache-laravel.ini \
+    && echo "opcache.memory_consumption=128" >> /usr/local/etc/php/conf.d/opcache-laravel.ini \
+    && echo "opcache.validate_timestamps=0" >> /usr/local/etc/php/conf.d/opcache-laravel.ini \
     && rm -rf /var/lib/apt/lists/*
-
-# Apache vhost pointed at public/ (deployer may refine path after flatten)
-RUN printf '%s\n' \
-    'ServerName localhost' \
-    '<VirtualHost *:80>' \
-    '    ServerAdmin webmaster@localhost' \
-    '    DocumentRoot /var/www/html/public' \
-    '    <Directory /var/www/html/public>' \
-    '        Options FollowSymLinks' \
-    '        AllowOverride All' \
-    '        Require all granted' \
-    '        DirectoryIndex index.php index.html' \
-    '    </Directory>' \
-    '    ErrorLog ${APACHE_LOG_DIR}/error.log' \
-    '    CustomLog ${APACHE_LOG_DIR}/access.log combined' \
-    '</VirtualHost>' \
-    > /etc/apache2/sites-available/000-default.conf
 
 COPY --from={MIRROR_DOCKER}/composer:2 /usr/bin/composer /usr/bin/composer
 
 COPY . /var/www/html/
 
-# Mandatory for Laravel — image build FAILS without vendor/autoload.php
 RUN test -f composer.json \
-    && COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_MEMORY_LIMIT=-1 \
-       composer install \
+    && composer install \
          --no-dev \
          --prefer-dist \
          --no-interaction \
@@ -209,12 +181,7 @@ RUN test -f composer.json \
          --no-scripts \
     && test -f vendor/autoload.php \
     && echo "Laravel composer install OK" \
-    && mkdir -p \
-         storage/framework/cache \
-         storage/framework/sessions \
-         storage/framework/views \
-         storage/logs \
-         bootstrap/cache \
+    && mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache \
     && chown -R www-data:www-data /var/www/html \
     && chmod -R ug+rwx storage bootstrap/cache
 
