@@ -3,14 +3,14 @@ from django.utils.translation import gettext_lazy as _
 
 
 APPLICATIONS = [
-    "php", "python", "django", "nextjs", "nodejs", "flask", "docker", "go",
+    "php", "laravel", "python", "django", "nextjs", "nodejs", "flask", "docker", "go",
     "statichtmlcss", "vuejs", "angular", "react", "dotnet",
 ]
 
 DBS = ["mysql", "postgresql", "mariadb", "mongodb", "redis", "oracle"]
 
 PLATFORM_CHOICES = [
-    ("php", "PHP"), ("python", "Python"), ("django", "Django"),
+    ("php", "PHP"), ("laravel", "Laravel"), ("python", "Python"), ("django", "Django"),
     ("nextjs", "Next.js"), ("nodejs", "Node.js"), ("flask", "Flask"),
     ("docker", "Docker"), ("go", "Go"), ("statichtmlcss", "Static HTML/CSS"),
     ("vuejs", "Vue.js"), ("angular", "Angular"), ("react", "React"),
@@ -21,7 +21,7 @@ PLATFORM_CHOICES = [
 
 # Fallback when DB settings are empty
 default_ports = {
-    "php": 80, "python": None, "django": 8000, "nextjs": 3000, "nodejs": 3000,
+    "php": 80, "laravel": 80, "python": None, "django": 8000, "nextjs": 3000, "nodejs": 3000,
     "flask": 5000, "docker": None, "go": None, "statichtmlcss": 80,
     "vuejs": 80, "angular": 80, "react": 80, "dotnet": 5000,
     "mysql": 3306, "postgresql": 5432, "mariadb": 3306, "mongodb": 27017,
@@ -83,6 +83,9 @@ class SERVICE_STATUS_CHOICES(models.TextChoices):
 # Code-level fallbacks (DB SystemSetting overrides these at runtime)
 MIRROR_DOCKER = "docker.arvancloud.ir"
 MIRROR_PYTHON = "https://mirror-pypi.runflare.com/simple"
+# Packagist/Composer mirror. Empty = official repo.packagist.org
+# Example: "https://mirrors.aliyun.com/composer/"
+MIRROR_COMPOSER = "https://package-mirror.liara.ir/repository/composer/"
 
 DEFAULT_RUNTIME_VERSIONS = {
     "python_version": "3.11",
@@ -103,9 +106,6 @@ MAX_DEPLOY_TIME_MINUTE = 10
 class Config:
     """Dockerfile templates — placeholders filled by DeploymentHelper."""
 
-    # ------------------------------------------------------------------
-    # Plain PHP — DocumentRoot defaults to /var/www/html
-    # ------------------------------------------------------------------
     php = """
 FROM {MIRROR_DOCKER}/php:{php_version}-apache
 
@@ -127,10 +127,13 @@ COPY --from={MIRROR_DOCKER}/composer:2 /usr/bin/composer /usr/bin/composer
 
 COPY . /var/www/html/
 
-RUN if [ -f composer.json ]; then \
+RUN if [ -n "{MIRROR_COMPOSER}" ]; then \
+      composer config -g repo.packagist composer {MIRROR_COMPOSER}; \
+      composer config -g secure-http false; \
+    fi \
+    && if [ -f composer.json ]; then \
       composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader --no-scripts \
-      && test -f vendor/autoload.php \
-      && echo "composer install OK"; \
+      && test -f vendor/autoload.php; \
     fi \
     && chown -R www-data:www-data /var/www/html
 
@@ -138,11 +141,6 @@ EXPOSE {port}
 CMD ["apache2-foreground"]
 """
 
-    # ------------------------------------------------------------------
-    # Laravel — separate from plain PHP
-    # DocumentRoot = public/; composer is mandatory; storage writable
-    # Apache vhost is finalized by deployer (_apply_php_document_root)
-    # ------------------------------------------------------------------
     laravel = """
 FROM {MIRROR_DOCKER}/php:{php_version}-apache
 
@@ -164,26 +162,63 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && (grep -q '^ServerName ' /etc/apache2/apache2.conf || echo 'ServerName localhost' >> /etc/apache2/apache2.conf) \
     && echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache-laravel.ini \
     && echo "opcache.memory_consumption=128" >> /usr/local/etc/php/conf.d/opcache-laravel.ini \
-    && echo "opcache.validate_timestamps=0" >> /usr/local/etc/php/conf.d/opcache-laravel.ini \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from={MIRROR_DOCKER}/composer:2 /usr/bin/composer /usr/bin/composer
 
 COPY . /var/www/html/
 
-RUN test -f composer.json \
-    && composer install \
-         --no-dev \
-         --prefer-dist \
-         --no-interaction \
-         --no-progress \
-         --optimize-autoloader \
-         --no-scripts \
-    && test -f vendor/autoload.php \
-    && echo "Laravel composer install OK" \
-    && mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache \
-    && chown -R www-data:www-data /var/www/html \
-    && chmod -R ug+rwx storage bootstrap/cache
+RUN set -eux; \
+    if [ ! -f /var/www/html/composer.json ]; then \
+      found=$(find /var/www/html -maxdepth 3 -type f -name composer.json | head -n1 || true); \
+      if [ -n "$found" ]; then \
+        appdir=$(dirname "$found"); \
+        echo "Promoting nested Laravel app from $appdir"; \
+        tmp=/tmp/laravel-root; rm -rf "$tmp"; mkdir -p "$tmp"; \
+        cp -a "$appdir"/. "$tmp"/; \
+        find /var/www/html -mindepth 1 -maxdepth 1 ! -name . -exec rm -rf {{}} +; \
+        cp -a "$tmp"/. /var/www/html/; \
+        rm -rf "$tmp"; \
+      fi; \
+    fi; \
+    cd /var/www/html; \
+    echo "=== /var/www/html listing ==="; ls -la; \
+    if [ ! -f composer.json ]; then \
+      echo "ERROR: composer.json missing after COPY"; \
+      find /var/www/html -maxdepth 3 -type f | head -80; \
+      exit 1; \
+    fi; \
+    if [ -n "{MIRROR_COMPOSER}" ]; then \
+      echo "Using Composer mirror: {MIRROR_COMPOSER}"; \
+      composer config -g repo.packagist composer {MIRROR_COMPOSER}; \
+      composer config -g secure-http false; \
+    else \
+      echo "No MIRROR_COMPOSER set — using official packagist"; \
+    fi; \
+    composer --version; \
+    ( composer install \
+        --no-dev \
+        --prefer-dist \
+        --no-interaction \
+        --optimize-autoloader \
+        --no-scripts \
+      || composer install \
+        --no-dev \
+        --prefer-dist \
+        --no-interaction \
+        --optimize-autoloader \
+        --no-scripts \
+        --ignore-platform-reqs \
+    ); \
+    if [ ! -f vendor/autoload.php ]; then \
+      echo "ERROR: vendor/autoload.php missing after composer install"; \
+      ls -la; ls -la vendor 2>/dev/null || true; \
+      exit 1; \
+    fi; \
+    echo "Laravel composer install OK"; \
+    mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache; \
+    chown -R www-data:www-data /var/www/html; \
+    chmod -R ug+rwx storage bootstrap/cache
 
 EXPOSE {port}
 CMD ["apache2-foreground"]

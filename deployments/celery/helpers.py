@@ -46,6 +46,10 @@ class DeploymentHelper:
             mirror_python = svc.mirror_python()
             mirror_npm = svc.mirror_npm()
             mirror_apt = svc.mirror_apt()
+            try:
+                mirror_composer = svc.mirror_composer()
+            except Exception:
+                mirror_composer = ""
             versions = dict(svc.default_runtime_versions() or {})
             ports_map = dict(svc.default_ports_map() or {})
             default_expose = svc.default_expose_port()
@@ -60,6 +64,7 @@ class DeploymentHelper:
             )
             mirror_npm = "https://registry.npmjs.org"
             mirror_apt = ""
+            mirror_composer = getattr(_gcfg, "MIRROR_COMPOSER", "") or ""
             versions = dict(getattr(_gcfg, "DEFAULT_RUNTIME_VERSIONS", None) or {})
             try:
                 from core.global_settings.config import default_ports, DEFAULT_EXPOSE_PORT
@@ -88,6 +93,7 @@ class DeploymentHelper:
             "MIRROR_PYTHON": mirror_python,
             "MIRROR_NPM": mirror_npm,
             "MIRROR_APT": mirror_apt or "http://deb.debian.org/debian/",
+            "MIRROR_COMPOSER": (mirror_composer or "").strip(),
             "PIP_DEFAULT_TIMEOUT": str(pip_timeout),
             "build_dir": build_dir,
         }
