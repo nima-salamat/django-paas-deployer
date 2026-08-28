@@ -97,8 +97,21 @@ class Service(BaseModel):
 
     def get_storage_quota_mb(self) -> int:
         """Plan max_storage is in GB. Convert to MiB (1024-based)."""
+        plan = None
         try:
-            gb = float(getattr(self.plan, "max_storage", 0) or 0)
+            plan = self.plan
+        except Exception:
+            plan = None
+        if plan is None:
+            try:
+                plan_id = getattr(self, "plan_id", None)
+                if plan_id:
+                    from plans.models import Plan
+                    plan = Plan.objects.filter(pk=plan_id).only("max_storage").first()
+            except Exception:
+                plan = None
+        try:
+            gb = float(getattr(plan, "max_storage", 0) or 0) if plan is not None else 0.0
         except (TypeError, ValueError):
             gb = 0.0
         return max(0, int(gb * 1024))

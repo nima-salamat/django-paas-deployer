@@ -389,7 +389,14 @@ class VolumeViewSet(ModelViewSet):
                     {"error": _("Can not create Volume."), "errors": msgs},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            raise
+            logger.exception("volume create failed for user=%s", getattr(owner, "pk", None))
+            return Response(
+                {
+                    "error": _("Can not create Volume."),
+                    "detail": str(exc)[:300],
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         storage = None
         if instance.service_id:

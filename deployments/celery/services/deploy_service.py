@@ -262,6 +262,25 @@ class DeployService:
         environment = dict(cfg.get("env") or cfg.get("environment") or {})
         environment = {str(k): str(v) for k, v in environment.items()}
 
+        # Laravel/PHP defaults when root FS may be read-only: app reads these
+        # from the process environment even without a writable .env file.
+        if platform in ("laravel", "php", "lumen", "symfony"):
+            environment.setdefault("LOG_CHANNEL", "stderr")
+            environment.setdefault("SESSION_DRIVER", "file")
+            environment.setdefault("CACHE_STORE", "file")
+            environment.setdefault("CACHE_DRIVER", "file")
+            environment.setdefault("QUEUE_CONNECTION", "sync")
+            if not environment.get("APP_KEY"):
+                # Generate a stable-enough key for this deploy so encryption works.
+                # Prefer value from deploy config if the user set one later.
+                import base64
+                import os as _os
+
+                environment["APP_KEY"] = "base64:" + base64.b64encode(
+                    _os.urandom(32)
+                ).decode("ascii")
+            environment.setdefault("APP_ENV", "production")
+
         server_type = (
             getattr(deploy_item, "server_type", None)
             or cfg.get("server_type")
@@ -369,8 +388,10 @@ class DeployService:
             max_cpu=service.plan.max_cpu,
             max_ram=service.plan.max_ram,
             networks=networks,
-            volumes=self._volume_specs(deploy_item),
+            volumes=self._volume_specs(deploy_item, platform=platform),
             port=port,
+            # Laravel/PHP need writable storage even when service.read_only
+            # is True (root FS RO).  Named volumes cover storage paths.
             read_only=service.read_only,
             platform=platform,
             platform_type=service.plan.plan_type,
@@ -447,12 +468,101 @@ class DeployService:
     def _get_volumes_for_service(service):
         return Volume.objects.filter(service_id=service.pk)
 
+    # Laravel/PHP writable paths that must be volumes when root FS is RO.
+    _LARAVEL_DEFAULT_VOLUMES = (
+        ("storage", "/var/www/html/storage", 512),
+        ("bootstrap-cache", "/var/www/html/bootstrap/cache", 128),
+    )
+
+    @classmethod
+    def _ensure_laravel_volumes(cls, service, platform: str) -> None:
+        """
+        Auto-create + attach storage / bootstrap-cache volumes for Laravel
+        when the service has none.  Avoids Read-only file system at runtime
+        when Service.read_only=True (default in production).
+        """
+        p = (platform or "").lower().strip()
+        if p not in ("laravel", "php", "lumen", "symfony"):
+            return
+        existing = list(cls._get_volumes_for_service(service))
+        existing_binds = set()
+        for vol in existing:
+            att = (vol.service_attachments or {}).get(str(service.id)) or {}
+            bind = att.get("bind") or getattr(vol, "default_bind", "") or ""
+            if bind:
+                existing_binds.add(bind.rstrip("/"))
+
+        for short, bind, size_mb in cls._LARAVEL_DEFAULT_VOLUMES:
+            if bind.rstrip("/") in existing_binds:
+                continue
+            # Unique volume name within 32 chars
+            try:
+                sid = service.id.hex[:6]
+            except Exception:
+                sid = str(service.pk)[:6]
+            name = f"lv-{sid}-{short}"[:32]
+            # Quota: skip if plan cannot allocate
+            try:
+                ok, msg = service.can_allocate_storage(size_mb)
+                if not ok:
+                    logger.warning(
+                        "Skip auto volume %s for service %s: %s",
+                        name, service.pk, msg,
+                    )
+                    continue
+            except Exception as exc:
+                logger.warning("quota check failed for auto volume: %s", exc)
+                continue
+            try:
+                vol = Volume.objects.create(
+                    name=name,
+                    user_id=service.user_id,
+                    service=service,
+                    service_attachments={
+                        str(service.id): {
+                            "bind": bind,
+                            "mode": "rw",
+                        }
+                    },
+                    default_bind=bind,
+                    default_mode="rw",
+                    size_mb=size_mb,
+                )
+                logger.info(
+                    "Auto-created Laravel volume %s → %s (%s MB) for service %s",
+                    vol.name, bind, size_mb, service.pk,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to auto-create volume %s for service %s: %s",
+                    name, service.pk, exc,
+                )
+
     @staticmethod
-    def _volume_specs(deploy_item: Deploy) -> list:
-        specs = []
+    def _volume_specs(deploy_item: Deploy, platform: str | None = None) -> list:
         service = deploy_item.service
         service_id = str(service.id)
 
+        # Ensure Laravel writable paths exist as named volumes
+        try:
+            plat = platform or ""
+            if not plat:
+                cfg = {}
+                raw = getattr(deploy_item, "config", None)
+                if isinstance(raw, dict):
+                    cfg = raw
+                elif isinstance(raw, str) and raw.strip():
+                    import json as _json
+                    try:
+                        cfg = _json.loads(raw) or {}
+                    except Exception:
+                        cfg = {}
+                plat = str(cfg.get("platform") or "").lower()
+            DeployService._ensure_laravel_volumes(service, plat)
+        except Exception as exc:
+            logger.warning("ensure_laravel_volumes failed: %s", exc)
+
+        specs = []
         for volume in DeployService._get_volumes_for_service(service):
             attachments = getattr(volume, "service_attachments", None) or {}
             if not isinstance(attachments, dict):
