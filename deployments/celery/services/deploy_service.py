@@ -167,6 +167,34 @@ class DeployService:
             str(cfg.get("platform") or "").lower().strip()
             or str(getattr(getattr(deploy_item.service, "plan", None), "platform", None) or "docker").lower().strip()
         )
+        # Normalize framework aliases so Laravel never falls through as plain "php".
+        # plan.platform may still be "php" while Deploy.config / detection says laravel.
+        _fw = str(cfg.get("framework") or cfg.get("framework_name") or "").lower().strip()
+        if platform in ("php", "docker", "") and _fw in ("laravel", "lumen"):
+            platform = _fw
+        if platform in ("php",) and str(cfg.get("laravel") or "").lower() in ("1", "true", "yes"):
+            platform = "laravel"
+        # Persist so DockerfileGenerator / _render_php see platform=laravel
+        if platform in ("laravel", "lumen", "symfony", "codeigniter"):
+            cfg["platform"] = platform
+            try:
+                # Best-effort: keep Deploy.config in sync for later stages
+                if hasattr(deploy_item, "config"):
+                    import json as _json
+                    raw_cfg = getattr(deploy_item, "config", None)
+                    if isinstance(raw_cfg, dict):
+                        raw_cfg = {**raw_cfg, "platform": platform}
+                        deploy_item.config = raw_cfg
+                    elif isinstance(raw_cfg, str) and raw_cfg.strip():
+                        try:
+                            parsed = _json.loads(raw_cfg)
+                            if isinstance(parsed, dict):
+                                parsed["platform"] = platform
+                                deploy_item.config = _json.dumps(parsed)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
 
         version_overrides = {
             k: cfg[k]

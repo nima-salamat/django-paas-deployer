@@ -2116,7 +2116,9 @@ class DockerfileGenerator:
             rendered = _render_node_family(
                 platform, dockerfile_template, tar_stream, config, logger,
             )
-        elif platform in ("php", "laravel"):
+        elif platform in ("php", "laravel", "lumen", "symfony", "codeigniter"):
+            # Keep original platform name on config so _render_php can force
+            # Laravel DocumentRoot=public + composer + artisan migrate.
             rendered = _render_php(dockerfile_template, tar_stream, config, logger)
         elif platform == "go":
             rendered = _render_generic(platform, dockerfile_template, tar_stream, config, logger)

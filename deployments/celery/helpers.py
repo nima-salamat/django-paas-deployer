@@ -25,12 +25,11 @@ class DeploymentHelper:
         "static": "static",
         "html": "static",
         "fastapi": "python",
-        # PHP family — Laravel/Symfony/etc. share the php Apache template;
-        # framework-specific bootstrap is injected later in dockerfile.py.
-        "laravel": "php",
+        # Framework-specific templates preferred; fall back to php in
+        # get_dockerfile_text if Config.<framework> is missing.
         "symfony": "php",
         "codeigniter": "php",
-        "lumen": "php",
+        "lumen": "laravel",
     }
 
     @staticmethod
@@ -129,26 +128,42 @@ class DeploymentHelper:
         key = (platform or "").lower().strip()
         attr = DeploymentHelper._DOCKERFILE_ALIASES.get(key, key)
 
-        # Prefer in-code Config for PHP/Laravel.  DB-stored templates are
-        # often stale (no composer install, broken DocumentRoot sed).
-        _prefer_code = attr in ("php",) or key in (
-            "php", "laravel", "symfony", "codeigniter", "lumen",
-        )
+        # Candidate attribute names in priority order.
+        # Laravel MUST try Config.laravel before falling back to Config.php
+        # so framework-specific templates are not silently replaced by plain PHP.
+        candidates: list[str] = []
+        for name in (key, attr, "php" if key in ("laravel", "lumen", "symfony", "codeigniter") else None):
+            if name and name not in candidates:
+                candidates.append(name)
+
+        # Prefer in-code Config for PHP family — DB templates are often stale.
+        _prefer_code = any(
+            c in ("php", "laravel") for c in candidates
+        ) or key in ("php", "laravel", "symfony", "codeigniter", "lumen")
 
         raw = None
         if _prefer_code:
-            raw = getattr(Config, attr, None) or getattr(Config, key, None)
+            for name in candidates:
+                raw = getattr(Config, name, None)
+                if raw:
+                    break
 
         if not raw:
             try:
                 from core import settings_service as svc
 
-                raw = svc.dockerfile_template(attr) or svc.dockerfile_template(key)
+                for name in candidates:
+                    raw = svc.dockerfile_template(name)
+                    if raw:
+                        break
             except Exception:
                 pass
 
         if not raw:
-            raw = getattr(Config, attr, None) or getattr(Config, key, None)
+            for name in candidates:
+                raw = getattr(Config, name, None)
+                if raw:
+                    break
         if not raw:
             return None
 

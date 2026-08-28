@@ -139,6 +139,7 @@ EXPOSE {port}
 CMD ["apache2-foreground"]
 """
 
+    # Dedicated Laravel entry — same base image, deployer forces public/ + migrate
     laravel = php
 
     python = """
