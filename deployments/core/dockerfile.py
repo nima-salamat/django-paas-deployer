@@ -1146,22 +1146,24 @@ def _detect_php_document_root(
     project_cfg=None,
 ) -> str:
     """
-    Resolve Apache DocumentRoot relative to ``/var/www/html``.
+    Resolve Apache DocumentRoot relative to ``/var/www/html`` **after**
+    the build-context flatten step.
 
-    Returns a relative path such as ``""`` (meaning ``/var/www/html``),
-    ``"MyApp"``, or ``"MyApp/public"``.  Never returns an absolute path.
+    The image build strips a single top-level archive directory (GitHub
+    zips, commit-hash folders, etc.).  Therefore this function always
+    returns a path relative to the *application* root, never including
+    that outer wrapper directory.
+
+    Returns a relative path such as ``""`` (→ ``/var/www/html``) or
+    ``"public"``.  Never returns an absolute path.
 
     Priority
     --------
     1. Explicit user override (Deploy.config document_root / DOCUMENT_ROOT)
-    2. Laravel / Symfony style: ``…/public/index.php`` (shallowest)
+    2. Laravel / Symfony style: shallowest ``…/public/index.php``
     3. Plain PHP: shallowest ``index.php``
     4. Platform inspect hint (``static_dir`` / ``document_root``)
-    5. Single top-level archive directory
-    6. Fallback: ``""`` → ``/var/www/html``
-
-    Handles archives that unpack into a single top-level directory
-    (common for GitHub release zips) without hard-coding any project name.
+    5. Fallback: ``""`` → ``/var/www/html``
     """
     def _clean_rel(path: str) -> str:
         p = (path or "").replace("\\", "/").strip().lstrip("./").rstrip("/")
@@ -1169,12 +1171,19 @@ def _detect_php_document_root(
             return ""
         return p
 
-    if user_override and str(user_override).strip():
-        return _clean_rel(str(user_override))
+    def _strip_prefix(rel: str, prefix: str) -> str:
+        """Remove a single top-level archive directory from *rel*."""
+        if not prefix or not rel:
+            return rel
+        if rel == prefix:
+            return ""
+        if rel.startswith(prefix + "/"):
+            return rel[len(prefix) + 1 :]
+        return rel
 
-    # project_cfg paths (e.g. static_dir="public") are relative to the
-    # *application* root. Archives often wrap that root in a single
-    # top-level directory, so resolve against the tar layout first.
+    if user_override and str(user_override).strip():
+        # User overrides are relative to the app root (post-flatten).
+        return _clean_rel(str(user_override))
 
     names = _php_member_names(tar_stream)
     if not names:
@@ -1191,6 +1200,8 @@ def _detect_php_document_root(
     single_prefix = ""
     if len(top_level) == 1:
         only = top_level[0]
+        # Only treat it as a wrapper if there is content *under* it
+        # (not just a lone file named like a hash).
         if any(n.startswith(only + "/") for n in names):
             single_prefix = only
 
@@ -1214,21 +1225,20 @@ def _detect_php_document_root(
 
     if chosen_index:
         rel = chosen_index.rsplit("/", 1)[0] if "/" in chosen_index else ""
-        return _clean_rel(rel)
+        # Critical: image build flattens single_prefix, so DocumentRoot
+        # must be relative to the *inner* app root.
+        return _clean_rel(_strip_prefix(rel, single_prefix))
 
     if project_cfg is not None:
         sd = getattr(project_cfg, "static_dir", None) or getattr(
             project_cfg, "document_root", None
         )
         if sd and str(sd).strip():
-            sd_rel = _clean_rel(str(sd))
-            if single_prefix and sd_rel and not sd_rel.startswith(single_prefix):
-                return _clean_rel(f"{single_prefix}/{sd_rel}")
-            return sd_rel or single_prefix
+            # project_cfg paths are already relative to the app root
+            return _clean_rel(str(sd))
 
-    if single_prefix:
-        return single_prefix
-
+    # No index.php found — still do not return the wrapper dir; after
+    # flatten the app root *is* /var/www/html.
     return ""
 
 
@@ -1305,14 +1315,17 @@ def _apply_php_document_root(dockerfile: str, document_root_rel: str) -> str:
     )
     b64 = base64.b64encode(conf_body.encode("utf-8")).decode("ascii")
 
+    # Write the full VirtualHost via base64 — do NOT run a follow-up sed
+    # that rewrites "DocumentRoot /var/www/html" because the conf we just
+    # wrote already contains the correct absolute path; a prefix sed would
+    # double it (e.g. /var/www/html/HASH → /var/www/html/HASH/HASH).
     apache_block = (
         "\n# --- Apache DocumentRoot (auto) ---\n"
         f"RUN echo '{b64}' | base64 -d > /etc/apache2/sites-available/000-default.conf \\\n"
-        f"    && sed -ri -e 's#DocumentRoot /var/www/html#DocumentRoot {absolute}#g' "
-        "/etc/apache2/sites-available/*.conf 2>/dev/null || true \\\n"
         "    && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \\\n"
         "    && (grep -q '^ServerName ' /etc/apache2/apache2.conf || echo 'ServerName localhost' >> /etc/apache2/apache2.conf) \\\n"
-        "    && a2enmod rewrite headers\n"
+        "    && a2enmod rewrite headers \\\n"
+        f"    && test -d {absolute} || (echo \"WARNING: DocumentRoot {absolute} missing\" >&2)\n"
     )
 
     if re.search(r"^COPY\s+\.\s+/var/www/html/?\s*$", dockerfile, re.MULTILINE):
