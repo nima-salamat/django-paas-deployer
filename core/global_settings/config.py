@@ -106,7 +106,6 @@ class Config:
     php = """
 FROM {MIRROR_DOCKER}/php:{php_version}-apache
 
-# DocumentRoot rewritten by deployer (_apply_php_document_root).
 ENV APACHE_DOCUMENT_ROOT=/var/www/html \
     COMPOSER_ALLOW_SUPERUSER=1 \
     COMPOSER_MEMORY_LIMIT=-1
@@ -121,22 +120,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \
     && (grep -q '^ServerName ' /etc/apache2/apache2.conf || echo 'ServerName localhost' >> /etc/apache2/apache2.conf) \
     && echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache.ini \
-    && echo "opcache.memory_consumption=128" >> /usr/local/etc/php/conf.d/opcache.ini \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from={MIRROR_DOCKER}/composer:2 /usr/bin/composer /usr/bin/composer
 
 COPY . /var/www/html/
 
-# Laravel / any composer project: install deps at build time.
 RUN if [ -f composer.json ]; then \
-      composer install \
-        --no-dev \
-        --prefer-dist \
-        --no-interaction \
-        --no-progress \
-        --optimize-autoloader \
-        --no-scripts \
+      composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader --no-scripts \
       && test -f vendor/autoload.php \
       && echo "composer install OK"; \
     fi \
@@ -148,9 +139,7 @@ EXPOSE {port}
 CMD ["apache2-foreground"]
 """
 
-    # Laravel shares the PHP image; deployer forces DocumentRoot=public + migrate.
     laravel = php
-
 
     python = """
 FROM {MIRROR_DOCKER}/python:{python_version}-slim

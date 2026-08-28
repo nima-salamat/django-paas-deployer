@@ -1558,7 +1558,11 @@ def _php_entrypoint_script(
     doc_root_rel: str = "",
 ) -> str:
     """
-    Shell entrypoint that waits for DB, runs migrations/schema, then Apache.
+    Shell entrypoint that:
+      1. Ensures vendor/ via composer if missing (Laravel #1 failure mode)
+      2. Waits for DB
+      3. Runs migrations / schema
+      4. Starts Apache
     """
     app_root = "/var/www/html"
     if doc_root_rel:
@@ -1587,6 +1591,50 @@ def _php_entrypoint_script(
         'DB_USER="${DB_USERNAME:-${DB_USER:-${MYSQL_USER:-root}}}"',
         'DB_PASS="${DB_PASSWORD:-${MYSQL_PASSWORD:-${MYSQL_ROOT_PASSWORD:-}}}"',
         'DB_NAME="${DB_DATABASE:-${MYSQL_DATABASE:-}}"',
+        "",
+        # ------------------------------------------------------------------
+        # Ensure Composer dependencies exist.  Build-time install can be
+        # skipped (stale template, missing composer.json detection, network
+        # failure).  Without vendor/autoload.php Laravel fatals immediately.
+        # ------------------------------------------------------------------
+        "ensure_composer_vendor() {",
+        '  if [ -f "$APP_ROOT/vendor/autoload.php" ]; then',
+        '    echo "[entrypoint] vendor/autoload.php present."',
+        "    return 0",
+        "  fi",
+        '  if [ ! -f "$APP_ROOT/composer.json" ]; then',
+        '    echo "[entrypoint] WARNING: no composer.json and no vendor/ — app may fail."',
+        "    return 0",
+        "  fi",
+        '  echo "[entrypoint] vendor/ missing — running composer install ..."',
+        "  export COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_MEMORY_LIMIT=-1",
+        "  if ! command -v composer >/dev/null 2>&1; then",
+        '    echo "[entrypoint] composer binary missing; downloading ..."',
+        "    php -r \"copy('https://getcomposer.org/installer', 'composer-setup.php');\" \\",
+        "      && php composer-setup.php --install-dir=/usr/local/bin --filename=composer \\",
+        "      && rm -f composer-setup.php \\",
+        "      || { echo '[entrypoint] ERROR: cannot install composer' >&2; return 1; }",
+        "  fi",
+        '  cd "$APP_ROOT"',
+        "  composer install \\",
+        "    --no-dev \\",
+        "    --prefer-dist \\",
+        "    --no-interaction \\",
+        "    --no-progress \\",
+        "    --optimize-autoloader \\",
+        "    --no-scripts \\",
+        "    || { echo '[entrypoint] ERROR: composer install failed' >&2; return 1; }",
+        '  if [ ! -f "$APP_ROOT/vendor/autoload.php" ]; then',
+        '    echo "[entrypoint] ERROR: vendor/autoload.php still missing after composer install" >&2',
+        "    return 1",
+        "  fi",
+        '  echo "[entrypoint] composer install finished."',
+        "  # Laravel package discovery (safe without DB)",
+        '  if [ -f "$APP_ROOT/artisan" ]; then',
+        '    php "$APP_ROOT/artisan" package:discover --ansi 2>/dev/null || true',
+        "  fi",
+        "  return 0",
+        "}",
         "",
         "wait_for_db() {",
         '  if [ -z "$DB_HOST" ]; then return 0; fi',
@@ -1662,6 +1710,7 @@ def _php_entrypoint_script(
         '  echo "[entrypoint] Schema import finished."',
         "}",
         "",
+        "ensure_composer_vendor",
         "wait_for_db",
     ]
 
@@ -1713,26 +1762,48 @@ def _inject_php_runtime(
         else:
             app_root = f"/var/www/html/{rel}"
 
-    # Composer install: the PHP/Laravel template may already contain a
-    # `composer install` RUN. Only inject when the rendered Dockerfile does
-    # not already run composer (avoids duplicate layers / conflicts).
-    already_has_composer = bool(
-        re.search(r"\bcomposer\s+install\b", dockerfile, re.IGNORECASE)
-    )
-    if (
-        has_composer
-        and not info.get("has_vendor")
-        and not already_has_composer
-    ):
+    # ------------------------------------------------------------------
+    # ALWAYS install composer deps for Laravel / any project with
+    # composer.json when vendor/autoload.php is missing.
+    # Do NOT trust the template: DB templates are often stale and lack
+    # this step.  Strip any prior incomplete composer RUN then inject
+    # a known-good block after COPY.
+    # ------------------------------------------------------------------
+    needs_vendor = (is_laravel or has_composer) and not info.get("has_vendor")
+    if needs_vendor:
+        # Remove previous injected composer blocks to avoid duplicates
+        dockerfile = re.sub(
+            r"\n# --- Composer dependencies \(injected by deployer\) ---[\s\S]*?"
+            r"(?=\n(?:# ---|COPY|RUN|WORKDIR|EXPOSE|CMD|ENTRYPOINT|ENV|FROM)|$)",
+            "\n",
+            dockerfile,
+            count=1,
+        )
+        # Ensure composer binary is present even if template already
+        # mentioned "composer install" without shipping the binary.
+        has_composer_bin = bool(
+            re.search(
+                r"COPY\s+--from=\S*composer\S*\s+/usr/bin/composer",
+                dockerfile,
+                re.IGNORECASE,
+            )
+        )
         composer_block = (
             "\n# --- Composer dependencies (injected by deployer) ---\n"
             "RUN apt-get update && apt-get install -y --no-install-recommends \\\n"
             "        git unzip libzip-dev \\\n"
-            "    && docker-php-ext-install zip \\\n"
+            "    && (docker-php-ext-install zip 2>/dev/null || true) \\\n"
             "    && rm -rf /var/lib/apt/lists/*\n"
-            f"COPY --from={MIRROR_DOCKER}/composer:2 /usr/bin/composer /usr/bin/composer\n"
+        )
+        if not has_composer_bin:
+            composer_block += (
+                f"COPY --from={MIRROR_DOCKER}/composer:2 /usr/bin/composer /usr/bin/composer\n"
+            )
+        composer_block += (
             f"RUN cd {app_root} \\\n"
-            "    && test -f composer.json \\\n"
+            "    && if [ ! -f composer.json ]; then \\\n"
+            "         echo 'ERROR: composer.json not found in app root' >&2; exit 1; \\\n"
+            "       fi \\\n"
             "    && COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_MEMORY_LIMIT=-1 \\\n"
             "       composer install \\\n"
             "         --no-dev \\\n"
@@ -1742,24 +1813,43 @@ def _inject_php_runtime(
             "         --optimize-autoloader \\\n"
             "         --no-scripts \\\n"
             "    && test -f vendor/autoload.php \\\n"
-            "    && echo 'composer install OK'\n"
+            "    && echo 'composer install OK' \\\n"
+            "    && chown -R www-data:www-data vendor 2>/dev/null || true\n"
         )
+        # Insert after the last "COPY . /var/www/html" so sources exist first
         if re.search(r"^COPY\s+\.\s+/var/www/html/?\s*$", dockerfile, re.MULTILINE):
-            dockerfile = re.sub(
-                r"^(COPY\s+\.\s+/var/www/html/?\s*)$",
-                lambda m: m.group(1) + "\n" + composer_block,
-                dockerfile,
-                count=1,
-                flags=re.MULTILINE,
+            # Insert after the LAST matching COPY (template may have only one)
+            matches = list(
+                re.finditer(
+                    r"^COPY\s+\.\s+/var/www/html/?\s*$",
+                    dockerfile,
+                    flags=re.MULTILINE,
+                )
             )
+            if matches:
+                m = matches[-1]
+                dockerfile = (
+                    dockerfile[: m.end()]
+                    + "\n"
+                    + composer_block
+                    + dockerfile[m.end() :]
+                )
+            else:
+                dockerfile = dockerfile.rstrip() + "\n" + composer_block
         else:
             dockerfile = dockerfile.rstrip() + "\n" + composer_block
-    elif already_has_composer and logger:
-        logger.info(
-            "dockerfile_generation",
-            "Template already contains composer install; skip injection.",
-            progress=15,
-        )
+
+        if logger:
+            logger.info(
+                "dockerfile_generation",
+                f"Injected composer install at {app_root}.",
+                progress=15,
+                details={
+                    "app_root": app_root,
+                    "is_laravel": is_laravel,
+                    "has_composer": has_composer,
+                },
+            )
 
     if writable_dirs:
         safe_dirs = [
@@ -1777,7 +1867,9 @@ def _inject_php_runtime(
             )
             dockerfile = dockerfile.rstrip() + "\n" + chmod_block
 
-    need_entrypoint = is_laravel or bool(schema_files)
+    # Always inject entrypoint when Laravel or composer project — the
+    # entrypoint re-runs composer install if vendor/ is missing at runtime.
+    need_entrypoint = is_laravel or bool(schema_files) or has_composer
     if need_entrypoint:
         script = _php_entrypoint_script(
             is_laravel=is_laravel,
@@ -1786,7 +1878,7 @@ def _inject_php_runtime(
         )
         b64 = base64.b64encode(script.encode("utf-8")).decode("ascii")
         entry_block = (
-            "\n# --- PHP DB bootstrap entrypoint (injected by deployer) ---\n"
+            "\n# --- PHP bootstrap entrypoint (composer + migrate) ---\n"
             f"RUN echo '{b64}' | base64 -d > /usr/local/bin/paas-php-entrypoint.sh \\\n"
             "    && chmod +x /usr/local/bin/paas-php-entrypoint.sh\n"
             'ENTRYPOINT ["/usr/local/bin/paas-php-entrypoint.sh"]\n'
