@@ -98,7 +98,7 @@ DEFAULT_RUNTIME_VERSIONS = {
 DEFAULT_WORKER_COUNT = 1
 DEFAULT_SPA_BUILD_DIR = "dist"
 DEFAULT_EXPOSE_PORT = 80
-MAX_DEPLOY_TIME_MINUTE = 20
+MAX_DEPLOY_TIME_MINUTE = 10
 
 
 class Config:
@@ -124,15 +124,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends git unzip libzi
 COPY --from={MIRROR_DOCKER}/composer:2 /usr/bin/composer /usr/bin/composer
 COPY . /var/www/html/
 
-RUN if [ -n "{MIRROR_COMPOSER}" ]; then \
-      composer config -g repo.packagist composer {MIRROR_COMPOSER}; \
-      composer config -g secure-http false; \
-    fi \
+RUN if [ -n "{MIRROR_COMPOSER}" ]; then composer config -g repo.packagist composer {MIRROR_COMPOSER}; composer config -g secure-http false; fi \
     && if [ -f composer.json ]; then \
-      composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader --no-scripts \
-      || composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader --no-scripts --ignore-platform-reqs; \
-      test -f vendor/autoload.php; \
-    fi \
+         composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader --no-scripts \
+         || composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader --no-scripts --ignore-platform-reqs; \
+         test -f vendor/autoload.php; \
+       fi \
     && chown -R www-data:www-data /var/www/html
 
 EXPOSE {port}
@@ -162,10 +159,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from={MIRROR_DOCKER}/composer:2 /usr/bin/composer /usr/bin/composer
+
 COPY . /var/www/html/
 
-RUN set -eux; \
-    if [ ! -f /var/www/html/composer.json ]; then \
+RUN if [ ! -f composer.json ]; then \
       found=$(find /var/www/html -maxdepth 3 -type f -name composer.json | head -n1 || true); \
       if [ -n "$found" ]; then \
         appdir=$(dirname "$found"); \
@@ -175,27 +172,24 @@ RUN set -eux; \
         cp -a "$tmp"/. /var/www/html/; \
         rm -rf "$tmp"; \
       fi; \
-    fi; \
-    cd /var/www/html; \
-    test -f composer.json; \
-    if [ -n "{MIRROR_COMPOSER}" ]; then \
+    fi
+
+RUN if [ -n "{MIRROR_COMPOSER}" ]; then \
       composer config -g repo.packagist composer {MIRROR_COMPOSER}; \
       composer config -g secure-http false; \
-    fi; \
-    composer install \
-      --no-dev --prefer-dist --no-interaction --optimize-autoloader --no-scripts \
-    || composer install \
-      --no-dev --prefer-dist --no-interaction --optimize-autoloader --no-scripts \
-      --ignore-platform-reqs; \
-    test -f vendor/autoload.php; \
-    mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache; \
-    # Critical: --no-scripts skips package:discover → "Target class [view] does not exist"
-    php artisan package:discover --ansi || true; \
-    php artisan config:clear || true; \
-    php artisan view:clear || true; \
-    chown -R www-data:www-data /var/www/html; \
-    chmod -R ug+rwx storage bootstrap/cache; \
-    echo "Laravel composer install OK"
+    fi \
+    && test -f composer.json \
+    && ( composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader --no-scripts \
+         || composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader --no-scripts --ignore-platform-reqs ) \
+    && test -f vendor/autoload.php
+
+RUN mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache \
+    && php artisan package:discover --ansi || true \
+    && php artisan config:clear || true \
+    && php artisan view:clear || true \
+    && chown -R www-data:www-data /var/www/html \
+    && chmod -R ug+rwx storage bootstrap/cache \
+    && echo "Laravel composer install OK"
 
 EXPOSE {port}
 CMD ["apache2-foreground"]
