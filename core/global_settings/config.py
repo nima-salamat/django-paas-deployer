@@ -103,6 +103,10 @@ MAX_DEPLOY_TIME_MINUTE = 10
 class Config:
     """Dockerfile templates — placeholders filled by DeploymentHelper."""
 
+    # ------------------------------------------------------------------
+    # Plain PHP (no framework) — DocumentRoot is /var/www/html by default.
+    # Deployer may rewrite DocumentRoot if index.php lives in a subfolder.
+    # ------------------------------------------------------------------
     php = """
 FROM {MIRROR_DOCKER}/php:{php_version}-apache
 
@@ -113,9 +117,8 @@ ENV APACHE_DOCUMENT_ROOT=/var/www/html \
 WORKDIR /var/www/html
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git unzip libzip-dev libpng-dev libjpeg62-turbo-dev libfreetype6-dev libicu-dev \
-    && docker-php-ext-configure gd --with-freetype --with-jpeg \
-    && docker-php-ext-install -j$(nproc) mysqli pdo pdo_mysql opcache zip gd intl bcmath \
+        git unzip libzip-dev \
+    && docker-php-ext-install -j$(nproc) mysqli pdo pdo_mysql opcache zip \
     && a2enmod rewrite headers \
     && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \
     && (grep -q '^ServerName ' /etc/apache2/apache2.conf || echo 'ServerName localhost' >> /etc/apache2/apache2.conf) \
@@ -126,21 +129,98 @@ COPY --from={MIRROR_DOCKER}/composer:2 /usr/bin/composer /usr/bin/composer
 
 COPY . /var/www/html/
 
+# Optional: only if this plain-PHP project ships composer.json
 RUN if [ -f composer.json ]; then \
       composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader --no-scripts \
       && test -f vendor/autoload.php \
       && echo "composer install OK"; \
     fi \
-    && mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache \
-    && chown -R www-data:www-data /var/www/html \
-    && chmod -R ug+rwx storage bootstrap/cache 2>/dev/null || true
+    && chown -R www-data:www-data /var/www/html
 
 EXPOSE {port}
 CMD ["apache2-foreground"]
 """
 
-    # Dedicated Laravel entry — same base image, deployer forces public/ + migrate
-    laravel = php
+    # ------------------------------------------------------------------
+    # Laravel — DIFFERENT from plain PHP:
+    #   * DocumentRoot = /var/www/html/public  (not project root)
+    #   * Full extension set (gd, intl, bcmath, zip)
+    #   * composer install is mandatory
+    #   * storage/ + bootstrap/cache must be writable
+    #   * Deployer injects entrypoint for migrate / package:discover
+    # ------------------------------------------------------------------
+    laravel = """
+FROM {MIRROR_DOCKER}/php:{php_version}-apache
+
+ENV APACHE_DOCUMENT_ROOT=/var/www/html/public \
+    COMPOSER_ALLOW_SUPERUSER=1 \
+    COMPOSER_MEMORY_LIMIT=-1 \
+    LOG_CHANNEL=stderr
+
+WORKDIR /var/www/html
+
+# Build deps + PHP extensions commonly required by Laravel
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git unzip libzip-dev libpng-dev libjpeg62-turbo-dev libfreetype6-dev \
+        libicu-dev libonig-dev libxml2-dev \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install -j$(nproc) \
+        mysqli pdo pdo_mysql opcache zip gd intl bcmath mbstring exif pcntl \
+    && a2enmod rewrite headers \
+    && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \
+    && (grep -q '^ServerName ' /etc/apache2/apache2.conf || echo 'ServerName localhost' >> /etc/apache2/apache2.conf) \
+    && printf '%s\n' \
+        'opcache.enable=1' \
+        'opcache.memory_consumption=128' \
+        'opcache.validate_timestamps=0' \
+        > /usr/local/etc/php/conf.d/opcache-laravel.ini \
+    && rm -rf /var/lib/apt/lists/*
+
+# Apache vhost pointed at public/ (deployer may refine path after flatten)
+RUN printf '%s\n' \
+    'ServerName localhost' \
+    '<VirtualHost *:80>' \
+    '    ServerAdmin webmaster@localhost' \
+    '    DocumentRoot /var/www/html/public' \
+    '    <Directory /var/www/html/public>' \
+    '        Options FollowSymLinks' \
+    '        AllowOverride All' \
+    '        Require all granted' \
+    '        DirectoryIndex index.php index.html' \
+    '    </Directory>' \
+    '    ErrorLog ${APACHE_LOG_DIR}/error.log' \
+    '    CustomLog ${APACHE_LOG_DIR}/access.log combined' \
+    '</VirtualHost>' \
+    > /etc/apache2/sites-available/000-default.conf
+
+COPY --from={MIRROR_DOCKER}/composer:2 /usr/bin/composer /usr/bin/composer
+
+COPY . /var/www/html/
+
+# Mandatory for Laravel — image build FAILS without vendor/autoload.php
+RUN test -f composer.json \
+    && COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_MEMORY_LIMIT=-1 \
+       composer install \
+         --no-dev \
+         --prefer-dist \
+         --no-interaction \
+         --no-progress \
+         --optimize-autoloader \
+         --no-scripts \
+    && test -f vendor/autoload.php \
+    && echo "Laravel composer install OK" \
+    && mkdir -p \
+         storage/framework/cache \
+         storage/framework/sessions \
+         storage/framework/views \
+         storage/logs \
+         bootstrap/cache \
+    && chown -R www-data:www-data /var/www/html \
+    && chmod -R ug+rwx storage bootstrap/cache
+
+EXPOSE {port}
+CMD ["apache2-foreground"]
+"""
 
     python = """
 FROM {MIRROR_DOCKER}/python:{python_version}-slim
