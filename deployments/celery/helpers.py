@@ -25,6 +25,12 @@ class DeploymentHelper:
         "static": "static",
         "html": "static",
         "fastapi": "python",
+        # PHP family — Laravel/Symfony/etc. share the php Apache template;
+        # framework-specific bootstrap is injected later in dockerfile.py.
+        "laravel": "php",
+        "symfony": "php",
+        "codeigniter": "php",
+        "lumen": "php",
     }
 
     @staticmethod
