@@ -87,6 +87,13 @@ class DeploymentHelper:
                 "dotnet_version": "6.0",
                 "nginx_version": "alpine",
             }
+        # Laravel 11+/13 and modern lockfiles need 8.3+; default 8.4 when
+        # the caller did not pass php_version (dockerfile.py may still bump
+        # further from composer.json).
+        if (platform or "").lower() in ("laravel", "lumen") and not (
+            overrides or {}
+        ).get("php_version"):
+            versions["php_version"] = "8.4"
 
         kwargs = {
             "MIRROR_DOCKER": mirror_docker,

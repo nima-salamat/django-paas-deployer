@@ -84,7 +84,6 @@ class SERVICE_STATUS_CHOICES(models.TextChoices):
 MIRROR_DOCKER = "docker.arvancloud.ir"
 MIRROR_PYTHON = "https://mirror-pypi.runflare.com/simple"
 # Packagist/Composer mirror. Empty = official repo.packagist.org
-# Example: "https://mirrors.aliyun.com/composer/"
 MIRROR_COMPOSER = "https://package-mirror.liara.ir/repository/composer/"
 
 DEFAULT_RUNTIME_VERSIONS = {
@@ -124,7 +123,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends git unzip libzi
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from={MIRROR_DOCKER}/composer:2 /usr/bin/composer /usr/bin/composer
-
 COPY . /var/www/html/
 
 RUN if [ -n "{MIRROR_COMPOSER}" ]; then \
@@ -133,7 +131,8 @@ RUN if [ -n "{MIRROR_COMPOSER}" ]; then \
     fi \
     && if [ -f composer.json ]; then \
       composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader --no-scripts \
-      && test -f vendor/autoload.php; \
+      || composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader --no-scripts --ignore-platform-reqs; \
+      test -f vendor/autoload.php; \
     fi \
     && chown -R www-data:www-data /var/www/html
 
@@ -165,7 +164,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from={MIRROR_DOCKER}/composer:2 /usr/bin/composer /usr/bin/composer
-
 COPY . /var/www/html/
 
 RUN set -eux; \
@@ -182,39 +180,20 @@ RUN set -eux; \
       fi; \
     fi; \
     cd /var/www/html; \
-    echo "=== /var/www/html listing ==="; ls -la; \
-    if [ ! -f composer.json ]; then \
-      echo "ERROR: composer.json missing after COPY"; \
-      find /var/www/html -maxdepth 3 -type f | head -80; \
-      exit 1; \
-    fi; \
+    ls -la; \
+    test -f composer.json; \
+    php -v; \
     if [ -n "{MIRROR_COMPOSER}" ]; then \
       echo "Using Composer mirror: {MIRROR_COMPOSER}"; \
       composer config -g repo.packagist composer {MIRROR_COMPOSER}; \
       composer config -g secure-http false; \
-    else \
-      echo "No MIRROR_COMPOSER set — using official packagist"; \
     fi; \
-    composer --version; \
-    ( composer install \
-        --no-dev \
-        --prefer-dist \
-        --no-interaction \
-        --optimize-autoloader \
-        --no-scripts \
-      || composer install \
-        --no-dev \
-        --prefer-dist \
-        --no-interaction \
-        --optimize-autoloader \
-        --no-scripts \
-        --ignore-platform-reqs \
-    ); \
-    if [ ! -f vendor/autoload.php ]; then \
-      echo "ERROR: vendor/autoload.php missing after composer install"; \
-      ls -la; ls -la vendor 2>/dev/null || true; \
-      exit 1; \
-    fi; \
+    composer install \
+      --no-dev --prefer-dist --no-interaction --optimize-autoloader --no-scripts \
+    || composer install \
+      --no-dev --prefer-dist --no-interaction --optimize-autoloader --no-scripts \
+      --ignore-platform-reqs; \
+    test -f vendor/autoload.php; \
     echo "Laravel composer install OK"; \
     mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache; \
     chown -R www-data:www-data /var/www/html; \

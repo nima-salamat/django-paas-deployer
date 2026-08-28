@@ -1390,12 +1390,38 @@ def _composer_info(tar_stream) -> dict:
 
 
 def _php_min_version(constraint: str | None) -> str | None:
+    """
+    Extract the highest PHP 8.x minor mentioned in a composer constraint
+    (e.g. ``^8.4``, ``>=8.4.1``, ``8.3.*`` → ``8.4`` / ``8.3``).
+    """
     if not constraint:
         return None
-    versions = re.findall(r"\b(8\.[0-9]+)\b", str(constraint))
+    versions = re.findall(r"\b(8\.\d+)\b", str(constraint))
     if not versions:
         return None
     return max(versions, key=lambda v: tuple(map(int, v.split("."))))
+
+
+def _resolve_php_image_version(
+    *,
+    constraint: str | None,
+    is_laravel: bool,
+    configured: str | None = None,
+) -> str:
+    """
+    Pick the Docker PHP tag (e.g. ``8.4``) for the image.
+
+    Priority: composer.json constraint > explicit config > Laravel default 8.4
+    > plain PHP default 8.2.
+    """
+    from_constraint = _php_min_version(constraint)
+    if from_constraint:
+        return from_constraint
+    if configured and re.match(r"^8\.\d+", str(configured).strip()):
+        return str(configured).strip().split("-")[0]
+    if is_laravel:
+        return "8.4"
+    return "8.2"
 
 
 def _inject_php_extensions(dockerfile: str, extensions: list[str]) -> str:
@@ -1998,15 +2024,8 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
     # Detect Laravel / schema.sql and inject composer + migrate entrypoint.
     php_info = _detect_php_project(tar_stream)
     composer_meta = php_info.get("composer") or {}
-    min_php = _php_min_version(composer_meta.get("php_constraint"))
-    if min_php:
-        rendered = re.sub(
-            r"(php:)[^\s/]+(-apache)",
-            lambda m: f"{m.group(1)}{min_php}{m.group(2)}",
-            rendered, count=1, flags=re.IGNORECASE,
-        )
 
-    # Force Laravel flags from platform name / project_cfg
+    # Force Laravel flags from platform name / project_cfg BEFORE version pick
     if project_cfg is not None:
         fw = (getattr(project_cfg, "framework", None) or "").lower()
         platform_name = (getattr(project_cfg, "platform", None) or "").lower()
@@ -2017,6 +2036,38 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
     if forced_laravel:
         php_info["is_laravel"] = True
         php_info["has_artisan"] = True
+
+    # PHP image version: this project's composer.json requires ^8.4 /
+    # laravel 13 needs >=8.3.  Default image 8.2 causes composer install
+    # to fail hard — rewrite FROM php:X.Y-apache accordingly.
+    configured_php = None
+    if config is not None:
+        configured_php = getattr(config, "php_version", None) or (
+            (getattr(config, "environment", None) or {}).get("php_version")
+        )
+    php_tag = _resolve_php_image_version(
+        constraint=composer_meta.get("php_constraint"),
+        is_laravel=bool(php_info.get("is_laravel") or forced_laravel),
+        configured=str(configured_php) if configured_php else None,
+    )
+    rendered = re.sub(
+        r"(php:)[^\s/]+(-apache)",
+        lambda m: f"{m.group(1)}{php_tag}{m.group(2)}",
+        rendered,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    if logger:
+        logger.info(
+            "dockerfile_generation",
+            f"PHP image version set to {php_tag}.",
+            progress=14,
+            details={
+                "php_version": php_tag,
+                "constraint": composer_meta.get("php_constraint"),
+                "is_laravel": bool(php_info.get("is_laravel") or forced_laravel),
+            },
+        )
         # Ensure composer runs even if archive inspection missed composer.json
         php_info["has_composer"] = True
         # Never skip install just because a partial vendor/ was in the zip
