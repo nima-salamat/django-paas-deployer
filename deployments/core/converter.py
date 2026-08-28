@@ -56,10 +56,12 @@ def convert_zip_to_tar(zip_path: str) -> io.BytesIO:
                 )
 
             for zip_info in members:
-                if zip_info.is_dir():
+                # Normalize early so both dirs and files share the same checks
+                member_name = zip_info.filename.replace("\\", "/").lstrip("./")
+                if not member_name or member_name in {".", ".."}:
                     continue
 
-                if not is_safe_archive_name(zip_info.filename):
+                if not is_safe_archive_name(member_name):
                     raise DeploymentSecurityError(
                         "ZIP archive contains an unsafe file path "
                         "(path traversal or absolute path).",
@@ -74,6 +76,16 @@ def convert_zip_to_tar(zip_path: str) -> io.BytesIO:
                         details={"filename": zip_info.filename},
                     )
 
+                if zip_info.is_dir():
+                    # Preserve directory entries (important for empty dirs
+                    # such as Laravel storage/framework/cache).
+                    dir_name = member_name.rstrip("/") + "/"
+                    tar_info = tarfile.TarInfo(name=dir_name)
+                    tar_info.type = tarfile.DIRTYPE
+                    tar_info.mode = 0o755
+                    tar.addfile(tar_info)
+                    continue
+
                 total_uncompressed += zip_info.file_size
                 if total_uncompressed > MAX_ARCHIVE_BYTES:
                     raise DeploymentValidationError(
@@ -83,14 +95,6 @@ def convert_zip_to_tar(zip_path: str) -> io.BytesIO:
                     )
 
                 file_data = zipf.read(zip_info.filename)
-                # Normalize member name to forward slashes, no leading ./
-                member_name = zip_info.filename.replace("\\", "/").lstrip("./")
-                if not is_safe_archive_name(member_name):
-                    raise DeploymentSecurityError(
-                        "ZIP member name is unsafe after normalization.",
-                        stage="archive_validation",
-                        details={"filename": member_name},
-                    )
                 tar_info = tarfile.TarInfo(name=member_name)
                 tar_info.size = len(file_data)
                 tar_info.mode = 0o644

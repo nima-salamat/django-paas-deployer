@@ -170,10 +170,23 @@ class DeploymentOrchestrator:
             # 7. Networks + volumes
             self._ensure_networks(config)
             self.logger.info("volume_creation", "Preparing Docker volume mounts.", progress=40)
-            volume_binds = self.volume_manager.prepare(config.volumes)
+
+            # Auto-allocate a default persistent volume when the platform
+            # needs one and the caller supplied none.  Pure Docker path —
+            # does not require Django Volume models.  On insufficient host
+            # space the volume is skipped (deploy continues with ephemeral
+            # storage) so the whole deploy is not aborted.
+            effective_volumes = self.volume_manager.ensure_default_volumes(
+                list(config.volumes or []),
+                platform=getattr(config, "platform", None)
+                or getattr(config, "platform_type", None),
+                service_name=getattr(config, "name", None),
+                size_mb=None,
+            )
+            volume_binds = self.volume_manager.prepare(effective_volumes)
             self.logger.info(
                 "volume_creation", "Docker volume mounts are ready.",
-                progress=48, details={"volume_count": len(config.volumes)},
+                progress=48, details={"volume_count": len(effective_volumes)},
             )
 
             self._check_cancelled()

@@ -1,4 +1,6 @@
 import logging
+import os
+import shutil
 
 import docker
 
@@ -19,6 +21,10 @@ _SIZE_CAPABLE_DRIVERS = frozenset({
     "portworx",
     "flocker",
 })
+
+# Minimum free space (MB) that must remain on the Docker root filesystem
+# after allocating a new volume. Prevents the host from filling up.
+_MIN_FREE_AFTER_MB = 512
 
 
 class Volume(Client):
@@ -76,8 +82,51 @@ class Volume(Client):
             )
         return opts
 
+    @staticmethod
+    def check_host_space(required_mb: int | None = None) -> tuple[bool, int]:
+        """
+        Return (ok, free_mb) for the Docker root filesystem.
+
+        When ``required_mb`` is given we also require that after allocation
+        at least ``_MIN_FREE_AFTER_MB`` remains. This is a best-effort host
+        check; the local driver has no hard size quota.
+        """
+        try:
+            # Prefer Docker root dir when available
+            info = None
+            try:
+                from .client_manager import Client as _C
+                info = _C().client.info()
+            except Exception:
+                pass
+            root = (info or {}).get("DockerRootDir") or "/var/lib/docker"
+            usage = shutil.disk_usage(root)
+            free_mb = usage.free // (1024 * 1024)
+            if required_mb is None or required_mb <= 0:
+                return free_mb >= _MIN_FREE_AFTER_MB, free_mb
+            needed = int(required_mb) + _MIN_FREE_AFTER_MB
+            return free_mb >= needed, free_mb
+        except Exception as exc:
+            logger.warning("Host disk-space check failed: %s", exc)
+            # Fail open — better to attempt create than block all deploys
+            return True, -1
+
     def create(self):
         opts = self._options()
+        # Pre-flight space check (non-fatal when size_mb is unknown)
+        ok, free_mb = self.check_host_space(self.size_mb)
+        if not ok:
+            raise VolumeError(
+                f"Insufficient host disk space to create volume '{self.name}'. "
+                f"Free={free_mb} MB, requested={self.size_mb or '?'} MB "
+                f"(minimum reserve {_MIN_FREE_AFTER_MB} MB).",
+                details={
+                    "volume": self.name,
+                    "free_mb": free_mb,
+                    "requested_mb": self.size_mb,
+                    "min_reserve_mb": _MIN_FREE_AFTER_MB,
+                },
+            )
         try:
             volume = self.client.volumes.create(
                 name=self.name,
@@ -86,10 +135,11 @@ class Volume(Client):
                 labels={"managed-by": "django-paas-deployer"},
             )
             logger.info(
-                "Volume '%s' created with driver '%s' opts=%s",
+                "Volume '%s' created with driver '%s' opts=%s (host free ~%s MB)",
                 self.name,
                 self.driver,
                 opts or {},
+                free_mb,
             )
             return volume
         except docker.errors.APIError as exc:

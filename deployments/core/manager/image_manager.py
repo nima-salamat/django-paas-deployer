@@ -145,6 +145,57 @@ def safe_extract(
             pass
 
 
+def flatten_single_toplevel(build_root: str) -> str | None:
+    """
+    If the extracted archive contains exactly one top-level directory
+    (and no other files/dirs at the root), move its contents up one level.
+
+    This is the #1 cause of PHP/Apache DocumentRoot failures: GitHub zips
+    and many CI artifacts unpack as ``MyApp/public/index.php`` instead of
+    ``public/index.php``. After flattening, COPY . /var/www/html puts
+    files where the Dockerfile and Apache conf expect them.
+
+    Returns the name of the stripped directory (for logging), or None
+    when no strip was performed.
+    """
+    try:
+        entries = [
+            e for e in os.listdir(build_root)
+            if e not in (".", "..", "Dockerfile", ".dockerignore")
+        ]
+    except OSError:
+        return None
+
+    if len(entries) != 1:
+        return None
+
+    only = entries[0]
+    only_path = os.path.join(build_root, only)
+    if not os.path.isdir(only_path):
+        return None
+
+    # Safety: refuse if the single dir itself looks like a system dir
+    if only in ("bin", "etc", "usr", "var", "lib", "opt", "tmp", "dev", "proc"):
+        return None
+
+    import shutil
+
+    for item in os.listdir(only_path):
+        src = os.path.join(only_path, item)
+        dst = os.path.join(build_root, item)
+        if os.path.exists(dst):
+            # Conflict — abort flatten to avoid data loss
+            return None
+        shutil.move(src, dst)
+
+    try:
+        os.rmdir(only_path)
+    except OSError:
+        pass
+
+    return only
+
+
 # ---------------------------------------------------------------------------
 # Reference sanitization — fixes "invalid tag ... invalid reference format"
 # ---------------------------------------------------------------------------
@@ -442,6 +493,17 @@ class Image(Client):
                 tar_stream.seek(0)
                 with tarfile.open(fileobj=tar_stream, mode="r:*") as tar:
                     safe_extract(tar, tmpdir, max_bytes=500 * 1024 * 1024)
+
+                # Flatten single top-level directory (GitHub zips, release
+                # archives). Critical for PHP so Apache DocumentRoot matches
+                # the real layout after COPY . /var/www/html.
+                stripped = flatten_single_toplevel(tmpdir)
+                if stripped:
+                    logger.info(
+                        "Stripped single top-level archive directory '%s' "
+                        "from build context.",
+                        stripped,
+                    )
 
                 build_path = tmpdir
                 app_dir = os.path.join(tmpdir, "app")
