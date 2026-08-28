@@ -1458,7 +1458,8 @@ def _detect_php_project(tar_stream) -> dict:
             for n in names:
                 base = n.rsplit("/", 1)[-1]
                 depth = 0 if "/" not in n else n.count("/")
-                if base == "composer.json" and depth <= 2:
+                # Accept composer.json up to depth 3 (wrapper/app/composer.json)
+                if base == "composer.json" and depth <= 3:
                     info["has_composer"] = True
                     try:
                         m = next(
@@ -1481,12 +1482,26 @@ def _detect_php_project(tar_stream) -> dict:
                                 }
                                 if any(k.startswith("laravel/") for k in req):
                                     info["is_laravel"] = True
+                                # Collect ext-* for later injection
+                                info["composer"]["php_constraint"] = (
+                                    str(req["php"]) if req.get("php") else None
+                                )
+                                info["composer"]["extensions"] = sorted(
+                                    {
+                                        str(k)[4:].lower()
+                                        for k in req
+                                        if str(k).lower().startswith("ext-")
+                                    }
+                                )
                     except Exception:
                         pass
-                if base == "artisan" and depth <= 2:
+                if base == "artisan" and depth <= 3:
                     info["has_artisan"] = True
                     info["is_laravel"] = True
-                if n.endswith("vendor/autoload.php"):
+                # Only treat as "vendor present" when autoload.php exists
+                if n.endswith("vendor/autoload.php") and not n.endswith(
+                    "vendor/autoload.php/"
+                ):
                     info["has_vendor"] = True
 
             schema_candidates = (
@@ -1698,16 +1713,35 @@ def _inject_php_runtime(
         else:
             app_root = f"/var/www/html/{rel}"
 
+    # Always run composer install when composer.json is present and
+    # vendor/autoload.php is missing.  This is the #1 Laravel failure mode
+    # (Fatal error: Failed opening required vendor/autoload.php).
     if has_composer and not info.get("has_vendor"):
         composer_block = (
             "\n# --- Composer dependencies (injected by deployer) ---\n"
+            # System libs needed by composer (zip) and common Laravel packages
+            "RUN apt-get update && apt-get install -y --no-install-recommends \\\n"
+            "        git unzip libzip-dev \\\n"
+            "    && docker-php-ext-install zip \\\n"
+            "    && rm -rf /var/lib/apt/lists/*\n"
             f"COPY --from={MIRROR_DOCKER}/composer:2 /usr/bin/composer /usr/bin/composer\n"
-            f"RUN cd {app_root} \
-"
-            "    && composer validate --no-check-publish --no-interaction \
-"
-            "    && composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader\n"
+            # Run from the application root (parent of public/ for Laravel).
+            # COMPOSER_ALLOW_SUPERUSER avoids the root warning that can
+            # exit non-zero under some CI settings.
+            f"RUN cd {app_root} \\\n"
+            "    && test -f composer.json \\\n"
+            "    && COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_MEMORY_LIMIT=-1 \\\n"
+            "       composer install \\\n"
+            "         --no-dev \\\n"
+            "         --prefer-dist \\\n"
+            "         --no-interaction \\\n"
+            "         --no-progress \\\n"
+            "         --optimize-autoloader \\\n"
+            "         --no-scripts \\\n"
+            "    && test -f vendor/autoload.php \\\n"
+            "    && echo 'composer install OK'\n"
         )
+        # Prefer inserting right after COPY so vendor lands in the image layer
         if re.search(r"^COPY\s+\.\s+/var/www/html/?\s*$", dockerfile, re.MULTILINE):
             dockerfile = re.sub(
                 r"^(COPY\s+\.\s+/var/www/html/?\s*)$",
