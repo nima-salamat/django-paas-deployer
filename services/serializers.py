@@ -281,7 +281,15 @@ class VolumeSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-        return super().create(validated_data)
+        service = validated_data.pop("service", None)
+        instance = super().create(validated_data)
+
+        if service is not None:
+            bind = instance.default_bind or "/data"
+            mode = instance.default_mode or "rw"
+            instance.attach_to_service(service, bind=bind, mode=mode)
+
+        return instance
 
     def update(self, instance, validated_data):
         if "service" in validated_data and validated_data["service"] is None:

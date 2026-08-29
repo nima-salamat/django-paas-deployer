@@ -11,7 +11,13 @@ dotenv.load_dotenv()
 import os
 import re
 
-def env_bool(name, default=False): return os.environ.get(name, str(default)).lower() in ( "1", "true", "yes", "on", "True")
+def env_bool(name, default=False):
+    value = os.environ.get(name)
+
+    if value is None:
+        return default
+
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY=os.environ.get("SECRET_KEY")

@@ -42,7 +42,12 @@ logger = logging.getLogger(__name__)
 # Permission helpers (aligned with users.admin_apis Rule system)
 # ---------------------------------------------------------------------------
 
-from .common import *  # noqa: F401,F403
+from .common import (
+    ServiceAdminPagination,
+    _service_is_mutable,
+    _docker_volume_exists,
+)
+from .volume_files import _get_docker_volume
 
 class ServiceViewSet(ModelViewSet):
     queryset = Service.objects.all()
