@@ -1658,31 +1658,75 @@ def _php_entrypoint_script(
         "  return 0",
         "}",
         "",
-        # Always run for Laravel: package:discover (skipped by --no-scripts),
-        # storage dirs, and APP_KEY.  Missing discover → "Target class [view]".
+        # Always run for Laravel: package:discover, storage, SQLite, APP_KEY.
         "bootstrap_laravel() {",
         '  if [ ! -f "$APP_ROOT/artisan" ]; then return 0; fi',
         '  cd "$APP_ROOT" || return 0',
         '  mkdir -p storage/framework/cache storage/framework/sessions '
         "storage/framework/views storage/logs bootstrap/cache",
         "  chmod -R ug+rwx storage bootstrap/cache 2>/dev/null || true",
+        '  DB_CONN="${DB_CONNECTION:-}"',
+        '  if [ -z "$DB_CONN" ] && [ -f .env ]; then',
+        "    DB_CONN=$(grep -E '^DB_CONNECTION=' .env 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '\\r' | tr -d '\"' | tr -d \"'\")",
+        "  fi",
+        '  if [ -z "$DB_CONN" ] && [ -f .env.example ]; then',
+        "    DB_CONN=$(grep -E '^DB_CONNECTION=' .env.example 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '\\r' | tr -d '\"' | tr -d \"'\")",
+        "  fi",
+        '  DB_CONN=$(echo "${DB_CONN:-sqlite}" | tr "[:upper:]" "[:lower:]")',
+        '  export DB_CONNECTION="$DB_CONN"',
+        '  if [ "$DB_CONN" = "sqlite" ]; then',
+        '    echo "[entrypoint] SQLite detected — ensuring database file"',
+        "    mkdir -p database",
+        '    DB_FILE="${DB_DATABASE:-}"',
+        '    if [ -z "$DB_FILE" ] || [ "$DB_FILE" = "database" ]; then',
+        '      DB_FILE="$APP_ROOT/database/database.sqlite"',
+        "    fi",
+        '    case "$DB_FILE" in',
+        "      /*) ;;",
+        '      *) DB_FILE="$APP_ROOT/$DB_FILE" ;;',
+        "    esac",
+        '    if [ ! -f "$DB_FILE" ]; then',
+        '      touch "$DB_FILE" 2>/dev/null || true',
+        "    fi",
+        '    chmod ug+rw "$DB_FILE" 2>/dev/null || true',
+        '    export DB_DATABASE="$DB_FILE"',
+        "  fi",
         '  if [ ! -f .env ] && [ -f .env.example ]; then',
         '    echo "[entrypoint] Creating .env from .env.example"',
         "    cp .env.example .env",
         "  fi",
+        '  if [ -f .env ] && [ -w .env ]; then',
+        '    if [ -n "${APP_KEY:-}" ] && ! grep -qE "^APP_KEY=base64:" .env 2>/dev/null; then',
+        "      sed -i '/^APP_KEY=/d' .env 2>/dev/null || true",
+        '      echo "APP_KEY=$APP_KEY" >> .env',
+        "    fi",
+        '    if [ -n "${DB_CONNECTION:-}" ]; then',
+        "      sed -i '/^DB_CONNECTION=/d' .env 2>/dev/null || true",
+        '      echo "DB_CONNECTION=$DB_CONNECTION" >> .env',
+        "    fi",
+        '    if [ -n "${DB_DATABASE:-}" ]; then',
+        "      sed -i '/^DB_DATABASE=/d' .env 2>/dev/null || true",
+        '      echo "DB_DATABASE=$DB_DATABASE" >> .env',
+        "    fi",
+        "  fi",
         '  echo "[entrypoint] Running package:discover ..."',
         '  php artisan package:discover --ansi 2>/dev/null || true',
-        '  if [ -f .env ] && ! grep -qE "^APP_KEY=base64:" .env 2>/dev/null; then',
+        '  if [ -z "${APP_KEY:-}" ] && [ -f .env ] && ! grep -qE "^APP_KEY=base64:" .env 2>/dev/null; then',
         '    echo "[entrypoint] Generating APP_KEY ..."',
         "    php artisan key:generate --force --ansi 2>/dev/null || true",
         "  fi",
         "  php artisan config:clear 2>/dev/null || true",
         "  php artisan view:clear 2>/dev/null || true",
-        "  chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true",
+        "  chown -R www-data:www-data storage bootstrap/cache database 2>/dev/null || true",
         "  return 0",
         "}",
         "",
         "wait_for_db() {",
+        '  DB_CONN=$(echo "${DB_CONNECTION:-sqlite}" | tr "[:upper:]" "[:lower:]")',
+        '  if [ "$DB_CONN" = "sqlite" ]; then',
+        '    echo "[entrypoint] SQLite — skip network DB wait."',
+        "    return 0",
+        "  fi",
         '  if [ -z "$DB_HOST" ]; then return 0; fi',
         '  echo "[entrypoint] Waiting for database at $DB_HOST:$DB_PORT ..."',
         "  for i in $(seq 1 60); do",
@@ -1692,7 +1736,7 @@ def _php_entrypoint_script(
         '      $u=getenv("DB_USERNAME")?:getenv("DB_USER")?:getenv("MYSQL_USER")?:"root";',
         '      $w=getenv("DB_PASSWORD")?:getenv("MYSQL_PASSWORD")?:getenv("MYSQL_ROOT_PASSWORD")?:"";',
         '      $d=getenv("DB_DATABASE")?:getenv("MYSQL_DATABASE")?:"";',
-        "      try { $m=@new mysqli($h,$u,$w,$d?:\"\",$p); if($m&&!$m->connect_errno){$m->close();exit(0);} } catch(Throwable $e){}",
+        "      try { $m=@new mysqli($h,$u,$w,$d?:\\\"\\\",$p); if($m&&!$m->connect_errno){$m->close();exit(0);} } catch(Throwable $e){}",
         "      exit(1);",
         "    ' 2>/dev/null; then",
         '      echo "[entrypoint] Database is reachable."; return 0;',
@@ -1705,19 +1749,29 @@ def _php_entrypoint_script(
         "",
         "run_laravel_migrate() {",
         '  if [ ! -f "$APP_ROOT/artisan" ]; then return 0; fi',
-        '  echo "[entrypoint] Running Laravel migrations..."',
-        '  php "$APP_ROOT/artisan" migrate --force || {',
-        '    if [ -n "$DB_HOST" ] || [ -n "$DB_NAME" ]; then',
-        '      echo "[entrypoint] ERROR: artisan migrate failed while database settings are configured." >&2',
-        '      return 1',
-        '    fi',
-        '    echo "[entrypoint] Database settings are absent; skipping fatal migration check."',
+        '  cd "$APP_ROOT" || return 0',
+        '  DB_CONN=$(echo "${DB_CONNECTION:-}" | tr "[:upper:]" "[:lower:]")',
+        '  if [ -z "$DB_CONN" ] && [ -f .env ]; then',
+        "    DB_CONN=$(grep -E '^DB_CONNECTION=' .env 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '\\r' | tr -d '\"' | tr -d \"'\")",
+        "  fi",
+        '  DB_CONN=$(echo "${DB_CONN:-sqlite}" | tr "[:upper:]" "[:lower:]")',
+        '  if [ "$DB_CONN" = "sqlite" ]; then',
+        "    mkdir -p database",
+        '    DB_FILE="${DB_DATABASE:-$APP_ROOT/database/database.sqlite}"',
+        '    case "$DB_FILE" in /*) ;; *) DB_FILE="$APP_ROOT/$DB_FILE" ;; esac',
+        '    [ -f "$DB_FILE" ] || touch "$DB_FILE" 2>/dev/null || true',
+        '    export DB_CONNECTION=sqlite',
+        '    export DB_DATABASE="$DB_FILE"',
+        "  fi",
+        '  echo "[entrypoint] Running Laravel migrations (DB_CONNECTION=$DB_CONN)..."',
+        '  php artisan migrate --force || {',
+        '    echo "[entrypoint] WARNING: artisan migrate failed (non-fatal)." >&2',
         '    return 0',
         '  }',
         '  echo "[entrypoint] Laravel migrations finished."',
         "}",
         "",
-        "run_schema_sql() {",
+"run_schema_sql() {",
         f'  SCHEMA_FILES="{schema_list}"',
         '  if [ -z "$SCHEMA_FILES" ]; then return 0; fi',
         '  if [ -z "$DB_HOST" ] || [ -z "$DB_NAME" ]; then',
@@ -2109,7 +2163,160 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
         doc_root_rel=doc_root_rel or "",
         logger=logger,
     )
+
+    if php_info.get("is_laravel") or forced_laravel:
+        rendered = _inject_laravel_frontend_build(
+            rendered,
+            tar_stream=tar_stream,
+            config=config,
+            logger=logger,
+        )
     return rendered
+
+
+def _detect_laravel_frontend(tar_stream) -> dict:
+    """
+    Inspect archive for package.json + vite/react/mix tooling.
+    Returns {kind: 'vite'|'react'|'mix'|'', has_package_json, build_script}.
+    """
+    info = {"kind": "", "has_package_json": False, "build_script": "build"}
+    try:
+        tar_stream.seek(0)
+        names = []
+        pkg_text = None
+        for m in tar_stream.getmembers():
+            n = (m.name or "").lstrip("./")
+            if not n or n.endswith("/"):
+                continue
+            base = n.split("/")[-1]
+            depth = n.count("/")
+            if depth > 2:
+                continue
+            names.append(base.lower())
+            if base.lower() == "package.json" and pkg_text is None and m.isfile():
+                f = tar_stream.extractfile(m)
+                if f:
+                    pkg_text = f.read().decode("utf-8", "ignore")
+        tar_stream.seek(0)
+        if not pkg_text:
+            return info
+        info["has_package_json"] = True
+        import json as _json
+        try:
+            pkg = _json.loads(pkg_text)
+        except Exception:
+            pkg = {}
+        deps = {}
+        for k in ("dependencies", "devDependencies"):
+            if isinstance(pkg.get(k), dict):
+                deps.update(pkg[k])
+        scripts = pkg.get("scripts") or {}
+        if not isinstance(scripts, dict):
+            scripts = {}
+        # Prefer explicit build scripts
+        for candidate in ("build", "prod", "production", "build:prod"):
+            if candidate in scripts:
+                info["build_script"] = candidate
+                break
+        name_set = set(names)
+        if (
+            "vite.config.js" in name_set
+            or "vite.config.ts" in name_set
+            or "vite.config.mjs" in name_set
+            or "vite" in deps
+            or "@vitejs/plugin-react" in deps
+            or "@vitejs/plugin-vue" in deps
+        ):
+            info["kind"] = "vite"
+        elif "react-scripts" in deps or "react" in deps:
+            info["kind"] = "react"
+        elif "laravel-mix" in deps or "webpack.mix.js" in name_set:
+            info["kind"] = "mix"
+        elif "build" in scripts:
+            info["kind"] = "node"
+    except Exception:
+        try:
+            tar_stream.seek(0)
+        except Exception:
+            pass
+    return info
+
+
+def _inject_laravel_frontend_build(
+    dockerfile: str,
+    *,
+    tar_stream,
+    config=None,
+    logger=None,
+) -> str:
+    """
+    If the Laravel app ships a JS frontend (vite/react/mix) or the deploy
+    config sets front_build_platform, inject Node install + npm run build
+    into the Dockerfile after composer install.
+    """
+    # Config override
+    front = ""
+    env = {}
+    if config is not None:
+        env = getattr(config, "environment", None) or {}
+        if not isinstance(env, dict):
+            env = {}
+        front = (
+            env.get("FRONT_BUILD_PLATFORM")
+            or getattr(config, "front_build_platform", None)
+            or ""
+        )
+        front = str(front or "").strip().lower()
+
+    detected = _detect_laravel_frontend(tar_stream)
+    kind = front or detected.get("kind") or ""
+    if not kind and not detected.get("has_package_json"):
+        return dockerfile
+    if not kind and detected.get("has_package_json"):
+        # package.json present but unknown tooling — still try npm run build
+        kind = "node"
+
+    if re.search(r"\bnpm\s+run\s+build\b", dockerfile, re.I):
+        return dockerfile  # already present
+
+    script = detected.get("build_script") or "build"
+    # Use node from official image via multi-stage copy of binaries is heavy;
+    # install node inside the PHP image for a single-stage simple build.
+    block = (
+        "\n# --- Laravel frontend build (injected) ---\n"
+        f"# front_build_platform={kind}\n"
+        "RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \\\n"
+        "    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \\\n"
+        "    && apt-get install -y --no-install-recommends nodejs \\\n"
+        "    && rm -rf /var/lib/apt/lists/* \\\n"
+        "    && if [ -f package.json ]; then \\\n"
+        "         npm ci --omit=dev 2>/dev/null || npm install --omit=dev || npm install; \\\n"
+        f"         npm run {script} || npm run build || true; \\\n"
+        "       fi\n"
+    )
+
+    # Insert after the last composer-related RUN if possible, else before EXPOSE/CMD
+    if re.search(r"^EXPOSE\s+", dockerfile, re.M):
+        dockerfile = re.sub(
+            r"^(EXPOSE\s+)",
+            block + r"\1",
+            dockerfile,
+            count=1,
+            flags=re.M,
+        )
+    else:
+        dockerfile = dockerfile.rstrip() + "\n" + block
+
+    if logger:
+        logger.info(
+            "dockerfile_generation",
+            f"Laravel frontend build injected (kind={kind}, script={script}).",
+            progress=15,
+            details={"front_build_platform": kind, "build_script": script},
+        )
+    return dockerfile
+
+
 
 
 

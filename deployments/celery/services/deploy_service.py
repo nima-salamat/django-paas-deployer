@@ -281,6 +281,34 @@ class DeployService:
                 ).decode("ascii")
             environment.setdefault("APP_ENV", "production")
 
+            db_conn = (
+                environment.get("DB_CONNECTION")
+                or cfg.get("db_connection")
+                or cfg.get("database")
+                or cfg.get("DB_CONNECTION")
+                or ""
+            )
+            db_conn = str(db_conn).strip().lower()
+            if not db_conn:
+                db_conn = "sqlite"
+            environment["DB_CONNECTION"] = db_conn
+            if db_conn == "sqlite":
+                environment.setdefault(
+                    "DB_DATABASE", "/var/www/html/database/database.sqlite"
+                )
+                environment.setdefault("SESSION_DRIVER", "file")
+                environment.setdefault("CACHE_STORE", "file")
+
+            fb = (
+                cfg.get("front_build_platform")
+                or cfg.get("frontend")
+                or cfg.get("frontend_build")
+                or environment.get("FRONT_BUILD_PLATFORM")
+                or ""
+            )
+            if fb:
+                environment["FRONT_BUILD_PLATFORM"] = str(fb).strip().lower()
+
         server_type = (
             getattr(deploy_item, "server_type", None)
             or cfg.get("server_type")
@@ -473,17 +501,23 @@ class DeployService:
         ("storage", "/var/www/html/storage", 512),
         ("bootstrap-cache", "/var/www/html/bootstrap/cache", 128),
     )
+    _LARAVEL_SQLITE_VOLUME = ("database", "/var/www/html/database", 256)
 
     @classmethod
-    def _ensure_laravel_volumes(cls, service, platform: str) -> None:
+    def _ensure_laravel_volumes(
+        cls, service, platform: str, *, db_connection: str | None = None
+    ) -> None:
         """
-        Auto-create + attach storage / bootstrap-cache volumes for Laravel
-        when the service has none.  Avoids Read-only file system at runtime
-        when Service.read_only=True (default in production).
+        Auto-create storage / bootstrap-cache (+ database for sqlite).
         """
         p = (platform or "").lower().strip()
         if p not in ("laravel", "php", "lumen", "symfony"):
             return
+        wanted = list(cls._LARAVEL_DEFAULT_VOLUMES)
+        dbc = (db_connection or "").strip().lower()
+        if dbc in ("", "sqlite"):
+            wanted.append(cls._LARAVEL_SQLITE_VOLUME)
+
         existing = list(cls._get_volumes_for_service(service))
         existing_binds = set()
         for vol in existing:
@@ -492,7 +526,7 @@ class DeployService:
             if bind:
                 existing_binds.add(bind.rstrip("/"))
 
-        for short, bind, size_mb in cls._LARAVEL_DEFAULT_VOLUMES:
+        for short, bind, size_mb in wanted:
             if bind.rstrip("/") in existing_binds:
                 continue
             # Unique volume name within 32 chars
@@ -545,20 +579,27 @@ class DeployService:
 
         # Ensure Laravel writable paths exist as named volumes
         try:
-            plat = platform or ""
-            if not plat:
-                cfg = {}
-                raw = getattr(deploy_item, "config", None)
-                if isinstance(raw, dict):
-                    cfg = raw
-                elif isinstance(raw, str) and raw.strip():
-                    import json as _json
-                    try:
-                        cfg = _json.loads(raw) or {}
-                    except Exception:
-                        cfg = {}
-                plat = str(cfg.get("platform") or "").lower()
-            DeployService._ensure_laravel_volumes(service, plat)
+            cfg = {}
+            raw = getattr(deploy_item, "config", None)
+            if isinstance(raw, dict):
+                cfg = raw
+            elif isinstance(raw, str) and raw.strip():
+                import json as _json
+                try:
+                    cfg = _json.loads(raw) or {}
+                except Exception:
+                    cfg = {}
+            plat = (platform or str(cfg.get("platform") or "")).lower()
+            cfg_db = ""
+            env_cfg = cfg.get("env") or cfg.get("environment") or {}
+            if isinstance(env_cfg, dict):
+                cfg_db = str(env_cfg.get("DB_CONNECTION") or "")
+            cfg_db = cfg_db or str(
+                cfg.get("db_connection") or cfg.get("database") or ""
+            )
+            DeployService._ensure_laravel_volumes(
+                service, plat, db_connection=cfg_db
+            )
         except Exception as exc:
             logger.warning("ensure_laravel_volumes failed: %s", exc)
 
