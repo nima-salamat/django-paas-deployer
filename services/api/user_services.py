@@ -347,73 +347,92 @@ class VolumeViewSet(ModelViewSet):
         return Response(data)
 
     def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(
-            data=request.data, context={"request": request}
-        )
-        if not serializer.is_valid():
-            return Response(
-                {"error": _("Can not create Volume."), "errors": serializer.errors},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        service_obj = serializer.validated_data.get("service")
-        # User-facing: volume ALWAYS owned by the authenticated user
-        # (even for superuser/staff). Cross-user only via admin APIs.
         owner = request.user
-        if service_obj is not None and service_obj.user_id != owner.id:
-            return Response(
-                {
-                    "error": _(
-                        "Selected service does not belong to the authenticated user."
-                    )
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # If creating already assigned to a service, service must be mutable
-        if service_obj is not None:
-            ok, reason = _service_is_mutable(service_obj)
-            if not ok:
-                return Response({"error": reason}, status=status.HTTP_409_CONFLICT)
 
         try:
-            instance = serializer.save(user=owner)
-        except Exception as exc:
-            from django.core.exceptions import ValidationError as DjangoValidationError
+            serializer = self.get_serializer(
+                data=request.data,
+                context={"request": request},
+            )
 
-            if isinstance(exc, DjangoValidationError):
-                msgs = getattr(exc, "message_dict", None) or {
-                    "detail": list(getattr(exc, "messages", [str(exc)]))
-                }
+            # Catch unexpected validation/database errors too.
+            if not serializer.is_valid():
                 return Response(
-                    {"error": _("Can not create Volume."), "errors": msgs},
+                    {
+                        "error": _("Can not create Volume."),
+                        "errors": serializer.errors,
+                    },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            logger.exception("volume create failed for user=%s", getattr(owner, "pk", None))
+
+            service_obj = serializer.validated_data.get("service")
+
+            # User-facing: volume must belong to the authenticated user.
+            if service_obj is not None and service_obj.user_id != owner.id:
+                return Response(
+                    {
+                        "error": _(
+                            "Selected service does not belong to the authenticated user."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Service must be mutable when volume is created attached to it.
+            if service_obj is not None:
+                ok, reason = _service_is_mutable(service_obj)
+                if not ok:
+                    return Response(
+                        {"error": reason},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
+            # Save inside a transaction so a failed create cannot leave
+            # a partially-written DB row.
+            from django.db import transaction
+
+            with transaction.atomic():
+                instance = serializer.save(user=owner)
+
+            # Calculate quota only after the object has been committed.
+            storage = None
+            if instance.service_id:
+                try:
+                    storage = instance.service.storage_quota_summary()
+                except Exception:
+                    logger.exception(
+                        "Failed to calculate storage summary for volume %s",
+                        instance.pk,
+                    )
+
+            data = self.get_serializer(instance).data
+
+            return Response(
+                {
+                    "success": _("Volume created."),
+                    "id": str(instance.pk),
+                    "storage": storage,
+                    **data,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        except Exception as exc:
+            # Never allow the API to silently turn a volume-create failure
+            # into an opaque HTTP 500.
+            logger.exception(
+                "Volume creation failed. user=%s payload=%s",
+                getattr(owner, "pk", None),
+                dict(request.data),
+            )
+
             return Response(
                 {
                     "error": _("Can not create Volume."),
-                    "detail": str(exc)[:300],
+                    "detail": str(exc)[:500],
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        storage = None
-        if instance.service_id:
-            try:
-                storage = instance.service.storage_quota_summary()
-            except Exception:
-                storage = None
-
-        return Response(
-            {
-                "success": _("Volume created."),
-                "id": str(instance.pk),
-                "storage": storage,
-                **self.get_serializer(instance).data,
-            },
-            status=status.HTTP_201_CREATED,
-        )
 
     def update(self, request, pk=None, *args, **kwargs):
         """
