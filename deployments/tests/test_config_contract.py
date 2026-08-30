@@ -16,5 +16,7 @@ def test_deployment_config_accepts_server_build_resource_policy():
         platform="docker",
         platform_type="APP",
         build_resource_policy={"cpu": 1.0, "memory_mb": 1024, "pids_limit": 2048},
+        static_dir="public",
     )
     assert cfg.build_resource_policy["cpu"] == 1.0
+    assert cfg.static_dir == "public"

@@ -159,8 +159,6 @@ class DeploymentOrchestrator:
                 max_cpu=config.resource_limits.get("cpu", config.max_cpu),
                 max_ram=config.resource_limits.get("memory_mb", config.max_ram),
                 build_options=config.build_options,
-                build_resource_policy=config.build_resource_policy,
-                deployment_id=deployment_id,
             )
             image.create(on_build_output=self._on_build_output)
             image_built = True
@@ -216,7 +214,7 @@ class DeploymentOrchestrator:
                 environment=dict(config.environment) if config.environment else {},
                 labels={
                     "managed-by": "django-paas-deployer",
-                    "deployment.id": str(config.labels.get("deployment.id") or deployment_id or ""),
+                    "deployment.id": str(config.labels.get("deployment.id") or self.logger.deployment_id or ""),
                     "service.id": str(config.labels.get("service.id") or ""),
                     **{str(k): str(v) for k, v in config.labels.items()},
                 },
