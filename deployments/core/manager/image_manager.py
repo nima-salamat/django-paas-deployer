@@ -468,8 +468,17 @@ class Image(Client):
         effective_ram = int(limits["Memory"]) // (1024 * 1024)
         target_ref = self.image_ref
 
+        # Pass the final sanitized image reference explicitly to docker-py.
+        # Some client/engine combinations can otherwise turn an omitted tag
+        # into the literal value ``None`` and Docker rejects it.
+        if not _SAFE_REF_RE.match(target_ref):
+            raise ImageBuildError(
+                f"Invalid generated Docker image reference: {target_ref!r}",
+                details={"image": target_ref},
+            )
+
         logger.info(
-            "Building image %s (untagged → tag after) cpu=%.2f ram=%d MB",
+            "Building image %s cpu=%.2f ram=%d MB",
             target_ref,
             effective_cpu,
             effective_ram,
@@ -550,6 +559,7 @@ class Image(Client):
                     attempt_kwargs = [
                         dict(
                             path=build_path,
+                            tag=target_ref,
                             rm=True,
                             forcerm=True,
                             decode=True,
@@ -561,6 +571,7 @@ class Image(Client):
                         ),
                         dict(
                             path=build_path,
+                            tag=target_ref,
                             rm=True,
                             forcerm=True,
                             decode=True,

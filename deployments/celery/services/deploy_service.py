@@ -291,7 +291,6 @@ class DeployService:
         build_command = cfg.get("build_command") or build_options.get("build_command") or detected_project_cfg.get("build_command")
         install_command = cfg.get("install_command") or build_options.get("install_command") or detected_project_cfg.get("install_command")
         build_dir = cfg.get("build_dir") or build_options.get("build_dir") or detected_project_cfg.get("build_dir")
-        static_dir = cfg.get("static_dir") or build_options.get("static_dir") or detected_project_cfg.get("static_dir")
         package_manager = cfg.get("package_manager") or build_options.get("package_manager") or detected_project_cfg.get("package_manager")
 
         # Port resolution: explicit config > platform default.
@@ -446,7 +445,6 @@ class DeployService:
             package_manager=package_manager,
             working_directory=cfg.get("working_directory") or runtime_options.get("working_directory") or "/app",
             build_dir=build_dir,
-            static_dir=static_dir,
             install_command=install_command,
             build_command=build_command,
             start_command=cfg.get("start_command"),

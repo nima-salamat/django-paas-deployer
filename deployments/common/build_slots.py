@@ -5,7 +5,6 @@ Docker builds globally bounded across all workers.
 """
 from __future__ import annotations
 
-import logging
 import os
 import time
 import uuid
@@ -69,27 +68,21 @@ class BuildSlot(AbstractContextManager):
                 try:
                     if self.redis.set(key, self.token, nx=True, ex=600):
                         self.key = key
-                        # Logging must NEVER turn a successful lease acquisition
-                        # into a fake "concurrency unavailable" failure. In
-                        # particular, stdlib logging.Logger does not understand
-                        # DeploymentLogger's structured `details=` keyword.
-                        try:
-                            if self.logger:
-                                if hasattr(self.logger, "emit") and not isinstance(self.logger, logging.Logger):
-                                    self.logger.info(
-                                        "build_slot_acquired",
-                                        "Acquired build slot.",
-                                        details={"slot": index, "parallelism": count},
-                                    )
-                                else:
-                                    self.logger.info(
-                                        "build_slot_acquired | Acquired build slot. slot=%s parallelism=%s",
-                                        index, count,
-                                    )
-                        except Exception:
-                            logging.getLogger(__name__).exception(
-                                "Build slot acquired but logging failed; continuing with leased slot."
-                            )
+                        if self.logger:
+                            try:
+                                self.logger.info(
+                                    "build_slot_acquired",
+                                    "Acquired build slot.",
+                                    details={"slot": index, "parallelism": count},
+                                )
+                            except TypeError:
+                                # Standard logging.Logger does not accept the
+                                # DeploymentLogger ``details=`` keyword.
+                                self.logger.info(
+                                    "build_slot_acquired slot=%s parallelism=%s",
+                                    index,
+                                    count,
+                                )
                         return self
                 except Exception as exc:
                     raise DeploymentError(
@@ -112,17 +105,12 @@ class BuildSlot(AbstractContextManager):
             except Exception:
                 if self.logger:
                     try:
-                        if hasattr(self.logger, "emit") and not isinstance(self.logger, logging.Logger):
-                            self.logger.warning(
-                                "build_slot_release_failed",
-                                "Could not release build slot; lease will expire automatically.",
-                            )
-                        else:
-                            self.logger.warning(
-                                "build_slot_release_failed | Could not release build slot; lease will expire automatically."
-                            )
-                    except Exception:
-                        logging.getLogger(__name__).exception(
-                            "Could not log build slot release failure; lease will expire automatically."
+                        self.logger.warning(
+                            "build_slot_release_failed",
+                            "Could not release build slot; lease will expire automatically.",
+                        )
+                    except TypeError:
+                        self.logger.warning(
+                            "build_slot_release_failed: lease will expire automatically"
                         )
         return False

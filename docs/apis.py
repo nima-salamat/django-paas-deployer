@@ -1,6 +1,5 @@
-import mimetypes
+import os
 from django.http import FileResponse, Http404
-from django.utils import timezone
 from rest_framework import status
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.permissions import AllowAny, IsAuthenticated, BasePermission
@@ -10,9 +9,9 @@ from rest_framework.viewsets import ModelViewSet
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.decorators import action
 from rest_framework_simplejwt.authentication import JWTAuthentication
-
-from .models import Document, DocumentAsset
-from .serializers import DocumentSerializer, DocumentAssetSerializer
+from django.utils import timezone
+from .models import Document, DocumentAsset, DocumentCategory
+from .serializers import DocumentSerializer, DocumentAssetSerializer, CategorySerializer
 
 
 def has_rule(user, code):
@@ -35,11 +34,40 @@ class PublicDocumentsAPIView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        qs = Document.objects.filter(status=Document.Status.PUBLISHED).prefetch_related("assets")
-        section = (request.query_params.get("section") or "").strip()
-        if section:
-            qs = qs.filter(section=section)
+        qs = Document.objects.filter(status=Document.Status.PUBLISHED).select_related("category")
         return Response(DocumentSerializer(qs, many=True, context={"request": request}).data)
+
+
+class PublicCategoryTreeAPIView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        categories = list(DocumentCategory.objects.all().order_by("order", "name"))
+        published = list(
+            Document.objects.filter(status=Document.Status.PUBLISHED)
+            .select_related("category")
+            .order_by("order", "title")
+        )
+        docs_by_category = {}
+        for doc in published:
+            docs_by_category.setdefault(str(doc.category_id) if doc.category_id else None, []).append(
+                DocumentSerializer(doc, context={"request": request}).data
+            )
+        children = {}
+        for cat in categories:
+            children.setdefault(str(cat.parent_id) if cat.parent_id else None, []).append(cat)
+
+        def build(parent):
+            result = []
+            for cat in children.get(parent, []):
+                result.append({
+                    **CategorySerializer(cat, context={"request": request}).data,
+                    "documents": docs_by_category.get(str(cat.id), []),
+                    "children": build(str(cat.id)),
+                })
+            return result
+
+        return Response({"categories": build(None), "uncategorized": docs_by_category.get(None, [])})
 
 
 class PublicDocumentDetailAPIView(APIView):
@@ -47,20 +75,43 @@ class PublicDocumentDetailAPIView(APIView):
 
     def get(self, request, slug):
         try:
-            obj = Document.objects.prefetch_related("assets").get(slug=slug, status=Document.Status.PUBLISHED)
+            obj = Document.objects.select_related("category").prefetch_related("assets").get(
+                slug=slug, status=Document.Status.PUBLISHED
+            )
         except Document.DoesNotExist:
             return Response({"detail": "Documentation page not found."}, status=404)
         return Response(DocumentSerializer(obj, context={"request": request}).data)
 
 
-class DocumentAdminViewSet(ModelViewSet):
-    queryset = Document.objects.all().prefetch_related("assets")
-    serializer_class = DocumentSerializer
+class CategoryAdminViewSet(ModelViewSet):
+    queryset = DocumentCategory.objects.all().select_related("parent")
+    serializer_class = CategorySerializer
     authentication_classes = [JWTAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated, DocsManagePermission]
 
-    def perform_create(self, serializer):
-        serializer.save()
+    @action(detail=False, methods=["get"])
+    def tree(self, request):
+        nodes = list(self.get_queryset())
+        by_parent = {}
+        for node in nodes:
+            by_parent.setdefault(str(node.parent_id) if node.parent_id else None, []).append(node)
+
+        def build(parent_id):
+            result = []
+            for node in by_parent.get(parent_id, []):
+                item = CategorySerializer(node, context={"request": request}).data
+                item["children"] = build(str(node.id))
+                result.append(item)
+            return result
+
+        return Response(build(None))
+
+
+class DocumentAdminViewSet(ModelViewSet):
+    queryset = Document.objects.all().select_related("category").prefetch_related("assets")
+    serializer_class = DocumentSerializer
+    authentication_classes = [JWTAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated, DocsManagePermission]
 
     @action(detail=True, methods=["post"])
     def publish(self, request, pk=None):
@@ -78,20 +129,32 @@ class DocumentAdminViewSet(ModelViewSet):
         return Response(self.get_serializer(obj).data)
 
 
-class DocumentAssetCreateAPIView(APIView):
+class DocumentAssetListCreateAPIView(APIView):
     authentication_classes = [JWTAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated, DocsManagePermission]
     parser_classes = [MultiPartParser, FormParser]
 
-    def post(self, request, document_id):
-        try:
-            document = Document.objects.get(pk=document_id)
-        except Document.DoesNotExist:
-            return Response({"detail": "Document not found."}, status=404)
-        image = request.FILES.get("image")
-        if not image:
-            return Response({"detail": "image is required."}, status=400)
-        asset = DocumentAsset(document=document, image=image, alt=str(request.data.get("alt") or "")[:240])
+    def get(self, request):
+        qs = DocumentAsset.objects.all().select_related("document")
+        kind = (request.query_params.get("kind") or "").strip()
+        search = (request.query_params.get("search") or "").strip()
+        if kind:
+            qs = qs.filter(kind=kind)
+        if search:
+            qs = qs.filter(name__icontains=search)
+        return Response(DocumentAssetSerializer(qs[:500], many=True, context={"request": request}).data)
+
+    def post(self, request):
+        incoming = request.FILES.get("file")
+        if not incoming:
+            return Response({"detail": "file is required."}, status=400)
+        document = None
+        doc_id = request.data.get("document")
+        if doc_id:
+            document = Document.objects.filter(pk=doc_id).first()
+            if not document:
+                return Response({"detail": "Document not found."}, status=404)
+        asset = DocumentAsset(document=document, file=incoming, alt=str(request.data.get("alt") or "")[:240])
         try:
             asset.full_clean()
             asset.save()
@@ -108,26 +171,33 @@ class DocumentAssetAPIView(APIView):
             asset = DocumentAsset.objects.select_related("document").get(pk=asset_id)
         except DocumentAsset.DoesNotExist:
             raise Http404
-        if asset.document.status != Document.Status.PUBLISHED and not has_rule(request.user, "docs.manage"):
-            return Response({"detail": "Not found."}, status=404)
-        if not asset.image:
+
+        # Browser media tags (<img>, <audio>, <video>) cannot attach an
+        # Authorization header. Admin previews therefore may provide the same
+        # short-lived JWT in ?token=. Never treat an arbitrary token as public
+        # access: it must authenticate through SimpleJWT and still pass the
+        # docs.manage rule below.
+        if not request.user.is_authenticated:
+            raw_token = (request.query_params.get("token") or "").strip()
+            if raw_token:
+                try:
+                    jwt_auth = JWTAuthentication()
+                    validated = jwt_auth.get_validated_token(raw_token)
+                    request.user = jwt_auth.get_user(validated)
+                except Exception:
+                    pass
+
+        # Unattached/draft assets are private library objects. Only assets
+        # belonging to a published document are public.
+        if not asset.document_id:
+            if not has_rule(request.user, "docs.manage"):
+                raise Http404
+        elif asset.document.status != Document.Status.PUBLISHED and not has_rule(request.user, "docs.manage"):
             raise Http404
-        # Images are verified at upload time, but serve them as images rather
-        # than trusting an attacker-controlled filename extension.
-        content_type = "application/octet-stream"
-        try:
-            from PIL import Image as PILImage
-            with PILImage.open(asset.image.file) as checked:
-                fmt = (checked.format or "").upper()
-            content_type = {
-                "JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp",
-                "GIF": "image/gif", "SVG": "image/svg+xml",
-            }.get(fmt, content_type)
-            asset.image.seek(0)
-        except Exception:
-            pass
-        response = FileResponse(asset.image.open("rb"), content_type=content_type)
+        if not asset.file:
+            raise Http404
+        response = FileResponse(asset.file.open("rb"), content_type=asset.mime_type or "application/octet-stream")
         response["X-Content-Type-Options"] = "nosniff"
-        response["Content-Disposition"] = "inline"
-        response["Cache-Control"] = "public, max-age=86400" if asset.document.status == Document.Status.PUBLISHED else "private, no-store"
+        response["Content-Disposition"] = "inline" if asset.kind in {"image", "audio", "video"} else f'attachment; filename="{os.path.basename(asset.name)}"'
+        response["Cache-Control"] = "public, max-age=86400" if asset.document_id and asset.document.status == Document.Status.PUBLISHED else "private, no-store"
         return response
