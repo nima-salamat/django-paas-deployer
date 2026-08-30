@@ -27,3 +27,18 @@ class DeploymentContractRegressionTests(unittest.TestCase):
                 pass
         finally:
             slots._redis_client = old
+
+    def test_orchestrator_has_no_free_deployment_id_references(self):
+        import ast
+        from pathlib import Path
+        source = Path('deployments/core/orchestrator.py').read_text(encoding='utf-8')
+        tree = ast.parse(source)
+        free_loads = [
+            (node.lineno, node.col_offset)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Name)
+            and node.id == 'deployment_id'
+            and isinstance(node.ctx, ast.Load)
+            and node.lineno != 70  # constructor argument
+        ]
+        self.assertEqual(free_loads, [])
