@@ -849,3 +849,54 @@ def share_members(request, pk):
         metadata={"member_overrides": created},
     )
     return Response({"result": "success", "overrides": created})
+
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def service_access_info(request, service_id):
+    """
+    Return ownership + effective permissions for the current user on a service.
+    Used by Service Detail UI to hide unauthorized panels.
+    """
+    service = get_object_or_404(Service, pk=service_id)
+    is_owner = str(service.user_id) == str(request.user.id)
+    if is_owner:
+        from services.share_permissions import full_owner_rules
+        return Response({
+            "result": "success",
+            "service_id": str(service.pk),
+            "is_owner": True,
+            "permissions": full_owner_rules(),
+            "share_id": None,
+        })
+    allowed, share = user_can_access_service(service, request.user, "can_view")
+    if not allowed:
+        return Response(
+            {"result": "error", "detail": _("Access denied.")},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    from services.share_permissions import normalize_rules, full_owner_rules
+    # Recompute effective (member override already inside user_can_access for actions;
+    # for full map use serializer path)
+    if share is None:
+        perms = full_owner_rules()
+    else:
+        try:
+            from services.models import ServiceShareMember
+            mem = ServiceShareMember.objects.filter(share=share, user=request.user).first()
+            if mem is not None and not mem.is_enabled:
+                perms = {k: (0 if k == "daily_deploy_limit" else False) for k in (share.rules or {})}
+            elif mem is not None:
+                perms = normalize_rules(mem.rules or share.rules)
+            else:
+                perms = normalize_rules(share.rules)
+        except Exception:
+            perms = normalize_rules(share.rules if share else {})
+    return Response({
+        "result": "success",
+        "service_id": str(service.pk),
+        "is_owner": False,
+        "permissions": perms,
+        "share_id": str(share.pk) if share else None,
+    })

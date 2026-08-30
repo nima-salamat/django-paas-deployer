@@ -58,8 +58,11 @@ class ServiceViewSet(ModelViewSet):
 
     def get_queryset(self):
         """
-        Own services + services shared with the user (active shares).
-        Mutating actions still enforce fine-grained share rules.
+        list → only services owned by the user (shared ones appear under
+        /services/shared/ and unified tabs, not mixed into "mine").
+        retrieve/update/partial_update → owner OR active share recipient
+        so Service Detail can open shared services.
+        destroy stays blocked for non-owners in destroy().
         """
         from django.db.models import Q
         from services.models import ServiceShare
@@ -67,6 +70,9 @@ class ServiceViewSet(ModelViewSet):
 
         queryset = super().get_queryset().select_related("user", "network", "plan")
         user = self.request.user
+        action = getattr(self, "action", None) or ""
+        if action in ("list", "create"):
+            return queryset.filter(user=user)
         group_ids = active_group_ids_for_user(user)
         shared_ids = ServiceShare.objects.filter(is_active=True).filter(
             Q(target_user=user) | Q(group_id__in=group_ids)

@@ -31,6 +31,7 @@ from services.apis import (
     leave_share,
     share_presets,
     share_members,
+    service_access_info,
 )
 
 # ---------------------------------------------------------------------------
@@ -80,5 +81,6 @@ urlpatterns = (
         path("services/shares/<uuid:pk>/leave/", leave_share, name="services_share_leave"),
         path("services/shares/<uuid:pk>/members/", share_members, name="services_share_members"),
         path("services/share-presets/", share_presets, name="services_share_presets"),
+        path("services/<uuid:service_id>/access/", service_access_info, name="services_service_access"),
     ]
 )
