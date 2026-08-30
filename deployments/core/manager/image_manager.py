@@ -204,12 +204,11 @@ def flatten_single_toplevel(build_root: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Reference sanitization — fixes "invalid tag ... invalid reference format"
+# Docker image naming
 # ---------------------------------------------------------------------------
-#
-# Some docker-py / daemon versions reject tags that are pure version numbers
-# like "1.22" or "1.00". We always produce a tag that starts with a letter
-# and uses only [A-Za-z0-9_.-].
+# The deployment models are authoritative: ``Service.get_docker_service_name()``
+# provides the repository/container name and ``Deploy.version`` provides the tag.
+# We validate those values but never invent a staging name or rewrite the version.
 
 _VALID_NAME_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
 _VALID_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
@@ -221,7 +220,7 @@ def _validate_image_name(name: str) -> str:
     value = name.strip()
     if value != name:
         raise ValueError(f"Image name contains surrounding whitespace: {name!r}")
-    if len(value) > 255 or not _VALID_NAME_RE.match(value):
+    if len(value) > 255 or not _VALID_NAME_RE.fullmatch(value):
         raise ValueError(f"Invalid Docker image repository name: {value!r}")
     return value
 
@@ -230,15 +229,13 @@ def _validate_image_tag(tag: Any) -> str:
     value = "latest" if tag is None else str(tag).strip()
     if not value:
         value = "latest"
-    if not _VALID_TAG_RE.match(value):
+    if len(value) > 128 or not _VALID_TAG_RE.fullmatch(value):
         raise ValueError(f"Invalid Docker image tag: {value!r}")
     return value
 
 
 def _make_image_ref(name: str, tag: Any) -> str:
-    n = _validate_image_name(name)
-    t = _validate_image_tag(tag)
-    return f"{n}:{t}"
+    return f"{_validate_image_name(name)}:{_validate_image_tag(tag)}"
 
 
 # ---------------------------------------------------------------------------
@@ -415,11 +412,14 @@ class Image(Client):
 
 
     def create(self, on_build_output: Optional[Callable] = None):
-        """
-        Build Docker image without passing tag= (avoids broken match_tag).
+        """Build the exact model-derived image and apply its tag after build.
 
-        Also degrades gracefully if container_limits / network_mode are
-        unsupported by the installed docker-py or engine.
+        The low-level docker-py ``api.build`` path is intentionally used
+        without a ``tag`` argument because the deployed docker-py version in
+        this project validates its ``tag`` parameter differently and rejects
+        a full ``repository:tag`` reference.  We therefore build untagged,
+        capture the image ID from the build stream, then apply the exact
+        ``Service`` repository name + ``Deploy.version`` tag.
         """
         if not self.dockerfile_text or not self.tarfile:
             raise ValueError("dockerfile_text and tarfile are required")
@@ -428,40 +428,16 @@ class Image(Client):
         effective_cpu = float(limits["NanoCpus"]) / 1_000_000_000
         effective_ram = int(limits["Memory"]) // (1024 * 1024)
         target_ref = self.image_ref
-        # Pass the final sanitized image reference explicitly to docker-py.
-        # Some client/engine combinations can otherwise turn an omitted tag
-        # into the literal value ``None`` and Docker rejects it.
-        if not _SAFE_REF_RE.match(target_ref):
-            raise ImageBuildError(
-                f"Invalid generated Docker image reference: {target_ref!r}",
-                details={"image": target_ref},
-            )
 
         logger.info(
-            "Building image %s cpu=%.2f ram=%d MB",
-            target_ref,
-            effective_cpu,
-            effective_ram,
+            "Building image repository=%r tag=%r cpu=%.2f ram=%d MB",
+            self.name, self.tag, effective_cpu, effective_ram,
         )
-        try:
-            import docker as _docker_mod
-
-            logger.info(
-                "docker-py=%s name=%r tag=%r",
-                getattr(_docker_mod, "__version__", "?"),
-                self.name,
-                self.tag,
-            )
-        except Exception:
-            pass
 
         buildargs = {"BUILDKIT_INLINE_CACHE": "1"}
-        # Do not accept tenant-controlled build arguments; they can carry
-        # secrets into image history/cache and can be used to alter trust
-        # boundaries of server-generated Dockerfiles.
 
         try:
-            with BuildSlot(deployment_id=self.deployment_id or self.image_ref, logger=logger) as _build_slot:
+            with BuildSlot(deployment_id=self.deployment_id or target_ref, logger=logger):
                 with tempfile.TemporaryDirectory() as tmpdir:
                     tar_stream = (
                         io.BytesIO(self.tarfile)
@@ -472,117 +448,71 @@ class Image(Client):
                     with tarfile.open(fileobj=tar_stream, mode="r:*") as tar:
                         safe_extract(tar, tmpdir, max_bytes=500 * 1024 * 1024)
 
-                    # Flatten single top-level directory (GitHub zips, release
-                    # archives). Critical for PHP so Apache DocumentRoot matches
-                    # the real layout after COPY . /var/www/html.
                     stripped = flatten_single_toplevel(tmpdir)
                     if stripped:
                         logger.info(
-                            "Stripped single top-level archive directory '%s' "
-                            "from build context.",
+                            "Stripped single top-level archive directory '%s' from build context.",
                             stripped,
                         )
 
                     build_path = tmpdir
                     app_dir = os.path.join(tmpdir, "app")
-                    if os.path.isdir(app_dir) and os.path.exists(
-                        os.path.join(app_dir, "Dockerfile")
-                    ):
+                    if os.path.isdir(app_dir) and os.path.exists(os.path.join(app_dir, "Dockerfile")):
                         build_path = app_dir
                     else:
-                        with open(
-                            os.path.join(tmpdir, "Dockerfile"),
-                            "w",
-                            encoding="utf-8",
-                        ) as f:
+                        with open(os.path.join(tmpdir, "Dockerfile"), "w", encoding="utf-8") as f:
                             f.write(self.dockerfile_text)
 
-                    # Ensure Dockerfile exists at build root
                     df_path = os.path.join(build_path, "Dockerfile")
                     if not os.path.isfile(df_path):
                         with open(df_path, "w", encoding="utf-8") as f:
                             f.write(self.dockerfile_text)
 
-                    logger.info(
-                        "Build context ready path=%s files=%s",
-                        build_path,
-                        len(os.listdir(build_path)),
+                    attempt_kwargs = [
+                        dict(path=build_path, rm=True, forcerm=True, decode=True,
+                             container_limits=limits, buildargs=buildargs, network_mode="default"),
+                        dict(path=build_path, rm=True, forcerm=True, decode=True, buildargs=buildargs),
+                        dict(path=build_path, rm=True, forcerm=True, decode=True),
+                    ]
+
+                    response = None
+                    last_err = None
+                    for i, kwargs in enumerate(attempt_kwargs):
+                        try:
+                            logger.info("api.build attempt %d kwargs=%s", i + 1, sorted(k for k in kwargs if k != "path"))
+                            response = self.client.api.build(**kwargs)
+                            last_err = None
+                            break
+                        except TypeError as exc:
+                            last_err = exc
+                            logger.warning("api.build attempt %d TypeError: %s", i + 1, exc)
+                        except docker.errors.DockerException as exc:
+                            last_err = exc
+                            logger.warning("api.build attempt %d DockerException: %s: %s", i + 1, type(exc).__name__, exc)
+                            break
+                        except Exception as exc:
+                            last_err = exc
+                            logger.warning("api.build attempt %d %s: %s", i + 1, type(exc).__name__, exc)
+                            break
+
+                    if response is None:
+                        raise ImageBuildError(
+                            f"Docker api.build failed: {type(last_err).__name__ if last_err else 'unknown'}: {last_err}",
+                            details={"image": target_ref, "error": str(last_err), "error_type": type(last_err).__name__ if last_err else None},
+                        ) from last_err
+
+                    image_id = self._handle_build_stream_collect_id(
+                        response, on_build_output=on_build_output
                     )
-
-                    # Use the canonical image reference from the deployment
-                    # model: Service.get_docker_service_name() + Deploy.version.
-                    # No staging name and no generated tag are introduced here.
-                    target = self.build_options.get("target")
-                    nocache = bool(self.build_options.get("no_cache", self.build_options.get("nocache", False)))
-                    pull = bool(self.build_options.get("pull", False))
-
-                    build_kwargs = dict(
-                        path=build_path,
-                        tag=target_ref,
-                        rm=True,
-                        forcerm=True,
-                        container_limits=limits,
-                        buildargs=buildargs,
-                        network_mode="default",
-                        nocache=nocache,
-                        pull=pull,
-                    )
-                    if target:
-                        build_kwargs["target"] = str(target)
-
-                    logger.info(
-                        "Docker image build: name=%r tag=%r image_ref=%r",
-                        self.name, self.tag, target_ref,
-                    )
-                    try:
-                        built_image, build_logs = self.client.images.build(**build_kwargs)
-                    except TypeError as exc:
-                        # Retry only by removing optional compatibility knobs;
-                        # the canonical tag remains exactly target_ref.
-                        logger.warning("images.build compatibility retry: %s", exc)
-                        fallback = dict(
-                            path=build_path,
-                            tag=target_ref,
-                            rm=True,
-                            forcerm=True,
-                            buildargs=buildargs,
-                            nocache=nocache,
-                            pull=pull,
-                        )
-                        if target:
-                            fallback["target"] = str(target)
-                        built_image, build_logs = self.client.images.build(**fallback)
-
-                    # Stream the high-level SDK logs through the existing sink.
-                    for chunk in build_logs or []:
-                        if on_build_output:
-                            try:
-                                on_build_output(chunk if isinstance(chunk, dict) else {"stream": str(chunk)})
-                            except Exception:
-                                logger.exception("on_build_output callback failed")
-                        if isinstance(chunk, dict):
-                            if chunk.get("error") or chunk.get("errorDetail"):
-                                err = chunk.get("error") or (chunk.get("errorDetail") or {}).get("message") or "Docker image build failed."
-                                raise ImageBuildError(str(err), build_log=[chunk], details={"image": target_ref})
-                            if chunk.get("stream"):
-                                msg = str(chunk.get("stream")).strip()
-                                if msg:
-                                    logger.info(msg)
-                            elif chunk.get("status"):
-                                logger.info("%s%s", chunk.get("status"), f" {chunk.get('progress')}" if chunk.get("progress") else "")
-
-                    image_id = getattr(built_image, "id", None)
-                    if image_id:
-                        logger.info("Docker image built: image=%r id=%s", target_ref, str(image_id)[:16])
-
                     if not image_id:
                         raise ImageBuildError(
-                            "Docker build completed but returned no image ID.",
+                            "Docker build finished but no image ID was returned by the build stream.",
                             details={"image": target_ref},
                         )
 
-                    # The image already carries the exact canonical model-derived
-                    # repository:tag because images.build(tag=target_ref) was used.
+                    # Preserve the exact repository and exact Deploy.version tag.
+                    self._tag_image(image_id)
+                    logger.info("Docker image built and tagged: %s", target_ref)
                     try:
                         return self.client.images.get(target_ref)
                     except ImageNotFound:
@@ -598,18 +528,12 @@ class Image(Client):
         except Exception as exc:
             logger.error(
                 "Unexpected error while building Docker image: %s: %s",
-                type(exc).__name__,
-                exc,
+                type(exc).__name__, exc,
             )
             logger.error(traceback.format_exc())
             raise ImageBuildError(
-                f"Unexpected error while building Docker image: "
-                f"{type(exc).__name__}: {exc}",
-                details={
-                    "image": target_ref,
-                    "error": str(exc),
-                    "error_type": type(exc).__name__,
-                },
+                f"Unexpected error while building Docker image: {type(exc).__name__}: {exc}",
+                details={"image": target_ref, "error": str(exc), "error_type": type(exc).__name__},
             ) from exc
 
 
