@@ -46,6 +46,8 @@ class DeploymentConfig:
     install_command: Optional[str] = None
     build_command: Optional[str] = None
     start_command: Optional[str] = None
+    static_dir: Optional[str] = None
+    media_dir: Optional[str] = None
     # --- new fields ---------------------------------------------------------
     # Runtime environment variables injected at container start (not baked
     # into the image).  Keys and values must both be strings.

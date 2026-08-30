@@ -159,6 +159,8 @@ class DeploymentOrchestrator:
                 max_cpu=config.resource_limits.get("cpu", config.max_cpu),
                 max_ram=config.resource_limits.get("memory_mb", config.max_ram),
                 build_options=config.build_options,
+                build_resource_policy=config.build_resource_policy,
+                deployment_id=deployment_id,
             )
             image.create(on_build_output=self._on_build_output)
             image_built = True

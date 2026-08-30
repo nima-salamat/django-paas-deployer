@@ -69,6 +69,8 @@ class Deploy:
         install_command=None,
         build_command=None,
         start_command=None,
+        static_dir=None,
+        media_dir=None,
     ):
         self.name = name
         self.tag = str(tag)
@@ -106,6 +108,8 @@ class Deploy:
         self.install_command = install_command
         self.build_command = build_command
         self.start_command = start_command
+        self.static_dir = static_dir
+        self.media_dir = media_dir
         self.errors = []
         self.result = None
 
@@ -184,6 +188,8 @@ class Deploy:
             install_command=getattr(self, "install_command", None),
             build_command=getattr(self, "build_command", None),
             start_command=getattr(self, "start_command", None),
+            static_dir=getattr(self, "static_dir", None),
+            media_dir=getattr(self, "media_dir", None),
             environment=self.environment,
             server_type=self.server_type,
             celery=self.celery,

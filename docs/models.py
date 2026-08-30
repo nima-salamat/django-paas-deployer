@@ -8,7 +8,46 @@ from django.utils.text import slugify
 
 def document_asset_path(instance, filename):
     ext = os.path.splitext(filename)[1].lower()[:12]
-    return f"docs/assets/{instance.document_id}/{uuid.uuid4().hex}{ext}"
+    return f"docs/assets/{uuid.uuid4().hex}{ext}"
+
+
+class DocumentCategory(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=140)
+    slug = models.SlugField(max_length=180, unique=True)
+    parent = models.ForeignKey(
+        "self", null=True, blank=True, related_name="children", on_delete=models.CASCADE
+    )
+    description = models.CharField(max_length=320, blank=True, default="")
+    icon = models.CharField(max_length=64, blank=True, default="folder")
+    order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("order", "name")
+        constraints = [
+            models.UniqueConstraint(fields=("parent", "name"), name="docs_category_parent_name_uniq"),
+        ]
+
+    def clean(self):
+        if self.parent_id:
+            seen = {self.pk}
+            node = self.parent
+            while node is not None:
+                if node.pk in seen:
+                    raise ValidationError({"parent": "A category cannot be its own ancestor."})
+                seen.add(node.pk)
+                node = node.parent
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.name)[:180]
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.name
 
 
 class Document(models.Model):
@@ -20,23 +59,20 @@ class Document(models.Model):
     title = models.CharField(max_length=180)
     slug = models.SlugField(max_length=220, unique=True)
     description = models.CharField(max_length=320, blank=True, default="")
-    section = models.CharField(max_length=100, blank=True, default="Documentation")
+    category = models.ForeignKey(
+        DocumentCategory, null=True, blank=True, related_name="documents", on_delete=models.SET_NULL
+    )
     icon = models.CharField(max_length=64, blank=True, default="description")
     order = models.PositiveIntegerField(default=0)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
-    content = models.JSONField(default=list, blank=True)
+    # Markdown is the source of truth. Rendering is handled by the frontend.
+    content = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     published_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        ordering = ("section", "order", "title")
-
-    def clean(self):
-        if not isinstance(self.content, list):
-            raise ValidationError({"content": "Content must be a list of blocks."})
-        if len(self.content) > 250:
-            raise ValidationError({"content": "A document may contain at most 250 blocks."})
+        ordering = ("order", "title")
 
     def save(self, *args, **kwargs):
         if not self.slug:
@@ -49,32 +85,68 @@ class Document(models.Model):
 
 
 class DocumentAsset(models.Model):
+    class Kind(models.TextChoices):
+        IMAGE = "image", "Image"
+        VIDEO = "video", "Video"
+        AUDIO = "audio", "Audio"
+        FILE = "file", "File"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    document = models.ForeignKey(Document, related_name="assets", on_delete=models.CASCADE)
-    image = models.ImageField(upload_to=document_asset_path)
+    document = models.ForeignKey(
+        Document, related_name="assets", null=True, blank=True, on_delete=models.SET_NULL
+    )
+    file = models.FileField(upload_to=document_asset_path)
+    name = models.CharField(max_length=255, blank=True, default="")
     alt = models.CharField(max_length=240, blank=True, default="")
+    kind = models.CharField(max_length=16, choices=Kind.choices, default=Kind.FILE)
+    mime_type = models.CharField(max_length=120, blank=True, default="")
+    size_bytes = models.PositiveBigIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        ordering = ("-created_at",)
+
     def clean(self):
-        image = self.image
-        if not image:
-            raise ValidationError({"image": "Image is required."})
-        content_type = getattr(image, "content_type", "") or ""
-        if content_type and not content_type.startswith("image/"):
-            raise ValidationError({"image": "Only image files are allowed."})
-        if getattr(image, "size", 0) > 8 * 1024 * 1024:
-            raise ValidationError({"image": "Image must be 8 MB or smaller."})
-        # Verify bytes with Pillow; never trust the browser supplied MIME type.
-        try:
-            from PIL import Image as PILImage
-            image.file.seek(0)
-            with PILImage.open(image.file) as checked:
-                checked.verify()
-            image.file.seek(0)
-            image.format = getattr(checked, "format", None)
-        except Exception as exc:
-            raise ValidationError({"image": f"The uploaded file is not a valid image: {exc}"}) from exc
+        if not self.file:
+            raise ValidationError({"file": "A file is required."})
+        size = getattr(self.file, "size", 0) or 0
+        if size > 50 * 1024 * 1024:
+            raise ValidationError({"file": "Files must be 50 MB or smaller."})
+
+        content_type = (getattr(self.file, "content_type", "") or self.mime_type or "").lower()
+        ext = os.path.splitext(getattr(self.file, "name", ""))[1].lower()
+        if content_type.startswith("image/"):
+            self.kind = self.Kind.IMAGE
+            try:
+                from PIL import Image as PILImage
+                self.file.seek(0)
+                with PILImage.open(self.file) as checked:
+                    checked.verify()
+                self.file.seek(0)
+            except Exception as exc:
+                raise ValidationError({"file": f"The uploaded image is invalid: {exc}"}) from exc
+        elif content_type.startswith("video/"):
+            self.kind = self.Kind.VIDEO
+        elif content_type.startswith("audio/"):
+            self.kind = self.Kind.AUDIO
+        else:
+            self.kind = self.Kind.FILE
+            # Allow-list common document/archive/code formats; unknown files are
+            # still stored as generic attachments, never rendered as HTML.
+            allowed_exts = {
+                ".pdf", ".txt", ".md", ".zip", ".tar", ".gz", ".json", ".csv",
+                ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".py", ".js",
+                ".ts", ".tsx", ".jsx", ".css", ".html", ".xml", ".yaml", ".yml",
+            }
+            if ext and len(ext) > 16:
+                raise ValidationError({"file": "Unsupported file extension."})
+            if ext and ext not in allowed_exts:
+                raise ValidationError({"file": "This file type is not allowed."})
 
     def save(self, *args, **kwargs):
+        if not self.name and self.file:
+            self.name = os.path.basename(self.file.name)[:255]
+        self.mime_type = getattr(self.file, "content_type", "") or self.mime_type or ""
+        self.size_bytes = getattr(self.file, "size", 0) or self.size_bytes or 0
         self.full_clean()
         super().save(*args, **kwargs)

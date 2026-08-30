@@ -69,7 +69,20 @@ class BuildSlot(AbstractContextManager):
                     if self.redis.set(key, self.token, nx=True, ex=600):
                         self.key = key
                         if self.logger:
-                            self.logger.info("build_slot_acquired", "Acquired build slot.", details={"slot": index, "parallelism": count})
+                            try:
+                                self.logger.info(
+                                    "build_slot_acquired",
+                                    "Acquired build slot.",
+                                    details={"slot": index, "parallelism": count},
+                                )
+                            except TypeError:
+                                # Standard logging.Logger does not accept the
+                                # DeploymentLogger ``details=`` keyword.
+                                self.logger.info(
+                                    "build_slot_acquired slot=%s parallelism=%s",
+                                    index,
+                                    count,
+                                )
                         return self
                 except Exception as exc:
                     raise DeploymentError(
@@ -91,5 +104,13 @@ class BuildSlot(AbstractContextManager):
                 self.redis.eval(_RELEASE_SCRIPT, 1, self.key, self.token)
             except Exception:
                 if self.logger:
-                    self.logger.warning("build_slot_release_failed", "Could not release build slot; lease will expire automatically.")
+                    try:
+                        self.logger.warning(
+                            "build_slot_release_failed",
+                            "Could not release build slot; lease will expire automatically.",
+                        )
+                    except TypeError:
+                        self.logger.warning(
+                            "build_slot_release_failed: lease will expire automatically"
+                        )
         return False
