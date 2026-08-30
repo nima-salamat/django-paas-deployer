@@ -108,8 +108,45 @@ class DeploySerializer(serializers.ModelSerializer):
             )
             return []
 
+    def validate(self, attrs):
+        """Enforce share can_deploy_add on create (non-owners)."""
+        request = self.context.get("request")
+        if request is None or self.instance is not None:
+            return attrs
+        service = attrs.get("service")
+        user = getattr(request, "user", None)
+        if service is None or user is None or not getattr(user, "is_authenticated", False):
+            raise serializers.ValidationError({"service": "Service is required."})
+        if str(service.user_id) == str(user.id):
+            return attrs
+        from services.api.sharing import user_can_access_service
+        allowed, share = user_can_access_service(service, user, action="can_deploy_add")
+        if not allowed:
+            raise serializers.ValidationError(
+                {
+                    "service": "You do not have permission to add deploys on this shared service.",
+                    "code": "share_permission_denied",
+                    "action": "can_deploy_add",
+                }
+            )
+        return attrs
+
+
     def create(self, validated_data):
         request = self.context.get("request")
+        service = validated_data.get("service")
+        user = getattr(request, "user", None) if request else None
+        if service is not None and user is not None and str(service.user_id) != str(user.id):
+            from services.api.sharing import user_can_access_service
+            allowed, _ = user_can_access_service(service, user, action="can_deploy_add")
+            if not allowed:
+                raise serializers.ValidationError(
+                    {
+                        "service": "You do not have permission to add deploys on this shared service.",
+                        "code": "share_permission_denied",
+                        "action": "can_deploy_add",
+                    }
+                )
         instance = Deploy(**validated_data)
         if request and (request.user.is_superuser or request.user.is_staff):
             instance.skip_zip_size_limit = True
@@ -124,4 +161,3 @@ class DeploySerializer(serializers.ModelSerializer):
             instance.skip_zip_size_limit = True
         instance.save()
         return instance
-

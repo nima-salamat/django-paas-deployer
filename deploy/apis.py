@@ -195,14 +195,17 @@ class DeployViewSet(ModelViewSet):
         """Hard gate: non-owners need can_deploy_add (defense in depth)."""
         service = serializer.validated_data.get("service")
         user = self.request.user
-        if service is not None and str(service.user_id) != str(user.id):
-            if not (user.is_superuser or user.is_staff):
-                from services.share_permissions import assert_share_action, SharePermissionError
-                from rest_framework.exceptions import PermissionDenied
-                try:
-                    assert_share_action(service, user, "can_deploy_add")
-                except SharePermissionError as e:
-                    raise PermissionDenied(str(e))
+        if service is None:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({"service": "Service is required."})
+        if str(service.user_id) != str(user.id):
+            from services.api.sharing import user_can_access_service
+            from rest_framework.exceptions import PermissionDenied
+            allowed, _share = user_can_access_service(service, user, action="can_deploy_add")
+            if not allowed:
+                raise PermissionDenied(
+                    "You do not have permission to add deploys on this shared service."
+                )
         serializer.save(created_by=user)
 
 
@@ -232,36 +235,30 @@ class DeployViewSet(ModelViewSet):
             )
 
         is_owner = str(service.user_id) == str(request.user.id)
-        is_staff = bool(request.user.is_superuser or request.user.is_staff)
 
-        # Non-owners (including staff acting as shared users on purpose) must have
-        # can_deploy_add. Staff/superuser still bypass share rules for support.
+        # Non-owners MUST have can_deploy_add — no staff bypass on shared services.
         if not is_owner:
-            if not is_staff:
-                from services.share_permissions import assert_share_action, SharePermissionError
-                try:
-                    assert_share_action(service, request.user, "can_deploy_add")
-                except SharePermissionError as e:
-                    return Response(
-                        {"error": str(e), "code": "share_permission_denied", "action": "can_deploy_add"},
-                        status=status.HTTP_403_FORBIDDEN,
-                    )
-            else:
-                # Staff bypass share rules but still log
-                import logging
-                logging.getLogger(__name__).info(
-                    "staff deploy create bypass share checks user=%s service=%s",
-                    request.user.id, service.pk,
+            from services.api.sharing import user_can_access_service
+            allowed, share = user_can_access_service(
+                service, request.user, action="can_deploy_add"
+            )
+            if not allowed:
+                return Response(
+                    {
+                        "error": _("You do not have permission to add deploys on this shared service."),
+                        "code": "share_permission_denied",
+                        "action": "can_deploy_add",
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
                 )
 
-        if not is_staff:
-            from deploy.daily_limits import assert_daily_deploy_allowed
-            ok_lim, lim_msg, used, limit = assert_daily_deploy_allowed(service, request.user)
-            if not ok_lim:
-                return Response(
-                    {"error": lim_msg, "used": used, "limit": limit},
-                    status=status.HTTP_429_TOO_MANY_REQUESTS,
-                )
+        from deploy.daily_limits import assert_daily_deploy_allowed
+        ok_lim, lim_msg, used, limit = assert_daily_deploy_allowed(service, request.user)
+        if not ok_lim:
+            return Response(
+                {"error": lim_msg, "used": used, "limit": limit},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
 
         # Prefer the raw request payload for nested config.  Using
         # dict(request.data.items()) is fine for flat form fields but can

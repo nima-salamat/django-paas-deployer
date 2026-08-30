@@ -508,7 +508,11 @@ class ServiceShare(BaseModel):
 
     def allows(self, action: str) -> bool:
         """Return True if the given action key is permitted by rules."""
-        return bool((self.rules or {}).get(action, False))
+        from services.share_permissions import normalize_rules
+        rules = normalize_rules(self.rules or {})
+        if action == "daily_deploy_limit":
+            return int(rules.get(action) or 0) > 0
+        return bool(rules.get(action, False))
 
     def __str__(self):
         target = self.group_id or self.target_user_id
