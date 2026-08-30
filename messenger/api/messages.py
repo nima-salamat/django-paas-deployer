@@ -628,8 +628,9 @@ class MarkReadAPIView(APIView):
                 except (TypeError, ValueError):
                     pass
 
+        # Include system messages (calls, service-share events) so unread clears.
         msg_qs = Message.objects.filter(
-            conversation_id=pk, is_deleted=False, is_system=False, is_scheduled=False
+            conversation_id=pk, is_deleted=False, is_scheduled=False
         ).exclude(sender=request.user)
 
         if message_ids:
