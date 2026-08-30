@@ -414,8 +414,8 @@ def _force_cancel_runtime_cleanup(service, *, container_name: str, deploy=None) 
     deploy_id = str(getattr(deploy, "pk", "")) if deploy is not None else ""
     version = str(getattr(deploy, "version", "latest")) if deploy is not None else "latest"
     try:
-        from deployments.celery.services.deploy_service import _docker_safe_tag
-        target_image = f"{container_name}:{_docker_safe_tag(version)}"
+        from deployments.celery.services.deploy_service import _docker_tag_from_deploy
+        target_image = f"{container_name}:{_docker_tag_from_deploy(version)}"
     except Exception:
         target_image = None
 

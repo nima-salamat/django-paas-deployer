@@ -212,73 +212,33 @@ def flatten_single_toplevel(build_root: str) -> str | None:
 # and uses only [A-Za-z0-9_.-].
 
 _VALID_NAME_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
-# Full reference as accepted by common docker-py match_tag implementations
-_SAFE_REF_RE = re.compile(
-    r"^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[a-zA-Z][a-zA-Z0-9._-]{0,127})?$"
-)
+_VALID_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 
 
-def _sanitize_image_name(name: str) -> str:
+def _validate_image_name(name: str) -> str:
     if not name or not isinstance(name, str):
         raise ValueError("Image name must not be empty")
-    cleaned = name.strip().lower()
-    cleaned = re.sub(r"[^a-z0-9._-]", "-", cleaned)
-    cleaned = re.sub(r"[._-]{2,}", "-", cleaned).strip("._-")
-    if not cleaned or not _VALID_NAME_RE.match(cleaned):
-        cleaned = re.sub(r"[^a-z0-9]", "", cleaned) or "image"
-    return cleaned[:255]
+    value = name.strip()
+    if value != name:
+        raise ValueError(f"Image name contains surrounding whitespace: {name!r}")
+    if len(value) > 255 or not _VALID_NAME_RE.match(value):
+        raise ValueError(f"Invalid Docker image repository name: {value!r}")
+    return value
 
 
-def _sanitize_image_tag(tag: Any) -> str:
-    """
-    Return a Docker-legal tag that starts with a letter.
-
-    Examples
-    --------
-    1.22  → v1-22
-    1.00  → v1-00
-    v1.2  → v1.2
-    latest → latest
-    """
-    if tag is None:
-        return "latest"
-    t = str(tag).strip()
-    if not t:
-        return "latest"
-
-    # Strip leading v/V for normalization, then re-apply
-    raw = t
-    if t.lower().startswith("v") and len(t) > 1 and t[1].isdigit():
-        raw = t[1:]
-
-    # Pure numeric / semver style (digits and dots/hyphens only)
-    if re.match(r"^[\d]+([.\-][\d]+)*$", raw):
-        # Prefer hyphens over dots — maximally compatible with strict match_tag
-        safe = "v" + raw.replace(".", "-")
-        return safe[:128]
-
-    # General sanitization
-    t = re.sub(r"[^a-zA-Z0-9_.-]", "-", t)
-    t = t.strip(".-")
-    if not t:
-        return "latest"
-    # Must start with letter or underscore (not digit, not dot, not hyphen)
-    if not re.match(r"^[a-zA-Z_]", t):
-        t = "v" + t
-    return t[:128]
+def _validate_image_tag(tag: Any) -> str:
+    value = "latest" if tag is None else str(tag).strip()
+    if not value:
+        value = "latest"
+    if not _VALID_TAG_RE.match(value):
+        raise ValueError(f"Invalid Docker image tag: {value!r}")
+    return value
 
 
-def _make_safe_ref(name: str, tag: str) -> str:
-    n = _sanitize_image_name(name)
-    t = _sanitize_image_tag(tag)
-    ref = f"{n}:{t}"
-    if not _SAFE_REF_RE.match(ref):
-        # Last resort
-        t2 = re.sub(r"[^a-zA-Z0-9-]", "-", t)
-        if not re.match(r"^[a-zA-Z_]", t2):
-            t2 = "v" + t2
-        ref = f"{n}:{t2[:128]}"
-    return ref
+def _make_image_ref(name: str, tag: Any) -> str:
+    n = _validate_image_name(name)
+    t = _validate_image_tag(tag)
+    return f"{n}:{t}"
 
 
 # ---------------------------------------------------------------------------
@@ -300,11 +260,11 @@ class Image(Client):
         deployment_id: Any | None = None,
     ):
         super().__init__()
-        self.name = _sanitize_image_name(name)
-        self.tag = _sanitize_image_tag(tag)
+        self.name = _validate_image_name(name)
+        self.tag = _validate_image_tag(tag)
         self.dockerfile_text = dockerfile_text
         self.tarfile = tarfile
-        self.image_ref = _make_safe_ref(self.name, self.tag)
+        self.image_ref = _make_image_ref(self.name, self.tag)
         # Keep name/tag in sync with image_ref
         if ":" in self.image_ref:
             self.name, self.tag = self.image_ref.rsplit(":", 1)
@@ -468,13 +428,6 @@ class Image(Client):
         effective_cpu = float(limits["NanoCpus"]) / 1_000_000_000
         effective_ram = int(limits["Memory"]) // (1024 * 1024)
         target_ref = self.image_ref
-        # Build with an internal tag-only reference first. Some docker-py /
-        # daemon combinations reject a repository-qualified value passed to
-        # the low-level Build API even though the final image reference is
-        # valid. The image is retagged by immutable image ID immediately after
-        # the build succeeds.
-        staging_tag = f"deployer-build-{uuid.uuid4().hex[:24]}"
-
         # Pass the final sanitized image reference explicitly to docker-py.
         # Some client/engine combinations can otherwise turn an omitted tag
         # into the literal value ``None`` and Docker rejects it.
@@ -556,127 +509,80 @@ class Image(Client):
                         len(os.listdir(build_path)),
                     )
 
-                    # Try progressively simpler kwargs so unsupported options
-                    # never abort the whole deploy.
-                    # Tenant config cannot select arbitrary build networking.
-                    network_mode = "default"
+                    # Use the canonical image reference from the deployment
+                    # model: Service.get_docker_service_name() + Deploy.version.
+                    # No staging name and no generated tag are introduced here.
                     target = self.build_options.get("target")
                     nocache = bool(self.build_options.get("no_cache", self.build_options.get("nocache", False)))
                     pull = bool(self.build_options.get("pull", False))
-                    attempt_kwargs = [
-                        dict(
-                            path=build_path,
-                            tag=staging_tag,
-                            rm=True,
-                            forcerm=True,
-                            decode=True,
-                            container_limits=limits,
-                            buildargs=buildargs,
-                            network_mode=network_mode,
-                            nocache=nocache,
-                            pull=pull,
-                        ),
-                        dict(
-                            path=build_path,
-                            tag=staging_tag,
-                            rm=True,
-                            forcerm=True,
-                            decode=True,
-                            container_limits=limits,
-                            buildargs=buildargs,
-                            nocache=nocache,
-                            pull=pull,
-                        ),
-                    ]
 
-                    if target:
-                        for _kwargs in attempt_kwargs:
-                            _kwargs["target"] = str(target)
-                    response = None
-                    last_err: Exception | None = None
-                    for i, kwargs in enumerate(attempt_kwargs):
-                        try:
-                            logger.info(
-                                "api.build attempt %d kwargs=%s",
-                                i + 1,
-                                sorted(k for k in kwargs if k != "path"),
-                            )
-                            response = self.client.api.build(**kwargs)
-                            last_err = None
-                            break
-                        except TypeError as exc:
-                            # Unknown kwarg for this docker-py version
-                            logger.warning(
-                                "api.build attempt %d TypeError: %s", i + 1, exc
-                            )
-                            last_err = exc
-                        except docker.errors.DockerException as exc:
-                            msg = str(exc).lower()
-                            # Still the broken match_tag? (should not happen without tag=)
-                            logger.warning(
-                                "api.build attempt %d DockerException: %s: %s",
-                                i + 1,
-                                type(exc).__name__,
-                                exc,
-                            )
-                            last_err = exc
-                            # If somehow tag validation still triggers, continue
-                            if "invalid tag" in msg or "invalid reference" in msg:
-                                continue
-                            # Other docker errors (daemon down, etc.) — stop
-                            break
-                        except Exception as exc:
-                            logger.warning(
-                                "api.build attempt %d %s: %s",
-                                i + 1,
-                                type(exc).__name__,
-                                exc,
-                            )
-                            last_err = exc
-                            break
-
-                    if response is None:
-                        raise ImageBuildError(
-                            f"Docker api.build failed: "
-                            f"{type(last_err).__name__ if last_err else 'unknown'}: "
-                            f"{last_err}",
-                            details={
-                                "image": target_ref,
-                                "error": str(last_err),
-                                "error_type": type(last_err).__name__
-                                if last_err
-                                else None,
-                            },
-                        ) from last_err
-
-                    image_id = self._handle_build_stream_collect_id(
-                        response, on_build_output=on_build_output
+                    build_kwargs = dict(
+                        path=build_path,
+                        tag=target_ref,
+                        rm=True,
+                        forcerm=True,
+                        container_limits=limits,
+                        buildargs=buildargs,
+                        network_mode="default",
+                        nocache=nocache,
+                        pull=pull,
                     )
+                    if target:
+                        build_kwargs["target"] = str(target)
+
+                    logger.info(
+                        "Docker image build: name=%r tag=%r image_ref=%r",
+                        self.name, self.tag, target_ref,
+                    )
+                    try:
+                        built_image, build_logs = self.client.images.build(**build_kwargs)
+                    except TypeError as exc:
+                        # Retry only by removing optional compatibility knobs;
+                        # the canonical tag remains exactly target_ref.
+                        logger.warning("images.build compatibility retry: %s", exc)
+                        fallback = dict(
+                            path=build_path,
+                            tag=target_ref,
+                            rm=True,
+                            forcerm=True,
+                            buildargs=buildargs,
+                            nocache=nocache,
+                            pull=pull,
+                        )
+                        if target:
+                            fallback["target"] = str(target)
+                        built_image, build_logs = self.client.images.build(**fallback)
+
+                    # Stream the high-level SDK logs through the existing sink.
+                    for chunk in build_logs or []:
+                        if on_build_output:
+                            try:
+                                on_build_output(chunk if isinstance(chunk, dict) else {"stream": str(chunk)})
+                            except Exception:
+                                logger.exception("on_build_output callback failed")
+                        if isinstance(chunk, dict):
+                            if chunk.get("error") or chunk.get("errorDetail"):
+                                err = chunk.get("error") or (chunk.get("errorDetail") or {}).get("message") or "Docker image build failed."
+                                raise ImageBuildError(str(err), build_log=[chunk], details={"image": target_ref})
+                            if chunk.get("stream"):
+                                msg = str(chunk.get("stream")).strip()
+                                if msg:
+                                    logger.info(msg)
+                            elif chunk.get("status"):
+                                logger.info("%s%s", chunk.get("status"), f" {chunk.get('progress')}" if chunk.get("progress") else "")
+
+                    image_id = getattr(built_image, "id", None)
+                    if image_id:
+                        logger.info("Docker image built: image=%r id=%s", target_ref, str(image_id)[:16])
 
                     if not image_id:
-                        # SECURITY/RELIABILITY: the legacy code fell back to
-                        # ``dangling[0].id`` here, which could pick up an
-                        # UNRELATED dangling image and silently tag it as the
-                        # deployment image — deploying the wrong code.  We
-                        # now fail loudly instead of guessing.
                         raise ImageBuildError(
-                            "Docker build finished but no image ID was returned "
-                            "by the build stream. Refusing to guess a dangling image.",
-                            details={
-                                "image": target_ref,
-                                "hint": (
-                                    "Enable BuildKit (DOCKER_BUILDKIT=1) or upgrade "
-                                    "docker-py to a version that emits 'writing image "
-                                    "sha256:...' in the build stream."
-                                ),
-                            },
+                            "Docker build completed but returned no image ID.",
+                            details={"image": target_ref},
                         )
 
-                    # Convert the unique staging tag into the final
-                    # server-generated repository:tag only after the build
-                    # has produced an immutable image ID.
-                    self._tag_image(image_id)
-
+                    # The image already carries the exact canonical model-derived
+                    # repository:tag because images.build(tag=target_ref) was used.
                     try:
                         return self.client.images.get(target_ref)
                     except ImageNotFound:

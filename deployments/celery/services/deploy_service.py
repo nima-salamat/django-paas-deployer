@@ -52,21 +52,22 @@ from ..waiters import ContainerWaiter
 logger = logging.getLogger(__name__)
 
 
-def _docker_safe_tag(version) -> str:
-    """Convert ``Deploy.version`` to a docker-py-safe tag."""
+def _docker_tag_from_deploy(version) -> str:
+    """Return the Deploy.version value unchanged as the Docker tag.
+
+    Deploy.version is the canonical server-side version field.  Do not invent
+    staging tags or rewrite the value here; the Image manager validates the
+    final reference before sending it to Docker.
+    """
     if version is None:
         return "latest"
-    raw = str(version).strip()
-    if not raw:
-        return "latest"
-    if re.match(r"^\d+(\.\d+)?$", raw):
-        return "v" + raw.replace(".", "-")
-    cleaned = re.sub(r"[^A-Za-z0-9_.-]", "-", raw)
-    if not cleaned:
-        return "latest"
-    if not re.match(r"^[A-Za-z_]", cleaned):
-        cleaned = "v" + cleaned
-    return cleaned[:128]
+    value = str(version).strip()
+    return value or "latest"
+
+# Backward-compatible symbol for older internal callers/tests. It does not
+# transform the version; it returns the model value unchanged.
+_docker_safe_tag = _docker_tag_from_deploy
+
 
 
 class DeployService:
@@ -410,12 +411,12 @@ class DeployService:
         logger.info(
             "Deploy package ready: path=%s size=%s tag=%s name=%s",
             zip_path, os.path.getsize(zip_path),
-            _docker_safe_tag(deploy_item.version), container_name,
+            _docker_tag_from_deploy(deploy_item.version), container_name,
         )
 
         deployer = DeployFacade(
             name=container_name,
-            tag=_docker_safe_tag(deploy_item.version),
+            tag=_docker_tag_from_deploy(deploy_item.version),
             zip_filename=zip_path,
             dockerfile_text=dockerfile_text,
             max_cpu=resource_limits["cpu"],

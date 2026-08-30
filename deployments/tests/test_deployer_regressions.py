@@ -35,9 +35,3 @@ def test_orchestrator_has_no_free_deployment_id_reference():
     assert "deployment_id=deployment_id" not in source
     assert " or deployment_id or " not in source
 
-def test_image_build_uses_unique_staging_tag_before_final_tag():
-    from pathlib import Path
-    source = Path(__file__).parents[1].joinpath("core", "manager", "image_manager.py").read_text()
-    assert "staging_tag = f\"deployer-build-" in source
-    assert "tag=staging_tag" in source
-    assert "self._tag_image(image_id)" in source
