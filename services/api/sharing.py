@@ -382,43 +382,65 @@ def create_share(request):
             preset=(data.get("preset") or "")[:32],
         )
         share.save()
-        # Optional per-member rules at create time
+        # Optional per-member rules at create time (ignore if table not migrated)
         members_payload = request.data.get("members")
         if group and isinstance(members_payload, list):
-            from services.models import ServiceShareMember
-            from services.share_permissions import normalize_rules
-            from messenger.models import ConversationParticipant
-            valid_ids = set(
-                ConversationParticipant.objects.filter(
-                    conversation=group, left_at__isnull=True
-                ).values_list("user_id", flat=True)
+            try:
+                from services.models import ServiceShareMember
+                from services.share_permissions import normalize_rules
+                from messenger.models import ConversationParticipant
+                valid_ids = {
+                    str(x)
+                    for x in ConversationParticipant.objects.filter(
+                        conversation=group, left_at__isnull=True
+                    ).values_list("user_id", flat=True)
+                }
+                default_rules = normalize_rules(share.rules)
+                for item in members_payload:
+                    if not isinstance(item, dict):
+                        continue
+                    uid = item.get("user_id")
+                    if str(uid) not in valid_ids:
+                        continue
+                    rules = normalize_rules(item.get("rules") or {})
+                    is_enabled = bool(item.get("is_enabled", True))
+                    if is_enabled and rules == default_rules:
+                        continue
+                    ServiceShareMember.objects.create(
+                        share=share,
+                        user_id=uid,
+                        rules=rules,
+                        is_enabled=is_enabled,
+                    )
+            except Exception:
+                logger.exception("create_share: member rules skipped")
+        try:
+            record_share_event(
+                share,
+                actor=request.user,
+                action="share",
+                message="",
+                metadata={"rules": share.rules},
             )
-            default_rules = normalize_rules(share.rules)
-            for item in members_payload:
-                if not isinstance(item, dict):
-                    continue
-                uid = item.get("user_id")
-                if uid not in valid_ids:
-                    continue
-                rules = normalize_rules(item.get("rules") or {})
-                is_enabled = bool(item.get("is_enabled", True))
-                if is_enabled and rules == default_rules:
-                    continue
-                ServiceShareMember.objects.create(
-                    share=share,
-                    user_id=uid,
-                    rules=rules,
-                    is_enabled=is_enabled,
-                )
-        record_share_event(
-            share,
-            actor=request.user,
-            action="share",
-            message="",
-            metadata={"rules": share.rules},
-        )
+        except Exception:
+            logger.exception("create_share: record_share_event failed")
 
-    out = ServiceShareSerializer(share, context={"request": request}).data
+    try:
+        share = (
+            ServiceShare.objects.select_related(
+                "service", "shared_by", "group", "target_user"
+            ).get(pk=share.pk)
+        )
+        out = ServiceShareSerializer(share, context={"request": request}).data
+    except Exception:
+        logger.exception("create_share: serialize failed")
+        out = {
+            "id": str(share.pk),
+            "service_id": str(share.service_id),
+            "group_id": share.group_id,
+            "target_user_id": str(share.target_user_id) if share.target_user_id else None,
+            "is_active": share.is_active,
+        }
     return Response({"result": "success", "share": out}, status=status.HTTP_201_CREATED)
 
 
@@ -637,8 +659,23 @@ def shares_for_group(request, group_id):
         .select_related("service", "service__user", "service__plan", "shared_by", "group", "target_user")
         .order_by("-created_at")
     )
-    data = ServiceShareSerializer(qs, many=True, context={"request": request}).data
-    return Response({"result": "success", "shares": data, "group_id": str(conv.pk)})
+    try:
+        data = ServiceShareSerializer(qs, many=True, context={"request": request}).data
+    except Exception:
+        logger.exception("shares_for_group serialize failed")
+        data = [
+            {
+                "id": str(s.pk),
+                "service_id": str(s.service_id),
+                "service_name": getattr(getattr(s, "service", None), "name", None),
+                "group_id": s.group_id,
+                "shared_by_id": str(s.shared_by_id),
+                "is_active": s.is_active,
+                "rules": s.rules or {},
+            }
+            for s in qs
+        ]
+    return Response({"result": "success", "shares": data, "group_id": conv.pk})
 
 
 @api_view(["POST"])
