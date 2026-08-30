@@ -367,9 +367,19 @@ class VolumeViewSet(ModelViewSet):
     pagination_class = ServiceAdminPagination
 
     def get_queryset(self):
-        """User-facing: only the authenticated user's volumes."""
-        queryset = super().get_queryset()
-        return queryset.filter(user=self.request.user).select_related("user", "service")
+        """Own volumes + volumes on services shared with the user."""
+        from django.db.models import Q
+        from services.models import ServiceShare
+        from services.share_cleanup import active_group_ids_for_user
+        queryset = super().get_queryset().select_related("user", "service")
+        user = self.request.user
+        group_ids = active_group_ids_for_user(user)
+        shared_service_ids = ServiceShare.objects.filter(is_active=True).filter(
+            Q(target_user=user) | Q(group_id__in=group_ids)
+        ).values_list("service_id", flat=True)
+        return queryset.filter(
+            Q(user=user) | Q(service_id__in=shared_service_ids)
+        ).distinct()
 
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
@@ -536,15 +546,31 @@ class VolumeViewSet(ModelViewSet):
         volume = get_object_or_404(self.get_queryset(), pk=pk)
         data = dict(request.data) if hasattr(request.data, "keys") else {}
 
+        # Permission: volume tied to a shared service
+        _svc_for_perm = volume.service
+        if _svc_for_perm is not None and str(_svc_for_perm.user_id) != str(request.user.id):
+            from services.share_permissions import assert_share_action, SharePermissionError
+            try:
+                # metadata edit vs attach decided later; require at least view
+                assert_share_action(_svc_for_perm, request.user, "can_view")
+            except SharePermissionError as e:
+                return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
+
         docker_exists = _docker_volume_exists(volume)
 
         service_raw = data.get("service", "__omit__")
         target_service = None
         touching_service = service_raw != "__omit__"
         if touching_service and service_raw not in (None, "", "null"):
-            target_service = get_object_or_404(
-                Service.objects.filter(user=request.user), pk=service_raw
-            )
+            target_service = get_object_or_404(Service.objects.all(), pk=service_raw)
+            # owner or share with attach/detach rights
+            if str(target_service.user_id) != str(request.user.id):
+                from services.share_permissions import assert_share_action, SharePermissionError
+                # attaching when service set, detaching when cleared handled below
+                try:
+                    assert_share_action(target_service, request.user, "can_volume_attach")
+                except SharePermissionError as e:
+                    return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
 
         # Mutability for any change tied to a service (current owner or target)
         services_to_check = set()
@@ -718,6 +744,12 @@ class VolumeViewSet(ModelViewSet):
           quota freed
         """
         volume = get_object_or_404(self.get_queryset(), pk=pk)
+        if volume.service_id and str(volume.service.user_id) != str(request.user.id):
+            from services.share_permissions import assert_share_action, SharePermissionError
+            try:
+                assert_share_action(volume.service, request.user, "can_volume_detach")
+            except SharePermissionError as e:
+                return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
 
         release = str(
             request.query_params.get("release")

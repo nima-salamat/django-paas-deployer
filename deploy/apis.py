@@ -166,6 +166,32 @@ def _parse_cursor(value):
     return dt
 
 
+
+def _require_deploy_service_action(deploy, user, action: str):
+    """Owner OK; otherwise share rule `action` required. Returns Response or None."""
+    service = getattr(deploy, "service", None)
+    if service is None:
+        return Response(
+            {"result": "error", "detail": "Service not found.", "code": "share_permission_denied"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    if str(service.user_id) == str(user.id):
+        return None
+    from services.api.sharing import user_can_access_service
+    allowed, _ = user_can_access_service(service, user, action=action)
+    if not allowed:
+        return Response(
+            {
+                "result": "error",
+                "detail": f"You do not have permission ({action}) on this service.",
+                "error": f"You do not have permission ({action}) on this service.",
+                "code": "share_permission_denied",
+                "action": action,
+            },
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None
+
 class DeployViewSet(ModelViewSet):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "deploy.action"
@@ -384,11 +410,9 @@ class DeployViewSet(ModelViewSet):
             self.get_queryset().select_related("service", "service__plan"),
             pk=pk,
         )
-        if not (request.user.is_superuser or request.user.is_staff) and deploy.service.user_id != request.user.id:
-            return Response(
-                {"result": "error", "detail": _("Only owner can start deploy.")},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        denied = _require_deploy_service_action(deploy, request.user, "can_start")
+        if denied is not None:
+            return denied
 
         task_id = str(uuid4())
         platform = _resolve_platform(deploy)
@@ -484,11 +508,10 @@ class DeployViewSet(ModelViewSet):
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
         deploy = get_object_or_404(self.get_queryset(), pk=pk)
-        if not (request.user.is_superuser or request.user.is_staff) and deploy.service.user_id != request.user.id:
-            return Response(
-                {"result": "error", "detail": _("Only owner can cancel deploy.")},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        denied = _require_deploy_service_action(deploy, request.user, "can_stop")
+        if denied is not None:
+            return denied
+
 
         deploy.cancel_requested = True
         if deploy.status == "pending":
@@ -513,22 +536,18 @@ class DeployViewSet(ModelViewSet):
     def logs(self, request, pk=None):
         deploy = get_object_or_404(self.get_queryset(), pk=pk)
         service = deploy.service
-        if str(service.user_id) != str(request.user.id):
-            from services.share_permissions import assert_share_action, SharePermissionError
-            try:
-                assert_share_action(service, request.user, "can_view_deploy_logs")
-            except SharePermissionError as e:
-                return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
+        denied = _require_deploy_service_action(deploy, request.user, "can_view_deploy_logs")
+        if denied is not None:
+            return denied
         return deploy_logs_apiview(request, pk)
 
     @action(detail=True, methods=["post"])
     def rollback(self, request, pk=None):
         deploy = get_object_or_404(self.get_queryset(), pk=pk)
-        if not (request.user.is_superuser or request.user.is_staff) and deploy.service.user_id != request.user.id:
-            return Response(
-                {"result": "error", "detail": _("Only owner can rollback deploy.")},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        denied = _require_deploy_service_action(deploy, request.user, "can_rebuild")
+        if denied is not None:
+            return denied
+
 
         deploy.rollback_status = "pending"
         deploy.save(update_fields=["rollback_status"])
@@ -576,11 +595,7 @@ class DeployViewSet(ModelViewSet):
             self.get_queryset().select_related("service", "service__plan"),
             pk=pk,
         )
-        if not (request.user.is_superuser or request.user.is_staff) and deploy.service.user_id != request.user.id:
-            return Response(
-                {"result": "error", "detail": _("Only owner can rebuild.")},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        # share can_rebuild already enforced above for non-owners
 
         task_id = str(uuid4())
         platform = _resolve_platform(deploy)
@@ -690,11 +705,23 @@ class DeployViewSet(ModelViewSet):
             self.get_queryset().select_related("service", "service__plan"),
             pk=pk,
         )
-        if not (request.user.is_superuser or request.user.is_staff) and deploy.service.user_id != request.user.id:
-            return Response(
-                {"result": "error", "detail": _("Only owner can update DB config.")},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        # Need change_config OR edit on this deploy
+        from services.share_permissions import can_mutate_deploy
+        is_owner = str(deploy.service.user_id) == str(request.user.id)
+        if not is_owner:
+            from services.api.sharing import user_can_access_service
+            ok_cfg, _ = user_can_access_service(deploy.service, request.user, "can_change_config")
+            ok_edit = can_mutate_deploy(deploy, request.user, action="can_deploy_edit")
+            if not (ok_cfg or ok_edit):
+                return Response(
+                    {
+                        "result": "error",
+                        "detail": _("You do not have permission to update DB config."),
+                        "code": "share_permission_denied",
+                        "action": "can_change_config",
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
 
         cfg = _parse_deploy_config(getattr(deploy, "config", None))
         platform = _resolve_platform(deploy)
@@ -891,11 +918,9 @@ class DeployViewSet(ModelViewSet):
             self.get_queryset().select_related("service", "service__plan"),
             pk=pk,
         )
-        if not (request.user.is_superuser or request.user.is_staff) and deploy.service.user_id != request.user.id:
-            return Response(
-                {"result": "error", "detail": _("Only owner can reveal DB credentials.")},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        denied = _require_deploy_service_action(deploy, request.user, "can_view_db_credentials")
+        if denied is not None:
+            return denied
 
         platform = _resolve_platform(deploy)
         if platform not in DB_PLATFORMS:
@@ -960,11 +985,9 @@ def deploy_logs_apiview(request, pk):
         Deploy.objects.select_related("service", "service__user"),
         pk=pk,
     )
-    if not (request.user.is_superuser or request.user.is_staff) and deploy.service.user_id != request.user.id:
-        return Response(
-            {"result": "error", "detail": _("Only owner can view deployment logs.")},
-            status=status.HTTP_403_FORBIDDEN,
-        )
+    denied = _require_deploy_service_action(deploy, request.user, "can_view_deploy_logs")
+    if denied is not None:
+        return denied
 
     try:
         limit = min(max(int(request.query_params.get("limit", 10)), 1), 200)

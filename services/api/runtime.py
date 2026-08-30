@@ -720,7 +720,20 @@ def service_status_apiview(request):
     service_id = request.data.get("service_id", "")
 
     try:
-        service_item = Service.objects.get(id=service_id, user=request.user)
+        service_item, _share = _get_service_for_user_or_share(
+            request, service_id, action="can_view_metrics", for_update=False
+        )
+    except PermissionError as pe:
+        return Response(
+            {
+                "result": "error",
+                "running": False,
+                "cpu": 0,
+                "ram": 0,
+                "detail": str(pe),
+            },
+            status=status.HTTP_403_FORBIDDEN,
+        )
     except Service.DoesNotExist:
         return Response(
             {
