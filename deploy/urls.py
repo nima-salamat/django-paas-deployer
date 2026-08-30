@@ -19,6 +19,7 @@ urlpatterns = [
     path('<uuid:pk>/update_db_config/', DeployViewSet.as_view({'patch': 'update_db_config'}), name='deploy-update-db-config'),
     path('<uuid:pk>/reveal_db_credentials/', DeployViewSet.as_view({'get': 'reveal_db_credentials'}), name='deploy-reveal-db-credentials'),
     path('<uuid:pk>/logs/', deploy_logs_apiview, name='deploy_logs'),
+    path('<uuid:pk>/download/', DeployViewSet.as_view({'get': 'download'}), name='deploy-download'),
     path('<uuid:pk>/', DeployViewSet.as_view({'get': 'retrieve', 'put': 'update', 'delete': 'destroy'}), name='deploy-detail'),
     path('name_is_available/', deploy_name_is_available, name='deploy_name_is_available'),
     path('set_deploy/', set_deploy_apiview, name='set_deploy'),

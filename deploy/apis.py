@@ -14,6 +14,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.http import FileResponse
+from pathlib import Path
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -26,6 +27,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.viewsets import ModelViewSet
+from rest_framework.decorators import action
 
 from core.global_settings.config import SERVICE_STATUS_CHOICES
 from deployments.celery.tasks import deploy as deploy_task
@@ -752,7 +754,7 @@ class DeployViewSet(ModelViewSet):
         from services.share_permissions import can_mutate_deploy
         if not can_mutate_deploy(deploy, request.user, action="can_deploy_edit"):
             return Response(
-                {"error": _("You can only edit deploys you created on shared services.")},
+                {"error": _("You do not have permission to edit this deploy."), "code": "share_permission_denied", "action": "can_deploy_edit"},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -822,11 +824,48 @@ class DeployViewSet(ModelViewSet):
         from services.share_permissions import can_mutate_deploy
         if not can_mutate_deploy(deploy, request.user, action="can_deploy_remove"):
             return Response(
-                {"error": _("You can only remove deploys you created on shared services.")},
+                {
+                    "error": _("You do not have permission to delete this deploy."),
+                    "code": "share_permission_denied",
+                    "action": "can_deploy_remove",
+                },
                 status=status.HTTP_403_FORBIDDEN,
             )
         deploy.delete()
         return Response({"success": _("Deploy deleted.")}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"], url_path="download")
+    def download(self, request, pk=None):
+        """Download deploy zip — owner or can_deploy_download."""
+        deploy = get_object_or_404(
+            self.get_queryset().select_related("service"), pk=pk
+        )
+        from services.share_permissions import can_mutate_deploy
+        if not can_mutate_deploy(deploy, request.user, action="can_deploy_download"):
+            # Owner always true via can_mutate_deploy; recipients need can_deploy_download
+            return Response(
+                {
+                    "error": _("You do not have permission to download this deploy."),
+                    "code": "share_permission_denied",
+                    "action": "can_deploy_download",
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if not deploy.zip_file:
+            return Response(
+                {"error": _("No zip file on this deploy.")},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        try:
+            f = deploy.zip_file.open("rb")
+        except Exception:
+            return Response(
+                {"error": _("Could not open zip file.")},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        filename = Path(getattr(deploy.zip_file, "name", "") or "deploy.zip").name
+        resp = FileResponse(f, as_attachment=True, filename=filename)
+        return resp
 
     @action(detail=True, methods=["get"])
     def reveal_db_credentials(self, request, pk=None):
@@ -1032,6 +1071,20 @@ def _extract_id(value):
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
+
+def _lock_service_for_user(service_id, user):
+    """Lock service row if user is owner or has any active share (view)."""
+    from services.api.sharing import user_can_access_service
+    svc = Service.objects.select_for_update().filter(pk=service_id).first()
+    if svc is None:
+        raise Service.DoesNotExist
+    if str(svc.user_id) == str(user.id):
+        return svc
+    allowed, _ = user_can_access_service(svc, user, action="can_view")
+    if not allowed:
+        raise Service.DoesNotExist
+    return svc
+
 def set_deploy_apiview(request):
     deploy_id = _extract_id(request.data.get("deploy_id"))
     service_id = _extract_id(request.data.get("service_id"))
@@ -1044,11 +1097,7 @@ def set_deploy_apiview(request):
 
     try:
         with transaction.atomic():
-            service_item = (
-                Service.objects.select_for_update().get(id=service_id)
-                if (request.user.is_superuser or request.user.is_staff)
-                else Service.objects.select_for_update().get(id=service_id, user=request.user)
-            )
+            service_item = _lock_service_for_user(service_id, request.user)
 
             if service_item.status in (
                 SERVICE_STATUS_CHOICES.QUEUED,
@@ -1074,14 +1123,18 @@ def set_deploy_apiview(request):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            if deploy_item.service.user_id != request.user.id and not (request.user.is_superuser or request.user.is_staff):
-                return Response(
-                    {
-                        "result": "error",
-                        "detail": _("Only owner can select deploy."),
-                    },
-                    status=status.HTTP_403_FORBIDDEN,
-                )
+            if str(deploy_item.service.user_id) != str(request.user.id):
+                from services.share_permissions import can_mutate_deploy
+                if not can_mutate_deploy(deploy_item, request.user, action="can_deploy_select"):
+                    return Response(
+                        {
+                            "result": "error",
+                            "detail": _("You do not have permission to select this deploy."),
+                            "code": "share_permission_denied",
+                            "action": "can_deploy_select",
+                        },
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
 
             service_item.selected_deploy = deploy_item
             service_item.save(update_fields=["selected_deploy"])
@@ -1127,11 +1180,7 @@ def unset_deploy_apiview(request):
 
     try:
         with transaction.atomic():
-            service_item = (
-                Service.objects.select_for_update().get(id=service_id)
-                if (request.user.is_superuser or request.user.is_staff)
-                else Service.objects.select_for_update().get(id=service_id, user=request.user)
-            )
+            service_item = _lock_service_for_user(service_id, request.user)
 
             if service_item.status in (
                 SERVICE_STATUS_CHOICES.QUEUED,
@@ -1148,14 +1197,18 @@ def unset_deploy_apiview(request):
 
             deploy_item = Deploy.objects.select_related("service").get(id=deploy_id)
 
-            if deploy_item.service.user_id != request.user.id and not (request.user.is_superuser or request.user.is_staff):
-                return Response(
-                    {
-                        "result": "error",
-                        "detail": _("Only owner can unselect deploy."),
-                    },
-                    status=status.HTTP_403_FORBIDDEN,
-                )
+            if str(deploy_item.service.user_id) != str(request.user.id):
+                from services.share_permissions import can_mutate_deploy
+                if not can_mutate_deploy(deploy_item, request.user, action="can_deploy_select"):
+                    return Response(
+                        {
+                            "result": "error",
+                            "detail": _("You do not have permission to unselect this deploy."),
+                            "code": "share_permission_denied",
+                            "action": "can_deploy_select",
+                        },
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
 
             if service_item.selected_deploy_id != deploy_item.id:
                 return Response(

@@ -56,6 +56,9 @@ RULE_LABELS: dict[str, str] = {
     "can_deploy_edit": "Edit own deploys",
     "can_deploy_remove": "Remove own deploys",
     "can_deploy_select": "Select active deploy",
+    "can_deploy_download": "Download deploy zip",
+    "can_deploy_edit_others": "Edit others' deploys",
+    "can_deploy_remove_others": "Delete others' deploys",
     "can_volume_add": "Add volume",
     "can_volume_edit": "Edit volume",
     "can_volume_delete": "Delete volume",
@@ -152,21 +155,48 @@ def assert_share_action(service, user, action: str):
 
 def can_mutate_deploy(deploy, user, *, action: str = "can_deploy_edit") -> bool:
     """
-    Share recipients may only edit/remove deploys they created (created_by).
-    Service owner may always mutate any deploy on their service.
+    Service owner: always True.
+    Share recipient:
+      - can_deploy_edit / can_deploy_remove → only deploys they created
+      - can_deploy_edit_others / can_deploy_remove_others → any deploy on the service
+      - can_deploy_download / can_deploy_select → no ownership check (action itself is enough)
     """
     service = getattr(deploy, "service", None)
     if service is None:
         return False
     if str(service.user_id) == str(user.id):
         return True
+
     from services.api.sharing import user_can_access_service
-    allowed, share = user_can_access_service(service, user, action=action)
-    if not allowed or share is None:
+
+    own_actions = {
+        "can_deploy_edit": "can_deploy_edit",
+        "can_deploy_remove": "can_deploy_remove",
+    }
+    others_actions = {
+        "can_deploy_edit": "can_deploy_edit_others",
+        "can_deploy_remove": "can_deploy_remove_others",
+    }
+    open_actions = {"can_deploy_download", "can_deploy_select", "can_deploy_add"}
+
+    if action in open_actions:
+        allowed, _share = user_can_access_service(service, user, action=action)
+        return bool(allowed)
+
+    # Prefer "others" permission if set; else own-only
+    others_key = others_actions.get(action)
+    own_key = own_actions.get(action, action)
+
+    if others_key:
+        allowed_others, _ = user_can_access_service(service, user, action=others_key)
+        if allowed_others:
+            return True
+
+    allowed_own, _ = user_can_access_service(service, user, action=own_key)
+    if not allowed_own:
         return False
     created_by_id = getattr(deploy, "created_by_id", None)
     if created_by_id is None:
-        # Legacy deploys without created_by: deny recipients
         return False
     return str(created_by_id) == str(user.id)
 
@@ -238,6 +268,9 @@ RULE_PRESETS: dict[str, dict[str, bool]] = {
         "can_deploy_edit": True,
         "can_deploy_remove": True,
         "can_deploy_select": True,
+        "can_deploy_download": True,
+        "can_deploy_edit_others": False,
+        "can_deploy_remove_others": False,
         "can_volume_attach": True,
         "can_volume_detach": True,
         "can_change_config": True,
