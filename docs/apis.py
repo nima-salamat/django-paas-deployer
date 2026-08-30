@@ -1,9 +1,11 @@
 import os
 from django.http import FileResponse, Http404
+from django.db import transaction
 from rest_framework import status
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.permissions import AllowAny, IsAuthenticated, BasePermission
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -89,6 +91,18 @@ class CategoryAdminViewSet(ModelViewSet):
     authentication_classes = [JWTAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated, DocsManagePermission]
 
+    def destroy(self, request, *args, **kwargs):
+        # Deleting a category must never orphan its content or unexpectedly
+        # delete an entire subtree. Move documents and direct child
+        # categories to the deleted category's parent first.
+        category = self.get_object()
+        parent = category.parent
+        with transaction.atomic():
+            Document.objects.filter(category=category).update(category=parent)
+            DocumentCategory.objects.filter(parent=category).update(parent=parent)
+            category.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
     @action(detail=False, methods=["get"])
     def tree(self, request):
         nodes = list(self.get_queryset())
@@ -146,6 +160,12 @@ class DocumentAdminViewSet(ModelViewSet):
         return Response(self.get_serializer(obj).data)
 
 
+class DocumentAssetPagination(PageNumberPagination):
+    page_size = 24
+    page_size_query_param = "page_size"
+    max_page_size = 48
+
+
 class DocumentAssetListCreateAPIView(APIView):
     authentication_classes = [JWTAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated, DocsManagePermission]
@@ -159,7 +179,14 @@ class DocumentAssetListCreateAPIView(APIView):
             qs = qs.filter(kind=kind)
         if search:
             qs = qs.filter(name__icontains=search)
-        return Response(DocumentAssetSerializer(qs[:500], many=True, context={"request": request}).data)
+        paginator = DocumentAssetPagination()
+        page = paginator.paginate_queryset(qs, request, view=self)
+        serializer_data = DocumentAssetSerializer(page, many=True, context={"request": request}).data
+        response = paginator.get_paginated_response(serializer_data)
+        response.data["page"] = paginator.page.number
+        response.data["page_size"] = paginator.get_page_size(request)
+        response.data["pages"] = paginator.page.paginator.num_pages
+        return response
 
     def post(self, request):
         incoming = request.FILES.get("file")

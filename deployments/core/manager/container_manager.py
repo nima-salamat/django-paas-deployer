@@ -257,10 +257,12 @@ class Container(Client):
             ) from exc
 
     def _labels(self):
-        if self.labels is not None:
-            return self.labels
-
+        # Caller-provided labels extend platform labels; they must never
+        # suppress the Traefik labels required for public app routing.
         labels = {"managed-by": "django-paas-deployer"}
+        if self.labels:
+            labels.update({str(k): str(v) for k, v in self.labels.items()})
+
         if not self.entry_port:
             return labels
 
