@@ -189,6 +189,44 @@ def _get_service_for_user(request, service_id, *, for_update=False, require_mana
     return qs.get(id=service_id, user=request.user)
 
 
+def _get_service_for_user_or_share(
+    request,
+    service_id,
+    *,
+    action: str = "can_view",
+    for_update: bool = False,
+):
+    """
+    Resolve a service the user owns OR has been granted via ServiceShare.
+
+    Returns (service, share_or_None).
+    Raises Service.DoesNotExist or PermissionError.
+    """
+    qs = Service.objects.all()
+    if for_update:
+        qs = qs.select_for_update()
+
+    try:
+        service = qs.get(id=service_id, user=request.user)
+        return service, None
+    except Service.DoesNotExist:
+        pass
+
+    try:
+        service = qs.get(id=service_id)
+    except Service.DoesNotExist:
+        raise
+
+    from .sharing import user_can_access_service
+
+    allowed, share = user_can_access_service(service, request.user, action=action)
+    if not allowed:
+        raise PermissionError(
+            f"You do not have permission to perform '{action}' on this service."
+        )
+    return service, share
+
+
 def _purge_service_runtime(service) -> dict:
     """Force-stop/remove container and related images. Always best-effort."""
     name = service.get_docker_service_name()

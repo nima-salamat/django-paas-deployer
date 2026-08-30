@@ -74,6 +74,11 @@ class DeploymentEventPipeline:
                 traceback=payload.get("traceback", ""),
             )
             payload["id"] = str(log.pk)
+            try:
+                from .log_retention import trim_after_write
+                trim_after_write(self.deploy.service_id)
+            except Exception:
+                pass
         except Exception:
             logger.exception("Unable to persist deployment event for %s.", self.deploy.pk)
 

@@ -58,13 +58,20 @@ class ServiceViewSet(ModelViewSet):
 
     def get_queryset(self):
         """
-        User-facing endpoint: ALWAYS scoped to the authenticated user.
-
-        Staff who also have admin rules still only see *their own* services here.
-        Cross-user listing lives under /admin/services/ (see AdminServiceViewSet).
+        Own services + services shared with the user (active shares).
+        Mutating actions still enforce fine-grained share rules.
         """
-        queryset = super().get_queryset()
-        return queryset.filter(user=self.request.user).select_related("user", "network", "plan")
+        from django.db.models import Q
+        from services.models import ServiceShare
+        from services.share_cleanup import active_group_ids_for_user
+
+        queryset = super().get_queryset().select_related("user", "network", "plan")
+        user = self.request.user
+        group_ids = active_group_ids_for_user(user)
+        shared_ids = ServiceShare.objects.filter(is_active=True).filter(
+            Q(target_user=user) | Q(group_id__in=group_ids)
+        ).values_list("service_id", flat=True)
+        return queryset.filter(Q(user=user) | Q(id__in=shared_ids)).distinct()
 
     def list(self, request, *args, **kwargs):
         from core.app_cache import (
@@ -135,6 +142,29 @@ class ServiceViewSet(ModelViewSet):
 
     def update(self, request, pk=None, *args, **kwargs):
         service = get_object_or_404(self.get_queryset(), pk=pk)
+        is_owner = str(service.user_id) == str(request.user.id)
+        if not is_owner:
+            from services.share_permissions import assert_share_action, SharePermissionError
+            data_keys = set(request.data.keys()) if hasattr(request.data, "keys") else set()
+            # network change
+            if "network" in data_keys:
+                try:
+                    assert_share_action(service, request.user, "can_network_change")
+                except SharePermissionError as e:
+                    return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
+            # selected_deploy
+            if "selected_deploy" in data_keys:
+                try:
+                    assert_share_action(service, request.user, "can_deploy_select")
+                except SharePermissionError as e:
+                    return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
+            # any other field → can_change_config
+            other = data_keys - {"network", "selected_deploy"}
+            if other:
+                try:
+                    assert_share_action(service, request.user, "can_change_config")
+                except SharePermissionError as e:
+                    return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
         serializer = self.get_serializer(service, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
@@ -157,6 +187,12 @@ class ServiceViewSet(ModelViewSet):
         Best-effort purge of container/image before DB delete.
         """
         service = get_object_or_404(self.get_queryset(), pk=pk)
+        # Share recipients must never delete the service
+        if str(service.user_id) != str(request.user.id):
+            return Response(
+                {"result": "error", "detail": _("Only the service owner can delete it.")},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         status_now = str(getattr(service, "status", "") or "").lower().strip()
         blocked = {
             SERVICE_STATUS_CHOICES.QUEUED,
@@ -186,6 +222,23 @@ class ServiceViewSet(ModelViewSet):
             _purge_service_runtime(service)
         except Exception as exc:
             logger.warning("purge before service delete failed: %s", exc)
+
+        # Notify groups that had this service shared before CASCADE removes shares
+        try:
+            from services.models import ServiceShare
+            from services.api.sharing import _post_system_message_to_group
+            for share in ServiceShare.objects.filter(service=service, is_active=True, group__isnull=False):
+                try:
+                    _post_system_message_to_group(
+                        share,
+                        actor=request.user,
+                        action="unshare",
+                        message=f"Service «{service.name}» was deleted by the owner; share ended.",
+                    )
+                except Exception:
+                    logger.debug("share delete notify failed", exc_info=True)
+        except Exception:
+            logger.debug("share pre-delete notify failed", exc_info=True)
 
         service.delete()
         try:
@@ -352,7 +405,29 @@ class VolumeViewSet(ModelViewSet):
         return Response(data)
 
     def create(self, request, *args, **kwargs):
+        # If creating for a service the user does not own, require can_volume_add
+        _svc_id = request.data.get("service")
+        if _svc_id:
+            try:
+                _svc = Service.objects.get(pk=_svc_id)
+                if str(_svc.user_id) != str(request.user.id):
+                    from services.share_permissions import assert_share_action, SharePermissionError
+                    try:
+                        assert_share_action(_svc, request.user, "can_volume_add")
+                    except SharePermissionError as e:
+                        return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
+            except Service.DoesNotExist:
+                pass
+
         owner = request.user
+        _force_owner = None
+        if _svc_id:
+            try:
+                _svc = Service.objects.get(pk=_svc_id)
+                if str(_svc.user_id) != str(request.user.id):
+                    _force_owner = _svc.user
+            except Service.DoesNotExist:
+                pass
 
         try:
             serializer = self.get_serializer(
@@ -372,8 +447,11 @@ class VolumeViewSet(ModelViewSet):
 
             service_obj = serializer.validated_data.get("service")
 
-            # User-facing: volume must belong to the authenticated user.
-            if service_obj is not None and service_obj.user_id != owner.id:
+            # Volume user: service owner when acting via share; else request.user
+            volume_user = _force_owner or owner
+
+            # Owner path: service must belong to user. Share path: already authorized.
+            if service_obj is not None and _force_owner is None and service_obj.user_id != owner.id:
                 return Response(
                     {
                         "error": _(
@@ -397,7 +475,7 @@ class VolumeViewSet(ModelViewSet):
             from django.db import transaction
 
             with transaction.atomic():
-                instance = serializer.save(user=owner)
+                instance = serializer.save(user=volume_user)
 
             # Calculate quota only after the object has been committed.
             storage = None
@@ -603,6 +681,19 @@ class VolumeViewSet(ModelViewSet):
         )
 
 
+    def _assert_volume_service_action(self, request, service, action: str):
+        """Owner always ok; share recipients need the matching volume rule."""
+        if service is None:
+            return None
+        if str(service.user_id) == str(request.user.id):
+            return None
+        from services.share_permissions import assert_share_action, SharePermissionError
+        try:
+            assert_share_action(service, request.user, action)
+        except SharePermissionError as e:
+            return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
+        return None
+
     @action(detail=True, methods=["post"], url_path="detach")
     def detach(self, request, pk=None):
         """
@@ -643,6 +734,9 @@ class VolumeViewSet(ModelViewSet):
 
         owner = volume.service
         if owner is not None:
+            denied = self._assert_volume_service_action(request, owner, "can_volume_detach")
+            if denied is not None:
+                return denied
             ok, reason = _service_is_mutable(owner)
             if not ok:
                 return Response({"error": reason}, status=status.HTTP_409_CONFLICT)
@@ -710,9 +804,14 @@ class VolumeViewSet(ModelViewSet):
                 {"error": _("service is required.")},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        target = get_object_or_404(
-            Service.objects.filter(user=request.user), pk=service_raw
-        )
+        try:
+            target = Service.objects.get(pk=service_raw)
+        except Service.DoesNotExist:
+            return Response({"error": _("Service not found.")}, status=status.HTTP_404_NOT_FOUND)
+        if str(target.user_id) != str(request.user.id):
+            denied = self._assert_volume_service_action(request, target, "can_volume_attach")
+            if denied is not None:
+                return denied
         ok, reason = _service_is_mutable(target)
         if not ok:
             return Response({"error": reason}, status=status.HTTP_409_CONFLICT)
@@ -762,6 +861,11 @@ class VolumeViewSet(ModelViewSet):
           (idle + no container). Soft-detach first if you only want to unmount.
         """
         volume = get_object_or_404(self.get_queryset(), pk=pk)
+        if volume.service_id:
+            denied = self._assert_volume_service_action(request, volume.service, "can_volume_delete")
+            if denied is not None:
+                return denied
+
 
         is_mounted = False
         try:

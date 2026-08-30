@@ -2176,8 +2176,11 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
 
 def _detect_laravel_frontend(tar_stream) -> dict:
     """
-    Inspect archive for package.json + vite/react/mix tooling.
-    Returns {kind: 'vite'|'react'|'mix'|'', has_package_json, build_script}.
+    Inspect archive for package.json + vite/react/mix/inertia tooling.
+    Returns {kind: 'vite'|'react'|'mix'|'node'|'', has_package_json, build_script}.
+
+    Looks up to depth 4 so monorepo / nested layouts are still detected.
+    User-supplied front_build_platform always wins over this detection.
     """
     info = {"kind": "", "has_package_json": False, "build_script": "build"}
     try:
@@ -2190,13 +2193,15 @@ def _detect_laravel_frontend(tar_stream) -> dict:
                 continue
             base = n.split("/")[-1]
             depth = n.count("/")
-            if depth > 2:
+            if depth > 4:
                 continue
             names.append(base.lower())
-            if base.lower() == "package.json" and pkg_text is None and m.isfile():
-                f = tar_stream.extractfile(m)
-                if f:
-                    pkg_text = f.read().decode("utf-8", "ignore")
+            # Prefer shallowest package.json
+            if base.lower() == "package.json" and m.isfile():
+                if pkg_text is None or depth < 2:
+                    f = tar_stream.extractfile(m)
+                    if f:
+                        pkg_text = f.read().decode("utf-8", "ignore")
         tar_stream.seek(0)
         if not pkg_text:
             return info
@@ -2213,8 +2218,7 @@ def _detect_laravel_frontend(tar_stream) -> dict:
         scripts = pkg.get("scripts") or {}
         if not isinstance(scripts, dict):
             scripts = {}
-        # Prefer explicit build scripts
-        for candidate in ("build", "prod", "production", "build:prod"):
+        for candidate in ("build", "prod", "production", "build:prod", "build:ssr"):
             if candidate in scripts:
                 info["build_script"] = candidate
                 break
@@ -2226,12 +2230,24 @@ def _detect_laravel_frontend(tar_stream) -> dict:
             or "vite" in deps
             or "@vitejs/plugin-react" in deps
             or "@vitejs/plugin-vue" in deps
+            or "laravel-vite-plugin" in deps
         ):
             info["kind"] = "vite"
-        elif "react-scripts" in deps or "react" in deps:
+        elif "react-scripts" in deps:
             info["kind"] = "react"
         elif "laravel-mix" in deps or "webpack.mix.js" in name_set:
             info["kind"] = "mix"
+        elif "next" in deps:
+            info["kind"] = "nextjs"
+        elif "nuxt" in deps or "nuxt3" in deps:
+            info["kind"] = "nuxt"
+        elif (
+            "react" in deps
+            or "vue" in deps
+            or "@inertiajs/react" in deps
+            or "@inertiajs/vue3" in deps
+        ):
+            info["kind"] = "node"
         elif "build" in scripts:
             info["kind"] = "node"
     except Exception:

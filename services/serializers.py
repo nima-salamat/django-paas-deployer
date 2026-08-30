@@ -320,3 +320,171 @@ class VolumeSerializer(serializers.ModelSerializer):
             return instance
 
         return super().update(instance, validated_data)
+
+
+# ---------------------------------------------------------------------------
+# Service Sharing
+# ---------------------------------------------------------------------------
+
+from .models import ServiceShare, ServiceShareEvent
+from services.share_permissions import DEFAULT_SHARE_RULES, normalize_rules, full_owner_rules, RULE_LABELS
+
+
+# DEFAULT_SHARE_RULES imported from services.share_permissions
+
+
+class ServiceShareSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(source="pk", read_only=True)
+    service_id = serializers.CharField(source="service_id", read_only=True)
+    service_name = serializers.CharField(source="service.name", read_only=True)
+    service_status = serializers.CharField(source="service.status", read_only=True)
+    shared_by_id = serializers.CharField(source="shared_by_id", read_only=True)
+    shared_by_username = serializers.SerializerMethodField()
+    group_id = serializers.CharField(source="group_id", read_only=True, allow_null=True)
+    group_title = serializers.SerializerMethodField()
+    target_user_id = serializers.CharField(source="target_user_id", read_only=True, allow_null=True)
+    target_username = serializers.SerializerMethodField()
+    is_owner = serializers.SerializerMethodField()
+    my_permissions = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ServiceShare
+        fields = [
+            "id",
+            "service_id",
+            "service_name",
+            "service_status",
+            "group_id",
+            "group_title",
+            "target_user_id",
+            "target_username",
+            "shared_by_id",
+            "shared_by_username",
+            "rules",
+            "is_active",
+            "note",
+            "expires_at",
+            "admin_only",
+            "preset",
+            "is_owner",
+            "my_permissions",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "service_id",
+            "service_name",
+            "service_status",
+            "shared_by_id",
+            "shared_by_username",
+            "group_title",
+            "target_username",
+            "is_owner",
+            "my_permissions",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_shared_by_username(self, obj):
+        u = getattr(obj, "shared_by", None)
+        return getattr(u, "username", None) or getattr(u, "email", None) or str(obj.shared_by_id)
+
+    def get_group_title(self, obj):
+        g = getattr(obj, "group", None)
+        if not g:
+            return None
+        return g.title or str(g.public_id)
+
+    def get_target_username(self, obj):
+        u = getattr(obj, "target_user", None)
+        if not u:
+            return None
+        return getattr(u, "username", None) or getattr(u, "email", None) or str(obj.target_user_id)
+
+    def get_is_owner(self, obj):
+        request = self.context.get("request")
+        if not request or not getattr(request, "user", None):
+            return False
+        return str(obj.shared_by_id) == str(request.user.id)
+
+    def get_my_permissions(self, obj):
+        """Rules the current user can exercise on this shared service."""
+        request = self.context.get("request")
+        if not request or not getattr(request, "user", None):
+            return {}
+        # Owner always has full control
+        if str(obj.shared_by_id) == str(request.user.id):
+            return full_owner_rules()
+        return dict(obj.rules or DEFAULT_SHARE_RULES)
+
+
+class ServiceShareCreateSerializer(serializers.Serializer):
+    service_id = serializers.UUIDField(required=True)
+    group_id = serializers.IntegerField(required=False, allow_null=True)
+    target_user_id = serializers.UUIDField(required=False, allow_null=True)
+    rules = serializers.DictField(required=False, default=dict)
+    note = serializers.CharField(required=False, allow_blank=True, max_length=255, default="")
+    expires_at = serializers.DateTimeField(required=False, allow_null=True)
+    admin_only = serializers.BooleanField(required=False, default=False)
+    preset = serializers.CharField(required=False, allow_blank=True, max_length=32, default="")
+
+    def validate(self, attrs):
+        group_id = attrs.get("group_id")
+        target_user_id = attrs.get("target_user_id")
+        if bool(group_id) == bool(target_user_id):
+            raise serializers.ValidationError(
+                _("Exactly one of group_id or target_user_id must be provided.")
+            )
+        rules = attrs.get("rules") or {}
+        if not isinstance(rules, dict):
+            raise serializers.ValidationError({"rules": _("Must be a JSON object.")})
+        preset = (attrs.get("preset") or "").strip().lower()
+        if preset:
+            from services.share_permissions import RULE_PRESETS
+            if preset not in RULE_PRESETS:
+                raise serializers.ValidationError({"preset": _("Unknown preset.")})
+            attrs["rules"] = dict(RULE_PRESETS[preset])
+            attrs["preset"] = preset
+        else:
+            attrs["rules"] = normalize_rules(rules)
+        return attrs
+
+
+class ServiceShareUpdateSerializer(serializers.Serializer):
+    rules = serializers.DictField(required=False)
+    note = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    is_active = serializers.BooleanField(required=False)
+    expires_at = serializers.DateTimeField(required=False, allow_null=True)
+    admin_only = serializers.BooleanField(required=False)
+    preset = serializers.CharField(required=False, allow_blank=True, max_length=32)
+
+    def validate_rules(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError(_("Must be a JSON object."))
+        return normalize_rules(value)
+
+
+class ServiceShareEventSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(source="pk", read_only=True)
+    actor_username = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ServiceShareEvent
+        fields = [
+            "id",
+            "share",
+            "actor",
+            "actor_username",
+            "action",
+            "message",
+            "metadata",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_actor_username(self, obj):
+        u = getattr(obj, "actor", None)
+        if not u:
+            return None
+        return getattr(u, "username", None) or getattr(u, "email", None) or str(obj.actor_id)

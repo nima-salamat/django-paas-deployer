@@ -387,3 +387,159 @@ class Volume(BaseModel):
 
     def __str__(self):
         return f"Volume: {self.name} ({self.size_mb} MB)"
+
+
+# ---------------------------------------------------------------------------
+# Service Sharing (group / user sharing with fine-grained rules)
+# ---------------------------------------------------------------------------
+
+class ServiceShare(BaseModel):
+    """
+    Share a service with a messenger group (Conversation) or directly with a user.
+    The owner retains full control; members can only perform actions allowed by `rules`.
+    """
+    service = models.ForeignKey(
+        Service,
+        verbose_name=_("Service"),
+        related_name="shares",
+        on_delete=models.CASCADE,
+    )
+    # Exactly one of group / target_user should be set
+    group = models.ForeignKey(
+        "messenger.Conversation",
+        verbose_name=_("Shared with Group"),
+        related_name="shared_services",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        help_text=_("Messenger group this service is shared into."),
+    )
+    target_user = models.ForeignKey(
+        User,
+        verbose_name=_("Shared with User"),
+        related_name="received_service_shares",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
+    shared_by = models.ForeignKey(
+        User,
+        verbose_name=_("Shared by"),
+        related_name="created_service_shares",
+        on_delete=models.CASCADE,
+    )
+    # Fine-grained permissions the recipients may exercise.
+    # Example:
+    # {
+    #   "can_view": true,
+    #   "can_start": true,
+    #   "can_stop": true,
+    #   "can_restart": false,
+    #   "can_deploy": false,
+    #   "can_view_logs": true,
+    #   "can_view_metrics": true,
+    #   "can_attach_volume": false,
+    #   "can_change_config": false
+    # }
+    rules = models.JSONField(
+        _("Permission Rules"),
+        default=dict,
+        blank=True,
+        help_text=_("JSON map of allowed actions for recipients of this share."),
+    )
+    is_active = models.BooleanField(_("Active"), default=True)
+    note = models.CharField(_("Note"), max_length=255, blank=True, default="")
+    # Optional expiry — after this time the share is treated as inactive
+    expires_at = models.DateTimeField(
+        _("Expires at"),
+        null=True,
+        blank=True,
+        help_text=_("When set, share stops applying after this timestamp."),
+    )
+    # When True, only group owner/admin may use the shared service (members see it but cannot act)
+    admin_only = models.BooleanField(
+        _("Admins only"),
+        default=False,
+        help_text=_("If set, only group owner/admin participants may exercise rules."),
+    )
+    preset = models.CharField(
+        _("Preset"),
+        max_length=32,
+        blank=True,
+        default="",
+        help_text=_("Optional preset name: viewer, operator, developer, ops."),
+    )
+
+    class Meta:
+        verbose_name = _("Service Share")
+        verbose_name_plural = _("Service Shares")
+        indexes = [
+            models.Index(fields=["service", "is_active"]),
+            models.Index(fields=["group", "is_active"]),
+            models.Index(fields=["target_user", "is_active"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    models.Q(group__isnull=False, target_user__isnull=True)
+                    | models.Q(group__isnull=True, target_user__isnull=False)
+                ),
+                name="service_share_exactly_one_target",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        if bool(self.group_id) == bool(self.target_user_id):
+            raise ValidationError(
+                _("Exactly one of group or target_user must be set.")
+            )
+        if self.service_id and self.shared_by_id:
+            if str(self.service.user_id) != str(self.shared_by_id):
+                raise ValidationError(
+                    _("Only the service owner can create a share.")
+                )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        from services.share_permissions import normalize_rules
+        self.rules = normalize_rules(self.rules)
+        super().save(*args, **kwargs)
+
+    def allows(self, action: str) -> bool:
+        """Return True if the given action key is permitted by rules."""
+        return bool((self.rules or {}).get(action, False))
+
+    def __str__(self):
+        target = self.group_id or self.target_user_id
+        return f"Share({self.service_id} → {target})"
+
+
+class ServiceShareEvent(BaseModel):
+    """
+    Audit / activity events for a shared service.
+    These are also posted as system messages into the messenger group.
+    """
+    share = models.ForeignKey(
+        ServiceShare,
+        related_name="events",
+        on_delete=models.CASCADE,
+    )
+    actor = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    action = models.CharField(max_length=64)  # start, stop, deploy, share, unshare, ...
+    message = models.TextField(blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        verbose_name = _("Service Share Event")
+        verbose_name_plural = _("Service Share Events")
+        ordering = ("-created_at",)
+
+    def __str__(self):
+        return f"{self.action} on share {self.share_id}"

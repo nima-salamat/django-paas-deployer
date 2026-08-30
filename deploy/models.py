@@ -31,6 +31,15 @@ class RollbackStatusChoices(models.TextChoices):
 class Deploy(BaseModel):
     name = models.CharField(verbose_name=_("Name"), max_length=50, unique=True)
     service = models.ForeignKey(Service, verbose_name=_("Service"), on_delete=models.CASCADE)
+    created_by = models.ForeignKey(
+        "users.User",
+        verbose_name=_("Created by"),
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_deploys",
+        help_text=_("User who uploaded this deploy (for share permission scoping)."),
+    )
     version = models.DecimalField(_("Version"), max_digits=5, decimal_places=2, default=0.00, help_text=_("Deployment version, e.g., 1.0"))
     zip_file = models.FileField(verbose_name=_("ZIP File"), upload_to=zip_file_path, blank=True, null=True)
     config = models.JSONField(verbose_name=_("Configuration"), blank=True, null=True)

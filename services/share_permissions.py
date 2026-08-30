@@ -1,0 +1,270 @@
+"""
+Fine-grained permission rules for ServiceShare.
+
+Service DELETE is intentionally never granted to share recipients.
+"""
+from __future__ import annotations
+
+from django.utils.translation import gettext_lazy as _
+
+# Canonical rule keys + defaults (safe defaults = deny mutating actions)
+DEFAULT_SHARE_RULES: dict[str, bool] = {
+    # visibility
+    "can_view": True,
+    "can_view_logs": True,           # container / service runtime logs
+    "can_view_deploy_logs": True,    # deployment pipeline logs
+    "can_view_metrics": True,
+    "can_view_db_credentials": False,  # DB password / root_password / secrets
+    # lifecycle
+    "can_start": False,
+    "can_stop": False,
+    "can_restart": False,
+    "can_rebuild": False,            # force_rebuild / rebuild image
+    "can_purge": False,              # purge runtime (container/images)
+    # deploys (recipients may only touch deploys they created when created_by is set)
+    "can_deploy_add": False,
+    "can_deploy_edit": False,        # edit own deploys only
+    "can_deploy_remove": False,      # remove own deploys only
+    "can_deploy_select": False,      # select active deploy on service
+    # volumes
+    "can_volume_add": False,
+    "can_volume_edit": False,
+    "can_volume_delete": False,
+    "can_volume_attach": False,
+    "can_volume_detach": False,
+    # network on the shared service
+    "can_network_change": False,     # change service.network
+    # generic service config (name/plan/etc. — still cannot delete service)
+    "can_change_config": False,
+}
+
+# Human labels for UI (EN; frontend may translate)
+RULE_LABELS: dict[str, str] = {
+    "can_view": "View service",
+    "can_view_logs": "View service logs",
+    "can_view_deploy_logs": "View deploy logs",
+    "can_view_metrics": "View metrics",
+    "can_view_db_credentials": "View DB credentials",
+    "can_start": "Start",
+    "can_stop": "Stop",
+    "can_restart": "Restart",
+    "can_rebuild": "Rebuild",
+    "can_purge": "Purge runtime",
+    "can_deploy_add": "Add deploy",
+    "can_deploy_edit": "Edit own deploys",
+    "can_deploy_remove": "Remove own deploys",
+    "can_deploy_select": "Select active deploy",
+    "can_volume_add": "Add volume",
+    "can_volume_edit": "Edit volume",
+    "can_volume_delete": "Delete volume",
+    "can_volume_attach": "Attach volume",
+    "can_volume_detach": "Detach volume",
+    "can_network_change": "Change network",
+    "can_change_config": "Change service config",
+}
+
+# Map legacy short keys → canonical
+_LEGACY_ALIASES = {
+    "can_deploy": "can_rebuild",  # old single deploy flag → rebuild
+    "can_attach_volume": "can_volume_attach",
+    "can_delete_deploy": "can_deploy_remove",
+}
+
+
+def normalize_rules(raw) -> dict[str, bool]:
+    """Merge user-supplied rules with defaults; coerce to bool; map legacy keys."""
+    out = dict(DEFAULT_SHARE_RULES)
+    if not isinstance(raw, dict):
+        return out
+    # apply legacy aliases first
+    mapped = {}
+    for k, v in raw.items():
+        key = _LEGACY_ALIASES.get(k, k)
+        mapped[key] = v
+    for k in DEFAULT_SHARE_RULES:
+        if k in mapped:
+            out[k] = bool(mapped[k])
+    return out
+
+
+def full_owner_rules() -> dict[str, bool]:
+    return {k: True for k in DEFAULT_SHARE_RULES}
+
+
+# Actions that share recipients must NEVER perform
+FORBIDDEN_FOR_RECIPIENTS = frozenset({
+    "delete_service",
+    "transfer_ownership",
+})
+
+
+class SharePermissionError(PermissionError):
+    def __init__(self, message: str = "Permission denied", *, action: str = ""):
+        super().__init__(message)
+        self.action = action
+
+
+def assert_share_action(service, user, action: str):
+    """
+    Raise SharePermissionError if user cannot perform action on service.
+    Owners always pass.
+    Returns (service, share_or_None).
+    """
+    from services.api.sharing import user_can_access_service
+
+    if action in FORBIDDEN_FOR_RECIPIENTS:
+        # Only true owner
+        if str(getattr(service, "user_id", None)) != str(getattr(user, "id", None)):
+            raise SharePermissionError(
+                str(_("You cannot perform this action on a shared service.")),
+                action=action,
+            )
+        return service, None
+
+    # Map high-level action names to rule keys
+    rule_key = action
+    allowed, share = user_can_access_service(service, user, action=rule_key)
+    if not allowed:
+        # Owner path inside user_can_access returns allowed=True for can_view etc.
+        # If owner, user_can_access returns (True, None) only when service.user == user
+        if str(getattr(service, "user_id", None)) == str(getattr(user, "id", None)):
+            return service, None
+        raise SharePermissionError(
+            str(_("You do not have permission to perform '%(a)s' on this service.") % {"a": action}),
+            action=action,
+        )
+    return service, share
+
+
+def can_mutate_deploy(deploy, user, *, action: str = "can_deploy_edit") -> bool:
+    """
+    Share recipients may only edit/remove deploys they created (created_by).
+    Service owner may always mutate any deploy on their service.
+    """
+    service = getattr(deploy, "service", None)
+    if service is None:
+        return False
+    if str(service.user_id) == str(user.id):
+        return True
+    from services.api.sharing import user_can_access_service
+    allowed, share = user_can_access_service(service, user, action=action)
+    if not allowed or share is None:
+        return False
+    created_by_id = getattr(deploy, "created_by_id", None)
+    if created_by_id is None:
+        # Legacy deploys without created_by: deny recipients
+        return False
+    return str(created_by_id) == str(user.id)
+
+
+def redact_db_secrets(cfg: dict | None) -> dict:
+    """Strip sensitive keys from deploy/service config for unauthorized viewers."""
+    if not isinstance(cfg, dict):
+        return {}
+    secret_keys = {
+        "password",
+        "root_password",
+        "ROOT_PASSWORD",
+        "PASSWORD",
+        "MYSQL_ROOT_PASSWORD",
+        "MYSQL_PASSWORD",
+        "POSTGRES_PASSWORD",
+        "MONGO_INITDB_ROOT_PASSWORD",
+        "REDIS_PASSWORD",
+        "secret",
+        "SECRET",
+        "secret_key",
+        "SECRET_KEY",
+        "api_key",
+        "API_KEY",
+        "token",
+        "TOKEN",
+    }
+    out = {}
+    for k, v in cfg.items():
+        if k in secret_keys or str(k).lower().endswith("password"):
+            out[k] = "********" if v not in (None, "") else v
+        elif isinstance(v, dict):
+            out[k] = redact_db_secrets(v)
+        else:
+            out[k] = v
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Presets for UI (one-click profiles)
+# ---------------------------------------------------------------------------
+RULE_PRESETS: dict[str, dict[str, bool]] = {
+    "viewer": normalize_rules({
+        "can_view": True,
+        "can_view_logs": True,
+        "can_view_deploy_logs": True,
+        "can_view_metrics": True,
+    }),
+    "operator": normalize_rules({
+        "can_view": True,
+        "can_view_logs": True,
+        "can_view_deploy_logs": True,
+        "can_view_metrics": True,
+        "can_start": True,
+        "can_stop": True,
+        "can_restart": True,
+        "can_rebuild": True,
+    }),
+    "developer": normalize_rules({
+        "can_view": True,
+        "can_view_logs": True,
+        "can_view_deploy_logs": True,
+        "can_view_metrics": True,
+        "can_start": True,
+        "can_stop": True,
+        "can_restart": True,
+        "can_rebuild": True,
+        "can_deploy_add": True,
+        "can_deploy_edit": True,
+        "can_deploy_remove": True,
+        "can_deploy_select": True,
+        "can_volume_attach": True,
+        "can_volume_detach": True,
+        "can_change_config": True,
+    }),
+    "ops": normalize_rules({
+        "can_view": True,
+        "can_view_logs": True,
+        "can_view_deploy_logs": True,
+        "can_view_metrics": True,
+        "can_view_db_credentials": True,
+        "can_start": True,
+        "can_stop": True,
+        "can_restart": True,
+        "can_rebuild": True,
+        "can_purge": True,
+        "can_deploy_add": True,
+        "can_deploy_edit": True,
+        "can_deploy_remove": True,
+        "can_deploy_select": True,
+        "can_volume_add": True,
+        "can_volume_edit": True,
+        "can_volume_delete": True,
+        "can_volume_attach": True,
+        "can_volume_detach": True,
+        "can_network_change": True,
+        "can_change_config": True,
+    }),
+}
+
+
+def user_is_group_admin(user, group_id) -> bool:
+    """True if user is active owner/admin of the messenger group."""
+    from messenger.models import ConversationParticipant
+    part = ConversationParticipant.objects.filter(
+        conversation_id=group_id,
+        user=user,
+        left_at__isnull=True,
+    ).only("role").first()
+    if not part:
+        return False
+    return part.role in (
+        ConversationParticipant.Role.OWNER,
+        ConversationParticipant.Role.ADMIN,
+    )

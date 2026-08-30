@@ -54,16 +54,30 @@ def _invalidate_service_cache_soft(user_id):
 
 from .common import (
     _get_service_for_user,
+    _get_service_for_user_or_share,
     _parse_deploy_config,
     _resolve_platform,
 )
+from .sharing import record_share_event
 
 @api_view(["GET"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def service_logs_apiview(request, pk):
-    # User-facing: always own service only (even for superuser/staff)
-    service = get_object_or_404(Service.objects.filter(user=request.user), pk=pk)
+    try:
+        service, share = _get_service_for_user_or_share(
+            request, pk, action="can_view_logs", for_update=False
+        )
+    except PermissionError as pe:
+        return Response(
+            {"result": "error", "detail": str(pe)},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    except Service.DoesNotExist:
+        return Response(
+            {"result": "error", "detail": _("Service not found.")},
+            status=status.HTTP_404_NOT_FOUND,
+        )
     container_name = service.get_docker_service_name()
     try:
         client = Client()().containers.get(container_name)
@@ -114,10 +128,27 @@ def start_service_apiview(request):
         "true",
         "yes",
     )
+    share = None
+    task_id = None
 
     try:
         with transaction.atomic():
-            service_item = _get_service_for_user(request, service_id, for_update=True)
+            action = "can_rebuild" if force_rebuild else "can_start"
+            try:
+                service_item, share = _get_service_for_user_or_share(
+                    request, service_id, action=action, for_update=True
+                )
+            except PermissionError as pe:
+                return Response(
+                    {"result": "error", "detail": str(pe)},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            except Service.DoesNotExist:
+                return Response(
+                    {"result": "error", "detail": _("Service not found.")},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
             deploy_item = service_item.selected_deploy
             if deploy_item is None:
                 return Response(
@@ -253,6 +284,18 @@ def start_service_apiview(request):
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
+    # Record share activity when the actor is a share recipient
+    try:
+        if share is not None:
+            record_share_event(
+                share,
+                actor=request.user,
+                action="deploy" if force_rebuild else "start",
+                metadata={"force_rebuild": force_rebuild, "task_id": str(task_id)},
+            )
+    except Exception:
+        logger.exception("Failed to record share event for start service=%s", service_id)
+
     action_word = "Rebuild" if force_rebuild else "Start"
     return Response(
         {
@@ -269,10 +312,24 @@ def start_service_apiview(request):
 @permission_classes([IsAuthenticated])
 def stop_service_apiview(request):
     service_id = request.data.get("service_id", "")
+    share = None
 
     try:
         with transaction.atomic():
-            service_item = _get_service_for_user(request, service_id, for_update=True)
+            try:
+                service_item, share = _get_service_for_user_or_share(
+                    request, service_id, action="can_stop", for_update=True
+                )
+            except PermissionError as pe:
+                return Response(
+                    {"result": "error", "detail": str(pe)},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            except Service.DoesNotExist:
+                return Response(
+                    {"result": "error", "detail": _("Service not found.")},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
             if service_item.status in (
                 SERVICE_STATUS_CHOICES.QUEUED,
@@ -303,6 +360,19 @@ def stop_service_apiview(request):
                     args=[str(service_id)], task_id=custom_task_id
                 )
             )
+
+            if share is not None:
+                try:
+                    record_share_event(
+                        share,
+                        actor=request.user,
+                        action="stop",
+                        metadata={"task_id": str(custom_task_id)},
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to record share event for stop service=%s", service_id
+                    )
 
     except Service.DoesNotExist:
         return Response(
@@ -608,6 +678,11 @@ def force_cancel_deploy_apiview(request):
                     "cancelled_deploys": [str(x) for x in cancelled_deploy_ids],
                 },
             )
+            try:
+                from deploy.log_retention import trim_after_write
+                trim_after_write(service_item.pk)
+            except Exception:
+                pass
     except Exception:
         logger.debug("force_cancel: DeployLog write skipped", exc_info=True)
 
@@ -703,4 +778,98 @@ def service_status_apiview(request):
             "detail": detail,
         },
         status=status.HTTP_200_OK,
+    )
+
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def restart_service_apiview(request):
+    """
+    Restart = stop then start when allowed.
+    Requires can_restart (or owner).
+    Body: { "service_id": "<uuid>" }
+    """
+    service_id = request.data.get("service_id", "")
+    share = None
+    try:
+        with transaction.atomic():
+            try:
+                service_item, share = _get_service_for_user_or_share(
+                    request, service_id, action="can_restart", for_update=True
+                )
+            except PermissionError as pe:
+                return Response(
+                    {"result": "error", "detail": str(pe)},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            except Service.DoesNotExist:
+                return Response(
+                    {"result": "error", "detail": _("Service not found.")},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            if service_item.status in (
+                SERVICE_STATUS_CHOICES.QUEUED,
+                SERVICE_STATUS_CHOICES.DEPLOYING,
+                SERVICE_STATUS_CHOICES.STOPPING,
+            ):
+                return Response(
+                    {
+                        "result": "error",
+                        "detail": _("Service is busy; try again later."),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            # Stop path if running
+            custom_task_id = make_uuid4()
+            if str(service_item.status).lower() == str(SERVICE_STATUS_CHOICES.RUNNING).lower() or str(service_item.status).lower() == "running":
+                service_item.status = SERVICE_STATUS_CHOICES.STOPPING
+                service_item.task_id = custom_task_id
+                service_item.save(update_fields=["status", "task_id"])
+                transaction.on_commit(
+                    lambda: stop_service.apply_async(
+                        args=[str(service_id)], task_id=custom_task_id
+                    )
+                )
+            # Queue start after stop is best-effort; clients may call start separately.
+            # For a true restart we also queue deploy if selected_deploy exists.
+            deploy_item = service_item.selected_deploy
+            if deploy_item is not None:
+                start_task_id = make_uuid4()
+
+                def _start_after():
+                    try:
+                        from deployments.celery.tasks import deploy as start_task
+                        start_task.apply_async(args=[str(deploy_item.id)], task_id=start_task_id)
+                    except Exception:
+                        logger.exception("restart: start enqueue failed")
+
+                transaction.on_commit(_start_after)
+                service_item.status = SERVICE_STATUS_CHOICES.QUEUED
+                service_item.task_id = start_task_id
+                service_item.save(update_fields=["status", "task_id"])
+
+            if share is not None:
+                try:
+                    record_share_event(
+                        share,
+                        actor=request.user,
+                        action="restart",
+                        metadata={},
+                    )
+                except Exception:
+                    logger.exception("restart share event failed")
+    except Exception:
+        logger.exception("restart failed")
+        return Response(
+            {"result": "error", "detail": _("Could not restart service.")},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    return Response(
+        {"result": "success", "detail": _("Restart queued.")},
+        status=status.HTTP_202_ACCEPTED,
     )

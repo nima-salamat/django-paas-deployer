@@ -175,12 +175,21 @@ class DeployViewSet(ModelViewSet):
     pagination_class = DeployPagination
 
     def get_queryset(self):
+        from django.db.models import Q
+        from services.share_cleanup import active_group_ids_for_user
+        from services.models import ServiceShare
+
         qs = super().get_queryset().select_related(
-            "service", "service__user", "service__plan"
+            "service", "service__user", "service__plan", "created_by"
         )
-        if self.request.user.is_superuser or self.request.user.is_staff:
-            return qs
-        return qs.filter(service__user=self.request.user)
+        user = self.request.user
+        group_ids = active_group_ids_for_user(user)
+        shared_service_ids = ServiceShare.objects.filter(
+            is_active=True
+        ).filter(
+            Q(target_user=user) | Q(group_id__in=group_ids)
+        ).values_list("service_id", flat=True)
+        return qs.filter(Q(service__user=user) | Q(service_id__in=shared_service_ids)).distinct()
 
     def list(self, request, *args, **kwargs):
         service_id = request.query_params.get("service_id", "")
@@ -195,11 +204,27 @@ class DeployViewSet(ModelViewSet):
     def create(self, request, *args, **kwargs):
         if not (request.user.is_superuser or request.user.is_staff):
             service_id = request.data.get("service")
-            if not service_id or not Service.objects.filter(id=service_id, user=request.user).exists():
+            if not service_id:
                 return Response(
-                    {"error": _("Service must belong to the authenticated user.")},
+                    {"error": _("Service is required.")},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            try:
+                service = Service.objects.get(pk=service_id)
+            except Service.DoesNotExist:
+                return Response(
+                    {"error": _("Service not found.")},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            if str(service.user_id) != str(request.user.id):
+                from services.share_permissions import assert_share_action, SharePermissionError
+                try:
+                    assert_share_action(service, request.user, "can_deploy_add")
+                except SharePermissionError as e:
+                    return Response(
+                        {"error": str(e)},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
 
         # Prefer the raw request payload for nested config.  Using
         # dict(request.data.items()) is fine for flat form fields but can
@@ -287,6 +312,13 @@ class DeployViewSet(ModelViewSet):
         serializer = self.get_serializer(data=data)
         if serializer.is_valid():
             deploy = serializer.save()
+            # Track uploader for share-scoped deploy edit/remove
+            try:
+                if getattr(deploy, "created_by_id", None) is None:
+                    deploy.created_by = request.user
+                    deploy.save(update_fields=["created_by"])
+            except Exception:
+                pass
             # Verify secrets actually persisted (catch serializer/field bugs).
             if platform in ("mysql", "mariadb"):
                 saved = _parse_deploy_config(getattr(deploy, "config", None))
@@ -448,6 +480,14 @@ class DeployViewSet(ModelViewSet):
 
     @action(detail=True, methods=["get"])
     def logs(self, request, pk=None):
+        deploy = get_object_or_404(self.get_queryset(), pk=pk)
+        service = deploy.service
+        if str(service.user_id) != str(request.user.id):
+            from services.share_permissions import assert_share_action, SharePermissionError
+            try:
+                assert_share_action(service, request.user, "can_view_deploy_logs")
+            except SharePermissionError as e:
+                return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
         return deploy_logs_apiview(request, pk)
 
     @action(detail=True, methods=["post"])
@@ -484,6 +524,15 @@ class DeployViewSet(ModelViewSet):
                               or repeated container restarts with no
                               clear error message.
         """
+        deploy = get_object_or_404(self.get_queryset().select_related("service"), pk=pk)
+        service = deploy.service
+        if str(service.user_id) != str(request.user.id):
+            from services.share_permissions import assert_share_action, SharePermissionError
+            try:
+                assert_share_action(service, request.user, "can_rebuild")
+            except SharePermissionError as e:
+                return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
+
         deploy = get_object_or_404(
             self.get_queryset().select_related("service", "service__plan"),
             pk=pk,
@@ -663,6 +712,12 @@ class DeployViewSet(ModelViewSet):
 
     def update(self, request, pk=None, *args, **kwargs):
         deploy = get_object_or_404(self.get_queryset(), pk=pk)
+        from services.share_permissions import can_mutate_deploy
+        if not can_mutate_deploy(deploy, request.user, action="can_deploy_edit"):
+            return Response(
+                {"error": _("You can only edit deploys you created on shared services.")},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         # For DB-platform deploys, the generic update would normally
         # overwrite the entire ``config`` JSONField with whatever the
@@ -727,6 +782,12 @@ class DeployViewSet(ModelViewSet):
 
     def destroy(self, request, pk=None, *args, **kwargs):
         deploy = get_object_or_404(self.get_queryset(), pk=pk)
+        from services.share_permissions import can_mutate_deploy
+        if not can_mutate_deploy(deploy, request.user, action="can_deploy_remove"):
+            return Response(
+                {"error": _("You can only remove deploys you created on shared services.")},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         deploy.delete()
         return Response({"success": _("Deploy deleted.")}, status=status.HTTP_200_OK)
 

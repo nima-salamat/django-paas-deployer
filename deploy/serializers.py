@@ -9,17 +9,45 @@ logger = logging.getLogger(__name__)
 
 
 class MaskedDBConfigField(serializers.JSONField):
-    """JSONField that strips sensitive DB credentials on read, but accepts full dict on write."""
+    """JSONField that strips sensitive DB credentials on read, but accepts full dict on write.
+
+    Secrets are visible only to the service owner or a share recipient with
+    can_view_db_credentials=True.
+    """
     def to_representation(self, value):
-        # Call parent to get the normal dict representation
         data = super().to_representation(value)
         if not isinstance(data, dict):
             return data
         platform = data.get("platform") or ""
-        if platform in DB_PLATFORMS:
-            # Remove sensitive keys before sending to client
-            return {k: v for k, v in data.items() if k not in SENSITIVE_CONFIG_KEYS}
-        return data
+        if platform not in DB_PLATFORMS:
+            return data
+
+        request = self.context.get("request")
+        parent = getattr(self, "parent", None)
+        deploy = getattr(parent, "instance", None) if parent is not None else None
+        # list serializer: instance may be on parent
+        if deploy is None and parent is not None:
+            deploy = getattr(parent, "instance", None)
+
+        allow_secrets = False
+        user = getattr(request, "user", None) if request else None
+        service = getattr(deploy, "service", None) if deploy is not None else None
+        if user and service is not None:
+            if str(service.user_id) == str(user.id):
+                allow_secrets = True
+            else:
+                try:
+                    from services.api.sharing import user_can_access_service
+                    ok, share = user_can_access_service(
+                        service, user, action="can_view_db_credentials"
+                    )
+                    allow_secrets = bool(ok and share and share.allows("can_view_db_credentials"))
+                except Exception:
+                    allow_secrets = False
+
+        if allow_secrets:
+            return data
+        return {k: v for k, v in data.items() if k not in SENSITIVE_CONFIG_KEYS}
 
 
 class DeployLogSerializer(serializers.ModelSerializer):
@@ -42,7 +70,7 @@ class DeploySerializer(serializers.ModelSerializer):
     class Meta:
         model = Deploy
         fields = [
-            "id", "name", "service", "version", "zip_file",
+            "id", "name", "service", "created_by", "version", "zip_file",
             "config",
             "started_at", "completed_at", "status", "stage", "progress",
             "status_message", "error_message", "rollback_status",
@@ -55,7 +83,7 @@ class DeploySerializer(serializers.ModelSerializer):
             "status_message", "error_message", "rollback_status",
             "health_status", "container_status", "image_status",
             "volume_status", "network_status",
-            "recent_logs", "created_at", "updated_at", "updated_file_at",
+            "recent_logs", "created_at", "updated_at", "updated_file_at", "created_by",
         ]
 
     def get_recent_logs(self, obj):

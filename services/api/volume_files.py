@@ -484,7 +484,15 @@ def purge_service_runtime_apiview(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
     try:
-        service = _get_service_for_user(request, service_id)
+        try:
+            from services.api.common import _get_service_for_user_or_share
+            service, share = _get_service_for_user_or_share(
+                request, service_id, action="can_purge", for_update=False
+            )
+        except PermissionError as pe:
+            return Response({"result": "error", "detail": str(pe)}, status=status.HTTP_403_FORBIDDEN)
+        except Service.DoesNotExist:
+            return Response({"result": "error", "detail": _("Service not found.")}, status=status.HTTP_404_NOT_FOUND)
         service = Service.objects.select_related("plan").get(pk=service.pk)
     except Service.DoesNotExist:
         return Response(
