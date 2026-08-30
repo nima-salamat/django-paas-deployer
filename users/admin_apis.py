@@ -71,6 +71,9 @@ KNOWN_PERMISSIONS = [
     # DB tables browser (NEW)
     "tables.view",
     "tables.manage",
+    # Documentation workspace
+    "docs.view",
+    "docs.manage",
 ]
 
 

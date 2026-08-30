@@ -132,3 +132,33 @@ Before production rollout, verify:
 ## Related frontend
 
 React dashboard: https://github.com/nima-salamat/react-paas-deployer
+
+
+## Deployment resource policy
+
+Deployment resource allocation is server-authoritative. Tenants cannot select CPU, RAM, PIDs, worker counts, Docker host configuration, or build limits through `Deploy.config`.
+
+### Build resources
+
+Build resources are resolved by `deployments.common.resource_policy.build_limits(plan)`:
+
+- `build.resource_mode=static`: use operator-defined fixed build limits.
+- `build.resource_mode=plan`: derive the requested build budget from the selected Service Plan and clamp it to operator hard ceilings.
+
+This makes the policy easy to change later without changing the tenant API or deployment schema. The build policy is passed to the executor as `DeploymentConfig.build_resource_policy` and is never read from user config.
+
+### Runtime resources
+
+Runtime CPU/RAM are taken only from the selected Service Plan. Worker count is derived server-side from the same plan and operator tuning parameters.
+
+### Compatibility
+
+`DeploymentConfig.build_resource_policy` is part of the executor contract. Older call sites that only provide `build_options` remain valid because the field has a safe empty default.
+
+### Force cancel
+
+Force-cancel is deployment-scoped. It updates the target deployment state first, revokes the Celery task when possible, and removes only artifacts belonging to the cancelled deployment. A running previous/production deployment must not be removed merely because a newer build was cancelled.
+
+### Lifecycle source of truth
+
+Docker Events are used for runtime lifecycle reconciliation and live WebSocket updates. Scheduler/beat is retained only for periodic reconciliation and recovery; it is not required for normal state propagation.

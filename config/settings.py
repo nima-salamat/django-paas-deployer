@@ -128,6 +128,7 @@ INSTALLED_APPS = [
     "tickets.apps.TicketsConfig",
     "messenger.apps.MessengerConfig",
     "custom_emails",
+    "docs.apps.DocsConfig",
 ]
 
 
