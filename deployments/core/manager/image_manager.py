@@ -68,24 +68,27 @@ def _build_container_limits(
     *,
     policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    # Only the orchestrator may provide this server-computed policy. There is
-    # deliberately no tenant-facing resource parameter here.
+    """Return only resource keys supported by Docker's Build API.
+
+    Runtime container controls such as NanoCpus/PidsLimit/ShmSize are NOT
+    valid ``container_limits`` keys for ``APIClient.build()``. Passing them
+    to docker-py 7.x can raise the misleading error "invalid tag ..." before
+    the request is sent to Docker. Build resources remain server-owned; CPU is
+    represented as a relative cpu-shares weight because the build API does not
+    accept NanoCpus/CpuQuota in ``container_limits``.
+    """
     from deployments.common.resource_policy import build_limits
     policy = dict(policy or build_limits())
-    cpu = float(policy["cpu"])
-    ram = int(policy["memory_mb"])
-    pids = int(policy["pids_limit"])
-    shm = int(policy["shm_size_mb"])
-    nano_cpus = int(cpu * 1_000_000_000)
+    cpu = max(0.1, float(policy["cpu"]))
+    ram = max(64, int(policy["memory_mb"]))
+    # Docker's documented build-time container_limits supports cpushares.
+    # Keep the mapping deterministic and bounded to Docker's accepted range.
+    cpu_shares = max(2, min(262144, int(round(cpu * 1024))))
     mem_bytes = ram * 1024 * 1024
     return {
-        "Memory": mem_bytes,
-        "MemorySwap": mem_bytes,
-        "NanoCpus": nano_cpus,
-        "CpuPeriod": 100_000,
-        "CpuQuota": int(cpu * 100_000),
-        "PidsLimit": pids,
-        "ShmSize": shm * 1024 * 1024,
+        "memory": mem_bytes,
+        "memswap": mem_bytes,
+        "cpushares": cpu_shares,
     }
 
 
@@ -414,19 +417,24 @@ class Image(Client):
     def create(self, on_build_output: Optional[Callable] = None):
         """Build the exact model-derived image and apply its tag after build.
 
-        The low-level docker-py ``api.build`` path is intentionally used
-        without a ``tag`` argument because the deployed docker-py version in
-        this project validates its ``tag`` parameter differently and rejects
-        a full ``repository:tag`` reference.  We therefore build untagged,
-        capture the image ID from the build stream, then apply the exact
-        ``Service`` repository name + ``Deploy.version`` tag.
+        The low-level docker-py ``api.build`` path is used with the exact
+        ``Deploy.version`` as the API's tag-only argument. docker-py validates
+        this value before sending the request, so ``None`` is never passed.
+        The exact ``Service`` repository name is then applied to the returned
+        image ID with ``api.tag``. No synthetic/staging image name or rewritten
+        version is ever introduced.
         """
         if not self.dockerfile_text or not self.tarfile:
             raise ValueError("dockerfile_text and tarfile are required")
 
-        limits = _build_container_limits(policy=self.build_resource_policy or None)
-        effective_cpu = float(limits["NanoCpus"]) / 1_000_000_000
-        effective_ram = int(limits["Memory"]) // (1024 * 1024)
+        build_policy = dict(self.build_resource_policy or {})
+        if not build_policy:
+            from deployments.common.resource_policy import build_limits
+            build_policy = dict(build_limits())
+        effective_cpu = max(0.1, float(build_policy["cpu"]))
+        effective_ram = max(64, int(build_policy["memory_mb"]))
+        limits = _build_container_limits(policy=build_policy)
+        build_shm_size = max(1, int(build_policy.get("shm_size_mb", 64))) * 1024 * 1024
         target_ref = self.image_ref
 
         logger.info(
@@ -468,11 +476,19 @@ class Image(Client):
                         with open(df_path, "w", encoding="utf-8") as f:
                             f.write(self.dockerfile_text)
 
+                    # docker-py 7.x validates BuildApiMixin.build(tag=...) as a
+                    # *tag only*, not as a full repository:tag reference, and
+                    # rejects tag=None before the request reaches Docker. The
+                    # repository is derived by Docker from the build context's
+                    # resulting image reference; ``self.name`` is applied
+                    # immediately after the build by _tag_image().
+                    # IMPORTANT: never synthesize or rewrite the model-provided
+                    # name/version. The Deploy model owns the tag.
                     attempt_kwargs = [
-                        dict(path=build_path, rm=True, forcerm=True, decode=True,
-                             container_limits=limits, buildargs=buildargs, network_mode="default"),
-                        dict(path=build_path, rm=True, forcerm=True, decode=True, buildargs=buildargs),
-                        dict(path=build_path, rm=True, forcerm=True, decode=True),
+                        dict(path=build_path, tag=self.tag, rm=True, forcerm=True, decode=True,
+                             container_limits=limits, shmsize=build_shm_size, buildargs=buildargs, network_mode="default"),
+                        dict(path=build_path, tag=self.tag, rm=True, forcerm=True, decode=True, shmsize=build_shm_size, buildargs=buildargs),
+                        dict(path=build_path, tag=self.tag, rm=True, forcerm=True, decode=True),
                     ]
 
                     response = None
