@@ -8,6 +8,7 @@ import re
 import tarfile
 import tempfile
 import traceback
+import uuid
 from typing import Any, Callable, Optional
 
 import docker
@@ -467,6 +468,12 @@ class Image(Client):
         effective_cpu = float(limits["NanoCpus"]) / 1_000_000_000
         effective_ram = int(limits["Memory"]) // (1024 * 1024)
         target_ref = self.image_ref
+        # Build with an internal tag-only reference first. Some docker-py /
+        # daemon combinations reject a repository-qualified value passed to
+        # the low-level Build API even though the final image reference is
+        # valid. The image is retagged by immutable image ID immediately after
+        # the build succeeds.
+        staging_tag = f"deployer-build-{uuid.uuid4().hex[:24]}"
 
         # Pass the final sanitized image reference explicitly to docker-py.
         # Some client/engine combinations can otherwise turn an omitted tag
@@ -559,7 +566,7 @@ class Image(Client):
                     attempt_kwargs = [
                         dict(
                             path=build_path,
-                            tag=target_ref,
+                            tag=staging_tag,
                             rm=True,
                             forcerm=True,
                             decode=True,
@@ -571,7 +578,7 @@ class Image(Client):
                         ),
                         dict(
                             path=build_path,
-                            tag=target_ref,
+                            tag=staging_tag,
                             rm=True,
                             forcerm=True,
                             decode=True,
@@ -665,6 +672,9 @@ class Image(Client):
                             },
                         )
 
+                    # Convert the unique staging tag into the final
+                    # server-generated repository:tag only after the build
+                    # has produced an immutable image ID.
                     self._tag_image(image_id)
 
                     try:

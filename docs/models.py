@@ -1,3 +1,4 @@
+import mimetypes
 import os
 import uuid
 
@@ -113,8 +114,26 @@ class DocumentAsset(models.Model):
         if size > 50 * 1024 * 1024:
             raise ValidationError({"file": "Files must be 50 MB or smaller."})
 
-        content_type = (getattr(self.file, "content_type", "") or self.mime_type or "").lower()
-        ext = os.path.splitext(getattr(self.file, "name", ""))[1].lower()
+        filename = getattr(self.file, "name", "") or ""
+        ext = os.path.splitext(filename)[1].lower()
+        content_type = (
+            getattr(self.file, "content_type", "")
+            or self.mime_type
+            or mimetypes.guess_type(filename)[0]
+            or ""
+        ).lower()
+        # Some reverse proxies / clients report application/octet-stream for
+        # multipart uploads. Resolve a safe MIME type from the extension so
+        # valid images/audio/video are classified correctly.
+        mime_by_ext = {
+            ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".gif": "image/gif", ".webp": "image/webp",
+            ".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
+            ".m4v": "video/x-m4v", ".mp3": "audio/mpeg", ".wav": "audio/wav",
+            ".ogg": "audio/ogg", ".m4a": "audio/mp4",
+        }
+        if (not content_type or content_type == "application/octet-stream") and ext in mime_by_ext:
+            content_type = mime_by_ext[ext]
         if content_type.startswith("image/"):
             self.kind = self.Kind.IMAGE
             try:
@@ -134,9 +153,11 @@ class DocumentAsset(models.Model):
             # Allow-list common document/archive/code formats; unknown files are
             # still stored as generic attachments, never rendered as HTML.
             allowed_exts = {
-                ".pdf", ".txt", ".md", ".zip", ".tar", ".gz", ".json", ".csv",
-                ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".py", ".js",
-                ".ts", ".tsx", ".jsx", ".css", ".html", ".xml", ".yaml", ".yml",
+                ".pdf", ".txt", ".md", ".zip", ".tar", ".gz", ".bz2", ".7z", ".json", ".csv",
+                ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+                ".py", ".js", ".ts", ".tsx", ".jsx", ".css", ".scss", ".html", ".xml", ".yaml", ".yml",
+                ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
+                ".mp4", ".webm", ".mov", ".m4v", ".mp3", ".wav", ".ogg", ".m4a",
             }
             if ext and len(ext) > 16:
                 raise ValidationError({"file": "Unsupported file extension."})
@@ -146,7 +167,12 @@ class DocumentAsset(models.Model):
     def save(self, *args, **kwargs):
         if not self.name and self.file:
             self.name = os.path.basename(self.file.name)[:255]
-        self.mime_type = getattr(self.file, "content_type", "") or self.mime_type or ""
+        self.mime_type = (
+            getattr(self.file, "content_type", "")
+            or self.mime_type
+            or mimetypes.guess_type(getattr(self.file, "name", "") or "")[0]
+            or "application/octet-stream"
+        )
         self.size_bytes = getattr(self.file, "size", 0) or self.size_bytes or 0
         self.full_clean()
         super().save(*args, **kwargs)

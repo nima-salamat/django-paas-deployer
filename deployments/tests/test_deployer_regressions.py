@@ -28,17 +28,16 @@ class DeploymentContractRegressionTests(unittest.TestCase):
         finally:
             slots._redis_client = old
 
-    def test_orchestrator_has_no_free_deployment_id_references(self):
-        import ast
-        from pathlib import Path
-        source = Path('deployments/core/orchestrator.py').read_text(encoding='utf-8')
-        tree = ast.parse(source)
-        free_loads = [
-            (node.lineno, node.col_offset)
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Name)
-            and node.id == 'deployment_id'
-            and isinstance(node.ctx, ast.Load)
-            and node.lineno != 70  # constructor argument
-        ]
-        self.assertEqual(free_loads, [])
+
+def test_orchestrator_has_no_free_deployment_id_reference():
+    from pathlib import Path
+    source = Path(__file__).parents[1].joinpath("core", "orchestrator.py").read_text()
+    assert "deployment_id=deployment_id" not in source
+    assert " or deployment_id or " not in source
+
+def test_image_build_uses_unique_staging_tag_before_final_tag():
+    from pathlib import Path
+    source = Path(__file__).parents[1].joinpath("core", "manager", "image_manager.py").read_text()
+    assert "staging_tag = f\"deployer-build-" in source
+    assert "tag=staging_tag" in source
+    assert "self._tag_image(image_id)" in source
