@@ -45,6 +45,7 @@ from deployments.core.manager.container_manager import Container
 from docker.errors import APIError, NotFound as DockerNotFound
 
 from .models import Deploy, DeployLog
+from deployments.common.config import sanitize_tenant_config
 from .serializers import DeployLogSerializer, DeploySerializer
 from services.models import Service
 from core.utils import make_uuid4
@@ -114,11 +115,9 @@ def _resolve_platform(deploy) -> str:
 
     Order: deploy.config["platform"] → service.plan.platform → "docker".
     """
-    cfg = _parse_deploy_config(getattr(deploy, "config", None))
-    p = str(cfg.get("platform") or "").strip().lower()
-    if p:
-        return p
-
+    # Tenant config is never authoritative for execution class. The Plan
+    # selected by the service determines the platform family and resource
+    # boundary. This prevents switching an APP plan into a DB/custom runtime.
     service = getattr(deploy, "service", None)
     plan = getattr(service, "plan", None) if service is not None else None
     if plan is not None and getattr(plan, "platform", None):
@@ -331,7 +330,12 @@ class DeployViewSet(ModelViewSet):
             except Service.DoesNotExist:
                 pass
 
-        platform = str(cfg.get("platform") or "").strip().lower()
+        plan_platform = str(getattr(getattr(service, "plan", None), "platform", "") or "").strip().lower()
+        requested_platform = str(cfg.get("platform") or "").strip().lower()
+        platform = plan_platform or requested_platform
+        # The request may select a framework inside the plan family, but it
+        # cannot change the execution family itself.
+        cfg["platform"] = platform
         if platform in DB_PLATFORMS:
             cfg = _normalize_db_credentials(cfg, platform)
             errors = validate_db_config(platform, cfg)
@@ -363,7 +367,8 @@ class DeployViewSet(ModelViewSet):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
-        data["config"] = cfg
+        data["config"] = sanitize_tenant_config(cfg)
+        cfg = data["config"]
         logger.info(
             "Deploy create config ready platform=%s audit=%s keys=%s",
             platform or "?",
@@ -513,18 +518,49 @@ class DeployViewSet(ModelViewSet):
             return denied
 
 
-        deploy.cancel_requested = True
-        if deploy.status == "pending":
-            deploy.status = "cancelled"
-            deploy.stage = "cancelled"
-            deploy.status_message = "Deployment cancelled before execution."
-            deploy.completed_at = timezone.now()
-            deploy.save(update_fields=["cancel_requested", "status", "stage", "status_message", "completed_at"])
-        else:
-            deploy.save(update_fields=["cancel_requested"])
+        from django.db import transaction
+        from deployments.common.state_machine import (
+            DEPLOY_CANCELLED, DEPLOY_PENDING, DEPLOY_RUNNING, DEPLOY_ROLLING_BACK,
+        )
+
+        now = timezone.now()
+        old_status = deploy.status
+        task_id = getattr(deploy.service, "task_id", None)
+        with transaction.atomic():
+            locked = Deploy.objects.select_for_update().get(pk=deploy.pk)
+            if locked.status in {DEPLOY_PENDING, DEPLOY_RUNNING, DEPLOY_ROLLING_BACK}:
+                Deploy.objects.filter(pk=locked.pk).update(
+                    cancel_requested=True,
+                    status=DEPLOY_CANCELLED,
+                    stage="cancelled",
+                    progress=max(int(locked.progress or 0), 100),
+                    status_message="Deployment cancelled by user.",
+                    error_message="",
+                    completed_at=now,
+                )
+            else:
+                Deploy.objects.filter(pk=locked.pk).update(cancel_requested=True)
+
+        # Best-effort hard cancellation of the worker process. The DB state is
+        # updated above first, so even if Celery is unavailable the UI is not
+        # left waiting for a future scheduler tick.
+        revoke_result = "not_requested"
+        try:
+            if task_id:
+                from config.celery import app as celery_app
+                celery_app.control.revoke(str(task_id), terminate=True, signal="SIGTERM")
+                revoke_result = "revoked"
+        except Exception as exc:
+            logger.warning("Force-cancel revoke failed for deploy %s: %s", deploy.pk, exc)
+            revoke_result = "revoke_failed"
 
         return Response(
-            {"result": "success", "detail": _(f"Cancel requested for {deploy.name}.")},
+            {
+                "result": "success",
+                "detail": _(f"Deployment {deploy.name} cancelled."),
+                "previous_status": old_status,
+                "task_revoke": revoke_result,
+            },
             status=status.HTTP_200_OK,
         )
 
@@ -1411,6 +1447,13 @@ def inspect_deploy_zip_apiview(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    max_bytes = int(getattr(settings, "DEPLOY_MAX_ZIP_BYTES", 100 * 1024 * 1024))
+    if getattr(uploaded, "size", None) is not None and uploaded.size > max_bytes:
+        return Response(
+            {"result": "error", "detail": _("ZIP file exceeds the deployment upload limit.")},
+            status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        )
+
     # Save to a temp file — extract_zip_to_temp takes a path, not a file.
     tmp_zip_path = None
     tmp_dir = None
@@ -1418,7 +1461,11 @@ def inspect_deploy_zip_apiview(request):
         with tempfile.NamedTemporaryFile(
             suffix=".zip", delete=False, prefix="deploy-inspect-"
         ) as tmp:
+            total = 0
             for chunk in uploaded.chunks():
+                total += len(chunk)
+                if total > max_bytes:
+                    raise ValueError("ZIP file exceeds the deployment upload limit.")
                 tmp.write(chunk)
             tmp_zip_path = tmp.name
 
@@ -1451,18 +1498,6 @@ def inspect_deploy_zip_apiview(request):
                 {"result": "error", "detail": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        # Optional plan resources from the client (Create Deploy form).
-        plan_cpu = request.data.get("max_cpu") or request.POST.get("max_cpu")
-        plan_ram = request.data.get("max_ram") or request.POST.get("max_ram")
-        try:
-            plan_cpu_f = float(plan_cpu) if plan_cpu not in (None, "") else None
-        except (TypeError, ValueError):
-            plan_cpu_f = None
-        try:
-            plan_ram_f = float(plan_ram) if plan_ram not in (None, "") else None
-        except (TypeError, ValueError):
-            plan_ram_f = None
 
         # enrich_config_from_project only fills EMPTY fields. platform MUST
         # be empty — otherwise detection never overwrites hard-coded "docker".

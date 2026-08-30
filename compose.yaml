@@ -291,6 +291,66 @@ services:
   
 
   # ============================================================
+  # DEDICATED DEPLOYMENT WORKER
+  # Long-running Docker builds/deploys are isolated from generic Celery jobs.
+  # Scale horizontally with: docker compose up --scale deployment-worker=2
+  # ============================================================
+  deployment-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        DOCKERFILE_DOCKER_MIRROR: ${DOCKERFILE_DOCKER_MIRROR}
+        DOCKERFILE_PYTHON_VERSION: ${DOCKERFILE_PYTHON_VERSION}
+        DOCKERFILE_PYTHON_MIRROR: ${DOCKERFILE_PYTHON_MIRROR}
+        DOCKERFILE_LINUX_MIRROR: ${DOCKERFILE_LINUX_MIRROR}
+
+    restart: unless-stopped
+
+    command:
+      - celery
+      - -A
+      - config
+      - worker
+      - --loglevel=info
+      - --pool=prefork
+      - --concurrency=${DEPLOYMENT_WORKER_CONCURRENCY:-2}
+      - -Q
+      - deployments,operations
+
+    volumes:
+      - .:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    depends_on:
+      db:
+        condition: service_healthy
+      deployment-log-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    env_file:
+      - .env
+
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DEPLOYMENT_LOG_DB_HOST: deployment-log-db
+      DEPLOYMENT_LOG_DB_PORT: 5432
+      REDIS_URL: redis://redis:6379
+      CELERY_BROKER_URL: redis://redis:6379
+      CELERY_RESULT_BACKEND: redis://redis:6379
+      CHANNEL_REDIS_URL: redis://redis:6379
+      API_DOMAIN_NAME: ${API_DOMAIN_NAME}
+      DEPLOYMENT_DOMAIN: ${DEPLOYMENT_DOMAIN}
+
+    networks:
+      - app-network
+      - proxy_net
+
+
+  # ============================================================
   # CELERY BEAT
   # ============================================================
   celery-beat:
@@ -383,6 +443,54 @@ services:
 
     expose:
       - "10808"
+
+    networks:
+      - app-network
+
+
+
+  # ============================================================
+  # DOCKER EVENT CONSUMER
+  # ============================================================
+  deployment-events:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        DOCKERFILE_DOCKER_MIRROR: ${DOCKERFILE_DOCKER_MIRROR}
+        DOCKERFILE_PYTHON_VERSION: ${DOCKERFILE_PYTHON_VERSION}
+        DOCKERFILE_PYTHON_MIRROR: ${DOCKERFILE_PYTHON_MIRROR}
+        DOCKERFILE_LINUX_MIRROR: ${DOCKERFILE_LINUX_MIRROR}
+        CODENAME: ${CODENAME}
+
+    container_name: deploy-events
+    restart: unless-stopped
+    command: python manage.py consume_docker_events
+
+    volumes:
+      - .:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    depends_on:
+      db:
+        condition: service_healthy
+      deployment-log-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    env_file:
+      - .env
+
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DEPLOYMENT_LOG_DB_HOST: deployment-log-db
+      DEPLOYMENT_LOG_DB_PORT: 5432
+      REDIS_URL: redis://redis:6379
+      CHANNEL_REDIS_URL: redis://redis:6379
+      API_DOMAIN_NAME: ${API_DOMAIN_NAME}
+      DEPLOYMENT_DOMAIN: ${DEPLOYMENT_DOMAIN}
 
     networks:
       - app-network

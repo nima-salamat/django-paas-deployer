@@ -160,4 +160,52 @@ CONFIG_SCHEMA: dict[str, ConfigOption] = {
         default=False,
         description="Enable Celery beat",
     ),
+    "resource_limits": ConfigOption(
+        name="resource_limits",
+        auto_detect=False,
+        default={},
+        description="Server-owned Docker cgroup limits; tenant overrides are ignored.",
+    ),
+    "build_options": ConfigOption(
+        name="build_options",
+        auto_detect=False,
+        default={},
+        description="BuildKit / docker build options.",
+    ),
+    "runtime_options": ConfigOption(
+        name="runtime_options",
+        auto_detect=False,
+        default={},
+        description="Runtime/container options and detected capabilities.",
+    ),
+    "build": ConfigOption(
+        name="build",
+        auto_detect=False,
+        default={},
+        description="Nested build profile; normalized into build_options.",
+    ),
+    "runtime": ConfigOption(
+        name="runtime",
+        auto_detect=False,
+        default={},
+        description="Nested runtime profile; normalized into runtime_options.",
+    ),
+    "frontend": ConfigOption(
+        name="frontend",
+        auto_detect=False,
+        default={},
+        description="Optional frontend/build profile for full-stack applications such as Laravel + React/Vite.",
+    ),
+    "resources": ConfigOption(
+        name="resources",
+        auto_detect=False,
+        default={},
+        description="Legacy alias; tenant values are ignored.",
+    ),
+    "labels": ConfigOption(
+        name="labels",
+        auto_detect=False,
+        default={},
+        description="Additional Docker labels attached to managed deployment containers.",
+    ),
 }

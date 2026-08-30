@@ -62,6 +62,7 @@ class Container(Client):
         route_name: str | None = None,
         restart_policy: dict | None = None,
         extra_host_config: dict | None = None,
+        resource_limits: dict | None = None,
     ):
         # NOTE: no super().__init__() side-effect beyond caching the
         # singleton client.
@@ -85,7 +86,8 @@ class Container(Client):
         self.restart_policy = self._normalize_restart_policy(
             restart_policy or {"Name": "unless-stopped"}
         )
-        self.extra_host_config = extra_host_config or {}
+        self.extra_host_config = {}
+        self.resource_limits = dict(resource_limits or {})
 
     @staticmethod
     def _normalize_restart_policy(policy: dict | None) -> dict:
@@ -171,9 +173,10 @@ class Container(Client):
         # We use ``nano_cpus`` exclusively because it's the simpler,
         # engine-agnostic API: 1 CPU = 1_000_000_000 nano_cpus.  Docker
         # internally translates it to the right cgroup knobs for the host.
-        if self.max_cpu is not None:
+        effective_cpu = self.resource_limits.get("cpu", self.max_cpu)
+        if effective_cpu is not None:
             try:
-                cpu_float = float(self.max_cpu)
+                cpu_float = float(effective_cpu)
                 if cpu_float > 0:
                     kwargs["nano_cpus"] = int(cpu_float * 1_000_000_000)
             except (TypeError, ValueError):
@@ -182,23 +185,36 @@ class Container(Client):
         # Memory limit + matching memswap_limit so the container cannot
         # use swap.  Legacy code set only ``mem_limit`` which leaves
         # Docker's default ``memswap_limit == 2 * mem_limit`` in effect.
-        if self.max_ram is not None:
+        effective_ram = self.resource_limits.get("memory_mb", self.max_ram)
+        if effective_ram is not None:
             try:
-                ram_mb = int(self.max_ram)
+                ram_mb = int(effective_ram)
                 if ram_mb > 0:
                     mem_bytes = ram_mb * 1024 * 1024
                     kwargs["mem_limit"] = mem_bytes
-                    kwargs["memswap_limit"] = mem_bytes
+                    swap_mb = self.resource_limits.get("memory_swap_mb")
+                    if swap_mb is None:
+                        swap_mb = ram_mb
+                    kwargs["memswap_limit"] = -1 if int(swap_mb) < 0 else int(swap_mb) * 1024 * 1024
             except (TypeError, ValueError):
                 pass
 
+        if self.resource_limits.get("cpu_shares"):
+            kwargs["cpu_shares"] = int(self.resource_limits["cpu_shares"])
+        if self.resource_limits.get("pids_limit"):
+            kwargs["pids_limit"] = int(self.resource_limits["pids_limit"])
+        if self.resource_limits.get("cpuset_cpus"):
+            kwargs["cpuset_cpus"] = str(self.resource_limits["cpuset_cpus"])
+        if self.resource_limits.get("shm_size_mb"):
+            kwargs["shm_size"] = int(self.resource_limits["shm_size_mb"]) * 1024 * 1024
+
         # PID limit — prevents fork bombs inside the container.
-        kwargs["pids_limit"] = 4096
+        kwargs.setdefault("pids_limit", 4096)
 
         # tmpfs for ephemeral writable directories even on read-only rootfs.
         # Without this gunicorn / Python tempfile die with
         # "No usable temporary directory found".
-        tmpfs = {
+        tmpfs = self.resource_limits.get("tmpfs") or {
             "/tmp": "rw,noexec,nosuid,size=64m",
             "/var/tmp": "rw,noexec,nosuid,size=32m",
             "/run": "rw,noexec,nosuid,size=16m",
@@ -210,9 +226,9 @@ class Container(Client):
         # If the engine cannot accept this, the deployment fails closed.
         kwargs["security_opt"] = ["no-new-privileges:true"]
 
-        # Allow callers (orchestrator, rollback) to extend the host
-        # config without subclassing.
-        kwargs.update(self.extra_host_config or {})
+        # Deliberately do not merge arbitrary host config. Values such as
+        # privileged, devices, binds, pid_mode, network_mode, cap_add and
+        # security_opt are security boundaries and are server-owned.
 
         return kwargs
 
@@ -361,12 +377,10 @@ class Container(Client):
         # (no-new-privileges and the private network) are intentionally never
         # stripped. If the Docker engine cannot apply them, the deployment
         # fails closed instead of silently running with weaker isolation.
+        # Resource constraints are security/billing boundaries, not optional
+        # compatibility hints. Never remove CPU/RAM limits as a fallback.
         fallbacks = [
             ("full config", lambda kw: kw),
-            ("without pids_limit", lambda kw: {k: v for k, v in kw.items() if k != "pids_limit"}),
-            ("without memswap_limit", lambda kw: {k: v for k, v in kw.items() if k != "memswap_limit"}),
-            ("without nano_cpus", lambda kw: {k: v for k, v in kw.items() if k != "nano_cpus"}),
-            ("without mem_limit", lambda kw: {k: v for k, v in kw.items() if k != "mem_limit"}),
             ("without tmpfs", lambda kw: {k: v for k, v in kw.items() if k != "tmpfs"}),
             ("without restart_policy", lambda kw: {k: v for k, v in kw.items() if k != "restart_policy"}),
         ]

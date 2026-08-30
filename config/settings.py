@@ -379,6 +379,15 @@ CELERY_TASK_PUBLISH_RETRY_POLICY = {
 CELERY_TASK_DEFAULT_QUEUE = "celery"
 CELERY_TASK_DEFAULT_EXCHANGE = "celery"
 CELERY_TASK_DEFAULT_ROUTING_KEY = "celery"
+# Keep long-running deployment work isolated from generic Celery jobs.
+# Multiple deployment-worker replicas can consume this queue independently.
+CELERY_TASK_ROUTES = {
+    "deployments.celery.tasks.deploy": {"queue": "deployments"},
+    "deployments.celery.tasks.run_db_deploy": {"queue": "deployments"},
+    "deployments.celery.tasks.stop": {"queue": "operations"},
+}
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_TASK_ACKS_LATE = True
 CELERY_IMPORTS = (
     "deployments.celery.tasks",
     "core.tasks.email",
@@ -390,9 +399,9 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers.DatabaseScheduler'
 CELERY_BEAT_SCHEDULE = {
-    "monitor_services_every_minute": {
+    "monitor_services_reconciliation": {
         "task": "deployments.celery.schedules.monitor_services",
-        "schedule": 20.0,
+        "schedule": 300.0,
     },
     "messenger_deliver_scheduled_messages": {
         "task": "messenger.tasks.deliver_scheduled_messages",
@@ -502,3 +511,6 @@ if not DEBUG:
     SECURE_BROWSER_XSS_FILTER = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
     X_FRAME_OPTIONS = "DENY"
+
+# Hard server-side upload boundary for untrusted deployment archives.
+DEPLOY_MAX_ZIP_BYTES = int(os.getenv("DEPLOY_MAX_ZIP_BYTES", str(100 * 1024 * 1024)))

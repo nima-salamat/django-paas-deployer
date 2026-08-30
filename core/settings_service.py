@@ -154,6 +154,10 @@ def mirror_apt() -> str:
     return get_str("mirror.apt", "")
 
 
+def build_resource_mode() -> str:
+    return get_str("build.resource_mode", "static").strip().lower()
+
+
 def build_max_cpu() -> float:
     return get_float("build.max_cpu", 1.0)
 
@@ -163,7 +167,11 @@ def build_max_ram_mb() -> int:
 
 
 def build_parallelism() -> int:
-    return get_int("build.parallelism", 1)
+    return max(1, get_int("build.parallelism", 1))
+
+
+def build_max_wait_minute() -> int:
+    return max(1, get_int("build.max_wait_minute", 5))
 
 
 def max_deploy_time_minute() -> int:

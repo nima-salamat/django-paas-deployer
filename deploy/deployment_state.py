@@ -64,38 +64,67 @@ class DjangoDeploymentState:
 
     def start(self):
         self._finished = False
-        self._update_deploy(
-            status=DeploymentStatusChoices.RUNNING,
-            stage="deployment_started",
-            progress=0,
-            status_message="Deployment started.",
-            error_message="",
-            rollback_status=RollbackStatusChoices.NOT_REQUIRED,
-            health_status="pending",
-            container_status="pending",
-            image_status="pending",
-            volume_status="pending",
-            network_status="pending",
-            started_at=timezone.now(),
-            completed_at=None,
-            cancel_requested=False,
-        )
+
+        # Serialize the transition with the API cancel transaction. This
+        # closes the race where a worker checked cancel_requested=False and
+        # then a force-cancel arrived just before the old implementation
+        # unconditionally reset the flag to False.
+        with transaction.atomic():
+            locked = Deploy.objects.select_for_update().get(pk=self.deploy.pk)
+            if locked.cancel_requested or locked.status == DeploymentStatusChoices.CANCELLED:
+                Deploy.objects.filter(pk=locked.pk).update(
+                    status=DeploymentStatusChoices.CANCELLED,
+                    stage="cancelled",
+                    progress=100,
+                    status_message="Deployment cancelled before execution.",
+                    completed_at=timezone.now(),
+                )
+                self.deploy = locked
+                self._finished = True
+                emit_cancelled = True
+            else:
+                fields = {
+                    "status": DeploymentStatusChoices.RUNNING,
+                    "stage": "deployment_started",
+                    "progress": 0,
+                    "status_message": "Deployment started.",
+                    "error_message": "",
+                    "rollback_status": RollbackStatusChoices.NOT_REQUIRED,
+                    "health_status": "pending",
+                    "container_status": "pending",
+                    "image_status": "pending",
+                    "volume_status": "pending",
+                    "network_status": "pending",
+                    "started_at": timezone.now(),
+                    "completed_at": None,
+                    "cancel_requested": False,
+                }
+                Deploy.objects.filter(pk=locked.pk).update(**fields)
+                for key, value in fields.items():
+                    setattr(self.deploy, key, value)
+                emit_cancelled = False
+
         try:
             self.events.record(
                 DeploymentEvent(
-                    stage="deployment_started",
-                    message="Deployment started.",
-                    level="info",
-                    progress=0,
+                    stage="cancelled" if emit_cancelled else "deployment_started",
+                    message=(
+                        "Deployment cancelled before execution. "
+                        if emit_cancelled
+                        else "Deployment started."
+                    ),
+                    level="warning" if emit_cancelled else "info",
+                    progress=100 if emit_cancelled else 0,
                 )
             )
         except DeploymentCancelled:
             raise
         except Exception:
             logger.exception(
-                "Failed to record deployment_started for deploy %s",
+                "Failed to record start/cancel event for deploy %s",
                 self.deploy.pk,
             )
+        return not emit_cancelled
 
     def event_sink(self, event: DeploymentEvent):
         """
@@ -209,7 +238,19 @@ class DjangoDeploymentState:
 
     def finish(self, result):
         self._finished = True
-        success = bool(getattr(result, "success", False))
+        # Cancellation wins over a late worker result. The API writes the
+        # terminal state before revoking Celery, so a worker that unwinds
+        # afterwards must not overwrite CANCELLED with SUCCEEDED/FAILED.
+        current = Deploy.objects.filter(pk=self.deploy.pk).values(
+            "status", "cancel_requested", "rollback_status", "progress"
+        ).first()
+        cancelled_by_operator = bool(
+            current and (
+                current.get("cancel_requested")
+                or current.get("status") == DeploymentStatusChoices.CANCELLED
+            )
+        )
+        success = False if cancelled_by_operator else bool(getattr(result, "success", False))
         result_status = (getattr(result, "status", None) or "").lower()
         result_stage = getattr(result, "stage", None) or ""
         result_message = getattr(result, "message", None) or ""
@@ -238,12 +279,15 @@ class DjangoDeploymentState:
             )
             final_stage = "deployment_completed"
             final_level = "info"
-        elif result_status == "cancelled" or result_stage == "cancelled":
+        elif cancelled_by_operator or result_status == "cancelled" or result_stage == "cancelled":
             update.update(
                 {
                     "status": DeploymentStatusChoices.CANCELLED,
                     "stage": "cancelled",
-                    "status_message": result_message or "Deployment cancelled.",
+                    "status_message": (
+                        "Deployment cancelled by the user." if cancelled_by_operator
+                        else result_message or "Deployment cancelled."
+                    ),
                     "error_message": result_error or result_message or "",
                 }
             )

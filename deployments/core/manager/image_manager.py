@@ -15,6 +15,7 @@ import docker.errors
 from docker.errors import BuildError, ImageNotFound
 
 from deployments.core.exceptions import CleanupError, ImageBuildError
+from deployments.common.build_slots import BuildSlot
 from .client_manager import Client
 
 logger = logging.getLogger(__name__)
@@ -64,13 +65,16 @@ DEFAULT_BUILD_PARALLELISM: int = 1
 
 def _build_container_limits(
     *,
-    max_cpu: float | None = None,
-    max_ram_mb: int | None = None,
+    policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    cpu = float(max_cpu if max_cpu is not None else _build_default_cpu())
-    ram = int(max_ram_mb if max_ram_mb is not None else _build_default_ram())
-    cpu = max(0.1, min(cpu, 32.0))
-    ram = max(128, min(ram, 65536))
+    # Only the orchestrator may provide this server-computed policy. There is
+    # deliberately no tenant-facing resource parameter here.
+    from deployments.common.resource_policy import build_limits
+    policy = dict(policy or build_limits())
+    cpu = float(policy["cpu"])
+    ram = int(policy["memory_mb"])
+    pids = int(policy["pids_limit"])
+    shm = int(policy["shm_size_mb"])
     nano_cpus = int(cpu * 1_000_000_000)
     mem_bytes = ram * 1024 * 1024
     return {
@@ -79,6 +83,8 @@ def _build_container_limits(
         "NanoCpus": nano_cpus,
         "CpuPeriod": 100_000,
         "CpuQuota": int(cpu * 100_000),
+        "PidsLimit": pids,
+        "ShmSize": shm * 1024 * 1024,
     }
 
 
@@ -288,6 +294,9 @@ class Image(Client):
         *,
         max_cpu: float | None = None,
         max_ram: int | None = None,
+        build_options: dict[str, Any] | None = None,
+        build_resource_policy: dict[str, Any] | None = None,
+        deployment_id: Any | None = None,
     ):
         super().__init__()
         self.name = _sanitize_image_name(name)
@@ -300,6 +309,9 @@ class Image(Client):
             self.name, self.tag = self.image_ref.rsplit(":", 1)
         self.max_cpu = max_cpu
         self.max_ram = max_ram
+        self.build_options = dict(build_options or {})
+        self.build_resource_policy = dict(build_resource_policy or {})
+        self.deployment_id = deployment_id
         if not self.name:
             raise ValueError("Image name must not be empty")
 
@@ -451,16 +463,9 @@ class Image(Client):
         if not self.dockerfile_text or not self.tarfile:
             raise ValueError("dockerfile_text and tarfile are required")
 
-        limits = _build_container_limits(
-            max_cpu=self.max_cpu,
-            max_ram_mb=self.max_ram,
-        )
-        effective_cpu = (
-            self.max_cpu if self.max_cpu is not None else DEFAULT_BUILD_CPU
-        )
-        effective_ram = (
-            self.max_ram if self.max_ram is not None else DEFAULT_BUILD_RAM_MB
-        )
+        limits = _build_container_limits(policy=self.build_resource_policy or None)
+        effective_cpu = float(limits["NanoCpus"]) / 1_000_000_000
+        effective_ram = int(limits["Memory"]) // (1024 * 1024)
         target_ref = self.image_ref
 
         logger.info(
@@ -482,168 +487,179 @@ class Image(Client):
             pass
 
         buildargs = {"BUILDKIT_INLINE_CACHE": "1"}
+        # Do not accept tenant-controlled build arguments; they can carry
+        # secrets into image history/cache and can be used to alter trust
+        # boundaries of server-generated Dockerfiles.
 
         try:
-            with tempfile.TemporaryDirectory() as tmpdir:
-                tar_stream = (
-                    io.BytesIO(self.tarfile)
-                    if isinstance(self.tarfile, (bytes, bytearray))
-                    else self.tarfile
-                )
-                tar_stream.seek(0)
-                with tarfile.open(fileobj=tar_stream, mode="r:*") as tar:
-                    safe_extract(tar, tmpdir, max_bytes=500 * 1024 * 1024)
-
-                # Flatten single top-level directory (GitHub zips, release
-                # archives). Critical for PHP so Apache DocumentRoot matches
-                # the real layout after COPY . /var/www/html.
-                stripped = flatten_single_toplevel(tmpdir)
-                if stripped:
-                    logger.info(
-                        "Stripped single top-level archive directory '%s' "
-                        "from build context.",
-                        stripped,
+            with BuildSlot(deployment_id=self.deployment_id or self.image_ref, logger=logger) as _build_slot:
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    tar_stream = (
+                        io.BytesIO(self.tarfile)
+                        if isinstance(self.tarfile, (bytes, bytearray))
+                        else self.tarfile
                     )
+                    tar_stream.seek(0)
+                    with tarfile.open(fileobj=tar_stream, mode="r:*") as tar:
+                        safe_extract(tar, tmpdir, max_bytes=500 * 1024 * 1024)
 
-                build_path = tmpdir
-                app_dir = os.path.join(tmpdir, "app")
-                if os.path.isdir(app_dir) and os.path.exists(
-                    os.path.join(app_dir, "Dockerfile")
-                ):
-                    build_path = app_dir
-                else:
-                    with open(
-                        os.path.join(tmpdir, "Dockerfile"),
-                        "w",
-                        encoding="utf-8",
-                    ) as f:
-                        f.write(self.dockerfile_text)
-
-                # Ensure Dockerfile exists at build root
-                df_path = os.path.join(build_path, "Dockerfile")
-                if not os.path.isfile(df_path):
-                    with open(df_path, "w", encoding="utf-8") as f:
-                        f.write(self.dockerfile_text)
-
-                logger.info(
-                    "Build context ready path=%s files=%s",
-                    build_path,
-                    len(os.listdir(build_path)),
-                )
-
-                # Try progressively simpler kwargs so unsupported options
-                # never abort the whole deploy.
-                attempt_kwargs = [
-                    dict(
-                        path=build_path,
-                        rm=True,
-                        forcerm=True,
-                        decode=True,
-                        container_limits=limits,
-                        buildargs=buildargs,
-                        network_mode="default",
-                    ),
-                    dict(
-                        path=build_path,
-                        rm=True,
-                        forcerm=True,
-                        decode=True,
-                        buildargs=buildargs,
-                    ),
-                    dict(
-                        path=build_path,
-                        rm=True,
-                        forcerm=True,
-                        decode=True,
-                    ),
-                ]
-
-                response = None
-                last_err: Exception | None = None
-                for i, kwargs in enumerate(attempt_kwargs):
-                    try:
+                    # Flatten single top-level directory (GitHub zips, release
+                    # archives). Critical for PHP so Apache DocumentRoot matches
+                    # the real layout after COPY . /var/www/html.
+                    stripped = flatten_single_toplevel(tmpdir)
+                    if stripped:
                         logger.info(
-                            "api.build attempt %d kwargs=%s",
-                            i + 1,
-                            sorted(k for k in kwargs if k != "path"),
+                            "Stripped single top-level archive directory '%s' "
+                            "from build context.",
+                            stripped,
                         )
-                        response = self.client.api.build(**kwargs)
-                        last_err = None
-                        break
-                    except TypeError as exc:
-                        # Unknown kwarg for this docker-py version
-                        logger.warning(
-                            "api.build attempt %d TypeError: %s", i + 1, exc
-                        )
-                        last_err = exc
-                    except docker.errors.DockerException as exc:
-                        msg = str(exc).lower()
-                        # Still the broken match_tag? (should not happen without tag=)
-                        logger.warning(
-                            "api.build attempt %d DockerException: %s: %s",
-                            i + 1,
-                            type(exc).__name__,
-                            exc,
-                        )
-                        last_err = exc
-                        # If somehow tag validation still triggers, continue
-                        if "invalid tag" in msg or "invalid reference" in msg:
-                            continue
-                        # Other docker errors (daemon down, etc.) — stop
-                        break
-                    except Exception as exc:
-                        logger.warning(
-                            "api.build attempt %d %s: %s",
-                            i + 1,
-                            type(exc).__name__,
-                            exc,
-                        )
-                        last_err = exc
-                        break
 
-                if response is None:
-                    raise ImageBuildError(
-                        f"Docker api.build failed: "
-                        f"{type(last_err).__name__ if last_err else 'unknown'}: "
-                        f"{last_err}",
-                        details={
-                            "image": target_ref,
-                            "error": str(last_err),
-                            "error_type": type(last_err).__name__
-                            if last_err
-                            else None,
-                        },
-                    ) from last_err
+                    build_path = tmpdir
+                    app_dir = os.path.join(tmpdir, "app")
+                    if os.path.isdir(app_dir) and os.path.exists(
+                        os.path.join(app_dir, "Dockerfile")
+                    ):
+                        build_path = app_dir
+                    else:
+                        with open(
+                            os.path.join(tmpdir, "Dockerfile"),
+                            "w",
+                            encoding="utf-8",
+                        ) as f:
+                            f.write(self.dockerfile_text)
 
-                image_id = self._handle_build_stream_collect_id(
-                    response, on_build_output=on_build_output
-                )
+                    # Ensure Dockerfile exists at build root
+                    df_path = os.path.join(build_path, "Dockerfile")
+                    if not os.path.isfile(df_path):
+                        with open(df_path, "w", encoding="utf-8") as f:
+                            f.write(self.dockerfile_text)
 
-                if not image_id:
-                    # SECURITY/RELIABILITY: the legacy code fell back to
-                    # ``dangling[0].id`` here, which could pick up an
-                    # UNRELATED dangling image and silently tag it as the
-                    # deployment image — deploying the wrong code.  We
-                    # now fail loudly instead of guessing.
-                    raise ImageBuildError(
-                        "Docker build finished but no image ID was returned "
-                        "by the build stream. Refusing to guess a dangling image.",
-                        details={
-                            "image": target_ref,
-                            "hint": (
-                                "Enable BuildKit (DOCKER_BUILDKIT=1) or upgrade "
-                                "docker-py to a version that emits 'writing image "
-                                "sha256:...' in the build stream."
-                            ),
-                        },
+                    logger.info(
+                        "Build context ready path=%s files=%s",
+                        build_path,
+                        len(os.listdir(build_path)),
                     )
 
-                self._tag_image(image_id)
+                    # Try progressively simpler kwargs so unsupported options
+                    # never abort the whole deploy.
+                    # Tenant config cannot select arbitrary build networking.
+                    network_mode = "default"
+                    target = self.build_options.get("target")
+                    nocache = bool(self.build_options.get("no_cache", self.build_options.get("nocache", False)))
+                    pull = bool(self.build_options.get("pull", False))
+                    attempt_kwargs = [
+                        dict(
+                            path=build_path,
+                            rm=True,
+                            forcerm=True,
+                            decode=True,
+                            container_limits=limits,
+                            buildargs=buildargs,
+                            network_mode=network_mode,
+                            nocache=nocache,
+                            pull=pull,
+                        ),
+                        dict(
+                            path=build_path,
+                            rm=True,
+                            forcerm=True,
+                            decode=True,
+                            container_limits=limits,
+                            buildargs=buildargs,
+                            nocache=nocache,
+                            pull=pull,
+                        ),
+                    ]
 
-                try:
-                    return self.client.images.get(target_ref)
-                except ImageNotFound:
-                    return self.client.images.get(image_id)
+                    if target:
+                        for _kwargs in attempt_kwargs:
+                            _kwargs["target"] = str(target)
+                    response = None
+                    last_err: Exception | None = None
+                    for i, kwargs in enumerate(attempt_kwargs):
+                        try:
+                            logger.info(
+                                "api.build attempt %d kwargs=%s",
+                                i + 1,
+                                sorted(k for k in kwargs if k != "path"),
+                            )
+                            response = self.client.api.build(**kwargs)
+                            last_err = None
+                            break
+                        except TypeError as exc:
+                            # Unknown kwarg for this docker-py version
+                            logger.warning(
+                                "api.build attempt %d TypeError: %s", i + 1, exc
+                            )
+                            last_err = exc
+                        except docker.errors.DockerException as exc:
+                            msg = str(exc).lower()
+                            # Still the broken match_tag? (should not happen without tag=)
+                            logger.warning(
+                                "api.build attempt %d DockerException: %s: %s",
+                                i + 1,
+                                type(exc).__name__,
+                                exc,
+                            )
+                            last_err = exc
+                            # If somehow tag validation still triggers, continue
+                            if "invalid tag" in msg or "invalid reference" in msg:
+                                continue
+                            # Other docker errors (daemon down, etc.) — stop
+                            break
+                        except Exception as exc:
+                            logger.warning(
+                                "api.build attempt %d %s: %s",
+                                i + 1,
+                                type(exc).__name__,
+                                exc,
+                            )
+                            last_err = exc
+                            break
+
+                    if response is None:
+                        raise ImageBuildError(
+                            f"Docker api.build failed: "
+                            f"{type(last_err).__name__ if last_err else 'unknown'}: "
+                            f"{last_err}",
+                            details={
+                                "image": target_ref,
+                                "error": str(last_err),
+                                "error_type": type(last_err).__name__
+                                if last_err
+                                else None,
+                            },
+                        ) from last_err
+
+                    image_id = self._handle_build_stream_collect_id(
+                        response, on_build_output=on_build_output
+                    )
+
+                    if not image_id:
+                        # SECURITY/RELIABILITY: the legacy code fell back to
+                        # ``dangling[0].id`` here, which could pick up an
+                        # UNRELATED dangling image and silently tag it as the
+                        # deployment image — deploying the wrong code.  We
+                        # now fail loudly instead of guessing.
+                        raise ImageBuildError(
+                            "Docker build finished but no image ID was returned "
+                            "by the build stream. Refusing to guess a dangling image.",
+                            details={
+                                "image": target_ref,
+                                "hint": (
+                                    "Enable BuildKit (DOCKER_BUILDKIT=1) or upgrade "
+                                    "docker-py to a version that emits 'writing image "
+                                    "sha256:...' in the build stream."
+                                ),
+                            },
+                        )
+
+                    self._tag_image(image_id)
+
+                    try:
+                        return self.client.images.get(target_ref)
+                    except ImageNotFound:
+                        return self.client.images.get(image_id)
 
         except BuildError as exc:
             raise ImageBuildError(

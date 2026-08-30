@@ -222,6 +222,34 @@ def enrich_config_from_project(
     if not config.server_type and project_cfg.server_type:
         updates["server_type"] = project_cfg.server_type
 
+    # Promote platform detector results into the immutable DeploymentConfig.
+    # The old bridge discarded build/install/output settings, which meant a
+    # Laravel app could detect React/Vite correctly but the renderer never
+    # received the detected commands/directories.
+    for source_key, target_key in (
+        ("runtime_version", "runtime_version"),
+        ("package_manager", "package_manager"),
+        ("working_directory", "working_directory"),
+        ("build_dir", "build_dir"),
+        ("output_dir", "output_dir"),
+        ("static_dir", "static_dir"),
+        ("start_command", "start_command"),
+        ("build_command", "build_command"),
+        ("install_command", "install_command"),
+    ):
+        val = getattr(project_cfg, source_key, None)
+        if val not in (None, ""):
+            current = getattr(config, target_key, None)
+            if current in (None, ""):
+                updates[target_key] = val
+
+    if project_cfg.extra:
+        # Keep detector-specific capabilities available to renderers.
+        updates["runtime_options"] = {
+            **(config.runtime_options or {}),
+            **dict(project_cfg.extra or {}),
+        }
+
     if config.port is None and project_cfg.port is not None:
         try:
             updates["port"] = int(project_cfg.port)

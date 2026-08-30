@@ -3,6 +3,7 @@ from django.db import OperationalError, InterfaceError, ProgrammingError
 import logging
 
 from deployments.core.db_deployer import DB_PLATFORMS, SENSITIVE_CONFIG_KEYS
+from deployments.common.config import sanitize_tenant_config
 from .models import Deploy, DeployLog
 
 logger = logging.getLogger(__name__)
@@ -147,6 +148,8 @@ class DeploySerializer(serializers.ModelSerializer):
                         "action": "can_deploy_add",
                     }
                 )
+        if "config" in validated_data:
+            validated_data["config"] = sanitize_tenant_config(validated_data["config"])
         instance = Deploy(**validated_data)
         if request and (request.user.is_superuser or request.user.is_staff):
             instance.skip_zip_size_limit = True
@@ -156,6 +159,8 @@ class DeploySerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         request = self.context.get("request")
         for attr, value in validated_data.items():
+            if attr == "config":
+                value = sanitize_tenant_config(value)
             setattr(instance, attr, value)
         if request and (request.user.is_superuser or request.user.is_staff):
             instance.skip_zip_size_limit = True

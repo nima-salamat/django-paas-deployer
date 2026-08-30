@@ -156,7 +156,9 @@ class DeploymentOrchestrator:
             self.logger.info("image_build", "Building Docker image.", progress=20)
             image = Image(
                 config.name, str(config.tag), dockerfile_text, tar_stream,
-                max_cpu=config.max_cpu, max_ram=config.max_ram,
+                max_cpu=config.resource_limits.get("cpu", config.max_cpu),
+                max_ram=config.resource_limits.get("memory_mb", config.max_ram),
+                build_options=config.build_options,
             )
             image.create(on_build_output=self._on_build_output)
             image_built = True
@@ -210,6 +212,13 @@ class DeploymentOrchestrator:
                 config.read_only,
                 entry_port=config.port,
                 environment=dict(config.environment) if config.environment else {},
+                labels={
+                    "managed-by": "django-paas-deployer",
+                    "deployment.id": str(config.labels.get("deployment.id") or deployment_id or ""),
+                    "service.id": str(config.labels.get("service.id") or ""),
+                    **{str(k): str(v) for k, v in config.labels.items()},
+                },
+                resource_limits=config.resource_limits,
             )
 
             if existing_container.exists():

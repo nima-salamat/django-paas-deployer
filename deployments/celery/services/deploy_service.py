@@ -32,6 +32,8 @@ from deployments.core.state.locks import acquire_service_deployment_lock
 from services.models import Volume  # type: ignore
 
 from deployments.common import parse_config, as_bool, as_int
+from deployments.common.deployment_profile import normalize_profile
+from deployments.common.resource_policy import runtime_limits, worker_count as derive_worker_count, build_limits
 from deployments.common.config import (
     suggest_worker_count,
     apply_workers_to_command,
@@ -123,7 +125,10 @@ class DeployService:
             ServiceStateManager.sync_legacy_stopped(service_id)
             return
 
-        state_tracker.start()
+        started = state_tracker.start()
+        if started is False:
+            ServiceStateManager.sync_legacy_stopped(service_id)
+            return
 
         try:
             result = self._process_deployment(deploy_item, container_name, state_tracker)
@@ -162,17 +167,35 @@ class DeployService:
         self, deploy_item: Deploy, container_name: str,
         state_tracker: DjangoDeploymentState,
     ):
-        cfg = parse_config(getattr(deploy_item, "config", None))
-        platform = (
-            str(cfg.get("platform") or "").lower().strip()
-            or str(getattr(getattr(deploy_item.service, "plan", None), "platform", None) or "docker").lower().strip()
+        cfg = normalize_profile(
+            parse_config(getattr(deploy_item, "config", None)),
+            plan_cpu=getattr(getattr(deploy_item.service, "plan", None), "max_cpu", None),
+            plan_ram_mb=getattr(getattr(deploy_item.service, "plan", None), "max_ram", None),
         )
+        # Accept both the modern nested config and legacy flat keys.
+        build_options = dict(cfg.get("build_options") or {})
+        for _k in ("build_command", "install_command", "package_manager", "build_dir", "build_target", "build_args", "build_network", "no_cache", "pull"):
+            if _k in cfg and _k not in build_options:
+                build_options[_k] = cfg[_k]
+        runtime_options = dict(cfg.get("runtime_options") or {})
+        plan = getattr(deploy_item.service, "plan", None)
+        resource_limits = runtime_limits(plan)
+        for legacy_key in ("build_args", "buildargs", "build_target", "build_network", "no_cache", "pull"):
+            if legacy_key in cfg and legacy_key not in build_options:
+                mapped = {"build_target": "target", "build_network": "network", "no_cache": "no_cache", "pull": "pull", "build_args": "build_args", "buildargs": "build_args"}[legacy_key]
+                build_options[mapped] = cfg[legacy_key]
+
+        # Plan controls the execution family; config may only refine a
+        # framework within that family (e.g. Laravel on a PHP plan).
+        plan_platform = str(getattr(getattr(deploy_item.service, "plan", None), "platform", None) or "docker").lower().strip()
+        requested_platform = str(cfg.get("platform") or "").lower().strip()
+        platform = plan_platform
         # Normalize framework aliases so Laravel never falls through as plain "php".
         # plan.platform may still be "php" while Deploy.config / detection says laravel.
         _fw = str(cfg.get("framework") or cfg.get("framework_name") or "").lower().strip()
-        if platform in ("php", "docker", "") and _fw in ("laravel", "lumen"):
+        if platform == "php" and _fw in ("laravel", "lumen", "symfony", "codeigniter"):
             platform = _fw
-        if platform in ("php",) and str(cfg.get("laravel") or "").lower() in ("1", "true", "yes"):
+        if platform == "php" and str(cfg.get("laravel") or "").lower() in ("1", "true", "yes"):
             platform = "laravel"
         # Persist so DockerfileGenerator / _render_php see platform=laravel
         if platform in ("laravel", "lumen", "symfony", "codeigniter"):
@@ -195,6 +218,12 @@ class DeployService:
                             pass
             except Exception:
                 pass
+
+        # Explicit config always wins over detector output.
+        detected_project_cfg = runtime_options.get("project_cfg") or {}
+        build_command = cfg.get("build_command") or detected_project_cfg.get("build_command")
+        install_command = cfg.get("install_command") or detected_project_cfg.get("install_command")
+        build_dir = cfg.get("build_dir") or detected_project_cfg.get("build_dir")
 
         version_overrides = {
             k: cfg[k]
@@ -247,7 +276,22 @@ class DeployService:
         dockerfile_text: str, state_tracker: DjangoDeploymentState,
     ):
         service = deploy_item.service
-        cfg = parse_config(getattr(deploy_item, "config", None))
+        cfg = normalize_profile(
+            parse_config(getattr(deploy_item, "config", None)),
+            plan_cpu=getattr(getattr(service, "plan", None), "max_cpu", None),
+            plan_ram_mb=getattr(getattr(service, "plan", None), "max_ram", None),
+        )
+        build_options = dict(cfg.get("build_options") or {})
+        runtime_options = dict(cfg.get("runtime_options") or {})
+        plan_cpu = getattr(getattr(service, "plan", None), "max_cpu", None)
+        plan_ram = getattr(getattr(service, "plan", None), "max_ram", None)
+        resource_limits = runtime_limits(service.plan)
+        build_resource_policy = build_limits(service.plan)
+        detected_project_cfg = runtime_options.get("project_cfg") or {}
+        build_command = cfg.get("build_command") or build_options.get("build_command") or detected_project_cfg.get("build_command")
+        install_command = cfg.get("install_command") or build_options.get("install_command") or detected_project_cfg.get("install_command")
+        build_dir = cfg.get("build_dir") or build_options.get("build_dir") or detected_project_cfg.get("build_dir")
+        package_manager = cfg.get("package_manager") or build_options.get("package_manager") or detected_project_cfg.get("package_manager")
 
         # Port resolution: explicit config > platform default.
         raw_port = cfg.get("port")
@@ -333,49 +377,10 @@ class DeployService:
         celery_app = cfg.get("celery_app") or cfg.get("celery_module") or None
 
         # ------------------------------------------------------------------
-        # worker_count resolution
+        # worker_count is server-owned. Tenant config is ignored.
         # ------------------------------------------------------------------
-        # Priority:
-        #   1. Explicit Deploy.config["worker_count"] / ["workers"]
-        #   2. Plan-based suggestion from max_cpu + max_ram
-        #   3. --workers N inside entry_point (detector default)
-        #   4. default 1
-        #
-        # When we auto-pick from the plan, also rewrite entry_point so a
-        # hard-coded "gunicorn … --workers 3" does not ignore the plan.
-        explicit_workers = (
-            "worker_count" in cfg
-            or "workers" in cfg
-            or getattr(deploy_item, "worker_count", None) not in (None, "")
-        )
-        plan = getattr(service, "plan", None)
-        plan_cpu = getattr(plan, "max_cpu", None) if plan is not None else None
-        plan_ram = getattr(plan, "max_ram", None) if plan is not None else None
-
-        if explicit_workers:
-            worker_count = as_int(
-                cfg.get("worker_count") or cfg.get("workers")
-                or getattr(deploy_item, "worker_count", None),
-                default=1,
-                minimum=1,
-            )
-        else:
-            from_cmd = parse_workers_from_command(entry_point)
-            from_plan = suggest_worker_count(
-                plan_cpu, plan_ram, platform=platform, default=1,
-            )
-            # Prefer plan over detector hard-code when plan resources exist.
-            if plan_cpu is not None or plan_ram is not None:
-                worker_count = from_plan
-            elif from_cmd:
-                worker_count = from_cmd
-            else:
-                worker_count = from_plan
-
-            if entry_point and (
-                parse_workers_from_command(entry_point) != worker_count
-            ):
-                entry_point = apply_workers_to_command(entry_point, worker_count)
+        explicit_workers = False
+        worker_count = derive_worker_count(service.plan)
 
         logger.info(
             "Orchestrator options for %s: platform=%s celery=%s celery_beat=%s "
@@ -413,8 +418,8 @@ class DeployService:
             tag=_docker_safe_tag(deploy_item.version),
             zip_filename=zip_path,
             dockerfile_text=dockerfile_text,
-            max_cpu=service.plan.max_cpu,
-            max_ram=service.plan.max_ram,
+            max_cpu=resource_limits["cpu"],
+            max_ram=resource_limits["memory_mb"],
             networks=networks,
             volumes=self._volume_specs(deploy_item, platform=platform),
             port=port,
@@ -431,6 +436,18 @@ class DeployService:
             celery_beat=celery_beat,
             entry_point=entry_point,
             worker_count=worker_count,
+            resource_limits=resource_limits,
+            build_resource_policy=build_resource_policy,
+            build_options={**build_options, "build_command": build_command, "install_command": install_command, "build_dir": build_dir, "package_manager": package_manager},
+            runtime_options=runtime_options,
+            labels={"deployment.id": str(deploy_item.pk), "service.id": str(service.pk)},
+            runtime_version=cfg.get("runtime_version") or cfg.get("node_version") or cfg.get("php_version"),
+            package_manager=package_manager,
+            working_directory=cfg.get("working_directory") or runtime_options.get("working_directory") or "/app",
+            build_dir=build_dir,
+            install_command=install_command,
+            build_command=build_command,
+            start_command=cfg.get("start_command"),
         )
         if celery_app:
             try:

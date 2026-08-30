@@ -64,3 +64,5 @@ __all__ = [
     "security",
     "state_machine",
 ]
+
+from .deployment_profile import normalize_profile

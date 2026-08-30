@@ -78,7 +78,7 @@ def deploy(self, deploy_id) -> None:
             .first()
         )
         if deploy_item is not None:
-            cfg = parse_config(deploy_item.config) if isinstance(deploy_item.config, dict) else {}
+            cfg = parse_config(deploy_item.config)
             platform = (
                 (cfg.get("platform") or "")
                 or getattr(getattr(deploy_item.service, "plan", None), "platform", "")
@@ -100,6 +100,11 @@ def deploy(self, deploy_id) -> None:
         )
 
     try:
+        # A cancelled deployment must never be resurrected by Celery retry
+        # handling after the API has already made the state terminal.
+        if Deploy.objects.filter(pk=deploy_id, cancel_requested=True).exists():
+            logger.info("Deploy %s is already cancelled; skipping worker execution.", deploy_id)
+            return
         DeployService().execute(deploy_id)
     except (InvalidServiceStateError, DeploymentValidationError,
             OrchestratorDeploymentError, ContainerTimeoutError):
@@ -117,6 +122,11 @@ def deploy(self, deploy_id) -> None:
             raise self.retry(exc=exc)
         logger.exception("Permanent deployment error for deploy_id: %s", deploy_id)
     except Exception as exc:
+        # Never retry a deployment that the operator cancelled while the
+        # worker was unwinding (for example after SIGTERM/revoke).
+        if Deploy.objects.filter(pk=deploy_id, cancel_requested=True).exists():
+            logger.info("Deploy %s was cancelled while failing; suppressing retry.", deploy_id)
+            return
         # Unknown errors are treated as transient — retry up to max.
         if self.request.retries < self.max_retries:
             logger.warning(
@@ -150,10 +160,8 @@ def stop(self, service_id) -> None:
 
 def _resolve_platform(deploy: Deploy) -> str:
     """config.platform -> service.plan.platform -> empty string."""
-    cfg = parse_config(getattr(deploy, "config", None))
-    p = str(cfg.get("platform") or "").strip().lower()
-    if p:
-        return p
+    # The Service Plan is the execution authority. Tenant config cannot
+    # switch a deployment into another platform family (especially DB).
     plan = getattr(getattr(deploy, "service", None), "plan", None)
     if plan is not None and getattr(plan, "platform", None):
         return str(plan.platform).strip().lower()

@@ -1017,10 +1017,16 @@ def _render_node_family(platform, dockerfile_template, tar_stream, config, logge
 
     rendered = dockerfile_template.replace("{MIRROR_DOCKER}", MIRROR_DOCKER)
 
-    package_manager = (getattr(project_cfg, "package_manager", None) if project_cfg else None) or _detect_node_package_manager_from_tar(tar_stream)
+    package_manager = (getattr(config, "package_manager", None) if config else None) or (getattr(project_cfg, "package_manager", None) if project_cfg else None) or _detect_node_package_manager_from_tar(tar_stream)
     rendered = _prepare_node_package_manager(rendered, package_manager)
-    if project_cfg and project_cfg.install_command:
-        rendered = _swap_npm_install(rendered, project_cfg.install_command)
+    install_cmd = (getattr(config, "install_command", None) if config else None) or (getattr(project_cfg, "install_command", None) if project_cfg else None)
+    if install_cmd:
+        rendered = _swap_npm_install(rendered, str(install_cmd))
+
+    # Explicit build command wins over detector/template defaults.
+    build_cmd = (getattr(config, "build_command", None) if config else None) or (getattr(project_cfg, "build_command", None) if project_cfg else None)
+    if build_cmd and re.search(r"^RUN\s+[^\n]*(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?build[^\n]*$", rendered, re.M):
+        rendered = re.sub(r"^RUN\s+[^\n]*(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?build[^\n]*$", f"RUN {str(build_cmd).strip()}", rendered, count=1, flags=re.M)
 
     # Always correct SPA copy paths when the template is nginx multi-stage
     if _is_nginx_spa_template(rendered):
@@ -2265,74 +2271,98 @@ def _inject_laravel_frontend_build(
     config=None,
     logger=None,
 ) -> str:
+    """Inject a real Node build for Laravel/Inertia/Vite projects.
+
+    Build tooling is installed with dev dependencies because Vite/React/
+    TypeScript normally live there. A failed build is fatal: silently
+    accepting ``npm run build || true`` used to produce a healthy-looking
+    Laravel container with missing frontend assets.
     """
-    If the Laravel app ships a JS frontend (vite/react/mix) or the deploy
-    config sets front_build_platform, inject Node install + npm run build
-    into the Dockerfile after composer install.
-    """
-    # Config override
     front = ""
-    env = {}
+    package_manager = "npm"
+    build_command = None
+    install_command = None
     if config is not None:
         env = getattr(config, "environment", None) or {}
-        if not isinstance(env, dict):
-            env = {}
-        front = (
-            env.get("FRONT_BUILD_PLATFORM")
-            or getattr(config, "front_build_platform", None)
-            or ""
-        )
-        front = str(front or "").strip().lower()
+        if isinstance(env, dict):
+            front = env.get("FRONT_BUILD_PLATFORM") or env.get("FRONTEND_BUILD") or ""
+        front = front or getattr(config, "front_build_platform", None) or ""
+        package_manager = getattr(config, "package_manager", None) or package_manager
+        opts = getattr(config, "build_options", None) or {}
+        build_command = opts.get("build_command") or getattr(config, "build_command", None)
+        install_command = opts.get("install_command") or getattr(config, "install_command", None)
 
     detected = _detect_laravel_frontend(tar_stream)
-    kind = front or detected.get("kind") or ""
+    kind = str(front or detected.get("kind") or "").strip().lower()
     if not kind and not detected.get("has_package_json"):
         return dockerfile
-    if not kind and detected.get("has_package_json"):
-        # package.json present but unknown tooling — still try npm run build
+    if not kind:
         kind = "node"
-
-    if re.search(r"\bnpm\s+run\s+build\b", dockerfile, re.I):
-        return dockerfile  # already present
+    package_manager = str(package_manager or detected.get("package_manager") or "npm").lower()
 
     script = detected.get("build_script") or "build"
-    # Use node from official image via multi-stage copy of binaries is heavy;
-    # install node inside the PHP image for a single-stage simple build.
+    default_install_commands = {
+        "npm": "npm ci",
+        "pnpm": "corepack enable && pnpm install --frozen-lockfile",
+        "yarn": "corepack enable && yarn install --immutable",
+        "bun": "npm install -g bun && bun install --frozen-lockfile",
+    }
+    generated_install_command = default_install_commands.get(package_manager, "npm ci")
+    install_command = str(install_command or generated_install_command).strip()
+    generated_build_command = f"{package_manager} run {script}"
+    build_command = str(build_command or generated_build_command).strip()
+
+    # User-provided build/install overrides are deliberately restricted to a
+    # single executable command. This keeps the new customization surface
+    # useful without turning Deploy.config into arbitrary shell execution.
+    if install_command != generated_install_command:
+        install_command = validate_shell_command(install_command)
+    if build_command != generated_build_command:
+        build_command = validate_shell_command(build_command)
+
+    # Never duplicate the injector if Dockerfile generation is called twice.
+    if "# --- Laravel frontend build (injected) ---" in dockerfile:
+        return dockerfile
+
+    node_version = "20"
+    if config is not None:
+        rv = getattr(config, "runtime_version", None)
+        if rv:
+            m = re.search(r"(?:node)?\s*[>=~^]*\s*(\d{2})(?:\.\d+)?", str(rv), re.I)
+            if m:
+                node_version = m.group(1)
+
     block = (
         "\n# --- Laravel frontend build (injected) ---\n"
         f"# front_build_platform={kind}\n"
         "RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \\\n"
-        "    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \\\n"
+        f"    && curl -fsSL https://deb.nodesource.com/setup_{node_version}.x | bash - \\\n"
         "    && apt-get install -y --no-install-recommends nodejs \\\n"
         "    && rm -rf /var/lib/apt/lists/* \\\n"
-        "    && if [ -f package.json ]; then \\\n"
-        "         npm ci --omit=dev 2>/dev/null || npm install --omit=dev || npm install; \\\n"
-        f"         npm run {script} || npm run build || true; \\\n"
-        "       fi\n"
+        f"    && {install_command} \\\n"
+        f"    && {build_command}\n"
     )
 
-    # Insert after the last composer-related RUN if possible, else before EXPOSE/CMD
+    # The build must happen after COPY . /var/www/html. Insert immediately
+    # before EXPOSE so the complete application source is available.
     if re.search(r"^EXPOSE\s+", dockerfile, re.M):
-        dockerfile = re.sub(
-            r"^(EXPOSE\s+)",
-            block + r"\1",
-            dockerfile,
-            count=1,
-            flags=re.M,
-        )
+        dockerfile = re.sub(r"^(EXPOSE\s+)", block + r"\1", dockerfile, count=1, flags=re.M)
     else:
         dockerfile = dockerfile.rstrip() + "\n" + block
 
     if logger:
         logger.info(
             "dockerfile_generation",
-            f"Laravel frontend build injected (kind={kind}, script={script}).",
+            f"Laravel frontend build configured (kind={kind}, package_manager={package_manager}).",
             progress=15,
-            details={"front_build_platform": kind, "build_script": script},
+            details={
+                "front_build_platform": kind,
+                "package_manager": package_manager,
+                "install_command": install_command,
+                "build_command": build_command,
+            },
         )
     return dockerfile
-
-
 
 
 

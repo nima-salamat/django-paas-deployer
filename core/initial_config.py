@@ -107,7 +107,31 @@ DEFAULTS: list[dict] = [
         "label": "Fallback EXPOSE port",
         "description": "Used when platform has no default port.",
     },
+    # ----- deployment security/resource policy -----
+    {
+        "key": "deploy.build_pids_limit", "default": 2048, "value_type": "integer",
+        "category": "build", "label": "Build PID limit",
+        "description": "Operator-only PID cap for untrusted build containers.",
+    },
+    {
+        "key": "deploy.mb_per_worker", "default": 256, "value_type": "integer",
+        "category": "runtime", "label": "Memory per worker",
+        "description": "Server-side memory budget used to derive process count.",
+    },
+    {
+        "key": "deploy.runtime_worker_cap", "default": 8, "value_type": "integer",
+        "category": "runtime", "label": "Runtime worker cap",
+        "description": "Hard server-side cap for application worker processes.",
+    },
     # ----- build limits (image_manager) -----
+    {
+        "key": "build.resource_mode",
+        "default": "static",
+        "value_type": "string",
+        "category": "build",
+        "label": "Build resource mode",
+        "description": "Server-only build budget mode: static or plan. Tenant config cannot change it.",
+    },
     {
         "key": "build.max_cpu",
         "default": 1.0,
@@ -130,7 +154,12 @@ DEFAULTS: list[dict] = [
         "value_type": "integer",
         "category": "build",
         "label": "Build parallelism",
-        "description": "Reserved for future parallel build slots (DEPLOY_BUILD_PARALLELISM).",
+        "description": "Maximum number of Docker builds allowed concurrently across deployment workers.",
+    },
+    {
+        "key": "build.max_wait_minute", "default": 5, "value_type": "integer",
+        "category": "build", "label": "Build slot wait timeout (minutes)",
+        "description": "Maximum time a deployment waits for a distributed build slot before failing.",
     },
     # ----- deploy behaviour -----
     {

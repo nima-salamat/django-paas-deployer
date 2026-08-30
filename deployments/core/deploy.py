@@ -57,6 +57,18 @@ class Deploy:
         celery_beat=False,
         entry_point=None,
         worker_count=1,
+        resource_limits=None,
+        build_options=None,
+        build_resource_policy=None,
+        runtime_options=None,
+        labels=None,
+        runtime_version=None,
+        package_manager=None,
+        working_directory="/app",
+        build_dir=None,
+        install_command=None,
+        build_command=None,
+        start_command=None,
     ):
         self.name = name
         self.tag = str(tag)
@@ -82,6 +94,18 @@ class Deploy:
             self.worker_count = max(1, int(worker_count or 1))
         except (TypeError, ValueError):
             self.worker_count = 1
+        self.resource_limits = dict(resource_limits or {})
+        self.build_options = dict(build_options or {})
+        self.build_resource_policy = dict(build_resource_policy or {})
+        self.runtime_options = dict(runtime_options or {})
+        self.labels = {str(k): str(v) for k, v in (labels or {}).items()}
+        self.runtime_version = runtime_version
+        self.package_manager = package_manager
+        self.working_directory = working_directory or "/app"
+        self.build_dir = build_dir
+        self.install_command = install_command
+        self.build_command = build_command
+        self.start_command = start_command
         self.errors = []
         self.result = None
 
@@ -153,12 +177,24 @@ class Deploy:
             read_only=self.read_only,
             platform=self.platform,
             platform_type=self.platform_type,
+            runtime_version=getattr(self, "runtime_version", None),
+            package_manager=getattr(self, "package_manager", None),
+            working_directory=getattr(self, "working_directory", "/app"),
+            build_dir=getattr(self, "build_dir", None),
+            install_command=getattr(self, "install_command", None),
+            build_command=getattr(self, "build_command", None),
+            start_command=getattr(self, "start_command", None),
             environment=self.environment,
             server_type=self.server_type,
             celery=self.celery,
             celery_beat=self.celery_beat,
             entry_point=self.entry_point,
             worker_count=self.worker_count,
+            resource_limits=self.resource_limits,
+            build_options=self.build_options,
+            build_resource_policy=self.build_resource_policy,
+            runtime_options=self.runtime_options,
+            labels=self.labels,
         )
 
     def deploy(self):
