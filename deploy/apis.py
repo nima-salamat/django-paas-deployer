@@ -191,6 +191,21 @@ class DeployViewSet(ModelViewSet):
         ).values_list("service_id", flat=True)
         return qs.filter(Q(service__user=user) | Q(service_id__in=shared_service_ids)).distinct()
 
+    def perform_create(self, serializer):
+        """Hard gate: non-owners need can_deploy_add (defense in depth)."""
+        service = serializer.validated_data.get("service")
+        user = self.request.user
+        if service is not None and str(service.user_id) != str(user.id):
+            if not (user.is_superuser or user.is_staff):
+                from services.share_permissions import assert_share_action, SharePermissionError
+                from rest_framework.exceptions import PermissionDenied
+                try:
+                    assert_share_action(service, user, "can_deploy_add")
+                except SharePermissionError as e:
+                    raise PermissionDenied(str(e))
+        serializer.save(created_by=user)
+
+
     def list(self, request, *args, **kwargs):
         service_id = request.query_params.get("service_id", "")
         queryset = self.get_queryset().order_by("-created_at")
@@ -202,31 +217,44 @@ class DeployViewSet(ModelViewSet):
         return self.get_paginated_response(serializer.data)
 
     def create(self, request, *args, **kwargs):
-        if not (request.user.is_superuser or request.user.is_staff):
-            service_id = request.data.get("service")
-            if not service_id:
-                return Response(
-                    {"error": _("Service is required.")},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            try:
-                service = Service.objects.get(pk=service_id)
-            except Service.DoesNotExist:
-                return Response(
-                    {"error": _("Service not found.")},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
-            if str(service.user_id) != str(request.user.id):
+        service_id = request.data.get("service")
+        if not service_id:
+            return Response(
+                {"error": _("Service is required.")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            service = Service.objects.select_related("user", "plan").get(pk=service_id)
+        except Service.DoesNotExist:
+            return Response(
+                {"error": _("Service not found.")},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        is_owner = str(service.user_id) == str(request.user.id)
+        is_staff = bool(request.user.is_superuser or request.user.is_staff)
+
+        # Non-owners (including staff acting as shared users on purpose) must have
+        # can_deploy_add. Staff/superuser still bypass share rules for support.
+        if not is_owner:
+            if not is_staff:
                 from services.share_permissions import assert_share_action, SharePermissionError
                 try:
                     assert_share_action(service, request.user, "can_deploy_add")
                 except SharePermissionError as e:
                     return Response(
-                        {"error": str(e)},
+                        {"error": str(e), "code": "share_permission_denied", "action": "can_deploy_add"},
                         status=status.HTTP_403_FORBIDDEN,
                     )
+            else:
+                # Staff bypass share rules but still log
+                import logging
+                logging.getLogger(__name__).info(
+                    "staff deploy create bypass share checks user=%s service=%s",
+                    request.user.id, service.pk,
+                )
 
-            # Daily deploy quota
+        if not is_staff:
             from deploy.daily_limits import assert_daily_deploy_allowed
             ok_lim, lim_msg, used, limit = assert_daily_deploy_allowed(service, request.user)
             if not ok_lim:
@@ -320,14 +348,9 @@ class DeployViewSet(ModelViewSet):
 
         serializer = self.get_serializer(data=data)
         if serializer.is_valid():
-            deploy = serializer.save()
-            # Track uploader for share-scoped deploy edit/remove
-            try:
-                if getattr(deploy, "created_by_id", None) is None:
-                    deploy.created_by = request.user
-                    deploy.save(update_fields=["created_by"])
-            except Exception:
-                pass
+            # perform_create re-checks can_deploy_add and sets created_by
+            self.perform_create(serializer)
+            deploy = serializer.instance
             # Verify secrets actually persisted (catch serializer/field bugs).
             if platform in ("mysql", "mariadb"):
                 saved = _parse_deploy_config(getattr(deploy, "config", None))

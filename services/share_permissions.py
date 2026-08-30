@@ -93,7 +93,11 @@ def normalize_rules(raw) -> dict:
             except (TypeError, ValueError):
                 out[k] = default
         else:
-            out[k] = bool(mapped[k])
+            v = mapped[k]
+            if isinstance(v, str):
+                out[k] = v.strip().lower() in ("1", "true", "yes", "on")
+            else:
+                out[k] = bool(v)
     return out
 
 
