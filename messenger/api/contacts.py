@@ -77,11 +77,32 @@ class ContactListCreateAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        qs = list(Contact.objects.filter(owner=request.user).select_related("contact").order_by("-created_at"))
-        user_ids = [c.contact_id for c in qs if c.contact_id]
+        from django.db.models import Q
+        page = max(1, int(request.query_params.get("page") or 1))
+        page_size = min(50, max(1, int(request.query_params.get("page_size") or 20)))
+        q = (request.query_params.get("q") or "").strip()
+        qs = Contact.objects.filter(owner=request.user).select_related("contact").order_by("-created_at")
+        if q:
+            qs = qs.filter(
+                Q(contact__username__icontains=q)
+                | Q(nickname__icontains=q)
+                | Q(contact__first_name__icontains=q)
+                | Q(contact__last_name__icontains=q)
+            )
+        total = qs.count()
+        start = (page - 1) * page_size
+        end = start + page_size
+        page_qs = list(qs[start:end])
+        user_ids = [c.contact_id for c in page_qs if c.contact_id]
         ctx = build_user_mini_context(request.user, user_ids)
         ctx["request"] = request
-        return ok(data=ContactSerializer(qs, many=True, context=ctx).data)
+        return ok(data={
+            "results": ContactSerializer(page_qs, many=True, context=ctx).data,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "has_more": end < total,
+        })
 
     def post(self, request):
         uid = request.data.get("user_id")

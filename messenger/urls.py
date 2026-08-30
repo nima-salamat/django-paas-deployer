@@ -28,6 +28,7 @@ urlpatterns = [
     path("messages/<int:pk>/", apis.MessageDeleteAPIView.as_view()),
     path("conversations/<int:pk>/pinned-messages/", apis.ConversationPinnedMessagesAPIView.as_view()),
     path("conversations/<int:pk>/leave/", apis.LeaveConversationAPIView.as_view()),
+    path("conversations/<int:pk>/participants/", apis.GroupParticipantsListAPIView.as_view()),
     path("conversations/<int:pk>/members/", apis.AddMembersAPIView.as_view()),
     # Group management — remove member, change role, transfer ownership
     path("conversations/<int:pk>/members/<int:user_id>/", apis.RemoveMemberAPIView.as_view()),

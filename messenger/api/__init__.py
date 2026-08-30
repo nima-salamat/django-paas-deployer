@@ -15,6 +15,7 @@ from .messages import (
 from .members import (
     LeaveConversationAPIView, RemoveMemberAPIView, MemberRoleAPIView,
     TransferOwnershipAPIView, AddMembersAPIView, DeleteConversationAPIView,
+    GroupParticipantsListAPIView,
 )
 from .invites import (
     InviteLinkCreateAPIView, InviteLinkRevokeAPIView, JoinByInviteAPIView,
@@ -51,6 +52,7 @@ __all__ = [
     "MessageSearchAPIView", "ScheduledMessageCancelAPIView", "ScheduledMessageListAPIView",
     "LeaveConversationAPIView", "RemoveMemberAPIView", "MemberRoleAPIView",
     "TransferOwnershipAPIView", "AddMembersAPIView", "DeleteConversationAPIView",
+    "GroupParticipantsListAPIView",
     "InviteLinkCreateAPIView", "InviteLinkRevokeAPIView", "JoinByInviteAPIView",
     "MyProfilePhotosAPIView", "ProfilePhotoPrivacyAPIView", "UserProfileAPIView",
     "UserByUsernameAPIView", "UserBioAPIView", "ProfileUpdateBroadcastAPIView",

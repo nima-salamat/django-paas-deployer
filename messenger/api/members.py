@@ -45,7 +45,6 @@ def _schedule_member_cache(conv_id, extra_user_ids=None, system_msg=None):
 User = get_user_model()
 
 def _cleanup_service_shares_on_leave(user_id, group_id, reason="left_group"):
-    """Best-effort: revoke group service shares when membership ends."""
     try:
         from services.share_cleanup import on_user_left_or_removed_from_group
         on_user_left_or_removed_from_group(user_id, group_id, reason=reason)
@@ -102,7 +101,6 @@ def _auto_transfer_or_cleanup(conv, leaving_part):
             logger.exception(
                 "auto_cleanup: attachment file cleanup failed conv=%s", conv_id
             )
-        _cleanup_service_shares_on_group_delete(conv_id)
         conv.delete()
         try:
             from ..message_cache import MessageCacheService, ConversationCacheService
@@ -127,7 +125,6 @@ def _auto_transfer_or_cleanup(conv, leaving_part):
         "role", "can_add_members", "can_pin_messages", "can_change_info",
     ])
     return new_owner.user_id, False
-
 
 
 class LeaveConversationAPIView(APIView):
@@ -158,13 +155,10 @@ class LeaveConversationAPIView(APIView):
         transferred_to = None
         deleted = False
         if conv.type == Conversation.Type.GROUP:
-            # Revoke shares this user created for this group; membership-based
-            # access for remaining shares ends automatically via left_at checks.
             _cleanup_service_shares_on_leave(request.user.id, pk, reason="left_group")
             if part.role == ConversationParticipant.Role.OWNER:
                 transferred_to, deleted = _auto_transfer_or_cleanup(conv, part)
                 if deleted:
-                    _cleanup_service_shares_on_group_delete(pk)
                     try:
                         from ..consumers import broadcast_member_change
                         broadcast_member_change(pk, {
@@ -298,7 +292,6 @@ class RemoveMemberAPIView(APIView):
             return err("Cannot remove the group owner", status.HTTP_403_FORBIDDEN)
         target.left_at = timezone.now()
         target.save(update_fields=["left_at"])
-        _cleanup_service_shares_on_leave(user_id, pk, reason="removed_from_group")
         # System message
         try:
             removed_user = User.objects.only("id", "username").get(pk=user_id)
@@ -604,7 +597,6 @@ class DeleteConversationAPIView(APIView):
             )
 
         # Hard delete conversation (cascades messages, attachments rows, etc.)
-        _cleanup_service_shares_on_group_delete(conv_id)
         conv.delete()
 
         # Drop Redis caches so clients don't keep seeing a deleted chat.
@@ -643,3 +635,65 @@ class DeleteConversationAPIView(APIView):
 
 
 
+
+
+class GroupParticipantsListAPIView(APIView):
+    """
+    Paginated list of active participants for a group conversation.
+    GET /conversations/<pk>/participants/?page=1&page_size=20&q=&role=
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        from django.db.models import Q
+        conv = get_object_or_404(Conversation, pk=pk)
+        me = ConversationParticipant.objects.filter(
+            conversation=conv, user=request.user, left_at__isnull=True
+        ).first()
+        if not me:
+            return err("Not a member", status.HTTP_403_FORBIDDEN)
+
+        page = max(1, int(request.query_params.get("page") or 1))
+        page_size = min(50, max(1, int(request.query_params.get("page_size") or 20)))
+        q = (request.query_params.get("q") or "").strip()
+        role = (request.query_params.get("role") or "").strip().lower()
+
+        qs = (
+            ConversationParticipant.objects.filter(
+                conversation=conv, left_at__isnull=True
+            )
+            .select_related("user")
+            .order_by("role", "joined_at")
+        )
+        if role in ("owner", "admin", "member"):
+            qs = qs.filter(role=role)
+        if q:
+            qs = qs.filter(
+                Q(user__username__icontains=q)
+                | Q(user__first_name__icontains=q)
+                | Q(user__last_name__icontains=q)
+            )
+
+        total = qs.count()
+        start = (page - 1) * page_size
+        end = start + page_size
+        rows = []
+        for part in qs[start:end]:
+            u = part.user
+            rows.append({
+                "user_id": u.id,
+                "username": getattr(u, "username", "") or "",
+                "first_name": getattr(u, "first_name", "") or "",
+                "last_name": getattr(u, "last_name", "") or "",
+                "role": part.role,
+                "joined_at": part.joined_at.isoformat() if part.joined_at else None,
+                "is_self": u.id == request.user.id,
+            })
+        return ok(data={
+            "results": rows,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "has_more": end < total,
+        })
