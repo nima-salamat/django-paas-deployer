@@ -346,11 +346,15 @@ class ServiceShareSerializer(serializers.ModelSerializer):
     target_username = serializers.SerializerMethodField()
     is_owner = serializers.SerializerMethodField()
     my_permissions = serializers.SerializerMethodField()
+    service_platform = serializers.SerializerMethodField()
+    service_plan_type = serializers.SerializerMethodField()
+    service = serializers.SerializerMethodField()
 
     class Meta:
         model = ServiceShare
         fields = [
             "id", "service_id", "service_name", "service_status",
+            "service_platform", "service_plan_type", "service",
             "group_id", "group_title", "target_user_id", "target_username",
             "shared_by_id", "shared_by_username", "rules", "is_active", "note",
             "expires_at", "admin_only", "preset",
@@ -374,6 +378,52 @@ class ServiceShareSerializer(serializers.ModelSerializer):
             return getattr(obj.service, "status", None)
         except Exception:
             return None
+
+    def get_service_platform(self, obj):
+        try:
+            plan = getattr(obj.service, "plan", None)
+            return getattr(plan, "platform", None) if plan else None
+        except Exception:
+            return None
+
+    def get_service_plan_type(self, obj):
+        try:
+            plan = getattr(obj.service, "plan", None)
+            return getattr(plan, "plan_type", None) if plan else None
+        except Exception:
+            return None
+
+    def get_service(self, obj):
+        """Minimal nested service so UI filters (app/db) work without extra fetch."""
+        try:
+            s = obj.service
+            if not s:
+                return None
+            plan = getattr(s, "plan", None)
+            plan_data = None
+            if plan is not None:
+                plan_data = {
+                    "id": str(plan.pk),
+                    "platform": getattr(plan, "platform", None),
+                    "plan_type": getattr(plan, "plan_type", None),
+                    "name": getattr(plan, "name", None),
+                }
+            return {
+                "id": str(s.pk),
+                "pk": str(s.pk),
+                "name": getattr(s, "name", None),
+                "status": getattr(s, "status", None),
+                "plan": plan_data,
+                "platform": getattr(plan, "platform", None) if plan else None,
+                "plan_type": getattr(plan, "plan_type", None) if plan else None,
+            }
+        except Exception:
+            return {
+                "id": str(obj.service_id),
+                "pk": str(obj.service_id),
+                "name": None,
+                "status": None,
+            }
 
     def get_shared_by_id(self, obj):
         return str(obj.shared_by_id) if obj.shared_by_id else None
