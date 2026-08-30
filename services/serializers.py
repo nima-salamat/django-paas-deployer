@@ -416,7 +416,18 @@ class ServiceShareSerializer(serializers.ModelSerializer):
         # Owner always has full control
         if str(obj.shared_by_id) == str(request.user.id):
             return full_owner_rules()
-        return dict(obj.rules or DEFAULT_SHARE_RULES)
+        # Per-member override for group shares
+        if obj.group_id:
+            try:
+                from services.models import ServiceShareMember
+                mem = ServiceShareMember.objects.filter(share=obj, user=request.user).first()
+                if mem is not None:
+                    if not mem.is_enabled:
+                        return {k: False for k in DEFAULT_SHARE_RULES}
+                    return normalize_rules(mem.rules or {})
+            except Exception:
+                pass
+        return normalize_rules(obj.rules or DEFAULT_SHARE_RULES)
 
 
 class ServiceShareCreateSerializer(serializers.Serializer):

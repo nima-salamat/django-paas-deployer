@@ -30,6 +30,7 @@ from services.apis import (
     shares_for_group,
     leave_share,
     share_presets,
+    share_members,
 )
 
 # ---------------------------------------------------------------------------
@@ -77,6 +78,7 @@ urlpatterns = (
         path("services/shares/<uuid:pk>/events/", share_events, name="services_share_events"),
         path("services/groups/<int:group_id>/shares/", shares_for_group, name="services_group_shares"),
         path("services/shares/<uuid:pk>/leave/", leave_share, name="services_share_leave"),
+        path("services/shares/<uuid:pk>/members/", share_members, name="services_share_members"),
         path("services/share-presets/", share_presets, name="services_share_presets"),
     ]
 )

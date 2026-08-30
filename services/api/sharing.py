@@ -124,8 +124,28 @@ def user_can_access_service(service: Service, user, action: str = "can_view") ->
             # view allowed for members to see the service exists
             return True, share
 
+    # Per-member override (group shares)
+    member_rules = None
+    if share.group_id:
+        try:
+            from services.models import ServiceShareMember
+            mem = ServiceShareMember.objects.filter(share=share, user=user).first()
+            if mem is not None:
+                if not mem.is_enabled:
+                    return False, share
+                member_rules = mem.rules
+        except Exception:
+            member_rules = None
+
     if action == "can_view":
+        if member_rules is not None:
+            from services.share_permissions import normalize_rules
+            return bool(normalize_rules(member_rules).get("can_view", True)), share
         return True, share
+
+    if member_rules is not None:
+        from services.share_permissions import normalize_rules
+        return bool(normalize_rules(member_rules).get(action, False)), share
     return share.allows(action), share
 
 
@@ -362,6 +382,34 @@ def create_share(request):
             preset=(data.get("preset") or "")[:32],
         )
         share.save()
+        # Optional per-member rules at create time
+        members_payload = request.data.get("members")
+        if group and isinstance(members_payload, list):
+            from services.models import ServiceShareMember
+            from services.share_permissions import normalize_rules
+            from messenger.models import ConversationParticipant
+            valid_ids = set(
+                ConversationParticipant.objects.filter(
+                    conversation=group, left_at__isnull=True
+                ).values_list("user_id", flat=True)
+            )
+            default_rules = normalize_rules(share.rules)
+            for item in members_payload:
+                if not isinstance(item, dict):
+                    continue
+                uid = item.get("user_id")
+                if uid not in valid_ids:
+                    continue
+                rules = normalize_rules(item.get("rules") or {})
+                is_enabled = bool(item.get("is_enabled", True))
+                if is_enabled and rules == default_rules:
+                    continue
+                ServiceShareMember.objects.create(
+                    share=share,
+                    user_id=uid,
+                    rules=rules,
+                    is_enabled=is_enabled,
+                )
         record_share_event(
             share,
             actor=request.user,
@@ -641,3 +689,126 @@ def share_presets(request):
             "defaults": DEFAULT_SHARE_RULES,
         }
     )
+
+
+@api_view(["GET", "PUT"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def share_members(request, pk):
+    """
+    GET  — list group members with effective rules for this share.
+    PUT  — replace per-member overrides.
+           body: { "members": [ { "user_id": 1, "rules": {...}, "is_enabled": true }, ... ] }
+    Only the share owner (shared_by) may write.
+    """
+    from services.models import ServiceShareMember
+    from services.share_permissions import normalize_rules, DEFAULT_SHARE_RULES
+    from messenger.models import ConversationParticipant
+
+    share = get_object_or_404(
+        ServiceShare.objects.select_related("group", "service", "shared_by"),
+        pk=pk,
+        is_active=True,
+    )
+    if not share.group_id:
+        return Response(
+            {"result": "error", "detail": _("Member rules only apply to group shares.")},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    is_owner = str(share.shared_by_id) == str(request.user.id)
+    # Must be active group member to read
+    if not ConversationParticipant.objects.filter(
+        conversation_id=share.group_id, user=request.user, left_at__isnull=True
+    ).exists() and not is_owner:
+        return Response(
+            {"result": "error", "detail": _("Not a member of this group.")},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    participants = list(
+        ConversationParticipant.objects.filter(
+            conversation_id=share.group_id, left_at__isnull=True
+        ).select_related("user")
+    )
+    overrides = {
+        str(m.user_id): m
+        for m in ServiceShareMember.objects.filter(share=share)
+    }
+    default_rules = normalize_rules(share.rules)
+
+    if request.method == "GET":
+        rows = []
+        for p in participants:
+            uid = str(p.user_id)
+            ov = overrides.get(uid)
+            if ov is not None:
+                eff = normalize_rules(ov.rules) if ov.is_enabled else {k: False for k in DEFAULT_SHARE_RULES}
+                enabled = ov.is_enabled
+                has_override = True
+            else:
+                eff = default_rules
+                enabled = True
+                has_override = False
+            u = p.user
+            rows.append({
+                "user_id": p.user_id,
+                "username": getattr(u, "username", "") or "",
+                "display_name": getattr(u, "get_full_name", lambda: "")() or getattr(u, "username", ""),
+                "role": p.role,
+                "is_enabled": enabled,
+                "has_override": has_override,
+                "rules": eff,
+                "is_self": str(p.user_id) == str(request.user.id),
+            })
+        return Response({
+            "result": "success",
+            "share_id": str(share.pk),
+            "default_rules": default_rules,
+            "members": rows,
+            "can_edit": is_owner,
+        })
+
+    # PUT
+    if not is_owner:
+        return Response(
+            {"result": "error", "detail": _("Only the share owner can edit member rules.")},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    members_payload = request.data.get("members")
+    if not isinstance(members_payload, list):
+        return Response(
+            {"result": "error", "detail": _("members must be a list.")},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    valid_ids = {str(p.user_id) for p in participants}
+    # Clear and re-apply overrides that differ from default OR is_enabled=False
+    ServiceShareMember.objects.filter(share=share).delete()
+    created = 0
+    for item in members_payload:
+        if not isinstance(item, dict):
+            continue
+        uid = str(item.get("user_id") or "")
+        if uid not in valid_ids:
+            continue
+        # skip owner of service / share owner optional — allow still
+        rules = normalize_rules(item.get("rules") or {})
+        is_enabled = bool(item.get("is_enabled", True))
+        # Only store row if disabled or rules differ from default
+        if is_enabled and rules == default_rules:
+            continue
+        ServiceShareMember.objects.create(
+            share=share,
+            user_id=item.get("user_id"),
+            rules=rules,
+            is_enabled=is_enabled,
+        )
+        created += 1
+    record_share_event(
+        share,
+        actor=request.user,
+        action="rules_updated",
+        message="Per-member rules updated.",
+        metadata={"member_overrides": created},
+    )
+    return Response({"result": "success", "overrides": created})

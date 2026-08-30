@@ -23,6 +23,7 @@ from .sharing import (
     shares_for_group,
     leave_share,
     share_presets,
+    share_members,
     user_can_access_service,
     record_share_event,
 )
@@ -40,5 +41,6 @@ __all__ = [
     "shares_for_group",
     "leave_share",
     "share_presets",
+    "share_members",
     "user_can_access_service", "record_share_event",
 ]

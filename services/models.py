@@ -515,6 +515,57 @@ class ServiceShare(BaseModel):
         return f"Share({self.service_id} → {target})"
 
 
+
+class ServiceShareMember(BaseModel):
+    """
+    Per-member permission overrides inside a group share.
+    If no row exists for a participant, the parent ServiceShare.rules apply.
+    """
+    share = models.ForeignKey(
+        ServiceShare,
+        verbose_name=_("Share"),
+        related_name="member_rules",
+        on_delete=models.CASCADE,
+    )
+    user = models.ForeignKey(
+        User,
+        verbose_name=_("Member"),
+        related_name="service_share_member_rules",
+        on_delete=models.CASCADE,
+    )
+    rules = models.JSONField(
+        _("Permission Rules"),
+        default=dict,
+        blank=True,
+        help_text=_("Overrides parent share rules for this member only."),
+    )
+    is_enabled = models.BooleanField(
+        _("Enabled"),
+        default=True,
+        help_text=_("If false, this member has no access despite being in the group."),
+    )
+
+    class Meta:
+        verbose_name = _("Service Share Member Rule")
+        verbose_name_plural = _("Service Share Member Rules")
+        unique_together = ("share", "user")
+        indexes = [
+            models.Index(fields=["share", "user"]),
+        ]
+
+    def __str__(self):
+        return f"ShareMember {self.share_id} → {self.user_id}"
+
+    def effective_rules(self):
+        from services.share_permissions import normalize_rules
+        base = normalize_rules(self.share.rules if self.share_id else {})
+        if not self.is_enabled:
+            return {k: False for k in base}
+        over = normalize_rules(self.rules or {})
+        # Member override wins for keys they set; we store full map usually
+        return over if self.rules else base
+
+
 class ServiceShareEvent(BaseModel):
     """
     Audit / activity events for a shared service.

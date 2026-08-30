@@ -36,6 +36,8 @@ DEFAULT_SHARE_RULES: dict[str, bool] = {
     "can_network_change": False,     # change service.network
     # generic service config (name/plan/etc. — still cannot delete service)
     "can_change_config": False,
+    # integer: max deploys/builds per day for this recipient (capped at system max)
+    "daily_deploy_limit": 50,
 }
 
 # Human labels for UI (EN; frontend may translate)
@@ -61,6 +63,7 @@ RULE_LABELS: dict[str, str] = {
     "can_volume_detach": "Detach volume",
     "can_network_change": "Change network",
     "can_change_config": "Change service config",
+    "daily_deploy_limit": "Daily deploy limit",
 }
 
 # Map legacy short keys → canonical
@@ -71,18 +74,25 @@ _LEGACY_ALIASES = {
 }
 
 
-def normalize_rules(raw) -> dict[str, bool]:
-    """Merge user-supplied rules with defaults; coerce to bool; map legacy keys."""
+def normalize_rules(raw) -> dict:
+    """Merge user-supplied rules with defaults; coerce types; map legacy keys."""
     out = dict(DEFAULT_SHARE_RULES)
     if not isinstance(raw, dict):
         return out
-    # apply legacy aliases first
     mapped = {}
     for k, v in raw.items():
         key = _LEGACY_ALIASES.get(k, k)
         mapped[key] = v
-    for k in DEFAULT_SHARE_RULES:
-        if k in mapped:
+    for k, default in DEFAULT_SHARE_RULES.items():
+        if k not in mapped:
+            continue
+        if k == "daily_deploy_limit":
+            try:
+                n = int(mapped[k])
+                out[k] = max(0, min(n, 50))
+            except (TypeError, ValueError):
+                out[k] = default
+        else:
             out[k] = bool(mapped[k])
     return out
 

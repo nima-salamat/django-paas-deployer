@@ -226,6 +226,15 @@ class DeployViewSet(ModelViewSet):
                         status=status.HTTP_403_FORBIDDEN,
                     )
 
+            # Daily deploy quota
+            from deploy.daily_limits import assert_daily_deploy_allowed
+            ok_lim, lim_msg, used, limit = assert_daily_deploy_allowed(service, request.user)
+            if not ok_lim:
+                return Response(
+                    {"error": lim_msg, "used": used, "limit": limit},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+
         # Prefer the raw request payload for nested config.  Using
         # dict(request.data.items()) is fine for flat form fields but can
         # surprise callers when config arrives as a nested JSON object.
@@ -532,6 +541,14 @@ class DeployViewSet(ModelViewSet):
                 assert_share_action(service, request.user, "can_rebuild")
             except SharePermissionError as e:
                 return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
+
+            from deploy.daily_limits import assert_daily_deploy_allowed
+            ok_lim, lim_msg, used, limit = assert_daily_deploy_allowed(service, request.user)
+            if not ok_lim:
+                return Response(
+                    {"error": lim_msg, "used": used, "limit": limit},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
 
         deploy = get_object_or_404(
             self.get_queryset().select_related("service", "service__plan"),

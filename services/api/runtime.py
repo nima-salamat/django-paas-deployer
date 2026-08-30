@@ -198,6 +198,14 @@ def start_service_apiview(request):
                 Deploy.objects.filter(pk=deploy_item.pk).update(config=cfg)
 
             if force_rebuild:
+
+                from deploy.daily_limits import assert_daily_deploy_allowed
+                ok_lim, lim_msg, used, limit = assert_daily_deploy_allowed(service_item, request.user)
+                if not ok_lim:
+                    return Response(
+                        {"result": "error", "detail": lim_msg, "used": used, "limit": limit},
+                        status=status.HTTP_429_TOO_MANY_REQUESTS,
+                    )
                 container_name = service_item.get_docker_service_name()
                 try:
                     if is_db:
