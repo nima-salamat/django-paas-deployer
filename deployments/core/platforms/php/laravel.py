@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any, Optional
 
 from ..base.platform import DetectionResult
@@ -70,72 +69,52 @@ class LaravelPlatform(PHPPlatform):
         return result
 
     def _detect_frontend(self, file_index: dict[str, str]) -> dict[str, Any]:
-        pkg_paths = self._find("package.json", file_index)
-        if not pkg_paths:
+        """
+        Frontend auto-detection with per-directory marker association.
+
+        Delegates to the shared detection core
+        (``deployments.core.project_model``) so the plugin layer, the
+        bridge and the Dockerfile renderer all agree on which
+        ``package.json`` is the frontend: markers (vite.config.*,
+        lockfiles) are associated by shared parent directory and
+        candidates are scored, never "first package.json wins".
+        """
+        from deployments.core.project_model import (
+            frontend_candidates,
+            select_frontend,
+            detect_laravel_roots,
+        )
+
+        if not file_index:
             return {}
 
-        try:
-            pkg = json.loads(self._read_text(file_index[pkg_paths[0]]))
-        except Exception:
-            return {"kind": "node", "build_script": "build", "has_package_json": True}
+        names = sorted(file_index.keys())
 
-        deps = {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})}
-        scripts = pkg.get("scripts") or {}
-        if not isinstance(scripts, dict):
-            scripts = {}
+        def read_file(rel: str):
+            abs_path = file_index.get(rel)
+            if not abs_path:
+                return b""
+            try:
+                with open(abs_path, "rb") as f:
+                    return f.read(512_000)
+            except OSError:
+                return b""
 
-        build_script = "build"
-        for candidate in ("build", "prod", "production", "build:prod", "build:ssr"):
-            if candidate in scripts:
-                build_script = candidate
-                break
-
-        kind = ""
-        if (
-            self._exists("vite.config.js", file_index)
-            or self._exists("vite.config.ts", file_index)
-            or self._exists("vite.config.mjs", file_index)
-            or "vite" in deps
-            or "laravel-vite-plugin" in deps
-            or "@vitejs/plugin-react" in deps
-            or "@vitejs/plugin-vue" in deps
-        ):
-            kind = "vite"
-        elif "react-scripts" in deps:
-            kind = "react"
-        elif "laravel-mix" in deps or self._exists("webpack.mix.js", file_index):
-            kind = "mix"
-        elif "next" in deps:
-            kind = "nextjs"
-        elif "nuxt" in deps or "nuxt3" in deps:
-            kind = "nuxt"
-        elif (
-            "react" in deps
-            or "vue" in deps
-            or "@inertiajs/react" in deps
-            or "@inertiajs/vue3" in deps
-            or "build" in scripts
-        ):
-            kind = "node"
-
-        if not kind:
+        laravel_roots = detect_laravel_roots(names, read_file)
+        laravel_root = laravel_roots[0] if laravel_roots else ""
+        candidates = frontend_candidates(names, read_file, laravel_root)
+        best = select_frontend(candidates)
+        if best is None:
             return {}
 
         return {
-            "kind": kind,
-            "build_script": build_script,
+            "kind": best["kind"],
+            "build_script": best["build_script"],
             "has_package_json": True,
-            "package_manager": self._guess_pm(file_index),
+            "package_manager": best["package_manager"],
+            "package_json_path": best["path"],
+            "frontend_root": best["root"] or ".",
         }
-
-    def _guess_pm(self, file_index: dict[str, str]) -> str:
-        if self._exists("pnpm-lock.yaml", file_index):
-            return "pnpm"
-        if self._exists("yarn.lock", file_index):
-            return "yarn"
-        if self._exists("bun.lockb", file_index):
-            return "bun"
-        return "npm"
 
     def _dir_hint(self, file_index: dict[str, str]) -> set[str]:
         return {p.split("/")[0] for p in file_index if "/" in p}

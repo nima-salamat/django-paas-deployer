@@ -262,6 +262,46 @@ def enrich_config_from_project(
         if merged_env != (config.environment or {}):
             updates["environment"] = merged_env
 
+    # ------------------------------------------------------------------
+    # Structured project model — one detection pass whose paths are all
+    # relative to the post-flatten build context.  The renderer consumes
+    # this instead of re-walking the tar with different wrapper rules.
+    # ------------------------------------------------------------------
+    try:
+        from .project_model import build_project_model_from_tree
+
+        project_model = build_project_model_from_tree(
+            _project_file_index(project_root),
+            config=config,
+            wrapper=_zip_wrapper_name(config.zip_path),
+        )
+        pm_updates: dict[str, Any] = {"project_model": project_model}
+        if project_model.applications:
+            app_root = project_model.application_root
+            pm_updates["application_root"] = app_root
+            # The runtime root is the container path of the application
+            # root; for PHP images the app lives at /var/www/html.
+            pm_updates["runtime_root"] = (
+                "/var/www/html" if app_root == "." else f"/var/www/html/{app_root}"
+            )
+            if _has_public_index(project_root, app_root):
+                pm_updates["document_root"] = (
+                    "public" if app_root == "." else f"{app_root}/public"
+                )
+        if project_model.frontends:
+            front = project_model.frontends[0]
+            pm_updates["frontend_root"] = front.root or "."
+            pm_updates["build_root"] = front.root or "."
+            if front.build_output:
+                pm_updates["build_output"] = front.build_output
+        updates.update(pm_updates)
+    except Exception as exc:
+        logger.warning(
+            "Project model detection failed for %s: %s – renderer will fall back to tar inspection.",
+            config.name,
+            exc,
+        )
+
     if not updates:
         object.__setattr__(config, "_project_cfg", project_cfg)
         return config
@@ -269,6 +309,53 @@ def enrich_config_from_project(
     new_config = replace(config, **updates)
     object.__setattr__(new_config, "_project_cfg", project_cfg)
     return new_config
+
+
+def _project_file_index(project_root: str) -> "dict[str, str]":
+    """Relative posix path → absolute path for the extracted project tree."""
+    from .platforms.inspector import ProjectInspector
+
+    return ProjectInspector(project_root).scan().file_index
+
+
+def _has_public_index(project_root: str, app_root: str) -> bool:
+    """True when ``<app_root>/public/index.php`` exists in the tree."""
+    import os
+
+    base = project_root if app_root == "." else os.path.join(project_root, app_root)
+    return os.path.isfile(os.path.join(base, "public", "index.php"))
+
+
+def _zip_wrapper_name(zip_path: str) -> "str | None":
+    """
+    Return the single top-level wrapper directory of the ZIP (the one
+    ``flatten_single_toplevel`` will strip), or None.  Best-effort only:
+    failures never block the deploy.
+    """
+    try:
+        import os
+        import zipfile
+
+        from .project_model import detect_archive_wrapper
+
+        if not zip_path or not os.path.exists(zip_path):
+            return None
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            names = [i.filename for i in zf.infolist()]
+        wrapper = detect_archive_wrapper(names)
+        return wrapper or None
+    except Exception:
+        return None
+
+
+def get_project_model(config: DeploymentConfig):
+    """Return the ProjectModel attached by enrich_config_from_project, or None."""
+    if config is None:
+        return None
+    model = getattr(config, "project_model", None)
+    if model is not None:
+        return model
+    return getattr(config, "_project_model", None)
 
 
 def get_project_cfg(config: DeploymentConfig):

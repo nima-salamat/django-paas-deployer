@@ -12,6 +12,11 @@ from .entrypoints import (
 )
 from .exceptions import DeploymentValidationError
 from .types import DeploymentConfig
+from .project_model import (
+    detect_archive_wrapper,
+    frontend_info_from_model,
+    strip_archive_prefix,
+)
 
 from core.global_settings.config import MIRROR_DOCKER
 
@@ -1225,14 +1230,10 @@ def _detect_php_document_root(
         return ""
 
     file_names = [n for n in names if not n.endswith("/")]
-    top_level = sorted({n.split("/", 1)[0] for n in names if n})
-    single_prefix = ""
-    if len(top_level) == 1:
-        only = top_level[0]
-        # Only treat it as a wrapper if there is content *under* it
-        # (not just a lone file named like a hash).
-        if any(n.startswith(only + "/") for n in names):
-            single_prefix = only
+    # The image build strips a single top-level archive directory via
+    # flatten_single_toplevel; use the shared helper so every path this
+    # function returns is relative to the *post-flatten* build context.
+    single_prefix = detect_archive_wrapper(names)
 
     def _depth(path: str) -> int:
         return path.count("/")
@@ -2203,7 +2204,9 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
     return rendered
 
 
-def _detect_laravel_frontend(tar_stream, *, logger=None, progress: int | None = None) -> dict:
+def _detect_laravel_frontend(
+    tar_stream, *, logger=None, progress: int | None = None, project_model=None,
+) -> dict:
     """Detect the frontend project inside a Laravel deployment archive.
 
     The archive is the build context.  The Laravel application root and the
@@ -2217,8 +2220,11 @@ def _detect_laravel_frontend(tar_stream, *, logger=None, progress: int | None = 
     runtime remains rooted at ``backend``.
 
     Returns a stable detection record including ``package_json_path`` and
-    ``frontend_root`` (relative to the archive/build context; ``.`` means the
-    archive root).
+    ``frontend_root`` (relative to the POST-FLATTEN build context; ``.``
+    means the archive root).  Detection is delegated to
+    ``project_model.build_project_model_from_tar`` so the same rules as the
+    bridge/plugin layer apply; ``project_model`` (when already attached to
+    the config) is used directly instead of re-walking the tar.
     """
     info: dict = {
         "kind": "",
@@ -2230,6 +2236,34 @@ def _detect_laravel_frontend(tar_stream, *, logger=None, progress: int | None = 
         "frontend_root": None,
         "laravel_root": None,
     }
+    if project_model is not None:
+        model_info = frontend_info_from_model(project_model)
+        if model_info is not None:
+            info.update(model_info)
+            if logger is not None:
+                logger.info(
+                    "frontend_detection",
+                    f"Detected Laravel frontend kind='{info['kind'] or 'none'}', "
+                    f"package_manager='{info['package_manager']}', "
+                    f"build_script='{info['build_script']}', "
+                    f"package_json='{info['package_json_path']}', "
+                    f"frontend_root='{info['frontend_root']}'.",
+                    progress=progress,
+                    details={**info, "source": "project_model"},
+                )
+            return info
+        # The model ran detection and found no frontend — still report the
+        # Laravel application root so the runtime logs stay observable.
+        info["laravel_root"] = getattr(project_model, "application_root", ".") or "."
+        if logger is not None:
+            logger.info(
+                "frontend_detection",
+                "No package.json found in the Laravel archive; no frontend build step will be injected.",
+                progress=progress,
+                details={**info, "reason": "no_package_json"},
+            )
+        return info
+
     if tar_stream is None:
         if logger is not None:
             logger.info(
@@ -2240,216 +2274,11 @@ def _detect_laravel_frontend(tar_stream, *, logger=None, progress: int | None = 
             )
         return info
 
-    import json as _json
-    import tarfile as _tf
-    from pathlib import PurePosixPath
-
-    def _norm(name: str) -> str:
-        return (name or "").replace("\\", "/").lstrip("./").rstrip("/")
-
-    def _parent(path: str) -> str:
-        p = PurePosixPath(path)
-        parent = str(p.parent)
-        return "" if parent == "." else parent
-
-    def _rel_dir_from_file(path: str) -> str:
-        return _parent(path)
+    from .project_model import build_project_model_from_tar
 
     try:
-        tar_stream.seek(0)
-        with _tf.open(fileobj=tar_stream, mode="r:*") as tar:
-            regular = [m for m in tar.getmembers() if m.isfile()]
-            names = [_norm(m.name) for m in regular if _norm(m.name)]
-            name_set = set(names)
-
-            # Find Laravel roots from composer.json + artisan. Prefer the
-            # shallowest directory that contains both markers.
-            composer_candidates: list[tuple[str, dict]] = []
-            artisan_dirs: set[str] = set()
-            for m in regular:
-                n = _norm(m.name)
-                base = n.rsplit("/", 1)[-1].lower()
-                if base == "artisan":
-                    artisan_dirs.add(_rel_dir_from_file(n))
-                if base == "composer.json":
-                    try:
-                        raw = tar.extractfile(m)
-                        pkg = _json.loads(raw.read().decode("utf-8", "ignore")) if raw else {}
-                    except Exception:
-                        pkg = {}
-                    composer_candidates.append((_rel_dir_from_file(n), pkg))
-
-            laravel_roots: list[str] = []
-            for cdir, pkg in composer_candidates:
-                req = pkg.get("require") if isinstance(pkg, dict) else {}
-                is_laravel = isinstance(req, dict) and "laravel/framework" in req
-                if is_laravel and (cdir in artisan_dirs or not artisan_dirs):
-                    laravel_roots.append(cdir)
-
-            if not laravel_roots:
-                # Fallback to any artisan-containing directory.
-                laravel_roots = sorted(artisan_dirs, key=lambda x: (x.count("/"), x))
-
-            laravel_root = min(laravel_roots, key=lambda x: (x.count("/"), x)) if laravel_roots else ""
-            info["laravel_root"] = laravel_root or "."
-
-            markers = sorted({
-                "package.json" if any(n.endswith("/package.json") or n == "package.json" for n in name_set) else None,
-                "package-lock.json" if any(n.endswith("/package-lock.json") or n == "package-lock.json" for n in name_set) else None,
-                "pnpm-lock.yaml" if any(n.endswith("/pnpm-lock.yaml") or n == "pnpm-lock.yaml" for n in name_set) else None,
-                "yarn.lock" if any(n.endswith("/yarn.lock") or n == "yarn.lock" for n in name_set) else None,
-                "bun.lockb" if any(n.endswith("/bun.lockb") or n == "bun.lockb" for n in name_set) else None,
-                "bun.lock" if any(n.endswith("/bun.lock") or n == "bun.lock" for n in name_set) else None,
-                "vite.config.js" if any(n.endswith("/vite.config.js") or n == "vite.config.js" for n in name_set) else None,
-                "vite.config.ts" if any(n.endswith("/vite.config.ts") or n == "vite.config.ts" for n in name_set) else None,
-                "vite.config.mjs" if any(n.endswith("/vite.config.mjs") or n == "vite.config.mjs" for n in name_set) else None,
-                "webpack.mix.js" if any(n.endswith("/webpack.mix.js") or n == "webpack.mix.js" for n in name_set) else None,
-                "composer.json" if any(n.endswith("/composer.json") or n == "composer.json" for n in name_set) else None,
-                "artisan" if any(n.rsplit("/", 1)[-1].lower() == "artisan" for n in name_set) else None,
-            } - {None})
-            info["detected_files"] = markers
-
-            # Read every package.json and score it as a frontend candidate.
-            # Do not mix markers/dependencies from different package roots.
-            candidates: list[dict] = []
-            for m in regular:
-                n = _norm(m.name)
-                if n.rsplit("/", 1)[-1].lower() != "package.json":
-                    continue
-                pkg_dir = _rel_dir_from_file(n)
-                try:
-                    f = tar.extractfile(m)
-                    pkg = _json.loads(f.read().decode("utf-8", "ignore")) if f else {}
-                except Exception:
-                    pkg = {}
-                if not isinstance(pkg, dict):
-                    pkg = {}
-
-                deps: dict[str, str] = {}
-                for key in ("dependencies", "devDependencies"):
-                    if isinstance(pkg.get(key), dict):
-                        deps.update(pkg[key])
-                scripts = pkg.get("scripts") if isinstance(pkg.get("scripts"), dict) else {}
-
-                local_files = {
-                    x.rsplit("/", 1)[-1]
-                    for x in name_set
-                    if _parent(x) == pkg_dir
-                }
-                vite_local = any(
-                    x in local_files for x in ("vite.config.js", "vite.config.ts", "vite.config.mjs", "vite.config.cjs")
-                )
-                mix_local = "webpack.mix.js" in local_files
-                has_react = any(k in deps for k in ("react", "react-dom", "react-scripts", "@inertiajs/react"))
-                has_vue = any(k in deps for k in ("vue", "@inertiajs/vue3"))
-                is_vite = vite_local or any(
-                    k in deps for k in ("vite", "laravel-vite-plugin", "@vitejs/plugin-react", "@vitejs/plugin-vue")
-                )
-                if is_vite:
-                    kind = "vite"
-                elif "react-scripts" in deps:
-                    kind = "react"
-                elif "laravel-mix" in deps or mix_local:
-                    kind = "mix"
-                elif "next" in deps:
-                    kind = "nextjs"
-                elif "nuxt" in deps or "nuxt3" in deps:
-                    kind = "nuxt"
-                elif has_react or has_vue:
-                    kind = "node"
-                elif "build" in scripts:
-                    kind = "node"
-                else:
-                    kind = ""
-
-                build_script = next(
-                    (candidate for candidate in ("build", "prod", "production", "build:prod", "build:ssr") if candidate in scripts),
-                    "build",
-                )
-
-                # Score evidence, preferring Laravel's own package.json for
-                # Inertia/Vite, but allowing a sibling frontend when it has
-                # stronger explicit frontend evidence.
-                score = 0
-                if pkg_dir == laravel_root:
-                    score += 30
-                if is_vite:
-                    score += 50
-                if "laravel-vite-plugin" in deps:
-                    score += 25
-                if "@inertiajs/react" in deps or "@inertiajs/vue3" in deps:
-                    score += 20
-                if has_react or has_vue:
-                    score += 10
-                if "build" in scripts:
-                    score += 10
-                score -= pkg_dir.count("/")
-
-                candidates.append({
-                    "path": n,
-                    "root": pkg_dir,
-                    "pkg": pkg,
-                    "deps": deps,
-                    "scripts": scripts,
-                    "kind": kind,
-                    "build_script": build_script,
-                    "score": score,
-                    "local_files": local_files,
-                })
-
-            if not candidates:
-                if logger is not None:
-                    logger.info(
-                        "frontend_detection",
-                        "No package.json found in the Laravel archive; no frontend build step will be injected.",
-                        progress=progress,
-                        details={**info, "reason": "no_package_json"},
-                    )
-                return info
-
-            selected = max(candidates, key=lambda c: (c["score"], -c["root"].count("/"), c["path"]))
-            info["package_json_path"] = selected["path"]
-            info["frontend_root"] = selected["root"] or "."
-            info["has_package_json"] = True
-            info["kind"] = selected["kind"]
-            info["build_script"] = selected["build_script"]
-
-            selected_names = set(selected["local_files"])
-            if "pnpm-lock.yaml" in selected_names:
-                info["package_manager"] = "pnpm"
-            elif "yarn.lock" in selected_names:
-                info["package_manager"] = "yarn"
-            elif "bun.lockb" in selected_names or "bun.lock" in selected_names:
-                info["package_manager"] = "bun"
-            else:
-                pm_field = str(selected["pkg"].get("packageManager") or "").split("@", 1)[0].lower()
-                if pm_field in {"npm", "pnpm", "yarn", "bun"}:
-                    info["package_manager"] = pm_field
-
-            if logger is not None:
-                logger.info(
-                    "frontend_detection",
-                    f"Detected Laravel frontend kind='{info['kind'] or 'none'}', "
-                    f"package_manager='{info['package_manager']}', "
-                    f"build_script='{info['build_script']}', "
-                    f"package_json='{info['package_json_path']}', "
-                    f"frontend_root='{info['frontend_root']}'.",
-                    progress=progress,
-                    details={
-                        **info,
-                        "candidate_count": len(candidates),
-                        "candidates": [
-                            {
-                                "package_json_path": c["path"],
-                                "frontend_root": c["root"] or ".",
-                                "kind": c["kind"] or "none",
-                                "score": c["score"],
-                            }
-                            for c in sorted(candidates, key=lambda c: c["score"], reverse=True)
-                        ],
-                        "scripts": sorted(selected["scripts"].keys()),
-                    },
-                )
+        model = build_project_model_from_tar(tar_stream)
+        model_info = frontend_info_from_model(model)
     except Exception as exc:
         if logger is not None:
             logger.warning(
@@ -2459,11 +2288,36 @@ def _detect_laravel_frontend(tar_stream, *, logger=None, progress: int | None = 
                 details={"reason": "exception", "exception": str(exc)},
             )
         return info
-    finally:
-        try:
-            tar_stream.seek(0)
-        except Exception:
-            pass
+
+    if not model_info:
+        # No frontend detected — still report the Laravel application root
+        # (post-flatten) so runtime logs stay observable.
+        info["laravel_root"] = getattr(model, "application_root", ".") or "."
+        if logger is not None:
+            logger.info(
+                "frontend_detection",
+                "No package.json found in the Laravel archive; no frontend build step will be injected.",
+                progress=progress,
+                details={**info, "reason": "no_package_json"},
+            )
+        return info
+
+    info.update(model_info)
+    if logger is not None:
+        logger.info(
+            "frontend_detection",
+            f"Detected Laravel frontend kind='{info['kind'] or 'none'}', "
+            f"package_manager='{info['package_manager']}', "
+            f"build_script='{info['build_script']}', "
+            f"package_json='{info['package_json_path']}', "
+            f"frontend_root='{info['frontend_root']}'.",
+            progress=progress,
+            details={
+                **info,
+                "flattened_wrapper": getattr(model, "flattened_wrapper", None),
+                "applications": model.to_dict()["applications"] if hasattr(model, "to_dict") else [],
+            },
+        )
     return info
 
 
@@ -2590,7 +2444,15 @@ def _inject_laravel_frontend_build(
         build_command = frontend_options.get("build_command") or frontend_options.get("command")
         install_command = frontend_options.get("install_command")
 
-    detected = _detect_laravel_frontend(tar_stream, logger=logger, progress=15)
+    # Prefer the ProjectModel attached by the detector layer (post-flatten
+    # paths, single detection pass).  Only fall back to walking the tar
+    # when the model is unavailable (detection skipped/failed).
+    project_model = None
+    if config is not None:
+        project_model = getattr(config, "project_model", None)
+    detected = _detect_laravel_frontend(
+        tar_stream, logger=logger, progress=15, project_model=project_model,
+    )
     kind = str(front or detected.get("kind") or "").strip().lower()
     if not kind and not detected.get("has_package_json"):
         # Detection already logged its own "no package.json" line above.
@@ -2633,7 +2495,6 @@ def _inject_laravel_frontend_build(
         )
 
     script = detected.get("build_script") or "build"
-    member_names = _php_member_names(tar_stream)
     frontend_root = str(detected.get("frontend_root") or ".").replace("\\", "/").strip().strip("/")
     if frontend_root in {"", "."}:
         frontend_root = "."
@@ -2649,16 +2510,9 @@ def _inject_laravel_frontend_build(
 
     # Lock files must belong to the selected frontend project. A lockfile in
     # Laravel's root must never silently force the package manager for a
-    # separate sibling frontend.
-    frontend_lock_names = {
-        str(n).replace("\\", "/").lstrip("./")
-        for n in member_names
-        if str(n).replace("\\", "/").lstrip("./")
-    }
-    if frontend_root == ".":
-        has_npm_lock = "package-lock.json" in frontend_lock_names
-    else:
-        has_npm_lock = f"{frontend_root}/package-lock.json" in frontend_lock_names
+    # separate sibling frontend. The detection record already associates
+    # the lockfile with the selected frontend's own directory.
+    has_npm_lock = bool(detected.get("has_package_lock"))
 
     generated_install_command = {
         "npm": "npm ci" if has_npm_lock else "npm install",

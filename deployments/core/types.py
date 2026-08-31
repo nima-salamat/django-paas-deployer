@@ -1,5 +1,8 @@
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .project_model import ProjectModel
 
 
 EventSink = Callable[["DeploymentEvent"], None]
@@ -87,6 +90,27 @@ class DeploymentConfig:
     start_timeout: int = 45
     health_timeout: int = 60
     health_interval: float = 1.0
+
+    # ------------------------------------------------------------------
+    # Structured project model — produced once by the detector layer and
+    # consumed by the Dockerfile renderer.  Every path it carries is
+    # relative to the POST-FLATTEN build context (see
+    # deployments/core/project_model.py).  ``None`` means detection was
+    # skipped or failed; the renderer then falls back to walking the tar.
+    # ------------------------------------------------------------------------
+    project_model: Optional["ProjectModel"] = None
+    # Backend application root (post-flatten, archive-relative; "." = root).
+    application_root: str = "."
+    # Frontend project root (post-flatten) or None when no frontend exists.
+    frontend_root: Optional[str] = None
+    # Directory build commands execute from (post-flatten, archive-relative).
+    build_root: Optional[str] = None
+    # Where build artifacts land (post-flatten, archive-relative).
+    build_output: Optional[str] = None
+    # Directory the runtime process executes from (container-relative).
+    runtime_root: Optional[str] = None
+    # Directory Apache/nginx serves (archive-relative, post-flatten).
+    document_root: Optional[str] = None
 
     @property
     def image_ref(self) -> str:
