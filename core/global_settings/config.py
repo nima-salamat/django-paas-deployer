@@ -84,6 +84,10 @@ class SERVICE_STATUS_CHOICES(models.TextChoices):
 MIRROR_DOCKER = "docker.arvancloud.ir"
 MIRROR_PYTHON = "https://mirror-pypi.runflare.com/simple"
 MIRROR_COMPOSER = "https://package-mirror.liara.ir/repository/composer/"
+# Fill this with your preferred npm registry mirror (e.g. a national/cnpm mirror).
+# Empty string keeps the public default (https://registry.npmjs.org).
+# Runtime also consults SystemSetting key ``mirror.npm`` via settings_service.
+MIRROR_NPM = "https://package-mirror.liara.ir/repository/npm/"
 
 DEFAULT_RUNTIME_VERSIONS = {
     "python_version": "3.11",
@@ -162,28 +166,23 @@ COPY --from={MIRROR_DOCKER}/composer:2 /usr/bin/composer /usr/bin/composer
 
 COPY . /var/www/html/
 
-RUN if [ ! -f composer.json ]; then \
-      found=$(find /var/www/html -maxdepth 3 -type f -name composer.json | head -n1 || true); \
-      if [ -n "$found" ]; then \
-        appdir=$(dirname "$found"); \
-        tmp=/tmp/laravel-root; rm -rf "$tmp"; mkdir -p "$tmp"; \
-        cp -a "$appdir"/. "$tmp"/; \
-        find /var/www/html -mindepth 1 -maxdepth 1 ! -name . -exec rm -rf {{}} +; \
-        cp -a "$tmp"/. /var/www/html/; \
-        rm -rf "$tmp"; \
-      fi; \
-    fi
-
-RUN if [ -n "{MIRROR_COMPOSER}" ]; then \
-      composer config -g repo.packagist composer {MIRROR_COMPOSER}; \
-      composer config -g secure-http false; \
-    fi \
+# The WHOLE archive stays in the image.  The renderer replaces
+# __LARAVEL_APP_ROOT__ with the detected Laravel directory (post-flatten),
+# so composer / artisan run inside the real app root even when the app
+# lives in a sub-directory next to a sibling frontend project.
+# --- Laravel template composer install (app-root aware) ---
+RUN cd __LARAVEL_APP_ROOT__\
     && test -f composer.json \
-    && ( composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader --no-scripts \
-         || composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader --no-scripts --ignore-platform-reqs ) \
+    && if [ -n "{MIRROR_COMPOSER}" ]; then \
+         composer config -g repo.packagist composer {MIRROR_COMPOSER}; \
+         composer config -g secure-http false; \
+       fi \
+    && ( composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader --no-scripts \
+         || composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader --no-scripts --ignore-platform-reqs ) \
     && test -f vendor/autoload.php
 
-RUN mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache \
+RUN cd __LARAVEL_APP_ROOT__\
+    && mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache \
     && php artisan package:discover --ansi || true \
     && php artisan config:clear || true \
     && php artisan view:clear || true \

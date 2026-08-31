@@ -198,25 +198,30 @@ def enrich_config_from_project(
     if not preferred and project_cfg.platform:
         updates["platform"] = project_cfg.platform
 
-    # Do NOT promote "npx serve …" into entry_point for SPA platforms that
-    # ship a multi-stage nginx image – that CMD cannot run without Node.
-    _SPA_NGINX_PLATFORMS = {
+    # Platforms whose detected ``start_command`` must NOT be promoted into
+    # ``entry_point`` because the renderer owns CMD/ENTRYPOINT:
+    #   * SPA nginx multi-stage images — CMD must stay nginx (no Node).
+    #   * PHP family — CMD is ``apache2-foreground`` and the bootstrap
+    #     ENTRYPOINT is injected by ``_render_php``.  Promoting the detected
+    #     start_command here made ``_render_php`` mistake it for a USER
+    #     entry_point override and return early, which silently skipped
+    #     composer install AND the Laravel frontend build injection.
+    _NO_ENTRYPOINT_PROMOTE = {
         "react", "vue", "vuejs", "angular", "vite", "static", "statichtmlcss",
+        "php", "laravel", "lumen", "symfony", "codeigniter",
     }
+    _effective_platform = (
+        (project_cfg.platform or config.platform or "")
+    ).lower()
     if (
         not config.entry_point
         and project_cfg.start_command
-        and (project_cfg.platform or config.platform or "").lower()
-        not in _SPA_NGINX_PLATFORMS
+        and _effective_platform not in _NO_ENTRYPOINT_PROMOTE
     ):
         updates["entry_point"] = project_cfg.start_command
-    elif (
-        not config.entry_point
-        and project_cfg.start_command
-        and (project_cfg.platform or config.platform or "").lower() in _SPA_NGINX_PLATFORMS
-    ):
+    else:
         # Still record detected start_command in sources for debugging, but
-        # leave entry_point empty so DockerfileGenerator keeps nginx CMD.
+        # leave entry_point empty so the renderer keeps its own CMD.
         pass
 
     if not config.server_type and project_cfg.server_type:

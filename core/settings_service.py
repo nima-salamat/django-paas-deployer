@@ -147,7 +147,17 @@ def mirror_python() -> str:
 
 
 def mirror_npm() -> str:
-    return get_str("mirror.npm", "https://registry.npmjs.org")
+    """Return the npm registry mirror.
+
+    Preference: SystemSetting ``mirror.npm`` → code-level ``MIRROR_NPM`` in
+    ``core.global_settings.config`` → public registry.
+    """
+    try:
+        from core.global_settings.config import MIRROR_NPM
+        code_default = (MIRROR_NPM or "").strip() or "https://registry.npmjs.org"
+    except Exception:
+        code_default = "https://registry.npmjs.org"
+    return get_str("mirror.npm", code_default)
 
 
 def mirror_apt() -> str:

@@ -18,7 +18,7 @@ from .project_model import (
     strip_archive_prefix,
 )
 
-from core.global_settings.config import MIRROR_DOCKER
+from core.global_settings.config import MIRROR_DOCKER, MIRROR_NPM
 
 # Security: validate user-supplied celery_app + entry_point overrides
 # before they reach supervisord command= lines (which are parsed by sh).
@@ -264,6 +264,46 @@ def _swap_npm_install(dockerfile: str, install_cmd: str) -> str:
         if re.search(pat, dockerfile):
             return re.sub(pat, f"RUN {install_cmd}", dockerfile, count=1)
     return dockerfile
+
+
+def _inject_npm_registry_into_dockerfile(
+    dockerfile: str,
+    *,
+    package_manager: str = "npm",
+    config=None,
+) -> str:
+    """
+    Ensure the first package-manager install step uses the configured npm
+    registry mirror (``MIRROR_NPM`` / SystemSetting ``mirror.npm``).
+
+    Prepends ``npm|pnpm|yarn config set registry <mirror>`` to the first
+    matching ``RUN … install`` line when the resolved registry differs from
+    the public default. Safe to call multiple times (idempotent).
+    """
+    if "config set registry" in dockerfile:
+        return dockerfile
+    registry = _resolve_frontend_npm_registry(config)
+    line = _registry_config_line(package_manager or "npm", registry)
+    if not line:
+        return dockerfile
+
+    # Match common install RUN forms used by global Node/SPA templates and
+    # the Laravel frontend injector.
+    install_re = re.compile(
+        r"^(RUN\s+)((?:corepack enable &&\s+)?"
+        r"(?:npm ci(?:\s+--omit=dev)?|npm install(?:\s+--omit=dev)?|"
+        r"pnpm install(?:\s+--frozen-lockfile)?|"
+        r"yarn install(?:\s+--frozen-lockfile)?|"
+        r"bun install)"
+        r"[^\n]*)$",
+        re.MULTILINE,
+    )
+
+    def _prepend(m: re.Match) -> str:
+        return f"{m.group(1)}{line} && {m.group(2)}"
+
+    new_df, n = install_re.subn(_prepend, dockerfile, count=1)
+    return new_df if n else dockerfile
 
 
 # ---------------------------------------------------------------------------
@@ -1056,6 +1096,12 @@ def _render_node_family(platform, dockerfile_template, tar_stream, config, logge
     elif build_cmd and re.search(r"^RUN\s+[^\n]*(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?build[^\n]*$", rendered, re.M):
         rendered = re.sub(r"^RUN\s+[^\n]*(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?build[^\n]*$", f"RUN {str(build_cmd).strip()}", rendered, count=1, flags=re.M)
 
+    # Point npm/pnpm/yarn at the operator-configured mirror (MIRROR_NPM /
+    # SystemSetting mirror.npm) before the first install step.
+    rendered = _inject_npm_registry_into_dockerfile(
+        rendered, package_manager=package_manager or "npm", config=config
+    )
+
     # Always correct SPA copy paths when the template is nginx multi-stage
     if _is_nginx_spa_template(rendered):
         before = rendered
@@ -1376,6 +1422,41 @@ def _apply_php_document_root(dockerfile: str, document_root_rel: str) -> str:
         dockerfile = dockerfile.replace("\\ \\ \\", "\\")
     return dockerfile
 
+
+
+def _php_app_root(doc_root_rel: str) -> str:
+    """
+    Container path of the PHP application root (where composer.json /
+    artisan live), derived from the DocumentRoot.
+
+    ``"public"`` or ``"backend/public"`` → ``/var/www/html`` resp.
+    ``/var/www/html/backend``; any other document root is used as-is.
+    """
+    rel = (doc_root_rel or "").replace("\\", "/").strip().strip("/")
+    if not rel:
+        return "/var/www/html"
+    if rel == "public" or rel.endswith("/public"):
+        parent = rel[: -len("/public")].rstrip("/") if rel.endswith("/public") else ""
+        return f"/var/www/html/{parent}" if parent else "/var/www/html"
+    return f"/var/www/html/{rel}"
+
+
+# Old laravel template hoist: when composer.json was not at /var/www/html it
+# deleted EVERYTHING else in the build context (including sibling frontend
+# projects) and moved the composer directory up.  App-root-aware rendering
+# replaced it; strip it defensively from stale templates.
+_DESTRUCTIVE_HOIST_RE = re.compile(
+    r"RUN if \[ ! -f composer\.json \]; then \\\n"
+    r"(?:[^\n]*\\\n)*?[^\n]*rm -rf \"\$tmp\"; \\\n"
+    r"\s*fi; \\\n"
+    r"\s*fi\n"
+)
+
+
+def _strip_destructive_hoist(dockerfile: str) -> str:
+    if "rm -rf" not in dockerfile or "composer.json" not in dockerfile:
+        return dockerfile
+    return _DESTRUCTIVE_HOIST_RE.sub("", dockerfile, count=1)
 
 
 _PHP_EXT_PACKAGE_MAP = {
@@ -2049,6 +2130,11 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
             entry_point_override = None
 
     rendered = dockerfile_template.replace("{MIRROR_DOCKER}", MIRROR_DOCKER)
+    # Defensively strip the old destructive "hoist" block from stale Laravel
+    # templates. When composer.json was not at the image root it used to
+    # `rm -rf` everything else (including sibling frontend trees) and move
+    # the composer directory up. App-root-aware rendering replaced it.
+    rendered = _strip_destructive_hoist(rendered)
 
     user_doc_root = None
     project_cfg = None
@@ -2110,9 +2196,12 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
             },
         )
 
-    if entry_point_override:
-        rendered = _apply_php_document_root(rendered, doc_root_rel)
-        return _replace_cmd(rendered, entry_point_override)
+    # Do NOT early-return on entry_point_override.  Previously any non-empty
+    # config.entry_point (including the auto-promoted detected start_command
+    # "apache2-foreground") caused an early return that skipped
+    # _inject_php_runtime (composer bootstrap / migrate ENTRYPOINT) and
+    # _inject_laravel_frontend_build.  Always run the full injection pipeline
+    # and apply a user/detected CMD override only at the end.
 
     if "docker-php-ext-install" not in rendered:
         rendered = rendered.replace(
@@ -2201,6 +2290,11 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
             config=config,
             logger=logger,
         )
+
+    # Apply user/detected entry_point only after all injections so that
+    # composer bootstrap and Laravel frontend build are never skipped.
+    if entry_point_override:
+        rendered = _replace_cmd(rendered, entry_point_override)
     return rendered
 
 
@@ -2325,18 +2419,18 @@ _DEFAULT_NPM_REGISTRY = "https://registry.npmjs.org"
 
 
 def _resolve_frontend_npm_registry(config) -> str:
-    """Return the npm registry mirror to use for the frontend build.
+    """Return the npm registry mirror to use for any npm/pnpm/yarn install.
 
     Resolution order (first non-empty wins):
       1. ``config.frontend.npm_registry``  (tenant override in Deploy.config)
-      2. ``config.environment.MIRROR_NPM``  (operator env-style override)
-      3. The global ``mirror.npm`` SystemSetting, read via ``core.settings_service``
-         (defaults to ``https://registry.npmjs.org``).
+      2. ``config.environment.MIRROR_NPM`` / ``NPM_REGISTRY``
+      3. The global ``mirror.npm`` SystemSetting via ``core.settings_service``
+      4. Code-level ``MIRROR_NPM`` constant in ``core.global_settings.config``
+         (operator fills this; empty keeps the public default)
 
-    The returned value is always a string. An empty string means "use the
-    package manager's built-in default" — we still emit a `* config set
-    registry` line for npm/pnpm/yarn when it differs from the public default
-    so users behind a mirror (e.g. cnpm / ir npm) can install packages.
+    The returned value is always a string. When it differs from the public
+    default we emit a ``* config set registry`` line so installs work behind
+    regional mirrors (cnpm, ir npm, …).
     """
     candidate = ""
     if config is not None:
@@ -2353,6 +2447,9 @@ def _resolve_frontend_npm_registry(config) -> str:
             candidate = (svc.mirror_npm() or "").strip()
         except Exception:
             candidate = ""
+    if not candidate:
+        # Code-level fallback from global_settings.config (operator-filled)
+        candidate = (MIRROR_NPM or "").strip()
     # Fall back to the public default so the Dockerfile line is always valid.
     return candidate or _DEFAULT_NPM_REGISTRY
 
