@@ -63,8 +63,8 @@ class LaravelPlatform(PHPPlatform):
             result.setdefault("extra", {})
             result["extra"]["frontend"] = frontend
             result["front_build_platform"] = frontend.get("kind") or ""
-            if frontend.get("build_script"):
-                result["build_command"] = f"npm run {frontend['build_script']}"
+            if frontend.get("build_command"):
+                result["build_command"] = frontend["build_command"]
 
         return result
 
@@ -107,13 +107,15 @@ class LaravelPlatform(PHPPlatform):
         if best is None:
             return {}
 
+        pm = best["package_manager"]
         return {
             "kind": best["kind"],
             "build_script": best["build_script"],
             "has_package_json": True,
-            "package_manager": best["package_manager"],
+            "package_manager": pm,
             "package_json_path": best["path"],
             "frontend_root": best["root"] or ".",
+            "build_command": f"{pm} run {best['build_script']}",
         }
 
     def _dir_hint(self, file_index: dict[str, str]) -> set[str]:

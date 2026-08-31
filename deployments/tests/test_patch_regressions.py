@@ -502,6 +502,89 @@ class _RecordingLogger:
         })
 
 
+class LaravelDockerfileRootRegressionTests(unittest.TestCase):
+    def setUp(self):
+        self.d = load_dockerfile_module()
+        sys.modules["core.settings_service"]._npm_registry = "https://package-mirror.liara.ir/repository/npm/"
+
+    def _config(self, **overrides):
+        class Config:
+            environment = overrides.get("environment", {})
+            frontend = overrides.get("frontend", {})
+            package_manager = overrides.get("package_manager", None)
+            install_command = overrides.get("install_command", None)
+            build_command = overrides.get("build_command", None)
+            runtime_version = overrides.get("runtime_version", None)
+            build_options = overrides.get("build_options", {})
+            document_root = overrides.get("document_root", None)
+            php_version = overrides.get("php_version", None)
+            server_type = None
+            entry_point = None
+            celery = False
+            celery_beat = False
+            worker_count = 1
+            port = 80
+            project_model = None
+            platform = "laravel"
+        return Config()
+
+    def _tar(self):
+        return make_tar({
+            "composer.json": '{"require":{"php":"^8.4","laravel/framework":"^13.0"}}',
+            "artisan": "<?php",
+            "public/index.php": "<?php",
+            "package.json": '{"scripts":{"dev":"vite","build":"vite build"},"devDependencies":{"vite":"^8.0.16","laravel-vite-plugin":"^3.0.0"}}',
+            "package-lock.json": "{}",
+            "yarn.lock": "# yarn lockfile",
+            "vite.config.js": "export default {}",
+        })
+
+    def _template(self):
+        return """FROM mirror.test/php:8.4-apache
+ENV APACHE_DOCUMENT_ROOT=/var/www/html/public
+WORKDIR /var/www/html
+COPY . /var/www/html/
+# --- Laravel template composer install (app-root aware) ---
+RUN cd __LARAVEL_APP_ROOT__\\
+    && test -f composer.json \\
+    && if [ -n "https://package-mirror.liara.ir/repository/composer/" ]; then \\
+         composer config -g repo.packagist composer https://package-mirror.liara.ir/repository/composer/; \\
+         composer config -g secure-http false; \\
+       fi \\
+    && composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader --no-scripts \\
+    && test -f vendor/autoload.php
+
+RUN cd __LARAVEL_APP_ROOT__\\
+    && mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache \\
+    && php artisan package:discover --ansi || true \\
+    && echo "Laravel composer install OK"
+
+EXPOSE 80
+CMD ["apache2-foreground"]
+"""
+
+    def test_no_unresolved_laravel_root_and_frontend_is_built(self):
+        out = self.d._render_php(self._template(), self._tar(), self._config(), None)
+        self.assertNotIn("__LARAVEL_APP_ROOT__", out)
+        self.assertIn("# --- Laravel frontend build (injected) ---", out)
+        self.assertIn("# front_build_platform=vite", out)
+        self.assertIn("npm config set registry https://package-mirror.liara.ir/repository/npm/", out)
+        self.assertIn("npm ci", out)
+        self.assertIn("npm run build", out)
+        self.assertNotIn("# --- Laravel template composer install (app-root aware) ---", out)
+
+    def test_frontend_is_auto_detected_without_frontend_config(self):
+        out = self.d._inject_laravel_frontend_build(
+            "FROM mirror.test/php:8.4-apache\nCOPY . /var/www/html/\nEXPOSE 80\n",
+            tar_stream=self._tar(),
+            config=self._config(frontend={}),
+            logger=None,
+        )
+        self.assertIn("# front_build_platform=vite", out)
+        self.assertIn("npm ci", out)
+        self.assertIn("npm run build", out)
+
+
 class LaravelFrontendDetectionAuditTests(unittest.TestCase):
     def setUp(self):
         self.d = load_dockerfile_module()

@@ -452,16 +452,35 @@ def _safe_read_file(read_file, name):
 
 
 def package_manager_for(pkg: dict, local_files: "set[str]") -> str:
-    """Resolve the package manager from the *same directory* as package.json."""
-    if "pnpm-lock.yaml" in local_files:
-        return "pnpm"
-    if "yarn.lock" in local_files:
-        return "yarn"
-    if "bun.lockb" in local_files or "bun.lock" in local_files:
-        return "bun"
+    """Resolve the package manager from the *same directory* as package.json.
+
+    An explicit ``packageManager`` field is authoritative. When it is absent,
+    prefer a single lockfile; when multiple lockfiles exist, npm's
+    package-lock is the safest deterministic default for Laravel/Vite apps
+    unless pnpm/yarn/bun is explicitly declared.
+    """
     pm_field = str(pkg.get("packageManager") or "").split("@", 1)[0].strip().lower()
     if pm_field in {"npm", "pnpm", "yarn", "bun"}:
         return pm_field
+
+    lock_managers = []
+    if "package-lock.json" in local_files:
+        lock_managers.append("npm")
+    if "pnpm-lock.yaml" in local_files:
+        lock_managers.append("pnpm")
+    if "yarn.lock" in local_files:
+        lock_managers.append("yarn")
+    if "bun.lockb" in local_files or "bun.lock" in local_files:
+        lock_managers.append("bun")
+
+    # One lockfile gives an unambiguous answer. With conflicting lockfiles,
+    # favor npm unless the project explicitly declares another manager.
+    if len(lock_managers) == 1:
+        return lock_managers[0]
+    if "npm" in lock_managers:
+        return "npm"
+    if lock_managers:
+        return lock_managers[0]
     return "npm"
 
 

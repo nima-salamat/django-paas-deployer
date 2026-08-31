@@ -31,7 +31,7 @@ DEFAULTS: list[dict] = [
     },
     {
         "key": "mirror.npm",
-        "default": "https://registry.npmjs.org",
+        "default": "https://package-mirror.liara.ir/repository/npm/",
         "value_type": "string",
         "category": "mirrors",
         "label": "npm registry",

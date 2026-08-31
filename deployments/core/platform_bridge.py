@@ -299,6 +299,39 @@ def enrich_config_from_project(
             pm_updates["build_root"] = front.root or "."
             if front.build_output:
                 pm_updates["build_output"] = front.build_output
+            if logger_sink:
+                try:
+                    logger_sink.info(
+                        "frontend_detection",
+                        f"Auto-detected frontend kind='{front.kind}', "
+                        f"package_manager='{front.package_manager or 'npm'}', "
+                        f"build_script='{front.build_script or 'build'}', "
+                        f"root='{front.root or '.'}', "
+                        f"output='{front.build_output or ''}'.",
+                        progress=13,
+                        details={
+                            "kind": front.kind,
+                            "package_manager": front.package_manager or "npm",
+                            "build_script": front.build_script or "build",
+                            "frontend_root": front.root or ".",
+                            "build_output": front.build_output,
+                            "package_json_path": (front.evidence or {}).get("package_json_path"),
+                            "detected_files": list((front.evidence or {}).get("detected_files") or []),
+                            "source": "project_model",
+                        },
+                    )
+                except Exception:
+                    pass
+        elif logger_sink:
+            try:
+                logger_sink.info(
+                    "frontend_detection",
+                    "Auto-detection found no frontend project (no usable package.json candidate).",
+                    progress=13,
+                    details={"source": "project_model", "reason": "no_frontend"},
+                )
+            except Exception:
+                pass
         updates.update(pm_updates)
     except Exception as exc:
         logger.warning(

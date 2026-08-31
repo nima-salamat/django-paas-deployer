@@ -147,17 +147,32 @@ def mirror_python() -> str:
 
 
 def mirror_npm() -> str:
-    """Return the npm registry mirror.
+    """Return the effective npm registry mirror.
 
-    Preference: SystemSetting ``mirror.npm`` → code-level ``MIRROR_NPM`` in
-    ``core.global_settings.config`` → public registry.
+    ``MIRROR_NPM`` is the operator's deployment-wide default. Older databases
+    may contain a seeded ``mirror.npm`` row whose value is the historical
+    public registry. That historical value must not silently override the
+    operator default. A non-public SystemSetting value remains an explicit
+    runtime override.
     """
+    public_default = "https://registry.npmjs.org"
     try:
         from core.global_settings.config import MIRROR_NPM
-        code_default = (MIRROR_NPM or "").strip() or "https://registry.npmjs.org"
+        code_default = (MIRROR_NPM or "").strip() or public_default
     except Exception:
-        code_default = "https://registry.npmjs.org"
-    return get_str("mirror.npm", code_default)
+        code_default = public_default
+
+    try:
+        from core.models import SystemSetting
+        row = SystemSetting.objects.filter(key="mirror.npm").first()
+        if row is not None:
+            value = str(row.cast_value() or "").strip()
+            if value and value != public_default:
+                return value
+    except (OperationalError, ProgrammingError, ImportError):
+        pass
+
+    return code_default
 
 
 def mirror_apt() -> str:

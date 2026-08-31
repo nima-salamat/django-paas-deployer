@@ -18,7 +18,7 @@ from .project_model import (
     strip_archive_prefix,
 )
 
-from core.global_settings.config import MIRROR_DOCKER, MIRROR_NPM
+from core.global_settings.config import MIRROR_DOCKER
 
 # Security: validate user-supplied celery_app + entry_point overrides
 # before they reach supervisord command= lines (which are parsed by sh).
@@ -2011,12 +2011,26 @@ def _inject_php_runtime(
             composer_block += (
                 f"COPY --from={MIRROR_DOCKER}/composer:2 /usr/bin/composer /usr/bin/composer\n"
             )
+        composer_mirror = _resolve_composer_mirror()
+        mirror_setup = ""
+        if composer_mirror:
+            if not re.match(r"^https?://[^\s'\"`;&|<>]+/?$", composer_mirror):
+                raise DeploymentValidationError(
+                    f"Invalid Composer mirror URL: {composer_mirror!r}",
+                    stage="dockerfile_generation",
+                    details={"mirror": composer_mirror},
+                )
+            mirror_setup = (
+                f"    && composer config -g repo.packagist composer {composer_mirror} \\\n"
+                "    && composer config -g secure-http false \\\n"
+            )
         composer_block += (
             f"RUN cd {app_root} \\\n"
             "    && if [ ! -f composer.json ]; then \\\n"
             "         echo 'ERROR: composer.json not found in app root' >&2; exit 1; \\\n"
             "       fi \\\n"
-            "    && COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_MEMORY_LIMIT=-1 \\\n"
+            + mirror_setup
+            + "    && COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_MEMORY_LIMIT=-1 \\\n"
             "       composer install \\\n"
             "         --no-dev \\\n"
             "         --prefer-dist \\\n"
@@ -2111,6 +2125,68 @@ def _inject_php_runtime(
             },
         )
     return dockerfile
+
+def _php_app_root_from_document_root(document_root_rel: str) -> str:
+    """Return the application directory for a PHP/Laravel public document root."""
+    rel = (document_root_rel or "").replace("\\", "/").strip().strip("/")
+    if rel in {"", "."}:
+        return "/var/www/html"
+    if rel == "public":
+        return "/var/www/html"
+    if rel.endswith("/public"):
+        parent = rel[:-7].rstrip("/")
+        return f"/var/www/html/{parent}" if parent else "/var/www/html"
+    return f"/var/www/html/{rel}"
+
+
+def _resolve_composer_mirror(config=None) -> str:
+    """Resolve Composer mirror: deploy env override -> SystemSetting -> code default."""
+    candidate = ""
+    if config is not None:
+        env = getattr(config, "environment", None) or {}
+        if isinstance(env, dict):
+            candidate = str(env.get("MIRROR_COMPOSER") or "").strip()
+    if not candidate:
+        try:
+            from core import settings_service as svc
+            candidate = str(svc.mirror_composer() or "").strip()
+        except Exception:
+            candidate = ""
+    if candidate:
+        return candidate
+    try:
+        from core.global_settings.config import MIRROR_COMPOSER
+        return str(MIRROR_COMPOSER or "").strip()
+    except Exception:
+        return ""
+
+
+def _strip_laravel_template_bootstrap(dockerfile: str) -> str:
+    """
+    Remove legacy Laravel template composer/bootstrap RUN blocks.
+
+    The old template used the unresolved ``__LARAVEL_APP_ROOT__`` token and
+    could fail before the canonical runtime injector ran.
+    """
+    dockerfile = re.sub(
+        r"\n?# --- Laravel template composer install \(app-root aware\) ---\n"
+        r"RUN cd __LARAVEL_APP_ROOT__\\\n"
+        r"[\s\S]*?"
+        r"&& test -f vendor/autoload\.php\n?",
+        "\n",
+        dockerfile,
+        count=1,
+    )
+    dockerfile = re.sub(
+        r"\n?RUN cd __LARAVEL_APP_ROOT__\\\n"
+        r"[\s\S]*?"
+        r"&& echo \"Laravel composer install OK\"\n?",
+        "\n",
+        dockerfile,
+        count=1,
+    )
+    return dockerfile
+
 
 def _render_php(dockerfile_template, tar_stream, config, logger):
     entry_point_override = None
@@ -2214,6 +2290,14 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
         )
 
     rendered = _apply_php_document_root(rendered, doc_root_rel)
+
+    # Remove stale Laravel template blocks before injecting the canonical,
+    # app-root-aware Composer bootstrap. This eliminates unresolved
+    # __LARAVEL_APP_ROOT__ tokens from the generated Dockerfile.
+    rendered = _strip_laravel_template_bootstrap(rendered)
+    rendered = rendered.replace(
+        "__LARAVEL_APP_ROOT__", _php_app_root_from_document_root(doc_root_rel)
+    )
 
     # Detect Laravel / schema.sql and inject composer + migrate entrypoint.
     php_info = _detect_php_project(tar_stream)
@@ -2448,8 +2532,12 @@ def _resolve_frontend_npm_registry(config) -> str:
         except Exception:
             candidate = ""
     if not candidate:
-        # Code-level fallback from global_settings.config (operator-filled)
-        candidate = (MIRROR_NPM or "").strip()
+        # Code-level fallback from global_settings.config (operator-filled).
+        try:
+            from core.global_settings.config import MIRROR_NPM
+            candidate = (MIRROR_NPM or "").strip()
+        except Exception:
+            candidate = ""
     # Fall back to the public default so the Dockerfile line is always valid.
     return candidate or _DEFAULT_NPM_REGISTRY
 
@@ -2647,6 +2735,12 @@ def _inject_laravel_frontend_build(
     # restricted-network regions without the user having to fork the
     # Dockerfile template.
     npm_registry = _resolve_frontend_npm_registry(config)
+    if npm_registry and not re.match(r"^https?://[^\s'\"`;&|<>]+/?$", npm_registry):
+        raise DeploymentValidationError(
+            f"Invalid npm registry URL: {npm_registry!r}",
+            stage="frontend_detection",
+            details={"registry": npm_registry},
+        )
     registry_line = _registry_config_line(package_manager, npm_registry)
 
     install_lines = [
@@ -2816,5 +2910,12 @@ class DockerfileGenerator:
         if config is not None and getattr(config, "port", None) is not None:
             port = config.port
         rendered = _ensure_port_placeholder(rendered, port)
+        unresolved = re.findall(r"__[^\s]+__", rendered)
+        if unresolved:
+            raise DeploymentValidationError(
+                "Dockerfile contains unresolved deployer placeholders.",
+                stage="dockerfile_generation",
+                details={"placeholders": sorted(set(unresolved))},
+            )
         return rendered
 
