@@ -346,9 +346,9 @@ CMD ["nginx", "-g", "daemon off;"]
 FROM {MIRROR_DOCKER}/node:{node_version}-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci || npm install
+__DEPLOY_INSTALL_COMMAND__
 COPY . .
-RUN npm run build
+__DEPLOY_BUILD_COMMAND__
 FROM {MIRROR_DOCKER}/nginx:{nginx_version}
 COPY --from=builder /app/{build_dir} /usr/share/nginx/html
 EXPOSE {port}

@@ -449,6 +449,7 @@ class DeployService:
             install_command=install_command,
             build_command=build_command,
             start_command=cfg.get("start_command"),
+            frontend=dict(cfg.get("frontend") or {}),
         )
         if celery_app:
             try:

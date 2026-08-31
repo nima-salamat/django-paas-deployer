@@ -211,6 +211,16 @@ def _detect_node_package_manager_from_tar(tar_stream) -> str:
     return "npm"
 
 
+def _default_node_install_command(package_manager: str) -> str:
+    """Return a safe default install command for a Node project."""
+    return {
+        "npm": "npm ci || npm install",
+        "pnpm": "corepack enable && pnpm install --frozen-lockfile || pnpm install",
+        "yarn": "corepack enable && yarn install --frozen-lockfile || yarn install",
+        "bun": "npm install -g bun && bun install",
+    }.get((package_manager or "npm").lower().strip(), "npm ci || npm install")
+
+
 def _prepare_node_package_manager(dockerfile: str, package_manager: str) -> str:
     """Make non-npm package managers and their lockfiles available before install."""
     pm = (package_manager or "npm").lower()
@@ -1020,12 +1030,25 @@ def _render_node_family(platform, dockerfile_template, tar_stream, config, logge
     package_manager = (getattr(config, "package_manager", None) if config else None) or (getattr(project_cfg, "package_manager", None) if project_cfg else None) or _detect_node_package_manager_from_tar(tar_stream)
     rendered = _prepare_node_package_manager(rendered, package_manager)
     install_cmd = (getattr(config, "install_command", None) if config else None) or (getattr(project_cfg, "install_command", None) if project_cfg else None)
-    if install_cmd:
+    build_cmd = (getattr(config, "build_command", None) if config else None) or (getattr(project_cfg, "build_command", None) if project_cfg else None)
+
+    # Global Node/React templates use deployment-time tokens. Commands are
+    # resolved only after project detection, so React/Vite/CRA do not depend
+    # on a hard-coded global `npm run build`.
+    if "__DEPLOY_INSTALL_COMMAND__" in rendered:
+        rendered = rendered.replace(
+            "__DEPLOY_INSTALL_COMMAND__",
+            f"RUN {str(install_cmd or _default_node_install_command(package_manager)).strip()}",
+        )
+    elif install_cmd:
         rendered = _swap_npm_install(rendered, str(install_cmd))
 
-    # Explicit build command wins over detector/template defaults.
-    build_cmd = (getattr(config, "build_command", None) if config else None) or (getattr(project_cfg, "build_command", None) if project_cfg else None)
-    if build_cmd and re.search(r"^RUN\s+[^\n]*(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?build[^\n]*$", rendered, re.M):
+    if "__DEPLOY_BUILD_COMMAND__" in rendered:
+        rendered = rendered.replace(
+            "__DEPLOY_BUILD_COMMAND__",
+            f"RUN {str(build_cmd or f'{package_manager} run build').strip()}",
+        )
+    elif build_cmd and re.search(r"^RUN\s+[^\n]*(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?build[^\n]*$", rendered, re.M):
         rendered = re.sub(r"^RUN\s+[^\n]*(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?build[^\n]*$", f"RUN {str(build_cmd).strip()}", rendered, count=1, flags=re.M)
 
     # Always correct SPA copy paths when the template is nginx multi-stage
@@ -2181,82 +2204,104 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
 
 
 def _detect_laravel_frontend(tar_stream) -> dict:
-    """
-    Inspect archive for package.json + vite/react/mix/inertia tooling.
-    Returns {kind: 'vite'|'react'|'mix'|'node'|'', has_package_json, build_script}.
+    """Detect Laravel's optional Node/Vite/React frontend from a TAR BytesIO."""
+    info = {
+        "kind": "",
+        "has_package_json": False,
+        "build_script": "build",
+        "package_manager": "npm",
+    }
+    if tar_stream is None:
+        return info
 
-    Looks up to depth 4 so monorepo / nested layouts are still detected.
-    User-supplied front_build_platform always wins over this detection.
-    """
-    info = {"kind": "", "has_package_json": False, "build_script": "build"}
+    import json as _json
+    import tarfile as _tf
+
     try:
         tar_stream.seek(0)
-        names = []
-        pkg_text = None
-        for m in tar_stream.getmembers():
-            n = (m.name or "").lstrip("./")
-            if not n or n.endswith("/"):
-                continue
-            base = n.split("/")[-1]
-            depth = n.count("/")
-            if depth > 4:
-                continue
-            names.append(base.lower())
-            # Prefer shallowest package.json
-            if base.lower() == "package.json" and m.isfile():
-                if pkg_text is None or depth < 2:
-                    f = tar_stream.extractfile(m)
-                    if f:
-                        pkg_text = f.read().decode("utf-8", "ignore")
-        tar_stream.seek(0)
-        if not pkg_text:
-            return info
-        info["has_package_json"] = True
-        import json as _json
-        try:
-            pkg = _json.loads(pkg_text)
-        except Exception:
-            pkg = {}
-        deps = {}
-        for k in ("dependencies", "devDependencies"):
-            if isinstance(pkg.get(k), dict):
-                deps.update(pkg[k])
-        scripts = pkg.get("scripts") or {}
-        if not isinstance(scripts, dict):
-            scripts = {}
-        for candidate in ("build", "prod", "production", "build:prod", "build:ssr"):
-            if candidate in scripts:
-                info["build_script"] = candidate
-                break
-        name_set = set(names)
-        if (
-            "vite.config.js" in name_set
-            or "vite.config.ts" in name_set
-            or "vite.config.mjs" in name_set
-            or "vite" in deps
-            or "@vitejs/plugin-react" in deps
-            or "@vitejs/plugin-vue" in deps
-            or "laravel-vite-plugin" in deps
-        ):
-            info["kind"] = "vite"
-        elif "react-scripts" in deps:
-            info["kind"] = "react"
-        elif "laravel-mix" in deps or "webpack.mix.js" in name_set:
-            info["kind"] = "mix"
-        elif "next" in deps:
-            info["kind"] = "nextjs"
-        elif "nuxt" in deps or "nuxt3" in deps:
-            info["kind"] = "nuxt"
-        elif (
-            "react" in deps
-            or "vue" in deps
-            or "@inertiajs/react" in deps
-            or "@inertiajs/vue3" in deps
-        ):
-            info["kind"] = "node"
-        elif "build" in scripts:
-            info["kind"] = "node"
+        with _tf.open(fileobj=tar_stream, mode="r:*") as tar:
+            members = tar.getmembers()
+            names: list[str] = []
+            package_member = None
+            package_depth = 999
+
+            for member in members:
+                n = (member.name or "").replace("\\", "/").lstrip("./")
+                if not n or n.endswith("/"):
+                    continue
+                depth = n.count("/")
+                if depth > 4:
+                    continue
+                base = n.rsplit("/", 1)[-1].lower()
+                names.append(base)
+                if base == "package.json" and member.isfile() and depth < package_depth:
+                    package_member = member
+                    package_depth = depth
+
+            if package_member is None:
+                return info
+
+            f = tar.extractfile(package_member)
+            if f is None:
+                return info
+            pkg_text = f.read().decode("utf-8", "ignore")
+            info["has_package_json"] = True
+
+            if "pnpm-lock.yaml" in names:
+                info["package_manager"] = "pnpm"
+            elif "yarn.lock" in names:
+                info["package_manager"] = "yarn"
+            elif "bun.lockb" in names or "bun.lock" in names:
+                info["package_manager"] = "bun"
+
+            try:
+                pkg = _json.loads(pkg_text)
+            except Exception:
+                pkg = {}
+
+            pm_field = str(pkg.get("packageManager") or "").split("@", 1)[0].lower()
+            if pm_field in {"npm", "pnpm", "yarn", "bun"} and info["package_manager"] == "npm":
+                info["package_manager"] = pm_field
+
+            deps: dict[str, str] = {}
+            for key in ("dependencies", "devDependencies"):
+                if isinstance(pkg.get(key), dict):
+                    deps.update(pkg[key])
+            scripts = pkg.get("scripts") or {}
+            if not isinstance(scripts, dict):
+                scripts = {}
+
+            for candidate in ("build", "prod", "production", "build:prod", "build:ssr"):
+                if candidate in scripts:
+                    info["build_script"] = candidate
+                    break
+
+            name_set = set(names)
+            if (
+                "vite.config.js" in name_set
+                or "vite.config.ts" in name_set
+                or "vite.config.mjs" in name_set
+                or "vite" in deps
+                or "laravel-vite-plugin" in deps
+                or "@vitejs/plugin-react" in deps
+                or "@vitejs/plugin-vue" in deps
+            ):
+                info["kind"] = "vite"
+            elif "react-scripts" in deps:
+                info["kind"] = "react"
+            elif "laravel-mix" in deps or "webpack.mix.js" in name_set:
+                info["kind"] = "mix"
+            elif "next" in deps:
+                info["kind"] = "nextjs"
+            elif "nuxt" in deps or "nuxt3" in deps:
+                info["kind"] = "nuxt"
+            elif "react" in deps or "vue" in deps or "@inertiajs/react" in deps or "@inertiajs/vue3" in deps:
+                info["kind"] = "node"
+            elif "build" in scripts:
+                info["kind"] = "node"
     except Exception:
+        return info
+    finally:
         try:
             tar_stream.seek(0)
         except Exception:
@@ -2283,14 +2328,15 @@ def _inject_laravel_frontend_build(
     build_command = None
     install_command = None
     if config is not None:
+        frontend_options = getattr(config, "frontend", None) or {}
+        frontend_options = dict(frontend_options) if isinstance(frontend_options, dict) else {}
         env = getattr(config, "environment", None) or {}
         if isinstance(env, dict):
             front = env.get("FRONT_BUILD_PLATFORM") or env.get("FRONTEND_BUILD") or ""
-        front = front or getattr(config, "front_build_platform", None) or ""
-        package_manager = getattr(config, "package_manager", None) or package_manager
-        opts = getattr(config, "build_options", None) or {}
-        build_command = opts.get("build_command") or getattr(config, "build_command", None)
-        install_command = opts.get("install_command") or getattr(config, "install_command", None)
+        front = front or frontend_options.get("platform") or frontend_options.get("kind") or getattr(config, "front_build_platform", None) or ""
+        package_manager = str(frontend_options.get("package_manager") or "").strip().lower()
+        build_command = frontend_options.get("build_command") or frontend_options.get("command")
+        install_command = frontend_options.get("install_command")
 
     detected = _detect_laravel_frontend(tar_stream)
     kind = str(front or detected.get("kind") or "").strip().lower()
@@ -2301,13 +2347,14 @@ def _inject_laravel_frontend_build(
     package_manager = str(package_manager or detected.get("package_manager") or "npm").lower()
 
     script = detected.get("build_script") or "build"
-    default_install_commands = {
-        "npm": "npm ci",
+    member_names = _php_member_names(tar_stream)
+    has_npm_lock = any(str(n).replace("\\", "/").lstrip("./").endswith("package-lock.json") for n in member_names)
+    generated_install_command = {
+        "npm": "npm ci" if has_npm_lock else "npm install",
         "pnpm": "corepack enable && pnpm install --frozen-lockfile",
-        "yarn": "corepack enable && yarn install --immutable",
-        "bun": "npm install -g bun && bun install --frozen-lockfile",
-    }
-    generated_install_command = default_install_commands.get(package_manager, "npm ci")
+        "yarn": "corepack enable && yarn install --frozen-lockfile",
+        "bun": "npm install -g bun && bun install",
+    }.get(package_manager, "npm install")
     install_command = str(install_command or generated_install_command).strip()
     generated_build_command = f"{package_manager} run {script}"
     build_command = str(build_command or generated_build_command).strip()

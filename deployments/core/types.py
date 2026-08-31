@@ -46,6 +46,9 @@ class DeploymentConfig:
     install_command: Optional[str] = None
     build_command: Optional[str] = None
     start_command: Optional[str] = None
+    # Frontend-specific settings for full-stack PHP/Laravel services.
+    # Kept separate from the backend Composer install command.
+    frontend: dict[str, Any] = field(default_factory=dict)
     static_dir: Optional[str] = None
     media_dir: Optional[str] = None
     # --- new fields ---------------------------------------------------------

@@ -15,8 +15,11 @@ def normalize_profile(raw: Any, *, plan_cpu=None, plan_ram_mb=None) -> dict[str,
     runtime = dict(cfg.get("runtime_options") or cfg.get("runtime") or {})
     frontend = cfg.get("frontend")
     if isinstance(frontend, dict):
+        frontend = dict(frontend)
         for key, value in frontend.items():
             build.setdefault(key, value)
+    else:
+        frontend = {}
 
     # Backward-compatible aliases.
     aliases = {
@@ -43,6 +46,7 @@ def normalize_profile(raw: Any, *, plan_cpu=None, plan_ram_mb=None) -> dict[str,
     out["resource_limits"] = resources
     out["build_options"] = build
     out["runtime_options"] = runtime
+    out["frontend"] = frontend
     # Ignore user-supplied worker_count; the worker count is derived from the plan.
     out.pop("worker_count", None)
     if "celery" in out:
