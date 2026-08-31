@@ -2203,15 +2203,34 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
     return rendered
 
 
-def _detect_laravel_frontend(tar_stream) -> dict:
-    """Detect Laravel's optional Node/Vite/React frontend from a TAR BytesIO."""
-    info = {
+def _detect_laravel_frontend(tar_stream, *, logger=None, progress: int | None = None) -> dict:
+    """Detect Laravel's optional Node/Vite/React frontend from a TAR BytesIO.
+
+    When a ``logger`` is supplied, the function emits a single
+    ``frontend_detection`` log line summarising what was found in the
+    archive — even when no frontend was detected. This makes the deploy
+    log auditable: the user can verify the platform inspected the zip
+    for a ``package.json``, what kind of frontend was detected (vite /
+    react / mix / nextjs / nuxt / node / none) and which package manager
+    was chosen (npm / pnpm / yarn / bun).
+    """
+    info: dict = {
         "kind": "",
         "has_package_json": False,
         "build_script": "build",
         "package_manager": "npm",
+        "detected_files": [],
+        "package_json_path": None,
     }
     if tar_stream is None:
+        if logger is not None:
+            logger.info(
+                "frontend_detection",
+                "Laravel frontend detection skipped: no tar stream available.",
+                progress=progress,
+                details={"kind": "", "has_package_json": False,
+                         "package_manager": "npm", "reason": "no_tar_stream"},
+            )
         return info
 
     import json as _json
@@ -2238,11 +2257,62 @@ def _detect_laravel_frontend(tar_stream) -> dict:
                     package_member = member
                     package_depth = depth
 
+            # Collect the marker files that drive detection so the log
+            # clearly explains WHY a particular kind was chosen.
+            name_set = set(names)
+            markers = sorted({
+                "package.json" if "package.json" in name_set else None,
+                "package-lock.json" if "package-lock.json" in name_set else None,
+                "pnpm-lock.yaml" if "pnpm-lock.yaml" in name_set else None,
+                "yarn.lock" if "yarn.lock" in name_set else None,
+                "bun.lockb" if "bun.lockb" in name_set else None,
+                "bun.lock" if "bun.lock" in name_set else None,
+                "vite.config.js" if "vite.config.js" in name_set else None,
+                "vite.config.ts" if "vite.config.ts" in name_set else None,
+                "vite.config.mjs" if "vite.config.mjs" in name_set else None,
+                "webpack.mix.js" if "webpack.mix.js" in name_set else None,
+                "composer.json" if "composer.json" in name_set else None,
+                "artisan" if "artisan" in name_set else None,
+            } - {None})
+            info["detected_files"] = markers
+            info["package_json_path"] = (
+                package_member.name if package_member is not None else None
+            )
+
             if package_member is None:
+                if logger is not None:
+                    logger.info(
+                        "frontend_detection",
+                        "No package.json found in the Laravel archive; "
+                        "no frontend build step will be injected.",
+                        progress=progress,
+                        details={
+                            "kind": "",
+                            "has_package_json": False,
+                            "package_manager": "npm",
+                            "detected_files": markers,
+                            "reason": "no_package_json",
+                        },
+                    )
                 return info
 
             f = tar.extractfile(package_member)
             if f is None:
+                if logger is not None:
+                    logger.info(
+                        "frontend_detection",
+                        "package.json was found but could not be read; "
+                        "no frontend build step will be injected.",
+                        progress=progress,
+                        details={
+                            "kind": "",
+                            "has_package_json": True,
+                            "package_json_path": info["package_json_path"],
+                            "package_manager": "npm",
+                            "detected_files": markers,
+                            "reason": "unreadable_package_json",
+                        },
+                    )
                 return info
             pkg_text = f.read().decode("utf-8", "ignore")
             info["has_package_json"] = True
@@ -2276,7 +2346,6 @@ def _detect_laravel_frontend(tar_stream) -> dict:
                     info["build_script"] = candidate
                     break
 
-            name_set = set(names)
             if (
                 "vite.config.js" in name_set
                 or "vite.config.ts" in name_set
@@ -2299,7 +2368,52 @@ def _detect_laravel_frontend(tar_stream) -> dict:
                 info["kind"] = "node"
             elif "build" in scripts:
                 info["kind"] = "node"
-    except Exception:
+
+            # Emit a single info log line describing the detection result
+            # so the deploy log is auditable. Even when ``kind`` is empty
+            # (package.json present but no recognised frontend stack), the
+            # log makes it clear that detection was attempted.
+            if logger is not None:
+                kind_msg = (
+                    f"Detected Laravel frontend kind='{info['kind'] or 'none'}', "
+                    f"package_manager='{info['package_manager']}', "
+                    f"build_script='{info['build_script']}', "
+                    f"package_json='{info['package_json_path']}'."
+                )
+                logger.info(
+                    "frontend_detection",
+                    kind_msg,
+                    progress=progress,
+                    details={
+                        "kind": info["kind"],
+                        "has_package_json": True,
+                        "package_json_path": info["package_json_path"],
+                        "package_manager": info["package_manager"],
+                        "build_script": info["build_script"],
+                        "detected_files": markers,
+                        "scripts": sorted(scripts.keys()) if isinstance(scripts, dict) else [],
+                        "has_vite_config": any(
+                            f in name_set
+                            for f in ("vite.config.js", "vite.config.ts", "vite.config.mjs")
+                        ),
+                        "has_webpack_mix": "webpack.mix.js" in name_set or "laravel-mix" in deps,
+                        "has_lockfiles": {
+                            "package-lock": "package-lock.json" in name_set,
+                            "pnpm-lock": "pnpm-lock.yaml" in name_set,
+                            "yarn.lock": "yarn.lock" in name_set,
+                            "bun.lockb": "bun.lockb" in name_set,
+                            "bun.lock": "bun.lock" in name_set,
+                        },
+                    },
+                )
+    except Exception as exc:
+        if logger is not None:
+            logger.warning(
+                "frontend_detection",
+                f"Laravel frontend detection failed: {exc}",
+                progress=progress,
+                details={"reason": "exception", "exception": str(exc)},
+            )
         return info
     finally:
         try:
@@ -2399,24 +2513,78 @@ def _inject_laravel_frontend_build(
     package_manager = "npm"
     build_command = None
     install_command = None
+    frontend_source_kind = "auto"   # auto | user_override | env
+    frontend_source_pm = "auto"
     if config is not None:
         frontend_options = getattr(config, "frontend", None) or {}
         frontend_options = dict(frontend_options) if isinstance(frontend_options, dict) else {}
         env = getattr(config, "environment", None) or {}
         if isinstance(env, dict):
             front = env.get("FRONT_BUILD_PLATFORM") or env.get("FRONTEND_BUILD") or ""
-        front = front or frontend_options.get("platform") or frontend_options.get("kind") or getattr(config, "front_build_platform", None) or ""
-        package_manager = str(frontend_options.get("package_manager") or "").strip().lower()
+            if front:
+                frontend_source_kind = "env"
+        if not front:
+            front = (
+                frontend_options.get("platform")
+                or frontend_options.get("kind")
+                or getattr(config, "front_build_platform", None)
+                or ""
+            )
+            if front:
+                frontend_source_kind = "user_override"
+        # Package manager can be supplied as:
+        #   - config.frontend.package_manager  (newest, preferred)
+        #   - config.package_manager            (top-level convenience field)
+        pm_from_user = str(
+            frontend_options.get("package_manager")
+            or getattr(config, "package_manager", None)
+            or ""
+        ).strip().lower()
+        if pm_from_user:
+            package_manager = pm_from_user
+            frontend_source_pm = "user_override"
         build_command = frontend_options.get("build_command") or frontend_options.get("command")
         install_command = frontend_options.get("install_command")
 
-    detected = _detect_laravel_frontend(tar_stream)
+    detected = _detect_laravel_frontend(tar_stream, logger=logger, progress=15)
     kind = str(front or detected.get("kind") or "").strip().lower()
     if not kind and not detected.get("has_package_json"):
+        # Detection already logged its own "no package.json" line above.
         return dockerfile
     if not kind:
         kind = "node"
-    package_manager = str(package_manager or detected.get("package_manager") or "npm").lower()
+    # Only fall back to the detected package manager when the user did
+    # not explicitly provide one. This makes ``config.package_manager`` /
+    # ``config.frontend.package_manager`` an actual override (otherwise
+    # the detected value would silently win because of the OR chain).
+    if not package_manager or package_manager == "npm":
+        detected_pm = str(detected.get("package_manager") or "npm").lower()
+        if detected_pm and detected_pm != "npm":
+            package_manager = detected_pm
+            if frontend_source_pm == "auto":
+                frontend_source_pm = "auto_detected"
+    package_manager = (package_manager or "npm").lower()
+    if frontend_source_pm == "auto":
+        frontend_source_pm = "auto_default"
+
+    # Log which source was used for the kind + package_manager so the user
+    # can verify their config (if any) was honored, or that auto-detect
+    # took over when they did not supply one.
+    if logger is not None:
+        logger.info(
+            "frontend_resolution",
+            f"Using Laravel frontend kind='{kind}' (source={frontend_source_kind}), "
+            f"package_manager='{package_manager}' (source={frontend_source_pm}).",
+            progress=15,
+            details={
+                "kind": kind,
+                "kind_source": frontend_source_kind,
+                "package_manager": package_manager,
+                "package_manager_source": frontend_source_pm,
+                "user_supplied_build_command": bool(build_command),
+                "user_supplied_install_command": bool(install_command),
+            },
+        )
 
     script = detected.get("build_script") or "build"
     member_names = _php_member_names(tar_stream)
@@ -2488,16 +2656,43 @@ def _inject_laravel_frontend_build(
         dockerfile = dockerfile.rstrip() + "\n" + block
 
     if logger:
+        # Identify which source the npm registry mirror came from so the
+        # user can verify the operator-configured ``mirror.npm`` setting
+        # is taking effect (or that they overrode it per-deploy via
+        # ``config.frontend.npm_registry``).
+        registry_source = "default"
+        if config is not None:
+            frontend_options = getattr(config, "frontend", None) or {}
+            if isinstance(frontend_options, dict) and (
+                frontend_options.get("npm_registry")
+                or frontend_options.get("registry")
+            ):
+                registry_source = "user_override"
+            else:
+                env = getattr(config, "environment", None) or {}
+                if isinstance(env, dict) and (env.get("MIRROR_NPM") or env.get("NPM_REGISTRY")):
+                    registry_source = "env"
+                else:
+                    registry_source = "operator_setting" if registry_line else "default"
         logger.info(
             "dockerfile_generation",
-            f"Laravel frontend build configured (kind={kind}, package_manager={package_manager}).",
+            f"Laravel frontend build configured: kind='{kind}', "
+            f"package_manager='{package_manager}', "
+            f"npm_registry='{npm_registry}' (source={registry_source}), "
+            f"install='{install_command}', build='{build_command}'.",
             progress=15,
             details={
                 "front_build_platform": kind,
+                "kind_source": frontend_source_kind,
                 "package_manager": package_manager,
+                "package_manager_source": frontend_source_pm,
                 "npm_registry": npm_registry,
+                "npm_registry_source": registry_source,
+                "npm_registry_config_line": registry_line or "(no override)",
                 "install_command": install_command,
                 "build_command": build_command,
+                "detected_files": detected.get("detected_files", []),
+                "package_json_path": detected.get("package_json_path"),
             },
         )
     return dockerfile

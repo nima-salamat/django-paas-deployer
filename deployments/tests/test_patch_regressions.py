@@ -473,6 +473,192 @@ class LaravelFrontendNpmMirrorTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Issue 5 (auditability) — frontend detection + resolution emit log lines
+# ---------------------------------------------------------------------------
+
+
+class _RecordingLogger:
+    """Tiny test double matching DeploymentLogger.info/.warning signatures."""
+
+    def __init__(self):
+        self.entries: list[dict] = []
+
+    def info(self, stage, message, *, progress=None, details=None):
+        self.entries.append({
+            "level": "info", "stage": stage, "message": message,
+            "progress": progress, "details": details or {},
+        })
+
+    def warning(self, stage, message, *, progress=None, details=None):
+        self.entries.append({
+            "level": "warning", "stage": stage, "message": message,
+            "progress": progress, "details": details or {},
+        })
+
+    def error(self, stage, message, *, progress=None, details=None):
+        self.entries.append({
+            "level": "error", "stage": stage, "message": message,
+            "progress": progress, "details": details or {},
+        })
+
+
+class LaravelFrontendDetectionAuditTests(unittest.TestCase):
+    def setUp(self):
+        self.d = load_dockerfile_module()
+        sys.modules["core.settings_service"]._npm_registry = "https://registry.npmjs.org"
+
+    def _config(self, **overrides):
+        class Config:
+            environment = overrides.get("environment", {})
+            frontend = overrides.get("frontend", {})
+            package_manager = overrides.get("package_manager", "npm")
+            install_command = overrides.get("install_command", "composer install --no-dev --optimize-autoloader")
+            build_command = overrides.get("build_command", "npm run build")
+            runtime_version = overrides.get("runtime_version", None)
+            build_options = overrides.get("build_options", {})
+        return Config()
+
+    def _pkg_tar(self):
+        return make_tar({
+            "composer.json": '{"require":{"laravel/framework":"^12.0"}}',
+            "artisan": "<?php",
+            "package.json": '{"scripts":{"build":"vite build"},"devDependencies":{"vite":"7","react":"19"}}',
+            "package-lock.json": "{}",
+        })
+
+    def _no_pkg_tar(self):
+        # No package.json — backend-only Laravel app.
+        return make_tar({
+            "composer.json": '{"require":{"laravel/framework":"^12.0"}}',
+            "artisan": "<?php",
+        })
+
+    def test_detection_log_is_emitted_when_package_json_exists(self):
+        log = _RecordingLogger()
+        self.d._inject_laravel_frontend_build(
+            "FROM mirror.test/php:8.4-apache\nCOPY . /var/www/html/\nEXPOSE 80\n",
+            tar_stream=self._pkg_tar(),
+            config=self._config(),
+            logger=log,
+        )
+        # Detection log MUST be emitted at progress=15.
+        detect = [e for e in log.entries if e["stage"] == "frontend_detection"]
+        self.assertTrue(detect,
+                        msg="Detection must emit a 'frontend_detection' log line "
+                            "even when the user did not supply a frontend config.")
+        first = detect[0]
+        self.assertEqual(first["level"], "info")
+        self.assertIn("kind='vite'", first["message"],
+                      msg="Detection log must report the resolved kind, e.g. 'vite'.")
+        self.assertEqual(first["details"].get("package_manager"), "npm")
+        self.assertEqual(first["details"].get("has_package_json"), True)
+        self.assertIn("package.json", first["details"].get("detected_files", []))
+
+    def test_detection_log_is_emitted_when_no_package_json(self):
+        log = _RecordingLogger()
+        out = self.d._inject_laravel_frontend_build(
+            "FROM mirror.test/php:8.4-apache\nCOPY . /var/www/html/\nEXPOSE 80\n",
+            tar_stream=self._no_pkg_tar(),
+            config=self._config(),
+            logger=log,
+        )
+        # No frontend block in the Dockerfile.
+        self.assertNotIn("# --- Laravel frontend build (injected) ---", out)
+        # But a detection log line MUST still be emitted so the user can
+        # verify the platform actually looked for a package.json.
+        detect = [e for e in log.entries if e["stage"] == "frontend_detection"]
+        self.assertTrue(detect,
+                        msg="Detection must still emit a log line when no "
+                            "package.json is found, so the user can verify "
+                            "the platform attempted detection.")
+        self.assertIn("No package.json", detect[0]["message"])
+        self.assertEqual(detect[0]["details"].get("reason"), "no_package_json")
+
+    def test_resolution_log_reports_source_user_vs_auto(self):
+        log = _RecordingLogger()
+        # User explicitly sets front_build_platform via env override.
+        self.d._inject_laravel_frontend_build(
+            "FROM mirror.test/php:8.4-apache\nCOPY . /var/www/html/\nEXPOSE 80\n",
+            tar_stream=self._pkg_tar(),
+            config=self._config(environment={"FRONT_BUILD_PLATFORM": "react"}),
+            logger=log,
+        )
+        # A 'frontend_resolution' log line MUST be present.
+        resolution = [e for e in log.entries if e["stage"] == "frontend_resolution"]
+        self.assertTrue(resolution,
+                        msg="Resolution must emit a 'frontend_resolution' log line.")
+        first = resolution[0]
+        self.assertEqual(first["details"].get("kind_source"), "env",
+                         msg="When FRONT_BUILD_PLATFORM is set in env, "
+                             "kind_source must be 'env'.")
+        self.assertEqual(first["details"].get("kind"), "react")
+
+    def test_resolution_log_reports_source_user_override(self):
+        log = _RecordingLogger()
+        # User sets frontend.kind = "mix" explicitly.
+        self.d._inject_laravel_frontend_build(
+            "FROM mirror.test/php:8.4-apache\nCOPY . /var/www/html/\nEXPOSE 80\n",
+            tar_stream=self._pkg_tar(),
+            config=self._config(frontend={"kind": "mix"}),
+            logger=log,
+        )
+        resolution = [e for e in log.entries if e["stage"] == "frontend_resolution"]
+        self.assertTrue(resolution)
+        self.assertEqual(resolution[0]["details"].get("kind_source"), "user_override")
+        self.assertEqual(resolution[0]["details"].get("kind"), "mix")
+
+    def test_resolution_log_reports_source_auto(self):
+        log = _RecordingLogger()
+        # No user config — auto-detect must take over.
+        self.d._inject_laravel_frontend_build(
+            "FROM mirror.test/php:8.4-apache\nCOPY . /var/www/html/\nEXPOSE 80\n",
+            tar_stream=self._pkg_tar(),
+            config=self._config(),
+            logger=log,
+        )
+        resolution = [e for e in log.entries if e["stage"] == "frontend_resolution"]
+        self.assertTrue(resolution)
+        self.assertEqual(resolution[0]["details"].get("kind_source"), "auto")
+        self.assertEqual(resolution[0]["details"].get("kind"), "vite")
+
+    def test_dockerfile_generation_log_reports_npm_registry_source(self):
+        # Operator-configured mirror.npm.
+        sys.modules["core.settings_service"]._npm_registry = "https://npm.ir/mirror/"
+        log = _RecordingLogger()
+        self.d._inject_laravel_frontend_build(
+            "FROM mirror.test/php:8.4-apache\nCOPY . /var/www/html/\nEXPOSE 80\n",
+            tar_stream=self._pkg_tar(),
+            config=self._config(),
+            logger=log,
+        )
+        gen = [e for e in log.entries if e["stage"] == "dockerfile_generation"]
+        self.assertTrue(gen)
+        last = gen[-1]
+        self.assertEqual(last["details"].get("npm_registry"), "https://npm.ir/mirror/")
+        self.assertEqual(last["details"].get("npm_registry_source"), "operator_setting")
+        # The full list of detected files must be in the log so the user
+        # can verify the platform actually looked at their archive.
+        self.assertIn("package.json", last["details"].get("detected_files", []))
+        self.assertEqual(last["details"].get("package_json_path"), "package.json")
+
+    def test_dockerfile_generation_log_reports_user_npm_registry_override(self):
+        # Operator default, user overrides via config.frontend.npm_registry.
+        sys.modules["core.settings_service"]._npm_registry = "https://registry.npmjs.org"
+        log = _RecordingLogger()
+        self.d._inject_laravel_frontend_build(
+            "FROM mirror.test/php:8.4-apache\nCOPY . /var/www/html/\nEXPOSE 80\n",
+            tar_stream=self._pkg_tar(),
+            config=self._config(frontend={"npm_registry": "https://tenant/mirror/"}),
+            logger=log,
+        )
+        gen = [e for e in log.entries if e["stage"] == "dockerfile_generation"]
+        self.assertTrue(gen)
+        last = gen[-1]
+        self.assertEqual(last["details"].get("npm_registry"), "https://tenant/mirror/")
+        self.assertEqual(last["details"].get("npm_registry_source"), "user_override")
+
+
+# ---------------------------------------------------------------------------
 # Issue 4 — settings_service exposes mirror_composer / mirror_go
 # ---------------------------------------------------------------------------
 
