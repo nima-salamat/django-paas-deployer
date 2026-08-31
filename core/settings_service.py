@@ -154,6 +154,23 @@ def mirror_apt() -> str:
     return get_str("mirror.apt", "")
 
 
+def mirror_composer() -> str:
+    """Return the Composer (PHP) package mirror.
+
+    Used by the Laravel/PHP Dockerfile templates to redirect packagist to a
+    local mirror via ``composer config -g repo.packagist composer <mirror>``.
+    Empty string means "use the public packagist.org" — the template has
+    ``if [ -n "{MIRROR_COMPOSER}" ]`` guards so an empty value disables the
+    redirect cleanly.
+    """
+    return get_str("mirror.composer", "")
+
+
+def mirror_go() -> str:
+    """Return the GOPROXY string for Go module downloads (empty = default)."""
+    return get_str("mirror.go", "")
+
+
 def build_resource_mode() -> str:
     return get_str("build.resource_mode", "static").strip().lower()
 

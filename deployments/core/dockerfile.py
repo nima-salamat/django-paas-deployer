@@ -2309,6 +2309,73 @@ def _detect_laravel_frontend(tar_stream) -> dict:
     return info
 
 
+_DEFAULT_NPM_REGISTRY = "https://registry.npmjs.org"
+
+
+def _resolve_frontend_npm_registry(config) -> str:
+    """Return the npm registry mirror to use for the frontend build.
+
+    Resolution order (first non-empty wins):
+      1. ``config.frontend.npm_registry``  (tenant override in Deploy.config)
+      2. ``config.environment.MIRROR_NPM``  (operator env-style override)
+      3. The global ``mirror.npm`` SystemSetting, read via ``core.settings_service``
+         (defaults to ``https://registry.npmjs.org``).
+
+    The returned value is always a string. An empty string means "use the
+    package manager's built-in default" — we still emit a `* config set
+    registry` line for npm/pnpm/yarn when it differs from the public default
+    so users behind a mirror (e.g. cnpm / ir npm) can install packages.
+    """
+    candidate = ""
+    if config is not None:
+        frontend = getattr(config, "frontend", None) or {}
+        if isinstance(frontend, dict):
+            candidate = (frontend.get("npm_registry") or frontend.get("registry") or "").strip()
+        if not candidate:
+            env = getattr(config, "environment", None) or {}
+            if isinstance(env, dict):
+                candidate = (env.get("MIRROR_NPM") or env.get("NPM_REGISTRY") or "").strip()
+    if not candidate:
+        try:
+            from core import settings_service as svc
+            candidate = (svc.mirror_npm() or "").strip()
+        except Exception:
+            candidate = ""
+    # Fall back to the public default so the Dockerfile line is always valid.
+    return candidate or _DEFAULT_NPM_REGISTRY
+
+
+def _registry_config_line(package_manager: str, registry: str) -> str:
+    """Return the shell snippet that points a package manager at ``registry``.
+
+    Returns an empty string when ``registry`` is empty, when it equals the
+    package manager's built-in public default (so we do not pollute the
+    Dockerfile with redundant `config set` lines), or when the package
+    manager has no `config set registry` command we can safely emit.
+    """
+    registry = (registry or "").strip()
+    if not registry:
+        return ""
+    pm = (package_manager or "npm").strip().lower()
+    builtin_defaults = {
+        "npm": _DEFAULT_NPM_REGISTRY,
+        "pnpm": _DEFAULT_NPM_REGISTRY,
+        "yarn": _DEFAULT_NPM_REGISTRY,
+    }
+    if builtin_defaults.get(pm) == registry:
+        return ""
+    if pm == "npm":
+        return f"npm config set registry {registry}"
+    if pm == "pnpm":
+        return f"pnpm config set registry {registry}"
+    if pm == "yarn":
+        # Yarn classic / berry both accept this form.
+        return f"yarn config set registry {registry}"
+    # bun does not currently expose a `config set registry`; users behind a
+    # mirror can pass an explicit install_command if they need to.
+    return ""
+
+
 def _inject_laravel_frontend_build(
     dockerfile: str,
     *,
@@ -2322,6 +2389,11 @@ def _inject_laravel_frontend_build(
     TypeScript normally live there. A failed build is fatal: silently
     accepting ``npm run build || true`` used to produce a healthy-looking
     Laravel container with missing frontend assets.
+
+    The npm/pnpm/yarn registry is automatically pointed at the operator's
+    configured mirror (``mirror.npm`` SystemSetting) when it differs from
+    the public default. The tenant can override the mirror per-deploy via
+    ``config.frontend.npm_registry``.
     """
     front = ""
     package_manager = "npm"
@@ -2379,15 +2451,33 @@ def _inject_laravel_frontend_build(
             if m:
                 node_version = m.group(1)
 
+    # Resolve the operator-configured npm registry mirror and prepend a
+    # `* config set registry <mirror>` step when it differs from the public
+    # default. This is what makes `npm ci` / `pnpm install` work in
+    # restricted-network regions without the user having to fork the
+    # Dockerfile template.
+    npm_registry = _resolve_frontend_npm_registry(config)
+    registry_line = _registry_config_line(package_manager, npm_registry)
+
+    install_lines = [
+        "    && rm -rf /var/lib/apt/lists/* \\",
+    ]
+    if registry_line:
+        install_lines.append(f"    && {registry_line} \\")
+    install_lines.append(f"    && {install_command} \\")
+    install_lines.append(f"    && {build_command}")
+    # The last line must not end with a backslash, otherwise the Dockerfile
+    # parser keeps waiting for the next line.
+    install_lines[-1] = install_lines[-1].rstrip(" \\")
+
     block = (
         "\n# --- Laravel frontend build (injected) ---\n"
         f"# front_build_platform={kind}\n"
+        f"# npm_registry={npm_registry}\n"
         "RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \\\n"
         f"    && curl -fsSL https://deb.nodesource.com/setup_{node_version}.x | bash - \\\n"
         "    && apt-get install -y --no-install-recommends nodejs \\\n"
-        "    && rm -rf /var/lib/apt/lists/* \\\n"
-        f"    && {install_command} \\\n"
-        f"    && {build_command}\n"
+        + "\n".join(install_lines) + "\n"
     )
 
     # The build must happen after COPY . /var/www/html. Insert immediately
@@ -2405,6 +2495,7 @@ def _inject_laravel_frontend_build(
             details={
                 "front_build_platform": kind,
                 "package_manager": package_manager,
+                "npm_registry": npm_registry,
                 "install_command": install_command,
                 "build_command": build_command,
             },

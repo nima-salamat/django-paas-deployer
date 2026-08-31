@@ -27,6 +27,39 @@ def _get_docker_client():
         raise
 
 
+def _sanitize_frontend_dict(value):
+    """Coerce a tenant-supplied ``frontend`` value to a safe dict.
+
+    The user can place a ``frontend`` object inside ``Deploy.config`` to
+    customize the Laravel/Vite build (npm registry mirror, package manager,
+    build/install commands). Anything that is not a dict, or whose values
+    are not JSON-primitive strings/bools/numbers, is dropped silently so a
+    bad tenant input can never inject shell commands into the Dockerfile
+    here. The actual shell commands are validated separately inside the
+    Dockerfile generator via ``validate_shell_command``.
+    """
+    if not isinstance(value, dict):
+        return {}
+    out: dict = {}
+    for key, val in value.items():
+        if not isinstance(key, str):
+            continue
+        if val is None or isinstance(val, (bool, int, float, str)):
+            out[key] = val
+        elif isinstance(val, dict):
+            # Allow nested dicts only with string keys + primitive values,
+            # used for things like ``{ "npm_registry": "..." }``.
+            nested = {
+                str(k): v for k, v in val.items()
+                if isinstance(k, str) and (
+                    v is None or isinstance(v, (bool, int, float, str))
+                )
+            }
+            if nested:
+                out[key] = nested
+    return out
+
+
 class DeployException(DeploymentError):
     pass
 
@@ -71,6 +104,11 @@ class Deploy:
         start_command=None,
         static_dir=None,
         media_dir=None,
+        # Frontend build settings for full-stack PHP/Laravel services.
+        # Carries npm_registry / package_manager / build_command overrides
+        # so the Dockerfile generator can inject a real Node build step
+        # (e.g. for Vite/Inertia) using the operator-configured npm mirror.
+        frontend=None,
     ):
         self.name = name
         self.tag = str(tag)
@@ -110,6 +148,10 @@ class Deploy:
         self.start_command = start_command
         self.static_dir = static_dir
         self.media_dir = media_dir
+        # Sanitize the frontend dict so a non-dict (or a string accidentally
+        # supplied by the user) can never crash downstream code. Only string
+        # keys/values are accepted; everything else is silently dropped.
+        self.frontend = _sanitize_frontend_dict(frontend)
         self.errors = []
         self.result = None
 
@@ -188,6 +230,7 @@ class Deploy:
             install_command=getattr(self, "install_command", None),
             build_command=getattr(self, "build_command", None),
             start_command=getattr(self, "start_command", None),
+            frontend=getattr(self, "frontend", {}),
             static_dir=getattr(self, "static_dir", None),
             media_dir=getattr(self, "media_dir", None),
             environment=self.environment,

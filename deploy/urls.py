@@ -7,6 +7,7 @@ from .apis import (
     unset_deploy_apiview,
     generate_db_credentials_apiview,
     inspect_deploy_zip_apiview,
+    deploy_config_contract_apiview,
 )
 
 urlpatterns = [
@@ -26,4 +27,5 @@ urlpatterns = [
     path('unset_deploy/', unset_deploy_apiview, name='unset_deploy'),
     path('generate_db_credentials/', generate_db_credentials_apiview, name='deploy-generate-db-credentials'),
     path('inspect_zip/', inspect_deploy_zip_apiview, name='deploy-inspect-zip'),
+    path('config_contract/', deploy_config_contract_apiview, name='deploy-config-contract'),
 ]

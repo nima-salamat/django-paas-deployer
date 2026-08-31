@@ -15,6 +15,17 @@ from django.utils import timezone
 from .models import Document, DocumentAsset, DocumentCategory
 from .serializers import DocumentSerializer, DocumentAssetSerializer, CategorySerializer
 
+# Public documentation endpoints must remain readable by everyone, including
+# anonymous clients and clients that send an expired/invalid Authorization
+# header. The global DRF DEFAULT_AUTHENTICATION_CLASSES is JWTAuthentication,
+# which raises AuthenticationFailed (HTTP 401) when a Bearer token is present
+# but invalid. Setting ``authentication_classes = []`` on the public views
+# below means DRF will not attempt JWT validation at all on these routes, so a
+# bad token in the request headers can never block anonymous read access.
+# Admin write endpoints (DocumentAdminViewSet, CategoryAdminViewSet,
+# DocumentAssetListCreateAPIView) keep their JWT + Session authentication.
+_PUBLIC_AUTH = []
+
 
 def has_rule(user, code):
     if not user or not user.is_authenticated:
@@ -33,6 +44,14 @@ class DocsManagePermission(BasePermission):
 
 
 class PublicDocumentsAPIView(APIView):
+    """Public list of published documentation pages.
+
+    Anonymous access is unconditional: even if a caller sends an invalid or
+    expired Bearer token in the Authorization header, the response must still
+    be a 200 with the published documents list. ``authentication_classes = []``
+    prevents JWTAuthentication from short-circuiting the request with a 401.
+    """
+    authentication_classes = _PUBLIC_AUTH
     permission_classes = [AllowAny]
 
     def get(self, request):
@@ -41,6 +60,7 @@ class PublicDocumentsAPIView(APIView):
 
 
 class PublicCategoryTreeAPIView(APIView):
+    authentication_classes = _PUBLIC_AUTH
     permission_classes = [AllowAny]
 
     def get(self, request):
@@ -73,6 +93,7 @@ class PublicCategoryTreeAPIView(APIView):
 
 
 class PublicDocumentDetailAPIView(APIView):
+    authentication_classes = _PUBLIC_AUTH
     permission_classes = [AllowAny]
 
     def get(self, request, slug):
@@ -208,7 +229,16 @@ class DocumentAssetListCreateAPIView(APIView):
 
 
 class DocumentAssetAPIView(APIView):
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
+    # Public asset reads must not be gated by JWT. A browser <img>/<video>/
+    # <audio> tag cannot send an Authorization header, and a stale/invalid
+    # Bearer token in the headers must never block serving a published
+    # document's media. ``authentication_classes = []`` keeps DRF from
+    # rejecting requests that carry an expired token in the Authorization
+    # header. Optional admin access (for draft/unattached assets) is still
+    # supported via the explicit ``?token=`` query-parameter path below.
+    authentication_classes = _PUBLIC_AUTH
+    # No permission_classes => default AllowAny. Access control is performed
+    # inside get()/delete()/patch() based on the asset's publication state.
 
     def get(self, request, asset_id):
         try:

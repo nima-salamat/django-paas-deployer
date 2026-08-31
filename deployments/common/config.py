@@ -57,6 +57,279 @@ TENANT_BLOCKED_KEYS = {
 SAFE_BUILD_OPTION_KEYS = {"target", "no_cache", "pull"}
 
 
+# ---------------------------------------------------------------------------
+# Tenant config contract — surface of valid top-level keys
+# ---------------------------------------------------------------------------
+# Every key listed here is a documented knob a user may set inside
+# ``Deploy.config``. Anything NOT in this set is reported back to the user
+# as a warning (NOT a hard error — we never want to block a deploy just
+# because the user typed an unknown key), so they can fix their config.
+# The blocked-keys list above is enforced separately (those keys are
+# silently stripped by ``sanitize_tenant_config``).
+
+TENANT_CONFIG_KEYS: dict[str, dict[str, Any]] = {
+    "platform": {
+        "type": "string",
+        "description": "Target platform. Usually auto-detected from the zip "
+                       "via /deploy/inspect_zip/. Examples: laravel, php, django, "
+                       "flask, python, nodejs, nextjs, react, vuejs, angular, "
+                       "go, statichtmlcss, docker.",
+    },
+    "framework": {
+        "type": "string",
+        "description": "Framework alias used to refine a Plan.platform. "
+                       "Examples: laravel, lumen, symfony, codeigniter, fastapi.",
+    },
+    "env": {
+        "type": "object<string,string>",
+        "description": "Environment variables injected at container start. "
+                       "Values are stringified before being passed to Docker. "
+                       "Do NOT put secrets here for production — use a secrets "
+                       "manager instead.",
+    },
+    "environment": {
+        "type": "object<string,string>",
+        "description": "Alias for ``env``. ``env`` wins when both are set.",
+    },
+    "port": {
+        "type": "integer",
+        "description": "Container EXPOSE / publish port. Falls back to the "
+                       "platform default (e.g. 80 for Laravel, 8000 for Django).",
+    },
+    "entry_point": {
+        "type": "string",
+        "description": "Replaces the auto-generated CMD in the Dockerfile. "
+                       "Validated as a single shell command — no shell "
+                       "metacharacters that bypass the validator are allowed.",
+    },
+    "start_command": {
+        "type": "string",
+        "description": "Like ``entry_point`` but used as the container start "
+                       "command after the image is built.",
+    },
+    "install_command": {
+        "type": "string",
+        "description": "Single shell command that installs backend "
+                       "dependencies (e.g. ``composer install --no-dev``). "
+                       "Validated against the shell-command allow-list.",
+    },
+    "build_command": {
+        "type": "string",
+        "description": "Single shell command that builds the project "
+                       "(e.g. ``npm run build``). Validated against the "
+                       "shell-command allow-list.",
+    },
+    "package_manager": {
+        "type": "string",
+        "description": "Package manager used by the build step. "
+                       "One of: npm (default), pnpm, yarn, bun.",
+    },
+    "build_dir": {
+        "type": "string",
+        "description": "Working directory for the build step, e.g. ``/app`` "
+                       "or ``/var/www/html``.",
+    },
+    "working_directory": {
+        "type": "string",
+        "description": "Container working directory at runtime. Defaults to "
+                       "``/app`` for Python/Node and ``/var/www/html`` for PHP.",
+    },
+    "static_dir": {
+        "type": "string",
+        "description": "Path to compiled static assets served by the runtime "
+                       "(used by nginx stages for SPAs).",
+    },
+    "media_dir": {
+        "type": "string",
+        "description": "Path to user-uploaded media that must persist across "
+                       "redeploys (bind-mount target).",
+    },
+    "server_type": {
+        "type": "string",
+        "description": "ASGI/WSGI selector for Django (``asgi`` or ``wsgi``). "
+                       "Auto-detected when not set.",
+    },
+    "celery": {
+        "type": "boolean",
+        "description": "When true, a Celery worker process is added to the "
+                       "container via supervisord. Only supported for the "
+                       "Python family (django/flask/python).",
+    },
+    "celery_beat": {
+        "type": "boolean",
+        "description": "When true (and ``celery`` is true), a Celery beat "
+                       "scheduler process is also added.",
+    },
+    "celery_app": {
+        "type": "string",
+        "description": "Dotted path to the Celery app module "
+                       "(e.g. ``myproj.celery``). Validated against the "
+                       "module-name allow-list.",
+    },
+    "runtime_version": {
+        "type": "string",
+        "description": "Override the language runtime tag, e.g. ``node20`` "
+                       "or ``php8.4``. Parsed by the Dockerfile generator.",
+    },
+    "node_version":  {"type": "string", "description": "Node.js major version (e.g. ``20``)."},
+    "php_version":   {"type": "string", "description": "PHP image tag (e.g. ``8.4``)."},
+    "python_version": {"type": "string", "description": "Python image tag (e.g. ``3.11``)."},
+    "django_python_version": {"type": "string", "description": "Python tag used by the Django template."},
+    "go_version":    {"type": "string", "description": "Go image tag (e.g. ``1.21``)."},
+    "dotnet_version":{"type": "string", "description": ".NET SDK tag (e.g. ``6.0``)."},
+    "nginx_version": {"type": "string", "description": "Nginx image tag (e.g. ``alpine``)."},
+    "front_build_platform": {
+        "type": "string",
+        "description": "Force the Laravel frontend build kind "
+                       "(vite / react / mix / nextjs / nuxt / node). "
+                       "Auto-detected from package.json when not set.",
+    },
+    "frontend": {
+        "type": "object",
+        "description": "Frontend build options for full-stack PHP/Laravel. "
+                       "Accepted keys: ``platform`` / ``kind`` (alias of "
+                       "front_build_platform), ``package_manager``, "
+                       "``install_command``, ``build_command``, "
+                       "``npm_registry`` (override the operator-configured "
+                       "``mirror.npm``).",
+    },
+    "build_options": {
+        "type": "object",
+        "description": "Safe, allow-listed build metadata. Only ``target``, "
+                       "``no_cache`` and ``pull`` are honored; other keys are "
+                       "silently dropped.",
+    },
+    "db_connection": {
+        "type": "string",
+        "description": "Laravel DB_CONNECTION hint (sqlite / mysql / pgsql / "
+                       "sqlsrv). Defaults to sqlite.",
+    },
+    "database": {
+        "type": "string",
+        "description": "Alias for ``db_connection``.",
+    },
+    "laravel": {
+        "type": "boolean",
+        "description": "Hint that the PHP project is a Laravel app (used "
+                       "when the Plan.platform is ``php`` but the zip is "
+                       "actually Laravel).",
+    },
+}
+
+
+def validate_tenant_config(raw: Any) -> dict[str, Any]:
+    """Return a structured report about a tenant-supplied ``Deploy.config``.
+
+    The deploy pipeline never hard-fails on unknown keys — a wrong key is
+    usually a typo, not a security threat. Instead we return a dict with:
+
+    * ``warnings``: list of strings the API can surface back to the user.
+    * ``blocked_stripped``: list of keys that were silently stripped because
+      they are on the operator-only block-list.
+    * ``unknown_keys``: list of top-level keys that are not in the contract.
+    * ``known_keys``: list of top-level keys that ARE in the contract.
+
+    Callers can attach ``warnings`` to the API response so the user sees a
+    clear note like ``"Unknown config key 'enviroment' — did you mean 'env'?"``
+    without having their deploy silently succeed with no feedback.
+    """
+    cfg = parse_config(raw)
+    warnings: list[str] = []
+    blocked_stripped: list[str] = []
+    unknown_keys: list[str] = []
+    known_keys: list[str] = []
+
+    for key in cfg.keys():
+        skey = str(key)
+        if skey in TENANT_BLOCKED_KEYS:
+            blocked_stripped.append(skey)
+            continue
+        if skey in TENANT_CONFIG_KEYS:
+            known_keys.append(skey)
+        else:
+            unknown_keys.append(skey)
+
+    for k in unknown_keys:
+        suggestion = _suggest_known_key(k)
+        if suggestion:
+            warnings.append(
+                f"Unknown config key '{k}' — did you mean '{suggestion}'? "
+                "It will be ignored by the deployment pipeline."
+            )
+        else:
+            warnings.append(
+                f"Unknown config key '{k}'. It will be ignored by the deployment pipeline."
+            )
+
+    for k in blocked_stripped:
+        warnings.append(
+            f"Config key '{k}' is operator-only and was stripped before "
+            "persistence. It cannot affect resource limits, workers, "
+            "networks, or container privileges."
+        )
+
+    return {
+        "warnings": warnings,
+        "blocked_stripped": blocked_stripped,
+        "unknown_keys": unknown_keys,
+        "known_keys": known_keys,
+        "contract": dict(TENANT_CONFIG_KEYS),
+    }
+
+
+def _suggest_known_key(key: str) -> str | None:
+    """Return a close known-key match for a typo (Levenshtein distance <= 2)."""
+    s = str(key or "").strip().lower()
+    if not s:
+        return None
+    # Common typos first.
+    aliases = {
+        "environment": "env",
+        "build_cmd": "build_command",
+        "install_cmd": "install_command",
+        "start_cmd": "start_command",
+        "entrypoint": "entry_point",
+        "front_build": "front_build_platform",
+        "frontend_build": "front_build_platform",
+        "frontend_kind": "front_build_platform",
+        "db": "database",
+        "db_conn": "db_connection",
+        "php": "php_version",
+        "node": "node_version",
+        "python": "python_version",
+    }
+    if s in aliases:
+        return aliases[s]
+    best = None
+    best_dist = 3
+    for known in TENANT_CONFIG_KEYS:
+        d = _levenshtein(s, known.lower())
+        if d < best_dist:
+            best = known
+            best_dist = d
+    return best if best_dist <= 2 else None
+
+
+def _levenshtein(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(
+                prev[j] + 1,
+                cur[j - 1] + 1,
+                prev[j - 1] + (0 if ca == cb else 1),
+            ))
+        prev = cur
+    return prev[-1]
+
+
 def sanitize_tenant_config(raw: Any) -> dict[str, Any]:
     """Strip tenant escape hatches before config is persisted or executed."""
     cfg = parse_config(raw)
@@ -214,4 +487,9 @@ __all__ = [
     "parse_workers_from_command",
     "apply_workers_to_command",
     "resolve_resource_limits",
+    "sanitize_tenant_config",
+    "validate_tenant_config",
+    "TENANT_CONFIG_KEYS",
+    "TENANT_BLOCKED_KEYS",
+    "SAFE_BUILD_OPTION_KEYS",
 ]

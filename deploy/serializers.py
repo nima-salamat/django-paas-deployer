@@ -3,7 +3,7 @@ from django.db import OperationalError, InterfaceError, ProgrammingError
 import logging
 
 from deployments.core.db_deployer import DB_PLATFORMS, SENSITIVE_CONFIG_KEYS
-from deployments.common.config import sanitize_tenant_config
+from deployments.common.config import sanitize_tenant_config, validate_tenant_config
 from .models import Deploy, DeployLog
 
 logger = logging.getLogger(__name__)
@@ -110,7 +110,14 @@ class DeploySerializer(serializers.ModelSerializer):
             return []
 
     def validate(self, attrs):
-        """Enforce share can_deploy_add on create (non-owners)."""
+        """Enforce share can_deploy_add on create (non-owners) and surface
+        friendly warnings about unknown / blocked config keys.
+
+        We never HARD-fail on unknown tenant config keys — a typo should not
+        block a deploy. Instead, the warnings are surfaced through the
+        serializer's ``_config_warnings`` attribute so the view can include
+        them in the API response.
+        """
         request = self.context.get("request")
         if request is None or self.instance is not None:
             return attrs
@@ -119,6 +126,7 @@ class DeploySerializer(serializers.ModelSerializer):
         if service is None or user is None or not getattr(user, "is_authenticated", False):
             raise serializers.ValidationError({"service": "Service is required."})
         if str(service.user_id) == str(user.id):
+            self._collect_config_warnings(attrs)
             return attrs
         from services.api.sharing import user_can_access_service
         allowed, share = user_can_access_service(service, user, action="can_deploy_add")
@@ -130,7 +138,18 @@ class DeploySerializer(serializers.ModelSerializer):
                     "action": "can_deploy_add",
                 }
             )
+        self._collect_config_warnings(attrs)
         return attrs
+
+    def _collect_config_warnings(self, attrs):
+        """Run the tenant-config contract checker and stash the result."""
+        try:
+            raw_cfg = attrs.get("config")
+            report = validate_tenant_config(raw_cfg)
+            self._config_warnings = report.get("warnings") or []
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("validate_tenant_config failed: %s", exc)
+            self._config_warnings = []
 
 
     def create(self, validated_data):

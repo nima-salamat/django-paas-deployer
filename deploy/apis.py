@@ -1741,3 +1741,117 @@ def _json_safe(value) -> bool:
     if isinstance(value, dict):
         return all(isinstance(k, str) and _json_safe(v) for k, v in value.items())
     return False
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def deploy_config_contract_apiview(request):
+    """GET/POST /deploy/config_contract/
+
+    Returns the documented contract for ``Deploy.config`` so users know
+    which keys they can put in the JSON ``config`` field and what each one
+    does. POST lets the caller submit a draft config and get a validation
+    report (warnings + suggested corrections) without creating a Deploy.
+
+    GET response:
+        {
+            "result": "success",
+            "contract": { "<key>": { "type": "...", "description": "..." }, ... },
+            "blocked_keys": ["resource_limits", "worker_count", ...],
+            "platforms": ["laravel", "php", "django", ...],
+            "mirrors": {
+                "npm":     "https://registry.npmjs.org",
+                "composer":"https://package-mirror.liara.ir/...",
+                "docker":  "docker.arvancloud.ir",
+                "python":  "https://mirror-pypi.runflare.com/simple"
+            },
+            "example": { "platform": "laravel", "env": { "APP_ENV": "production" } }
+        }
+
+    POST (body = the draft config):
+        {
+            "result": "success",
+            "warnings": [...],
+            "unknown_keys": [...],
+            "known_keys": [...],
+            "blocked_stripped": [...],
+            "sanitized": { ... }     # the config after stripping blocked keys
+        }
+    """
+    from deployments.common.config import (
+        TENANT_CONFIG_KEYS,
+        TENANT_BLOCKED_KEYS,
+        validate_tenant_config,
+        sanitize_tenant_config,
+        parse_config,
+    )
+    from core.global_settings.config import PLATFORM_CHOICES
+
+    # Read operator-configured mirrors (these are not secrets — they are
+    # documented in the SystemSetting table and shown in the admin UI).
+    mirrors: dict[str, str] = {}
+    try:
+        from core import settings_service as svc
+        mirrors = {
+            "docker": svc.mirror_docker(),
+            "python": svc.mirror_python(),
+            "npm": svc.mirror_npm(),
+            "composer": svc.mirror_composer(),
+            "apt": svc.mirror_apt(),
+            "go": svc.mirror_go(),
+        }
+    except Exception:
+        # Settings service not available (e.g. during migrations). Fall
+        # back to the code-level constants.
+        try:
+            from core.global_settings import config as _gcfg
+            mirrors = {
+                "docker": getattr(_gcfg, "MIRROR_DOCKER", "docker.io"),
+                "python": getattr(_gcfg, "MIRROR_PYTHON", "https://pypi.org/simple"),
+                "npm": "https://registry.npmjs.org",
+                "composer": getattr(_gcfg, "MIRROR_COMPOSER", ""),
+                "apt": "",
+                "go": "",
+            }
+        except Exception:
+            mirrors = {}
+
+    platforms = sorted({value for value, _label in PLATFORM_CHOICES})
+
+    if request.method == "POST":
+        body = request.data if request.data is not None else {}
+        report = validate_tenant_config(body)
+        sanitized = sanitize_tenant_config(parse_config(body))
+        return Response(
+            {
+                "result": "success",
+                "warnings": report.get("warnings", []),
+                "unknown_keys": report.get("unknown_keys", []),
+                "known_keys": report.get("known_keys", []),
+                "blocked_stripped": report.get("blocked_stripped", []),
+                "sanitized": sanitized,
+                "contract": {k: v for k, v in TENANT_CONFIG_KEYS.items()},
+                "blocked_keys": sorted(TENANT_BLOCKED_KEYS),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    return Response(
+        {
+            "result": "success",
+            "contract": {k: v for k, v in TENANT_CONFIG_KEYS.items()},
+            "blocked_keys": sorted(TENANT_BLOCKED_KEYS),
+            "platforms": platforms,
+            "mirrors": mirrors,
+            "example": {
+                "platform": "laravel",
+                "env": {"APP_ENV": "production", "APP_DEBUG": "false"},
+                "frontend": {
+                    "npm_registry": mirrors.get("npm") or "https://registry.npmjs.org",
+                    "package_manager": "npm",
+                },
+            },
+        },
+        status=status.HTTP_200_OK,
+    )

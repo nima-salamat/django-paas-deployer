@@ -38,6 +38,14 @@ DEFAULTS: list[dict] = [
         "description": "Optional npm registry mirror for Node builds.",
     },
     {
+        "key": "mirror.composer",
+        "default": "https://package-mirror.liara.ir/repository/composer/",
+        "value_type": "string",
+        "category": "mirrors",
+        "label": "Composer (PHP) mirror",
+        "description": "Optional Composer/packagist mirror used by Laravel/PHP Dockerfiles.",
+    },
+    {
         "key": "mirror.apt",
         "default": "http://repo.iut.ac.ir/debian/",
         "value_type": "string",
