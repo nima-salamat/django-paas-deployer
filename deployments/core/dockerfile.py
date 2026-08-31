@@ -220,8 +220,8 @@ def _default_node_install_command(package_manager: str) -> str:
     """Return a safe default install command for a Node project."""
     return {
         "npm": "npm ci || npm install",
-        "pnpm": "corepack enable && pnpm install --frozen-lockfile || pnpm install",
-        "yarn": "corepack enable && yarn install --frozen-lockfile || yarn install",
+        "pnpm": "corepack enable && (pnpm install --frozen-lockfile || pnpm install)",
+        "yarn": "corepack enable && (yarn install --frozen-lockfile || yarn install)",
         "bun": "npm install -g bun && bun install",
     }.get((package_manager or "npm").lower().strip(), "npm ci || npm install")
 
@@ -2699,10 +2699,19 @@ def _inject_laravel_frontend_build(
     # the lockfile with the selected frontend's own directory.
     has_npm_lock = bool(detected.get("has_package_lock"))
 
+    # npm's `ci` is intentionally preferred when a lockfile exists, but a
+    # deployment platform must remain resilient to an out-of-sync lockfile.
+    # `npm ci` is strict by design and fails with EUSAGE when package.json and
+    # package-lock.json differ (for example after dependency updates). In an
+    # auto-detected deployment there is no user action available at build time,
+    # so fall back to `npm install` and let npm reconcile the lockfile inside
+    # the ephemeral image. This preserves reproducible `npm ci` behaviour for
+    # healthy lockfiles while preventing a stale lockfile from killing an
+    # otherwise valid Vite/Laravel deployment.
     generated_install_command = {
-        "npm": "npm ci" if has_npm_lock else "npm install",
-        "pnpm": "corepack enable && pnpm install --frozen-lockfile",
-        "yarn": "corepack enable && yarn install --frozen-lockfile",
+        "npm": "npm ci || npm install" if has_npm_lock else "npm install",
+        "pnpm": "corepack enable && (pnpm install --frozen-lockfile || pnpm install)",
+        "yarn": "corepack enable && (yarn install --frozen-lockfile || yarn install)",
         "bun": "npm install -g bun && bun install",
     }.get(package_manager, "npm install")
     install_command = str(install_command or generated_install_command).strip()
@@ -2749,7 +2758,11 @@ def _inject_laravel_frontend_build(
     ]
     if registry_line:
         install_lines.append(f"    && {registry_line} \\")
-    install_lines.append(f"    && {install_command} \\")
+    # Keep install fallback semantics local to the package-manager command.
+    # Without grouping, a preceding `&&` failure can accidentally trigger the
+    # fallback on its own because shell `&&`/`||` are left-associative.
+    install_lines.append(f"    && ( {install_command} ) \\")
+
     install_lines.append(f"    && {build_command}")
     # The last line must not end with a backslash, otherwise the Dockerfile
     # parser keeps waiting for the next line.

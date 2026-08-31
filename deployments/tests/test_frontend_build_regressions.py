@@ -126,6 +126,32 @@ def test_laravel_frontend_detects_nested_sibling_and_preserves_project_roots():
     assert detected["kind"] == "vite"
 
 
+def test_laravel_frontend_npm_lockfile_uses_resilient_ci_fallback():
+    d = load_dockerfile_module()
+    class Config:
+        environment = {}
+        frontend = {}
+        package_manager = "npm"
+        install_command = None
+        build_command = None
+        runtime_version = "20"
+    out = d._inject_laravel_frontend_build(
+        "FROM mirror.test/php:8.4-apache\nCOPY . /var/www/html/\nEXPOSE 80\n",
+        tar_stream=make_tar({
+            "composer.json": '{"require":{"laravel/framework":"^12.0"}}',
+            "artisan": "<?php",
+            "package.json": '{"scripts":{"build":"vite build"},"devDependencies":{"vite":"7","@emnapi/core":"1.11.3"}}',
+            # Deliberately stale/out-of-sync lock metadata. The generated
+            # command must retain npm ci first but recover with npm install.
+            "package-lock.json": '{"lockfileVersion":3,"packages":{}}',
+            "vite.config.js": "export default { plugins: [] }",
+        }),
+        config=Config(), logger=None,
+    )
+    assert "npm ci || npm install" in out
+    assert "npm ci\n" not in out
+
+
 def test_laravel_frontend_build_runs_from_selected_frontend_root():
     d = load_dockerfile_module()
     class Config:
