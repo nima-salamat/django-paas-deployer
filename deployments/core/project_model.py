@@ -179,13 +179,25 @@ class FileView:
 
 
 class TarFileView(FileView):
-    """Read access over an in-memory tar stream."""
+    """Read access over an in-memory tar stream.
+
+    Archive members are indexed by their normalised original path.  In
+    addition, when the archive has a single top-level wrapper directory
+    (the common GitHub-zip / commit-hash layout), every file is *also*
+    indexed under its post-flatten path so that callers which have already
+    stripped the wrapper (``build_project_model``, frontend detection,
+    etc.) can still read content.  Without the dual mapping,
+    ``view.read("package.json")`` silently returned ``None`` for any
+    wrapped archive and Laravel + Vite auto-injection was skipped.
+    """
 
     def __init__(self, tar_stream):
         import tarfile as _tf
 
         self._names: list[str] = []
         self._members: dict[str, Any] = {}
+        # lookup key → original member name that tarfile.extractfile expects
+        self._extract_name: dict[str, str] = {}
         self._payload: dict[str, bytes] = {}
         self._stream = tar_stream
         self._tf = _tf
@@ -199,10 +211,20 @@ class TarFileView(FileView):
                 self._names.append(n)
                 if m.isfile():
                     self._members[n] = m
+                    self._extract_name[n] = m.name
         try:
             tar_stream.seek(0)
         except Exception:
             pass
+
+        # Dual-index under post-flatten paths when a single wrapper exists.
+        wrapper = detect_archive_wrapper(self._names)
+        if wrapper:
+            for original in list(self._members.keys()):
+                stripped = strip_archive_prefix(original, wrapper)
+                if stripped and stripped not in self._members:
+                    self._members[stripped] = self._members[original]
+                    self._extract_name[stripped] = self._extract_name[original]
 
     def names(self) -> list[str]:
         return list(self._names)
@@ -213,17 +235,17 @@ class TarFileView(FileView):
         if name not in self._members:
             return None
         data = b""
+        extract_as = self._extract_name.get(name, name)
         try:
             self._stream.seek(0)
             with self._tf.open(fileobj=self._stream, mode="r:*") as tar:
-                f = tar.extractfile(name)
+                f = tar.extractfile(extract_as)
                 if f is not None:
                     data = f.read(_MAX_JSON_BYTES)
         except Exception:
             data = b""
         self._payload[name] = data
         return data
-
 
 class TreeFileView(FileView):
     """Read access over an extracted project tree via ``file_index``."""
