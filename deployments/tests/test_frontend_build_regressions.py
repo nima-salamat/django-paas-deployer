@@ -104,3 +104,44 @@ def test_laravel_frontend_detects_pnpm():
     }))
     assert detected["has_package_json"] is True
     assert detected["package_manager"] == "pnpm"
+
+
+def test_laravel_frontend_detects_nested_sibling_and_preserves_project_roots():
+    d = load_dockerfile_module()
+    tar = make_tar({
+        "workspace/backend/artisan": "<?php",
+        "workspace/backend/composer.json": '{"require":{"laravel/framework":"^12.0"}}',
+        "workspace/frontend/package.json": '{"scripts":{"build":"vite build"},"dependencies":{"react":"19"},"devDependencies":{"vite":"7"}}',
+        "workspace/frontend/package-lock.json": "{}",
+        "workspace/frontend/vite.config.js": "export default { build: { outDir: 'dist' } }",
+    })
+    detected = d._detect_laravel_frontend(tar)
+    assert detected["laravel_root"] == "workspace/backend"
+    assert detected["frontend_root"] == "workspace/frontend"
+    assert detected["package_json_path"] == "workspace/frontend/package.json"
+    assert detected["kind"] == "vite"
+
+
+def test_laravel_frontend_build_runs_from_selected_frontend_root():
+    d = load_dockerfile_module()
+    class Config:
+        environment = {}
+        frontend = {}
+        package_manager = "npm"
+        install_command = None
+        build_command = None
+        runtime_version = "20"
+    out = d._inject_laravel_frontend_build(
+        "FROM mirror.test/php:8.4-apache\nCOPY . /var/www/html/\nEXPOSE 80\n",
+        tar_stream=make_tar({
+            "workspace/backend/artisan": "<?php",
+            "workspace/backend/composer.json": '{"require":{"laravel/framework":"^12.0"}}',
+            "workspace/frontend/package.json": '{"scripts":{"build":"vite build"},"devDependencies":{"vite":"7"}}',
+            "workspace/frontend/package-lock.json": "{}",
+            "workspace/frontend/vite.config.js": "export default { build: { outDir: 'dist' } }",
+        }),
+        config=Config(), logger=None,
+    )
+    assert "cd /var/www/html/workspace/frontend" in out
+    assert "&& npm ci" in out
+    assert "&& npm run build" in out
