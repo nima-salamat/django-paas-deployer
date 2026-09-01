@@ -249,7 +249,7 @@ def shell_file_apiview(request, service_id):
                 raise DjangoValidationError("The workspace root cannot be created or replaced.")
             access = path_access(container, safe_path, for_create=True)
             if not access["writable"]:
-                raise DjangoValidationError(f"Path is read-only: {safe_path} ({access["reason"]}).")
+                raise DjangoValidationError(f"Path is read-only: {safe_path} ({access['reason']}).")
             parent_probe = container.exec_run(["test", "-d", "--", posixpath.dirname(safe_path) or session.root_path], workdir=session.workdir, stdout=False, stderr=False, tty=False)
             if int(parent_probe.exit_code or 1) != 0:
                 raise DjangoValidationError("Parent directory does not exist.")
@@ -263,7 +263,7 @@ def shell_file_apiview(request, service_id):
                 raise DjangoValidationError("The workspace root cannot be deleted.")
             access = path_access(container, safe_path, for_create=True)
             if not access["writable"]:
-                raise DjangoValidationError(f"Path is read-only: {safe_path} ({access["reason"]}).")
+                raise DjangoValidationError(f"Path is read-only: {safe_path} ({access['reason']}).")
             type_probe = container.exec_run(["test", "-f", "--", safe_path], workdir=session.workdir, stdout=False, stderr=False, tty=False)
             if int(type_probe.exit_code or 1) != 0:
                 raise DjangoValidationError("Only regular files can be deleted from the file editor.")
