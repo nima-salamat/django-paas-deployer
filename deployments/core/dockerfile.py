@@ -2143,6 +2143,28 @@ def _php_app_root_from_document_root(document_root_rel: str) -> str:
     return f"/var/www/html/{rel}"
 
 
+def _strip_base_owned_php_runtime(dockerfile: str) -> str:
+    """Remove expensive PHP/Apache runtime setup when a cached PHP base is used."""
+    patterns = [
+        r"\nRUN apt-get update && apt-get install -y --no-install-recommends\s+"
+        r"git unzip libzip-dev libpng-dev libjpeg62-turbo-dev libfreetype6-dev\s+"
+        r"libicu-dev libonig-dev libxml2-dev(?: curl ca-certificates)?\s+"
+        r"&& docker-php-ext-configure gd --with-freetype --with-jpeg\s+"
+        r"&& docker-php-ext-install -j\$\(nproc\)[\s\S]*?"
+        r"&& rm -rf /var/lib/apt/lists/\*\s*",
+        r"\nRUN apt-get update && apt-get install -y --no-install-recommends[\s\S]*?"
+        r"docker-php-ext-install[\s\S]*?&& rm -rf /var/lib/apt/lists/\*\s*",
+    ]
+    out = dockerfile
+    for pattern in patterns:
+        candidate = re.sub(pattern, "\n", out, count=1, flags=re.IGNORECASE)
+        if candidate != out:
+            out = candidate
+            break
+    out = re.sub(r"\nRUN docker-php-ext-install [^\n]+\n", "\n", out, flags=re.IGNORECASE)
+    return out
+
+
 def _apply_resolved_base_images(dockerfile: str, config=None) -> str:
     """Replace upstream runtime FROM stages with prebuilt operator base images.
 
@@ -2176,8 +2198,14 @@ def _apply_resolved_base_images(dockerfile: str, config=None) -> str:
     if bases.get("base_image") and (
         "php" in bases["base_image"] or "laravel" in str(getattr(config, "platform", ""))
     ):
-        out = re.sub(r"^COPY\s+--from=[^\n]+/composer:2\s+/usr/bin/composer\s+/usr/bin/composer\s*$",
-                     "# Composer is provided by the cached PHP base image.", out, flags=re.MULTILINE)
+        # The cached operator base already provides OS libraries, PHP extensions,
+        # Apache modules and Composer. Do not rebuild those layers per tenant.
+        out = _strip_base_owned_php_runtime(out)
+        out = re.sub(
+            r"^COPY\s+--from=[^\n]+/composer:2\s+/usr/bin/composer\s+/usr/bin/composer\s*$",
+            "# Composer is provided by the cached PHP base image.",
+            out, flags=re.MULTILINE,
+        )
 
     return out
 
