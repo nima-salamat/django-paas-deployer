@@ -347,8 +347,16 @@ def _validate_platform_command(argv: list[str], platform: str, root: str) -> Non
     allowed=BASE_COMMANDS | PLATFORM_COMMANDS.get(platform,set())
     if base not in allowed: raise ValidationError(f"Command '{base}' is not allowed for platform '{platform}'.")
     for token in argv[1:]:
+        # Relative `..` is allowed when it resolves inside the workspace (for
+        # example `cd ..` from /var/www/html/database). The old raw-token check
+        # rejected the perfectly valid `..` before cwd-aware resolution.
+        if base == 'cd':
+            continue
         if '../' in token or token.startswith('..') or token.endswith('/..'):
-            safe = _safe_workdir(token if token.startswith('/') else posixpath.join(root, token), root)
+            try:
+                safe = _safe_workdir(token if token.startswith('/') else posixpath.join(root, token), root)
+            except ValidationError:
+                raise ValidationError('Path traversal outside the service workspace is not allowed.')
             if not _path_is_within(safe, root):
                 raise ValidationError('Path traversal outside the service workspace is not allowed.')
         if token.startswith('/') and not _path_is_within(token,root) and not re.match(r'^https?://',token,re.I):

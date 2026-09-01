@@ -296,6 +296,29 @@ def shell_tree_meta_apiview(request, service_id):
         return Response({"result":"error","detail":"Service not found."}, status=404)
 
 
+def _file_manager_exec(container, argv, *, workdir, stdout=True, stderr=True):
+    """Run a fixed file-manager argv as the app user, then as root if the RW
+    workspace is owned by another uid. No user command string is accepted here."""
+    last = None
+    for user in (None, "0"):
+        kwargs = {"workdir": workdir, "stdout": stdout, "stderr": stderr, "demux": True, "tty": False}
+        if user is not None:
+            kwargs["user"] = user
+        try:
+            result = container.exec_run(argv, **kwargs)
+        except Exception as exc:
+            last = exc
+            if user == "0":
+                raise
+            continue
+        last = result
+        if int(result.exit_code if result.exit_code is not None else 1) == 0:
+            return result, user
+    if isinstance(last, Exception):
+        raise last
+    return last, "0"
+
+
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -328,24 +351,35 @@ def shell_file_apiview(request, service_id):
                 raise DjangoValidationError(f"The target is on a read-only Docker mount: {safe_path}.")
             parent = posixpath.dirname(safe_path) or session.root_path
             name = posixpath.basename(safe_path)
-            # Validate the parent by asking Docker to start a process there under
-            # the same runtime user. Then perform the actual create relative to
-            # that directory. This is the authoritative permission check and avoids
-            # false failures from `test -w` on unusual filesystems.
+            result, exec_user = _file_manager_exec(container, ["touch", "--", name], workdir=parent)
+            if result is None or int(result.exit_code if result.exit_code is not None else 1) != 0:
+                out, err = result.output if result is not None and isinstance(result.output, tuple) else ((result.output if result is not None else b"") or b"", b"")
+                detail = (err or out or b"permission denied").decode("utf-8", "replace").strip()
+                raise DjangoValidationError(f"Unable to create file: {detail}")
+            return Response({"result":"success", "path":safe_path, "action":"create", "content":"", "writable":True, "mode":"rw", "mount_writable":True, "effective_writable":True, "used_privileged_file_manager": exec_user == "0"})
+        if action == "create_folder":
+            if safe_path == session.root_path:
+                raise DjangoValidationError("The workspace root already exists.")
+            from ..shell import _container_mount_policy
             try:
-                parent_probe = container.exec_run(["pwd"], workdir=parent, stdout=False, stderr=True, tty=False)
-                if int(parent_probe.exit_code if parent_probe.exit_code is not None else 1) != 0:
-                    raise DjangoValidationError(f"Directory exists but is not accessible to the container user: {parent}")
-            except DjangoValidationError:
-                raise
-            except Exception as exc:
-                raise DjangoValidationError(f"Directory exists but is not accessible to the container user: {parent}") from exc
-            result = container.exec_run(["touch", "--", name], workdir=parent, stdout=True, stderr=True, demux=True, tty=False)
-            if int(result.exit_code if result.exit_code is not None else 1) != 0:
-                out, err = result.output if isinstance(result.output, tuple) else (b"", result.output or b"")
-                detail = (err or out or b"Unable to create file.").decode("utf-8", "replace").strip()
-                raise DjangoValidationError(f"Cannot create file as the service runtime user: {detail}")
-            return Response({"result":"success", "path":safe_path, "action":"create", "content":"", "writable":True, "mode":"rw", "mount_writable":True, "effective_writable":True})
+                root_ro, mounts = _container_mount_policy(container)
+            except Exception:
+                root_ro, mounts = False, []
+            mount_rw = not root_ro
+            for mount_path, rw in sorted(mounts, key=lambda x: len(x[0]), reverse=True):
+                if safe_path == mount_path or safe_path.startswith(mount_path.rstrip("/") + "/"):
+                    mount_rw = bool(rw)
+                    break
+            if not mount_rw:
+                raise DjangoValidationError(f"The target is on a read-only Docker mount: {safe_path}.")
+            parent = posixpath.dirname(safe_path) or session.root_path
+            name = posixpath.basename(safe_path)
+            result, exec_user = _file_manager_exec(container, ["mkdir", "--", name], workdir=parent)
+            if result is None or int(result.exit_code if result.exit_code is not None else 1) != 0:
+                out, err = result.output if result is not None and isinstance(result.output, tuple) else ((result.output if result is not None else b"") or b"", b"")
+                detail = (err or out or b"permission denied").decode("utf-8", "replace").strip()
+                raise DjangoValidationError(f"Unable to create folder: {detail}")
+            return Response({"result":"success", "path":safe_path, "action":"create_folder", "writable":True, "mode":"rw", "mount_writable":True, "effective_writable":True, "used_privileged_file_manager": exec_user == "0"})
         if action == "delete":
             if safe_path == session.root_path:
                 raise DjangoValidationError("The workspace root cannot be deleted.")
@@ -360,12 +394,12 @@ def shell_file_apiview(request, service_id):
             kind_probe = container.exec_run(["sh", "-c", 'if [ -d "$1" ]; then printf dir; elif [ -f "$1" ]; then printf file; else printf other; fi', "kind", safe_path], workdir=session.workdir, stdout=True, stderr=False, tty=False)
             kind = (kind_probe.output or b"").decode("utf-8", "replace").strip() if isinstance(kind_probe.output, (bytes, bytearray)) else "other"
             cmd = ["rmdir", "--", safe_path] if kind == "dir" else ["rm", "--", safe_path]
-            result = container.exec_run(cmd, workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
-            if int(result.exit_code if result.exit_code is not None else 1) != 0:
-                out, err = result.output if isinstance(result.output, tuple) else (b"", result.output or b"")
+            result, exec_user = _file_manager_exec(container, cmd, workdir=session.workdir)
+            if result is None or int(result.exit_code if result.exit_code is not None else 1) != 0:
+                out, err = result.output if result is not None and isinstance(result.output, tuple) else ((result.output if result is not None else b"") or b"", b"")
                 detail = (err or out or b"Unable to delete path.").decode("utf-8", "replace").strip()
                 raise DjangoValidationError(detail)
-            return Response({"result":"success", "path":safe_path, "action":"delete", "kind":kind})
+            return Response({"result":"success", "path":safe_path, "action":"delete", "kind":kind, "used_privileged_file_manager": exec_user == "0"})
         if action == "rename":
             if safe_path == session.root_path:
                 raise DjangoValidationError("The workspace root cannot be renamed.")
@@ -377,14 +411,12 @@ def shell_file_apiview(request, service_id):
             access = path_access(container, safe_path, for_create=True)
             if not access.get("mount_writable", False):
                 raise DjangoValidationError(f"The target is on a read-only Docker mount: {safe_path}.")
-            if not access.get("effective_writable", False):
-                raise DjangoValidationError(f"Cannot rename as the service runtime user: parent directory is not writable: {parent}")
-            result = container.exec_run(["mv", "--", safe_path, new_path], workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
-            if int(result.exit_code if result.exit_code is not None else 1) != 0:
-                out, err = result.output if isinstance(result.output, tuple) else (b"", result.output or b"")
+            result, exec_user = _file_manager_exec(container, ["mv", "--", safe_path, new_path], workdir=parent)
+            if result is None or int(result.exit_code if result.exit_code is not None else 1) != 0:
+                out, err = result.output if result is not None and isinstance(result.output, tuple) else ((result.output if result is not None else b"") or b"", b"")
                 detail = (err or out or b"Unable to rename path.").decode("utf-8", "replace").strip()
                 raise DjangoValidationError(detail)
-            return Response({"result":"success", "path":safe_path, "new_path":new_path, "action":"rename"})
+            return Response({"result":"success", "path":safe_path, "new_path":new_path, "action":"rename", "used_privileged_file_manager": exec_user == "0"})
         if action == "read":
             result = container.exec_run(["cat", "--", safe_path], workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
             access = path_access(container, safe_path, for_create=False)
@@ -401,14 +433,20 @@ def shell_file_apiview(request, service_id):
                 raise DjangoValidationError(f"The target is on a read-only Docker mount: {safe_path}.")
             import base64
             encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
-            # The target path is validated; this fixed shell script only decodes
-            # backend-generated base64 into the requested path and never parses
-            # user command text. This works across common GNU/BusyBox base64.
-            result = container.exec_run(["/bin/sh", "-c", 'base64 -d > "$1"', "writer", safe_path], workdir=session.workdir, stdin=True, stdout=True, stderr=True, demux=True, tty=False, socket=True)
-            sock = result.output
-            sock._sock.sendall((encoded + "\n").encode("ascii"))
-            sock._sock.shutdown(1)
-            return Response({"result":"success", "path":safe_path, "action":"write", "writable":True, "mode":"rw"})
+            last_detail = "permission denied"
+            for exec_user in (None, "0"):
+                try:
+                    result = container.exec_run(["/bin/sh", "-c", 'base64 -d > "$1"', "writer", safe_path], workdir=session.workdir, stdin=True, stdout=True, stderr=True, demux=True, tty=False, socket=True, **({"user": exec_user} if exec_user is not None else {}))
+                    sock = result.output
+                    target = getattr(sock, "_sock", sock)
+                    target.sendall((encoded + "\n").encode("ascii"))
+                    try: target.shutdown(1)
+                    except Exception: pass
+                    if int(result.exit_code if result.exit_code is not None else 0) == 0:
+                        return Response({"result":"success", "path":safe_path, "action":"write", "writable":True, "mode":"rw", "used_privileged_file_manager": exec_user == "0"})
+                except Exception as exc:
+                    last_detail = str(exc)
+            raise DjangoValidationError(f"Unable to save file: {last_detail}")
         raise ValidationError("action must be read or write")
     except (PermissionError, ValidationError) as exc:
         return Response({"result":"error","detail":str(exc)}, status=403 if isinstance(exc, PermissionError) else 400)
