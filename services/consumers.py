@@ -1,4 +1,5 @@
 import asyncio
+import shlex
 import urllib.parse
 
 from channels.db import database_sync_to_async
@@ -180,3 +181,199 @@ class ServiceLogsConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json({"type": "error", "message": "Container not found or has been removed."})
         except Exception as exc:
             await self.send_json({"type": "error", "message": f"Log stream error: {str(exc)}"})
+
+
+class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
+    """Interactive restricted shell backed by a Docker exec PTY.
+
+    Unlike the legacy POST /shell/command endpoint, this keeps the child
+    process and PTY alive across multiple messages so commands such as
+    ``python manage.py createsuperuser`` can pause for stdin and continue
+    after the browser sends the next line.
+    """
+
+    async def connect(self):
+        query = self.scope.get("query_string", b"").decode("utf-8")
+        params = urllib.parse.parse_qs(query)
+        access_token = (params.get("token") or [None])[0]
+        shell_token = (params.get("shell_token") or [None])[0]
+        service_id = self.scope["url_route"]["kwargs"].get("service_id")
+        if not access_token or not shell_token:
+            await self.close(code=4001)
+            return
+        try:
+            validated = AccessToken(access_token)
+            user_id = validated["user_id"]
+            self.user = await database_sync_to_async(User.objects.get)(pk=user_id)
+            self.service = await database_sync_to_async(self._get_service)(service_id)
+            self.session = await database_sync_to_async(self._authenticate_shell)(shell_token)
+        except (InvalidToken, TokenError, KeyError, User.DoesNotExist, Service.DoesNotExist, PermissionError):
+            await self.close(code=4003)
+            return
+        self.exec_socket = None
+        self.exec_task = None
+        self.exec_id = None
+        await self.accept()
+        await self.send_json({"type": "ready", "cwd": self.session.workdir, "platform": self.session.platform})
+
+    def _get_service(self, service_id):
+        from services.api.sharing import user_can_access_service
+        service = Service.objects.filter(pk=service_id).first()
+        if not service:
+            raise Service.DoesNotExist
+        allowed, _ = user_can_access_service(service, self.user, action="can_shell")
+        if not allowed:
+            raise PermissionError("You are not allowed to use the restricted service shell.")
+        return service
+
+    def _authenticate_shell(self, shell_token):
+        from .shell import authenticate_session
+        return authenticate_session(self.service, self.user, shell_token)
+
+    async def disconnect(self, code):
+        if self.exec_task and not self.exec_task.done():
+            self.exec_task.cancel()
+            try:
+                await self.exec_task
+            except asyncio.CancelledError:
+                pass
+        await self._close_exec_socket()
+
+    async def _close_exec_socket(self):
+        sock = getattr(self, "exec_socket", None)
+        self.exec_socket = None
+        if not sock:
+            return
+        def close_sock():
+            try:
+                sock.close()
+            except Exception:
+                pass
+        await asyncio.get_running_loop().run_in_executor(None, close_sock)
+
+    async def receive_json(self, content, **kwargs):
+        message_type = str(content.get("type") or "").strip().lower()
+        if message_type == "command":
+            await self._start_command(str(content.get("command") or ""), bool(content.get("confirm", False)))
+            return
+        if message_type == "stdin":
+            await self._write_stdin(str(content.get("data") or ""))
+            return
+        if message_type == "signal":
+            await self._write_stdin("\x03" if content.get("name") == "ctrl-c" else "")
+            return
+        if message_type == "resize":
+            await self.send_json({"type": "resize.unsupported"})
+            return
+        await self.send_json({"type": "error", "message": "Unsupported shell message."})
+
+    async def _start_command(self, command, confirm):
+        from .shell import _reject_shell_syntax, _validate_platform_command, _is_destructive_command, _resolve_container
+        try:
+            if self.exec_socket is not None:
+                await self.send_json({"type": "error", "message": "A command is already running. Send input or wait for it to finish."})
+                return
+            _reject_shell_syntax(command)
+            argv = shlex.split(command, posix=True)
+            _validate_platform_command(argv, self.session.platform, self.session.root_path)
+            if _is_destructive_command(argv) and not confirm:
+                await self.send_json({"type": "confirm_required", "command": command, "message": "This command changes application state. Confirmation is required."})
+                return
+            if argv and argv[0] == "cd":
+                from .shell import execute_command
+                result = await database_sync_to_async(execute_command)(self.session, command, confirm=confirm)
+                await self.send_json({"type": "command.output", **result})
+                return
+            container = await database_sync_to_async(_resolve_container)(self.service)
+            loop = asyncio.get_running_loop()
+            def create_exec():
+                api = container.client.api
+                created = api.exec_create(
+                    container.id,
+                    cmd=argv,
+                    stdout=True,
+                    stderr=True,
+                    stdin=True,
+                    tty=True,
+                    workdir=self.session.workdir,
+                )
+                sock = api.exec_start(created["Id"], tty=True, socket=True)
+                return created["Id"], sock
+            self.exec_id, self.exec_socket = await loop.run_in_executor(None, create_exec)
+            await self.send_json({"type": "process.started", "exec_id": self.exec_id, "cwd": self.session.workdir, "command": command})
+            self.exec_task = asyncio.create_task(self._read_exec_output(command))
+        except Exception as exc:
+            self.exec_id = None
+            await self._close_exec_socket()
+            await self.send_json({"type": "error", "message": str(exc)})
+
+    async def _read_exec_output(self, command):
+        loop = asyncio.get_running_loop()
+        sock = self.exec_socket
+        try:
+            while True:
+                chunk = await loop.run_in_executor(None, lambda: self._recv(sock, 32768))
+                if not chunk:
+                    break
+                text = bytes(chunk).decode("utf-8", "replace")
+                await self.send_json({"type": "process.output", "data": text})
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self.send_json({"type": "error", "message": f"Interactive shell stream error: {exc}"})
+        finally:
+            exit_code = await self._inspect_exit_code()
+            try:
+                await database_sync_to_async(self._touch_session)()
+            except Exception:
+                pass
+            await self._close_exec_socket()
+            self.exec_id = None
+            self.exec_task = None
+            await self.send_json({"type": "process.exit", "exit_code": exit_code})
+
+    @staticmethod
+    def _recv(sock, size):
+        target = getattr(sock, "_sock", sock)
+        return target.recv(size)
+
+    @staticmethod
+    def _send(sock, data):
+        target = getattr(sock, "_sock", sock)
+        target.sendall(data)
+
+    async def _write_stdin(self, data):
+        if not self.exec_socket:
+            await self.send_json({"type": "error", "message": "No interactive process is running."})
+            return
+        loop = asyncio.get_running_loop()
+        try:
+            payload = data.encode("utf-8")
+            await loop.run_in_executor(None, self._send, self.exec_socket, payload)
+            await database_sync_to_async(self._touch_session)()
+        except Exception as exc:
+            await self.send_json({"type": "error", "message": f"Unable to send input: {exc}"})
+
+    def _touch_session(self):
+        from .shell import _session_expiry
+        now = timezone.now()
+        self.session.last_used_at = now
+        self.session.expires_at = _session_expiry(now)
+        self.session.save(update_fields=["last_used_at", "expires_at"])
+
+    async def _inspect_exit_code(self):
+        exec_id = self.exec_id
+        if not exec_id:
+            return None
+        try:
+            def inspect_exec():
+                try:
+                    from deployments.core.manager.client_manager import Client
+                    api = Client()().api
+                    result = api.exec_inspect(exec_id)
+                    return result.get("ExitCode")
+                except Exception:
+                    return None
+            return await asyncio.get_running_loop().run_in_executor(None, inspect_exec)
+        except Exception:
+            return None

@@ -77,6 +77,14 @@ def shell_catalog_apiview(request, service_id):
             "result": "success",
             "platform": platform,
             "commands": command_catalog(platform),
+            "interactive": {
+                "supported": True,
+                "transport": "websocket",
+                "endpoint": f"/ws/services/shell/{service.pk}/",
+                "stdin": True,
+                "pty": True,
+                "note": "Commands marked interactive may pause and request stdin without terminating the process.",
+            },
             "policy": {
                 "shell_operators": False,
                 "arbitrary_php_scripts": False,

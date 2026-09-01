@@ -220,10 +220,11 @@ def _validate_platform_command(argv: list[str], platform: str, root: str) -> Non
                 # Safe/read-only or routine operational Laravel commands
                 "about", "list", "help", "route:list", "route:clear",
                 "config:show", "config:clear", "cache:clear", "view:clear",
-                "event:list", "schedule:list", "queue:monitor", "storage:link",
+                "event:list", "schedule:list", "queue:monitor", "queue:failed",
+                "queue:monitor", "storage:link",
                 # Database/schema maintenance
                 "migrate", "migrate:status", "migrate:rollback",
-                "migrate:fresh", "migrate:refresh", "db:seed", "db:show",
+                "migrate:fresh", "migrate:refresh", "db:seed", "db:show", "db:table",
                 # Common framework/cache maintenance
                 "optimize", "optimize:clear", "down", "up",
             }
@@ -245,14 +246,14 @@ def _validate_platform_command(argv: list[str], platform: str, root: str) -> Non
                 for token in argv[3:]:
                     if token.startswith("--") and token.split("=", 1)[0] not in allowed_flags:
                         raise ValidationError(f"Artisan flag '{token}' is not allowed.")
-        elif argv[1] not in {"-v", "--version"}:
-            raise ValidationError("Only PHP version flags and selected Artisan commands are allowed.")
+        elif argv[1] not in {"-v", "--version", "--ini", "-m", "--modules", "-i", "--info"}:
+            raise ValidationError("Only PHP diagnostic flags and selected Artisan commands are allowed.")
     if base == "composer":
-        if len(argv) < 2 or argv[1] not in {"install", "update", "dump-autoload", "dump-autoload", "show", "validate", "outdated"}:
+        if len(argv) < 2 or argv[1] not in {"install", "update", "dump-autoload", "show", "validate", "outdated"}:
             raise ValidationError("This Composer command is not allowed.")
     if base in {"python", "python3"}:
         if len(argv) >= 2 and argv[1] == "manage.py":
-            if len(argv) < 3 or argv[2] not in {"migrate", "makemigrations", "createsuperuser", "collectstatic", "check"}:
+            if len(argv) < 3 or argv[2] not in {"migrate", "makemigrations", "createsuperuser", "changepassword", "collectstatic", "check", "showmigrations", "sqlmigrate", "test"}:
                 raise ValidationError("This Django manage.py command is not allowed.")
         elif len(argv) >= 2 and argv[1] in {"-c", "-m"}:
             raise ValidationError("Inline/eval Python execution is not allowed.")
@@ -389,44 +390,62 @@ def _is_destructive_command(argv: list[str]) -> bool:
 
 
 def command_catalog(platform: str) -> list[dict]:
-    """Return UI-safe command metadata; custom arbitrary commands are excluded."""
+    """Return platform-aware command metadata consumed by the terminal UI.
+
+    ``interactive`` means the command is expected to keep a PTY open and may
+    request stdin (for example Django's ``createsuperuser``).
+    """
     items = [
-        {"command": c, "label": c.replace("_", " "), "mutating": False, "dangerous": False}
+        {"command": c, "label": c.replace("_", " "), "mutating": False, "dangerous": False, "interactive": False}
         for c in sorted(GENERIC_COMMAND_CATALOG)
     ]
     if platform in {"laravel", "php"}:
         items.extend(
             {"command": f"php artisan {name}", "label": meta["label"],
-             "mutating": bool(meta.get("mutating")), "dangerous": bool(meta.get("destructive"))}
+             "mutating": bool(meta.get("mutating")), "dangerous": bool(meta.get("destructive")), "interactive": bool(meta.get("interactive", False))}
             for name, meta in sorted(ARTISAN_COMMAND_CATALOG.items())
         )
         items.extend([
-            {"command": "php -v", "label": "PHP version", "mutating": False, "dangerous": False},
-            {"command": "composer show", "label": "Composer packages", "mutating": False, "dangerous": False},
-            {"command": "composer validate", "label": "Validate composer.json", "mutating": False, "dangerous": False},
+            {"command": "php -v", "label": "PHP version", "mutating": False, "dangerous": False, "interactive": False},
+            {"command": "php --ini", "label": "PHP ini location", "mutating": False, "dangerous": False, "interactive": False},
+            {"command": "php -m", "label": "PHP extensions", "mutating": False, "dangerous": False, "interactive": False},
+            {"command": "php -i", "label": "PHP information", "mutating": False, "dangerous": False, "interactive": False},
+            {"command": "composer show", "label": "Composer packages", "mutating": False, "dangerous": False, "interactive": False},
+            {"command": "composer validate", "label": "Validate composer.json", "mutating": False, "dangerous": False, "interactive": False},
+            {"command": "composer outdated", "label": "Outdated Composer packages", "mutating": False, "dangerous": False, "interactive": False},
         ])
     elif platform in {"django", "python"}:
-        for cmd, label, mut in [
-            ("python manage.py check", "Django system check", False),
-            ("python manage.py migrate", "Run migrations", True),
-            ("python manage.py makemigrations", "Create migrations", True),
-            ("python manage.py createsuperuser", "Create Django superuser", True),
-            ("python manage.py collectstatic", "Collect static files", True),
-        ]:
-            items.append({"command": cmd, "label": label, "mutating": mut, "dangerous": False})
         items += [
-            {"command": "python --version", "label": "Python version", "mutating": False, "dangerous": False},
-            {"command": "pip list", "label": "Installed Python packages", "mutating": False, "dangerous": False},
+            {"command": "python --version", "label": "Python version", "mutating": False, "dangerous": False, "interactive": False},
+            {"command": "python manage.py check", "label": "Django system check", "mutating": False, "dangerous": False, "interactive": False},
+            {"command": "python manage.py showmigrations", "label": "List migrations", "mutating": False, "dangerous": False, "interactive": False},
+            {"command": "python manage.py migrate", "label": "Run migrations", "mutating": True, "dangerous": False, "interactive": False},
+            {"command": "python manage.py makemigrations", "label": "Create migrations", "mutating": True, "dangerous": False, "interactive": False},
+            {"command": "python manage.py createsuperuser", "label": "Create Django superuser", "mutating": True, "dangerous": False, "interactive": True, "input_mode": "line"},
+            {"command": "python manage.py changepassword", "label": "Change Django user password", "mutating": True, "dangerous": False, "interactive": True, "input_mode": "line"},
+            {"command": "python manage.py collectstatic", "label": "Collect static files", "mutating": True, "dangerous": False, "interactive": False},
+            {"command": "pip list", "label": "Installed Python packages", "mutating": False, "dangerous": False, "interactive": False},
+            {"command": "pip freeze", "label": "Frozen Python requirements", "mutating": False, "dangerous": False, "interactive": False},
+            {"command": "pip check", "label": "Check Python dependencies", "mutating": False, "dangerous": False, "interactive": False},
         ]
     elif platform == "node":
         items += [
-            {"command": "node --version", "label": "Node version", "mutating": False, "dangerous": False},
-            {"command": "npm list", "label": "Installed npm packages", "mutating": False, "dangerous": False},
-            {"command": "npm run build", "label": "Run production build", "mutating": True, "dangerous": False},
-            {"command": "npm test", "label": "Run tests", "mutating": False, "dangerous": False},
+            {"command": "node --version", "label": "Node version", "mutating": False, "dangerous": False, "interactive": False},
+            {"command": "npm --version", "label": "npm version", "mutating": False, "dangerous": False, "interactive": False},
+            {"command": "npm list", "label": "Installed npm packages", "mutating": False, "dangerous": False, "interactive": False},
+            {"command": "npm outdated", "label": "Outdated npm packages", "mutating": False, "dangerous": False, "interactive": False},
+            {"command": "npm audit", "label": "Audit npm dependencies", "mutating": False, "dangerous": False, "interactive": False},
+            {"command": "npm run build", "label": "Run production build", "mutating": True, "dangerous": False, "interactive": False},
+            {"command": "npm test", "label": "Run tests", "mutating": False, "dangerous": False, "interactive": False},
         ]
-    return items
-
+    # De-duplicate while preserving deterministic order.
+    unique, seen = [], set()
+    for item in items:
+        if item["command"] in seen:
+            continue
+        seen.add(item["command"])
+        unique.append(item)
+    return unique
 
 def execute_command(session, command: str, *, confirm: bool = False) -> dict:
     _reject_shell_syntax(command)
