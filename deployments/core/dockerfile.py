@@ -2161,7 +2161,18 @@ def _strip_base_owned_php_runtime(dockerfile: str) -> str:
         if candidate != out:
             out = candidate
             break
-    out = re.sub(r"\nRUN docker-php-ext-install [^\n]+\n", "\n", out, flags=re.IGNORECASE)
+    # The canonical renderer may inject a multiline fallback runtime block
+    # (docker-php-ext-install + Apache modules) when the user template does not
+    # already contain docker-php-ext-install. Once a prebuilt PHP base image is
+    # selected, that entire generated block is owned by the base and must not
+    # be repeated in the application image.
+    out = re.sub(
+        r"\nRUN docker-php-ext-install[\s\S]*?(?=\n(?:RUN|COPY|ADD|ENV|ARG|WORKDIR|EXPOSE|ENTRYPOINT|CMD|USER|FROM)\b|\Z)",
+        "\n",
+        out,
+        count=1,
+        flags=re.IGNORECASE,
+    )
     return out
 
 
@@ -2847,13 +2858,13 @@ def _inject_laravel_frontend_build(
         # vendor/ (for example a package-provided Tailwind stylesheet), so the
         # Node stage must see the vendor tree produced by the PHP/composer stage.
         if not re.search(
-            r"^FROM\\s+[^\\n]+\\s+AS\\s+deployer-backend\\s*$",
+            r"^FROM\s+[^\n]+\s+AS\s+deployer-backend\s*$",
             dockerfile,
             re.MULTILINE | re.IGNORECASE,
         ):
             dockerfile = re.sub(
-                r"^FROM\\s+([^\\s]+)([ \\t]*)$",
-                r"FROM \\1 AS deployer-backend",
+                r"^FROM\s+([^\s]+)([ \t]*)$",
+                r"FROM \1 AS deployer-backend",
                 dockerfile,
                 count=1,
                 flags=re.MULTILINE,

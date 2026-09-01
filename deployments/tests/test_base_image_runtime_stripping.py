@@ -12,3 +12,13 @@ COPY . /var/www/html/
     assert "docker-php-ext-install" not in out
     assert "COPY . /var/www/html/" in out
     assert out.startswith("FROM paas-base/php-apache:8.4-r1")
+
+
+def test_multiline_php_runtime_fallback_is_stripped():
+    from deployments.core.dockerfile import _strip_base_owned_php_runtime
+    dockerfile = """\nFROM paas-base/php-apache:8.4-r1\nRUN docker-php-ext-install mysqli pdo pdo_mysql \\n    && a2enmod rewrite headers mime\
+RUN echo \"app\" > /tmp/app\n"""
+    out = _strip_base_owned_php_runtime(dockerfile)
+    assert "docker-php-ext-install" not in out
+    assert "a2enmod" not in out
+    assert "RUN echo" in out
