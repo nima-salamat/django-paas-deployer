@@ -315,12 +315,16 @@ def shell_file_apiview(request, service_id):
             if safe_path == session.root_path:
                 raise DjangoValidationError("The workspace root cannot be created or replaced.")
             access = path_access(container, safe_path, for_create=True)
-            if not access["writable"]:
-                raise DjangoValidationError(f"Path is read-only: {safe_path} ({access['reason']}).")
-            parent_probe = container.exec_run(["test", "-d", posixpath.dirname(safe_path) or session.root_path], workdir=session.workdir, stdout=False, stderr=False, tty=False)
+            if not access.get("mount_writable", False):
+                raise DjangoValidationError(f"The target is on a read-only Docker mount: {safe_path}.")
+            parent = posixpath.dirname(safe_path) or session.root_path
+            parent_probe = container.exec_run(["ls", "-d", parent + "/."], workdir=session.workdir, stdout=False, stderr=False, tty=False)
             if int(parent_probe.exit_code or 1) != 0:
-                raise DjangoValidationError("Parent directory does not exist.")
-            result = container.exec_run(["touch", "--", safe_path], workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
+                raise DjangoValidationError("Parent directory does not exist or is not accessible by the container user.")
+            # The actual filesystem operation is authoritative. Do not reject an
+            # RW mount merely because a generic -w probe disagrees (ACLs, ACL
+            # helpers, user namespaces and unusual filesystems can differ).
+            result = container.exec_run(["touch", safe_path], workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
             if int(result.exit_code or 0) != 0:
                 out, err = result.output if isinstance(result.output, tuple) else (b"", result.output or b"")
                 raise DjangoValidationError((err or out or b"Unable to create file.").decode("utf-8", "replace"))
@@ -329,9 +333,9 @@ def shell_file_apiview(request, service_id):
             if safe_path == session.root_path:
                 raise DjangoValidationError("The workspace root cannot be deleted.")
             access = path_access(container, safe_path, for_create=True)
-            if not access["writable"]:
-                raise DjangoValidationError(f"Path is read-only: {safe_path} ({access['reason']}).")
-            type_probe = container.exec_run(["test", "-f", "--", safe_path], workdir=session.workdir, stdout=False, stderr=False, tty=False)
+            if not access.get("mount_writable", False):
+                raise DjangoValidationError(f"The target is on a read-only Docker mount: {safe_path}.")
+            type_probe = container.exec_run(["ls", "-l", safe_path], workdir=session.workdir, stdout=False, stderr=False, tty=False)
             if int(type_probe.exit_code or 1) != 0:
                 raise DjangoValidationError("Only regular files can be deleted from the file editor.")
             result = container.exec_run(["rm", "--", safe_path], workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
@@ -351,12 +355,14 @@ def shell_file_apiview(request, service_id):
             if len(content.encode("utf-8")) > 262144:
                 raise ValidationError("File is too large for the restricted editor (256 KiB).")
             access = path_access(container, safe_path, for_create=True)
-            if not access["writable"]:
-                raise DjangoValidationError(f"Path is read-only: {safe_path} ({access['reason']}).")
+            if not access.get("mount_writable", False):
+                raise DjangoValidationError(f"The target is on a read-only Docker mount: {safe_path}.")
             import base64
             encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
-            # No shell: base64 is used only through argv, and the target path is already validated.
-            result = container.exec_run(["base64", "-d", "-o", safe_path], workdir=session.workdir, stdin=True, stdout=True, stderr=True, demux=True, tty=False, socket=True)
+            # The target path is validated; this fixed shell script only decodes
+            # backend-generated base64 into the requested path and never parses
+            # user command text. This works across common GNU/BusyBox base64.
+            result = container.exec_run(["/bin/sh", "-c", 'base64 -d > "$1"', "writer", safe_path], workdir=session.workdir, stdin=True, stdout=True, stderr=True, demux=True, tty=False, socket=True)
             sock = result.output
             sock._sock.sendall((encoded + "\n").encode("ascii"))
             sock._sock.shutdown(1)
