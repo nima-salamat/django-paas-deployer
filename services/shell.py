@@ -310,6 +310,30 @@ def create_session(service: Service, user, workdir: str | None = None) -> tuple[
     return session, token
 
 
+def terminate_active_session(service: Service, *, actor=None):
+    """Revoke the single active shell session for a service.
+
+    Shell commands are synchronous docker exec calls, so replacing a shell
+    session only revokes the token/DB session; it does not kill the service
+    container.
+    """
+    from services.models import ShellSession
+
+    now = timezone.now()
+    with transaction.atomic():
+        qs = ShellSession.objects.select_for_update().filter(
+            service=service, status=ShellSession.Status.ACTIVE
+        )
+        active = qs.filter(expires_at__gt=now).first()
+        if not active:
+            qs.filter(expires_at__lte=now).update(status=ShellSession.Status.EXPIRED)
+            return None
+        active.status = ShellSession.Status.CLOSED
+        active.closed_at = now
+        active.save(update_fields=["status", "closed_at"])
+        return active
+
+
 def authenticate_session(service: Service, user, token: str):
     from services.models import ShellSession
     session = ShellSession.objects.filter(

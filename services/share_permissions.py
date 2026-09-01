@@ -16,6 +16,7 @@ DEFAULT_SHARE_RULES: dict[str, bool] = {
     "can_view_metrics": True,
     "can_view_db_credentials": False,  # DB password / root_password / secrets
     "can_shell": False,                 # restricted shell on the live service container
+    "can_shell_replace": False,          # terminate another active shell session on the service
     # lifecycle
     "can_start": False,
     "can_stop": False,
@@ -49,6 +50,7 @@ RULE_LABELS: dict[str, str] = {
     "can_view_metrics": "View metrics",
     "can_view_db_credentials": "View DB credentials",
     "can_shell": "Use restricted service shell",
+    "can_shell_replace": "Replace another active shell session",
     "can_start": "Start",
     "can_stop": "Stop",
     "can_restart": "Restart",

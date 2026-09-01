@@ -1,5 +1,6 @@
 from django.core.exceptions import ValidationError
 from django.http import Http404
+from django.utils import timezone
 from services.models import Service
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -9,7 +10,7 @@ from rest_framework import status
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 from .common import _get_service_for_user_or_share
-from ..shell import authenticate_session, close_session, create_session, execute_command, command_catalog, _platform_for_service
+from ..shell import authenticate_session, close_session, create_session, terminate_active_session, execute_command, command_catalog, _platform_for_service
 
 
 def _resolve(request, service_id, action="can_shell"):
@@ -41,12 +42,14 @@ def shell_info_apiview(request, service_id):
         allowed, _ = user_can_access_service(
             service, request.user, action="can_shell"
         )
+        can_replace = is_owner or bool(user_can_access_service(service, request.user, action="can_shell_replace")[0])
         return Response({
             "result": "success",
             "service_id": str(service.pk),
             "enabled": bool(allowed),
             "is_owner": is_owner,
             "permission": "can_shell",
+            "can_replace_session": bool(can_replace),
             "shared": share is not None,
             "menu": {
                 "id": "shell",
@@ -96,8 +99,67 @@ def shell_create_apiview(request, service_id):
         service = _resolve(request, service_id, action="can_shell")
         session, token = create_session(service, request.user, request.data.get("workdir"))
         return Response({"result":"success","session_id":str(session.id),"token":token,"platform":session.platform,"cwd":session.workdir,"expires_at":session.expires_at}, status=201)
-    except (PermissionError, ValidationError) as exc:
-        return Response({"result":"error","detail":str(exc)}, status=403 if isinstance(exc, PermissionError) else 409)
+    except ValidationError as exc:
+        from services.models import ShellSession
+        from services.api.sharing import user_can_access_service
+        if "already has an active shell session" in str(exc):
+            active = ShellSession.objects.filter(
+                service=service, status=ShellSession.Status.ACTIVE, expires_at__gt=timezone.now()
+            ).select_related("user").first()
+            is_owner = str(service.user_id) == str(request.user.id)
+            can_replace = is_owner or bool(user_can_access_service(service, request.user, action="can_shell_replace")[0])
+            return Response({
+                "result": "error",
+                "code": "SHELL_SESSION_ACTIVE",
+                "detail": (exc.messages[0] if getattr(exc, "messages", None) else str(exc)),
+                "can_replace": bool(can_replace),
+                "active_session": {
+                    "session_id": str(active.id) if active else None,
+                    "user_id": str(active.user_id) if active else None,
+                    "username": getattr(active.user, "username", None) if active else None,
+                    "expires_at": active.expires_at if active else None,
+                },
+            }, status=409)
+        return Response({"result":"error","detail":str(exc)}, status=409)
+    except PermissionError as exc:
+        return Response({"result":"error","detail":str(exc)}, status=403)
+    except Service.DoesNotExist:
+        return Response({"result":"error","detail":"Service not found."}, status=404)
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def shell_replace_apiview(request, service_id):
+    """Replace the only active shell session after a privileged confirmation."""
+    try:
+        service = _resolve(request, service_id, action="can_shell")
+        from services.api.sharing import user_can_access_service
+        is_owner = str(service.user_id) == str(request.user.id)
+        can_replace = is_owner or bool(user_can_access_service(service, request.user, action="can_shell_replace")[0])
+        if not can_replace:
+            return Response({"result":"error","detail":"You are not allowed to replace another user's shell session."}, status=403)
+        if request.data.get("confirm") is not True:
+            return Response({"result":"error","detail":"confirm=true is required to replace the active shell session."}, status=400)
+        old = terminate_active_session(service, actor=request.user)
+        session, token = create_session(service, request.user, request.data.get("workdir"))
+        return Response({
+            "result":"success",
+            "replaced": bool(old),
+            "previous_session_id": str(old.id) if old else None,
+            "session_id": str(session.id),
+            "token": token,
+            "platform": session.platform,
+            "cwd": session.workdir,
+            "expires_at": session.expires_at,
+        }, status=201)
+    except PermissionError as exc:
+        return Response({"result":"error","detail":str(exc)}, status=403)
+    except ValidationError as exc:
+        return Response({"result":"error","detail":str(exc)}, status=409)
+    except Service.DoesNotExist:
+        return Response({"result":"error","detail":"Service not found."}, status=404)
+
 
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
