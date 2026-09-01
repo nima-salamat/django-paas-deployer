@@ -298,7 +298,7 @@ def shell_tree_meta_apiview(request, service_id):
                     mount_writable = bool(rw); break
             if policy[0] and not any(key == m[0] or key.startswith(m[0].rstrip('/') + '/') for m in policy[1]):
                 mount_writable = False
-            managed = bool(mount_writable and _mode_has_write_bit(container, safe))
+            managed = bool(mount_writable)
             user_writable = bool(access.get(key, False))
             result.append({
                 "path": safe,
@@ -507,9 +507,14 @@ def shell_file_apiview(request, service_id):
             out, err = result.output if isinstance(result.output, tuple) else (result.output or b"", b"")
             mount_rw = bool(access.get("mount_writable", False))
             user_writable = bool(access.get("writable", False))
-            managed_writable = bool(mount_rw and _mode_has_write_bit(container, safe_path))
-            editor_writable = bool(user_writable or managed_writable)
-            reason = "" if editor_writable else ("Read-only Docker mount" if not mount_rw else "File is not writable by the service user and has no writable mode bit")
+            # The restricted backend-owned file manager is allowed to perform
+            # file mutations inside an RW workspace even when the service UID
+            # itself is not the owner. Therefore editor capability is based on
+            # the mount policy plus the managed file-manager capability, while
+            # effective_writable remains the service-user capability.
+            managed_writable = bool(mount_rw)
+            editor_writable = bool(mount_rw)
+            reason = "" if editor_writable else "Read-only Docker mount"
             return Response({"result":"success", "path":safe_path, "exit_code":int(result.exit_code or 0), "content":(out or b"")[:262144].decode("utf-8","replace"), "stderr":(err or b"")[:16384].decode("utf-8","replace"), "writable":editor_writable, "mode":access["mode"], "mount_writable":mount_rw, "effective_writable":user_writable, "managed_writable":managed_writable, "read_only_reason":reason})
         if action == "write":
             content = request.data.get("content")
@@ -520,8 +525,6 @@ def shell_file_apiview(request, service_id):
             access = path_access(container, safe_path, for_create=False)
             if not access.get("mount_writable", False):
                 raise DjangoValidationError(f"The target is on a read-only Docker mount: {safe_path}.")
-            if not access.get("writable", False) and not _mode_has_write_bit(container, safe_path):
-                raise DjangoValidationError(f"The file is read-only: {safe_path}.")
             import base64
             encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
             last_detail = "permission denied"
