@@ -42,6 +42,7 @@ from deployments.core.db_deployer import (
 from deployments.core.deploy import Deploy as OrchestratorDeploy
 from deployments.core.manager.client_manager import Client
 from deployments.core.manager.container_manager import Container
+from deployments.core.manager.image_manager import Image
 from docker.errors import APIError, NotFound as DockerNotFound
 
 from .models import Deploy, DeployLog
@@ -660,6 +661,11 @@ class DeployViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # IMPORTANT: mark the service as STOPPING in a committed transaction
+        # BEFORE touching Docker. Docker emits a `kill`/`die` event when the
+        # old container is stopped/removed. If STOPPING is still uncommitted,
+        # the event consumer can see RUNNING/SUCCEEDED and incorrectly record
+        # `container_exit` as a deployment failure.
         with transaction.atomic():
             service = Service.objects.select_for_update().get(pk=deploy.service_id)
             if service.status in (
@@ -672,22 +678,90 @@ class DeployViewSet(ModelViewSet):
                     status=status.HTTP_409_CONFLICT,
                 )
 
-            container_name = service.get_docker_service_name()
+            service.status = SERVICE_STATUS_CHOICES.STOPPING
+            service.task_id = task_id
+            service.deploy_started = timezone.now()
+            service.save(update_fields=["status", "task_id", "deploy_started"])
+
+            Deploy.objects.filter(pk=deploy.pk).update(
+                status="pending",
+                stage="rebuild_teardown",
+                progress=0,
+                status_message="Stopping the previous container before rebuild.",
+                error_message="",
+                cancel_requested=False,
+            )
+
+        container_name = service.get_docker_service_name()
+        teardown_error = None
+        for attempt in range(1, 3):
             try:
                 if is_db:
                     DBDeployer().remove(container_name)
                 else:
                     OrchestratorDeploy.remove_all(container_name)
+                teardown_error = None
+                break
             except Exception as exc:
+                teardown_error = exc
                 logger.warning(
-                    "rebuild teardown warning for '%s': %s", container_name, exc
+                    "rebuild teardown attempt %s/2 failed for '%s': %s",
+                    attempt, container_name, exc,
                 )
 
+        if teardown_error is not None:
+            # Last-resort idempotent cleanup for app containers. Do not queue
+            # the rebuild until Docker confirms that the old container is gone.
+            try:
+                container = Container(name=container_name)
+                if container.exists():
+                    container.stop(timeout=10)
+                    container.remove()
+                if not is_db:
+                    Image.remove_by_name(container_name)
+                    Image.remove_by_name(f"{container_name}:latest")
+                teardown_error = None
+            except Exception as exc:
+                logger.exception(
+                    "rebuild teardown final cleanup failed for '%s'",
+                    container_name,
+                )
+                teardown_error = exc
+
+        if teardown_error is not None:
+            # Leave the service in a deterministic terminal state instead of
+            # pretending the rebuild was queued while the old container may
+            # still exist. The user can safely press rebuild again.
+            Service.objects.filter(pk=service.pk).update(
+                status=SERVICE_STATUS_CHOICES.FAILED,
+                task_id=None,
+                deploy_started=None,
+            )
+            Deploy.objects.filter(pk=deploy.pk).update(
+                status="failed",
+                stage="rebuild_teardown",
+                progress=100,
+                status_message="Failed to stop the previous container for rebuild.",
+                error_message=str(teardown_error)[:1000],
+            )
+            return Response(
+                {
+                    "result": "error",
+                    "detail": _("Could not stop the previous container. Please retry the rebuild."),
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        # Docker teardown is complete. Now commit the queued state and only
+        # then enqueue the new worker. This prevents a second rebuild/start
+        # from racing the container removal.
+        with transaction.atomic():
+            service = Service.objects.select_for_update().get(pk=service.pk)
             service.selected_deploy = deploy
             service.status = SERVICE_STATUS_CHOICES.QUEUED
             service.deploy_started = timezone.now()
             service.task_id = task_id
-            service.save()
+            service.save(update_fields=["selected_deploy", "status", "deploy_started", "task_id"])
 
             Deploy.objects.filter(pk=deploy.pk).update(
                 status="pending",
