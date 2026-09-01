@@ -303,6 +303,37 @@ def path_access(container, path: str, *, for_create: bool=False, policy=None) ->
         ),
     }
 
+def batch_path_writable(container, paths: list[str], *, policy=None) -> dict[str, bool]:
+    """Return effective write access for many paths with one container exec.
+
+    Mount mode is handled separately. This probe is only the Unix permission
+    layer, and uses a backend-owned fixed script with all paths supplied as
+    argv values (never interpolated into a shell command).
+    """
+    unique = []
+    seen = set()
+    for path in paths:
+        value = posixpath.normpath(str(path))
+        if value not in seen:
+            seen.add(value)
+            unique.append(value)
+    if not unique:
+        return {}
+    script = 'for p do if [ -d "$p" ]; then if [ -w "$p" ] && [ -x "$p" ]; then printf "1\n"; else printf "0\n"; fi; else if [ -w "$p" ]; then printf "1\n"; else printf "0\n"; fi; fi; done'
+    try:
+        result = container.exec_run(['/bin/sh', '-c', script, 'probe', *unique], stdout=True, stderr=False, tty=False)
+        out = result.output if isinstance(result.output, (bytes, bytearray)) else b''
+        if int(result.exit_code if result.exit_code is not None else 1) == 0:
+            values = out.decode('utf-8', 'replace').splitlines()
+            if len(values) == len(unique):
+                return {path: values[i].strip() == '1' for i, path in enumerate(unique)}
+    except Exception:
+        pass
+    # Fallback for images without a POSIX shell. This path is slower but only
+    # used for unusual minimal containers or after a failed bulk probe.
+    return {path: bool(path_access(container, path, policy=policy).get('effective_writable')) for path in unique}
+
+
 def _assert_writable_path(container,path: str,*,for_create: bool=False):
     access=path_access(container,path,for_create=for_create)
     if not access['writable']:
@@ -650,8 +681,19 @@ def execute_command(session, command: str, *, confirm: bool = False) -> dict:
         target=argv[1] if len(argv)==2 else session.root_path
         candidate=target if target.startswith('/') else posixpath.join(session.workdir,target)
         safe=_safe_workdir(candidate,session.root_path)
-        probe_code = _exec_test(container, ['test', '-d', safe], ['/bin/sh', '-c', 'test -d "$1"', 'probe', safe])
-        if probe_code != 0: raise ValidationError(f'Directory does not exist: {safe}')
+        # `test` is not present in every runtime image.  The directory tree
+        # itself is already queried through `ls`, so use the same primitive
+        # for cd validation.  `path/.` guarantees that the target resolves to
+        # a real directory while remaining fully argument-based (no user shell).
+        probe = safe if safe.endswith('/') else safe + '/.'
+        result = container.exec_run(['ls', '-d', probe], stdout=False, stderr=False, tty=False)
+        probe_code = int(result.exit_code if result.exit_code is not None else 1)
+        if probe_code != 0:
+            # A few very small images only expose /bin/ls.
+            result = container.exec_run(['/bin/ls', '-d', probe], stdout=False, stderr=False, tty=False)
+            probe_code = int(result.exit_code if result.exit_code is not None else 1)
+        if probe_code != 0:
+            raise ValidationError(f'Directory does not exist: {safe}')
         session.workdir=safe; now=timezone.now(); session.last_used_at=now; session.expires_at=_session_expiry(now); session.save(update_fields=['workdir','last_used_at','expires_at'])
         return {'exit_code':0,'stdout':safe+'\n','stderr':'','cwd':safe}
     if os.path.basename(argv[0]) in {'nano','vi','vim'}: raise ValidationError('Use the built-in file editor for text files.')

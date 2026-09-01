@@ -11,7 +11,7 @@ from rest_framework import status
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 from .common import _get_service_for_user_or_share
-from ..shell import authenticate_session, close_session, create_session, terminate_active_session, execute_command, command_catalog, _platform_for_service, _resolve_container, _safe_workdir, path_access
+from ..shell import authenticate_session, close_session, create_session, terminate_active_session, execute_command, command_catalog, _platform_for_service, _resolve_container, _safe_workdir, path_access, batch_path_writable
 
 
 def _resolve(request, service_id, action="can_shell"):
@@ -203,50 +203,93 @@ def shell_close_apiview(request, service_id):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def shell_tree_apiview(request, service_id):
-    """Return direct workspace entries with effective RO/RW metadata."""
+    """Fast directory listing. Expensive permission metadata is deferred."""
     try:
         service = _resolve(request, service_id, action="can_shell")
         token = request.headers.get("X-Shell-Token") or request.data.get("token")
         session = authenticate_session(service, request.user, token)
         container = _resolve_container(service)
-        result = container.exec_run(["ls", "-1Ap", "--", session.workdir], stdout=True, stderr=True, demux=True, tty=False)
+        result = container.exec_run(["ls", "-1Ap", session.workdir], stdout=True, stderr=True, demux=True, tty=False)
         out, err = result.output if isinstance(result.output, tuple) else (result.output or b"", b"")
         if int(result.exit_code or 0) != 0:
             raise DjangoValidationError((err or b"Unable to read directory.").decode("utf-8", "replace"))
-        entries=[]
-        access_policy = None
+
+        from ..shell import _container_mount_policy
         try:
-            from ..shell import _container_mount_policy
             access_policy = _container_mount_policy(container)
         except Exception:
-            access_policy = None
-        cwd_access = path_access(container, session.workdir, for_create=True, policy=access_policy)
+            access_policy = (False, [])
+        root_ro, mounts = access_policy
+        def mount_mode(path):
+            for mount_path, rw in mounts:
+                if path == mount_path or path.startswith(mount_path.rstrip("/") + "/"):
+                    return bool(rw)
+            return not root_ro
+
+        entries = []
         for raw in (out or b"").decode("utf-8", "replace").splitlines():
-            raw=raw.strip()
-            if not raw: continue
-            directory=raw.endswith("/")
-            name=raw[:-1] if directory else raw
-            path=_safe_workdir(name, session.workdir)
-            access=path_access(container, path, for_create=not directory, policy=access_policy)
+            raw = raw.strip()
+            if not raw:
+                continue
+            directory = raw.endswith("/")
+            name = raw[:-1] if directory else raw
+            path = _safe_workdir(name, session.workdir)
+            mount_rw = mount_mode(path)
             entries.append({
                 "name": name,
                 "path": path,
                 "directory": directory,
-                "writable": access["writable"],
-                "mode": access["mode"],
-                "mount_writable": access.get("mount_writable", access["writable"]),
-                "effective_writable": access.get("effective_writable", access["writable"]),
-                "read_only_reason": access["reason"] if not access["writable"] else "",
+                "mode": "rw" if mount_rw else "ro",
+                "mount_writable": mount_rw,
+                "writable": mount_rw,
+                "effective_writable": None,
+                "read_only_reason": "Checking permissions…" if mount_rw else "Read-only filesystem/mount",
             })
+        cwd_mount_rw = mount_mode(session.workdir)
         return Response({
             "result": "success",
             "cwd": session.workdir,
-            "cwd_writable": cwd_access["writable"],
-            "cwd_mode": cwd_access["mode"],
-            "cwd_mount_writable": cwd_access.get("mount_writable", cwd_access["writable"]),
-            "cwd_read_only_reason": cwd_access["reason"] if not cwd_access["writable"] else "",
+            "cwd_writable": None,
+            "cwd_mode": "rw" if cwd_mount_rw else "ro",
+            "cwd_mount_writable": cwd_mount_rw,
+            "cwd_read_only_reason": "Checking permissions…" if cwd_mount_rw else "Read-only filesystem/mount",
+            "metadata_pending": True,
             "entries": entries,
         })
+    except (PermissionError, DjangoValidationError) as exc:
+        return Response({"result":"error","detail":str(exc)}, status=403 if isinstance(exc, PermissionError) else 400)
+    except Service.DoesNotExist:
+        return Response({"result":"error","detail":"Service not found."}, status=404)
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def shell_tree_meta_apiview(request, service_id):
+    """Batch effective RW metadata after the fast tree has rendered."""
+    try:
+        service = _resolve(request, service_id, action="can_shell")
+        token = request.headers.get("X-Shell-Token") or request.data.get("token")
+        session = authenticate_session(service, request.user, token)
+        container = _resolve_container(service)
+        paths = request.data.get("paths") or []
+        paths = [str(p) for p in paths if p]
+        from ..shell import _container_mount_policy
+        try:
+            policy = _container_mount_policy(container)
+        except Exception:
+            policy = None
+        access = batch_path_writable(container, paths + [session.workdir], policy=policy)
+        cwd_effective = bool(access.get(posixpath.normpath(session.workdir), False))
+        result = []
+        for path in paths:
+            safe = _safe_workdir(path, session.root_path)
+            result.append({
+                "path": safe,
+                "effective_writable": bool(access.get(posixpath.normpath(safe), False)),
+                "writable": bool(access.get(posixpath.normpath(safe), False)),
+            })
+        return Response({"result":"success", "cwd":session.workdir, "cwd_writable":cwd_effective, "entries":result})
     except (PermissionError, DjangoValidationError) as exc:
         return Response({"result":"error","detail":str(exc)}, status=403 if isinstance(exc, PermissionError) else 400)
     except Service.DoesNotExist:
