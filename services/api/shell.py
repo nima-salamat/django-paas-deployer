@@ -285,7 +285,7 @@ def shell_file_apiview(request, service_id):
                 raise ValidationError("File is too large for the restricted editor (256 KiB).")
             access = path_access(container, safe_path, for_create=True)
             if not access["writable"]:
-                raise DjangoValidationError(f"Path is read-only: {safe_path} ({access["reason"]}).")
+                raise DjangoValidationError(f"Path is read-only: {safe_path} ({access['reason']}).")
             import base64
             encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
             # No shell: base64 is used only through argv, and the target path is already validated.
