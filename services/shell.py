@@ -243,20 +243,65 @@ def _container_mount_policy(container):
     mounts.sort(key=lambda x:len(x[0]), reverse=True)
     return root_ro,mounts
 
-def path_access(container, path: str, *, for_create: bool=False) -> dict:
-    root_ro,mounts=_container_mount_policy(container); target=posixpath.normpath(path); selected=None
-    for d,rw in mounts:
-        if target==d or target.startswith(d.rstrip('/')+'/'):
-            selected=rw; break
-    mount_rw=(not root_ro) if selected is None else selected
-    probe=posixpath.dirname(target) if for_create else target
-    probe=probe or '/'
+def _exec_test(container, args, fallback=None):
+    """Run a tiny filesystem probe without invoking a user-controlled shell.
+
+    Minimal images sometimes do not ship an external `test` binary. In that
+    case fall back to `sh` only with fixed backend-generated arguments.
+    """
+    result = container.exec_run(args, stdout=False, stderr=False, tty=False)
+    code = int(result.exit_code if result.exit_code is not None else 1)
+    if code in (126, 127) and fallback is not None:
+        result = container.exec_run(fallback, stdout=False, stderr=False, tty=False)
+        code = int(result.exit_code if result.exit_code is not None else 1)
+    return code
+
+
+def path_access(container, path: str, *, for_create: bool=False, policy=None) -> dict:
+    root_ro, mounts = policy if policy is not None else _container_mount_policy(container)
+    target = posixpath.normpath(path)
+    selected = None
+    for mount_path, rw in mounts:
+        if target == mount_path or target.startswith(mount_path.rstrip('/') + '/'):
+            selected = rw
+            break
+
+    # ``mode`` describes the Docker mount/rootfs mode. ``writable`` describes
+    # whether the actual container user can perform the requested operation.
+    # Keeping these separate avoids falsely labelling an RW mount as RO just
+    # because Unix ownership/permissions prevent the current uid from writing.
+    mount_rw = (not root_ro) if selected is None else bool(selected)
+    probe = posixpath.dirname(target) if for_create else target
+    probe = probe or '/'
+
+    mode_ok = False
     try:
-        result=container.exec_run(['test','-w','--',probe], stdout=False, stderr=False, tty=False)
-        mode_ok=int(result.exit_code or 1)==0
-    except Exception: mode_ok=False
-    writable=bool(mount_rw and mode_ok)
-    return {'writable':writable,'mode':'rw' if writable else 'ro','reason':'Writable' if writable else ('Read-only filesystem/mount' if not mount_rw else 'Filesystem permissions do not allow writing')}
+        # Do not pass ``--`` here: some minimal images provide a shell/test
+        # implementation that treats it differently. Absolute paths are
+        # already normalized and constrained by _safe_workdir upstream.
+        if for_create:
+            dir_ok = _exec_test(container, ['test', '-d', probe], ['/bin/sh', '-c', 'test -d "$1"', 'probe', probe]) == 0
+            write_ok = _exec_test(container, ['test', '-w', probe], ['/bin/sh', '-c', 'test -w "$1"', 'probe', probe]) == 0
+            traverse_ok = _exec_test(container, ['test', '-x', probe], ['/bin/sh', '-c', 'test -x "$1"', 'probe', probe]) == 0
+            mode_ok = dir_ok and write_ok and traverse_ok
+        else:
+            exists_ok = _exec_test(container, ['test', '-e', target], ['/bin/sh', '-c', 'test -e "$1"', 'probe', target]) == 0
+            writable_ok = _exec_test(container, ['test', '-w', target], ['/bin/sh', '-c', 'test -w "$1"', 'probe', target]) == 0
+            mode_ok = exists_ok and writable_ok
+    except Exception:
+        mode_ok = False
+
+    writable = bool(mount_rw and mode_ok)
+    return {
+        'writable': writable,
+        'mode': 'rw' if mount_rw else 'ro',
+        'mount_writable': mount_rw,
+        'effective_writable': mode_ok,
+        'reason': 'Writable' if writable else (
+            'Read-only filesystem/mount' if not mount_rw else
+            'RW mount, but the container user has no write permission at this path'
+        ),
+    }
 
 def _assert_writable_path(container,path: str,*,for_create: bool=False):
     access=path_access(container,path,for_create=for_create)
@@ -526,8 +571,8 @@ def execute_compound_command(session,command,*,confirm=False):
             target=argv[1] if len(argv)==2 else session.root_path
             candidate=target if target.startswith('/') else posixpath.join(session.workdir,target)
             safe=_safe_workdir(candidate,session.root_path)
-            probe=container.exec_run(['test','-d','--',safe],workdir=session.workdir,stdout=False,stderr=False,tty=False)
-            if int(probe.exit_code or 1)!=0: raise ValidationError(f'Directory does not exist: {safe}')
+            probe_code = _exec_test(container, ['test', '-d', safe], ['/bin/sh', '-c', 'test -d "$1"', 'probe', safe])
+            if probe_code != 0: raise ValidationError(f'Directory does not exist: {safe}')
             session.workdir=safe
             previous_code=0; out=(safe+'\n').encode(); err=b''; previous_output=out; final_stdout=out[:MAX_OUTPUT_BYTES]; final_stderr=b''
             continue
@@ -605,8 +650,8 @@ def execute_command(session, command: str, *, confirm: bool = False) -> dict:
         target=argv[1] if len(argv)==2 else session.root_path
         candidate=target if target.startswith('/') else posixpath.join(session.workdir,target)
         safe=_safe_workdir(candidate,session.root_path)
-        probe=container.exec_run(['test','-d','--',safe],workdir=session.workdir,stdout=False,stderr=False,tty=False)
-        if int(probe.exit_code or 1)!=0: raise ValidationError(f'Directory does not exist: {safe}')
+        probe_code = _exec_test(container, ['test', '-d', safe], ['/bin/sh', '-c', 'test -d "$1"', 'probe', safe])
+        if probe_code != 0: raise ValidationError(f'Directory does not exist: {safe}')
         session.workdir=safe; now=timezone.now(); session.last_used_at=now; session.expires_at=_session_expiry(now); session.save(update_fields=['workdir','last_used_at','expires_at'])
         return {'exit_code':0,'stdout':safe+'\n','stderr':'','cwd':safe}
     if os.path.basename(argv[0]) in {'nano','vi','vim'}: raise ValidationError('Use the built-in file editor for text files.')

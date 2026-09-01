@@ -214,15 +214,39 @@ def shell_tree_apiview(request, service_id):
         if int(result.exit_code or 0) != 0:
             raise DjangoValidationError((err or b"Unable to read directory.").decode("utf-8", "replace"))
         entries=[]
+        access_policy = None
+        try:
+            from ..shell import _container_mount_policy
+            access_policy = _container_mount_policy(container)
+        except Exception:
+            access_policy = None
+        cwd_access = path_access(container, session.workdir, for_create=True, policy=access_policy)
         for raw in (out or b"").decode("utf-8", "replace").splitlines():
             raw=raw.strip()
             if not raw: continue
             directory=raw.endswith("/")
             name=raw[:-1] if directory else raw
             path=_safe_workdir(name, session.workdir)
-            access=path_access(container,path,for_create=directory is False)
-            entries.append({"name":name,"path":path,"directory":directory,"writable":access["writable"],"mode":access["mode"],"read_only_reason":access["reason"] if not access["writable"] else ""})
-        return Response({"result":"success","cwd":session.workdir,"entries":entries})
+            access=path_access(container, path, for_create=not directory, policy=access_policy)
+            entries.append({
+                "name": name,
+                "path": path,
+                "directory": directory,
+                "writable": access["writable"],
+                "mode": access["mode"],
+                "mount_writable": access.get("mount_writable", access["writable"]),
+                "effective_writable": access.get("effective_writable", access["writable"]),
+                "read_only_reason": access["reason"] if not access["writable"] else "",
+            })
+        return Response({
+            "result": "success",
+            "cwd": session.workdir,
+            "cwd_writable": cwd_access["writable"],
+            "cwd_mode": cwd_access["mode"],
+            "cwd_mount_writable": cwd_access.get("mount_writable", cwd_access["writable"]),
+            "cwd_read_only_reason": cwd_access["reason"] if not cwd_access["writable"] else "",
+            "entries": entries,
+        })
     except (PermissionError, DjangoValidationError) as exc:
         return Response({"result":"error","detail":str(exc)}, status=403 if isinstance(exc, PermissionError) else 400)
     except Service.DoesNotExist:
@@ -250,7 +274,7 @@ def shell_file_apiview(request, service_id):
             access = path_access(container, safe_path, for_create=True)
             if not access["writable"]:
                 raise DjangoValidationError(f"Path is read-only: {safe_path} ({access['reason']}).")
-            parent_probe = container.exec_run(["test", "-d", "--", posixpath.dirname(safe_path) or session.root_path], workdir=session.workdir, stdout=False, stderr=False, tty=False)
+            parent_probe = container.exec_run(["test", "-d", posixpath.dirname(safe_path) or session.root_path], workdir=session.workdir, stdout=False, stderr=False, tty=False)
             if int(parent_probe.exit_code or 1) != 0:
                 raise DjangoValidationError("Parent directory does not exist.")
             result = container.exec_run(["touch", "--", safe_path], workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
@@ -276,7 +300,7 @@ def shell_file_apiview(request, service_id):
             result = container.exec_run(["cat", "--", safe_path], workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
             access = path_access(container, safe_path, for_create=False)
             out, err = result.output if isinstance(result.output, tuple) else (result.output or b"", b"")
-            return Response({"result":"success", "path":safe_path, "exit_code":int(result.exit_code or 0), "content":(out or b"")[:262144].decode("utf-8","replace"), "stderr":(err or b"")[:16384].decode("utf-8","replace"), "writable":access["writable"], "mode":access["mode"], "read_only_reason":access["reason"] if not access["writable"] else ""})
+            return Response({"result":"success", "path":safe_path, "exit_code":int(result.exit_code or 0), "content":(out or b"")[:262144].decode("utf-8","replace"), "stderr":(err or b"")[:16384].decode("utf-8","replace"), "writable":access["writable"], "mode":access["mode"], "mount_writable":access.get("mount_writable", access["writable"]), "effective_writable":access.get("effective_writable", access["writable"]), "read_only_reason":access["reason"] if not access["writable"] else ""})
         if action == "write":
             content = request.data.get("content")
             if not isinstance(content, str):

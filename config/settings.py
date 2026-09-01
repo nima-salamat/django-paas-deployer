@@ -89,7 +89,7 @@ INSTALLED_APPS = [
     "wagtail.contrib.settings",
     "wagtail.embeds",
     "wagtail.sites",
-    "wagtail.users",
+    "config.apps.CustomWagtailUsersAppConfig",
     "wagtail.snippets",
     "wagtail.documents",
     "wagtail.images",
@@ -479,9 +479,6 @@ MESSENGER_CONV_CACHE_TTL = int(os.environ.get("MESSENGER_CONV_CACHE_TTL", "120")
 # ---------------------------------------------------------------------------
 
 # Custom user forms (no first_name/last_name on users.User)
-WAGTAIL_USER_EDIT_FORM = "cms.forms.CustomUserEditForm"
-WAGTAIL_USER_CREATION_FORM = "cms.forms.CustomUserCreationForm"
-WAGTAIL_USER_CUSTOM_FIELDS: list[str] = []
 
 WAGTAIL_SITE_NAME = os.environ.get("WAGTAIL_SITE_NAME", "PaaS Control Panel")
 WAGTAILADMIN_BASE_URL = os.environ.get(
