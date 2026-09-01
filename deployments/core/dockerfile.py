@@ -973,15 +973,22 @@ def _apply_spa_port(dockerfile: str, port: int) -> str:
             flags=re.MULTILINE,
         )
 
-    if port == 80:
-        return dockerfile
-
+    # Always install an explicit SPA server configuration. Relying on the
+    # upstream nginx default config is fragile behind a reverse proxy and can
+    # route asset requests differently from browser navigation requests.
     conf = (
         "server {\n"
         f"    listen {port};\n"
         "    server_name _;\n"
         "    root /usr/share/nginx/html;\n"
         "    index index.html;\n"
+        "    include /etc/nginx/mime.types;\n"
+        "    location ~* \\.(?:css|js|mjs|map|json|png|jpg|jpeg|gif|svg|ico|webp|avif|woff|woff2|ttf|otf|eot)$ {\n"
+        "        try_files $uri =404;\n"
+        "        access_log off;\n"
+        "        expires 7d;\n"
+        "        add_header Cache-Control \"public, max-age=604800, immutable\" always;\n"
+        "    }\n"
         "    location / {\n"
         "        try_files $uri $uri/ /index.html;\n"
         "    }\n"
