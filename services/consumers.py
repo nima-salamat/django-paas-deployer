@@ -268,14 +268,18 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
         await self.send_json({"type": "error", "message": "Unsupported shell message."})
 
     async def _start_command(self, command, confirm):
-        from .shell import _reject_shell_syntax, _validate_platform_command, _is_destructive_command, _resolve_container
+        from .shell import _reject_shell_syntax, _validate_platform_command, _is_destructive_command, _resolve_container, parse_safe_command, validate_argv_for_container
         try:
             if self.exec_socket is not None:
                 await self.send_json({"type": "error", "message": "A command is already running. Send input or wait for it to finish."})
                 return
-            _reject_shell_syntax(command)
-            argv = shlex.split(command, posix=True)
-            _validate_platform_command(argv, self.session.platform, self.session.root_path)
+            parts = parse_safe_command(command)
+            if len(parts) != 1:
+                await self.send_json({"type": "error", "message": "Compound commands use the secure command API; interactive PTY accepts one command at a time."})
+                return
+            argv = parts[0][0]
+            container = await database_sync_to_async(_resolve_container)(self.service)
+            await database_sync_to_async(validate_argv_for_container)(argv, self.session.platform, self.session.root_path, container)
             if _is_destructive_command(argv) and not confirm:
                 await self.send_json({"type": "confirm_required", "command": command, "message": "This command changes application state. Confirmation is required."})
                 return
@@ -284,7 +288,6 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                 result = await database_sync_to_async(execute_command)(self.session, command, confirm=confirm)
                 await self.send_json({"type": "command.output", **result})
                 return
-            container = await database_sync_to_async(_resolve_container)(self.service)
             loop = asyncio.get_running_loop()
             def create_exec():
                 api = container.client.api

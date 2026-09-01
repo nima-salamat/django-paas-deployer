@@ -1,4 +1,5 @@
 from django.core.exceptions import ValidationError
+import posixpath
 from django.http import Http404
 from django.utils import timezone
 from services.models import Service
@@ -10,7 +11,7 @@ from rest_framework import status
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 from .common import _get_service_for_user_or_share
-from ..shell import authenticate_session, close_session, create_session, terminate_active_session, execute_command, command_catalog, _platform_for_service
+from ..shell import authenticate_session, close_session, create_session, terminate_active_session, execute_command, command_catalog, _platform_for_service, _resolve_container, _safe_workdir, path_access
 
 
 def _resolve(request, service_id, action="can_shell"):
@@ -201,29 +202,90 @@ def shell_close_apiview(request, service_id):
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
+def shell_tree_apiview(request, service_id):
+    """Return direct workspace entries with effective RO/RW metadata."""
+    try:
+        service = _resolve(request, service_id, action="can_shell")
+        token = request.headers.get("X-Shell-Token") or request.data.get("token")
+        session = authenticate_session(service, request.user, token)
+        container = _resolve_container(service)
+        result = container.exec_run(["ls", "-1Ap", "--", session.workdir], stdout=True, stderr=True, demux=True, tty=False)
+        out, err = result.output if isinstance(result.output, tuple) else (result.output or b"", b"")
+        if int(result.exit_code or 0) != 0:
+            raise DjangoValidationError((err or b"Unable to read directory.").decode("utf-8", "replace"))
+        entries=[]
+        for raw in (out or b"").decode("utf-8", "replace").splitlines():
+            raw=raw.strip()
+            if not raw: continue
+            directory=raw.endswith("/")
+            name=raw[:-1] if directory else raw
+            path=_safe_workdir(name, session.workdir)
+            access=path_access(container,path,for_create=directory is False)
+            entries.append({"name":name,"path":path,"directory":directory,"writable":access["writable"],"mode":access["mode"],"read_only_reason":access["reason"] if not access["writable"] else ""})
+        return Response({"result":"success","cwd":session.workdir,"entries":entries})
+    except (PermissionError, DjangoValidationError) as exc:
+        return Response({"result":"error","detail":str(exc)}, status=403 if isinstance(exc, PermissionError) else 400)
+    except Service.DoesNotExist:
+        return Response({"result":"error","detail":"Service not found."}, status=404)
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
 def shell_file_apiview(request, service_id):
     """Read/write a text file inside the restricted work directory without a TTY editor."""
     try:
         service = _resolve(request, service_id, action="can_shell")
         token = request.headers.get("X-Shell-Token") or request.data.get("token")
         session = authenticate_session(service, request.user, token)
-        from services.shell import _resolve_container, _safe_workdir
         container = _resolve_container(service)
         action = str(request.data.get("action") or "read").lower()
         path = str(request.data.get("path") or "").strip()
         if not path:
             raise ValidationError("path is required")
         safe_path = _safe_workdir(path, session.root_path)
+        if action == "create":
+            if safe_path == session.root_path:
+                raise DjangoValidationError("The workspace root cannot be created or replaced.")
+            access = path_access(container, safe_path, for_create=True)
+            if not access["writable"]:
+                raise DjangoValidationError(f"Path is read-only: {safe_path} ({access["reason"]}).")
+            parent_probe = container.exec_run(["test", "-d", "--", posixpath.dirname(safe_path) or session.root_path], workdir=session.workdir, stdout=False, stderr=False, tty=False)
+            if int(parent_probe.exit_code or 1) != 0:
+                raise DjangoValidationError("Parent directory does not exist.")
+            result = container.exec_run(["touch", "--", safe_path], workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
+            if int(result.exit_code or 0) != 0:
+                out, err = result.output if isinstance(result.output, tuple) else (b"", result.output or b"")
+                raise DjangoValidationError((err or out or b"Unable to create file.").decode("utf-8", "replace"))
+            return Response({"result":"success", "path":safe_path, "action":"create", "content":"", "writable":True, "mode":"rw"})
+        if action == "delete":
+            if safe_path == session.root_path:
+                raise DjangoValidationError("The workspace root cannot be deleted.")
+            access = path_access(container, safe_path, for_create=True)
+            if not access["writable"]:
+                raise DjangoValidationError(f"Path is read-only: {safe_path} ({access["reason"]}).")
+            type_probe = container.exec_run(["test", "-f", "--", safe_path], workdir=session.workdir, stdout=False, stderr=False, tty=False)
+            if int(type_probe.exit_code or 1) != 0:
+                raise DjangoValidationError("Only regular files can be deleted from the file editor.")
+            result = container.exec_run(["rm", "--", safe_path], workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
+            if int(result.exit_code or 0) != 0:
+                out, err = result.output if isinstance(result.output, tuple) else (b"", result.output or b"")
+                raise DjangoValidationError((err or out or b"Unable to delete file.").decode("utf-8", "replace"))
+            return Response({"result":"success", "path":safe_path, "action":"delete"})
         if action == "read":
             result = container.exec_run(["cat", "--", safe_path], workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
+            access = path_access(container, safe_path, for_create=False)
             out, err = result.output if isinstance(result.output, tuple) else (result.output or b"", b"")
-            return Response({"result":"success", "path":safe_path, "exit_code":int(result.exit_code or 0), "content":(out or b"")[:262144].decode("utf-8","replace"), "stderr":(err or b"")[:16384].decode("utf-8","replace")})
+            return Response({"result":"success", "path":safe_path, "exit_code":int(result.exit_code or 0), "content":(out or b"")[:262144].decode("utf-8","replace"), "stderr":(err or b"")[:16384].decode("utf-8","replace"), "writable":access["writable"], "mode":access["mode"], "read_only_reason":access["reason"] if not access["writable"] else ""})
         if action == "write":
             content = request.data.get("content")
             if not isinstance(content, str):
                 raise ValidationError("content must be a string")
             if len(content.encode("utf-8")) > 262144:
                 raise ValidationError("File is too large for the restricted editor (256 KiB).")
+            access = path_access(container, safe_path, for_create=True)
+            if not access["writable"]:
+                raise DjangoValidationError(f"Path is read-only: {safe_path} ({access["reason"]}).")
             import base64
             encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
             # No shell: base64 is used only through argv, and the target path is already validated.
@@ -231,7 +293,7 @@ def shell_file_apiview(request, service_id):
             sock = result.output
             sock._sock.sendall((encoded + "\n").encode("ascii"))
             sock._sock.shutdown(1)
-            return Response({"result":"success", "path":safe_path, "action":"write"})
+            return Response({"result":"success", "path":safe_path, "action":"write", "writable":True, "mode":"rw"})
         raise ValidationError("action must be read or write")
     except (PermissionError, ValidationError) as exc:
         return Response({"result":"error","detail":str(exc)}, status=403 if isinstance(exc, PermissionError) else 400)
