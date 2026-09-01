@@ -344,7 +344,7 @@ class BaseRuntimeImageAdmin(admin.ModelAdmin):
             obj.rebuild_requested = True
             obj.rebuild_requested_at = timezone.now()
             obj.save(update_fields=["status", "enabled", "rebuild_requested", "rebuild_requested_at", "updated_at"])
-            build_base_runtime_image.delay(str(obj.pk))
+            build_base_runtime_image.apply_async(args=[str(obj.pk)])
             count += 1
         self.message_user(request, f"Queued rebuild for {count} base image(s).")
 

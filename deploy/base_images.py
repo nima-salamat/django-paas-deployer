@@ -106,7 +106,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git unzip libzip-dev libpng-dev libjpeg62-turbo-dev libfreetype6-dev \
         libicu-dev libonig-dev libxml2-dev curl ca-certificates \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
-    && docker-php-ext-install -j$(nproc) mysqli pdo pdo_mysql opcache zip gd intl bcmath mbstring exif pcntl \
+    && missing=""; for ext in mysqli pdo pdo_mysql opcache zip gd intl bcmath mbstring exif pcntl; do \
+         if php -m | grep -Eiq "^${ext}$"; then \
+             echo "PHP extension ${ext} already enabled; skipping build"; \
+         else \
+             missing="$missing $ext"; \
+         fi; \
+       done; \
+       if [ -n "$missing" ]; then \
+         echo "Installing missing PHP extensions:$missing"; \
+         docker-php-ext-install -j$(nproc) $missing; \
+       else \
+         echo "All requested PHP extensions already enabled; skipping docker-php-ext-install"; \
+       fi \
     && a2enmod rewrite headers mime dir expires alias \
     && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \
     && printf '%s\\n' 'ServerName localhost' > /etc/apache2/conf-available/deployer-server-name.conf \
@@ -253,7 +265,7 @@ def _build_spec(spec: BaseImageSpec, *, build_policy: dict[str, Any] | None = No
         spec.dockerfile,
         _tar_for_dockerfile(spec.dockerfile),
         build_resource_policy=build_policy or {},
-        build_options={"pull": True, "no_cache": True},
+        build_options={"pull": True, "no_cache": bool((build_policy or {}).get("force_rebuild", False))},
         deployment_id=f"base:{spec.image_ref}",
     )
     return image.create(on_build_output=on_output)
@@ -309,7 +321,7 @@ def build_registered_base_image(base_image_id, *, task_id: str | None = None) ->
         row.save(update_fields=["status", "build_task_id", "build_owner_deployment_id", "rebuild_requested", "build_started_at", "last_error", "updated_at"])
 
     try:
-        _build_spec(spec)
+        _build_spec(spec, build_policy={**(build_policy or {}), "force_rebuild": True} if row.rebuild_requested else (build_policy or {}))
         client = get_docker_client()
         img = client.images.get(spec.image_ref)
         row = BaseRuntimeImage.objects.get(pk=base_image_id)
@@ -465,7 +477,20 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                 raise RuntimeError(f"Base runtime image {key} is disabled by an administrator.")
 
             local_exists = _docker_image_exists(row.image_ref)
-            if row.status == BaseRuntimeImage.Status.READY and local_exists:
+            if logger_sink:
+                logger_sink.info(
+                    "base_image",
+                    f"Base image resolution: runtime={key}, image={row.image_ref}, status={row.status}, docker_local={local_exists}, rebuild_requested={row.rebuild_requested}.",
+                    progress=17,
+                    details={
+                        "image": row.image_ref,
+                        "runtime": key,
+                        "status": row.status,
+                        "docker_local": local_exists,
+                        "rebuild_requested": bool(row.rebuild_requested),
+                    },
+                )
+            if row.status == BaseRuntimeImage.Status.READY and local_exists and not row.rebuild_requested:
                 result[logical_key(spec)] = row.image_ref
                 if deployment_id:
                     acquire_base_image_leases([row.image_ref], deployment_id)
