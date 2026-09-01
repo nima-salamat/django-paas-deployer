@@ -1384,7 +1384,16 @@ def _apply_php_document_root(dockerfile: str, document_root_rel: str) -> str:
         "        AllowOverride All\n"
         "        Require all granted\n"
         "        DirectoryIndex index.php index.html\n"
+        "        <IfModule mod_rewrite.c>\n"
+        "            RewriteEngine On\n"
+        "            RewriteCond %{REQUEST_FILENAME} -f [OR]\n"
+        "            RewriteCond %{REQUEST_FILENAME} -d\n"
+        "            RewriteRule ^ - [END]\n"
+        "        </IfModule>\n"
         "    </Directory>\n"
+        "    <FilesMatch \"\\.(css|js|mjs|map|json|svg|svgz|webp|avif|png|jpe?g|gif|ico|woff2?|ttf|otf|eot)$\">\n"
+        "        Require all granted\n"
+        "    </FilesMatch>\n"
         "    ErrorLog ${APACHE_LOG_DIR}/error.log\n"
         "    CustomLog ${APACHE_LOG_DIR}/access.log combined\n"
         "</VirtualHost>\n"
@@ -1397,11 +1406,12 @@ def _apply_php_document_root(dockerfile: str, document_root_rel: str) -> str:
     # double it (e.g. /var/www/html/HASH → /var/www/html/HASH/HASH).
     apache_block = (
         "\n# --- Apache DocumentRoot (auto) ---\n"
-        f"RUN echo '{b64}' | base64 -d > /etc/apache2/sites-available/000-default.conf \\\n"
-        "    && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \\\n"
-        "    && (grep -q '^ServerName ' /etc/apache2/apache2.conf || echo 'ServerName localhost' >> /etc/apache2/apache2.conf) \\\n"
-        "    && a2enmod rewrite headers \\\n"
-        f"    && test -d {absolute} || (echo \"WARNING: DocumentRoot {absolute} missing\" >&2)\n"
+        f"RUN echo '{b64}' | base64 -d > /etc/apache2/sites-available/000-default.conf "
+        "&& sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf "
+        "&& (grep -q '^ServerName ' /etc/apache2/apache2.conf || echo 'ServerName localhost' >> /etc/apache2/apache2.conf) "
+        "&& a2enmod rewrite headers mime dir expires alias "
+        "&& apache2ctl configtest "
+        f"&& (test -d {absolute} || (echo \"WARNING: DocumentRoot {absolute} missing\" >&2))\n"
     )
 
     if re.search(r"^COPY\s+\.\s+/var/www/html/?\s*$", dockerfile, re.MULTILINE):
@@ -2278,7 +2288,8 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
             "COPY . /var/www/html/",
             "COPY . /var/www/html/\n\n"
             "RUN docker-php-ext-install mysqli pdo pdo_mysql opcache \\\n"
-            "    && a2enmod rewrite headers \\\n"
+            "    && a2enmod rewrite headers mime dir expires alias \
+"
             "    && sed -i 's/AllowOverride None/AllowOverride All/g' "
             "/etc/apache2/apache2.conf",
         )
