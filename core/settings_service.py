@@ -156,6 +156,13 @@ def mirror_npm() -> str:
     return str(_wagtail_core_value("mirror_npm", get_str("mirror.npm", fallback)) or fallback)
 
 
+def auto_public_url_handling() -> bool:
+    return bool(_wagtail_core_value("auto_public_url_handling", True))
+
+def default_public_url_prefix() -> str:
+    return str(_wagtail_core_value("default_public_url_prefix", "") or "").strip()
+
+
 def mirror_apt() -> str:
     return str(_wagtail_core_value("mirror_apt", get_str("mirror.apt", "")) or "")
 

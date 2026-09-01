@@ -176,6 +176,16 @@ class CoreSettings(BaseGenericSetting):
         help_text=_("Adopt matching runtime images already present on the Docker host instead of rebuilding them."),
     )
 
+    auto_public_url_handling = models.BooleanField(
+        default=True, verbose_name=_("Automatic public/asset URL handling"),
+        help_text=_("When enabled, app deployments receive a secure public URL/asset URL default behind the platform proxy. Disable to let the application manage its own URL scheme/path."),
+    )
+    default_public_url_prefix = models.CharField(
+        default="", max_length=500, blank=True,
+        verbose_name=_("Default public URL prefix"),
+        help_text=_("Optional operator default for public URL generation. Tenant custom values can override only when explicitly requested."),
+    )
+
     mirror_docker = models.CharField(default="docker.arvancloud.ir", max_length=255, verbose_name=_("Docker registry mirror"))
     mirror_python = models.CharField(default="https://mirror-pypi.runflare.com/simple", max_length=500, verbose_name=_("PyPI mirror"))
     mirror_npm = models.CharField(default="https://package-mirror.liara.ir/repository/npm/", max_length=500, verbose_name=_("npm registry"))
@@ -257,6 +267,8 @@ class CoreSettings(BaseGenericSetting):
                 FieldPanel("base_images_auto_build"),
                 FieldPanel("base_images_auto_register_existing"),
                 FieldPanel("base_images_retain_after_deploy"),
+                FieldPanel("auto_public_url_handling"),
+                FieldPanel("default_public_url_prefix"),
             ],
             heading=_("Base runtime images"),
         ),

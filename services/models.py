@@ -598,3 +598,36 @@ class ServiceShareEvent(BaseModel):
 
     def __str__(self):
         return f"{self.action} on share {self.share_id}"
+
+
+class ShellSession(BaseModel):
+    """Short-lived, single-user restricted shell session for a service."""
+
+    class Status(models.TextChoices):
+        ACTIVE = "active", _("Active")
+        CLOSED = "closed", _("Closed")
+        EXPIRED = "expired", _("Expired")
+
+    service = models.ForeignKey("services.Service", on_delete=models.CASCADE, related_name="shell_sessions")
+    user = models.ForeignKey("users.User", on_delete=models.CASCADE, related_name="shell_sessions")
+    token_hash = models.CharField(max_length=64, unique=True)
+    platform = models.CharField(max_length=32)
+    root_path = models.CharField(max_length=512, default="/app")
+    workdir = models.CharField(max_length=512, default="/app")
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
+    last_used_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField()
+    closed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=("service", "status", "expires_at"))]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("service",),
+                condition=models.Q(status="active"),
+                name="uniq_active_shell_session_service",
+            )
+        ]
+
+    def __str__(self):
+        return f"Shell {self.service_id} / {self.user_id} / {self.status}"

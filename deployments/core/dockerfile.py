@@ -2304,9 +2304,17 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
     rendered = _strip_destructive_hoist(rendered)
 
     user_doc_root = None
+    explicit_doc_root_override = False
     project_cfg = None
     if config is not None:
         user_doc_root = getattr(config, "document_root", None)
+        if user_doc_root not in (None, ""):
+            explicit_doc_root_override = True
+        if not user_doc_root:
+            paths = getattr(config, "runtime_options", None) or {}
+            if isinstance(paths, dict) and paths.get("document_root") not in (None, ""):
+                user_doc_root = paths.get("document_root")
+                explicit_doc_root_override = True
         env = getattr(config, "environment", None) or {}
         if not user_doc_root and isinstance(env, dict):
             user_doc_root = (
@@ -2340,7 +2348,7 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
 
     # Laravel ALWAYS serves from public/ after flatten.  If detection
     # returned "" but platform is laravel, force "public".
-    if forced_laravel and not doc_root_rel:
+    if forced_laravel and not doc_root_rel and not explicit_doc_root_override:
         doc_root_rel = "public"
     if project_cfg is not None and not doc_root_rel:
         fw = (getattr(project_cfg, "framework", None) or "").lower()
@@ -2761,7 +2769,11 @@ def _inject_laravel_frontend_build(
         )
 
     script = detected.get("build_script") or "build"
-    frontend_root = str(detected.get("frontend_root") or ".").replace("\\", "/").strip().strip("/")
+    _frontend_cfg = getattr(config, "frontend", None) or {} if config is not None else {}
+    if not isinstance(_frontend_cfg, dict):
+        _frontend_cfg = {}
+    _path_cfg = _frontend_cfg.get("paths") if isinstance(_frontend_cfg.get("paths"), dict) else {}
+    frontend_root = str(_path_cfg.get("root") or _frontend_cfg.get("frontend_root") or detected.get("frontend_root") or ".").replace("\\", "/").strip().strip("/")
     if frontend_root in {"", "."}:
         frontend_root = "."
     elif frontend_root.startswith("/") or ".." in frontend_root.split("/"):
@@ -2836,7 +2848,11 @@ def _inject_laravel_frontend_build(
     bases = dict(getattr(config, "base_images", {}) or {}) if config is not None else {}
     node_base_image = bases.get("node_base_image")
     build_output = str(
-        getattr(config, "build_output", None) or detected.get("build_output") or ""
+        (_path_cfg.get("output") if isinstance(_path_cfg, dict) else None)
+        or (_frontend_cfg.get("build_output") if isinstance(_frontend_cfg, dict) else None)
+        or getattr(config, "build_output", None)
+        or detected.get("build_output")
+        or ""
     ).strip().strip("/")
     if build_output.startswith("./"):
         build_output = build_output[2:]

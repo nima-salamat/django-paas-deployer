@@ -224,7 +224,20 @@ class DeployService:
         detected_project_cfg = runtime_options.get("project_cfg") or {}
         build_command = cfg.get("build_command") or detected_project_cfg.get("build_command")
         install_command = cfg.get("install_command") or detected_project_cfg.get("install_command")
-        build_dir = cfg.get("build_dir") or detected_project_cfg.get("build_dir")
+        _paths_cfg = cfg.get("paths") if isinstance(cfg.get("paths"), dict) else {}
+        build_dir = cfg.get("build_dir") or _paths_cfg.get("build_dir") or detected_project_cfg.get("build_dir")
+
+        # Validate scoped tenant customizations without disabling the rest of
+        # automatic detection. Path/URL overrides are isolated to their
+        # corresponding renderer and unsafe/nonexistent project paths fail
+        # before Docker build.
+        try:
+            from deployments.common.config import validate_platform_config
+            _platform_report = validate_platform_config(getattr(deploy_item, "config", None), platform)
+            for _warning in _platform_report.get("warnings") or []:
+                logger.warning("Platform config warning for %s: %s", container_name, _warning)
+        except ValueError as exc:
+            raise OrchestratorDeploymentError(str(exc)) from exc
 
         version_overrides = {
             k: cfg[k]
@@ -307,6 +320,33 @@ class DeployService:
         environment = dict(cfg.get("env") or cfg.get("environment") or {})
         environment = {str(k): str(v) for k, v in environment.items()}
 
+        # URL handling is intentionally scoped: it can change the public/asset
+        # URL policy without disabling platform detection, builds or static
+        # serving. Explicit environment values always win.
+        url_handling = dict(cfg.get("url_handling") or {}) if isinstance(cfg.get("url_handling"), dict) else {}
+        url_mode = str(url_handling.get("mode") or "auto").strip().lower()
+        try:
+            from core import settings_service as _core_settings
+            if not _core_settings.auto_public_url_handling() and url_mode == "auto":
+                url_mode = "disabled"
+        except Exception:
+            pass
+        if url_mode not in {"auto", "disabled", "custom"}:
+            raise OrchestratorDeploymentError(
+                "Invalid url_handling.mode; expected auto, disabled, or custom."
+            )
+        custom_public_url = str(
+            url_handling.get("public_url") or cfg.get("public_url") or ""
+        ).strip()
+        custom_asset_url = str(
+            url_handling.get("asset_url") or cfg.get("asset_url") or ""
+        ).strip()
+        if url_mode == "custom":
+            import re as _re
+            for _label, _value in (("public_url", custom_public_url), ("asset_url", custom_asset_url)):
+                if _value and not _re.match(r"^https?://[^\s'\"`;&|<>]+/?$", _value):
+                    raise OrchestratorDeploymentError(f"Invalid custom {_label}: {_value!r}")
+
         # Laravel/PHP defaults when root FS may be read-only: app reads these
         # from the process environment even without a writable .env file.
         if platform in ("laravel", "php", "lumen", "symfony"):
@@ -324,11 +364,19 @@ class DeployService:
                 _service_host = str(service.get_docker_service_name() or "").strip()
             except Exception:
                 _service_host = ""
-            if _deployment_domain and _service_host:
-                _public_url = f"https://{_service_host}.{_deployment_domain}"
-                environment.setdefault("APP_URL", _public_url)
-                environment.setdefault("ASSET_URL", _public_url)
-                environment.setdefault("PUBLIC_URL", _public_url)
+            if url_mode != "disabled":
+                _auto_public_url = ""
+                if _deployment_domain and _service_host:
+                    _auto_public_url = f"https://{_service_host}.{_deployment_domain}"
+                _public_url = custom_public_url if url_mode == "custom" and custom_public_url else _auto_public_url
+                _asset_url = custom_asset_url if url_mode == "custom" and custom_asset_url else _public_url
+                if _public_url:
+                    environment.setdefault("APP_URL", _public_url)
+                    environment.setdefault("PUBLIC_URL", _public_url)
+                if _asset_url:
+                    environment.setdefault("ASSET_URL", _asset_url)
+                # Keep proxy HTTPS detection automatic unless the entire URL
+                # policy is explicitly disabled.
                 environment.setdefault("HTTPS", "on")
                 environment.setdefault("REQUEST_SCHEME", "https")
                 environment.setdefault("TRUSTED_PROXIES", "*")
@@ -481,6 +529,10 @@ class DeployService:
             build_command=build_command,
             start_command=cfg.get("start_command"),
             frontend=dict(cfg.get("frontend") or {}),
+            document_root=cfg.get("document_root") or _paths_cfg.get("document_root"),
+            static_dir=cfg.get("static_dir") or _paths_cfg.get("static_dir"),
+            media_dir=cfg.get("media_dir") or _paths_cfg.get("media_dir"),
+            url_handling=url_handling,
             # Base runtime images are resolved by DeploymentOrchestrator after
             # project auto-detection. Do not reference a local ``config`` here;
             # no such variable exists in this service layer.

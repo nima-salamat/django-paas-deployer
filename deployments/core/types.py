@@ -111,6 +111,9 @@ class DeploymentConfig:
     runtime_root: Optional[str] = None
     # Directory Apache/nginx serves (archive-relative, post-flatten).
     document_root: Optional[str] = None
+    # URL/path customization for the public application endpoint.
+    # mode: auto (default), disabled, custom.
+    url_handling: dict[str, Any] = field(default_factory=dict)
     # Operator-owned base runtime images resolved before final image build.
     # Keys: base_image, node_base_image, nginx_base_image.
     base_images: dict[str, str] = field(default_factory=dict)

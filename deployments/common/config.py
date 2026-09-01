@@ -134,6 +134,10 @@ TENANT_CONFIG_KEYS: dict[str, dict[str, Any]] = {
         "description": "Container working directory at runtime. Defaults to "
                        "``/app`` for Python/Node and ``/var/www/html`` for PHP.",
     },
+    "document_root": {
+        "type": "string",
+        "description": "Runtime-served application directory relative to the project root. PHP/Laravel defaults to public; absolute/parent-traversal paths are rejected.",
+    },
     "static_dir": {
         "type": "string",
         "description": "Path to compiled static assets served by the runtime "
@@ -184,6 +188,22 @@ TENANT_CONFIG_KEYS: dict[str, dict[str, Any]] = {
                        "(vite / react / mix / nextjs / nuxt / node). "
                        "Auto-detected from package.json when not set.",
     },
+    "paths": {
+        "type": "object",
+        "description": "Scoped path overrides. Allowed keys depend on platform: document_root, static_dir, build_dir, media_dir. Paths must be relative to the uploaded project.",
+    },
+    "url_handling": {
+        "type": "object",
+        "description": "Optional public URL/asset URL policy. mode=auto (default), disabled, or custom. custom accepts public_url and/or asset_url. This only changes URL generation; platform detection/build/static serving remain automatic.",
+    },
+    "public_url": {
+        "type": "string",
+        "description": "Custom public service URL used only when url_handling.mode=custom or as a direct shorthand override.",
+    },
+    "asset_url": {
+        "type": "string",
+        "description": "Custom Laravel asset URL/prefix. Leave empty for automatic same-origin HTTPS handling.",
+    },
     "frontend": {
         "type": "object",
         "description": "Frontend build options for full-stack PHP/Laravel. "
@@ -215,6 +235,85 @@ TENANT_CONFIG_KEYS: dict[str, dict[str, Any]] = {
                        "actually Laravel).",
     },
 }
+
+
+# Per-platform config contract and validation. These keys customize only the
+# requested path/URL aspect; all unrelated detector and resource automation
+# remains enabled.
+PLATFORM_CONFIG_RULES: dict[str, dict[str, Any]] = {
+    "php": {"document_root": True, "url_handling": True, "public_url": True, "asset_url": True},
+    "laravel": {"document_root": True, "url_handling": True, "public_url": True, "asset_url": True},
+    "lumen": {"document_root": True, "url_handling": True, "public_url": True, "asset_url": True},
+    "symfony": {"document_root": True, "url_handling": True, "public_url": True, "asset_url": True},
+    "statichtmlcss": {"static_dir": True, "url_handling": True, "public_url": True},
+    "react": {"static_dir": True, "build_dir": True, "url_handling": True, "public_url": True},
+    "vuejs": {"static_dir": True, "build_dir": True, "url_handling": True, "public_url": True},
+    "angular": {"static_dir": True, "build_dir": True, "url_handling": True, "public_url": True},
+    "nodejs": {"build_dir": True, "url_handling": True, "public_url": True},
+    "nextjs": {"build_dir": True, "url_handling": True, "public_url": True},
+    "nuxt": {"build_dir": True, "url_handling": True, "public_url": True},
+    "django": {"static_dir": True, "media_dir": True, "url_handling": True, "public_url": True},
+    "flask": {"static_dir": True, "media_dir": True, "url_handling": True, "public_url": True},
+    "python": {"static_dir": True, "media_dir": True, "url_handling": True, "public_url": True},
+    "go": {"static_dir": True, "build_dir": True, "url_handling": True, "public_url": True},
+}
+
+_SAFE_RELATIVE_PATH_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+
+def _valid_rel_path(value: Any) -> bool:
+    text = str(value or "").replace("\\", "/").strip()
+    if not text or text.startswith("/") or "\x00" in text:
+        return False
+    parts = [p for p in text.split("/") if p]
+    return bool(parts) and all(p not in {".", ".."} for p in parts) and bool(_SAFE_RELATIVE_PATH_RE.fullmatch(text))
+
+def validate_platform_config(raw: Any, platform: str, *, project_paths: set[str] | None = None) -> dict[str, Any]:
+    """Validate scoped customizations without disabling unrelated auto detection.
+
+    Returns ``errors``, ``warnings`` and ``normalized``. Only the explicitly
+    customized subsystem is validated; untouched parts continue through the
+    normal detector. When ``project_paths`` is provided, custom filesystem
+    paths must resolve inside the uploaded project.
+    """
+    cfg = parse_config(raw)
+    p = str(platform or "docker").lower().strip()
+    rules = PLATFORM_CONFIG_RULES.get(p, PLATFORM_CONFIG_RULES.get("php", {}))
+    errors: list[str] = []
+    warnings: list[str] = []
+    normalized: dict[str, Any] = {}
+
+    paths = cfg.get("paths") if isinstance(cfg.get("paths"), dict) else {}
+    for key in ("document_root", "static_dir", "build_dir", "media_dir"):
+        value = cfg.get(key) or paths.get(key)
+        if value:
+            if not rules.get(key):
+                warnings.append(f"'{key}' is not applicable to platform '{p}' and will be ignored; auto detection remains enabled.")
+            elif not _valid_rel_path(value):
+                errors.append(f"Invalid {key!r}: must be a safe relative project path.")
+            elif project_paths:
+                rel = str(value).replace("\\", "/").strip("/")
+                if rel not in project_paths and not any(x.startswith(rel + "/") for x in project_paths):
+                    errors.append(f"Custom {key} '{rel}' does not exist in the uploaded project.")
+            normalized[key] = str(value).replace("\\", "/").strip("/")
+
+    uh = cfg.get("url_handling")
+    if uh is None:
+        uh = {}
+    if not isinstance(uh, dict):
+        errors.append("url_handling must be an object.")
+    else:
+        mode = str(uh.get("mode") or "auto").lower().strip()
+        if mode not in {"auto", "disabled", "custom"}:
+            errors.append("url_handling.mode must be auto, disabled, or custom.")
+        for k in ("public_url", "asset_url"):
+            v = str(uh.get(k) or cfg.get(k) or "").strip()
+            if v and not re.match(r"^https?://[^\s'\"`;&|<>]+/?$", v):
+                errors.append(f"Invalid {k}: must be an http(s) URL without shell metacharacters.")
+        normalized["url_handling"] = dict(uh)
+
+    if errors:
+        raise ValueError("Platform configuration validation failed: " + "; ".join(errors))
+    return {"errors": errors, "warnings": warnings, "normalized": normalized}
 
 
 def validate_tenant_config(raw: Any) -> dict[str, Any]:
@@ -492,4 +591,6 @@ __all__ = [
     "TENANT_CONFIG_KEYS",
     "TENANT_BLOCKED_KEYS",
     "SAFE_BUILD_OPTION_KEYS",
+    "PLATFORM_CONFIG_RULES",
+    "validate_platform_config",
 ]

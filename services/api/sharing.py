@@ -869,6 +869,13 @@ def service_access_info(request, service_id):
             "is_owner": True,
             "permissions": full_owner_rules(),
             "share_id": None,
+            "menu": {
+                "shell": {
+                    "visible": True,
+                    "enabled": True,
+                    "permission": "can_shell",
+                }
+            },
         })
     allowed, share = user_can_access_service(service, request.user, "can_view")
     if not allowed:
@@ -893,10 +900,18 @@ def service_access_info(request, service_id):
                 perms = normalize_rules(share.rules)
         except Exception:
             perms = normalize_rules(share.rules if share else {})
+    can_shell = bool(perms.get("can_shell", False))
     return Response({
         "result": "success",
         "service_id": str(service.pk),
         "is_owner": False,
         "permissions": perms,
         "share_id": str(share.pk) if share else None,
+        "menu": {
+            "shell": {
+                "visible": can_shell,
+                "enabled": can_shell,
+                "permission": "can_shell",
+            }
+        },
     })

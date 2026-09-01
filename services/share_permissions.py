@@ -15,6 +15,7 @@ DEFAULT_SHARE_RULES: dict[str, bool] = {
     "can_view_deploy_logs": True,    # deployment pipeline logs
     "can_view_metrics": True,
     "can_view_db_credentials": False,  # DB password / root_password / secrets
+    "can_shell": False,                 # restricted shell on the live service container
     # lifecycle
     "can_start": False,
     "can_stop": False,
@@ -47,6 +48,7 @@ RULE_LABELS: dict[str, str] = {
     "can_view_deploy_logs": "View deploy logs",
     "can_view_metrics": "View metrics",
     "can_view_db_credentials": "View DB credentials",
+    "can_shell": "Use restricted service shell",
     "can_start": "Start",
     "can_stop": "Stop",
     "can_restart": "Restart",
@@ -264,6 +266,7 @@ RULE_PRESETS: dict[str, dict[str, bool]] = {
         "can_stop": True,
         "can_restart": True,
         "can_rebuild": True,
+        "can_shell": True,
         "can_deploy_add": True,
         "can_deploy_edit": True,
         "can_deploy_remove": True,
@@ -285,6 +288,7 @@ RULE_PRESETS: dict[str, dict[str, bool]] = {
         "can_stop": True,
         "can_restart": True,
         "can_rebuild": True,
+        "can_shell": True,
         "can_purge": True,
         "can_deploy_add": True,
         "can_deploy_edit": True,

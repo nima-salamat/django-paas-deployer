@@ -104,6 +104,8 @@ class Deploy:
         start_command=None,
         static_dir=None,
         media_dir=None,
+        document_root=None,
+        url_handling=None,
         # Frontend build settings for full-stack PHP/Laravel services.
         # Carries npm_registry / package_manager / build_command overrides
         # so the Dockerfile generator can inject a real Node build step
@@ -149,6 +151,8 @@ class Deploy:
         self.start_command = start_command
         self.static_dir = static_dir
         self.media_dir = media_dir
+        self.document_root = document_root
+        self.url_handling = dict(url_handling or {})
         # Sanitize the frontend dict so a non-dict (or a string accidentally
         # supplied by the user) can never crash downstream code. Only string
         # keys/values are accepted; everything else is silently dropped.
@@ -235,6 +239,8 @@ class Deploy:
             frontend=getattr(self, "frontend", {}),
             static_dir=getattr(self, "static_dir", None),
             media_dir=getattr(self, "media_dir", None),
+            document_root=getattr(self, "document_root", None),
+            url_handling=getattr(self, "url_handling", {}) or {},
             environment=self.environment,
             server_type=self.server_type,
             celery=self.celery,

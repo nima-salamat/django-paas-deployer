@@ -335,3 +335,13 @@ class VolumeAdmin(admin.ModelAdmin):
             'font-size:12px;max-height:300px;overflow:auto;">{}</pre>',
             pretty,
         )
+
+
+from .models import ShellSession
+
+@admin.register(ShellSession)
+class ShellSessionAdmin(admin.ModelAdmin):
+    list_display = ("id", "service", "user", "platform", "status", "workdir", "expires_at", "last_used_at")
+    list_filter = ("status", "platform")
+    search_fields = ("service__name", "user__email", "user__username")
+    readonly_fields = ("token_hash", "created_at", "updated_at", "last_used_at", "expires_at", "closed_at")
