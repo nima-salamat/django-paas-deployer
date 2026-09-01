@@ -387,6 +387,7 @@ CELERY_TASK_ROUTES = {
     "deployments.celery.tasks.deploy": {"queue": "deployments"},
     "deployments.celery.tasks.run_db_deploy": {"queue": "deployments"},
     "deployments.celery.tasks.stop": {"queue": "operations"},
+    "deployments.celery.tasks.build_base_runtime_image": {"queue": "base-images"},
 }
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_TASK_ACKS_LATE = True

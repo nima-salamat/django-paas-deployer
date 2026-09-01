@@ -187,6 +187,8 @@ class BaseRuntimeImage(BaseModel):
     build_started_at = models.DateTimeField(null=True, blank=True)
     build_completed_at = models.DateTimeField(null=True, blank=True)
     build_count = models.PositiveIntegerField(default=0)
+    build_task_id = models.CharField(max_length=255, blank=True, default="")
+    build_owner_deployment_id = models.CharField(max_length=255, blank=True, default="")
     last_error = models.TextField(blank=True, default="")
 
     class Meta:

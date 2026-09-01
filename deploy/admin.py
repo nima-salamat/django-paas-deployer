@@ -312,14 +312,14 @@ class BaseRuntimeImageAdmin(admin.ModelAdmin):
     readonly_fields = (
         "image_ref", "image_id", "image_digest", "source_image", "docker_host", "status",
         "rebuild_requested", "rebuild_requested_at", "build_started_at", "build_completed_at",
-        "build_count", "last_error", "created_at", "updated_at",
+        "build_count", "build_task_id", "build_owner_deployment_id", "last_error", "created_at", "updated_at",
     )
 
     fieldsets = (
         ("Runtime", {"fields": ("logical_runtime", "runtime_version", "variant", "architecture")}),
         ("Docker image", {"fields": ("source_image", "image_repository", "image_tag", "image_ref", "image_id", "image_digest", "docker_host")}),
         ("Policy", {"fields": ("enabled", "auto_build", "rebuild_requested")}),
-        ("Build state", {"fields": ("status", "rebuild_requested_at", "build_started_at", "build_completed_at", "build_count", "last_error")}),
+        ("Build state", {"fields": ("status", "rebuild_requested_at", "build_started_at", "build_completed_at", "build_count", "build_task_id", "build_owner_deployment_id", "last_error")}),
         ("Timestamps", {"fields": ("created_at", "updated_at")}),
     )
 

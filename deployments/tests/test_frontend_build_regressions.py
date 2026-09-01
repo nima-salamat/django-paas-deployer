@@ -717,3 +717,39 @@ def test_full_php_render_wrapped_sibling_frontend_is_buildable():
     block_only = block.split("EXPOSE 80", 1)[0]
     last_line = [ln for ln in block_only.rstrip().splitlines() if ln.strip()][-1]
     assert not last_line.rstrip().endswith("\\")
+
+
+def test_cached_laravel_frontend_stage_sees_composer_vendor():
+    """Laravel/Vite frontend builds may import package CSS from vendor/.
+    The cached Node stage must inherit vendor from the Composer/PHP stage.
+    """
+    d = load_dockerfile_module()
+
+    class Config:
+        environment = {}
+        frontend = {}
+        package_manager = "npm"
+        install_command = None
+        build_command = None
+        runtime_version = "20"
+        base_images = {
+            "node_base_image": "paas-base/node-alpine:20-r1",
+        }
+
+    out = d._inject_laravel_frontend_build(
+        "FROM mirror.test/php:8.4-apache\nCOPY . /var/www/html/\nRUN composer install --no-dev\nCMD [\"apache2-foreground\"]\n",
+        tar_stream=make_tar({
+            "artisan": "<?php",
+            "composer.json": LARAVEL_COMPOSER,
+            "package.json": '{"scripts":{"build":"vite build"},"devDependencies":{"vite":"7"}}',
+            "package-lock.json": "{}",
+            "vite.config.js": "export default {}",
+            "resources/css/app.css": "@import '../../vendor/pkg/resources/css/tailwind.css';",
+        }),
+        config=Config(), logger=None,
+    )
+    assert "AS deployer-backend" in out
+    assert "AS deployer-frontend-builder" in out
+    assert "COPY --from=deployer-backend /var/www/html/vendor /frontend/vendor" in out
+    assert "FROM deployer-backend AS deployer-final" in out
+    assert "COPY --from=deployer-frontend-builder /frontend/public/build /var/www/html/public/build" in out

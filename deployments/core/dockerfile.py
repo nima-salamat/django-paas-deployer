@@ -2815,29 +2815,49 @@ def _inject_laravel_frontend_build(
         )
 
     if node_base_image:
-        # Cached Node builder: final Laravel image contains only generated assets,
-        # never a second Node.js installation.
+        # Cached Node builder. Laravel frontend assets may import files from
+        # vendor/ (for example a package-provided Tailwind stylesheet), so the
+        # Node stage must see the vendor tree produced by the PHP/composer stage.
+        if not re.search(
+            r"^FROM\\s+[^\\n]+\\s+AS\\s+deployer-backend\\s*$",
+            dockerfile,
+            re.MULTILINE | re.IGNORECASE,
+        ):
+            dockerfile = re.sub(
+                r"^FROM\\s+([^\\s]+)([ \\t]*)$",
+                r"FROM \\1 AS deployer-backend",
+                dockerfile,
+                count=1,
+                flags=re.MULTILINE,
+            )
+
+        laravel_root = str(detected.get("laravel_root") or ".").replace("\\", "/").strip().strip("/")
+        if laravel_root in {"", "."}:
+            backend_app_root = "/var/www/html"
+        else:
+            backend_app_root = f"/var/www/html/{laravel_root}"
+
         stage_lines = [
             "# --- Laravel frontend build (cached Node stage) ---",
             f"FROM {node_base_image} AS deployer-frontend-builder",
             "WORKDIR /frontend",
             "COPY . /frontend/",
+            f"COPY --from=deployer-backend {backend_app_root}/vendor /frontend/vendor",
             f"RUN cd {('/frontend' if frontend_root == '.' else '/frontend/' + frontend_root)} \\",
         ]
         if registry_line:
             stage_lines.append(f"    && {registry_line} \\")
         stage_lines.append(f"    && ( {install_command} ) \\")
         stage_lines.append(f"    && {build_command}")
-        dockerfile = "\n".join(stage_lines) + "\n" + dockerfile
-        copy_line = (
-            f"COPY --from=deployer-frontend-builder /frontend/{build_output} "
-            f"/var/www/html/{build_output}"
-        )
-        match = re.search(r"^COPY\s+\.\s+/var/www/html/[^\n]*$", dockerfile, re.M)
-        if match:
-            dockerfile = dockerfile[:match.end()] + "\n" + copy_line + dockerfile[match.end():]
-        else:
-            dockerfile = dockerfile.rstrip() + "\n" + copy_line + "\n"
+        stage_lines.extend([
+            "",
+            "FROM deployer-backend AS deployer-final",
+            (
+                f"COPY --from=deployer-frontend-builder /frontend/{build_output} "
+                f"/var/www/html/{build_output}"
+            ),
+        ])
+        dockerfile = dockerfile.rstrip() + "\n" + "\n".join(stage_lines) + "\n"
     else:
         install_lines = [
             "    && rm -rf /var/lib/apt/lists/* \\",

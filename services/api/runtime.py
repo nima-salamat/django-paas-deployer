@@ -515,7 +515,27 @@ def force_cancel_deploy_apiview(request):
     docker_report = _force_cancel_runtime_cleanup(service_item, container_name=service_item.get_docker_service_name(), deploy=selected)
 
     # Clear task metadata only if it still points to the cancelled task.
-    Service.objects.filter(pk=service_item.pk, task_id=task_id).update(task_id=None, deploy_started=None, status=SERVICE_STATUS_CHOICES.STOPPED)
+    # Reconcile the service state instead of blindly marking STOPPED. A force
+    # cancel may happen while an older successful container is still serving.
+    try:
+        running = Container.container_is_running(service_item.get_docker_service_name())
+    except Exception:
+        running = False
+    fallback_status = SERVICE_STATUS_CHOICES.RUNNING if running else SERVICE_STATUS_CHOICES.STOPPED
+    Service.objects.filter(pk=service_item.pk, task_id=task_id).update(
+        task_id=None, deploy_started=None, status=fallback_status
+    )
+
+    # Release any base-image leases held by this deployment. If the operator
+    # disabled retention, an unshared newly-built base can now be removed.
+    try:
+        from deploy.base_images import base_image_settings, release_base_image_leases
+        release_base_image_leases(
+            str(selected.pk),
+            remove_if_unretained=not base_image_settings()["retain_after_deploy"],
+        )
+    except Exception as exc:
+        logger.warning("force_cancel: failed to release base-image leases for deploy %s: %s", selected.pk, exc)
 
     return Response({
         "result": "success" if not docker_report["errors"] else "partial",
