@@ -213,7 +213,7 @@ def flatten_single_toplevel(build_root: str) -> str | None:
 # provides the repository/container name and ``Deploy.version`` provides the tag.
 # We validate those values but never invent a staging name or rewrite the version.
 
-_VALID_NAME_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
+_VALID_NAME_COMPONENT_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
 _VALID_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 
 
@@ -223,7 +223,14 @@ def _validate_image_name(name: str) -> str:
     value = name.strip()
     if value != name:
         raise ValueError(f"Image name contains surrounding whitespace: {name!r}")
-    if len(value) > 255 or not _VALID_NAME_RE.fullmatch(value):
+    if len(value) > 255:
+        raise ValueError(f"Invalid Docker image repository name: {value!r}")
+
+    # Docker repository names may contain multiple lowercase namespace
+    # components separated by '/'. Validate every component individually
+    # instead of rejecting valid repositories such as 'paas-base/php-apache'.
+    parts = value.split("/")
+    if any(not part or not _VALID_NAME_COMPONENT_RE.fullmatch(part) for part in parts):
         raise ValueError(f"Invalid Docker image repository name: {value!r}")
     return value
 

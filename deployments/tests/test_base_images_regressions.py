@@ -21,3 +21,11 @@ def test_rebuild_uses_no_cache_and_pull():
     text = (Path(__file__).resolve().parents[2] / "deploy" / "base_images.py").read_text()
     assert '"pull": True' in text
     assert '"no_cache": True' in text
+
+
+def test_docker_repository_names_allow_namespace_paths():
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "deployments" / "core" / "manager" / "image_manager.py").read_text()
+    assert "_VALID_NAME_COMPONENT_RE" in text
+    assert 'value.split("/")' in text
+    assert "paas-base/php-apache" in (root / "deploy" / "base_images.py").read_text()
