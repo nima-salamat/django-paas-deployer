@@ -107,8 +107,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libicu-dev libonig-dev libxml2-dev curl ca-certificates \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && missing=""; for ext in mysqli pdo pdo_mysql opcache zip gd intl bcmath mbstring exif pcntl; do \
-         if php -m | grep -Eiq "^${ext}$"; then \
-             echo "PHP extension ${ext} already enabled; skipping build"; \
+         if php -m | grep -Eiq "^${{ext}}$"; then \
+             echo "PHP extension ${{ext}} already enabled; skipping build"; \
          else \
              missing="$missing $ext"; \
          fi; \
