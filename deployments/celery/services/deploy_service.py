@@ -458,7 +458,9 @@ class DeployService:
             build_command=build_command,
             start_command=cfg.get("start_command"),
             frontend=dict(cfg.get("frontend") or {}),
-            base_images=getattr(config, "base_images", {}) or {},
+            # Base runtime images are resolved by DeploymentOrchestrator after
+            # project auto-detection. Do not reference a local ``config`` here;
+            # no such variable exists in this service layer.
         )
         if celery_app:
             try:
