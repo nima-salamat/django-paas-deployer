@@ -108,9 +108,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && docker-php-ext-install -j$(nproc) mysqli pdo pdo_mysql opcache zip gd intl bcmath mbstring exif pcntl \
     && a2enmod rewrite headers mime dir expires alias \
     && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \
-    && printf '%s\n' 'ServerName localhost' > /etc/apache2/conf-available/deployer-server-name.conf \
+    && printf '%s\\n' 'ServerName localhost' > /etc/apache2/conf-available/deployer-server-name.conf \
     && a2enconf deployer-server-name \
-    && printf '%s\n' \
+    && printf '%s\\n' \
        '<VirtualHost *:80>' \
        '    ServerName localhost' \
        '    DocumentRoot {doc_root}' \
