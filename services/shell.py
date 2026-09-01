@@ -38,7 +38,7 @@ PLATFORM_ALIASES = {
 BASE_COMMANDS = {
     "pwd", "ls", "cat", "head", "tail", "mkdir", "touch", "rm", "cp", "mv", "find",
     "grep", "wc", "stat", "date", "whoami", "id", "env", "printenv", "which", "df", "du",
-    "uname", "hostname", "ping", "curl", "cd",
+    "uname", "hostname", "ping", "curl", "cd", "nano",
 }
 PLATFORM_COMMANDS = {
     "laravel": {"php", "composer"},
@@ -104,7 +104,7 @@ ARTISAN_COMMAND_CATALOG = {
 GENERIC_COMMAND_CATALOG = {
     "pwd", "ls", "cat", "head", "tail", "mkdir", "touch", "rm", "cp", "mv", "find",
     "grep", "wc", "stat", "date", "whoami", "id", "env", "printenv", "which",
-    "df", "du", "uname", "hostname", "ping", "curl", "cd",
+    "df", "du", "uname", "hostname", "ping", "curl", "cd", "nano",
 }
 
 
@@ -203,6 +203,10 @@ def _validate_platform_command(argv: list[str], platform: str, root: str) -> Non
         if not targets:
             raise ValidationError("ping requires a host.")
         _validate_network_target(targets[-1])
+    if base == "nano":
+        if len(argv) != 2:
+            raise ValidationError("nano accepts exactly one file path in the restricted shell.")
+        _safe_workdir(argv[1], root)
     if base in {"rm", "cp", "mv", "mkdir", "touch", "find", "grep", "cat", "head", "tail", "ls", "stat", "du", "wc"}:
         _validate_mutating_paths(argv, root, base)
         for arg in argv[1:]:
@@ -409,10 +413,42 @@ def execute_command(session, command: str, *, confirm: bool = False) -> dict:
     if argv and argv[0] == "cd":
         if len(argv) != 2:
             raise ValidationError("cd accepts exactly one path.")
-        session.workdir = _safe_workdir(argv[1], session.root_path)
+        target = _safe_workdir(argv[1], session.root_path)
+        container = _resolve_container(session.service)
+        check = container.exec_run(["test", "-d", "--", target], workdir=session.workdir, stdout=False, stderr=True, demux=False, tty=False)
+        if int(check.exit_code or 0) != 0:
+            raise ValidationError(f"Directory does not exist: {target}")
+        session.workdir = target
         session.last_used_at = timezone.now()
-        session.save(update_fields=["workdir", "last_used_at"])
+        session.expires_at = timezone.now() + timedelta(minutes=SESSION_TTL_MINUTES)
+        session.save(update_fields=["workdir", "last_used_at", "expires_at"])
         return {"exit_code": 0, "stdout": session.workdir + "\n", "stderr": "", "cwd": session.workdir}
+
+    if argv and argv[0] == "nano":
+        target = _safe_workdir(argv[1], session.root_path)
+        container = _resolve_container(session.service)
+        exists = container.exec_run(["test", "-f", "--", target], workdir=session.workdir, stdout=False, stderr=True, demux=False, tty=False)
+        if int(exists.exit_code or 0) != 0:
+            raise ValidationError(f"File does not exist: {target}")
+        result = container.exec_run(["cat", "--", target], workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
+        out, err = result.output if isinstance(result.output, tuple) else (result.output or b"", b"")
+        writable_check = container.exec_run(["test", "-w", target], workdir=session.workdir, stdout=False, stderr=True, demux=False, tty=False)
+        writable = int(writable_check.exit_code or 0) == 0
+        session.last_used_at = timezone.now()
+        session.expires_at = timezone.now() + timedelta(minutes=SESSION_TTL_MINUTES)
+        session.save(update_fields=["last_used_at", "expires_at"])
+        return {
+            "action": "open_file",
+            "path": target,
+            "content": (out or b"")[:MAX_FILE_SIZE].decode("utf-8", "replace"),
+            "writable": writable,
+            "read_only": not writable,
+            "read_only_reason": None if writable else "This file is read-only in the running container.",
+            "exit_code": 0,
+            "stdout": "",
+            "stderr": (err or b"")[:16384].decode("utf-8", "replace"),
+            "cwd": session.workdir,
+        }
     container = _resolve_container(session.service)
     try:
         result = container.exec_run(argv, workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
