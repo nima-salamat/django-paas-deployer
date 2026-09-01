@@ -65,6 +65,15 @@ logger = logging.getLogger(__name__)
 # App deploy / stop
 # ===========================================================================
 
+@shared_task(name="deployments.celery.tasks.expire_idle_shell_sessions")
+def expire_idle_shell_sessions_task() -> dict:
+    """Expire restricted shell sessions that have exceeded the operator idle timeout."""
+    from services.shell import expire_idle_sessions
+    count = expire_idle_sessions()
+    logger.info("Expired %s idle restricted shell sessions", count)
+    return {"status": "ok", "expired": count}
+
+
 @shared_task(bind=True, max_retries=3, default_retry_delay=15)
 def deploy(self, deploy_id) -> None:
     logger.info("Initializing background processing for deploy_id: %s", deploy_id)

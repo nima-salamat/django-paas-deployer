@@ -282,30 +282,6 @@ def _resolve_container(service: Service):
         raise ValidationError("Service container is not running or does not exist.") from exc
 
 
-def shell_idle_timeout_minutes() -> int:
-    """Read the operator-configured shell inactivity timeout."""
-    try:
-        from core.settings_service import shell_idle_timeout_minutes as _timeout
-        return _timeout()
-    except Exception:
-        return 10
-
-
-def _session_expiry(now):
-    return now + timedelta(minutes=shell_idle_timeout_minutes())
-
-
-def expire_idle_sessions(*, service=None, now=None) -> int:
-    """Expire inactive shell sessions. Safe to call from API requests or monitor workers."""
-    from services.models import ShellSession
-    now = now or timezone.now()
-    cutoff = now - timedelta(minutes=shell_idle_timeout_minutes())
-    qs = ShellSession.objects.filter(status=ShellSession.Status.ACTIVE, last_used_at__lte=cutoff)
-    if service is not None:
-        qs = qs.filter(service=service)
-    return qs.update(status=ShellSession.Status.EXPIRED, closed_at=now, expires_at=now)
-
-
 def create_session(service: Service, user, workdir: str | None = None) -> tuple[object, str]:
     platform = _platform_for_service(service)
     root = DEFAULT_WORKDIRS.get(platform, "/app")
@@ -314,7 +290,6 @@ def create_session(service: Service, user, workdir: str | None = None) -> tuple[
     now = timezone.now()
     # Lazy import avoids model cycle during Django app loading.
     from services.models import ShellSession
-    expire_idle_sessions(service=service, now=now)
     with transaction.atomic():
         active_qs = ShellSession.objects.select_for_update().filter(
             service=service, status=ShellSession.Status.ACTIVE
@@ -330,33 +305,9 @@ def create_session(service: Service, user, workdir: str | None = None) -> tuple[
             service=service, user=user, token_hash=_token_hash(token),
             platform=platform, root_path=root, workdir=workdir,
             status=ShellSession.Status.ACTIVE,
-            expires_at=_session_expiry(now),
+            expires_at=now + timedelta(minutes=SESSION_TTL_MINUTES),
         )
     return session, token
-
-
-def terminate_active_session(service: Service, *, actor=None):
-    """Revoke the single active shell session for a service.
-
-    Shell commands are synchronous docker exec calls, so replacing a shell
-    session only revokes the token/DB session; it does not kill the service
-    container.
-    """
-    from services.models import ShellSession
-
-    now = timezone.now()
-    with transaction.atomic():
-        qs = ShellSession.objects.select_for_update().filter(
-            service=service, status=ShellSession.Status.ACTIVE
-        )
-        active = qs.filter(expires_at__gt=now).first()
-        if not active:
-            qs.filter(expires_at__lte=now).update(status=ShellSession.Status.EXPIRED)
-            return None
-        active.status = ShellSession.Status.CLOSED
-        active.closed_at = now
-        active.save(update_fields=["status", "closed_at"])
-        return active
 
 
 def authenticate_session(service: Service, user, token: str):
@@ -367,12 +318,9 @@ def authenticate_session(service: Service, user, token: str):
     if not session:
         raise ValidationError("Invalid or inactive shell session.")
     now = timezone.now()
-    idle_cutoff = now - timedelta(minutes=shell_idle_timeout_minutes())
-    if session.expires_at <= now or session.last_used_at <= idle_cutoff:
-        ShellSession.objects.filter(pk=session.pk).update(
-            status=ShellSession.Status.EXPIRED, closed_at=now, expires_at=now
-        )
-        raise ValidationError("Shell session expired due to inactivity.")
+    if session.expires_at <= now:
+        ShellSession.objects.filter(pk=session.pk).update(status=ShellSession.Status.EXPIRED)
+        raise ValidationError("Shell session expired.")
     return session
 
 
@@ -437,29 +385,9 @@ def execute_command(session, command: str, *, confirm: bool = False) -> dict:
     if argv and argv[0] == "cd":
         if len(argv) != 2:
             raise ValidationError("cd accepts exactly one path.")
-        target = argv[1].strip() or session.root_path
-        # Match normal shell semantics: relative paths are relative to the current cwd.
-        candidate = target if target.startswith("/") else posixpath.join(session.workdir, target)
-        target_workdir = _safe_workdir(candidate, session.root_path)
-        container = _resolve_container(session.service)
-        try:
-            probe = container.exec_run(
-                ["test", "-d", target_workdir],
-                workdir=session.workdir,
-                stdout=True,
-                stderr=True,
-                demux=True,
-                tty=False,
-            )
-        except APIError as exc:
-            raise ValidationError(f"Docker exec failed while checking directory: {exc}") from exc
-        if int(probe.exit_code or 0) != 0:
-            raise ValidationError(f"Directory does not exist: {target_workdir}")
-        now = timezone.now()
-        session.workdir = target_workdir
-        session.last_used_at = now
-        session.expires_at = _session_expiry(now)
-        session.save(update_fields=["workdir", "last_used_at", "expires_at"])
+        session.workdir = _safe_workdir(argv[1], session.root_path)
+        session.last_used_at = timezone.now()
+        session.save(update_fields=["workdir", "last_used_at"])
         return {"exit_code": 0, "stdout": session.workdir + "\n", "stderr": "", "cwd": session.workdir}
     container = _resolve_container(session.service)
     try:
@@ -476,7 +404,7 @@ def execute_command(session, command: str, *, confirm: bool = False) -> dict:
             return data[:MAX_OUTPUT_BYTES].decode("utf-8", "replace")
         return str(data or "")[:MAX_OUTPUT_BYTES]
     session.last_used_at = timezone.now()
-    session.expires_at = _session_expiry(session.last_used_at)
+    session.expires_at = timezone.now() + timedelta(minutes=SESSION_TTL_MINUTES)
     session.save(update_fields=["last_used_at", "expires_at"])
     return {"exit_code": int(result.exit_code or 0), "stdout": clip(stdout), "stderr": clip(stderr), "cwd": session.workdir}
 

@@ -260,6 +260,10 @@ class CoreSettings(BaseGenericSetting):
     monitor_scheduler_lock_seconds = models.PositiveIntegerField(
         default=20, verbose_name=_("Monitor scheduler lock (seconds)"),
     )
+    shell_idle_timeout_minutes = models.PositiveSmallIntegerField(
+        default=10, verbose_name=_("Restricted shell idle timeout (minutes)"),
+        help_text=_("Close inactive shell sessions after this many minutes. Commands and file operations refresh activity."),
+    )
     panels = [
         MultiFieldPanel(
             [
@@ -315,8 +319,9 @@ class CoreSettings(BaseGenericSetting):
                 FieldPanel("monitor_stale_base_build_minutes"),
                 FieldPanel("monitor_stale_worker_seconds"),
                 FieldPanel("monitor_scheduler_lock_seconds"),
+                FieldPanel("shell_idle_timeout_minutes"),
             ],
-            heading=_("Scheduler & monitor")
+            heading=_("Scheduler, monitor & shell")
         ),
     ]
 

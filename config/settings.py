@@ -408,6 +408,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "deployments.celery.schedules.monitor_services",
         "schedule": 5.0,
     },
+    "expire_idle_shell_sessions": {
+        "task": "deployments.celery.tasks.expire_idle_shell_sessions",
+        "schedule": 30.0,
+    },
     "messenger_deliver_scheduled_messages": {
         "task": "messenger.tasks.deliver_scheduled_messages",
         "schedule": 15.0,  # every 15s

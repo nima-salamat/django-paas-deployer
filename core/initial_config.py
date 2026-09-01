@@ -203,6 +203,11 @@ DEFAULTS: list[dict] = [
         "description": "Legacy DEFAULT_MAX_APPS (plan overrides preferred).",
     },
     {
+        "key": "shell.idle_timeout_minutes",
+        "value": "10",
+        "category": "shell", "label": "Restricted shell idle timeout (minutes)",
+        "description": "Fallback setting for automatically expiring inactive shell sessions.",
+
         "key": "deploy.pip_timeout",
         "default": 120,
         "value_type": "integer",

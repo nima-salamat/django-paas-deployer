@@ -209,28 +209,8 @@ def shell_file_apiview(request, service_id):
         if action == "read":
             result = container.exec_run(["cat", "--", safe_path], workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
             out, err = result.output if isinstance(result.output, tuple) else (result.output or b"", b"")
-            writable_check = container.exec_run(["test", "-w", safe_path], workdir=session.workdir, stdout=False, stderr=True, demux=False, tty=False)
-            writable = int(writable_check.exit_code or 0) == 0
-            session.last_used_at = timezone.now()
-            session.expires_at = timezone.now() + timedelta(minutes=SESSION_TTL_MINUTES)
-            session.save(update_fields=["last_used_at", "expires_at"])
-            return Response({
-                "result":"success",
-                "path":safe_path,
-                "exit_code":int(result.exit_code or 0),
-                "content":(out or b"")[:262144].decode("utf-8","replace"),
-                "stderr":(err or b"")[:16384].decode("utf-8","replace"),
-                "writable": writable,
-                "read_only": not writable,
-                "read_only_reason": None if writable else "This file is not writable in the running container (for example, the filesystem or volume may be mounted read-only).",
-            })
+            return Response({"result":"success", "path":safe_path, "exit_code":int(result.exit_code or 0), "content":(out or b"")[:262144].decode("utf-8","replace"), "stderr":(err or b"")[:16384].decode("utf-8","replace")})
         if action == "write":
-            writable_check = container.exec_run(["test", "-w", safe_path], workdir=session.workdir, stdout=False, stderr=True, demux=False, tty=False)
-            if int(writable_check.exit_code or 0) != 0:
-                raise ValidationError("This file is read-only in the running container. Mount a writable volume or change the service filesystem configuration before editing it.")
-            session.last_used_at = timezone.now()
-            session.expires_at = timezone.now() + timedelta(minutes=SESSION_TTL_MINUTES)
-            session.save(update_fields=["last_used_at", "expires_at"])
             content = request.data.get("content")
             if not isinstance(content, str):
                 raise ValidationError("content must be a string")

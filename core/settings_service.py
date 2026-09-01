@@ -276,6 +276,10 @@ def monitor_stale_worker_seconds() -> int:
 def monitor_scheduler_lock_seconds() -> int:
     return max(5, min(int(_wagtail_core_value("monitor_scheduler_lock_seconds", 20)), 300))
 
+
+def shell_idle_timeout_minutes() -> int:
+    return max(1, min(int(_wagtail_core_value("shell_idle_timeout_minutes", 10)), 1440))
+
 # ---- Unified Wagtail operator settings -----------------------------------
 def base_images_enabled() -> bool:
     return bool(_wagtail_core_value("base_images_enabled", get_bool("base_images.enabled", True)))
