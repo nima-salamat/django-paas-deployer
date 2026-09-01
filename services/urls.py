@@ -1,7 +1,7 @@
 from django.urls import path
 from rest_framework.routers import DefaultRouter
 
-from .api.shell import shell_info_apiview, shell_create_apiview, shell_command_apiview, shell_close_apiview, shell_file_apiview
+from .api.shell import shell_info_apiview, shell_catalog_apiview, shell_create_apiview, shell_command_apiview, shell_close_apiview, shell_file_apiview
 
 from services.apis import (
     ServiceViewSet,
@@ -68,6 +68,7 @@ urlpatterns = (
         path("admin/purge_service_runtime/", admin_purge_service_runtime_apiview, name="admin_purge_service_runtime"),
         path("service_status/", service_status_apiview, name="service_status"),
         path("services/<uuid:service_id>/shell/", shell_info_apiview, name="service_shell_info"),
+        path("services/<uuid:service_id>/shell/catalog/", shell_catalog_apiview, name="service_shell_catalog"),
         path("services/<uuid:service_id>/shell/session/", shell_create_apiview, name="service_shell_create"),
         path("services/<uuid:service_id>/shell/command/", shell_command_apiview, name="service_shell_command"),
         path("services/<uuid:service_id>/shell/close/", shell_close_apiview, name="service_shell_close"),

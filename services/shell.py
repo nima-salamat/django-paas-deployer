@@ -57,6 +57,56 @@ FORBIDDEN_BASENAMES = {
 }
 PATH_ARG_COMMANDS = {"ls", "cat", "head", "tail", "mkdir", "touch", "rm", "cp", "mv", "find", "grep", "wc", "stat", "du"}
 
+# Commands that may change application state or availability. The API requires
+# an explicit ``confirm=true`` for these operations. This is separate from the
+# command allow-list so the shell can stay interactive without silently allowing
+# destructive actions.
+DESTRUCTIVE_COMMANDS = {
+    ("php", "artisan", "migrate:fresh"),
+    ("php", "artisan", "migrate:refresh"),
+    ("php", "artisan", "down"),
+    ("php", "artisan", "up"),
+    ("php", "artisan", "db:seed"),
+    ("composer", "update"),
+    ("npm", "install"),
+    ("npm", "ci"),
+    ("yarn", "install"),
+    ("pnpm", "install"),
+}
+
+ARTISAN_COMMAND_CATALOG = {
+    "about": {"label": "Application information", "mutating": False},
+    "list": {"label": "List Artisan commands", "mutating": False},
+    "help": {"label": "Help for an Artisan command", "mutating": False},
+    "route:list": {"label": "List application routes", "mutating": False},
+    "route:clear": {"label": "Clear route cache", "mutating": True},
+    "config:show": {"label": "Show configuration", "mutating": False},
+    "config:clear": {"label": "Clear configuration cache", "mutating": True},
+    "cache:clear": {"label": "Clear application cache", "mutating": True},
+    "view:clear": {"label": "Clear compiled views", "mutating": True},
+    "event:list": {"label": "List registered events", "mutating": False},
+    "schedule:list": {"label": "List scheduled tasks", "mutating": False},
+    "queue:monitor": {"label": "Show queue monitor status", "mutating": False},
+    "storage:link": {"label": "Create the public storage symlink", "mutating": True},
+    "migrate": {"label": "Run pending database migrations", "mutating": True},
+    "migrate:status": {"label": "Show migration status", "mutating": False},
+    "migrate:rollback": {"label": "Rollback the latest migrations", "mutating": True},
+    "migrate:fresh": {"label": "Drop all tables and re-run migrations", "mutating": True, "destructive": True},
+    "migrate:refresh": {"label": "Rollback and re-run all migrations", "mutating": True, "destructive": True},
+    "db:seed": {"label": "Seed the database", "mutating": True, "destructive": True},
+    "db:show": {"label": "Show database information", "mutating": False},
+    "optimize": {"label": "Cache framework files", "mutating": True},
+    "optimize:clear": {"label": "Clear framework caches", "mutating": True},
+    "down": {"label": "Put the application into maintenance mode", "mutating": True, "destructive": True},
+    "up": {"label": "Leave maintenance mode", "mutating": True},
+}
+
+GENERIC_COMMAND_CATALOG = {
+    "pwd", "ls", "cat", "head", "tail", "mkdir", "touch", "rm", "cp", "mv", "find",
+    "grep", "wc", "stat", "date", "whoami", "id", "env", "printenv", "which",
+    "df", "du", "uname", "hostname", "ping", "curl", "cd",
+}
+
 
 def _platform_for_service(service: Service) -> str:
     deploy = getattr(service, "selected_deploy", None)
@@ -164,11 +214,39 @@ def _validate_platform_command(argv: list[str], platform: str, root: str) -> Non
         if len(argv) < 2:
             raise ValidationError("php requires a subcommand/script.")
         if argv[1] == "artisan":
-            allowed_artisan = {"migrate", "migrate:fresh", "migrate:refresh", "db:seed", "route:list", "config:clear", "cache:clear", "view:clear", "optimize", "storage:link", "about"}
-            if len(argv) >= 3 and argv[2] not in allowed_artisan:
-                raise ValidationError("This Laravel Artisan command is not allowed.")
-        elif argv[1] not in {"-v", "--version", "-r", "-m", "-i"} and not argv[1].endswith(".php"):
-            raise ValidationError("Only PHP scripts/version flags and selected Artisan commands are allowed.")
+            if len(argv) < 3:
+                raise ValidationError("php artisan requires a command.")
+            allowed_artisan = {
+                # Safe/read-only or routine operational Laravel commands
+                "about", "list", "help", "route:list", "route:clear",
+                "config:show", "config:clear", "cache:clear", "view:clear",
+                "event:list", "schedule:list", "queue:monitor", "storage:link",
+                # Database/schema maintenance
+                "migrate", "migrate:status", "migrate:rollback",
+                "migrate:fresh", "migrate:refresh", "db:seed", "db:show",
+                # Common framework/cache maintenance
+                "optimize", "optimize:clear", "down", "up",
+            }
+            command = argv[2]
+            if command not in allowed_artisan:
+                raise ValidationError(
+                    "This Laravel Artisan command is not allowed by the restricted shell. "
+                    "Project-specific Artisan commands must be explicitly enabled by the service/admin policy."
+                )
+            # Keep destructive migrate/down commands explicit and disallow arbitrary arguments that could
+            # select or mutate an unexpected environment. Routine flags are limited below.
+            if command in {"migrate:fresh", "migrate:refresh", "down", "up"}:
+                allowed_flags = {"--force", "--seed", "--step", "--graceful", "--render", "--retry", "--refresh"}
+                for token in argv[3:]:
+                    if token.startswith("--") and token.split("=", 1)[0] not in allowed_flags:
+                        raise ValidationError(f"Artisan flag '{token}' is not allowed.")
+            elif command in {"migrate", "migrate:rollback", "db:seed"}:
+                allowed_flags = {"--force", "--step", "--seed", "--class"}
+                for token in argv[3:]:
+                    if token.startswith("--") and token.split("=", 1)[0] not in allowed_flags:
+                        raise ValidationError(f"Artisan flag '{token}' is not allowed.")
+        elif argv[1] not in {"-v", "--version"}:
+            raise ValidationError("Only PHP version flags and selected Artisan commands are allowed.")
     if base == "composer":
         if len(argv) < 2 or argv[1] not in {"install", "update", "dump-autoload", "dump-autoload", "show", "validate", "outdated"}:
             raise ValidationError("This Composer command is not allowed.")
@@ -246,10 +324,64 @@ def authenticate_session(service: Service, user, token: str):
     return session
 
 
-def execute_command(session, command: str) -> dict:
+def _is_destructive_command(argv: list[str]) -> bool:
+    if not argv:
+        return False
+    base = os.path.basename(argv[0])
+    key = tuple(argv[:3])
+    if key in DESTRUCTIVE_COMMANDS:
+        return True
+    if base in {"yarn", "pnpm"} and len(argv) >= 2 and tuple(argv[:2]) in DESTRUCTIVE_COMMANDS:
+        return True
+    return False
+
+
+def command_catalog(platform: str) -> list[dict]:
+    """Return UI-safe command metadata; custom arbitrary commands are excluded."""
+    items = [
+        {"command": c, "label": c.replace("_", " "), "mutating": False, "dangerous": False}
+        for c in sorted(GENERIC_COMMAND_CATALOG)
+    ]
+    if platform in {"laravel", "php"}:
+        items.extend(
+            {"command": f"php artisan {name}", "label": meta["label"],
+             "mutating": bool(meta.get("mutating")), "dangerous": bool(meta.get("destructive"))}
+            for name, meta in sorted(ARTISAN_COMMAND_CATALOG.items())
+        )
+        items.extend([
+            {"command": "php -v", "label": "PHP version", "mutating": False, "dangerous": False},
+            {"command": "composer show", "label": "Composer packages", "mutating": False, "dangerous": False},
+            {"command": "composer validate", "label": "Validate composer.json", "mutating": False, "dangerous": False},
+        ])
+    elif platform in {"django", "python"}:
+        for cmd, label, mut in [
+            ("python manage.py check", "Django system check", False),
+            ("python manage.py migrate", "Run migrations", True),
+            ("python manage.py makemigrations", "Create migrations", True),
+            ("python manage.py createsuperuser", "Create Django superuser", True),
+            ("python manage.py collectstatic", "Collect static files", True),
+        ]:
+            items.append({"command": cmd, "label": label, "mutating": mut, "dangerous": False})
+        items += [
+            {"command": "python --version", "label": "Python version", "mutating": False, "dangerous": False},
+            {"command": "pip list", "label": "Installed Python packages", "mutating": False, "dangerous": False},
+        ]
+    elif platform == "node":
+        items += [
+            {"command": "node --version", "label": "Node version", "mutating": False, "dangerous": False},
+            {"command": "npm list", "label": "Installed npm packages", "mutating": False, "dangerous": False},
+            {"command": "npm run build", "label": "Run production build", "mutating": True, "dangerous": False},
+            {"command": "npm test", "label": "Run tests", "mutating": False, "dangerous": False},
+        ]
+    return items
+
+
+def execute_command(session, command: str, *, confirm: bool = False) -> dict:
     _reject_shell_syntax(command)
     argv = shlex.split(command, posix=True)
     _validate_platform_command(argv, session.platform, session.root_path)
+    if _is_destructive_command(argv) and not confirm:
+        raise ValidationError("This command changes application state. Re-submit it with confirm=true.")
     if argv and argv[0] == "cd":
         if len(argv) != 2:
             raise ValidationError("cd accepts exactly one path.")

@@ -9,7 +9,7 @@ from rest_framework import status
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 from .common import _get_service_for_user_or_share
-from ..shell import authenticate_session, close_session, create_session, execute_command
+from ..shell import authenticate_session, close_session, create_session, execute_command, command_catalog, _platform_for_service
 
 
 def _resolve(request, service_id, action="can_shell"):
@@ -62,6 +62,32 @@ def shell_info_apiview(request, service_id):
         return Response({"result": "error", "detail": "Service not found."}, status=404)
 
 
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def shell_catalog_apiview(request, service_id):
+    """Return the restricted, platform-aware command catalog for the shell UI."""
+    try:
+        service = _resolve(request, service_id, action="can_shell")
+        platform = _platform_for_service(service)
+        return Response({
+            "result": "success",
+            "platform": platform,
+            "commands": command_catalog(platform),
+            "policy": {
+                "shell_operators": False,
+                "arbitrary_php_scripts": False,
+                "arbitrary_python_eval": False,
+                "destructive_commands_require_confirmation": True,
+                "custom_commands_require_admin_policy": True,
+            },
+        })
+    except PermissionError as exc:
+        return Response({"result":"error","detail":str(exc)}, status=403)
+    except Service.DoesNotExist:
+        return Response({"result":"error","detail":"Service not found."}, status=404)
+
+
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -81,7 +107,7 @@ def shell_command_apiview(request, service_id):
         service = _resolve(request, service_id, action="can_shell")
         token = request.headers.get("X-Shell-Token") or request.data.get("token")
         session = authenticate_session(service, request.user, token)
-        result = execute_command(session, request.data.get("command", ""))
+        result = execute_command(session, request.data.get("command", ""), confirm=bool(request.data.get("confirm", False)))
         return Response({"result":"success", **result}, status=200)
     except (PermissionError, ValidationError) as exc:
         return Response({"result":"error","detail":str(exc)}, status=403 if isinstance(exc, PermissionError) else 400)
