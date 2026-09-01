@@ -310,6 +310,29 @@ class DeployService:
         # Laravel/PHP defaults when root FS may be read-only: app reads these
         # from the process environment even without a writable .env file.
         if platform in ("laravel", "php", "lumen", "symfony"):
+            # The public deployment endpoint is HTTPS while Traefik forwards
+            # traffic to the container over HTTP. Laravel otherwise may build
+            # absolute asset URLs with http://, causing browser Mixed Content
+            # blocks for Vite CSS/JS. Keep explicit tenant settings intact and
+            # provide secure platform defaults for APP_URL/ASSET_URL.
+            try:
+                from django.conf import settings as _django_settings
+                _deployment_domain = str(getattr(_django_settings, "DEPLOYMENT_DOMAIN", "") or "").strip().strip(".")
+            except Exception:
+                _deployment_domain = ""
+            try:
+                _service_host = str(service.get_docker_service_name() or "").strip()
+            except Exception:
+                _service_host = ""
+            if _deployment_domain and _service_host:
+                _public_url = f"https://{_service_host}.{_deployment_domain}"
+                environment.setdefault("APP_URL", _public_url)
+                environment.setdefault("ASSET_URL", _public_url)
+                environment.setdefault("PUBLIC_URL", _public_url)
+                environment.setdefault("HTTPS", "on")
+                environment.setdefault("REQUEST_SCHEME", "https")
+                environment.setdefault("TRUSTED_PROXIES", "*")
+
             environment.setdefault("LOG_CHANNEL", "stderr")
             environment.setdefault("SESSION_DRIVER", "file")
             environment.setdefault("CACHE_STORE", "file")

@@ -1385,6 +1385,8 @@ def _apply_php_document_root(dockerfile: str, document_root_rel: str) -> str:
         "ServerName localhost\n"
         "<VirtualHost *:80>\n"
         "    ServerAdmin webmaster@localhost\n"
+        "    SetEnv HTTPS on\n"
+        "    SetEnv REQUEST_SCHEME https\n"
         f"    DocumentRoot {absolute}\n"
         f"    <Directory {absolute}>\n"
         "        Options FollowSymLinks\n"
@@ -2367,17 +2369,6 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
     # _inject_php_runtime (composer bootstrap / migrate ENTRYPOINT) and
     # _inject_laravel_frontend_build.  Always run the full injection pipeline
     # and apply a user/detected CMD override only at the end.
-
-    if "docker-php-ext-install" not in rendered:
-        rendered = rendered.replace(
-            "COPY . /var/www/html/",
-            "COPY . /var/www/html/\n\n"
-            "RUN docker-php-ext-install mysqli pdo pdo_mysql opcache \\\n"
-            "    && a2enmod rewrite headers mime dir expires alias \
-"
-            "    && sed -i 's/AllowOverride None/AllowOverride All/g' "
-            "/etc/apache2/apache2.conf",
-        )
 
     rendered = _apply_php_document_root(rendered, doc_root_rel)
 
