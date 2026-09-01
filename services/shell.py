@@ -681,18 +681,31 @@ def execute_command(session, command: str, *, confirm: bool = False) -> dict:
         target=argv[1] if len(argv)==2 else session.root_path
         candidate=target if target.startswith('/') else posixpath.join(session.workdir,target)
         safe=_safe_workdir(candidate,session.root_path)
-        # `test` is not present in every runtime image.  The directory tree
-        # itself is already queried through `ls`, so use the same primitive
-        # for cd validation.  `path/.` guarantees that the target resolves to
-        # a real directory while remaining fully argument-based (no user shell).
-        probe = safe if safe.endswith('/') else safe + '/.'
-        result = container.exec_run(['ls', '-d', probe], stdout=False, stderr=False, tty=False)
-        probe_code = int(result.exit_code if result.exit_code is not None else 1)
-        if probe_code != 0:
-            # A few very small images only expose /bin/ls.
-            result = container.exec_run(['/bin/ls', '-d', probe], stdout=False, stderr=False, tty=False)
-            probe_code = int(result.exit_code if result.exit_code is not None else 1)
-        if probe_code != 0:
+        # The authoritative test is whether Docker can start a process with this
+        # directory as its working directory under the *service runtime user*.
+        # This avoids false negatives caused by missing/incompatible `test` or
+        # `ls -d path/.` implementations in minimal images.
+        cwd_error=None
+        try:
+            result = container.exec_run(['pwd'], workdir=safe, stdout=True, stderr=True, demux=True, tty=False)
+            code = int(result.exit_code if result.exit_code is not None else 1)
+            if code != 0:
+                out, err = result.output if isinstance(result.output, tuple) else (result.output or b"", b"")
+                cwd_error = (err or out or b"").decode("utf-8", "replace").strip()
+        except Exception as exc:
+            cwd_error = str(exc)
+        if cwd_error:
+            # Distinguish an existing-but-inaccessible directory from a genuinely
+            # missing one. Listing the parent is enough to stat the child without
+            # requiring traversal into the child itself.
+            parent = posixpath.dirname(safe) or session.root_path
+            try:
+                probe = container.exec_run(['ls', '-ld', safe], workdir=parent, stdout=False, stderr=False, tty=False)
+                exists = int(probe.exit_code if probe.exit_code is not None else 1) == 0
+            except Exception:
+                exists = False
+            if exists:
+                raise ValidationError(f'Directory exists but is not accessible to the container user: {safe}')
             raise ValidationError(f'Directory does not exist: {safe}')
         session.workdir=safe; now=timezone.now(); session.last_used_at=now; session.expires_at=_session_expiry(now); session.save(update_fields=['workdir','last_used_at','expires_at'])
         return {'exit_code':0,'stdout':safe+'\n','stderr':'','cwd':safe}

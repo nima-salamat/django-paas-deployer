@@ -314,21 +314,38 @@ def shell_file_apiview(request, service_id):
         if action == "create":
             if safe_path == session.root_path:
                 raise DjangoValidationError("The workspace root cannot be created or replaced.")
-            access = path_access(container, safe_path, for_create=True)
-            if not access.get("mount_writable", False):
+            from ..shell import _container_mount_policy
+            try:
+                root_ro, mounts = _container_mount_policy(container)
+            except Exception:
+                root_ro, mounts = False, []
+            mount_rw = (not root_ro)
+            for mount_path, rw in sorted(mounts, key=lambda x: len(x[0]), reverse=True):
+                if safe_path == mount_path or safe_path.startswith(mount_path.rstrip("/") + "/"):
+                    mount_rw = bool(rw)
+                    break
+            if not mount_rw:
                 raise DjangoValidationError(f"The target is on a read-only Docker mount: {safe_path}.")
             parent = posixpath.dirname(safe_path) or session.root_path
-            parent_probe = container.exec_run(["ls", "-d", parent + "/."], workdir=session.workdir, stdout=False, stderr=False, tty=False)
-            if int(parent_probe.exit_code or 1) != 0:
-                raise DjangoValidationError("Parent directory does not exist or is not accessible by the container user.")
-            # The actual filesystem operation is authoritative. Do not reject an
-            # RW mount merely because a generic -w probe disagrees (ACLs, ACL
-            # helpers, user namespaces and unusual filesystems can differ).
-            result = container.exec_run(["touch", safe_path], workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
-            if int(result.exit_code or 0) != 0:
+            name = posixpath.basename(safe_path)
+            # Validate the parent by asking Docker to start a process there under
+            # the same runtime user. Then perform the actual create relative to
+            # that directory. This is the authoritative permission check and avoids
+            # false failures from `test -w` on unusual filesystems.
+            try:
+                parent_probe = container.exec_run(["pwd"], workdir=parent, stdout=False, stderr=True, tty=False)
+                if int(parent_probe.exit_code if parent_probe.exit_code is not None else 1) != 0:
+                    raise DjangoValidationError(f"Directory exists but is not accessible to the container user: {parent}")
+            except DjangoValidationError:
+                raise
+            except Exception as exc:
+                raise DjangoValidationError(f"Directory exists but is not accessible to the container user: {parent}") from exc
+            result = container.exec_run(["touch", "--", name], workdir=parent, stdout=True, stderr=True, demux=True, tty=False)
+            if int(result.exit_code if result.exit_code is not None else 1) != 0:
                 out, err = result.output if isinstance(result.output, tuple) else (b"", result.output or b"")
-                raise DjangoValidationError((err or out or b"Unable to create file.").decode("utf-8", "replace"))
-            return Response({"result":"success", "path":safe_path, "action":"create", "content":"", "writable":True, "mode":"rw"})
+                detail = (err or out or b"Unable to create file.").decode("utf-8", "replace").strip()
+                raise DjangoValidationError(f"Cannot create file as the service runtime user: {detail}")
+            return Response({"result":"success", "path":safe_path, "action":"create", "content":"", "writable":True, "mode":"rw", "mount_writable":True, "effective_writable":True})
         if action == "delete":
             if safe_path == session.root_path:
                 raise DjangoValidationError("The workspace root cannot be deleted.")
