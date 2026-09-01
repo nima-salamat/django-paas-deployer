@@ -1,5 +1,6 @@
 
 from datetime import timedelta
+import os
 import logging
 
 from celery import shared_task
@@ -15,17 +16,11 @@ from deploy.models import (
     DeployLog,
     DeploymentStatusChoices,
     RollbackStatusChoices,
+    BaseRuntimeImage,
 )
 from services.models import Service
 
-from .monitoring.policies import (
-    DEPLOY_TIMEOUT_MINUTES,
-    STUCK_QUEUED_MINUTES,
-    STOP_TIMEOUT_MINUTES,
-    UNEXPECTED_DEATH_GRACE_SECONDS,
-    ACTIVE_DEPLOY_STATUSES,
-    ACTIVE_SERVICE_STATUSES,
-)
+from .monitoring.policies import ACTIVE_DEPLOY_STATUSES, ACTIVE_SERVICE_STATUSES, runtime_policies
 from .monitoring.actions import (
     mark_service_running,
     mark_service_stopped,
@@ -98,8 +93,8 @@ def create_deploy_log(
     )
 
 
-@shared_task
-def monitor_services():
+@shared_task(bind=True, name="deployments.celery.schedules.monitor_services")
+def monitor_services(self):
     """
     Dual-scan monitor reconciling three truths:
       1) Deploy.status (DB)
@@ -111,6 +106,35 @@ def monitor_services():
       B. Services needing runtime reconciliation (queued, deploying, running,
          stopping, succeeded)
     """
+    policies = runtime_policies()
+    if not policies["monitor_enabled"]:
+        logger.info("Monitor disabled by operator settings")
+        return {"status": "disabled"}
+
+    # Lightweight distributed scheduler gate. Beat may pulse frequently, but
+    # only one worker executes the full reconciliation at the configured cadence.
+    try:
+        import redis
+        raw = os.getenv("CELERY_BROKER_URL") or os.getenv("REDIS_URL") or "redis://redis:6379/0"
+        r = redis.Redis.from_url(raw, decode_responses=True)
+        lock_seconds = int(policies["scheduler_lock_seconds"])
+        lock_key = "deployer:monitor:lock"
+        run_key = "deployer:monitor:last_run"
+        import time as _time
+        now_ts = int(_time.time())
+        last = int(r.get(run_key) or 0)
+        if now_ts - last < int(policies["monitor_interval_seconds"]):
+            return {"status": "throttled", "next_in": int(policies["monitor_interval_seconds"]) - (now_ts - last)}
+        token = f"{self.request.id}:{now_ts}"
+        if not r.set(lock_key, token, nx=True, ex=lock_seconds):
+            return {"status": "locked"}
+        r.set(run_key, now_ts, ex=max(lock_seconds * 3, int(policies["monitor_interval_seconds"]) * 3))
+    except Exception as exc:
+        logger.warning("Monitor scheduler gate unavailable: %s", exc)
+        lock_key = None
+        r = None
+        token = None
+
     # ------------------------------------------------------------------
     # 1. Active deployments (pipeline progress / timeout)
     # ------------------------------------------------------------------
@@ -129,10 +153,11 @@ def monitor_services():
     # 2. Services that need runtime reconciliation
     # ------------------------------------------------------------------
     _retry_orphaned_queued_deploys()
+    _reconcile_base_runtime_builds(policies)
     services = (
         Service.objects
         .select_related("selected_deploy")
-        .filter(status__in=ACTIVE_SERVICE_STATUSES)
+        .filter(status__in=ACTIVE_SERVICE_STATUSES)[: int(policies["monitor_batch_size"])]
     )
     for service in services:
         try:
@@ -146,6 +171,12 @@ def monitor_services():
         len(services),
         extra={"event": "monitor_tick", "deployments": len(deployments), "services": len(services)},
     )
+    if r is not None and lock_key and token:
+        try:
+            r.eval("if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0", 1, lock_key, token)
+        except Exception:
+            logger.warning("Unable to release monitor scheduler lock")
+    return {"status": "ok", "deployments": len(deployments), "services": len(services)}
 
 
 def _retry_orphaned_queued_deploys() -> None:
@@ -158,12 +189,15 @@ def _retry_orphaned_queued_deploys() -> None:
     from deployments.core.db_deployer import DB_PLATFORMS
     from deployments.common import parse_config
 
-    cutoff = timezone.now() - timedelta(seconds=25)
+    policies = runtime_policies()
+    if not policies["recovery_enabled"]:
+        return
+    cutoff = timezone.now() - timedelta(seconds=int(policies["stale_worker_seconds"]))
     candidates = (
         Deploy.objects
         .select_related("service", "service__plan")
         .filter(status=DeploymentStatusChoices.PENDING, created_at__lt=cutoff)
-        .order_by("created_at")[:50]
+        .order_by("created_at")[: int(runtime_policies()["monitor_batch_size"])]
     )
     for deploy in candidates:
         service = deploy.service
@@ -171,6 +205,18 @@ def _retry_orphaned_queued_deploys() -> None:
             continue
         lock_id = make_uuid4()
         try:
+            # Bound automatic recovery per deployment so a permanently broken
+            # broker/task does not create an infinite requeue loop.
+            import redis as _redis
+            raw = os.getenv("CELERY_BROKER_URL") or os.getenv("REDIS_URL") or "redis://redis:6379/0"
+            rr = _redis.Redis.from_url(raw, decode_responses=True)
+            recovery_key = f"deployer:recovery:deployment:{deploy.pk}"
+            attempts = int(rr.get(recovery_key) or 0)
+            if attempts >= int(policies["max_recovery_attempts"]):
+                logger.error("Recovery limit reached for deployment %s", deploy.pk)
+                continue
+            rr.incr(recovery_key)
+            rr.expire(recovery_key, max(3600, int(policies["stale_worker_seconds"]) * 10))
             cfg = parse_config(deploy.config) if isinstance(deploy.config, dict) else {}
             platform = str(
                 cfg.get("platform")
@@ -240,7 +286,7 @@ def _reconcile_active_deploy(deploy: Deploy) -> None:
         # 1. Timeout check
         if locked.status in ("pending", "running") and locked.started_at:
             minutes_elapsed = (now - locked.started_at).total_seconds() / 60.0
-            if minutes_elapsed >= DEPLOY_TIMEOUT_MINUTES:
+            if minutes_elapsed >= int(policies["deploy_timeout_minutes"]):
                 mark_deploy_timeout(
                     deploy=locked,
                     container_exists=exists,
@@ -399,7 +445,7 @@ def _reconcile_service_runtime(service: Service) -> None:
             # Stuck timeout
             if locked.deploy_started:
                 minutes_elapsed = (now - locked.deploy_started).total_seconds() / 60.0
-                if minutes_elapsed >= STUCK_QUEUED_MINUTES:
+                if minutes_elapsed >= int(policies["queued_timeout_minutes"]):
                     mark_service_failed(
                         service=locked,
                         message="Service stuck in queue/deploying beyond timeout.",
@@ -428,7 +474,7 @@ def _reconcile_service_runtime(service: Service) -> None:
             # Stop timeout — container still running after grace period
             if locked.deploy_started:
                 minutes_elapsed = (now - locked.deploy_started).total_seconds() / 60.0
-                if minutes_elapsed >= STOP_TIMEOUT_MINUTES:
+                if minutes_elapsed >= int(policies["stop_timeout_minutes"]):
                     try:
                         container.stop(timeout=5)
                         container.remove()
@@ -439,3 +485,29 @@ def _reconcile_service_runtime(service: Service) -> None:
 
 
 # ---- (removed old handlers, replaced by monitoring.actions) ----
+
+
+def _reconcile_base_runtime_builds(policies: dict) -> None:
+    """Recover base-image rows whose builder disappeared or exceeded the operator timeout."""
+    cutoff = timezone.now() - timedelta(minutes=int(policies["stale_base_build_minutes"]))
+    stale = BaseRuntimeImage.objects.filter(
+        status=BaseRuntimeImage.Status.BUILDING,
+        build_started_at__lt=cutoff,
+    ).order_by("build_started_at")[: int(policies["monitor_batch_size"])]
+    for row in stale:
+        try:
+            updated = BaseRuntimeImage.objects.filter(
+                pk=row.pk, status=BaseRuntimeImage.Status.BUILDING, build_started_at__lt=cutoff
+            ).update(
+                status=BaseRuntimeImage.Status.FAILED,
+                build_task_id="",
+                build_owner_deployment_id="",
+                last_error="Base image build marked stale by monitor.",
+                build_completed_at=timezone.now(),
+                updated_at=timezone.now(),
+            )
+            if updated and policies["recovery_enabled"]:
+                # A later deployment/admin rebuild can safely claim the row again.
+                logger.warning("Recovered stale base-image build row %s (%s)", row.pk, row.image_ref)
+        except Exception:
+            logger.exception("Failed to reconcile stale base-image row %s", row.pk)

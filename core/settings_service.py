@@ -139,44 +139,25 @@ def all_settings(*, include_secrets: bool = False) -> list[dict]:
 # ---- Convenience domain helpers used by deployment pipeline ----
 
 def mirror_docker() -> str:
-    return get_str("mirror.docker", "docker.io")
+    return str(_wagtail_core_value("mirror_docker", get_str("mirror.docker", "docker.io")) or "docker.io")
 
 
 def mirror_python() -> str:
-    return get_str("mirror.python", "https://pypi.org/simple")
+    return str(_wagtail_core_value("mirror_python", get_str("mirror.python", "https://pypi.org/simple")) or "https://pypi.org/simple")
 
 
 def mirror_npm() -> str:
-    """Return the effective npm registry mirror.
-
-    ``MIRROR_NPM`` is the operator's deployment-wide default. Older databases
-    may contain a seeded ``mirror.npm`` row whose value is the historical
-    public registry. That historical value must not silently override the
-    operator default. A non-public SystemSetting value remains an explicit
-    runtime override.
-    """
-    public_default = "https://registry.npmjs.org"
+    fallback = "https://registry.npmjs.org"
     try:
         from core.global_settings.config import MIRROR_NPM
-        code_default = (MIRROR_NPM or "").strip() or public_default
+        fallback = (MIRROR_NPM or "").strip() or fallback
     except Exception:
-        code_default = public_default
-
-    try:
-        from core.models import SystemSetting
-        row = SystemSetting.objects.filter(key="mirror.npm").first()
-        if row is not None:
-            value = str(row.cast_value() or "").strip()
-            if value and value != public_default:
-                return value
-    except (OperationalError, ProgrammingError, ImportError):
         pass
-
-    return code_default
+    return str(_wagtail_core_value("mirror_npm", get_str("mirror.npm", fallback)) or fallback)
 
 
 def mirror_apt() -> str:
-    return get_str("mirror.apt", "")
+    return str(_wagtail_core_value("mirror_apt", get_str("mirror.apt", "")) or "")
 
 
 def mirror_composer() -> str:
@@ -188,91 +169,118 @@ def mirror_composer() -> str:
     ``if [ -n "{MIRROR_COMPOSER}" ]`` guards so an empty value disables the
     redirect cleanly.
     """
-    return get_str("mirror.composer", "")
+    return str(_wagtail_core_value("mirror_composer", get_str("mirror.composer", "")) or "")
 
 
 def mirror_go() -> str:
     """Return the GOPROXY string for Go module downloads (empty = default)."""
-    return get_str("mirror.go", "")
+    return str(_wagtail_core_value("mirror_go", get_str("mirror.go", "")) or "")
 
 
 def build_resource_mode() -> str:
-    return get_str("build.resource_mode", "static").strip().lower()
+    return str(_wagtail_core_value("build_resource_mode", get_str("build.resource_mode", "static")) or "static").strip().lower()
+
+
+
+
+def _wagtail_core_value(field: str, default: Any) -> Any:
+    """Read operator settings from the unified Wagtail CoreSettings page."""
+    try:
+        from core.models import CoreSettings
+        obj = CoreSettings.load()
+        value = getattr(obj, field, None)
+        return default if value is None else value
+    except Exception:
+        return default
+
+
+def build_pids_limit() -> int:
+    return max(128, min(int(_wagtail_core_value("build_pids_limit", get_int("deploy.build_pids_limit", 2048))), 8192))
+
+
+def build_shm_mb() -> int:
+    return max(16, min(int(_wagtail_core_value("build_shm_mb", get_int("deploy.build_shm_mb", 64))), 512))
 
 
 def build_max_cpu() -> float:
-    return get_float("build.max_cpu", 1.0)
+    return max(0.25, min(float(_wagtail_core_value("build_max_cpu", get_float("build.max_cpu", 1.0))), 8.0))
 
 
 def build_max_ram_mb() -> int:
-    return get_int("build.max_ram_mb", 1024)
+    return max(256, min(int(_wagtail_core_value("build_max_ram_mb", get_int("build.max_ram_mb", 1024))), 8192))
 
 
 def build_parallelism() -> int:
-    return max(1, get_int("build.parallelism", 1))
+    return max(1, min(int(_wagtail_core_value("build_parallelism", get_int("build.parallelism", 1))), 16))
 
 
 def build_max_wait_minute() -> int:
-    return max(1, get_int("build.max_wait_minute", 5))
+    return max(1, min(int(_wagtail_core_value("build_wait_minutes", get_int("build.max_wait_minute", 5))), 120))
 
 
-def max_deploy_time_minute() -> int:
-    return get_int("deploy.max_time_minute", 10)
+def build_slot_lease_seconds() -> int:
+    return max(60, min(int(_wagtail_core_value("build_slot_lease_seconds", 900)), 86400))
 
 
-def default_runtime_versions() -> dict:
-    return get_json("runtime.versions", {}) or {}
+def deploy_timeout_minutes() -> int:
+    return max(1, min(int(_wagtail_core_value("deploy_timeout_minutes", get_int("deploy.max_time_minute", 10))), 1440))
 
 
-def default_ports_map() -> dict:
-    return get_json("ports.defaults", {}) or {}
+def queued_timeout_minutes() -> int:
+    return max(1, min(int(_wagtail_core_value("queued_timeout_minutes", deploy_timeout_minutes())), 1440))
 
 
-def default_expose_port() -> int:
-    return get_int("ports.default_expose", 80)
+def stop_timeout_minutes() -> int:
+    return max(1, min(int(_wagtail_core_value("stop_timeout_minutes", 5)), 120))
 
 
-def default_spa_build_dir() -> str:
-    return get_str("deploy.spa_build_dir", "dist")
+def unexpected_death_grace_seconds() -> int:
+    return max(0, min(int(_wagtail_core_value("unexpected_death_grace_seconds", 15)), 3600))
 
 
-def default_worker_count() -> int:
-    return get_int("deploy.worker_count", 1)
+def monitor_enabled() -> bool:
+    return bool(_wagtail_core_value("monitor_enabled", True))
 
 
-def dockerfile_template(platform: str) -> Optional[str]:
-    key = f"dockerfile.{platform}"
-    val = get_str(key, "")
-    return val or None
+def monitor_interval_seconds() -> int:
+    return max(5, min(int(_wagtail_core_value("monitor_interval_seconds", 30)), 3600))
 
 
+def monitor_batch_size() -> int:
+    return max(1, min(int(_wagtail_core_value("monitor_batch_size", 100)), 1000))
+
+
+def monitor_recovery_enabled() -> bool:
+    return bool(_wagtail_core_value("monitor_recovery_enabled", True))
+
+
+def monitor_max_recovery_attempts() -> int:
+    return max(0, min(int(_wagtail_core_value("monitor_max_recovery_attempts", 3)), 10))
+
+
+def monitor_stale_base_build_minutes() -> int:
+    return max(5, min(int(_wagtail_core_value("monitor_stale_base_build_minutes", 30)), 1440))
+
+
+def monitor_stale_worker_seconds() -> int:
+    return max(30, min(int(_wagtail_core_value("monitor_stale_worker_seconds", 90)), 3600))
+
+
+def monitor_scheduler_lock_seconds() -> int:
+    return max(5, min(int(_wagtail_core_value("monitor_scheduler_lock_seconds", 20)), 300))
+
+# ---- Unified Wagtail operator settings -----------------------------------
 def base_images_enabled() -> bool:
-    try:
-        from core.models import CoreSettings
-        return bool(CoreSettings.load().base_images_enabled)
-    except Exception:
-        return True
+    return bool(_wagtail_core_value("base_images_enabled", get_bool("base_images.enabled", True)))
 
 
 def base_images_auto_build() -> bool:
-    try:
-        from core.models import CoreSettings
-        return bool(CoreSettings.load().base_images_auto_build)
-    except Exception:
-        return True
-
-
-def base_images_retain_after_deploy() -> bool:
-    try:
-        from core.models import CoreSettings
-        return bool(CoreSettings.load().base_images_retain_after_deploy)
-    except Exception:
-        return True
+    return bool(_wagtail_core_value("base_images_auto_build", get_bool("base_images.auto_build", True)))
 
 
 def base_images_auto_register_existing() -> bool:
-    try:
-        from core.models import CoreSettings
-        return bool(CoreSettings.load().base_images_auto_register_existing)
-    except Exception:
-        return True
+    return bool(_wagtail_core_value("base_images_auto_register_existing", get_bool("base_images.auto_register_existing", True)))
+
+
+def base_images_retain_after_deploy() -> bool:
+    return bool(_wagtail_core_value("base_images_retain_after_deploy", get_bool("base_images.retain_after_deploy", True)))

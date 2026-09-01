@@ -54,8 +54,13 @@ def build_limits(plan: Any = None) -> dict[str, int | float]:
         except (TypeError, ValueError):
             pass
 
-    pids = max(128, min(int(_operator("deploy.build_pids_limit", _get("DEPLOY_BUILD_PIDS_LIMIT", BUILD_PIDS_DEFAULT))), 8192))
-    shm = max(16, min(int(_get("DEPLOY_BUILD_SHM_MB", BUILD_SHM_MB_DEFAULT)), 512))
+    try:
+        from core import settings_service as svc
+        pids = svc.build_pids_limit()
+        shm = svc.build_shm_mb()
+    except Exception:
+        pids = max(128, min(int(_operator("deploy.build_pids_limit", _get("DEPLOY_BUILD_PIDS_LIMIT", BUILD_PIDS_DEFAULT))), 8192))
+        shm = max(16, min(int(_get("DEPLOY_BUILD_SHM_MB", BUILD_SHM_MB_DEFAULT)), 512))
     return {"cpu": cpu, "memory_mb": ram, "pids_limit": pids, "shm_size_mb": shm, "mode": mode if mode in {"static", "plan"} else "static"}
 
 

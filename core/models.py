@@ -176,6 +176,80 @@ class CoreSettings(BaseGenericSetting):
         help_text=_("Adopt matching runtime images already present on the Docker host instead of rebuilding them."),
     )
 
+    mirror_docker = models.CharField(default="docker.arvancloud.ir", max_length=255, verbose_name=_("Docker registry mirror"))
+    mirror_python = models.CharField(default="https://mirror-pypi.runflare.com/simple", max_length=500, verbose_name=_("PyPI mirror"))
+    mirror_npm = models.CharField(default="https://package-mirror.liara.ir/repository/npm/", max_length=500, verbose_name=_("npm registry"))
+    mirror_composer = models.CharField(default="https://package-mirror.liara.ir/repository/composer/", max_length=500, verbose_name=_("Composer mirror"))
+    mirror_apt = models.CharField(default="http://repo.iut.ac.ir/debian/", max_length=500, verbose_name=_("APT/Debian mirror"))
+    mirror_go = models.CharField(default="", max_length=500, blank=True, verbose_name=_("Go module proxy"))
+
+    build_resource_mode = models.CharField(default="static", max_length=16, choices=(("static", "Static"), ("plan", "Plan capped")), verbose_name=_("Build resource mode"))
+    build_pids_limit = models.PositiveIntegerField(default=2048, verbose_name=_("Build PID limit"))
+    build_shm_mb = models.PositiveIntegerField(default=64, verbose_name=_("Build shared memory (MB)"))
+
+    build_parallelism = models.PositiveSmallIntegerField(
+        default=1,
+        verbose_name=_("Maximum concurrent Docker builds"),
+        help_text=_("Global build concurrency across workers."),
+    )
+    build_wait_minutes = models.PositiveSmallIntegerField(
+        default=5, verbose_name=_("Build slot wait timeout (minutes)"),
+        help_text=_("Maximum time a deployment waits for a Docker build slot."),
+    )
+    build_max_cpu = models.FloatField(
+        default=1.0, verbose_name=_("Maximum build CPU"),
+        help_text=_("Operator-only Docker build CPU ceiling."),
+    )
+    build_max_ram_mb = models.PositiveIntegerField(
+        default=1024, verbose_name=_("Maximum build RAM (MB)"),
+        help_text=_("Operator-only Docker build memory ceiling."),
+    )
+    build_slot_lease_seconds = models.PositiveIntegerField(
+        default=900, verbose_name=_("Build slot lease (seconds)"),
+        help_text=_("Lease duration used to recover abandoned build slots."),
+    )
+    deploy_timeout_minutes = models.PositiveIntegerField(
+        default=10, verbose_name=_("Deployment timeout (minutes)"),
+        help_text=_("Maximum time for an active deployment pipeline."),
+    )
+    queued_timeout_minutes = models.PositiveIntegerField(
+        default=10, verbose_name=_("Queued/deploying timeout (minutes)"),
+        help_text=_("Maximum time a service may remain queued or deploying."),
+    )
+    stop_timeout_minutes = models.PositiveIntegerField(
+        default=5, verbose_name=_("Stop timeout (minutes)"),
+        help_text=_("Maximum time allowed for an intentional service stop."),
+    )
+    unexpected_death_grace_seconds = models.PositiveIntegerField(
+        default=15, verbose_name=_("Unexpected container death grace (seconds)"),
+    )
+    monitor_enabled = models.BooleanField(
+        default=True, verbose_name=_("Enable deployment monitor"),
+        help_text=_("Run automatic reconciliation and recovery."),
+    )
+    monitor_interval_seconds = models.PositiveIntegerField(
+        default=30, verbose_name=_("Monitor interval (seconds)"),
+        help_text=_("Actual monitor cadence. Celery Beat provides a lightweight pulse."),
+    )
+    monitor_batch_size = models.PositiveIntegerField(
+        default=100, verbose_name=_("Monitor batch size"),
+        help_text=_("Maximum deployments/services inspected per monitor tick."),
+    )
+    monitor_recovery_enabled = models.BooleanField(
+        default=True, verbose_name=_("Enable automatic recovery"),
+    )
+    monitor_max_recovery_attempts = models.PositiveSmallIntegerField(
+        default=3, verbose_name=_("Maximum recovery attempts"),
+    )
+    monitor_stale_base_build_minutes = models.PositiveIntegerField(
+        default=30, verbose_name=_("Stale base build timeout (minutes)"),
+    )
+    monitor_stale_worker_seconds = models.PositiveIntegerField(
+        default=90, verbose_name=_("Stale worker heartbeat (seconds)"),
+    )
+    monitor_scheduler_lock_seconds = models.PositiveIntegerField(
+        default=20, verbose_name=_("Monitor scheduler lock (seconds)"),
+    )
     panels = [
         MultiFieldPanel(
             [
@@ -185,6 +259,52 @@ class CoreSettings(BaseGenericSetting):
                 FieldPanel("base_images_retain_after_deploy"),
             ],
             heading=_("Base runtime images"),
+        ),
+        MultiFieldPanel(
+            [
+                FieldPanel("mirror_docker"),
+                FieldPanel("mirror_python"),
+                FieldPanel("mirror_npm"),
+                FieldPanel("mirror_composer"),
+                FieldPanel("mirror_apt"),
+                FieldPanel("mirror_go"),
+            ],
+            heading=_("Package & registry mirrors"),
+        ),
+        MultiFieldPanel(
+            [
+                FieldPanel("build_parallelism"),
+                FieldPanel("build_resource_mode"),
+                FieldPanel("build_pids_limit"),
+                FieldPanel("build_shm_mb"),
+                FieldPanel("build_wait_minutes"),
+                FieldPanel("build_max_cpu"),
+                FieldPanel("build_max_ram_mb"),
+                FieldPanel("build_slot_lease_seconds"),
+            ],
+            heading=_("Docker build resources"),
+        ),
+        MultiFieldPanel(
+            [
+                FieldPanel("deploy_timeout_minutes"),
+                FieldPanel("queued_timeout_minutes"),
+                FieldPanel("stop_timeout_minutes"),
+                FieldPanel("unexpected_death_grace_seconds"),
+            ],
+            heading=_("Deployment timeouts"),
+        ),
+        MultiFieldPanel(
+            [
+                FieldPanel("monitor_enabled"),
+                FieldPanel("monitor_interval_seconds"),
+                FieldPanel("monitor_batch_size"),
+                FieldPanel("monitor_recovery_enabled"),
+                FieldPanel("monitor_max_recovery_attempts"),
+                FieldPanel("monitor_stale_base_build_minutes"),
+                FieldPanel("monitor_stale_worker_seconds"),
+                FieldPanel("monitor_scheduler_lock_seconds"),
+            ],
+            heading=_("Scheduler & monitor")
         ),
     ]
 

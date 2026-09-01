@@ -288,7 +288,7 @@ def _spec_for_record(row: BaseRuntimeImage) -> BaseImageSpec:
     raise ValueError(f"Unsupported base runtime '{runtime}'")
 
 
-def build_registered_base_image(base_image_id, *, task_id: str | None = None) -> None:
+def build_registered_base_image(base_image_id, *, task_id: str | None = None, force_rebuild: bool = False, build_policy: dict[str, Any] | None = None) -> None:
     """Build one registry row in a dedicated Celery task.
 
     The DB row is the ownership lock: only the task whose ``build_task_id``
@@ -315,13 +315,16 @@ def build_registered_base_image(base_image_id, *, task_id: str | None = None) ->
         # when retain_after_deploy=False and the deployment is cancelled while
         # the shared base build is still in flight.
         row.build_owner_deployment_id = owner_deployment_id
+        requested_force_rebuild = bool(force_rebuild or row.rebuild_requested)
         row.rebuild_requested = False
         row.build_started_at = timezone.now()
         row.last_error = ""
         row.save(update_fields=["status", "build_task_id", "build_owner_deployment_id", "rebuild_requested", "build_started_at", "last_error", "updated_at"])
 
     try:
-        _build_spec(spec, build_policy={**(build_policy or {}), "force_rebuild": True} if row.rebuild_requested else (build_policy or {}))
+        effective_policy = dict(build_policy or {})
+        effective_policy["force_rebuild"] = requested_force_rebuild
+        _build_spec(spec, build_policy=effective_policy)
         client = get_docker_client()
         img = client.images.get(spec.image_ref)
         row = BaseRuntimeImage.objects.get(pk=base_image_id)

@@ -32,6 +32,16 @@ def _parallelism() -> int:
             return 1
 
 
+def _lease_seconds() -> int:
+    try:
+        from core import settings_service
+        return max(60, int(settings_service.build_slot_lease_seconds()))
+    except Exception:
+        try:
+            return max(60, int(os.getenv('DEPLOY_BUILD_SLOT_LEASE_SECONDS', '900')))
+        except (TypeError, ValueError):
+            return 900
+
 def _wait_seconds() -> int:
     try:
         from core import settings_service
@@ -61,12 +71,13 @@ class BuildSlot(AbstractContextManager):
         if count <= 0:
             count = 1
         started = time.monotonic()
+        lease_seconds = _lease_seconds()
         while True:
             self.redis = _redis_client()
             for index in range(count):
                 key = f"deployer:build-slot:{index}"
                 try:
-                    if self.redis.set(key, self.token, nx=True, ex=600):
+                    if self.redis.set(key, self.token, nx=True, ex=lease_seconds):
                         self.key = key
                         if self.logger:
                             try:

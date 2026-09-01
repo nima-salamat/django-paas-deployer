@@ -155,7 +155,7 @@ def stop(self, service_id) -> None:
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=10)
-def build_base_runtime_image(self, base_image_id) -> None:
+def build_base_runtime_image(self, base_image_id, force_rebuild=False) -> None:
     """Build/rebuild one registered operator base runtime image.
 
     This runs independently from an application's deployment task so a user
@@ -163,7 +163,11 @@ def build_base_runtime_image(self, base_image_id) -> None:
     """
     from deploy.base_images import build_registered_base_image
     try:
-        build_registered_base_image(base_image_id, task_id=str(self.request.id))
+        build_registered_base_image(
+            base_image_id,
+            task_id=str(self.request.id),
+            force_rebuild=bool(force_rebuild),
+        )
     except Exception as exc:
         if self.request.retries < self.max_retries:
             logger.warning("Base image build failed; retrying id=%s: %s", base_image_id, exc)

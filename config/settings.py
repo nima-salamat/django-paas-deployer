@@ -402,9 +402,11 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers.DatabaseScheduler'
 CELERY_BEAT_SCHEDULE = {
+    # Lightweight pulse; the task reads the operator-configured interval from
+    # Wagtail CoreSettings and throttles itself with a distributed lock.
     "monitor_services_reconciliation": {
         "task": "deployments.celery.schedules.monitor_services",
-        "schedule": 300.0,
+        "schedule": 5.0,
     },
     "messenger_deliver_scheduled_messages": {
         "task": "messenger.tasks.deliver_scheduled_messages",

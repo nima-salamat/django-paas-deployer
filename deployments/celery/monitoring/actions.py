@@ -7,7 +7,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from core.global_settings.config import SERVICE_STATUS_CHOICES, MAX_DEPLOY_TIME_MINUTE
+from core.global_settings.config import SERVICE_STATUS_CHOICES
 from deploy.models import Deploy, DeployLog, DeploymentStatusChoices, RollbackStatusChoices
 from services.models import Service
 
@@ -306,9 +306,14 @@ def mark_deploy_timeout(
     if locked.status in terminal:
         return False
 
+    try:
+        from core.settings_service import deploy_timeout_minutes
+        max_minutes = deploy_timeout_minutes()
+    except Exception:
+        max_minutes = 10
     message = (
         f"Deployment exceeded the maximum allowed time "
-        f"of {MAX_DEPLOY_TIME_MINUTE} minutes."
+        f"of {max_minutes} minutes."
     )
     now = timezone.now()
 
@@ -333,7 +338,7 @@ def mark_deploy_timeout(
         details={
             "container_exists": container_exists,
             "container_running": container_running,
-            "max_deploy_time_minutes": MAX_DEPLOY_TIME_MINUTE,
+            "max_deploy_time_minutes": max_minutes,
         },
     )
 
