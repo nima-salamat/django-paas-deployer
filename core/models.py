@@ -137,3 +137,57 @@ def _setting_saved(sender, instance, **kwargs):
 @receiver(post_delete, sender=SystemSetting)
 def _setting_deleted(sender, instance, **kwargs):
     _bust_cache(instance.key)
+
+
+# ---------------------------------------------------------------------------
+# Wagtail-managed platform / deployment settings
+# ---------------------------------------------------------------------------
+from wagtail.admin.panels import FieldPanel, MultiFieldPanel
+from wagtail.contrib.settings.models import BaseGenericSetting, register_setting
+
+
+@register_setting(icon="cog")
+class CoreSettings(BaseGenericSetting):
+    """Site-independent operator settings exposed in Wagtail's Settings menu.
+
+    These replace deployment-sensitive toggles being hidden in code or spread
+    across unrelated admin screens. Defaults are deliberately conservative:
+    base-image caching is enabled, while destructive post-deploy cleanup is off.
+    """
+
+    base_images_enabled = models.BooleanField(
+        default=True,
+        verbose_name=_("Use base runtime image cache"),
+        help_text=_("Reuse registered PHP, Python, Node and other runtime base images during deployment."),
+    )
+    base_images_auto_build = models.BooleanField(
+        default=True,
+        verbose_name=_("Auto-build missing base images"),
+        help_text=_("Build a requested runtime base image automatically when it is not available on the Docker host."),
+    )
+    base_images_retain_after_deploy = models.BooleanField(
+        default=True,
+        verbose_name=_("Keep base images after deployment"),
+        help_text=_("When disabled, an unused base image is removed after the deployment releases its lease. Shared images are kept until no active deployment uses them."),
+    )
+    base_images_auto_register_existing = models.BooleanField(
+        default=True,
+        verbose_name=_("Register existing Docker images"),
+        help_text=_("Adopt matching runtime images already present on the Docker host instead of rebuilding them."),
+    )
+
+    panels = [
+        MultiFieldPanel(
+            [
+                FieldPanel("base_images_enabled"),
+                FieldPanel("base_images_auto_build"),
+                FieldPanel("base_images_auto_register_existing"),
+                FieldPanel("base_images_retain_after_deploy"),
+            ],
+            heading=_("Base runtime images"),
+        ),
+    ]
+
+    class Meta:
+        verbose_name = _("Core / Deployment settings")
+        verbose_name_plural = _("Core / Deployment settings")

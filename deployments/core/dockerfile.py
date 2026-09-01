@@ -2143,6 +2143,45 @@ def _php_app_root_from_document_root(document_root_rel: str) -> str:
     return f"/var/www/html/{rel}"
 
 
+def _apply_resolved_base_images(dockerfile: str, config=None) -> str:
+    """Replace upstream runtime FROM stages with prebuilt operator base images.
+
+    This pass runs after all renderer injections (including Laravel/Vite), so
+    dynamically added Node stages are cached too. Unknown stages are left alone.
+    """
+    if config is None:
+        return dockerfile
+    bases = dict(getattr(config, "base_images", {}) or {})
+    if not bases:
+        return dockerfile
+
+    replacements = []
+    if bases.get("base_image"):
+        replacements.extend([
+            (r"FROM\s+(?:[^\s/]+/)*php:[^\s]+", f"FROM {bases['base_image']}"),
+            (r"FROM\s+(?:[^\s/]+/)*python:[^\s]+", f"FROM {bases['base_image']}"),
+            (r"FROM\s+(?:[^\s/]+/)*golang:[^\s]+", f"FROM {bases['base_image']}"),
+        ])
+    if bases.get("node_base_image"):
+        replacements.append((r"FROM\s+(?:[^\s/]+/)*node:[^\s]+", f"FROM {bases['node_base_image']}"))
+    if bases.get("nginx_base_image"):
+        replacements.append((r"FROM\s+(?:[^\s/]+/)*nginx:[^\s]+", f"FROM {bases['nginx_base_image']}"))
+
+    out = dockerfile
+    for pattern, replacement in replacements:
+        out = re.sub(pattern, replacement, out, flags=re.IGNORECASE)
+
+    # Composer is already installed in the PHP base image. Do not add a second
+    # external composer stage during every application build.
+    if bases.get("base_image") and (
+        "php" in bases["base_image"] or "laravel" in str(getattr(config, "platform", ""))
+    ):
+        out = re.sub(r"^COPY\s+--from=[^\n]+/composer:2\s+/usr/bin/composer\s+/usr/bin/composer\s*$",
+                     "# Composer is provided by the cached PHP base image.", out, flags=re.MULTILINE)
+
+    return out
+
+
 def _resolve_composer_mirror(config=None) -> str:
     """Resolve Composer mirror: deploy env override -> SystemSetting -> code default."""
     candidate = ""
@@ -2757,38 +2796,71 @@ def _inject_laravel_frontend_build(
         )
     registry_line = _registry_config_line(package_manager, npm_registry)
 
-    install_lines = [
-        "    && rm -rf /var/lib/apt/lists/* \\",
-        f"    && cd {frontend_prefix} \\",
-    ]
-    if registry_line:
-        install_lines.append(f"    && {registry_line} \\")
-    # Keep install fallback semantics local to the package-manager command.
-    # Without grouping, a preceding `&&` failure can accidentally trigger the
-    # fallback on its own because shell `&&`/`||` are left-associative.
-    install_lines.append(f"    && ( {install_command} ) \\")
+    bases = dict(getattr(config, "base_images", {}) or {}) if config is not None else {}
+    node_base_image = bases.get("node_base_image")
+    build_output = str(
+        getattr(config, "build_output", None) or detected.get("build_output") or ""
+    ).strip().strip("/")
+    if build_output.startswith("./"):
+        build_output = build_output[2:]
+    if not build_output:
+        build_output = (
+            "public/build" if kind in {"vite", "mix"}
+            else (f"{frontend_root}/dist" if frontend_root != "." else "dist")
+        )
+    if build_output.startswith("/") or ".." in build_output.split("/"):
+        raise DeploymentValidationError(
+            f"Invalid frontend build output: {build_output!r}",
+            stage="frontend_detection",
+        )
 
-    install_lines.append(f"    && {build_command}")
-    # The last line must not end with a backslash, otherwise the Dockerfile
-    # parser keeps waiting for the next line.
-    install_lines[-1] = install_lines[-1].rstrip(" \\")
-
-    block = (
-        "\n# --- Laravel frontend build (injected) ---\n"
-        f"# front_build_platform={kind}\n"
-        f"# npm_registry={npm_registry}\n"
-        "RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \\\n"
-        f"    && curl -fsSL https://deb.nodesource.com/setup_{node_version}.x | bash - \\\n"
-        "    && apt-get install -y --no-install-recommends nodejs \\\n"
-        + "\n".join(install_lines) + "\n"
-    )
-
-    # The build must happen after COPY . /var/www/html. Insert immediately
-    # before EXPOSE so the complete application source is available.
-    if re.search(r"^EXPOSE\s+", dockerfile, re.M):
-        dockerfile = re.sub(r"^(EXPOSE\s+)", block + r"\1", dockerfile, count=1, flags=re.M)
+    if node_base_image:
+        # Cached Node builder: final Laravel image contains only generated assets,
+        # never a second Node.js installation.
+        stage_lines = [
+            "# --- Laravel frontend build (cached Node stage) ---",
+            f"FROM {node_base_image} AS deployer-frontend-builder",
+            "WORKDIR /frontend",
+            "COPY . /frontend/",
+            f"RUN cd {('/frontend' if frontend_root == '.' else '/frontend/' + frontend_root)} \\",
+        ]
+        if registry_line:
+            stage_lines.append(f"    && {registry_line} \\")
+        stage_lines.append(f"    && ( {install_command} ) \\")
+        stage_lines.append(f"    && {build_command}")
+        dockerfile = "\n".join(stage_lines) + "\n" + dockerfile
+        copy_line = (
+            f"COPY --from=deployer-frontend-builder /frontend/{build_output} "
+            f"/var/www/html/{build_output}"
+        )
+        match = re.search(r"^COPY\s+\.\s+/var/www/html/[^\n]*$", dockerfile, re.M)
+        if match:
+            dockerfile = dockerfile[:match.end()] + "\n" + copy_line + dockerfile[match.end():]
+        else:
+            dockerfile = dockerfile.rstrip() + "\n" + copy_line + "\n"
     else:
-        dockerfile = dockerfile.rstrip() + "\n" + block
+        install_lines = [
+            "    && rm -rf /var/lib/apt/lists/* \\",
+            f"    && cd {frontend_prefix} \\",
+        ]
+        if registry_line:
+            install_lines.append(f"    && {registry_line} \\")
+        install_lines.append(f"    && ( {install_command} ) \\")
+        install_lines.append(f"    && {build_command}")
+        install_lines[-1] = install_lines[-1].rstrip(" \\")
+        block = (
+            "\n# --- Laravel frontend build (injected) ---\n"
+            f"# front_build_platform={kind}\n"
+            f"# npm_registry={npm_registry}\n"
+            "RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \\\n"
+            f"    && curl -fsSL https://deb.nodesource.com/setup_{node_version}.x | bash - \\\n"
+            "    && apt-get install -y --no-install-recommends nodejs \\\n"
+            + "\n".join(install_lines) + "\n"
+        )
+        if re.search(r"^EXPOSE\s+", dockerfile, re.M):
+            dockerfile = re.sub(r"^(EXPOSE\s+)", block + r"\1", dockerfile, count=1, flags=re.M)
+        else:
+            dockerfile = dockerfile.rstrip() + "\n" + block
 
     if logger:
         # Identify which source the npm registry mirror came from so the
@@ -2928,6 +3000,7 @@ class DockerfileGenerator:
         if config is not None and getattr(config, "port", None) is not None:
             port = config.port
         rendered = _ensure_port_placeholder(rendered, port)
+        rendered = _apply_resolved_base_images(rendered, config)
         unresolved = re.findall(r"__[^\s]+__", rendered)
         if unresolved:
             raise DeploymentValidationError(

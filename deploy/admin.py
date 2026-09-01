@@ -1,4 +1,4 @@
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.utils.html import format_html
 from django.urls import reverse
 from django.utils.safestring import mark_safe
@@ -295,3 +295,95 @@ class DeployLogAdmin(admin.ModelAdmin):
         if len(msg) > 80:
             return msg[:80] + "…"
         return msg
+
+from .models import BaseRuntimeImage
+
+
+@admin.register(BaseRuntimeImage)
+class BaseRuntimeImageAdmin(admin.ModelAdmin):
+    list_display = (
+        "runtime_label", "variant", "status_badge", "enabled", "auto_build",
+        "image_ref", "docker_host", "build_count", "build_completed_at",
+    )
+    list_filter = ("logical_runtime", "variant", "status", "enabled", "auto_build", "docker_host")
+    search_fields = ("logical_runtime", "runtime_version", "image_ref", "source_image", "docker_host", "last_error")
+    ordering = ("logical_runtime", "runtime_version", "variant")
+    actions = ("rebuild_selected", "enable_selected", "disable_selected", "delete_docker_images")
+    readonly_fields = (
+        "image_ref", "image_id", "image_digest", "source_image", "docker_host", "status",
+        "rebuild_requested", "rebuild_requested_at", "build_started_at", "build_completed_at",
+        "build_count", "last_error", "created_at", "updated_at",
+    )
+
+    fieldsets = (
+        ("Runtime", {"fields": ("logical_runtime", "runtime_version", "variant", "architecture")}),
+        ("Docker image", {"fields": ("source_image", "image_repository", "image_tag", "image_ref", "image_id", "image_digest", "docker_host")}),
+        ("Policy", {"fields": ("enabled", "auto_build", "rebuild_requested")}),
+        ("Build state", {"fields": ("status", "rebuild_requested_at", "build_started_at", "build_completed_at", "build_count", "last_error")}),
+        ("Timestamps", {"fields": ("created_at", "updated_at")}),
+    )
+
+    @admin.display(description="Runtime", ordering="runtime_version")
+    def runtime_label(self, obj):
+        return f"{obj.logical_runtime} {obj.runtime_version}"
+
+    @admin.display(description="Status", ordering="status")
+    def status_badge(self, obj):
+        colors = {"pending": "#6b7280", "building": "#2563eb", "ready": "#16a34a", "failed": "#dc2626", "disabled": "#9ca3af"}
+        color = colors.get(obj.status, "#6b7280")
+        return format_html('<span class="badge" style="background:{};">{}</span>', color, obj.get_status_display())
+
+    @admin.action(description="Rebuild selected base images")
+    def rebuild_selected(self, request, queryset):
+        from django.utils import timezone
+        from deployments.celery.tasks import build_base_runtime_image
+        count = 0
+        for obj in queryset:
+            obj.status = BaseRuntimeImage.Status.PENDING
+            obj.enabled = True
+            obj.rebuild_requested = True
+            obj.rebuild_requested_at = timezone.now()
+            obj.save(update_fields=["status", "enabled", "rebuild_requested", "rebuild_requested_at", "updated_at"])
+            build_base_runtime_image.delay(str(obj.pk))
+            count += 1
+        self.message_user(request, f"Queued rebuild for {count} base image(s).")
+
+    @admin.action(description="Enable selected base images")
+    def enable_selected(self, request, queryset):
+        count = queryset.update(enabled=True, status=BaseRuntimeImage.Status.PENDING)
+        self.message_user(request, f"Enabled {count} base image(s).")
+
+    @admin.action(description="Disable selected base images")
+    def disable_selected(self, request, queryset):
+        count = queryset.update(enabled=False, status=BaseRuntimeImage.Status.DISABLED)
+        self.message_user(request, f"Disabled {count} base image(s).")
+
+    @admin.action(description="Remove Docker image for selected rows")
+    def delete_docker_images(self, request, queryset):
+        from deployments.core.manager.image_manager import Image
+        count = 0
+        for obj in queryset:
+            try:
+                Image.remove_by_name(obj.image_ref)
+            except Exception:
+                self.message_user(request, f"Failed to remove {obj.image_ref}.", level=messages.ERROR)
+                continue
+            count += 1
+        self.message_user(request, f"Removed Docker image for {count} row(s).")
+    def delete_model(self, request, obj):
+        try:
+            from deployments.core.manager.image_manager import Image
+            Image.remove_by_name(obj.image_ref)
+        except Exception:
+            self.message_user(request, f"Could not remove Docker image {obj.image_ref}; removing registry record anyway.", level=messages.WARNING)
+        super().delete_model(request, obj)
+
+    def delete_queryset(self, request, queryset):
+        from deployments.core.manager.image_manager import Image
+        for obj in queryset:
+            try:
+                Image.remove_by_name(obj.image_ref)
+            except Exception:
+                self.message_user(request, f"Could not remove Docker image {obj.image_ref}.", level=messages.WARNING)
+        super().delete_queryset(request, queryset)
+

@@ -75,6 +75,7 @@ class DeploymentOrchestrator:
         self.rollback_manager = RollbackManager(logger=self.logger)
         self.cleanup_manager = CleanupManager(logger=self.logger)
         self._cancel_check = cancel_check
+        self._base_image_refs: list[str] = []
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -124,7 +125,33 @@ class DeploymentOrchestrator:
 
             self._check_cancelled()
 
-            # 4. Generate Dockerfile
+            # 4. Resolve operator-owned base runtime images before rendering.
+            # Existing images are reused; missing/invalid images are built once
+            # and registered in BaseRuntimeImage.
+            try:
+                from deploy.base_images import ensure_base_images
+                resolved_bases = ensure_base_images(
+                    config,
+                    build_policy=config.build_resource_policy,
+                    logger_sink=self.logger,
+                    deployment_id=self.logger.deployment_id,
+                )
+                if resolved_bases:
+                    from dataclasses import replace as _replace
+                    config = _replace(config, base_images=resolved_bases)
+                    self._base_image_refs = list(resolved_bases.values())
+                    self.logger.info(
+                        "base_image",
+                        "Resolved base runtime image cache.",
+                        progress=19,
+                        details={"base_images": resolved_bases},
+                    )
+            except Exception:
+                # A base-image build failure must fail the deployment with the
+                # real reason; silently falling back would destroy predictability.
+                raise
+
+            # 5. Generate Dockerfile
             dockerfile_text = self.dockerfile_generator.render(
                 platform=config.platform,
                 dockerfile_template=config.dockerfile_template,
@@ -338,6 +365,14 @@ class DeploymentOrchestrator:
                 renamed_old_name=renamed_old_name,
             )
         finally:
+            try:
+                from deploy.base_images import base_image_settings, release_base_image_leases
+                release_base_image_leases(
+                    self.logger.deployment_id,
+                    remove_if_unretained=not base_image_settings()["retain_after_deploy"],
+                )
+            except Exception as exc:
+                self.logger.warning("cleanup", f"Failed to release base image leases: {exc}", progress=99)
             if inspect_temp_dir:
                 shutil.rmtree(inspect_temp_dir, ignore_errors=True)
 

@@ -109,6 +109,7 @@ class Deploy:
         # so the Dockerfile generator can inject a real Node build step
         # (e.g. for Vite/Inertia) using the operator-configured npm mirror.
         frontend=None,
+        base_images=None,
     ):
         self.name = name
         self.tag = str(tag)
@@ -152,6 +153,7 @@ class Deploy:
         # supplied by the user) can never crash downstream code. Only string
         # keys/values are accepted; everything else is silently dropped.
         self.frontend = _sanitize_frontend_dict(frontend)
+        self.base_images = {str(k): str(v) for k, v in (base_images or {}).items() if v}
         self.errors = []
         self.result = None
 
@@ -244,6 +246,7 @@ class Deploy:
             build_resource_policy=self.build_resource_policy,
             runtime_options=self.runtime_options,
             labels=self.labels,
+            base_images=getattr(self, "base_images", {}) or {},
         )
 
     def deploy(self):

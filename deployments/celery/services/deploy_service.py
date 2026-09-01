@@ -442,7 +442,15 @@ class DeployService:
             build_options={**build_options, "build_command": build_command, "install_command": install_command, "build_dir": build_dir, "package_manager": package_manager},
             runtime_options=runtime_options,
             labels={"deployment.id": str(deploy_item.pk), "service.id": str(service.pk)},
-            runtime_version=cfg.get("runtime_version") or cfg.get("node_version") or cfg.get("php_version"),
+            runtime_version=(
+                cfg.get("runtime_version")
+                or cfg.get("node_version")
+                or cfg.get("php_version")
+                or cfg.get("python_version")
+                or cfg.get("django_python_version")
+                or cfg.get("go_version")
+                or cfg.get("dotnet_version")
+            ),
             package_manager=package_manager,
             working_directory=cfg.get("working_directory") or runtime_options.get("working_directory") or "/app",
             build_dir=build_dir,
@@ -450,6 +458,7 @@ class DeployService:
             build_command=build_command,
             start_command=cfg.get("start_command"),
             frontend=dict(cfg.get("frontend") or {}),
+            base_images=getattr(config, "base_images", {}) or {},
         )
         if celery_app:
             try:

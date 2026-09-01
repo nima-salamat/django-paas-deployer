@@ -6,9 +6,6 @@ from django.utils.translation import gettext_lazy as _
 from wagtail import hooks
 from wagtail.admin.menu import MenuItem
 
-from core.wagtail_admin import register as _register_core
-
-_register_core()
 
 
 @hooks.register("register_admin_urls")

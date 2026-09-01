@@ -154,6 +154,20 @@ def stop(self, service_id) -> None:
         logger.exception("Stop exhausted retries for service_id: %s", service_id)
 
 
+@shared_task(bind=True, max_retries=2, default_retry_delay=10)
+def build_base_runtime_image(self, base_image_id) -> None:
+    """Build/rebuild one registered operator base runtime image."""
+    from deploy.base_images import build_registered_base_image
+    try:
+        build_registered_base_image(base_image_id)
+    except Exception as exc:
+        if self.request.retries < self.max_retries:
+            logger.warning("Base image build failed; retrying id=%s: %s", base_image_id, exc)
+            raise self.retry(exc=exc)
+        logger.exception("Base image build exhausted retries id=%s", base_image_id)
+
+
+
 # ===========================================================================
 # DB deploy helpers
 # ===========================================================================

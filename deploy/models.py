@@ -129,3 +129,76 @@ class DeployLog(BaseModel):
     def __str__(self):
         return f"Deployment {self.deploy_id}: {self.stage} - {self.level}"
 
+
+
+class BaseRuntimeImageLease(BaseModel):
+    """Active deployment lease protecting a shared base image from cleanup."""
+
+    base_image = models.ForeignKey(
+        "deploy.BaseRuntimeImage",
+        on_delete=models.CASCADE,
+        related_name="leases",
+    )
+    deployment_id = models.CharField(max_length=255, db_index=True)
+    acquired_at = models.DateTimeField(default=timezone.now)
+    released_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = _("Base runtime image lease")
+        verbose_name_plural = _("Base runtime image leases")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("base_image", "deployment_id"),
+                name="uniq_base_image_deployment_lease",
+            )
+        ]
+        indexes = [
+            models.Index(fields=("base_image", "released_at")),
+        ]
+
+    def __str__(self):
+        return f"{self.base_image_id} -> {self.deployment_id}"
+
+
+class BaseRuntimeImage(BaseModel):
+    class Status(models.TextChoices):
+        PENDING = "pending", _("Pending")
+        BUILDING = "building", _("Building")
+        READY = "ready", _("Ready")
+        FAILED = "failed", _("Failed")
+        DISABLED = "disabled", _("Disabled")
+
+    logical_runtime = models.CharField(max_length=32)
+    runtime_version = models.CharField(max_length=32)
+    variant = models.CharField(max_length=32, default="default")
+    architecture = models.CharField(max_length=32, blank=True, default="")
+    docker_host = models.CharField(max_length=255, blank=True, default="")
+    source_image = models.CharField(max_length=255)
+    image_repository = models.CharField(max_length=255)
+    image_tag = models.CharField(max_length=128)
+    image_ref = models.CharField(max_length=384)
+    image_id = models.CharField(max_length=255, blank=True, default="")
+    image_digest = models.CharField(max_length=255, blank=True, default="")
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    enabled = models.BooleanField(default=True)
+    auto_build = models.BooleanField(default=True)
+    rebuild_requested = models.BooleanField(default=False)
+    rebuild_requested_at = models.DateTimeField(null=True, blank=True)
+    build_started_at = models.DateTimeField(null=True, blank=True)
+    build_completed_at = models.DateTimeField(null=True, blank=True)
+    build_count = models.PositiveIntegerField(default=0)
+    last_error = models.TextField(blank=True, default="")
+
+    class Meta:
+        verbose_name = _("Base runtime image")
+        verbose_name_plural = _("Base runtime images")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("logical_runtime", "runtime_version", "variant", "architecture", "docker_host"),
+                name="uniq_base_runtime_image_host",
+            )
+        ]
+        ordering = ("logical_runtime", "runtime_version", "variant")
+
+    def __str__(self):
+        return f"{self.logical_runtime} {self.runtime_version} ({self.variant}) — {self.status}"

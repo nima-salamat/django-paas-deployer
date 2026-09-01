@@ -5,7 +5,7 @@ from django.conf import settings
 from django.utils.translation import gettext_lazy as _
 
 from cms.wagtail_admin.utils import panels_for, read_only_panels
-from deploy.models import Deploy, DeployLog
+from deploy.models import Deploy, DeployLog, BaseRuntimeImage
 from wagtail.permission_policies.base import ModelPermissionPolicy
 from wagtail.snippets.views.snippets import SnippetViewSet, SnippetViewSetGroup
 
@@ -51,6 +51,28 @@ class DeployViewSet(SnippetViewSet):
             "cancel_requested",
             "created_at",
             "updated_at",
+        ],
+    )
+
+
+class BaseRuntimeImageViewSet(SnippetViewSet):
+    model = BaseRuntimeImage
+    icon = "cogs"
+    menu_label = _("Base runtime images")
+    menu_order = 106
+    list_display = [
+        "logical_runtime", "runtime_version", "variant", "status", "enabled",
+        "auto_build", "image_ref", "docker_host", "build_count", "build_completed_at",
+    ]
+    list_filter = ["logical_runtime", "status", "enabled", "auto_build", "docker_host"]
+    search_fields = ["logical_runtime", "runtime_version", "image_ref", "source_image", "docker_host"]
+    ordering = ["logical_runtime", "runtime_version", "variant"]
+    panels = panels_for(
+        editable=["logical_runtime", "runtime_version", "variant", "architecture", "enabled", "auto_build"],
+        read_only=[
+            "id", "source_image", "image_repository", "image_tag", "image_ref", "image_id",
+            "image_digest", "docker_host", "status", "rebuild_requested", "rebuild_requested_at",
+            "build_started_at", "build_completed_at", "build_count", "last_error", "created_at", "updated_at",
         ],
     )
 
@@ -119,6 +141,7 @@ class DeployGroup(SnippetViewSetGroup):
     items = (
         DeployViewSet,
         DeployLogViewSet,
+        BaseRuntimeImageViewSet,
     )
     menu_label = _("Deploy")
     menu_icon = "upload"

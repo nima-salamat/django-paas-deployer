@@ -484,11 +484,20 @@ class Image(Client):
                     # immediately after the build by _tag_image().
                     # IMPORTANT: never synthesize or rewrite the model-provided
                     # name/version. The Deploy model owns the tag.
+                    build_options = dict(self.build_options or {})
+                    extra_build = {}
+                    if bool(build_options.get("no_cache")):
+                        extra_build["nocache"] = True
+                    if bool(build_options.get("pull")):
+                        extra_build["pull"] = True
+
                     attempt_kwargs = [
                         dict(path=build_path, tag=self.tag, rm=True, forcerm=True, decode=True,
-                             container_limits=limits, shmsize=build_shm_size, buildargs=buildargs, network_mode="default"),
-                        dict(path=build_path, tag=self.tag, rm=True, forcerm=True, decode=True, shmsize=build_shm_size, buildargs=buildargs),
-                        dict(path=build_path, tag=self.tag, rm=True, forcerm=True, decode=True),
+                             container_limits=limits, shmsize=build_shm_size, buildargs=buildargs,
+                             network_mode="default", **extra_build),
+                        dict(path=build_path, tag=self.tag, rm=True, forcerm=True, decode=True,
+                             shmsize=build_shm_size, buildargs=buildargs, **extra_build),
+                        dict(path=build_path, tag=self.tag, rm=True, forcerm=True, decode=True, **extra_build),
                     ]
 
                     response = None

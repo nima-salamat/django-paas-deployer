@@ -244,3 +244,35 @@ def dockerfile_template(platform: str) -> Optional[str]:
     key = f"dockerfile.{platform}"
     val = get_str(key, "")
     return val or None
+
+
+def base_images_enabled() -> bool:
+    try:
+        from core.models import CoreSettings
+        return bool(CoreSettings.load().base_images_enabled)
+    except Exception:
+        return True
+
+
+def base_images_auto_build() -> bool:
+    try:
+        from core.models import CoreSettings
+        return bool(CoreSettings.load().base_images_auto_build)
+    except Exception:
+        return True
+
+
+def base_images_retain_after_deploy() -> bool:
+    try:
+        from core.models import CoreSettings
+        return bool(CoreSettings.load().base_images_retain_after_deploy)
+    except Exception:
+        return True
+
+
+def base_images_auto_register_existing() -> bool:
+    try:
+        from core.models import CoreSettings
+        return bool(CoreSettings.load().base_images_auto_register_existing)
+    except Exception:
+        return True
