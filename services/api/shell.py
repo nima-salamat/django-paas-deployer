@@ -352,14 +352,39 @@ def shell_file_apiview(request, service_id):
             access = path_access(container, safe_path, for_create=True)
             if not access.get("mount_writable", False):
                 raise DjangoValidationError(f"The target is on a read-only Docker mount: {safe_path}.")
-            type_probe = container.exec_run(["ls", "-l", safe_path], workdir=session.workdir, stdout=False, stderr=False, tty=False)
-            if int(type_probe.exit_code or 1) != 0:
-                raise DjangoValidationError("Only regular files can be deleted from the file editor.")
-            result = container.exec_run(["rm", "--", safe_path], workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
-            if int(result.exit_code or 0) != 0:
+            # Delete files with rm. Directories use rmdir only, so a context-menu
+            # delete can never recursively erase a project by accident.
+            type_probe = container.exec_run(["ls", "-ld", safe_path], workdir=session.workdir, stdout=False, stderr=False, tty=False)
+            if int(type_probe.exit_code if type_probe.exit_code is not None else 1) != 0:
+                raise DjangoValidationError("Path does not exist or is not accessible.")
+            kind_probe = container.exec_run(["sh", "-c", 'if [ -d "$1" ]; then printf dir; elif [ -f "$1" ]; then printf file; else printf other; fi', "kind", safe_path], workdir=session.workdir, stdout=True, stderr=False, tty=False)
+            kind = (kind_probe.output or b"").decode("utf-8", "replace").strip() if isinstance(kind_probe.output, (bytes, bytearray)) else "other"
+            cmd = ["rmdir", "--", safe_path] if kind == "dir" else ["rm", "--", safe_path]
+            result = container.exec_run(cmd, workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
+            if int(result.exit_code if result.exit_code is not None else 1) != 0:
                 out, err = result.output if isinstance(result.output, tuple) else (b"", result.output or b"")
-                raise DjangoValidationError((err or out or b"Unable to delete file.").decode("utf-8", "replace"))
-            return Response({"result":"success", "path":safe_path, "action":"delete"})
+                detail = (err or out or b"Unable to delete path.").decode("utf-8", "replace").strip()
+                raise DjangoValidationError(detail)
+            return Response({"result":"success", "path":safe_path, "action":"delete", "kind":kind})
+        if action == "rename":
+            if safe_path == session.root_path:
+                raise DjangoValidationError("The workspace root cannot be renamed.")
+            new_name = str(request.data.get("new_name") or "").strip()
+            if not new_name or new_name in {".", ".."} or "/" in new_name or "\\" in new_name or "\x00" in new_name:
+                raise DjangoValidationError("new_name must be a single file or directory name.")
+            parent = posixpath.dirname(safe_path) or session.root_path
+            new_path = _safe_workdir(posixpath.join(parent, new_name), session.root_path)
+            access = path_access(container, safe_path, for_create=True)
+            if not access.get("mount_writable", False):
+                raise DjangoValidationError(f"The target is on a read-only Docker mount: {safe_path}.")
+            if not access.get("effective_writable", False):
+                raise DjangoValidationError(f"Cannot rename as the service runtime user: parent directory is not writable: {parent}")
+            result = container.exec_run(["mv", "--", safe_path, new_path], workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
+            if int(result.exit_code if result.exit_code is not None else 1) != 0:
+                out, err = result.output if isinstance(result.output, tuple) else (b"", result.output or b"")
+                detail = (err or out or b"Unable to rename path.").decode("utf-8", "replace").strip()
+                raise DjangoValidationError(detail)
+            return Response({"result":"success", "path":safe_path, "new_path":new_path, "action":"rename"})
         if action == "read":
             result = container.exec_run(["cat", "--", safe_path], workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
             access = path_access(container, safe_path, for_create=False)

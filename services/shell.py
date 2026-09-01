@@ -106,7 +106,7 @@ ARTISAN_COMMAND_CATALOG = {
 GENERIC_COMMAND_CATALOG = {
     "pwd", "ls", "cat", "head", "tail", "mkdir", "touch", "rm", "cp", "mv", "find",
     "grep", "wc", "sort", "uniq", "cut", "tr", "sed", "tee", "stat", "date", "whoami", "id", "env", "printenv", "which",
-    "df", "du", "uname", "hostname", "ping", "curl", "cd",
+    "df", "du", "uname", "hostname", "ping", "curl", "cd", "rmdir",
 }
 
 
@@ -217,7 +217,7 @@ def _validate_mutating_paths(argv: list[str], root: str, base: str) -> None:
         _safe_workdir(args[-1], root)
         for arg in args[:-1]:
             _safe_workdir(arg, root)
-    elif base in {"mkdir", "touch"}:
+    elif base in {"mkdir", "touch", "rmdir"}:
         for arg in args:
             _safe_workdir(arg, root)
 
