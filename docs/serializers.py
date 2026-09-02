@@ -13,11 +13,15 @@ class CategorySerializer(serializers.ModelSerializer):
 
 class DocumentAssetSerializer(serializers.ModelSerializer):
     url = serializers.SerializerMethodField()
+    document_status = serializers.SerializerMethodField()
 
     class Meta:
         model = DocumentAsset
-        fields = ("id", "document", "name", "alt", "kind", "mime_type", "size_bytes", "url", "created_at")
+        fields = ("id", "document", "document_status", "name", "alt", "kind", "mime_type", "size_bytes", "url", "created_at")
         read_only_fields = ("id", "kind", "mime_type", "size_bytes", "url", "created_at")
+
+    def get_document_status(self, obj):
+        return obj.document.status if obj.document_id else None
 
     def get_url(self, obj):
         request = self.context.get("request")

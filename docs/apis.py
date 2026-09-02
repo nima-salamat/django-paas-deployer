@@ -38,6 +38,21 @@ def has_rule(user, code):
         return False
 
 
+class DocsAssetJWTAuthentication(JWTAuthentication):
+    """Skip JWT parsing for public asset GETs, but authenticate mutations.
+
+    DRF runs authenticators before permission checks. A normal JWTAuthentication
+    would reject an expired/invalid bearer token on a public GET, so the public
+    asset endpoint uses this method-aware authenticator instead of disabling
+    authentication globally for the view.
+    """
+
+    def authenticate(self, request):
+        if request.method == "GET":
+            return None
+        return super().authenticate(request)
+
+
 class DocsManagePermission(BasePermission):
     def has_permission(self, request, view):
         return has_rule(request.user, "docs.manage")
@@ -229,16 +244,41 @@ class DocumentAssetListCreateAPIView(APIView):
 
 
 class DocumentAssetAPIView(APIView):
-    # Public asset reads must not be gated by JWT. A browser <img>/<video>/
-    # <audio> tag cannot send an Authorization header, and a stale/invalid
-    # Bearer token in the headers must never block serving a published
-    # document's media. ``authentication_classes = []`` keeps DRF from
-    # rejecting requests that carry an expired token in the Authorization
-    # header. Optional admin access (for draft/unattached assets) is still
-    # supported via the explicit ``?token=`` query-parameter path below.
-    authentication_classes = _PUBLIC_AUTH
-    # No permission_classes => default AllowAny. Access control is performed
-    # inside get()/delete()/patch() based on the asset's publication state.
+    """Serve assets referenced by the public documentation.
+
+    GET is deliberately public, but only for assets attached to a published
+    document.  Draft/unattached library files never become public just because
+    their UUID is known.
+
+    Mutating methods remain admin-only and therefore use the same JWT/session
+    authentication as the other admin Docs APIs.  ``get_authenticators`` is
+    method-aware so making GET public does not silently make PATCH/DELETE
+    public as well.
+    """
+
+    authentication_classes = [DocsAssetJWTAuthentication, SessionAuthentication]
+
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [AllowAny()]
+        return [IsAuthenticated(), DocsManagePermission()]
+
+    @staticmethod
+    def _serve_asset(asset):
+        if not asset.file:
+            raise Http404
+        response = FileResponse(
+            asset.file.open("rb"),
+            content_type=asset.mime_type or "application/octet-stream",
+        )
+        response["X-Content-Type-Options"] = "nosniff"
+        response["Content-Disposition"] = (
+            "inline"
+            if asset.kind in {"image", "audio", "video"}
+            else f'attachment; filename="{os.path.basename(asset.name)}"'
+        )
+        response["Cache-Control"] = "public, max-age=86400"
+        return response
 
     def get(self, request, asset_id):
         try:
@@ -246,44 +286,18 @@ class DocumentAssetAPIView(APIView):
         except DocumentAsset.DoesNotExist:
             raise Http404
 
-        # Browser media tags (<img>, <audio>, <video>) cannot attach an
-        # Authorization header. Admin previews therefore may provide the same
-        # short-lived JWT in ?token=. Never treat an arbitrary token as public
-        # access: it must authenticate through SimpleJWT and still pass the
-        # docs.manage rule below.
-        if not request.user.is_authenticated:
-            raw_token = (request.query_params.get("token") or "").strip()
-            if raw_token:
-                try:
-                    jwt_auth = JWTAuthentication()
-                    validated = jwt_auth.get_validated_token(raw_token)
-                    request.user = jwt_auth.get_user(validated)
-                except Exception:
-                    pass
-
-        # Unattached/draft assets are private library objects. Only assets
-        # belonging to a published document are public.
-        if not asset.document_id:
-            if not has_rule(request.user, "docs.manage"):
-                raise Http404
-        elif asset.document.status != Document.Status.PUBLISHED and not has_rule(request.user, "docs.manage"):
+        # The public route is intentionally limited to published documentation.
+        # A draft or unattached asset must be read through the authenticated
+        # admin preview endpoint below.
+        if not asset.document_id or asset.document.status != Document.Status.PUBLISHED:
             raise Http404
-        if not asset.file:
-            raise Http404
-        response = FileResponse(asset.file.open("rb"), content_type=asset.mime_type or "application/octet-stream")
-        response["X-Content-Type-Options"] = "nosniff"
-        response["Content-Disposition"] = "inline" if asset.kind in {"image", "audio", "video"} else f'attachment; filename="{os.path.basename(asset.name)}"'
-        response["Cache-Control"] = "public, max-age=86400" if asset.document_id and asset.document.status == Document.Status.PUBLISHED else "private, no-store"
-        return response
+        return self._serve_asset(asset)
 
     def delete(self, request, asset_id):
-        if not has_rule(request.user, "docs.manage"):
-            return Response({"detail": "Permission denied."}, status=status.HTTP_403_FORBIDDEN)
         try:
             asset = DocumentAsset.objects.get(pk=asset_id)
         except DocumentAsset.DoesNotExist:
             raise Http404
-        # Remove the file from storage, then the row.
         if asset.file:
             try:
                 asset.file.delete(save=False)
@@ -294,8 +308,6 @@ class DocumentAssetAPIView(APIView):
 
     def patch(self, request, asset_id):
         """Reassign asset to a document or update alt/name."""
-        if not has_rule(request.user, "docs.manage"):
-            return Response({"detail": "Permission denied."}, status=status.HTTP_403_FORBIDDEN)
         try:
             asset = DocumentAsset.objects.select_related("document").get(pk=asset_id)
         except DocumentAsset.DoesNotExist:
@@ -315,3 +327,18 @@ class DocumentAssetAPIView(APIView):
             asset.name = str(request.data.get("name"))[:255]
         asset.save()
         return Response(DocumentAssetSerializer(asset, context={"request": request}).data)
+
+
+class DocumentAssetAdminPreviewAPIView(APIView):
+    """Authenticated media read for the Admin Docs media library/editor."""
+
+    authentication_classes = [JWTAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated, DocsManagePermission]
+
+    def get(self, request, asset_id):
+        try:
+            asset = DocumentAsset.objects.get(pk=asset_id)
+        except DocumentAsset.DoesNotExist:
+            raise Http404
+        return DocumentAssetAPIView._serve_asset(asset)
+

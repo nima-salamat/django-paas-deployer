@@ -8,7 +8,9 @@ Documentation is Markdown-first. The database stores Markdown source as plain te
 
 ## Assets
 
-`DocumentAsset` is a server-managed library for images, video, audio and generic files. Admin upload is authenticated with `docs.manage`. Draft-only assets are private; assets attached to published documents can be served publicly. Files are size-limited and images are verified with Pillow before storage.
+`DocumentAsset` is a server-managed library for images, video, audio and generic files. Admin upload/list/reassign/delete operations are authenticated with `docs.manage`. Draft-only and unattached assets are private; assets attached to published documents are served from the public `/api/docs/assets/<uuid>/` resource URL. The authenticated admin preview endpoint is `/api/docs/admin/assets/<uuid>/` and is used for draft/library previews.
+
+The public asset endpoint is read-only from the public perspective: its GET path never requires a JWT, while PATCH/DELETE on the same resource remain protected. Asset IDs are UUIDs and files are stored under the dedicated `docs/assets/` upload path, so the public route cannot be used as a generic file browser.
 
 ## Security
 
