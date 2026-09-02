@@ -410,29 +410,68 @@ def _assert_managed_target_safe(container, path: str, root: str, *, allow_missin
         return safe
 
 
-def _exec_stdin_checked(container, argv, *, workdir, data: bytes, user=None):
-    """Execute a backend-owned stdin command and return a reliable exit code."""
+def _exec_stdin_checked(container, argv, *, workdir, data: bytes, user=None, timeout_seconds: int = 60):
+    """Execute a backend-owned stdin command and return a reliable exit code.
+
+    Hard socket timeouts prevent the save path from hanging forever when the
+    Docker exec stream never closes cleanly.
+    """
+    import socket as _socket
+    import time as _time
+
     api = container.client.api
-    kwargs = dict(stdout=True, stderr=True, stdin=True, tty=False, demux=False, workdir=workdir)
+    # Note: demux is only valid on exec_run/exec_start — NOT on exec_create.
+    kwargs = dict(stdout=True, stderr=True, stdin=True, tty=False, workdir=workdir)
     if user is not None:
-        kwargs["user"] = user
+        kwargs["user"] = str(user)
     created = api.exec_create(container.id, cmd=argv, **kwargs)
     exec_id = created["Id"]
     sock = api.exec_start(exec_id, tty=False, socket=True)
     target = getattr(sock, "_sock", sock)
     chunks = []
+    deadline = _time.monotonic() + max(5, min(int(timeout_seconds or 60), 300))
     try:
-        if data:
-            target.sendall(data)
         try:
-            target.shutdown(1)
+            target.settimeout(5.0)
         except Exception:
             pass
-        while True:
-            chunk = target.recv(32768)
+        if data:
+            # Send in chunks so large payloads cannot block indefinitely.
+            view = memoryview(data)
+            offset = 0
+            while offset < len(view):
+                if _time.monotonic() > deadline:
+                    raise TimeoutError("Timed out while writing file content to the container.")
+                sent = target.send(view[offset : offset + 65536])
+                if sent is None or sent <= 0:
+                    break
+                offset += sent
+        try:
+            target.shutdown(_socket.SHUT_WR)
+        except Exception:
+            try:
+                target.shutdown(1)
+            except Exception:
+                pass
+        while _time.monotonic() < deadline:
+            try:
+                chunk = target.recv(32768)
+            except _socket.timeout:
+                # Still running — check whether the exec finished.
+                try:
+                    inspect = api.exec_inspect(exec_id)
+                    if not inspect.get("Running", True):
+                        break
+                except Exception:
+                    break
+                continue
             if not chunk:
                 break
             chunks.append(chunk)
+            if sum(len(c) for c in chunks) > 1024 * 1024:
+                break
+        else:
+            raise TimeoutError("Timed out waiting for the container write command to finish.")
     finally:
         try:
             sock.close()
@@ -591,15 +630,19 @@ def shell_file_apiview(request, service_id):
             access = path_access(container, safe_path, for_create=False)
             if not access.get("mount_writable", False):
                 raise DjangoValidationError(f"The target is on a read-only Docker mount: {safe_path}.")
-            import base64
-            encoded = base64.b64encode(encoded_content) + b"\n"
+            # Write the real file bytes (not base64). Previous code base64-encoded
+            # stdin but never decoded inside the container, which produced corrupt
+            # files and confusing editor behaviour.
             last_detail = "permission denied"
             for exec_user in (None, "0"):
                 try:
                     code, output = _exec_stdin_checked(
                         container,
                         ["/bin/sh", "-c", 'cat > "$1"', "writer", safe_path],
-                        workdir=session.workdir, data=encoded, user=exec_user,
+                        workdir=session.workdir,
+                        data=encoded_content,
+                        user=exec_user,
+                        timeout_seconds=90,
                     )
                     if code == 0:
                         if exec_user == "0":
@@ -627,18 +670,47 @@ def shell_file_apiview(request, service_id):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def shell_audit_apiview(request, service_id):
-    """Chronological activity log for the restricted shell (commands, files, sessions)."""
+    """Chronological activity log for the restricted shell (commands, files, sessions).
+
+    Supports page-based pagination:
+      ?page=1&page_size=50&action=command
+    Also accepts legacy ?limit=&offset= for compatibility.
+    """
     try:
         service = _resolve(request, service_id, action="can_shell")
         from services.models import ShellAuditEvent
-        limit = min(int(request.query_params.get("limit") or 100), 500)
-        offset = max(int(request.query_params.get("offset") or 0), 0)
+        from math import ceil
+
+        # Prefer page/page_size; fall back to limit/offset.
+        try:
+            page_size = int(request.query_params.get("page_size") or request.query_params.get("limit") or 50)
+        except (TypeError, ValueError):
+            page_size = 50
+        page_size = max(1, min(page_size, 100))
+
+        if request.query_params.get("page") is not None:
+            try:
+                page = max(1, int(request.query_params.get("page") or 1))
+            except (TypeError, ValueError):
+                page = 1
+            offset = (page - 1) * page_size
+        else:
+            try:
+                offset = max(0, int(request.query_params.get("offset") or 0))
+            except (TypeError, ValueError):
+                offset = 0
+            page = (offset // page_size) + 1
+
         action = (request.query_params.get("action") or "").strip()
         qs = ShellAuditEvent.objects.filter(service=service).select_related("user")
         if action:
             qs = qs.filter(action=action)
         total = qs.count()
-        rows = list(qs.order_by("-created_at")[offset : offset + limit])
+        total_pages = max(1, ceil(total / page_size)) if total else 1
+        if page > total_pages:
+            page = total_pages
+            offset = (page - 1) * page_size
+        rows = list(qs.order_by("-created_at")[offset : offset + page_size])
         data = [
             {
                 "id": str(r.id),
@@ -649,7 +721,7 @@ def shell_audit_apiview(request, service_id):
                 "exit_code": r.exit_code,
                 "success": r.success,
                 "detail": r.detail,
-                "output_preview": r.output_preview,
+                "output_preview": (r.output_preview or "")[:500],
                 "meta": r.meta,
                 "user_id": str(r.user_id) if r.user_id else None,
                 "user_email": getattr(r.user, "email", None) if r.user_id else None,
@@ -657,7 +729,16 @@ def shell_audit_apiview(request, service_id):
             }
             for r in rows
         ]
-        return Response({"result": "success", "total": total, "events": data})
+        return Response({
+            "result": "success",
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1,
+            "events": data,
+        })
     except (PermissionError, Exception) as exc:
         from django.core.exceptions import ValidationError as DjangoValidationError
         if isinstance(exc, (PermissionError, DjangoValidationError)):
