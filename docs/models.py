@@ -44,6 +44,15 @@ class DocumentCategory(models.Model):
     def save(self, *args, **kwargs):
         if not self.slug:
             self.slug = slugify(self.name)[:180]
+        if self._state.adding and not self.order:
+            # New sections land at the end of their sibling group instead of
+            # tying with every legacy order=0 row. Spaced by 10 so inserting
+            # between two categories never needs a full renumber.
+            last = (
+                DocumentCategory.objects.filter(parent=self.parent)
+                .aggregate(last=models.Max("order"))["last"]
+            )
+            self.order = (last or 0) + 10
         self.full_clean()
         super().save(*args, **kwargs)
 
@@ -78,6 +87,16 @@ class Document(models.Model):
     def save(self, *args, **kwargs):
         if not self.slug:
             self.slug = slugify(self.title)[:220]
+        if self._state.adding and not self.order:
+            # New articles land at the END of their section (order = max + 10)
+            # instead of defaulting to 0 and tying with everything else.
+            # This is the single source of truth: the DRF viewsets, the
+            # Django admin and direct ORM creates all share it.
+            last = (
+                Document.objects.filter(category=self.category)
+                .aggregate(last=models.Max("order"))["last"]
+            )
+            self.order = (last or 0) + 10
         self.full_clean()
         super().save(*args, **kwargs)
 

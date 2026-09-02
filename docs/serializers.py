@@ -9,6 +9,9 @@ class CategorySerializer(serializers.ModelSerializer):
         model = DocumentCategory
         fields = ("id", "name", "slug", "parent", "parent_id", "description", "icon", "order")
         read_only_fields = ("id", "parent_id")
+        # The model auto-slugs from the name on save, so callers (including
+        # the admin panel's "New category" box) may omit the slug entirely.
+        extra_kwargs = {"slug": {"required": False, "allow_blank": True}}
 
 
 class DocumentAssetSerializer(serializers.ModelSerializer):
@@ -40,6 +43,9 @@ class DocumentSerializer(serializers.ModelSerializer):
             "status", "content", "assets", "created_at", "updated_at", "published_at",
         )
         read_only_fields = ("id", "created_at", "updated_at", "published_at")
+        # Same as categories: the model auto-slugs from the title when the
+        # caller leaves the slug blank.
+        extra_kwargs = {"slug": {"required": False, "allow_blank": True}}
 
     def validate_content(self, value):
         if not isinstance(value, str):

@@ -1,6 +1,9 @@
 import os
+import uuid
+
 from django.http import FileResponse, Http404
 from django.db import transaction
+from django.db.models import Max
 from rest_framework import status
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.permissions import AllowAny, IsAuthenticated, BasePermission
@@ -14,6 +17,54 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from django.utils import timezone
 from .models import Document, DocumentAsset, DocumentCategory
 from .serializers import DocumentSerializer, DocumentAssetSerializer, CategorySerializer
+
+
+def _next_document_order(category):
+    """First free order slot at the end of a document's section.
+
+    Order values are spaced 10 apart (10, 20, …) so a manual insert between
+    two articles never needs renumbering the whole section. Used by the
+    reposition-on-section-move logic in DocumentAdminViewSet.perform_update;
+    the create path lives in Document.save itself.
+    """
+    last = (
+        Document.objects.filter(category=category)
+        .aggregate(last=Max("order"))["last"]
+    )
+    return (last or 0) + 10
+
+
+def _apply_reorder(model_cls, ids, order_field="order"):
+    """Persist an explicit id sequence as spaced order values.
+
+    Returns (updated_count, missing_ids). Order values start at 10 and grow
+    by 10, and every move rewrites the whole sibling list so old ties (rows
+    created with order=0 before this feature) are normalized away.
+
+    Raises ValueError when an entry is not a well-formed UUID — the views
+    turn that into a 400 instead of letting the ORM blow up on the lookup.
+    """
+    seen = []
+    for raw in ids:
+        if isinstance(raw, (dict, list)):
+            raise ValueError("ids entries must be UUID strings.")
+        value = str(raw).strip()
+        try:
+            uuid.UUID(value)
+        except (ValueError, AttributeError, TypeError):
+            raise ValueError(f"“{value}” is not a valid UUID.")
+        if value not in seen:
+            seen.append(value)
+    existing = {str(pk) for pk in model_cls.objects.filter(pk__in=seen).values_list("pk", flat=True)}
+    missing = [value for value in seen if value not in existing]
+    if missing:
+        # Validate BEFORE writing: a partially-wrong list must not half-apply.
+        return 0, missing
+    with transaction.atomic():
+        for position, value in enumerate(seen):
+            model_cls.objects.filter(pk=value).update(**{order_field: (position + 1) * 10})
+    return len(seen), missing
+
 
 # Public documentation endpoints must remain readable by everyone, including
 # anonymous clients and clients that send an expired/invalid Authorization
@@ -130,6 +181,28 @@ class CategoryAdminViewSet(ModelViewSet):
     authentication_classes = [JWTAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated, DocsManagePermission]
 
+    @action(detail=False, methods=["post"], url_path="reorder")
+    def reorder(self, request):
+        """Persist an explicit category order.
+
+        Body: {"ids": ["<uuid>", …]} — the array IS the desired order, so a
+        single call from the admin panel (up/down or drag) rewrites the
+        sibling sequence as 10, 20, 30, … and removes legacy ties.
+        """
+        ids = request.data.get("ids")
+        if not isinstance(ids, list) or not ids or len(ids) > 500:
+            return Response(
+                {"detail": "ids must be a non-empty list (max 500) of category ids in the desired order."},
+                status=400,
+            )
+        try:
+            updated, missing = _apply_reorder(DocumentCategory, ids)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        if missing:
+            return Response({"detail": "Unknown category ids.", "missing": missing}, status=404)
+        return Response({"updated": updated})
+
     def destroy(self, request, *args, **kwargs):
         # Deleting a category must never orphan its content or unexpectedly
         # delete an entire subtree. Move documents and direct child
@@ -182,6 +255,41 @@ class DocumentAdminViewSet(ModelViewSet):
     serializer_class = DocumentSerializer
     authentication_classes = [JWTAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated, DocsManagePermission]
+
+    def perform_update(self, serializer):
+        # Moving an article to another section places it at the end of the
+        # NEW section (its old order value belongs to the old section's
+        # sequence and would collide or overshoot there).
+        validated = serializer.validated_data
+        instance = serializer.instance
+        new_category = validated.get("category", instance.category)
+        category_changed = new_category != instance.category
+        order_given = "order" in validated and validated.get("order")
+        if category_changed and not order_given:
+            validated["order"] = _next_document_order(new_category)
+        serializer.save()
+
+    @action(detail=False, methods=["post"], url_path="reorder")
+    def reorder(self, request):
+        """Persist an explicit article order within a section.
+
+        Body: {"ids": ["<uuid>", …]} — the array IS the desired order. Send
+        the full sibling list of one section per call (the admin panel does
+        this from the tree, e.g. after an up/down click or a drag).
+        """
+        ids = request.data.get("ids")
+        if not isinstance(ids, list) or not ids or len(ids) > 500:
+            return Response(
+                {"detail": "ids must be a non-empty list (max 500) of document ids in the desired order."},
+                status=400,
+            )
+        try:
+            updated, missing = _apply_reorder(Document, ids)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        if missing:
+            return Response({"detail": "Unknown document ids.", "missing": missing}, status=404)
+        return Response({"updated": updated})
 
     @action(detail=True, methods=["post"])
     def publish(self, request, pk=None):
