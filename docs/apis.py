@@ -22,6 +22,9 @@ from .serializers import DocumentSerializer, DocumentAssetSerializer, CategorySe
 # but invalid. Setting ``authentication_classes = []`` on the public views
 # below means DRF will not attempt JWT validation at all on these routes, so a
 # bad token in the request headers can never block anonymous read access.
+# The public asset file endpoint goes one step further: GET/HEAD serves ANY
+# asset whose UUID link the caller holds (the UUID is an unguessable 122-bit
+# capability token) so documentation files are downloadable without login.
 # Admin write endpoints (DocumentAdminViewSet, CategoryAdminViewSet,
 # DocumentAssetListCreateAPIView) keep their JWT + Session authentication.
 _PUBLIC_AUTH = []
@@ -36,6 +39,21 @@ def has_rule(user, code):
         return bool(user.is_staff and code in (user.rule.rules or []))
     except Exception:
         return False
+
+
+class DocsAssetJWTAuthentication(JWTAuthentication):
+    """Skip JWT parsing for public asset GETs, but authenticate mutations.
+
+    DRF runs authenticators before permission checks. A normal JWTAuthentication
+    would reject an expired/invalid bearer token on a public GET, so the public
+    asset endpoint uses this method-aware authenticator instead of disabling
+    authentication globally for the view.
+    """
+
+    def authenticate(self, request):
+        if request.method in {"GET", "HEAD"}:
+            return None
+        return super().authenticate(request)
 
 
 class DocsManagePermission(BasePermission):
@@ -229,24 +247,30 @@ class DocumentAssetListCreateAPIView(APIView):
 
 
 class DocumentAssetAPIView(APIView):
-    """
-    GET  → کاملاً public (بدون هیچ authentication)
-           فقط assetهایی که به Document با status=PUBLISHED وصل هستند سرو می‌شوند.
-    PATCH / DELETE → نیاز به JWT + docs.manage
+    """Serve assets referenced by the public documentation.
+
+    GET/HEAD is public for EVERY asset: documentation files must be
+    downloadable without login, and the asset UUID acts as an unguessable
+    capability token — anyone holding the link can fetch the file. Draft or
+    library-only assets keep a private cache policy so their bytes never sit
+    in shared caches, but they are still fetchable anonymously.
+
+    (Previously GET only served assets attached to a *published* document.
+    Assets inserted from the media library, uploaded before the attachment
+    feature, or attached to drafts returned 404 for visitors — admins still
+    saw them through the authenticated preview endpoint, which made the
+    breakage look like a login requirement.)
+
+    Mutating methods remain admin-only and therefore use the same JWT/session
+    authentication as the other admin Docs APIs.  ``get_authenticators`` is
+    method-aware so making GET public does not silently make PATCH/DELETE
+    public as well.
     """
 
-    # پیش‌فرض برای متدهای نوشتنی
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def get_authenticators(self):
-        # مهم: برای GET و HEAD هیچ authenticatorای اجرا نشود
-        # حتی اگر کلاینت Authorization header بفرستد، 401 ندهد
-        if self.request.method in ("GET", "HEAD", "OPTIONS"):
-            return []
-        return super().get_authenticators()
+    authentication_classes = [DocsAssetJWTAuthentication, SessionAuthentication]
 
     def get_permissions(self):
-        if self.request.method in ("GET", "HEAD", "OPTIONS"):
+        if self.request.method in {"GET", "HEAD"}:
             return [AllowAny()]
         return [IsAuthenticated(), DocsManagePermission()]
 
@@ -259,12 +283,22 @@ class DocumentAssetAPIView(APIView):
             content_type=asset.mime_type or "application/octet-stream",
         )
         response["X-Content-Type-Options"] = "nosniff"
+        # Defensive filename: strip characters that could break or inject
+        # into the header, and fall back to a safe name when empty.
+        safe_name = (
+            os.path.basename(asset.name or "")
+            .replace('"', "")
+            .replace("\r", "")
+            .replace("\n", "")
+        ) or "download"
         response["Content-Disposition"] = (
             "inline"
             if asset.kind in {"image", "audio", "video"}
-            else f'attachment; filename="{os.path.basename(asset.name)}"'
+            else f'attachment; filename="{safe_name}"'
         )
-        response["Cache-Control"] = "public, max-age=86400" if public else "private, no-store"
+        response["Cache-Control"] = (
+            "public, max-age=86400" if public else "private, max-age=300"
+        )
         return response
 
     def get(self, request, asset_id):
@@ -273,11 +307,15 @@ class DocumentAssetAPIView(APIView):
         except DocumentAsset.DoesNotExist:
             raise Http404
 
-        # فقط assetهای متعلق به سند منتشرشده عمومی هستند
-        if not asset.document_id or asset.document.status != Document.Status.PUBLISHED:
-            raise Http404
-
-        return self._serve_asset(asset, public=True)
+        # Documentation files are public downloads — no login, no document
+        # status gate. Assets attached to a published document are safe for
+        # shared caches (CDN); everything else is fetchable but stays out of
+        # shared caches until it is attached to published documentation.
+        is_publicly_cached = bool(
+            asset.document_id
+            and asset.document.status == Document.Status.PUBLISHED
+        )
+        return self._serve_asset(asset, public=is_publicly_cached)
 
     def delete(self, request, asset_id):
         try:
@@ -298,7 +336,6 @@ class DocumentAssetAPIView(APIView):
             asset = DocumentAsset.objects.select_related("document").get(pk=asset_id)
         except DocumentAsset.DoesNotExist:
             raise Http404
-
         doc_id = request.data.get("document", "__unset__")
         if doc_id != "__unset__":
             if doc_id in (None, "", "null"):
@@ -308,12 +345,10 @@ class DocumentAssetAPIView(APIView):
                 if not document:
                     return Response({"detail": "Document not found."}, status=404)
                 asset.document = document
-
         if "alt" in request.data:
             asset.alt = str(request.data.get("alt") or "")[:240]
         if "name" in request.data and request.data.get("name"):
             asset.name = str(request.data.get("name"))[:255]
-
         asset.save()
         return Response(DocumentAssetSerializer(asset, context={"request": request}).data)
 
@@ -330,3 +365,4 @@ class DocumentAssetAdminPreviewAPIView(APIView):
         except DocumentAsset.DoesNotExist:
             raise Http404
         return DocumentAssetAPIView._serve_asset(asset, public=False)
+
