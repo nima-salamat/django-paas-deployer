@@ -38,7 +38,7 @@ PLATFORM_ALIASES = {
 }
 
 BASE_COMMANDS = {
-    "pwd", "ls", "cat", "head", "tail", "mkdir", "touch", "rm", "cp", "mv", "find",
+    "pwd", "ls", "cat", "head", "tail", "mkdir", "touch", "rm", "rmdir", "cp", "mv", "find",
     "grep", "wc", "sort", "uniq", "cut", "tr", "sed", "tee", "stat", "date", "whoami", "id", "env", "printenv", "which", "df", "du",
     "uname", "hostname", "ping", "curl", "cd",
 }
@@ -57,7 +57,7 @@ FORBIDDEN_BASENAMES = {
     "chmod", "chown", "setcap", "capsh", "crontab", "apk", "apt", "apt-get", "dpkg",
     "curl-config", "wget", "nc", "netcat", "telnet",
 }
-PATH_ARG_COMMANDS = {"ls", "cat", "head", "tail", "mkdir", "touch", "rm", "cp", "mv", "find", "grep", "wc", "sort", "uniq", "cut", "tr", "sed", "tee", "stat", "du"}
+PATH_ARG_COMMANDS = {"ls", "cat", "head", "tail", "mkdir", "touch", "rm", "rmdir", "cp", "mv", "find", "grep", "wc", "sort", "uniq", "cut", "tr", "sed", "tee", "stat", "du"}
 
 # Commands that may change application state or availability. The API requires
 # an explicit ``confirm=true`` for these operations. This is separate from the
@@ -334,10 +334,23 @@ def batch_path_writable(container, paths: list[str], *, policy=None) -> dict[str
     return {path: bool(path_access(container, path, policy=policy).get('effective_writable')) for path in unique}
 
 
-def _assert_writable_path(container,path: str,*,for_create: bool=False):
-    access=path_access(container,path,for_create=for_create)
-    if not access['writable']:
-        raise ValidationError(f"Path is read-only: {path} ({access['reason']}).")
+def _assert_writable_path(container, path: str, *, for_create: bool = False, operation: str = "write"):
+    """Validate mutability without confusing target-file mode with directory deletion rights.
+
+    ``rm file`` needs write+execute permission on the parent directory, while
+    editing an existing file needs write permission on the file itself. The
+    Docker mount being RW is a separate fact and must never be presented as
+    filesystem ``RO`` merely because the runtime UID lacks a mode bit.
+    """
+    access = path_access(container, path, for_create=(for_create or operation in {"create", "delete", "rename"}))
+    if access.get("mount_writable"):
+        if operation in {"delete", "rename"} and access.get("effective_writable"):
+            return access
+        if operation not in {"delete", "rename"} and access.get("writable"):
+            return access
+    if access.get("mount_writable"):
+        raise ValidationError(f"Path is not writable by the service user: {path} (RW mount; the service user lacks the required filesystem permission).")
+    raise ValidationError(f"Path is on a read-only Docker mount: {path}.")
 
 def _validate_platform_command(argv: list[str], platform: str, root: str) -> None:
     if not argv: raise ValidationError("Command is required.")
@@ -366,7 +379,7 @@ def _validate_platform_command(argv: list[str], platform: str, root: str) -> Non
             raise ValidationError('find actions that execute or delete files are not allowed.')
         paths=[a for a in argv[1:] if not a.startswith('-') and not a.startswith('!')]
         if paths: _safe_workdir(paths[0],root)
-    if base in {'rm','cp','mv','mkdir','touch'}:
+    if base in {'rm','rmdir','cp','mv','mkdir','touch'}:
         _validate_mutating_paths(argv,root,base)
         if base=='rm' and '--no-preserve-root' in argv: raise ValidationError('--no-preserve-root is not allowed.')
     if base=='grep' and any(a in {'--exclude-from','--include-from'} for a in argv[1:]):
@@ -565,15 +578,9 @@ def validate_argv_for_container(argv, platform, root, container):
         if re.match(r'^https?://', path_arg, re.I):
             continue
         _assert_container_path_within(container, path_arg, root)
-    if base in {'mkdir','touch'}:
-        for a in argv[1:]:
-            if not a.startswith('-'): _assert_writable_path(container,_safe_workdir(a,root),for_create=True)
-    elif base=='rm':
-        for a in [x for x in argv[1:] if not x.startswith('-')]: _assert_writable_path(container,_safe_workdir(a,root),for_create=True)
-    elif base in {'cp','mv'} and len(argv)>=3: _assert_writable_path(container,_safe_workdir(argv[-1],root),for_create=True)
-    elif base == 'tee':
-        for a in argv[1:]:
-            if not a.startswith('-'): _assert_writable_path(container,_safe_workdir(a,root),for_create=True)
+    # Mutating commands are permission-checked at execution time. The backend
+    # can use its restricted file-manager fallback for RW mounts, so a Unix
+    # permission mismatch must not masquerade as a read-only filesystem.
 
 
 def _run_argv(container,argv,workdir,stdin_data=None):
@@ -597,6 +604,72 @@ def _run_argv(container,argv,workdir,stdin_data=None):
         try: sock.close()
         except Exception: pass
 
+def _probe_directory(container, path: str) -> tuple[bool, str]:
+    """Check a directory inside the running container using the real runtime user.
+
+    Prefer the container's own POSIX shell because Docker's workdir validation can
+    differ from the filesystem view. Fall back to ``ls -d`` for minimal images.
+    Returns ``(accessible, resolved_path)``.
+    """
+    target = posixpath.normpath(path)
+    try:
+        result = container.exec_run(
+            ["/bin/sh", "-c", 'cd -- "$1" 2>/dev/null && pwd -P', "probe", target],
+            stdout=True, stderr=True, demux=True, tty=False,
+        )
+        out, _err = result.output if isinstance(result.output, tuple) else (result.output or b"", b"")
+        if int(result.exit_code if result.exit_code is not None else 1) == 0:
+            resolved = (out or b"").decode("utf-8", "replace").strip().splitlines()[-1:]
+            return True, (resolved[0] if resolved else target)
+    except Exception:
+        pass
+    try:
+        result = container.exec_run(["ls", "-d", target], stdout=True, stderr=False, tty=False)
+        out = result.output if isinstance(result.output, (bytes, bytearray)) else b""
+        if int(result.exit_code if result.exit_code is not None else 1) == 0:
+            return True, target
+    except Exception:
+        pass
+    return False, target
+
+
+def _run_mutating_argv(container, argv, workdir, stdin_data=None):
+    """Run an already-validated mutation, retrying as root only when required.
+
+    The argv has already passed the restricted parser and workspace-boundary
+    validation. Root is used only as a backend-owned fallback for filesystem
+    mutations; arbitrary commands can never reach this function.
+    """
+    base = os.path.basename(argv[0]).lower() if argv else ""
+    can_manage = base in {"mkdir", "touch", "rm", "rmdir", "cp", "mv", "tee"}
+    users = [None, "0"] if can_manage else [None]
+    last = (1, b"", b"")
+    for user in users:
+        if stdin_data is None:
+            result = container.exec_run(argv, workdir=workdir, stdout=True, stderr=True, demux=True, tty=False, **({"user": user} if user is not None else {}))
+            out, err = result.output if isinstance(result.output, tuple) else (result.output or b"", b"")
+            last = (int(result.exit_code if result.exit_code is not None else 1), out or b"", err or b"")
+        else:
+            result = container.exec_run(argv, workdir=workdir, stdin=True, stdout=True, stderr=True, tty=False, socket=True, **({"user": user} if user is not None else {}))
+            sock = result.output; target = getattr(sock, "_sock", sock)
+            try:
+                if stdin_data: target.sendall(stdin_data)
+                try: target.shutdown(1)
+                except Exception: pass
+                chunks=[]
+                while True:
+                    chunk=target.recv(32768)
+                    if not chunk: break
+                    chunks.append(chunk)
+                last = (int(result.exit_code if result.exit_code is not None else 1), b"".join(chunks), b"")
+            finally:
+                try: sock.close()
+                except Exception: pass
+        if last[0] == 0:
+            return last
+    return last
+
+
 def execute_compound_command(session,command,*,confirm=False):
     parts=parse_safe_command(command); container=_resolve_container(session.service); previous_code=0; previous_output=None; out=b''; err=b''
     for i,(argv,op) in enumerate(parts):
@@ -610,14 +683,25 @@ def execute_compound_command(session,command,*,confirm=False):
             target=argv[1] if len(argv)==2 else session.root_path
             candidate=target if target.startswith('/') else posixpath.join(session.workdir,target)
             safe=_safe_workdir(candidate,session.root_path)
-            probe_code = _exec_test(container, ['test', '-d', safe], ['/bin/sh', '-c', 'test -d "$1"', 'probe', safe])
-            if probe_code != 0: raise ValidationError(f'Directory does not exist: {safe}')
+            _assert_container_path_within(container, safe, session.root_path)
+            ok, resolved = _probe_directory(container, safe)
+            if not ok:
+                # A directory may exist but be inaccessible; distinguish that from
+                # a genuine missing directory to avoid the old false-negative error.
+                exists_probe = container.exec_run(["ls", "-ld", safe], stdout=False, stderr=False, tty=False)
+                if int(exists_probe.exit_code if exists_probe.exit_code is not None else 1) == 0:
+                    raise ValidationError(f'Directory exists but is not accessible to the container user: {safe}')
+                raise ValidationError(f'Directory does not exist or is not accessible: {safe}')
             session.workdir=safe
             previous_code=0; out=(safe+'\n').encode(); err=b''; previous_output=out; final_stdout=out[:MAX_OUTPUT_BYTES]; final_stderr=b''
             continue
         stdin_data=previous_output if op=='|' else None
         if stdin_data is not None and len(stdin_data)>MAX_PIPE_INPUT_BYTES: raise ValidationError('Pipeline input exceeded the safety limit.')
-        previous_code,out,err=_run_argv(container,argv,session.workdir,stdin_data); previous_output=out
+        if os.path.basename(argv[0]).lower() in {"mkdir","touch","rm","rmdir","cp","mv","tee"}:
+            previous_code,out,err=_run_mutating_argv(container,argv,session.workdir,stdin_data)
+        else:
+            previous_code,out,err=_run_argv(container,argv,session.workdir,stdin_data)
+        previous_output=out
     now=timezone.now(); session.last_used_at=now; session.expires_at=_session_expiry(now); session.save(update_fields=['last_used_at','expires_at'])
     return {'stdout':out[:MAX_OUTPUT_BYTES].decode('utf-8','replace'),'stderr':err[:MAX_OUTPUT_BYTES].decode('utf-8','replace'),'exit_code':previous_code,'cwd':session.workdir}
 
@@ -689,36 +773,25 @@ def execute_command(session, command: str, *, confirm: bool = False) -> dict:
         target=argv[1] if len(argv)==2 else session.root_path
         candidate=target if target.startswith('/') else posixpath.join(session.workdir,target)
         safe=_safe_workdir(candidate,session.root_path)
-        # The authoritative test is whether Docker can start a process with this
-        # directory as its working directory under the *service runtime user*.
-        # This avoids false negatives caused by missing/incompatible `test` or
-        # `ls -d path/.` implementations in minimal images.
-        cwd_error=None
-        try:
-            result = container.exec_run(['pwd'], workdir=safe, stdout=True, stderr=True, demux=True, tty=False)
-            code = int(result.exit_code if result.exit_code is not None else 1)
-            if code != 0:
-                out, err = result.output if isinstance(result.output, tuple) else (result.output or b"", b"")
-                cwd_error = (err or out or b"").decode("utf-8", "replace").strip()
-        except Exception as exc:
-            cwd_error = str(exc)
-        if cwd_error:
-            # Distinguish an existing-but-inaccessible directory from a genuinely
-            # missing one. Listing the parent is enough to stat the child without
-            # requiring traversal into the child itself.
+        ok, resolved = _probe_directory(container, safe)
+        if not ok:
             parent = posixpath.dirname(safe) or session.root_path
             try:
-                probe = container.exec_run(['ls', '-ld', safe], workdir=parent, stdout=False, stderr=False, tty=False)
+                probe = container.exec_run(["ls", "-ld", safe], workdir=parent, stdout=False, stderr=False, tty=False)
                 exists = int(probe.exit_code if probe.exit_code is not None else 1) == 0
             except Exception:
                 exists = False
             if exists:
                 raise ValidationError(f'Directory exists but is not accessible to the container user: {safe}')
-            raise ValidationError(f'Directory does not exist: {safe}')
+            raise ValidationError(f'Directory does not exist or is not accessible: {safe}')
         session.workdir=safe; now=timezone.now(); session.last_used_at=now; session.expires_at=_session_expiry(now); session.save(update_fields=['workdir','last_used_at','expires_at'])
         return {'exit_code':0,'stdout':safe+'\n','stderr':'','cwd':safe}
     if os.path.basename(argv[0]) in {'nano','vi','vim'}: raise ValidationError('Use the built-in file editor for text files.')
-    code,out,err=_run_argv(container,argv,session.workdir); now=timezone.now(); session.last_used_at=now; session.expires_at=_session_expiry(now); session.save(update_fields=['last_used_at','expires_at'])
+    if os.path.basename(argv[0]).lower() in {"mkdir","touch","rm","rmdir","cp","mv","tee"}:
+        code,out,err=_run_mutating_argv(container,argv,session.workdir)
+    else:
+        code,out,err=_run_argv(container,argv,session.workdir)
+    now=timezone.now(); session.last_used_at=now; session.expires_at=_session_expiry(now); session.save(update_fields=['last_used_at','expires_at'])
     return {'exit_code':code,'stdout':out[:MAX_OUTPUT_BYTES].decode('utf-8','replace'),'stderr':err[:MAX_OUTPUT_BYTES].decode('utf-8','replace'),'cwd':session.workdir}
 
 

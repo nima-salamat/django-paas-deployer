@@ -351,7 +351,7 @@ __DEPLOY_BUILD_COMMAND__
 RUN test -f /app/{build_dir}/index.html \
     && test -d /app/{build_dir} \
     && find /app/{build_dir} -maxdepth 3 -type f \
-         \( -name '*.css' -o -name '*.js' -o -name '*.mjs' \) \
+         \\( -name '*.css' -o -name '*.js' -o -name '*.mjs' \\) \
          | grep -q . \
     || (echo "Frontend build output is missing index.html/CSS/JS assets in /app/{build_dir}" >&2; exit 1)
 FROM {MIRROR_DOCKER}/nginx:{nginx_version}

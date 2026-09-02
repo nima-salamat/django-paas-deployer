@@ -307,7 +307,7 @@ def shell_tree_meta_apiview(request, service_id):
                 "mount_writable": mount_writable,
                 "writable": bool(user_writable or managed),
                 "mode": "rw" if mount_writable else "ro",
-                "read_only_reason": "" if (user_writable or managed) else ("Read-only Docker mount" if not mount_writable else "No write permission for this file")
+                "read_only_reason": "" if (user_writable or managed) else ("Read-only Docker mount" if not mount_writable else "Service user cannot write this path")
             })
         return Response({"result":"success", "cwd":session.workdir, "cwd_writable":bool(cwd_user_writable or (cwd_mount_writable and _mode_has_write_bit(container, session.workdir))), "cwd_mount_writable":cwd_mount_writable, "entries":result})
     except (PermissionError, DjangoValidationError) as exc:
@@ -385,6 +385,60 @@ def _mode_has_write_bit(container, path: str) -> bool:
         return False
 
 
+def _assert_managed_target_safe(container, path: str, root: str, *, allow_missing: bool = False) -> str:
+    """Enforce workspace containment, including container-side symlink resolution.
+
+    Non-existent create targets are checked through their parent. Existing targets
+    are resolved with realpath/readlink so a symlink cannot redirect an operation
+    outside the service workspace.
+    """
+    safe = _safe_workdir(path, root)
+    try:
+        _assert_container_path_within(container, safe, root)
+        return safe
+    except ValidationError:
+        if not allow_missing:
+            raise
+        parent = posixpath.dirname(safe) or root
+        _assert_container_path_within(container, parent, root)
+        probe = container.exec_run(["ls", "-ld", safe], workdir=parent, stdout=False, stderr=False, tty=False)
+        if int(probe.exit_code if probe.exit_code is not None else 1) == 0:
+            raise ValidationError(f"Path resolves outside the service workspace: {safe}")
+        return safe
+
+
+def _exec_stdin_checked(container, argv, *, workdir, data: bytes, user=None):
+    """Execute a backend-owned stdin command and return a reliable exit code."""
+    api = container.client.api
+    kwargs = dict(stdout=True, stderr=True, stdin=True, tty=False, demux=False, workdir=workdir)
+    if user is not None:
+        kwargs["user"] = user
+    created = api.exec_create(container.id, cmd=argv, **kwargs)
+    exec_id = created["Id"]
+    sock = api.exec_start(exec_id, tty=False, socket=True)
+    target = getattr(sock, "_sock", sock)
+    chunks = []
+    try:
+        if data:
+            target.sendall(data)
+        try:
+            target.shutdown(1)
+        except Exception:
+            pass
+        while True:
+            chunk = target.recv(32768)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+    inspect = api.exec_inspect(exec_id)
+    return int(inspect.get("ExitCode") if inspect.get("ExitCode") is not None else 1), b"".join(chunks)
+
+
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -400,6 +454,10 @@ def shell_file_apiview(request, service_id):
         if not path:
             raise ValidationError("path is required")
         safe_path = _safe_workdir(path, session.root_path)
+        if action in {"delete", "rename", "read", "write"}:
+            safe_path = _assert_managed_target_safe(container, safe_path, session.root_path)
+        elif action in {"create", "create_folder"}:
+            safe_path = _assert_managed_target_safe(container, safe_path, session.root_path, allow_missing=True)
         if action == "create":
             if safe_path == session.root_path:
                 raise DjangoValidationError("The workspace root cannot be created or replaced.")
@@ -520,26 +578,27 @@ def shell_file_apiview(request, service_id):
             content = request.data.get("content")
             if not isinstance(content, str):
                 raise ValidationError("content must be a string")
-            if len(content.encode("utf-8")) > 262144:
+            encoded_content = content.encode("utf-8")
+            if len(encoded_content) > 262144:
                 raise ValidationError("File is too large for the restricted editor (256 KiB).")
             access = path_access(container, safe_path, for_create=False)
             if not access.get("mount_writable", False):
                 raise DjangoValidationError(f"The target is on a read-only Docker mount: {safe_path}.")
             import base64
-            encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+            encoded = base64.b64encode(encoded_content) + b"\n"
             last_detail = "permission denied"
             for exec_user in (None, "0"):
                 try:
-                    result = container.exec_run(["/bin/sh", "-c", 'base64 -d > "$1"', "writer", safe_path], workdir=session.workdir, stdin=True, stdout=True, stderr=True, demux=True, tty=False, socket=True, **({"user": exec_user} if exec_user is not None else {}))
-                    sock = result.output
-                    target = getattr(sock, "_sock", sock)
-                    target.sendall((encoded + "\n").encode("ascii"))
-                    try: target.shutdown(1)
-                    except Exception: pass
-                    if int(result.exit_code if result.exit_code is not None else 0) == 0:
-                        return Response({"result":"success", "path":safe_path, "action":"write", "writable":True, "mode":"rw", "used_privileged_file_manager":exec_user == "0"})
+                    code, output = _exec_stdin_checked(
+                        container,
+                        ["/bin/sh", "-c", 'base64 -d > "$1"', "writer", safe_path],
+                        workdir=session.workdir, data=encoded, user=exec_user,
+                    )
+                    if code == 0:
+                        return Response({"result":"success", "path":safe_path, "action":"write", "writable":True, "mode":"rw", "mount_writable":True, "effective_writable":bool(access.get("effective_writable")), "managed_writable":True, "used_privileged_file_manager":exec_user == "0"})
+                    last_detail = output.decode("utf-8", "replace").strip() or last_detail
                 except Exception as exc:
-                    last_detail = str(exc)
+                    last_detail = str(exc) or last_detail
             raise DjangoValidationError(f"Unable to save file: {last_detail}")
         raise ValidationError("action must be read or write")
     except (PermissionError, ValidationError) as exc:
