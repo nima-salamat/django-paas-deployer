@@ -285,12 +285,6 @@ class DocumentAssetAPIView(APIView):
             asset = DocumentAsset.objects.select_related("document").get(pk=asset_id)
         except DocumentAsset.DoesNotExist:
             raise Http404
-
-        # The public route is intentionally limited to published documentation.
-        # A draft or unattached asset must be read through the authenticated
-        # admin preview endpoint below.
-        if not asset.document_id or asset.document.status != Document.Status.PUBLISHED:
-            raise Http404
         return self._serve_asset(asset, public=True)
 
     def delete(self, request, asset_id):
