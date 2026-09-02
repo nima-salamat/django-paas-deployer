@@ -17,6 +17,7 @@ DEFAULT_SHARE_RULES: dict[str, bool] = {
     "can_view_db_credentials": False,  # DB password / root_password / secrets
     "can_shell": False,                 # restricted shell on the live service container
     "can_shell_replace": False,          # terminate another active shell session on the service
+    "can_shell_advanced": False,         # advanced interactive developer tools such as Laravel Tinker
     # lifecycle
     "can_start": False,
     "can_stop": False,
@@ -51,6 +52,7 @@ RULE_LABELS: dict[str, str] = {
     "can_view_db_credentials": "View DB credentials",
     "can_shell": "Use restricted service shell",
     "can_shell_replace": "Replace another active shell session",
+    "can_shell_advanced": "Use advanced interactive shell tools (for example Tinker)",
     "can_start": "Start",
     "can_stop": "Stop",
     "can_restart": "Restart",
@@ -269,6 +271,7 @@ RULE_PRESETS: dict[str, dict[str, bool]] = {
         "can_restart": True,
         "can_rebuild": True,
         "can_shell": True,
+        "can_shell_advanced": True,
         "can_deploy_add": True,
         "can_deploy_edit": True,
         "can_deploy_remove": True,
@@ -291,6 +294,7 @@ RULE_PRESETS: dict[str, dict[str, bool]] = {
         "can_restart": True,
         "can_rebuild": True,
         "can_shell": True,
+        "can_shell_advanced": True,
         "can_purge": True,
         "can_deploy_add": True,
         "can_deploy_edit": True,

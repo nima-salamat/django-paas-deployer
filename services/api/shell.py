@@ -74,9 +74,11 @@ def shell_catalog_apiview(request, service_id):
     try:
         service = _resolve(request, service_id, action="can_shell")
         platform = _platform_for_service(service)
+        from services.shell import can_use_advanced_shell
         return Response({
             "result": "success",
             "platform": platform,
+            "advanced_interactive": bool(can_use_advanced_shell(service, request.user)),
             "commands": command_catalog(platform),
             "interactive": {
                 "supported": True,
@@ -91,7 +93,8 @@ def shell_catalog_apiview(request, service_id):
                 "arbitrary_php_scripts": False,
                 "arbitrary_python_eval": False,
                 "destructive_commands_require_confirmation": True,
-                "custom_commands_require_admin_policy": True,
+                "custom_commands_require_admin_policy": False,
+                "advanced_interactive_tools_require_permission": True,
             },
         })
     except PermissionError as exc:
@@ -533,7 +536,7 @@ def shell_file_apiview(request, service_id):
             type_probe = container.exec_run(["ls", "-ld", safe_path], workdir=session.workdir, stdout=False, stderr=False, tty=False)
             if int(type_probe.exit_code if type_probe.exit_code is not None else 1) != 0:
                 raise DjangoValidationError("Path does not exist or is not accessible.")
-            kind_probe = container.exec_run(["sh", "-c", 'if [ -d "$1" ]; then printf dir; elif [ -f "$1" ]; then printf file; else printf other; fi', "kind", safe_path], workdir=session.workdir, stdout=True, stderr=False, tty=False)
+            kind_probe = container.exec_run(["/bin/sh", "-c", 'if [ -d "$1" ]; then printf dir; elif [ -f "$1" ]; then printf file; else printf other; fi', "kind", safe_path], workdir=session.workdir, stdout=True, stderr=False, tty=False)
             kind = (kind_probe.output or b"").decode("utf-8", "replace").strip() if isinstance(kind_probe.output, (bytes, bytearray)) else "other"
             cmd = ["rmdir", safe_path] if kind == "dir" else ["rm", safe_path]
             result, privileged = _file_manager_exec(container, cmd, workdir=session.workdir)
@@ -560,7 +563,7 @@ def shell_file_apiview(request, service_id):
                 raise DjangoValidationError(detail)
             return Response({"result":"success", "path":safe_path, "new_path":new_path, "action":"rename", "used_privileged_file_manager": privileged})
         if action == "read":
-            result = container.exec_run(["cat", "--", safe_path], workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
+            result = container.exec_run(["cat", safe_path], workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
             access = path_access(container, safe_path, for_create=False)
             out, err = result.output if isinstance(result.output, tuple) else (result.output or b"", b"")
             mount_rw = bool(access.get("mount_writable", False))
@@ -591,10 +594,12 @@ def shell_file_apiview(request, service_id):
                 try:
                     code, output = _exec_stdin_checked(
                         container,
-                        ["/bin/sh", "-c", 'base64 -d > "$1"', "writer", safe_path],
+                        ["/bin/sh", "-c", 'cat > "$1"', "writer", safe_path],
                         workdir=session.workdir, data=encoded, user=exec_user,
                     )
                     if code == 0:
+                        if exec_user == "0":
+                            _reassign_to_runtime_user(container, safe_path)
                         return Response({"result":"success", "path":safe_path, "action":"write", "writable":True, "mode":"rw", "mount_writable":True, "effective_writable":bool(access.get("effective_writable")), "managed_writable":True, "used_privileged_file_manager":exec_user == "0"})
                     last_detail = output.decode("utf-8", "replace").strip() or last_detail
                 except Exception as exc:

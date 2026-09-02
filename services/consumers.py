@@ -268,7 +268,7 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
         await self.send_json({"type": "error", "message": "Unsupported shell message."})
 
     async def _start_command(self, command, confirm):
-        from .shell import _reject_shell_syntax, _validate_platform_command, _is_destructive_command, _resolve_container, parse_safe_command, validate_argv_for_container
+        from .shell import _reject_shell_syntax, _validate_platform_command, _is_destructive_command, _resolve_container, parse_safe_command, validate_argv_for_container, can_use_advanced_shell
         try:
             if self.exec_socket is not None:
                 await self.send_json({"type": "error", "message": "A command is already running. Send input or wait for it to finish."})
@@ -279,7 +279,7 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                 return
             argv = parts[0][0]
             container = await database_sync_to_async(_resolve_container)(self.service)
-            await database_sync_to_async(validate_argv_for_container)(argv, self.session.platform, self.session.root_path, container)
+            await database_sync_to_async(validate_argv_for_container)(argv, self.session.platform, self.session.root_path, container, allow_advanced=can_use_advanced_shell(self.service, self.user))
             if _is_destructive_command(argv) and not confirm:
                 await self.send_json({"type": "confirm_required", "command": command, "message": "This command changes application state. Confirmation is required."})
                 return

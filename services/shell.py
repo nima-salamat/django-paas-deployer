@@ -80,6 +80,8 @@ ARTISAN_COMMAND_CATALOG = {
     "about": {"label": "Application information", "mutating": False},
     "list": {"label": "List Artisan commands", "mutating": False},
     "help": {"label": "Help for an Artisan command", "mutating": False},
+    "tinker": {"label": "Laravel Tinker (advanced interactive)", "mutating": True, "interactive": True, "advanced": True},
+    "admin:create": {"label": "Create application administrator", "mutating": True, "interactive": True, "advanced": False, "requires_confirmation": False},
     "route:list": {"label": "List application routes", "mutating": False},
     "route:clear": {"label": "Clear route cache", "mutating": True},
     "config:show": {"label": "Show configuration", "mutating": False},
@@ -203,21 +205,46 @@ def _validate_network_target(target: str) -> None:
         pass
 
 
+def _non_option_args(argv: list[str], base: str) -> list[str]:
+    """Return positional path-like arguments without mistaking option values for paths."""
+    value_options = {
+        "head": {"-n", "--lines", "-c", "--bytes"},
+        "tail": {"-n", "--lines", "-c", "--bytes"},
+        "cut": {"-b", "--bytes", "-c", "--characters", "-d", "--delimiter", "-f", "--fields", "-s"},
+        "grep": {"-A", "-B", "-C", "--context", "--after-context", "--before-context", "-e", "--regexp", "-f", "--file"},
+        "sed": {"-e", "--expression", "-f", "--file"},
+    }
+    result = []
+    expects_value = False
+    for token in argv[1:]:
+        if expects_value:
+            expects_value = False
+            continue
+        if token in value_options.get(base, set()):
+            expects_value = True
+            continue
+        if token.startswith("--") and "=" in token:
+            continue
+        if token.startswith("-"):
+            continue
+        result.append(token)
+    return result
+
+
 def _validate_mutating_paths(argv: list[str], root: str, base: str) -> None:
-    args = [a for a in argv[1:] if not a.startswith("-")]
+    args = _non_option_args(argv, base)
     if base in {"rm", "rmdir"}:
         for arg in args:
-            safe = _safe_workdir(arg, root) if arg.startswith("/") or not arg.startswith("-") else None
+            safe = _safe_workdir(arg, root)
             if safe == posixpath.normpath(root):
                 raise ValidationError("The service work-root itself cannot be deleted.")
     elif base in {"cp", "mv"}:
         if len(args) < 2:
             raise ValidationError(f"{base} requires source and destination.")
-        # Both source and destination must remain inside the work root.
         _safe_workdir(args[-1], root)
         for arg in args[:-1]:
             _safe_workdir(arg, root)
-    elif base in {"mkdir", "touch", "rmdir"}:
+    elif base in {"mkdir", "touch"}:
         for arg in args:
             _safe_workdir(arg, root)
 
@@ -225,8 +252,20 @@ def _validate_mutating_paths(argv: list[str], root: str, base: str) -> None:
 
 ARTISAN_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]*(?::[a-z][a-z0-9_-]*)*$", re.I)
 DJANGO_COMMAND_RE = re.compile(r"^[a-z][a-z0-9_-]*(?::[a-z0-9_-]+)*$", re.I)
-FORBIDDEN_ARTISAN_PATTERNS = (re.compile(r"^(?:tinker|psysh|shell)$", re.I), re.compile(r"^(?:serve|queue:work|queue:listen|schedule:work)$", re.I))
+FORBIDDEN_ARTISAN_PATTERNS = (re.compile(r"^(?:shell)$", re.I), re.compile(r"^(?:serve|queue:work|queue:listen|schedule:work)$", re.I))
 FORBIDDEN_DJANGO_PATTERNS = (re.compile(r"^(?:shell|dbshell|runserver)$", re.I),)
+
+def can_use_advanced_shell(service: Service, user) -> bool:
+    """Allow advanced interactive developer tools for owners or explicit shares."""
+    if str(service.user_id) == str(user.id):
+        return True
+    try:
+        from services.api.sharing import user_can_access_service
+        allowed, _share = user_can_access_service(service, user, action="can_shell_advanced")
+        return bool(allowed)
+    except Exception:
+        return False
+
 
 def _path_is_within(path: str, root: str) -> bool:
     n=posixpath.normpath(path); r=posixpath.normpath(root)
@@ -406,6 +445,8 @@ def _validate_platform_command(argv: list[str], platform: str, root: str) -> Non
             if not ARTISAN_NAME_RE.fullmatch(cmd): raise ValidationError('Invalid Artisan command name.')
             if any(rx.fullmatch(cmd) for rx in FORBIDDEN_ARTISAN_PATTERNS):
                 raise ValidationError(f"Artisan command '{cmd}' is blocked because it opens an unrestricted shell/server/worker.")
+            if cmd in {"tinker", "psysh"} and not allow_advanced:
+                raise ValidationError("Artisan interactive developer tools require advanced shell permission.")
         elif argv[1] not in {'-v','--version','--ini','-m','--modules','-i','--info'}:
             raise ValidationError('Direct PHP script or inline execution is not allowed in the restricted shell.')
     if base=='composer' and (len(argv)<2 or argv[1] not in {'install','update','dump-autoload','show','validate','outdated','audit','why','depends','licenses'}):
@@ -533,7 +574,12 @@ def _is_destructive_command(argv: list[str]) -> bool:
     base=os.path.basename(argv[0]).lower()
     if tuple(argv[:3]) in DESTRUCTIVE_COMMANDS: return True
     if base=='php' and len(argv)>=3 and argv[1]=='artisan':
-        meta=ARTISAN_COMMAND_CATALOG.get(argv[2]); return bool(meta.get('destructive')) if meta else True
+        meta=ARTISAN_COMMAND_CATALOG.get(argv[2])
+        if meta:
+            if meta.get('requires_confirmation') is False:
+                return False
+            return bool(meta.get('destructive'))
+        return True
     if base in {'python','python3'} and len(argv)>=3 and argv[1]=='manage.py':
         return argv[2] in {'migrate','makemigrations','createsuperuser','changepassword','collectstatic','test'}
     if base in {'composer','pip','pip3'} and len(argv)>=2: return argv[1] in {'install','update','wheel'}
@@ -552,10 +598,11 @@ def _assert_container_path_within(container, path: str, root: str) -> None:
     root_norm = posixpath.normpath(root)
     target = None
 
-    # Existing directory: canonicalise by entering it.
+    # First try the container's own realpath implementation for files, directories,
+    # and symlinks. This prevents a symlinked file from escaping the workspace.
     try:
         probe = container.exec_run(
-            ["/bin/sh", "-c", 'cd "$1" 2>/dev/null && pwd -P', "probe", safe],
+            ["/bin/sh", "-c", 'if command -v readlink >/dev/null 2>&1; then readlink -f "$1" 2>/dev/null; fi', "probe", safe],
             stdout=True, stderr=False, demux=False, tty=False,
         )
         out = probe.output if isinstance(probe.output, (bytes, bytearray)) else b""
@@ -564,6 +611,20 @@ def _assert_container_path_within(container, path: str, root: str) -> None:
             target = candidate[0] if candidate else None
     except Exception:
         pass
+
+    # Existing directory: canonicalise by entering it.
+    if target is None:
+        try:
+            probe = container.exec_run(
+                ["/bin/sh", "-c", 'cd "$1" 2>/dev/null && pwd -P', "probe", safe],
+                stdout=True, stderr=False, demux=False, tty=False,
+            )
+            out = probe.output if isinstance(probe.output, (bytes, bytearray)) else b""
+            if int(probe.exit_code if probe.exit_code is not None else 1) == 0 and out:
+                candidate = out.decode("utf-8", "replace").strip().splitlines()[-1:]
+                target = candidate[0] if candidate else None
+        except Exception:
+            pass
 
     # Existing file/symlink or missing target: canonicalise its parent and append
     # the basename. This also catches a symlink in any parent directory.
@@ -589,18 +650,19 @@ def _assert_container_path_within(container, path: str, root: str) -> None:
 
 def _command_path_arguments(argv):
     base=os.path.basename(argv[0]).lower()
-    args=[a for a in argv[1:] if not a.startswith('-')]
-    if base in {'grep'} and args:
-        return args[1:]  # first positional is the search pattern
-    if base in {'sed'} and args:
-        return args[1:]  # first positional is the expression
-    if base in {'cut'}:
-        return args[1:]  # field spec is usually the first positional
-    if base in PATH_ARG_COMMANDS or base in {'sort','uniq','tr','sed','tee'}:
+    args = _non_option_args(argv, base)
+    if base in {"grep"}:
+        # grep's first positional argument is the pattern; remaining positionals are paths.
+        return args[1:]
+    if base in {"sed"}:
+        return args[1:]
+    if base in {"cut"}:
+        return args[1:]
+    if base in PATH_ARG_COMMANDS or base in {"sort", "uniq", "tr", "tee"}:
         return args
     return []
 
-def validate_argv_for_container(argv, platform, root, container):
+def validate_argv_for_container(argv, platform, root, container, *, allow_advanced: bool = False):
     _validate_platform_command(argv,platform,root)
     base=os.path.basename(argv[0]).lower()
     for path_arg in _command_path_arguments(argv):
@@ -706,7 +768,7 @@ def execute_compound_command(session,command,*,confirm=False):
         if i>0:
             if op=='&&' and previous_code!=0: continue
             if op=='||' and previous_code==0: continue
-        validate_argv_for_container(argv,session.platform,session.root_path,container)
+        validate_argv_for_container(argv,session.platform,session.root_path,container, allow_advanced=can_use_advanced_shell(session.service, session.user))
         if _is_destructive_command(argv) and not confirm: raise ValidationError('A command in this sequence changes application state. Confirmation is required.')
         if argv[0] == 'cd':
             if len(argv) > 2: raise ValidationError('cd accepts one path.')
@@ -796,7 +858,7 @@ def command_catalog(platform: str) -> list[dict]:
 def execute_command(session, command: str, *, confirm: bool = False) -> dict:
     parts=parse_safe_command(command)
     if len(parts)>1: return execute_compound_command(session,command,confirm=confirm)
-    argv=parts[0][0]; container=_resolve_container(session.service); validate_argv_for_container(argv,session.platform,session.root_path,container)
+    argv=parts[0][0]; container=_resolve_container(session.service); validate_argv_for_container(argv,session.platform,session.root_path,container, allow_advanced=can_use_advanced_shell(session.service, session.user))
     if _is_destructive_command(argv) and not confirm: raise ValidationError('This command changes application state. Confirmation is required.')
     if argv[0]=='cd':
         if len(argv)>2: raise ValidationError('cd accepts one path.')
