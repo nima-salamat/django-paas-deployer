@@ -48,7 +48,7 @@ class DocsAssetJWTAuthentication(JWTAuthentication):
     """
 
     def authenticate(self, request):
-        if request.method == "GET":
+        if request.method in {"GET", "HEAD"}:
             return None
         return super().authenticate(request)
 
@@ -259,12 +259,12 @@ class DocumentAssetAPIView(APIView):
     authentication_classes = [DocsAssetJWTAuthentication, SessionAuthentication]
 
     def get_permissions(self):
-        if self.request.method == "GET":
+        if self.request.method in {"GET", "HEAD"}:
             return [AllowAny()]
         return [IsAuthenticated(), DocsManagePermission()]
 
     @staticmethod
-    def _serve_asset(asset):
+    def _serve_asset(asset, public=False):
         if not asset.file:
             raise Http404
         response = FileResponse(
@@ -277,7 +277,7 @@ class DocumentAssetAPIView(APIView):
             if asset.kind in {"image", "audio", "video"}
             else f'attachment; filename="{os.path.basename(asset.name)}"'
         )
-        response["Cache-Control"] = "public, max-age=86400"
+        response["Cache-Control"] = "public, max-age=86400" if public else "private, no-store"
         return response
 
     def get(self, request, asset_id):
@@ -291,7 +291,7 @@ class DocumentAssetAPIView(APIView):
         # admin preview endpoint below.
         if not asset.document_id or asset.document.status != Document.Status.PUBLISHED:
             raise Http404
-        return self._serve_asset(asset)
+        return self._serve_asset(asset, public=True)
 
     def delete(self, request, asset_id):
         try:
@@ -340,5 +340,5 @@ class DocumentAssetAdminPreviewAPIView(APIView):
             asset = DocumentAsset.objects.get(pk=asset_id)
         except DocumentAsset.DoesNotExist:
             raise Http404
-        return DocumentAssetAPIView._serve_asset(asset)
+        return DocumentAssetAPIView._serve_asset(asset, public=False)
 

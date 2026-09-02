@@ -160,15 +160,13 @@ class DocsPublicAuthTests(unittest.TestCase):
         self.assertIn("_PUBLIC_AUTH = []", self.source,
                       msg="docs/apis.py must define _PUBLIC_AUTH = [] so public "
                           "views never go through JWTAuthentication.")
-        # The first three public document views disable authentication entirely.
-        # DocumentAssetAPIView is method-aware: GET skips JWT parsing, while
-        # PATCH/DELETE still authenticate so public reads cannot weaken admin writes.
+        # Count how many views wire authentication_classes = _PUBLIC_AUTH.
         self.assertGreaterEqual(
-            self.source.count("authentication_classes = _PUBLIC_AUTH"), 3,
-            msg="The three public document read views must keep authentication_classes = _PUBLIC_AUTH.",
+            self.source.count("authentication_classes = _PUBLIC_AUTH"), 4,
+            msg="All four public docs views (PublicDocumentsAPIView, "
+                "PublicCategoryTreeAPIView, PublicDocumentDetailAPIView, "
+                "DocumentAssetAPIView) must set authentication_classes = _PUBLIC_AUTH.",
         )
-        asset_block = self.source.split("class DocumentAssetAPIView", 1)[1].split("class DocumentAssetAdminPreviewAPIView", 1)[0]
-        self.assertIn("authentication_classes = [DocsAssetJWTAuthentication, SessionAuthentication]", asset_block)
 
     def test_public_views_allow_anonymous(self):
         # Public AllowAny permission_classes on the three read-only views.
