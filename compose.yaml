@@ -123,6 +123,7 @@ services:
         python manage.py setup_wagtail_site &&
         python manage.py collectstatic --noinput &&
         python manage.py setup_deployment_log_db &&
+        python manage.py migrate logs --database=deployment_logs &&
         daphne -b 0.0.0.0 -p 8000 asgi:application
       "
 
