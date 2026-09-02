@@ -229,26 +229,24 @@ class DocumentAssetListCreateAPIView(APIView):
 
 
 class DocumentAssetAPIView(APIView):
-    """Serve assets referenced by the public documentation.
-
-    GET is completely public (no authentication at all).
-    Only assets that belong to a *published* document are served.
-    Mutating methods remain admin-only.
+    """
+    GET  → کاملاً public (بدون هیچ authentication)
+           فقط assetهایی که به Document با status=PUBLISHED وصل هستند سرو می‌شوند.
+    PATCH / DELETE → نیاز به JWT + docs.manage
     """
 
-    authentication_classes = []
+    # پیش‌فرض برای متدهای نوشتنی
+    authentication_classes = [JWTAuthentication, SessionAuthentication]
 
     def get_authenticators(self):
-        # فقط برای متدهای غیر از GET/HEAD authentication داشته باشیم
-        if self.request.method in {"GET", "HEAD"}:
+        # مهم: برای GET و HEAD هیچ authenticatorای اجرا نشود
+        # حتی اگر کلاینت Authorization header بفرستد، 401 ندهد
+        if self.request.method in ("GET", "HEAD", "OPTIONS"):
             return []
-        return [
-            JWTAuthentication(),
-            SessionAuthentication(),
-        ]
+        return super().get_authenticators()
 
     def get_permissions(self):
-        if self.request.method in {"GET", "HEAD"}:
+        if self.request.method in ("GET", "HEAD", "OPTIONS"):
             return [AllowAny()]
         return [IsAuthenticated(), DocsManagePermission()]
 
@@ -275,9 +273,10 @@ class DocumentAssetAPIView(APIView):
         except DocumentAsset.DoesNotExist:
             raise Http404
 
-        # فقط assetهای مربوط به داکیومنت published عمومی هستند
+        # فقط assetهای متعلق به سند منتشرشده عمومی هستند
         if not asset.document_id or asset.document.status != Document.Status.PUBLISHED:
             raise Http404
+
         return self._serve_asset(asset, public=True)
 
     def delete(self, request, asset_id):
@@ -299,6 +298,7 @@ class DocumentAssetAPIView(APIView):
             asset = DocumentAsset.objects.select_related("document").get(pk=asset_id)
         except DocumentAsset.DoesNotExist:
             raise Http404
+
         doc_id = request.data.get("document", "__unset__")
         if doc_id != "__unset__":
             if doc_id in (None, "", "null"):
@@ -308,10 +308,12 @@ class DocumentAssetAPIView(APIView):
                 if not document:
                     return Response({"detail": "Document not found."}, status=404)
                 asset.document = document
+
         if "alt" in request.data:
             asset.alt = str(request.data.get("alt") or "")[:240]
         if "name" in request.data and request.data.get("name"):
             asset.name = str(request.data.get("name"))[:255]
+
         asset.save()
         return Response(DocumentAssetSerializer(asset, context={"request": request}).data)
 
