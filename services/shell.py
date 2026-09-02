@@ -663,6 +663,7 @@ def _command_path_arguments(argv):
     return []
 
 def validate_argv_for_container(argv, platform, root, container, *, allow_advanced: bool = False):
+    allow_advanced = bool(allow_advanced)
     _validate_platform_command(argv,platform,root)
     base=os.path.basename(argv[0]).lower()
     for path_arg in _command_path_arguments(argv):

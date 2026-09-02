@@ -429,7 +429,9 @@ CACHES = {
 
 
 # 
-CORS_ALLOW_ALL_ORIGINS = True
+# Explicitly support local Vite development and configured public frontend origins.
+# Keep wildcard disabled so credentialed requests have a deterministic Origin.
+CORS_ALLOW_ALL_ORIGINS = False
 CORS_EXPOSE_HEADERS = [
     "Content-Range",
     "Accept-Ranges",
@@ -444,7 +446,16 @@ CORS_ALLOW_HEADERS = list(getattr(__import__("corsheaders.defaults", fromlist=["
 ]
 
 CORS_ALLOWED_ORIGINS = [
-    f"https://{DOMAIN_NAME}",
+    origin
+    for origin in {
+        f"https://{DOMAIN_NAME}" if DOMAIN_NAME else "",
+        f"http://{DOMAIN_NAME}" if DOMAIN_NAME else "",
+        f"https://{API_DOMAIN_NAME}" if API_DOMAIN_NAME else "",
+        f"http://{API_DOMAIN_NAME}" if API_DOMAIN_NAME else "",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    }
+    if origin and not origin.endswith("://")
 ]
 
 CORS_ALLOW_CREDENTIALS = True
