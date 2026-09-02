@@ -740,6 +740,11 @@ def prepare_interactive_exec_environment(container, *, platform: str = "", root_
     env["XDG_DATA_HOME"] = env.get("XDG_DATA_HOME") or "/tmp/.local/share"
     env["XDG_CACHE_HOME"] = env.get("XDG_CACHE_HOME") or "/tmp/.cache"
     env["PSYSH_CONFIG_DIR"] = psysh_dir
+    # Give interactive REPLs a realistic terminal geometry so help tables
+    # and pagers format correctly (Docker exec defaults can be very narrow).
+    env["TERM"] = env.get("TERM") or "xterm-256color"
+    env["COLUMNS"] = env.get("COLUMNS") or "120"
+    env["LINES"] = env.get("LINES") or "40"
     return env
 
 
