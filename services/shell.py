@@ -391,7 +391,7 @@ def _assert_writable_path(container, path: str, *, for_create: bool = False, ope
         raise ValidationError(f"Path is not writable by the service user: {path} (RW mount; the service user lacks the required filesystem permission).")
     raise ValidationError(f"Path is on a read-only Docker mount: {path}.")
 
-def _validate_platform_command(argv: list[str], platform: str, root: str) -> None:
+def _validate_platform_command(argv: list[str], platform: str, root: str, *, allow_advanced: bool = False) -> None:
     if not argv: raise ValidationError("Command is required.")
     base=os.path.basename(argv[0]).lower()
     if base in FORBIDDEN_BASENAMES or base.startswith('docker'):
@@ -664,7 +664,7 @@ def _command_path_arguments(argv):
 
 def validate_argv_for_container(argv, platform, root, container, *, allow_advanced: bool = False):
     allow_advanced = bool(allow_advanced)
-    _validate_platform_command(argv,platform,root)
+    _validate_platform_command(argv, platform, root, allow_advanced=allow_advanced)
     base=os.path.basename(argv[0]).lower()
     for path_arg in _command_path_arguments(argv):
         # URL-like strings are data, not filesystem paths.

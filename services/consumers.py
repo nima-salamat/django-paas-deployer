@@ -268,7 +268,7 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
         await self.send_json({"type": "error", "message": "Unsupported shell message."})
 
     async def _start_command(self, command, confirm):
-        from .shell import _reject_shell_syntax, _validate_platform_command, _is_destructive_command, _resolve_container, parse_safe_command, validate_argv_for_container, can_use_advanced_shell
+        from .shell import _reject_shell_syntax, _is_destructive_command, _resolve_container, parse_safe_command, validate_argv_for_container, can_use_advanced_shell
         try:
             if self.exec_socket is not None:
                 await self.send_json({"type": "error", "message": "A command is already running. Send input or wait for it to finish."})
