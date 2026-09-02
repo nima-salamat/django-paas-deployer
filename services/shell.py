@@ -29,96 +29,221 @@ MAX_COMMAND_LENGTH = 4096
 MAX_COMPOUND_SEGMENTS = 16
 MAX_PIPE_INPUT_BYTES = 256 * 1024
 MAX_FILE_SIZE = 256 * 1024
-DEFAULT_WORKDIRS = {"laravel": "/var/www/html", "php": "/var/www/html", "node": "/app", "python": "/app", "django": "/app", "generic": "/app"}
+DEFAULT_WORKDIRS = {
+    "laravel": "/var/www/html",
+    "php": "/var/www/html",
+    "node": "/app",
+    "python": "/app",
+    "django": "/app",
+    "generic": "/app",
+}
 
 PLATFORM_ALIASES = {
-    "laravel": "laravel", "php": "php", "django": "django", "python": "python",
-    "flask": "python", "fastapi": "python", "node": "node", "node-express": "node",
-    "nextjs": "node", "nuxt": "node", "react": "node", "vue": "node", "angular": "node",
+    "laravel": "laravel",
+    "php": "php",
+    "lumen": "laravel",
+    "django": "django",
+    "python": "python",
+    "flask": "python",
+    "fastapi": "python",
+    "node": "node",
+    "node-express": "node",
+    "nodejs": "node",
+    "nextjs": "node",
+    "nuxt": "node",
+    "react": "node",
+    "vue": "node",
+    "angular": "node",
+    "express": "node",
 }
 
+# ---------------------------------------------------------------------------
+# Risk-based command policy
+#
+# Security boundary (always enforced):
+#   authorization + container isolation + workspace confinement +
+#   no user-controlled shell + explicit dangerous-binary bans + SSRF limits
+#
+# The allow surface is capability-oriented, not an exhaustive subcommand menu.
+# Legitimate developer CLIs that stay inside the service container/workspace
+# are accepted; dangerous execution mechanisms remain blocked.
+# ---------------------------------------------------------------------------
+
+class ShellPolicyError(ValidationError):
+    """Policy/authorization failure with a stable machine-readable code."""
+
+    def __init__(self, message: str, code: str = "POLICY_REJECTED"):
+        super().__init__(message)
+        self.shell_code = code
+
+
+class Risk:
+    READ_ONLY = "READ_ONLY"
+    NORMAL_MUTATION = "NORMAL_MUTATION"
+    DESTRUCTIVE = "DESTRUCTIVE"
+    INTERACTIVE = "INTERACTIVE"
+    PRIVILEGED = "PRIVILEGED"
+
+
+# Safe filesystem / inspection utilities always available in every platform.
 BASE_COMMANDS = {
-    "pwd", "ls", "cat", "head", "tail", "mkdir", "touch", "rm", "rmdir", "cp", "mv", "find",
-    "grep", "wc", "sort", "uniq", "cut", "tr", "sed", "tee", "stat", "date", "whoami", "id", "env", "printenv", "which", "df", "du",
-    "uname", "hostname", "ping", "curl", "cd",
+    "pwd", "ls", "cat", "head", "tail", "mkdir", "touch", "rm", "rmdir", "cp", "mv",
+    "find", "grep", "egrep", "fgrep", "wc", "sort", "uniq", "cut", "tr", "sed", "tee",
+    "stat", "date", "whoami", "id", "env", "printenv", "which", "type", "df", "du",
+    "uname", "hostname", "ping", "curl", "cd", "file", "basename", "dirname", "realpath",
+    "md5sum", "sha256sum", "sha1sum", "cmp", "diff", "true", "false", "echo", "printf",
+    "test", "[", "sleep", "expr",
 }
+
+# Runtime / package-manager binaries. Available regardless of platform label so
+# a mis-detected framework does not block legitimate tools present in the image.
+RUNTIME_COMMANDS = {
+    "php", "composer",
+    "python", "python3", "pip", "pip3",
+    "node", "npm", "npx", "yarn", "pnpm", "bun",
+    "git", "make",
+}
+
+# Platform label → preferred runtimes (advisory for catalogs / default workdir).
 PLATFORM_COMMANDS = {
-    "laravel": {"php", "composer"},
-    "php": {"php", "composer"},
-    "django": {"python", "python3", "pip", "pip3"},
-    "python": {"python", "python3", "pip", "pip3"},
-    "node": {"node", "npm", "npx", "yarn", "pnpm"},
+    "laravel": {"php", "composer", "node", "npm", "npx", "yarn", "pnpm", "git", "make"},
+    "php": {"php", "composer", "git", "make"},
+    "django": {"python", "python3", "pip", "pip3", "git", "make"},
+    "python": {"python", "python3", "pip", "pip3", "git", "make"},
+    "node": {"node", "npm", "npx", "yarn", "pnpm", "bun", "git", "make"},
+    "generic": set(RUNTIME_COMMANDS),
 }
+
+# Explicitly blocked binaries — primary dangerous-command control.
 FORBIDDEN_BASENAMES = {
-    "sh", "bash", "ash", "zsh", "fish", "dash", "busybox", "su", "sudo", "doas",
-    "ssh", "scp", "sftp", "docker", "podman", "kubectl", "nsenter", "mount", "umount",
-    "chroot", "iptables", "nft", "systemctl", "service", "kill", "pkill", "killall",
-    "passwd", "useradd", "adduser", "userdel", "deluser", "groupadd", "groupdel",
-    "chmod", "chown", "setcap", "capsh", "crontab", "apk", "apt", "apt-get", "dpkg",
-    "curl-config", "wget", "nc", "netcat", "telnet",
-}
-PATH_ARG_COMMANDS = {"ls", "cat", "head", "tail", "mkdir", "touch", "rm", "rmdir", "cp", "mv", "find", "grep", "wc", "sort", "uniq", "cut", "tr", "sed", "tee", "stat", "du"}
-
-# Commands that may change application state or availability. The API requires
-# an explicit ``confirm=true`` for these operations. This is separate from the
-# command allow-list so the shell can stay interactive without silently allowing
-# destructive actions.
-DESTRUCTIVE_COMMANDS = {
-    ("php", "artisan", "migrate:fresh"),
-    ("php", "artisan", "migrate:refresh"),
-    ("php", "artisan", "down"),
-    ("php", "artisan", "up"),
-    ("php", "artisan", "db:seed"),
-    ("composer", "update"),
-    ("npm", "install"),
-    ("npm", "ci"),
-    ("yarn", "install"),
-    ("pnpm", "install"),
+    "sh", "bash", "ash", "zsh", "fish", "dash", "busybox", "csh", "tcsh", "ksh",
+    "su", "sudo", "doas",
+    "ssh", "scp", "sftp",
+    "docker", "podman", "kubectl", "nerdctl", "crictl",
+    "nsenter", "unshare", "mount", "umount", "chroot",
+    "iptables", "nft", "ip6tables",
+    "systemctl", "service", "init",
+    "kill", "pkill", "killall", "killpg",
+    "passwd", "useradd", "adduser", "userdel", "deluser", "groupadd", "groupdel", "usermod",
+    "chmod", "chown", "chgrp", "setcap", "capsh", "setuid",
+    "crontab", "at", "batch",
+    "apk", "apt", "apt-get", "aptitude", "dpkg", "yum", "dnf", "rpm", "pacman", "zypper",
+    "curl-config", "wget", "nc", "netcat", "ncat", "telnet", "socat",
+    "perl", "ruby", "lua",  # arbitrary interpreters not part of the service runtime model
 }
 
+PATH_ARG_COMMANDS = {
+    "ls", "cat", "head", "tail", "mkdir", "touch", "rm", "rmdir", "cp", "mv",
+    "find", "grep", "egrep", "fgrep", "wc", "sort", "uniq", "cut", "tr", "sed",
+    "tee", "stat", "du", "file", "realpath", "diff", "cmp",
+}
+
+# Artisan commands that are genuinely destructive (data loss / outage).
+ARTISAN_DESTRUCTIVE = {
+    "migrate:fresh", "migrate:refresh", "migrate:reset",
+    "db:wipe", "db:seed",
+    "down",
+    "queue:flush", "queue:clear", "queue:prune-failed",
+    "horizon:terminate", "horizon:clear",
+}
+
+# Artisan interactive / advanced tools.
+ARTISAN_ADVANCED_INTERACTIVE = {"tinker", "psysh"}
+
+# Artisan long-running workers that must stay bounded.
+ARTISAN_ONE_SHOT_ONLY = {"queue:work", "queue:listen", "schedule:work", "serve", "horizon"}
+
+# Django management commands that are destructive.
+DJANGO_DESTRUCTIVE = {"flush", "reset_db"}
+
+# Django interactive / advanced.
+DJANGO_ADVANCED_INTERACTIVE = {"shell", "shell_plus", "dbshell"}
+
+# Git subcommands / option patterns that are unsafe in this boundary.
+GIT_FORBIDDEN_SUBCOMMANDS = {
+    "daemon", "shell", "update-server-info",
+}
+GIT_DESTRUCTIVE_SUBCOMMANDS = {
+    "reset", "clean", "checkout", "restore", "rebase", "push", "commit",
+    "merge", "pull", "fetch", "add", "rm", "mv", "stash", "tag", "branch",
+    "remote", "config", "init", "clone", "submodule", "filter-branch", "filter-repo",
+}
+# Read-only git subcommands never need confirmation.
+GIT_READ_ONLY = {
+    "status", "log", "diff", "show", "ls-files", "ls-remote", "rev-parse",
+    "rev-list", "describe", "blame", "shortlog", "whatchanged", "name-rev",
+    "cat-file", "ls-tree", "for-each-ref", "branch", "tag", "remote", "config",
+    "help", "version",
+}
+
+# npm/yarn/pnpm lifecycle that is destructive (dependency tree rewrite).
+PKG_DESTRUCTIVE_SUBS = {"install", "ci", "update", "upgrade", "add", "remove", "uninstall"}
+
+# Catalog metadata for the UI (suggestions only — not the policy gate).
 ARTISAN_COMMAND_CATALOG = {
-    "about": {"label": "Application information", "mutating": False},
-    "list": {"label": "List Artisan commands", "mutating": False},
-    "help": {"label": "Help for an Artisan command", "mutating": False},
-    "tinker": {"label": "Laravel Tinker (advanced interactive)", "mutating": True, "interactive": True, "advanced": True},
-    "queue:work": {"label": "Process one queue job (one-shot)", "mutating": True, "interactive": False, "advanced": False},
-    "schedule:run": {"label": "Run due scheduled tasks once", "mutating": True, "interactive": False},
-    "admin:create": {"label": "Create application administrator", "mutating": True, "interactive": True, "advanced": False, "requires_confirmation": False},
-    "route:list": {"label": "List application routes", "mutating": False},
-    "route:clear": {"label": "Clear route cache", "mutating": True},
-    "config:show": {"label": "Show configuration", "mutating": False},
-    "config:clear": {"label": "Clear configuration cache", "mutating": True},
-    "cache:clear": {"label": "Clear application cache", "mutating": True},
-    "view:clear": {"label": "Clear compiled views", "mutating": True},
-    "event:list": {"label": "List registered events", "mutating": False},
-    "schedule:list": {"label": "List scheduled tasks", "mutating": False},
-    "queue:monitor": {"label": "Show queue monitor status", "mutating": False},
-    "storage:link": {"label": "Create the public storage symlink", "mutating": True},
-    "migrate": {"label": "Run pending database migrations", "mutating": True},
-    "migrate:status": {"label": "Show migration status", "mutating": False},
-    "migrate:rollback": {"label": "Rollback the latest migrations", "mutating": True},
-    "migrate:fresh": {"label": "Drop all tables and re-run migrations", "mutating": True, "destructive": True},
-    "migrate:refresh": {"label": "Rollback and re-run all migrations", "mutating": True, "destructive": True},
-    "db:seed": {"label": "Seed the database", "mutating": True, "destructive": True},
-    "db:show": {"label": "Show database information", "mutating": False},
-    "optimize": {"label": "Cache framework files", "mutating": True},
-    "optimize:clear": {"label": "Clear framework caches", "mutating": True},
-    "down": {"label": "Put the application into maintenance mode", "mutating": True, "destructive": True},
-    "up": {"label": "Leave maintenance mode", "mutating": True},
+    "about": {"label": "Application information", "risk": Risk.READ_ONLY},
+    "list": {"label": "List Artisan commands", "risk": Risk.READ_ONLY},
+    "help": {"label": "Help for an Artisan command", "risk": Risk.READ_ONLY},
+    "tinker": {"label": "Laravel Tinker (advanced interactive)", "risk": Risk.INTERACTIVE, "interactive": True, "advanced": True},
+    "queue:work": {"label": "Process one queue job (one-shot)", "risk": Risk.NORMAL_MUTATION},
+    "schedule:run": {"label": "Run due scheduled tasks once", "risk": Risk.NORMAL_MUTATION},
+    "route:list": {"label": "List application routes", "risk": Risk.READ_ONLY},
+    "route:clear": {"label": "Clear route cache", "risk": Risk.NORMAL_MUTATION},
+    "config:show": {"label": "Show configuration", "risk": Risk.READ_ONLY},
+    "config:clear": {"label": "Clear configuration cache", "risk": Risk.NORMAL_MUTATION},
+    "cache:clear": {"label": "Clear application cache", "risk": Risk.NORMAL_MUTATION},
+    "view:clear": {"label": "Clear compiled views", "risk": Risk.NORMAL_MUTATION},
+    "event:list": {"label": "List registered events", "risk": Risk.READ_ONLY},
+    "schedule:list": {"label": "List scheduled tasks", "risk": Risk.READ_ONLY},
+    "storage:link": {"label": "Create the public storage symlink", "risk": Risk.NORMAL_MUTATION},
+    "migrate": {"label": "Run pending database migrations", "risk": Risk.NORMAL_MUTATION},
+    "migrate:status": {"label": "Show migration status", "risk": Risk.READ_ONLY},
+    "migrate:rollback": {"label": "Rollback the latest migrations", "risk": Risk.NORMAL_MUTATION},
+    "migrate:fresh": {"label": "Drop all tables and re-run migrations", "risk": Risk.DESTRUCTIVE, "destructive": True},
+    "migrate:refresh": {"label": "Rollback and re-run all migrations", "risk": Risk.DESTRUCTIVE, "destructive": True},
+    "db:seed": {"label": "Seed the database", "risk": Risk.DESTRUCTIVE, "destructive": True},
+    "db:show": {"label": "Show database information", "risk": Risk.READ_ONLY},
+    "optimize": {"label": "Cache framework files", "risk": Risk.NORMAL_MUTATION},
+    "optimize:clear": {"label": "Clear framework caches", "risk": Risk.NORMAL_MUTATION},
+    "down": {"label": "Put the application into maintenance mode", "risk": Risk.DESTRUCTIVE, "destructive": True},
+    "up": {"label": "Leave maintenance mode", "risk": Risk.NORMAL_MUTATION},
 }
 
-GENERIC_COMMAND_CATALOG = {
-    "pwd", "ls", "cat", "head", "tail", "mkdir", "touch", "rm", "cp", "mv", "find",
-    "grep", "wc", "sort", "uniq", "cut", "tr", "sed", "tee", "stat", "date", "whoami", "id", "env", "printenv", "which",
-    "df", "du", "uname", "hostname", "ping", "curl", "cd", "rmdir",
-}
+GENERIC_COMMAND_CATALOG = set(BASE_COMMANDS) | {"git", "make"}
 
 
 def _platform_for_service(service: Service) -> str:
+    """Resolve a stable platform label used for workdir defaults and UI catalogs.
+
+    Platform is advisory for binary availability: runtime tools (php, python,
+    node, git, …) are accepted on every platform so a mis-labelled deploy does
+    not block legitimate developer commands. The label still drives the default
+    work-root (Laravel → /var/www/html, others → /app).
+    """
     deploy = getattr(service, "selected_deploy", None)
     config = getattr(deploy, "config", None) or {}
-    raw = str(config.get("framework") or config.get("platform") or "generic").strip().lower()
-    return PLATFORM_ALIASES.get(raw, raw if raw in PLATFORM_COMMANDS else "generic")
+    candidates = [
+        config.get("framework"),
+        config.get("platform"),
+        config.get("runtime"),
+        config.get("stack"),
+        getattr(deploy, "framework", None) if deploy is not None else None,
+        getattr(service, "framework", None),
+        getattr(service, "platform", None),
+    ]
+    for raw in candidates:
+        value = str(raw or "").strip().lower()
+        if not value:
+            continue
+        if value in PLATFORM_ALIASES:
+            return PLATFORM_ALIASES[value]
+        if value in PLATFORM_COMMANDS:
+            return value
+        # Partial matches (e.g. "laravel-10", "node18").
+        for key, mapped in PLATFORM_ALIASES.items():
+            if key in value or value in key:
+                return mapped
+    return "generic"
 
 
 def _safe_workdir(path: str, root: str) -> str:
@@ -473,93 +598,293 @@ def _assert_writable_path(container, path: str, *, for_create: bool = False, ope
         raise ValidationError(f"Path is not writable by the service user: {path} (RW mount; the service user lacks the required filesystem permission).")
     raise ValidationError(f"Path is on a read-only Docker mount: {path}.")
 
-def _validate_platform_command(argv: list[str], platform: str, root: str, *, allow_advanced: bool = False) -> None:
-    if not argv: raise ValidationError("Command is required.")
-    base=os.path.basename(argv[0]).lower()
-    if base in FORBIDDEN_BASENAMES or base.startswith('docker'):
-        raise ValidationError(f"Command '{base}' is not allowed.")
-    allowed=BASE_COMMANDS | PLATFORM_COMMANDS.get(platform,set())
-    if base not in allowed: raise ValidationError(f"Command '{base}' is not allowed for platform '{platform}'.")
+def _policy_reject(message: str, code: str = "POLICY_REJECTED") -> None:
+    raise ShellPolicyError(message, code=code)
+
+
+def _validate_path_tokens(argv: list[str], base: str, root: str) -> None:
+    """Reject path arguments that resolve outside the service work-root."""
     for token in argv[1:]:
-        # Relative `..` is allowed when it resolves inside the workspace (for
-        # example `cd ..` from /var/www/html/database). The old raw-token check
-        # rejected the perfectly valid `..` before cwd-aware resolution.
-        if base == 'cd':
+        if base == "cd":
             continue
-        if '../' in token or token.startswith('..') or token.endswith('/..'):
+        if re.match(r"^https?://", token, re.I):
+            continue
+        if "../" in token or token == ".." or token.endswith("/.."):
             try:
-                safe = _safe_workdir(token if token.startswith('/') else posixpath.join(root, token), root)
-            except ValidationError:
-                raise ValidationError('Path traversal outside the service workspace is not allowed.')
+                candidate = token if token.startswith("/") else posixpath.join(root, token)
+                safe = _safe_workdir(candidate, root)
+            except ValidationError as exc:
+                _policy_reject(str(exc) or "Path traversal outside the service workspace is not allowed.")
             if not _path_is_within(safe, root):
-                raise ValidationError('Path traversal outside the service workspace is not allowed.')
-        if token.startswith('/') and not _path_is_within(token,root) and not re.match(r'^https?://',token,re.I):
-            raise ValidationError('Absolute paths outside the service workspace are not allowed.')
-    if base=='find':
-        if {a.lower() for a in argv[1:]} & {'-exec','-execdir','-ok','-okdir','-delete'}:
-            raise ValidationError('find actions that execute or delete files are not allowed.')
-        paths=[a for a in argv[1:] if not a.startswith('-') and not a.startswith('!')]
-        if paths: _safe_workdir(paths[0],root)
-    if base in {'rm','rmdir','cp','mv','mkdir','touch'}:
-        _validate_mutating_paths(argv,root,base)
-        if base=='rm' and '--no-preserve-root' in argv: raise ValidationError('--no-preserve-root is not allowed.')
-    if base=='grep' and any(a in {'--exclude-from','--include-from'} for a in argv[1:]):
-        raise ValidationError('grep option files are not allowed in the restricted shell.')
-    if base == 'sed' and any(a in {'-i','--in-place'} or a.startswith('-i') for a in argv[1:]):
-        raise ValidationError('sed in-place editing is not allowed; use the built-in file editor or tee.')
-    if base == 'tee':
-        paths=[a for a in argv[1:] if not a.startswith('-')]
-        if not paths: raise ValidationError('tee requires a destination file.')
-        if len(paths)>4: raise ValidationError('Too many tee destinations.')
-    if base=='curl':
-        urls=[a for a in argv[1:] if not a.startswith('-')]
-        if not urls: raise ValidationError('curl requires a URL.')
+                _policy_reject("Path traversal outside the service workspace is not allowed.")
+        if token.startswith("/") and not _path_is_within(token, root):
+            _policy_reject("Absolute paths outside the service workspace are not allowed.")
+
+
+def _validate_php_argv(argv: list[str], *, allow_advanced: bool) -> None:
+    if len(argv) < 2:
+        _policy_reject("php requires a subcommand or info flag.")
+    first = argv[1]
+    if first in {"-v", "--version", "--ini", "-m", "--modules", "-i", "--info", "-l", "--syntax-check"}:
+        return
+    if first == "artisan":
+        if len(argv) < 3:
+            _policy_reject("php artisan requires a command name.")
+        cmd = argv[2]
+        if not ARTISAN_NAME_RE.fullmatch(cmd):
+            _policy_reject(f"Invalid Artisan command name: {cmd}")
+        if any(rx.fullmatch(cmd) for rx in FORBIDDEN_ARTISAN_PATTERNS):
+            _policy_reject(
+                f"Artisan command '{cmd}' is blocked because it opens an unrestricted shell, server, or long-running worker."
+            )
+        if cmd in ARTISAN_ONE_SHOT_ONLY and cmd == "queue:work" and not _artisan_queue_work_allowed(argv):
+            _policy_reject(
+                "queue:work is only allowed as a one-shot job. "
+                "Use: php artisan queue:work --once   or   --max-jobs=1 --stop-when-empty"
+            )
+        if cmd in {"queue:listen", "schedule:work", "serve", "horizon"}:
+            _policy_reject(
+                f"Artisan command '{cmd}' is blocked because it starts a long-running server/worker. "
+                "Use a bounded one-shot alternative when available."
+            )
+        if cmd in ARTISAN_ADVANCED_INTERACTIVE and not allow_advanced:
+            _policy_reject(
+                "Artisan interactive developer tools require advanced shell permission.",
+                code="AUTHORIZATION_FAILED",
+            )
+        return
+    # Arbitrary PHP scripts / inline eval stay blocked — they bypass framework
+    # structure and are a common escape vector for unrestricted code execution.
+    if first in {"-r", "--run", "-f", "-a", "--interactive"} or first.endswith(".php"):
+        _policy_reject(
+            "Direct PHP script or inline execution is not allowed. "
+            "Use php artisan <command> for application operations."
+        )
+    _policy_reject(
+        "Direct PHP script or inline execution is not allowed. "
+        "Use php artisan <command> for application operations."
+    )
+
+
+def _validate_python_argv(argv: list[str], *, allow_advanced: bool) -> None:
+    if len(argv) < 2:
+        # bare `python` / `python3` — allow version banner via REPL-less invocation
+        return
+    first = argv[1]
+    if first in {"-V", "--version", "-h", "--help"}:
+        return
+    if first == "manage.py":
+        if len(argv) < 3:
+            _policy_reject("python manage.py requires a command name.")
+        cmd = argv[2]
+        if not DJANGO_COMMAND_RE.fullmatch(cmd):
+            _policy_reject(f"Invalid Django management command name: {cmd}")
+        if any(rx.fullmatch(cmd) for rx in FORBIDDEN_DJANGO_PATTERNS):
+            _policy_reject(
+                f"Django command '{cmd}' is blocked because it opens an unrestricted shell or development server."
+            )
+        if cmd in DJANGO_ADVANCED_INTERACTIVE and not allow_advanced:
+            _policy_reject(
+                "Django interactive shell requires advanced shell permission.",
+                code="AUTHORIZATION_FAILED",
+            )
+        return
+    # Block eval / arbitrary script execution outside manage.py.
+    if first in {"-c", "-m"} or first.endswith(".py"):
+        _policy_reject(
+            "Arbitrary Python script/inline execution is not allowed. "
+            "Use python manage.py <command> for application operations."
+        )
+    _policy_reject(
+        "Arbitrary Python script/inline execution is not allowed. "
+        "Use python manage.py <command> for application operations."
+    )
+
+
+def _validate_composer_argv(argv: list[str]) -> None:
+    if len(argv) < 2:
+        _policy_reject("composer requires a subcommand.")
+    # Composer is itself constrained; allow common developer verbs freely.
+    # Dangerous OS-level behaviour is already prevented by container isolation.
+    sub = argv[1].lstrip("-")
+    if sub in {"version", "V"} or argv[1] in {"-V", "--version", "-h", "--help"}:
+        return
+    # Block composer exec / run-script with unrestricted shell helpers is hard;
+    # allow standard package management and inspection verbs.
+    blocked = {"exec", "run-script", "global", "self-update", "config"}
+    if sub in blocked:
+        _policy_reject(f"Composer subcommand '{sub}' is not allowed in the restricted shell.")
+
+
+def _validate_node_pkg_argv(argv: list[str], base: str) -> None:
+    """npm / yarn / pnpm / bun — allow project scripts without a static allowlist."""
+    if len(argv) < 2:
+        return  # version / help banners
+    sub = argv[1]
+    if sub in {"-v", "--version", "-h", "--help", "version", "help"}:
+        return
+    # Explicitly block lifecycle scripts that shell out to arbitrary system tools
+    # outside the project model is impractical; we rely on container isolation.
+    # Still reject known dangerous npm features.
+    if sub in {"exec"} and base == "npm":
+        # npm exec is similar to npx — allow with constrained package names below via npx path
+        pass
+    if sub in {"explore", "owner", "publish", "unpublish", "login", "adduser", "logout", "token", "access"}:
+        _policy_reject(f"Package-manager subcommand '{sub}' is not allowed.")
+    # `npm run <script>` / `yarn <script>` / `pnpm run <script>` — script names
+    # are constrained to safe identifier characters; no shell metacharacters.
+    if sub == "run":
+        if len(argv) >= 3 and not re.fullmatch(r"[A-Za-z0-9:_./@+-]+", argv[2] or ""):
+            _policy_reject("Invalid package script name.")
+        return
+    # yarn/pnpm often allow `yarn build` without `run`.
+    if base in {"yarn", "pnpm", "bun"} and re.fullmatch(r"[A-Za-z0-9:_./@+-]+", sub or ""):
+        return
+
+
+def _validate_npx_argv(argv: list[str]) -> None:
+    if len(argv) < 2:
+        _policy_reject("npx requires a package/tool name.")
+    tool = argv[1]
+    if tool in {"-v", "--version", "-h", "--help"}:
+        return
+    # Allow common frontend/dev tools and scoped packages; reject shell-like names.
+    if tool in FORBIDDEN_BASENAMES or tool.startswith("docker"):
+        _policy_reject(f"npx tool '{tool}' is not allowed.")
+    if not re.fullmatch(r"[@A-Za-z0-9._/-]+", tool):
+        _policy_reject(f"Invalid npx tool name: {tool}")
+
+
+def _validate_git_argv(argv: list[str], root: str) -> None:
+    if len(argv) < 2:
+        return
+    sub = argv[1].lstrip("-")
+    if argv[1] in {"-v", "--version", "-h", "--help"} or sub in {"help", "version"}:
+        return
+    if sub in GIT_FORBIDDEN_SUBCOMMANDS:
+        _policy_reject(f"git {sub} is not allowed.")
+    # Block options that can escape the workspace or execute helpers.
+    joined = " ".join(argv[1:])
+    dangerous_opts = (
+        "--exec-path", "--upload-pack", "--receive-pack",
+        "-c",  # config override can set core.sshCommand / pager etc. — still useful; we block specific patterns below
+    )
+    # Block explicit external command injection vectors.
+    for token in argv[1:]:
+        lower = token.lower()
+        if lower.startswith("core.sshcommand") or lower.startswith("core.pager") or "gpg.program" in lower:
+            _policy_reject("git configuration that overrides external programs is not allowed.")
+        if lower in {"--upload-pack", "--receive-pack", "--exec-path"}:
+            _policy_reject(f"git option '{token}' is not allowed.")
+    # Restrict git -C / --git-dir / --work-tree to the workspace.
+    for i, token in enumerate(argv[1:], start=1):
+        if token in {"-C", "--git-dir", "--work-tree"} and i + 1 < len(argv):
+            _safe_workdir(argv[i + 1] if argv[i + 1].startswith("/") else posixpath.join(root, argv[i + 1]), root)
+        if token.startswith("--git-dir=") or token.startswith("--work-tree="):
+            path = token.split("=", 1)[1]
+            _safe_workdir(path if path.startswith("/") else posixpath.join(root, path), root)
+
+
+def _validate_pip_argv(argv: list[str]) -> None:
+    if len(argv) < 2:
+        return
+    sub = argv[1]
+    if sub in {"-V", "--version", "-h", "--help"}:
+        return
+    blocked = {"uninstall", "download", "wheel", "hash", "debug", "config"}
+    if sub in blocked:
+        _policy_reject(f"pip subcommand '{sub}' is not allowed.")
+
+
+def _validate_platform_command(argv: list[str], platform: str, root: str, *, allow_advanced: bool = False) -> None:
+    """Risk-based command validation.
+
+    Primary controls: forbidden binaries, no user shell, workspace paths,
+    framework-specific escape hatches (php -r, python -c, long-running servers).
+    Platform label does **not** gate binary availability.
+    """
+    if not argv:
+        _policy_reject("Command is required.")
+    base = os.path.basename(argv[0]).lower()
+
+    if base in FORBIDDEN_BASENAMES or base.startswith("docker"):
+        _policy_reject(f"Command '{base}' is not allowed.", code="POLICY_REJECTED")
+
+    allowed = BASE_COMMANDS | RUNTIME_COMMANDS | PLATFORM_COMMANDS.get(platform, set()) | PLATFORM_COMMANDS.get("generic", set())
+    if base not in allowed:
+        _policy_reject(
+            f"Command '{base}' is not allowed. "
+            "The restricted shell permits workspace filesystem tools, framework CLIs, "
+            "package managers, git, and make — not arbitrary system binaries.",
+            code="POLICY_REJECTED",
+        )
+
+    _validate_path_tokens(argv, base, root)
+
+    if base == "find":
+        if {a.lower() for a in argv[1:]} & {"-exec", "-execdir", "-ok", "-okdir", "-delete"}:
+            _policy_reject("find actions that execute or delete files are not allowed.")
+        paths = [a for a in argv[1:] if not a.startswith("-") and not a.startswith("!")]
+        if paths:
+            _safe_workdir(paths[0], root)
+
+    if base in {"rm", "rmdir", "cp", "mv", "mkdir", "touch"}:
+        _validate_mutating_paths(argv, root, base)
+        if base == "rm" and "--no-preserve-root" in argv:
+            _policy_reject("--no-preserve-root is not allowed.")
+
+    if base in {"grep", "egrep", "fgrep"} and any(a in {"--exclude-from", "--include-from"} for a in argv[1:]):
+        _policy_reject("grep option files are not allowed in the restricted shell.")
+
+    if base == "sed" and any(a in {"-i", "--in-place"} or a.startswith("-i") for a in argv[1:]):
+        _policy_reject("sed in-place editing is not allowed; use the built-in file editor or tee.")
+
+    if base == "tee":
+        paths = [a for a in argv[1:] if not a.startswith("-")]
+        if not paths:
+            _policy_reject("tee requires a destination file.")
+        if len(paths) > 4:
+            _policy_reject("Too many tee destinations.")
+
+    if base == "curl":
+        urls = [a for a in argv[1:] if not a.startswith("-")]
+        if not urls:
+            _policy_reject("curl requires a URL.")
         _validate_network_target(urls[-1])
-    if base=='ping':
-        targets=[a for a in argv[1:] if not a.startswith('-')]
-        if not targets: raise ValidationError('ping requires a host.')
+
+    if base == "ping":
+        targets = [a for a in argv[1:] if not a.startswith("-")]
+        if not targets:
+            _policy_reject("ping requires a host.")
         _validate_network_target(targets[-1])
-    if base=='php':
-        if len(argv)<2: raise ValidationError('php requires a subcommand/script.')
-        if argv[1]=='artisan':
-            if len(argv)<3: raise ValidationError('php artisan requires a command.')
-            cmd=argv[2]
-            if not ARTISAN_NAME_RE.fullmatch(cmd): raise ValidationError('Invalid Artisan command name.')
-            if any(rx.fullmatch(cmd) for rx in FORBIDDEN_ARTISAN_PATTERNS):
-                raise ValidationError(f"Artisan command '{cmd}' is blocked because it opens an unrestricted shell/server/worker.")
-            if cmd == "queue:work" and not _artisan_queue_work_allowed(argv):
-                raise ValidationError(
-                    "queue:work is only allowed as a one-shot job. "
-                    "Use: php artisan queue:work --once   or   --max-jobs=1 --stop-when-empty"
-                )
-            if cmd in {"tinker", "psysh"} and not allow_advanced:
-                raise ValidationError("Artisan interactive developer tools require advanced shell permission.")
-        elif argv[1] not in {'-v','--version','--ini','-m','--modules','-i','--info'}:
-            raise ValidationError('Direct PHP script or inline execution is not allowed in the restricted shell.')
-    if base=='composer' and (len(argv)<2 or argv[1] not in {'install','update','dump-autoload','show','validate','outdated','audit','why','depends','licenses'}):
-        raise ValidationError('This Composer command is not allowed.')
-    if base in {'python','python3'}:
-        if len(argv)>=2 and argv[1]=='manage.py':
-            if len(argv)<3 or not DJANGO_COMMAND_RE.fullmatch(argv[2]): raise ValidationError('Invalid Django manage.py command name.')
-            if any(rx.fullmatch(argv[2]) for rx in FORBIDDEN_DJANGO_PATTERNS):
-                raise ValidationError(f"Django command '{argv[2]}' is blocked because it opens an unrestricted shell/server.")
-            if argv[2] in {"shell", "shell_plus"} and not allow_advanced:
-                raise ValidationError("Django interactive shell requires advanced shell permission.")
-        elif len(argv) >= 2:
-            raise ValidationError("Arbitrary Python script/inline execution is not allowed.")
-    if base in {'npm', 'yarn', 'pnpm'}:
-        if len(argv) < 2:
-            raise ValidationError("This package-manager command is not allowed.")
-        sub = argv[1]
-        if sub in {'install', 'ci', 'test', 'list', 'outdated', 'audit', 'view', 'why'}:
-            pass
-        elif sub == "run" and len(argv) >= 3 and re.fullmatch(r"[A-Za-z0-9:_./@-]+", argv[2] or ""):
-            # npm run <script> — script name is constrained; no extra shell metacharacters.
-            pass
-        else:
-            raise ValidationError("This package-manager command is not allowed.")
-    if base=='npx' and (len(argv)<2 or argv[1] not in {'vite','tsc','eslint','prettier'}): raise ValidationError('Only approved npx tools are allowed.')
-    if base in {'pip','pip3'} and (len(argv)<2 or argv[1] not in {'install','list','show','freeze','check','index','wheel'}): raise ValidationError('This pip command is not allowed.')
+
+    if base == "php":
+        _validate_php_argv(argv, allow_advanced=allow_advanced)
+    elif base == "composer":
+        _validate_composer_argv(argv)
+    elif base in {"python", "python3"}:
+        _validate_python_argv(argv, allow_advanced=allow_advanced)
+    elif base in {"npm", "yarn", "pnpm", "bun"}:
+        _validate_node_pkg_argv(argv, base)
+    elif base == "npx":
+        _validate_npx_argv(argv)
+    elif base in {"pip", "pip3"}:
+        _validate_pip_argv(argv)
+    elif base == "git":
+        _validate_git_argv(argv, root)
+    elif base == "make":
+        # make is allowed; recipes run inside the container under the same isolation.
+        # Block overriding the shell used by make.
+        for token in argv[1:]:
+            if token.startswith("SHELL=") or token in {"-e", "--environment-overrides"} and False:
+                pass
+            if token.startswith("SHELL="):
+                _policy_reject("Overriding make SHELL is not allowed.")
+    elif base == "node":
+        if len(argv) >= 2 and argv[1] in {"-e", "--eval", "-p", "--print"}:
+            _policy_reject("Inline node eval is not allowed.")
+        # `node script.js` is allowed when the script path stays in the workspace
+        # (path tokens already validated above for absolute/traversal forms).
 
 
 def _resolve_container(service: Service):
@@ -688,22 +1013,132 @@ def authenticate_session(service: Service, user, token: str):
     return session
 
 
-def _is_destructive_command(argv: list[str]) -> bool:
-    if not argv: return False
-    base=os.path.basename(argv[0]).lower()
-    if tuple(argv[:3]) in DESTRUCTIVE_COMMANDS: return True
-    if base=='php' and len(argv)>=3 and argv[1]=='artisan':
-        meta=ARTISAN_COMMAND_CATALOG.get(argv[2])
+def classify_command_risk(argv: list[str]) -> str:
+    """Return a Risk level for confirmation / UI purposes.
+
+    READ_ONLY / NORMAL_MUTATION → no confirmation
+    DESTRUCTIVE / PRIVILEGED → confirmation required
+    INTERACTIVE → may need advanced permission (handled separately)
+    """
+    if not argv:
+        return Risk.READ_ONLY
+    base = os.path.basename(argv[0]).lower()
+
+    if base in {"pwd", "ls", "cat", "head", "tail", "find", "grep", "egrep", "fgrep",
+                "wc", "sort", "uniq", "cut", "tr", "stat", "date", "whoami", "id",
+                "env", "printenv", "which", "type", "df", "du", "uname", "hostname",
+                "file", "basename", "dirname", "realpath", "md5sum", "sha256sum",
+                "sha1sum", "cmp", "diff", "true", "false", "echo", "printf", "sleep",
+                "cd", "test"}:
+        return Risk.READ_ONLY
+
+    if base in {"rm", "rmdir"}:
+        return Risk.DESTRUCTIVE
+    if base in {"mkdir", "touch", "cp", "mv", "tee", "sed"}:
+        return Risk.NORMAL_MUTATION if base != "tee" else Risk.DESTRUCTIVE
+
+    if base == "php" and len(argv) >= 3 and argv[1] == "artisan":
+        cmd = argv[2]
+        if cmd in ARTISAN_ADVANCED_INTERACTIVE:
+            return Risk.INTERACTIVE
+        if cmd in ARTISAN_DESTRUCTIVE:
+            return Risk.DESTRUCTIVE
+        meta = ARTISAN_COMMAND_CATALOG.get(cmd)
         if meta:
-            if meta.get('requires_confirmation') is False:
-                return False
-            return bool(meta.get('destructive'))
-        return True
-    if base in {'python','python3'} and len(argv)>=3 and argv[1]=='manage.py':
-        return argv[2] in {'migrate','makemigrations','createsuperuser','changepassword','collectstatic','test'}
-    if base in {'composer','pip','pip3'} and len(argv)>=2: return argv[1] in {'install','update','wheel'}
-    if base == 'tee': return True
-    return False
+            return meta.get("risk") or (Risk.DESTRUCTIVE if meta.get("destructive") else Risk.NORMAL_MUTATION)
+        # Unknown / custom artisan commands are normal mutations, not destructive.
+        return Risk.NORMAL_MUTATION
+
+    if base == "php":
+        return Risk.READ_ONLY
+
+    if base in {"python", "python3"} and len(argv) >= 3 and argv[1] == "manage.py":
+        cmd = argv[2]
+        if cmd in DJANGO_ADVANCED_INTERACTIVE:
+            return Risk.INTERACTIVE
+        if cmd in DJANGO_DESTRUCTIVE:
+            return Risk.DESTRUCTIVE
+        if cmd in {"migrate", "makemigrations", "collectstatic", "createsuperuser",
+                    "changepassword", "test", "loaddata", "dumpdata"}:
+            return Risk.NORMAL_MUTATION
+        return Risk.NORMAL_MUTATION
+
+    if base in {"python", "python3"}:
+        return Risk.READ_ONLY
+
+    if base == "composer":
+        sub = argv[1] if len(argv) >= 2 else ""
+        if sub in {"install", "update", "require", "remove"}:
+            return Risk.DESTRUCTIVE if sub in {"update", "remove"} else Risk.NORMAL_MUTATION
+        return Risk.READ_ONLY
+
+    if base in {"npm", "yarn", "pnpm", "bun"}:
+        sub = argv[1] if len(argv) >= 2 else ""
+        if sub in PKG_DESTRUCTIVE_SUBS:
+            return Risk.DESTRUCTIVE
+        if sub in {"run", "test", "start", "build"} or (
+            base in {"yarn", "pnpm", "bun"} and sub and not sub.startswith("-")
+        ):
+            return Risk.NORMAL_MUTATION
+        return Risk.READ_ONLY
+
+    if base == "npx":
+        return Risk.NORMAL_MUTATION
+
+    if base in {"pip", "pip3"}:
+        sub = argv[1] if len(argv) >= 2 else ""
+        if sub in {"install", "uninstall"}:
+            return Risk.DESTRUCTIVE if sub == "uninstall" else Risk.NORMAL_MUTATION
+        return Risk.READ_ONLY
+
+    if base == "git":
+        sub = argv[1].lstrip("-") if len(argv) >= 2 else ""
+        flags = {a for a in argv[2:] if a.startswith("-")}
+        # Pure inspection.
+        if sub in {"status", "log", "diff", "show", "ls-files", "rev-parse", "rev-list",
+                   "describe", "blame", "shortlog", "whatchanged", "name-rev", "cat-file",
+                   "ls-tree", "for-each-ref", "help", "version", "ls-remote"}:
+            return Risk.READ_ONLY
+        # Listing branches/tags/remotes is read-only; creating/deleting is destructive.
+        if sub == "branch":
+            if flags & {"-d", "-D", "--delete", "-m", "-M", "--move", "-c", "-C", "--copy"}:
+                return Risk.DESTRUCTIVE
+            # `git branch newname` creates a branch.
+            positionals = [a for a in argv[2:] if not a.startswith("-")]
+            return Risk.DESTRUCTIVE if positionals else Risk.READ_ONLY
+        if sub == "tag":
+            positionals = [a for a in argv[2:] if not a.startswith("-")]
+            if flags & {"-d", "--delete"} or positionals:
+                return Risk.DESTRUCTIVE
+            return Risk.READ_ONLY
+        if sub == "remote":
+            # `git remote -v` / `git remote` are read-only; add/remove/set-url mutate.
+            positionals = [a for a in argv[2:] if not a.startswith("-")]
+            if positionals and positionals[0] in {"add", "remove", "rm", "set-url", "rename", "prune"}:
+                return Risk.DESTRUCTIVE
+            return Risk.READ_ONLY
+        if sub in {"reset", "clean"}:
+            return Risk.DESTRUCTIVE
+        if sub in GIT_DESTRUCTIVE_SUBCOMMANDS:
+            return Risk.DESTRUCTIVE
+        return Risk.READ_ONLY
+
+    if base == "make":
+        return Risk.NORMAL_MUTATION
+
+    if base in {"curl", "ping"}:
+        return Risk.READ_ONLY
+
+    if base == "node":
+        return Risk.NORMAL_MUTATION if len(argv) >= 2 else Risk.READ_ONLY
+
+    return Risk.NORMAL_MUTATION
+
+
+def _is_destructive_command(argv: list[str]) -> bool:
+    """True when the command requires explicit confirm=true before execution."""
+    risk = classify_command_risk(argv)
+    return risk in {Risk.DESTRUCTIVE, Risk.PRIVILEGED}
 
 def _assert_container_path_within(container, path: str, root: str) -> None:
     """Resolve a path inside the container and reject symlink/workspace escapes.
@@ -999,7 +1434,7 @@ def execute_compound_command(session,command,*,confirm=False):
             if op=='&&' and previous_code!=0: continue
             if op=='||' and previous_code==0: continue
         validate_argv_for_container(argv,session.platform,session.root_path,container, allow_advanced=can_use_advanced_shell(session.service, session.user))
-        if _is_destructive_command(argv) and not confirm: raise ValidationError('A command in this sequence changes application state. Confirmation is required.')
+        if _is_destructive_command(argv) and not confirm: raise ShellPolicyError('A command in this sequence is classified as destructive and requires confirmation.', code='CONFIRMATION_REQUIRED')
         if argv[0] == 'cd':
             if len(argv) > 2: raise ValidationError('cd accepts one path.')
             target=argv[1] if len(argv)==2 else session.root_path
@@ -1028,62 +1463,83 @@ def execute_compound_command(session,command,*,confirm=False):
     return {'stdout':out[:MAX_OUTPUT_BYTES].decode('utf-8','replace'),'stderr':err[:MAX_OUTPUT_BYTES].decode('utf-8','replace'),'exit_code':previous_code,'cwd':session.workdir}
 
 
-def command_catalog(platform: str) -> list[dict]:
-    """Return platform-aware command metadata consumed by the terminal UI.
+def _catalog_item(command: str, label: str, *, risk: str = Risk.READ_ONLY, interactive: bool = False, advanced: bool = False) -> dict:
+    return {
+        "command": command,
+        "label": label,
+        "risk": risk,
+        "mutating": risk in {Risk.NORMAL_MUTATION, Risk.DESTRUCTIVE, Risk.PRIVILEGED, Risk.INTERACTIVE},
+        "dangerous": risk == Risk.DESTRUCTIVE,
+        "interactive": interactive,
+        "advanced": advanced,
+    }
 
-    ``interactive`` means the command is expected to keep a PTY open and may
-    request stdin (for example Django's ``createsuperuser``).
+
+def command_catalog(platform: str) -> list[dict]:
+    """Return platform-aware command *suggestions* for the terminal UI.
+
+    This catalog is not the policy gate. Policy is enforced by
+    ``_validate_platform_command`` / ``classify_command_risk``.
     """
     items = [
-        {"command": c, "label": c.replace("_", " "), "mutating": False, "dangerous": False, "interactive": False}
+        _catalog_item(c, c.replace("_", " "), risk=Risk.READ_ONLY)
         for c in sorted(GENERIC_COMMAND_CATALOG)
     ]
-    if platform in {"laravel", "php"}:
+    items.extend([
+        _catalog_item("git status", "Git status", risk=Risk.READ_ONLY),
+        _catalog_item("git log --oneline -20", "Git recent commits", risk=Risk.READ_ONLY),
+        _catalog_item("git diff", "Git diff", risk=Risk.READ_ONLY),
+        _catalog_item("git branch -a", "Git branches", risk=Risk.READ_ONLY),
+        _catalog_item("git remote -v", "Git remotes", risk=Risk.READ_ONLY),
+    ])
+
+    if platform in {"laravel", "php", "generic"}:
         for name, meta in sorted(ARTISAN_COMMAND_CATALOG.items()):
             cmd = f"php artisan {name}"
             if name == "queue:work":
                 cmd = "php artisan queue:work --once"
-            items.append({
-                "command": cmd,
-                "label": meta["label"],
-                "mutating": bool(meta.get("mutating")),
-                "dangerous": bool(meta.get("destructive")),
-                "interactive": bool(meta.get("interactive", False)),
-            })
+            items.append(_catalog_item(
+                cmd, meta["label"],
+                risk=meta.get("risk", Risk.NORMAL_MUTATION),
+                interactive=bool(meta.get("interactive")),
+                advanced=bool(meta.get("advanced")),
+            ))
         items.extend([
-            {"command": "php -v", "label": "PHP version", "mutating": False, "dangerous": False, "interactive": False},
-            {"command": "php --ini", "label": "PHP ini location", "mutating": False, "dangerous": False, "interactive": False},
-            {"command": "php -m", "label": "PHP extensions", "mutating": False, "dangerous": False, "interactive": False},
-            {"command": "php -i", "label": "PHP information", "mutating": False, "dangerous": False, "interactive": False},
-            {"command": "composer show", "label": "Composer packages", "mutating": False, "dangerous": False, "interactive": False},
-            {"command": "composer validate", "label": "Validate composer.json", "mutating": False, "dangerous": False, "interactive": False},
-            {"command": "composer outdated", "label": "Outdated Composer packages", "mutating": False, "dangerous": False, "interactive": False},
+            _catalog_item("php -v", "PHP version"),
+            _catalog_item("php --ini", "PHP ini location"),
+            _catalog_item("php -m", "PHP extensions"),
+            _catalog_item("composer show", "Composer packages"),
+            _catalog_item("composer validate", "Validate composer.json"),
+            _catalog_item("composer outdated", "Outdated Composer packages"),
+            _catalog_item("composer install", "Composer install", risk=Risk.NORMAL_MUTATION),
         ])
-    elif platform in {"django", "python"}:
-        items += [
-            {"command": "python --version", "label": "Python version", "mutating": False, "dangerous": False, "interactive": False},
-            {"command": "python manage.py check", "label": "Django system check", "mutating": False, "dangerous": False, "interactive": False},
-            {"command": "python manage.py showmigrations", "label": "List migrations", "mutating": False, "dangerous": False, "interactive": False},
-            {"command": "python manage.py migrate", "label": "Run migrations", "mutating": True, "dangerous": False, "interactive": False},
-            {"command": "python manage.py makemigrations", "label": "Create migrations", "mutating": True, "dangerous": False, "interactive": False},
-            {"command": "python manage.py createsuperuser", "label": "Create Django superuser", "mutating": True, "dangerous": False, "interactive": True, "input_mode": "line"},
-            {"command": "python manage.py shell", "label": "Django shell (advanced interactive)", "mutating": True, "dangerous": False, "interactive": True, "advanced": True},
-            {"command": "python manage.py changepassword", "label": "Change Django user password", "mutating": True, "dangerous": False, "interactive": True, "input_mode": "line"},
-            {"command": "python manage.py collectstatic", "label": "Collect static files", "mutating": True, "dangerous": False, "interactive": False},
-            {"command": "pip list", "label": "Installed Python packages", "mutating": False, "dangerous": False, "interactive": False},
-            {"command": "pip freeze", "label": "Frozen Python requirements", "mutating": False, "dangerous": False, "interactive": False},
-            {"command": "pip check", "label": "Check Python dependencies", "mutating": False, "dangerous": False, "interactive": False},
-        ]
-    elif platform == "node":
-        items += [
-            {"command": "node --version", "label": "Node version", "mutating": False, "dangerous": False, "interactive": False},
-            {"command": "npm --version", "label": "npm version", "mutating": False, "dangerous": False, "interactive": False},
-            {"command": "npm list", "label": "Installed npm packages", "mutating": False, "dangerous": False, "interactive": False},
-            {"command": "npm outdated", "label": "Outdated npm packages", "mutating": False, "dangerous": False, "interactive": False},
-            {"command": "npm audit", "label": "Audit npm dependencies", "mutating": False, "dangerous": False, "interactive": False},
-            {"command": "npm test", "label": "Run tests", "mutating": False, "dangerous": False, "interactive": False},
-        ]
-    # De-duplicate while preserving deterministic order.
+
+    if platform in {"django", "python", "generic"}:
+        items.extend([
+            _catalog_item("python --version", "Python version"),
+            _catalog_item("python manage.py check", "Django system check"),
+            _catalog_item("python manage.py showmigrations", "List migrations"),
+            _catalog_item("python manage.py migrate", "Run migrations", risk=Risk.NORMAL_MUTATION),
+            _catalog_item("python manage.py makemigrations", "Create migrations", risk=Risk.NORMAL_MUTATION),
+            _catalog_item("python manage.py createsuperuser", "Create Django superuser", risk=Risk.NORMAL_MUTATION, interactive=True),
+            _catalog_item("python manage.py shell", "Django shell (advanced interactive)", risk=Risk.INTERACTIVE, interactive=True, advanced=True),
+            _catalog_item("python manage.py collectstatic", "Collect static files", risk=Risk.NORMAL_MUTATION),
+            _catalog_item("pip list", "Installed Python packages"),
+            _catalog_item("pip freeze", "Frozen Python requirements"),
+        ])
+
+    if platform in {"node", "laravel", "generic"}:
+        items.extend([
+            _catalog_item("node --version", "Node version"),
+            _catalog_item("npm --version", "npm version"),
+            _catalog_item("npm list", "Installed npm packages"),
+            _catalog_item("npm outdated", "Outdated npm packages"),
+            _catalog_item("npm audit", "Audit npm dependencies"),
+            _catalog_item("npm test", "Run tests", risk=Risk.NORMAL_MUTATION),
+            _catalog_item("npm run build", "Build (npm run build)", risk=Risk.NORMAL_MUTATION),
+            _catalog_item("npm run lint", "Lint (npm run lint)", risk=Risk.NORMAL_MUTATION),
+        ])
+
     unique, seen = [], set()
     for item in items:
         if item["command"] in seen:
@@ -1092,13 +1548,14 @@ def command_catalog(platform: str) -> list[dict]:
         unique.append(item)
     return unique
 
+
 def execute_command(session, command: str, *, confirm: bool = False, dry_run: bool = False) -> dict:
     parts = parse_safe_command(command)
     if len(parts) > 1:
         if dry_run:
             plan = []
             for argv, op in parts:
-                plan.append({"argv": argv, "operator": op, "destructive": _is_destructive_command(argv)})
+                plan.append({"argv": argv, "operator": op, "destructive": _is_destructive_command(argv), "risk": classify_command_risk(argv)})
             record_shell_audit(
                 service=session.service, user=getattr(session, "user", None), session=session,
                 action="command_dry_run", command=command, cwd=session.workdir,
@@ -1125,7 +1582,7 @@ def execute_command(session, command: str, *, confirm: bool = False, dry_run: bo
         allow_advanced=can_use_advanced_shell(session.service, session.user),
     )
     if dry_run:
-        plan = [{"argv": argv, "operator": None, "destructive": _is_destructive_command(argv)}]
+        plan = [{"argv": argv, "operator": None, "destructive": _is_destructive_command(argv), "risk": classify_command_risk(argv)}]
         record_shell_audit(
             service=session.service, user=getattr(session, "user", None), session=session,
             action="command_dry_run", command=command, cwd=session.workdir,
@@ -1134,10 +1591,10 @@ def execute_command(session, command: str, *, confirm: bool = False, dry_run: bo
         return {
             "exit_code": 0, "stdout": "", "stderr": "", "cwd": session.workdir,
             "dry_run": True, "plan": plan,
-            "requires_confirmation": _is_destructive_command(argv),
+            "requires_confirmation": _is_destructive_command(argv), "risk": classify_command_risk(argv),
         }
     if _is_destructive_command(argv) and not confirm:
-        raise ValidationError("This command changes application state. Confirmation is required.")
+        raise ShellPolicyError("This command is classified as destructive and requires confirmation.", code="CONFIRMATION_REQUIRED")
     if argv[0] == "cd":
         if len(argv) > 2:
             raise ValidationError("cd accepts one path.")

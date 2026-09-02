@@ -241,20 +241,48 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
         await self.send_json({"type": "error", "message": "Unsupported shell message."})
 
     async def _start_command(self, command, confirm):
-        from .shell import _reject_shell_syntax, _is_destructive_command, _resolve_container, parse_safe_command, validate_argv_for_container, can_use_advanced_shell
+        from .shell import (
+            _is_destructive_command,
+            _resolve_container,
+            parse_safe_command,
+            validate_argv_for_container,
+            can_use_advanced_shell,
+            ShellPolicyError,
+            classify_command_risk,
+        )
         try:
             if self.exec_socket is not None:
-                await self.send_json({"type": "error", "message": "A command is already running. Send input or wait for it to finish."})
+                await self.send_json({
+                    "type": "error",
+                    "code": "COMMAND_BUSY",
+                    "message": "A command is already running. Send input or wait for it to finish.",
+                })
                 return
             parts = parse_safe_command(command)
             if len(parts) != 1:
-                await self.send_json({"type": "error", "message": "Compound commands use the secure command API; interactive PTY accepts one command at a time."})
+                await self.send_json({
+                    "type": "error",
+                    "code": "POLICY_REJECTED",
+                    "message": "Compound commands use the secure command API; interactive PTY accepts one command at a time.",
+                })
                 return
             argv = parts[0][0]
             container = await database_sync_to_async(_resolve_container)(self.service)
-            await database_sync_to_async(validate_argv_for_container)(argv, self.session.platform, self.session.root_path, container, allow_advanced=can_use_advanced_shell(self.service, self.user))
+            await database_sync_to_async(validate_argv_for_container)(
+                argv,
+                self.session.platform,
+                self.session.root_path,
+                container,
+                allow_advanced=can_use_advanced_shell(self.service, self.user),
+            )
             if _is_destructive_command(argv) and not confirm:
-                await self.send_json({"type": "confirm_required", "command": command, "message": "This command changes application state. Confirmation is required."})
+                await self.send_json({
+                    "type": "confirm_required",
+                    "code": "CONFIRMATION_REQUIRED",
+                    "command": command,
+                    "risk": classify_command_risk(argv),
+                    "message": "This command is classified as destructive and requires confirmation.",
+                })
                 return
             if argv and argv[0] == "cd":
                 from .shell import execute_command
@@ -262,6 +290,7 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                 await self.send_json({"type": "command.output", **result})
                 return
             loop = asyncio.get_running_loop()
+
             def create_exec():
                 from services.shell import prepare_interactive_exec_environment
                 api = container.client.api
@@ -286,8 +315,15 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                 )
                 sock = api.exec_start(created["Id"], tty=True, socket=True)
                 return created["Id"], sock
+
             self.exec_id, self.exec_socket = await loop.run_in_executor(None, create_exec)
-            await self.send_json({"type": "process.started", "exec_id": self.exec_id, "cwd": self.session.workdir, "command": command})
+            await self.send_json({
+                "type": "process.started",
+                "exec_id": self.exec_id,
+                "cwd": self.session.workdir,
+                "command": command,
+                "risk": classify_command_risk(argv),
+            })
             try:
                 from .shell import record_shell_audit
                 await database_sync_to_async(record_shell_audit)(
@@ -297,10 +333,19 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
             except Exception:
                 pass
             self.exec_task = asyncio.create_task(self._read_exec_output(command))
+        except ShellPolicyError as exc:
+            self.exec_id = None
+            await self._close_exec_socket()
+            detail = exc.messages[0] if getattr(exc, "messages", None) else str(exc)
+            await self.send_json({
+                "type": "error",
+                "code": getattr(exc, "shell_code", None) or "POLICY_REJECTED",
+                "message": detail,
+            })
         except Exception as exc:
             self.exec_id = None
             await self._close_exec_socket()
-            await self.send_json({"type": "error", "message": str(exc)})
+            await self.send_json({"type": "error", "code": "RUNTIME_ERROR", "message": str(exc)})
 
     async def _read_exec_output(self, command):
         loop = asyncio.get_running_loop()

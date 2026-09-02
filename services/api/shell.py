@@ -11,7 +11,24 @@ from rest_framework import status
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 from .common import _get_service_for_user_or_share
-from ..shell import authenticate_session, close_session, create_session, terminate_active_session, execute_command, command_catalog, _platform_for_service, _resolve_container, _safe_workdir, record_shell_audit, max_concurrent_shell_sessions, _assert_container_path_within, path_access, batch_path_writable
+from ..shell import (
+    authenticate_session,
+    close_session,
+    create_session,
+    terminate_active_session,
+    execute_command,
+    command_catalog,
+    _platform_for_service,
+    _resolve_container,
+    _safe_workdir,
+    record_shell_audit,
+    max_concurrent_shell_sessions,
+    _assert_container_path_within,
+    path_access,
+    batch_path_writable,
+    ShellPolicyError,
+    classify_command_risk,
+)
 
 
 def _resolve(request, service_id, action="can_shell"):
@@ -185,6 +202,37 @@ def shell_replace_apiview(request, service_id):
         return Response({"result":"error","detail":"Service not found."}, status=404)
 
 
+def _shell_error_response(exc):
+    """Map policy/auth failures to structured API errors."""
+    if isinstance(exc, PermissionError):
+        return Response(
+            {"result": "error", "code": "AUTHORIZATION_FAILED", "detail": str(exc)},
+            status=403,
+        )
+    if isinstance(exc, ShellPolicyError):
+        code = getattr(exc, "shell_code", None) or "POLICY_REJECTED"
+        status_code = 403 if code == "AUTHORIZATION_FAILED" else 400
+        if code == "CONFIRMATION_REQUIRED":
+            status_code = 409
+        detail = exc.messages[0] if getattr(exc, "messages", None) else str(exc)
+        return Response({"result": "error", "code": code, "detail": detail}, status=status_code)
+    if isinstance(exc, ValidationError):
+        detail = exc.messages[0] if getattr(exc, "messages", None) else str(exc)
+        detail_l = str(detail).lower()
+        code = "POLICY_REJECTED"
+        if "not allowed" in detail_l or "blocked" in detail_l:
+            code = "POLICY_REJECTED"
+        elif "workdir" in detail_l or "directory" in detail_l or "workspace" in detail_l:
+            code = "INVALID_WORKDIR"
+        elif "session" in detail_l and ("invalid" in detail_l or "expired" in detail_l):
+            code = "AUTHORIZATION_FAILED"
+        elif "confirm" in detail_l:
+            code = "CONFIRMATION_REQUIRED"
+        status_code = 409 if code == "CONFIRMATION_REQUIRED" else (403 if code == "AUTHORIZATION_FAILED" else 400)
+        return Response({"result": "error", "code": code, "detail": detail}, status=status_code)
+    return Response({"result": "error", "code": "RUNTIME_ERROR", "detail": str(exc)}, status=500)
+
+
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -193,10 +241,15 @@ def shell_command_apiview(request, service_id):
         service = _resolve(request, service_id, action="can_shell")
         token = request.headers.get("X-Shell-Token") or request.data.get("token")
         session = authenticate_session(service, request.user, token)
-        result = execute_command(session, request.data.get("command", ""), confirm=bool(request.data.get("confirm", False)), dry_run=bool(request.data.get("dry_run", False)))
-        return Response({"result":"success", **result}, status=200)
+        result = execute_command(
+            session,
+            request.data.get("command", ""),
+            confirm=bool(request.data.get("confirm", False)),
+            dry_run=bool(request.data.get("dry_run", False)),
+        )
+        return Response({"result": "success", **result}, status=200)
     except (PermissionError, ValidationError) as exc:
-        return Response({"result":"error","detail":str(exc)}, status=403 if isinstance(exc, PermissionError) else 400)
+        return _shell_error_response(exc)
 
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
