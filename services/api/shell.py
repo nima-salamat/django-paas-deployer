@@ -114,25 +114,37 @@ def shell_create_apiview(request, service_id):
     except ValidationError as exc:
         from services.models import ShellSession
         from services.api.sharing import user_can_access_service
-        if "already has an active shell session" in str(exc):
-            active = ShellSession.objects.filter(
-                service=service, status=ShellSession.Status.ACTIVE, expires_at__gt=timezone.now()
-            ).select_related("user").first()
+        detail = exc.messages[0] if getattr(exc, "messages", None) else str(exc)
+        detail_l = str(detail).lower()
+        # Match both legacy and concurrent-limit messages so the UI can show the replace popup.
+        if "active shell session" in detail_l or "already has" in detail_l and "session" in detail_l:
+            active = (
+                ShellSession.objects.filter(
+                    service=service, status=ShellSession.Status.ACTIVE, expires_at__gt=timezone.now()
+                )
+                .select_related("user")
+                .order_by("-last_used_at")
+                .first()
+            )
             is_owner = str(service.user_id) == str(request.user.id)
             can_replace = is_owner or bool(user_can_access_service(service, request.user, action="can_shell_replace")[0])
+            # Owner can always replace their own blocked session.
+            if active and str(active.user_id) == str(request.user.id):
+                can_replace = True
             return Response({
                 "result": "error",
                 "code": "SHELL_SESSION_ACTIVE",
-                "detail": (exc.messages[0] if getattr(exc, "messages", None) else str(exc)),
+                "detail": detail,
                 "can_replace": bool(can_replace),
                 "active_session": {
                     "session_id": str(active.id) if active else None,
                     "user_id": str(active.user_id) if active else None,
                     "username": getattr(active.user, "username", None) if active else None,
+                    "email": getattr(active.user, "email", None) if active else None,
                     "expires_at": active.expires_at if active else None,
                 },
             }, status=409)
-        return Response({"result":"error","detail":str(exc)}, status=409)
+        return Response({"result": "error", "detail": detail}, status=409)
     except PermissionError as exc:
         return Response({"result":"error","detail":str(exc)}, status=403)
     except Service.DoesNotExist:
@@ -666,22 +678,24 @@ def shell_file_apiview(request, service_id):
         return Response({"result":"error","code":"SHELL_FILE_OPERATION_FAILED","detail":detail}, status=400)
 
 
+
 @api_view(["GET"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def shell_audit_apiview(request, service_id):
-    """Chronological activity log for the restricted shell (commands, files, sessions).
+    """Chronological activity log for the restricted shell.
 
-    Supports page-based pagination:
-      ?page=1&page_size=50&action=command
-    Also accepts legacy ?limit=&offset= for compatibility.
+    Query params:
+      page, page_size (or limit/offset)
+      action=command|file_write|...
+      q= free-text search across command/path/detail/action/user
     """
     try:
         service = _resolve(request, service_id, action="can_shell")
         from services.models import ShellAuditEvent
         from math import ceil
+        from django.db.models import Q
 
-        # Prefer page/page_size; fall back to limit/offset.
         try:
             page_size = int(request.query_params.get("page_size") or request.query_params.get("limit") or 50)
         except (TypeError, ValueError):
@@ -702,9 +716,30 @@ def shell_audit_apiview(request, service_id):
             page = (offset // page_size) + 1
 
         action = (request.query_params.get("action") or "").strip()
+        q = (request.query_params.get("q") or request.query_params.get("search") or "").strip()
         qs = ShellAuditEvent.objects.filter(service=service).select_related("user")
         if action:
             qs = qs.filter(action=action)
+        if q:
+            qs = qs.filter(
+                Q(command__icontains=q)
+                | Q(path__icontains=q)
+                | Q(detail__icontains=q)
+                | Q(action__icontains=q)
+                | Q(cwd__icontains=q)
+                | Q(output_preview__icontains=q)
+                | Q(user__email__icontains=q)
+                | Q(user__username__icontains=q)
+            )
+            # One audit row per search request (not per keystroke — client should debounce).
+            record_shell_audit(
+                service=service,
+                user=request.user,
+                action="audit_search",
+                detail=f"q={q[:200]} action_filter={action or '*'}",
+                meta={"q": q[:200], "action_filter": action or ""},
+            )
+
         total = qs.count()
         total_pages = max(1, ceil(total / page_size)) if total else 1
         if page > total_pages:
@@ -725,6 +760,7 @@ def shell_audit_apiview(request, service_id):
                 "meta": r.meta,
                 "user_id": str(r.user_id) if r.user_id else None,
                 "user_email": getattr(r.user, "email", None) if r.user_id else None,
+                "user_username": getattr(r.user, "username", None) if r.user_id else None,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             }
             for r in rows
@@ -737,6 +773,8 @@ def shell_audit_apiview(request, service_id):
             "total_pages": total_pages,
             "has_next": page < total_pages,
             "has_prev": page > 1,
+            "q": q,
+            "action": action,
             "events": data,
         })
     except (PermissionError, Exception) as exc:
@@ -744,6 +782,109 @@ def shell_audit_apiview(request, service_id):
         if isinstance(exc, (PermissionError, DjangoValidationError)):
             return Response({"result": "error", "detail": str(exc)}, status=403 if isinstance(exc, PermissionError) else 400)
         return Response({"result": "error", "detail": str(exc)}, status=400)
+
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def shell_audit_export_apiview(request, service_id):
+    """Download audit events as CSV or JSON (max 5000 rows).
+
+    Query params:
+      format=csv|json  (default csv)
+      action= optional filter
+      q= optional search
+    """
+    try:
+        service = _resolve(request, service_id, action="can_shell")
+        from services.models import ShellAuditEvent
+        from django.db.models import Q
+        from django.http import HttpResponse
+        import csv
+        import io
+        import json as _json
+
+        fmt = (request.query_params.get("format") or "csv").strip().lower()
+        if fmt not in {"csv", "json"}:
+            fmt = "csv"
+        action = (request.query_params.get("action") or "").strip()
+        q = (request.query_params.get("q") or request.query_params.get("search") or "").strip()
+
+        qs = ShellAuditEvent.objects.filter(service=service).select_related("user").order_by("-created_at")
+        if action:
+            qs = qs.filter(action=action)
+        if q:
+            qs = qs.filter(
+                Q(command__icontains=q)
+                | Q(path__icontains=q)
+                | Q(detail__icontains=q)
+                | Q(action__icontains=q)
+                | Q(cwd__icontains=q)
+                | Q(output_preview__icontains=q)
+                | Q(user__email__icontains=q)
+                | Q(user__username__icontains=q)
+            )
+
+        rows = list(qs[:5000])
+        record_shell_audit(
+            service=service,
+            user=request.user,
+            action="audit_download",
+            detail=f"format={fmt} rows={len(rows)} q={q[:120]} action_filter={action or '*'}",
+            meta={"format": fmt, "row_count": len(rows), "q": q[:200], "action_filter": action or ""},
+        )
+
+        if fmt == "json":
+            payload = [
+                {
+                    "id": str(r.id),
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "action": r.action,
+                    "command": r.command,
+                    "path": r.path,
+                    "cwd": r.cwd,
+                    "exit_code": r.exit_code,
+                    "success": r.success,
+                    "detail": r.detail,
+                    "output_preview": r.output_preview,
+                    "user_email": getattr(r.user, "email", None) if r.user_id else None,
+                    "user_username": getattr(r.user, "username", None) if r.user_id else None,
+                }
+                for r in rows
+            ]
+            body = _json.dumps({"service_id": str(service.id), "count": len(payload), "events": payload}, ensure_ascii=False, indent=2)
+            resp = HttpResponse(body, content_type="application/json; charset=utf-8")
+            resp["Content-Disposition"] = f'attachment; filename="shell-audit-{service.id}.json"'
+            return resp
+
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow([
+            "created_at", "action", "success", "exit_code", "command", "path", "cwd",
+            "detail", "user_email", "user_username", "output_preview",
+        ])
+        for r in rows:
+            writer.writerow([
+                r.created_at.isoformat() if r.created_at else "",
+                r.action,
+                "1" if r.success else "0",
+                "" if r.exit_code is None else r.exit_code,
+                r.command,
+                r.path,
+                r.cwd,
+                r.detail,
+                getattr(r.user, "email", "") if r.user_id else "",
+                getattr(r.user, "username", "") if r.user_id else "",
+                (r.output_preview or "")[:500],
+            ])
+        resp = HttpResponse(buf.getvalue(), content_type="text/csv; charset=utf-8")
+        resp["Content-Disposition"] = f'attachment; filename="shell-audit-{service.id}.csv"'
+        return resp
+    except PermissionError as exc:
+        return Response({"result": "error", "detail": str(exc)}, status=403)
+    except Exception as exc:
+        return Response({"result": "error", "detail": str(exc)}, status=400)
+
 
 
 @api_view(["GET"])

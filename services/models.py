@@ -650,6 +650,8 @@ class ShellAuditEvent(BaseModel):
         INTERACTIVE_EXIT = "interactive_exit", _("Interactive exit")
         ENV_VIEW = "env_view", _("Env view")
         HEALTH_VIEW = "health_view", _("Health view")
+        AUDIT_SEARCH = "audit_search", _("Audit search")
+        AUDIT_DOWNLOAD = "audit_download", _("Audit download")
 
     service = models.ForeignKey(
         "services.Service", on_delete=models.CASCADE, related_name="shell_audit_events"
