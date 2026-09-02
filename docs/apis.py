@@ -38,21 +38,6 @@ def has_rule(user, code):
         return False
 
 
-class DocsAssetJWTAuthentication(JWTAuthentication):
-    """Skip JWT parsing for public asset GETs, but authenticate mutations.
-
-    DRF runs authenticators before permission checks. A normal JWTAuthentication
-    would reject an expired/invalid bearer token on a public GET, so the public
-    asset endpoint uses this method-aware authenticator instead of disabling
-    authentication globally for the view.
-    """
-
-    def authenticate(self, request):
-        if request.method in {"GET", "HEAD"}:
-            return None
-        return super().authenticate(request)
-
-
 class DocsManagePermission(BasePermission):
     def has_permission(self, request, view):
         return has_rule(request.user, "docs.manage")
@@ -246,17 +231,21 @@ class DocumentAssetListCreateAPIView(APIView):
 class DocumentAssetAPIView(APIView):
     """Serve assets referenced by the public documentation.
 
-    GET is deliberately public, but only for assets attached to a published
-    document.  Draft/unattached library files never become public just because
-    their UUID is known.
-
-    Mutating methods remain admin-only and therefore use the same JWT/session
-    authentication as the other admin Docs APIs.  ``get_authenticators`` is
-    method-aware so making GET public does not silently make PATCH/DELETE
-    public as well.
+    GET is completely public (no authentication at all).
+    Only assets that belong to a *published* document are served.
+    Mutating methods remain admin-only.
     """
 
-    authentication_classes = [DocsAssetJWTAuthentication, SessionAuthentication]
+    authentication_classes = []
+
+    def get_authenticators(self):
+        # فقط برای متدهای غیر از GET/HEAD authentication داشته باشیم
+        if self.request.method in {"GET", "HEAD"}:
+            return []
+        return [
+            JWTAuthentication(),
+            SessionAuthentication(),
+        ]
 
     def get_permissions(self):
         if self.request.method in {"GET", "HEAD"}:
@@ -284,6 +273,10 @@ class DocumentAssetAPIView(APIView):
         try:
             asset = DocumentAsset.objects.select_related("document").get(pk=asset_id)
         except DocumentAsset.DoesNotExist:
+            raise Http404
+
+        # فقط assetهای مربوط به داکیومنت published عمومی هستند
+        if not asset.document_id or asset.document.status != Document.Status.PUBLISHED:
             raise Http404
         return self._serve_asset(asset, public=True)
 
@@ -335,4 +328,3 @@ class DocumentAssetAdminPreviewAPIView(APIView):
         except DocumentAsset.DoesNotExist:
             raise Http404
         return DocumentAssetAPIView._serve_asset(asset, public=False)
-
