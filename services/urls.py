@@ -4,6 +4,7 @@ from rest_framework.routers import DefaultRouter
 
 from .api.shell import shell_info_apiview, shell_catalog_apiview, shell_create_apiview, shell_replace_apiview, shell_command_apiview, shell_close_apiview, shell_file_apiview, shell_tree_apiview, shell_tree_meta_apiview, shell_audit_apiview, shell_audit_export_apiview, shell_history_apiview, shell_env_apiview, shell_health_apiview
 
+from services.api.runtime import service_logs_apiview, service_logs_export_apiview
 from services.apis import (
     ServiceViewSet,
     PrivateNetworkViewSet,
@@ -16,7 +17,6 @@ from services.apis import (
     force_cancel_deploy_apiview,
     service_status_apiview,
     restart_service_apiview,
-    service_logs_apiview, service_logs_export_apiview,
     volume_files_apiview,
     volume_download_apiview,
     purge_service_runtime_apiview,
