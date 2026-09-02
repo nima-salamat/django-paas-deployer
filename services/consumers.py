@@ -290,34 +290,13 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                 return
             loop = asyncio.get_running_loop()
             def create_exec():
+                from services.shell import prepare_interactive_exec_environment
                 api = container.client.api
-                # PsySH / Laravel Tinker try to write config & history under
-                # $HOME/.config/psysh (or $XDG_CONFIG_HOME/psysh). Many
-                # containers have a non-writable HOME (/root or empty), which
-                # produces "Writing to directory .../psysh is not allowed."
-                # Force a known-writable location under /tmp and ensure the
-                # directory exists before starting the PTY.
-                home = "/tmp"
-                config_home = "/tmp/.config"
-                psysh_dir = f"{config_home}/psysh"
-                environment = [
-                    f"HOME={home}",
-                    f"XDG_CONFIG_HOME={config_home}",
-                    f"XDG_DATA_HOME=/tmp/.local/share",
-                    f"XDG_CACHE_HOME=/tmp/.cache",
-                    f"PSYSH_CONFIG_DIR={psysh_dir}",
-                ]
-                # Best-effort: create the config dir so is_writable() succeeds.
-                try:
-                    container.exec_run(
-                        ["/bin/sh", "-c", f"mkdir -p '{psysh_dir}' && chmod 700 '{psysh_dir}'"],
-                        user="0",
-                        stdout=False,
-                        stderr=False,
-                        tty=False,
-                    )
-                except Exception:
-                    pass
+                environment = prepare_interactive_exec_environment(
+                    container,
+                    platform=getattr(self.session, "platform", None) or "",
+                    root_path=getattr(self.session, "root_path", None) or "",
+                )
                 created = api.exec_create(
                     container.id,
                     cmd=argv,

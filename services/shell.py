@@ -662,6 +662,87 @@ def _command_path_arguments(argv):
         return args
     return []
 
+
+def prepare_interactive_exec_environment(container, *, platform: str = "", root_path: str = "") -> dict[str, str]:
+    """Build an environment dict suitable for interactive REPLs (tinker/psysh/etc).
+
+    PsySH writes config/history under ``$XDG_CONFIG_HOME/psysh`` (preferred)
+    or ``$HOME/.config/psysh``. Our service containers usually run with
+    ``ReadonlyRootfs=true``; only named volumes (Laravel ``storage``) and
+    the ``/tmp`` tmpfs are writable.
+
+    Strategy
+    --------
+    1. Prefer ``<root>/storage/psysh`` for Laravel/PHP (named volume).
+    2. Fall back to ``/tmp/.config/psysh`` (tmpfs, always rw).
+    3. Pre-create the chosen directory as root with mode 0777.
+    4. Merge with the container's existing Env so PATH is preserved
+       (Docker exec ``Env`` replaces the whole environment when set).
+    """
+    platform = (platform or "").strip().lower()
+    root = (root_path or "").strip() or DEFAULT_WORKDIRS.get(platform, "/app")
+
+    # (xdg_config_home, psysh_dir)
+    options: list[tuple[str, str]] = []
+    if platform in {"laravel", "php", "lumen", "symfony"}:
+        storage = f"{root.rstrip('/')}/storage"
+        options.append((storage, f"{storage}/psysh"))
+    options.append(("/tmp/.config", "/tmp/.config/psysh"))
+    options.append(("/tmp", "/tmp/psysh"))
+
+    xdg_config = "/tmp/.config"
+    psysh_dir = "/tmp/.config/psysh"
+    home = "/tmp"
+
+    for xdg, pdir in options:
+        try:
+            container.exec_run(
+                [
+                    "/bin/sh", "-c",
+                    f"mkdir -p '{pdir}' && chmod 0777 '{pdir}' 2>/dev/null; "
+                    f"chmod 0777 '{xdg}' 2>/dev/null; true",
+                ],
+                user="0",
+                stdout=False,
+                stderr=False,
+                tty=False,
+            )
+            probe = container.exec_run(
+                ["test", "-w", pdir],
+                stdout=False,
+                stderr=False,
+                tty=False,
+            )
+            if int(probe.exit_code if probe.exit_code is not None else 1) == 0:
+                xdg_config = xdg
+                psysh_dir = pdir
+                # HOME: keep app root for Laravel so other tools behave;
+                # for /tmp fallbacks use /tmp.
+                home = root if xdg.startswith(root.rstrip("/")) else "/tmp"
+                break
+        except Exception:
+            continue
+
+    # Preserve the container's existing environment (PATH, APP_*, etc.).
+    env: dict[str, str] = {}
+    try:
+        container.reload()
+        for item in (container.attrs.get("Config") or {}).get("Env") or []:
+            if isinstance(item, str) and "=" in item:
+                key, _, value = item.partition("=")
+                if key:
+                    env[key] = value
+    except Exception:
+        pass
+
+    env["HOME"] = home
+    env["XDG_CONFIG_HOME"] = xdg_config
+    env["XDG_DATA_HOME"] = env.get("XDG_DATA_HOME") or "/tmp/.local/share"
+    env["XDG_CACHE_HOME"] = env.get("XDG_CACHE_HOME") or "/tmp/.cache"
+    env["PSYSH_CONFIG_DIR"] = psysh_dir
+    return env
+
+
 def validate_argv_for_container(argv, platform, root, container, *, allow_advanced: bool = False):
     allow_advanced = bool(allow_advanced)
     _validate_platform_command(argv, platform, root, allow_advanced=allow_advanced)
