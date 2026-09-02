@@ -81,6 +81,8 @@ ARTISAN_COMMAND_CATALOG = {
     "list": {"label": "List Artisan commands", "mutating": False},
     "help": {"label": "Help for an Artisan command", "mutating": False},
     "tinker": {"label": "Laravel Tinker (advanced interactive)", "mutating": True, "interactive": True, "advanced": True},
+    "queue:work": {"label": "Process one queue job (one-shot)", "mutating": True, "interactive": False, "advanced": False},
+    "schedule:run": {"label": "Run due scheduled tasks once", "mutating": True, "interactive": False},
     "admin:create": {"label": "Create application administrator", "mutating": True, "interactive": True, "advanced": False, "requires_confirmation": False},
     "route:list": {"label": "List application routes", "mutating": False},
     "route:clear": {"label": "Clear route cache", "mutating": True},
@@ -252,8 +254,40 @@ def _validate_mutating_paths(argv: list[str], root: str, base: str) -> None:
 
 ARTISAN_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]*(?::[a-z][a-z0-9_-]*)*$", re.I)
 DJANGO_COMMAND_RE = re.compile(r"^[a-z][a-z0-9_-]*(?::[a-z0-9_-]+)*$", re.I)
-FORBIDDEN_ARTISAN_PATTERNS = (re.compile(r"^(?:shell)$", re.I), re.compile(r"^(?:serve|queue:work|queue:listen|schedule:work)$", re.I))
-FORBIDDEN_DJANGO_PATTERNS = (re.compile(r"^(?:shell|dbshell|runserver)$", re.I),)
+FORBIDDEN_ARTISAN_PATTERNS = (
+    re.compile(r"^(?:shell)$", re.I),
+    re.compile(r"^(?:serve|queue:listen|schedule:work)$", re.I),
+)
+# queue:work is allowed only as a bounded one-shot (see _artisan_queue_work_allowed).
+ONE_SHOT_ARTISAN_TIMEOUT_SECONDS = 120
+
+FORBIDDEN_DJANGO_PATTERNS = (re.compile(r"^(?:dbshell|runserver)$", re.I),)
+# manage.py shell is advanced-interactive (same gate as tinker), not hard-banned.
+
+
+def _artisan_queue_work_allowed(argv: list[str]) -> bool:
+    """Allow only bounded queue:work invocations (never infinite workers)."""
+    flags = {a for a in argv[3:] if a.startswith("-")}
+    joined = " ".join(argv[3:])
+    if "--once" in flags or "--stop-when-empty" in flags:
+        return True
+    for a in argv[3:]:
+        if a.startswith("--max-jobs="):
+            try:
+                return 1 <= int(a.split("=", 1)[1]) <= 50
+            except ValueError:
+                return False
+        if a == "--max-jobs" and argv[3:].index(a) + 1 < len(argv[3:]):
+            pass
+    # --max-jobs N as two tokens
+    for i, a in enumerate(argv[3:]):
+        if a == "--max-jobs" and i + 1 < len(argv[3:]):
+            try:
+                return 1 <= int(argv[3:][i + 1]) <= 50
+            except ValueError:
+                return False
+    return False
+
 
 def can_use_advanced_shell(service: Service, user) -> bool:
     """Allow advanced interactive developer tools for owners or explicit shares."""
@@ -265,6 +299,54 @@ def can_use_advanced_shell(service: Service, user) -> bool:
         return bool(allowed)
     except Exception:
         return False
+
+
+
+def max_concurrent_shell_sessions() -> int:
+    """Operator-configurable cap on active shell sessions per service."""
+    try:
+        from core.settings_service import get_int
+        return max(1, min(get_int("shell.max_concurrent_sessions_per_service", 1), 20))
+    except Exception:
+        return 1
+
+
+def record_shell_audit(
+    *,
+    service,
+    user=None,
+    session=None,
+    action: str,
+    command: str = "",
+    path: str = "",
+    cwd: str = "",
+    exit_code=None,
+    success: bool = True,
+    detail: str = "",
+    meta: dict | None = None,
+    output_preview: str = "",
+) -> None:
+    """Persist a shell activity row. Never raises into the request path."""
+    try:
+        from services.models import ShellAuditEvent
+        preview = (output_preview or "")[:4000]
+        ShellAuditEvent.objects.create(
+            service=service,
+            user=user,
+            session=session if getattr(session, "pk", None) else None,
+            action=action,
+            command=(command or "")[:8000],
+            path=(path or "")[:1024],
+            cwd=(cwd or "")[:512],
+            exit_code=exit_code,
+            success=bool(success),
+            detail=(detail or "")[:4000],
+            meta=meta or {},
+            output_preview=preview,
+        )
+    except Exception:
+        pass
+
 
 
 def _path_is_within(path: str, root: str) -> bool:
@@ -445,6 +527,11 @@ def _validate_platform_command(argv: list[str], platform: str, root: str, *, all
             if not ARTISAN_NAME_RE.fullmatch(cmd): raise ValidationError('Invalid Artisan command name.')
             if any(rx.fullmatch(cmd) for rx in FORBIDDEN_ARTISAN_PATTERNS):
                 raise ValidationError(f"Artisan command '{cmd}' is blocked because it opens an unrestricted shell/server/worker.")
+            if cmd == "queue:work" and not _artisan_queue_work_allowed(argv):
+                raise ValidationError(
+                    "queue:work is only allowed as a one-shot job. "
+                    "Use: php artisan queue:work --once   or   --max-jobs=1 --stop-when-empty"
+                )
             if cmd in {"tinker", "psysh"} and not allow_advanced:
                 raise ValidationError("Artisan interactive developer tools require advanced shell permission.")
         elif argv[1] not in {'-v','--version','--ini','-m','--modules','-i','--info'}:
@@ -454,11 +541,23 @@ def _validate_platform_command(argv: list[str], platform: str, root: str, *, all
     if base in {'python','python3'}:
         if len(argv)>=2 and argv[1]=='manage.py':
             if len(argv)<3 or not DJANGO_COMMAND_RE.fullmatch(argv[2]): raise ValidationError('Invalid Django manage.py command name.')
-            if any(rx.fullmatch(argv[2]) for rx in FORBIDDEN_DJANGO_PATTERNS): raise ValidationError(f"Django command '{argv[2]}' is blocked because it opens an unrestricted shell/server.")
-        elif len(argv)>=2: raise ValidationError('Arbitrary Python script/inline execution is not allowed.')
-    if base in {'npm','yarn','pnpm'}:
-        if len(argv)<2 or argv[1] not in {'install','ci','test','list','outdated','audit','view','why'}:
-            raise ValidationError('This package-manager command is not allowed.')
+            if any(rx.fullmatch(argv[2]) for rx in FORBIDDEN_DJANGO_PATTERNS):
+                raise ValidationError(f"Django command '{argv[2]}' is blocked because it opens an unrestricted shell/server.")
+            if argv[2] in {"shell", "shell_plus"} and not allow_advanced:
+                raise ValidationError("Django interactive shell requires advanced shell permission.")
+        elif len(argv) >= 2:
+            raise ValidationError("Arbitrary Python script/inline execution is not allowed.")
+    if base in {'npm', 'yarn', 'pnpm'}:
+        if len(argv) < 2:
+            raise ValidationError("This package-manager command is not allowed.")
+        sub = argv[1]
+        if sub in {'install', 'ci', 'test', 'list', 'outdated', 'audit', 'view', 'why'}:
+            pass
+        elif sub == "run" and len(argv) >= 3 and re.fullmatch(r"[A-Za-z0-9:_./@-]+", argv[2] or ""):
+            # npm run <script> — script name is constrained; no extra shell metacharacters.
+            pass
+        else:
+            raise ValidationError("This package-manager command is not allowed.")
     if base=='npx' and (len(argv)<2 or argv[1] not in {'vite','tsc','eslint','prettier'}): raise ValidationError('Only approved npx tools are allowed.')
     if base in {'pip','pip3'} and (len(argv)<2 or argv[1] not in {'install','list','show','freeze','check','index','wheel'}): raise ValidationError('This pip command is not allowed.')
 
@@ -508,16 +607,21 @@ def create_session(service: Service, user, workdir: str | None = None) -> tuple[
     # Lazy import avoids model cycle during Django app loading.
     from services.models import ShellSession
     expire_idle_sessions(service=service, now=now)
+    limit = max_concurrent_shell_sessions()
     with transaction.atomic():
         active_qs = ShellSession.objects.select_for_update().filter(
             service=service, status=ShellSession.Status.ACTIVE
         )
-        active = active_qs.filter(expires_at__gt=now).first()
-        if active:
-            raise ValidationError("This service already has an active shell session.")
+        # Expire stale rows first so they do not count against the limit.
         expired_ids = list(active_qs.filter(expires_at__lte=now).values_list("id", flat=True))
         if expired_ids:
             active_qs.filter(id__in=expired_ids).update(status=ShellSession.Status.EXPIRED)
+        active_count = active_qs.filter(expires_at__gt=now).count()
+        if active_count >= limit:
+            raise ValidationError(
+                f"This service already has {active_count} active shell session(s) "
+                f"(limit {limit}). Close or replace an existing session first."
+            )
         token = secrets.token_urlsafe(32)
         session = ShellSession.objects.create(
             service=service, user=user, token_hash=_token_hash(token),
@@ -525,6 +629,14 @@ def create_session(service: Service, user, workdir: str | None = None) -> tuple[
             status=ShellSession.Status.ACTIVE,
             expires_at=_session_expiry(now),
         )
+    try:
+        record_shell_audit(
+            service=service, user=user, session=session,
+            action="session_open", cwd=workdir,
+            detail=f"platform={platform} limit={limit}",
+        )
+    except Exception:
+        pass
     return session, token
 
 
@@ -783,6 +895,30 @@ def _run_argv(container,argv,workdir,stdin_data=None):
         try: sock.close()
         except Exception: pass
 
+
+def _run_argv_with_timeout(container, argv, workdir, *, timeout_seconds: int = 120):
+    """Run argv with a hard wall-clock timeout; kill the exec if it overruns."""
+    import concurrent.futures
+    timeout_seconds = max(5, min(int(timeout_seconds or 120), 600))
+
+    def _call():
+        return _run_argv(container, argv, workdir)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        fut = pool.submit(_call)
+        try:
+            return fut.result(timeout=timeout_seconds)
+        except concurrent.futures.TimeoutError:
+            # Best-effort: Docker cannot easily kill a single exec from here;
+            # return a controlled failure so the API never hangs forever.
+            return (
+                124,
+                b"",
+                f"Command timed out after {timeout_seconds}s and was aborted.\n".encode(),
+            )
+
+
+
 def _probe_directory(container, path: str) -> tuple[bool, str]:
     """Check a directory inside the running container using the real runtime user.
 
@@ -896,11 +1032,17 @@ def command_catalog(platform: str) -> list[dict]:
         for c in sorted(GENERIC_COMMAND_CATALOG)
     ]
     if platform in {"laravel", "php"}:
-        items.extend(
-            {"command": f"php artisan {name}", "label": meta["label"],
-             "mutating": bool(meta.get("mutating")), "dangerous": bool(meta.get("destructive")), "interactive": bool(meta.get("interactive", False))}
-            for name, meta in sorted(ARTISAN_COMMAND_CATALOG.items())
-        )
+        for name, meta in sorted(ARTISAN_COMMAND_CATALOG.items()):
+            cmd = f"php artisan {name}"
+            if name == "queue:work":
+                cmd = "php artisan queue:work --once"
+            items.append({
+                "command": cmd,
+                "label": meta["label"],
+                "mutating": bool(meta.get("mutating")),
+                "dangerous": bool(meta.get("destructive")),
+                "interactive": bool(meta.get("interactive", False)),
+            })
         items.extend([
             {"command": "php -v", "label": "PHP version", "mutating": False, "dangerous": False, "interactive": False},
             {"command": "php --ini", "label": "PHP ini location", "mutating": False, "dangerous": False, "interactive": False},
@@ -918,6 +1060,7 @@ def command_catalog(platform: str) -> list[dict]:
             {"command": "python manage.py migrate", "label": "Run migrations", "mutating": True, "dangerous": False, "interactive": False},
             {"command": "python manage.py makemigrations", "label": "Create migrations", "mutating": True, "dangerous": False, "interactive": False},
             {"command": "python manage.py createsuperuser", "label": "Create Django superuser", "mutating": True, "dangerous": False, "interactive": True, "input_mode": "line"},
+            {"command": "python manage.py shell", "label": "Django shell (advanced interactive)", "mutating": True, "dangerous": False, "interactive": True, "advanced": True},
             {"command": "python manage.py changepassword", "label": "Change Django user password", "mutating": True, "dangerous": False, "interactive": True, "input_mode": "line"},
             {"command": "python manage.py collectstatic", "label": "Collect static files", "mutating": True, "dangerous": False, "interactive": False},
             {"command": "pip list", "label": "Installed Python packages", "mutating": False, "dangerous": False, "interactive": False},
@@ -942,16 +1085,58 @@ def command_catalog(platform: str) -> list[dict]:
         unique.append(item)
     return unique
 
-def execute_command(session, command: str, *, confirm: bool = False) -> dict:
-    parts=parse_safe_command(command)
-    if len(parts)>1: return execute_compound_command(session,command,confirm=confirm)
-    argv=parts[0][0]; container=_resolve_container(session.service); validate_argv_for_container(argv,session.platform,session.root_path,container, allow_advanced=can_use_advanced_shell(session.service, session.user))
-    if _is_destructive_command(argv) and not confirm: raise ValidationError('This command changes application state. Confirmation is required.')
-    if argv[0]=='cd':
-        if len(argv)>2: raise ValidationError('cd accepts one path.')
-        target=argv[1] if len(argv)==2 else session.root_path
-        candidate=target if target.startswith('/') else posixpath.join(session.workdir,target)
-        safe=_safe_workdir(candidate,session.root_path)
+def execute_command(session, command: str, *, confirm: bool = False, dry_run: bool = False) -> dict:
+    parts = parse_safe_command(command)
+    if len(parts) > 1:
+        if dry_run:
+            plan = []
+            for argv, op in parts:
+                plan.append({"argv": argv, "operator": op, "destructive": _is_destructive_command(argv)})
+            record_shell_audit(
+                service=session.service, user=getattr(session, "user", None), session=session,
+                action="command_dry_run", command=command, cwd=session.workdir,
+                success=True, detail="compound", meta={"plan": plan},
+            )
+            return {
+                "exit_code": 0, "stdout": "", "stderr": "", "cwd": session.workdir,
+                "dry_run": True, "plan": plan,
+            }
+        result = execute_compound_command(session, command, confirm=confirm)
+        record_shell_audit(
+            service=session.service, user=getattr(session, "user", None), session=session,
+            action="command", command=command, cwd=result.get("cwd") or session.workdir,
+            exit_code=result.get("exit_code"), success=int(result.get("exit_code") or 0) == 0,
+            output_preview=(result.get("stdout") or "")[:2000],
+            detail=(result.get("stderr") or "")[:500],
+        )
+        return result
+
+    argv = parts[0][0]
+    container = _resolve_container(session.service)
+    validate_argv_for_container(
+        argv, session.platform, session.root_path, container,
+        allow_advanced=can_use_advanced_shell(session.service, session.user),
+    )
+    if dry_run:
+        plan = [{"argv": argv, "operator": None, "destructive": _is_destructive_command(argv)}]
+        record_shell_audit(
+            service=session.service, user=getattr(session, "user", None), session=session,
+            action="command_dry_run", command=command, cwd=session.workdir,
+            success=True, meta={"plan": plan},
+        )
+        return {
+            "exit_code": 0, "stdout": "", "stderr": "", "cwd": session.workdir,
+            "dry_run": True, "plan": plan,
+            "requires_confirmation": _is_destructive_command(argv),
+        }
+    if _is_destructive_command(argv) and not confirm:
+        raise ValidationError("This command changes application state. Confirmation is required.")
+    if argv[0] == "cd":
+        if len(argv) > 2:
+            raise ValidationError("cd accepts one path.")
+        target = argv[1] if len(argv) == 2 else session.root_path
+        candidate = target if target.startswith("/") else posixpath.join(session.workdir, target)
+        safe = _safe_workdir(candidate, session.root_path)
         ok, resolved = _probe_directory(container, safe)
         if not ok:
             parent = posixpath.dirname(safe) or session.root_path
@@ -961,20 +1146,61 @@ def execute_command(session, command: str, *, confirm: bool = False) -> dict:
             except Exception:
                 exists = False
             if exists:
-                raise ValidationError(f'Directory exists but is not accessible to the container user: {safe}')
-            raise ValidationError(f'Directory does not exist or is not accessible: {safe}')
-        session.workdir=safe; now=timezone.now(); session.last_used_at=now; session.expires_at=_session_expiry(now); session.save(update_fields=['workdir','last_used_at','expires_at'])
-        return {'exit_code':0,'stdout':safe+'\n','stderr':'','cwd':safe}
-    if os.path.basename(argv[0]) in {'nano','vi','vim'}: raise ValidationError('Use the built-in file editor for text files.')
-    if os.path.basename(argv[0]).lower() in {"mkdir","touch","rm","rmdir","cp","mv","tee"}:
-        code,out,err=_run_mutating_argv(container,argv,session.workdir)
+                raise ValidationError(f"Directory exists but is not accessible to the container user: {safe}")
+            raise ValidationError(f"Directory does not exist or is not accessible: {safe}")
+        session.workdir = safe
+        now = timezone.now()
+        session.last_used_at = now
+        session.expires_at = _session_expiry(now)
+        session.save(update_fields=["workdir", "last_used_at", "expires_at"])
+        result = {"exit_code": 0, "stdout": safe + "\n", "stderr": "", "cwd": safe}
+        record_shell_audit(
+            service=session.service, user=getattr(session, "user", None), session=session,
+            action="command", command=command, cwd=safe, exit_code=0, success=True,
+        )
+        return result
+    if os.path.basename(argv[0]) in {"nano", "vi", "vim"}:
+        raise ValidationError("Use the built-in file editor for text files.")
+    base_name = os.path.basename(argv[0]).lower()
+    is_one_shot_job = (
+        base_name == "php"
+        and len(argv) >= 3
+        and argv[1] == "artisan"
+        and argv[2] in {"queue:work", "schedule:run"}
+    )
+    if base_name in {"mkdir", "touch", "rm", "rmdir", "cp", "mv", "tee"}:
+        code, out, err = _run_mutating_argv(container, argv, session.workdir)
+    elif is_one_shot_job:
+        code, out, err = _run_argv_with_timeout(
+            container, argv, session.workdir, timeout_seconds=ONE_SHOT_ARTISAN_TIMEOUT_SECONDS
+        )
     else:
-        code,out,err=_run_argv(container,argv,session.workdir)
-    now=timezone.now(); session.last_used_at=now; session.expires_at=_session_expiry(now); session.save(update_fields=['last_used_at','expires_at'])
-    return {'exit_code':code,'stdout':out[:MAX_OUTPUT_BYTES].decode('utf-8','replace'),'stderr':err[:MAX_OUTPUT_BYTES].decode('utf-8','replace'),'cwd':session.workdir}
+        code, out, err = _run_argv(container, argv, session.workdir)
+    now = timezone.now()
+    session.last_used_at = now
+    session.expires_at = _session_expiry(now)
+    session.save(update_fields=["last_used_at", "expires_at"])
+    stdout = out[:MAX_OUTPUT_BYTES].decode("utf-8", "replace")
+    stderr = err[:MAX_OUTPUT_BYTES].decode("utf-8", "replace")
+    result = {"exit_code": code, "stdout": stdout, "stderr": stderr, "cwd": session.workdir}
+    record_shell_audit(
+        service=session.service, user=getattr(session, "user", None), session=session,
+        action="command", command=command, cwd=session.workdir,
+        exit_code=code, success=int(code or 0) == 0,
+        output_preview=stdout[:2000], detail=stderr[:500],
+        meta={"argv": argv},
+    )
+    return result
 
 
 def close_session(session) -> None:
     session.status = session.Status.CLOSED
     session.closed_at = timezone.now()
     session.save(update_fields=["status", "closed_at"])
+    try:
+        record_shell_audit(
+            service=session.service, user=getattr(session, "user", None), session=session,
+            action="session_close", cwd=getattr(session, "workdir", "") or "",
+        )
+    except Exception:
+        pass

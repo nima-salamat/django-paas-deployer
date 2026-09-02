@@ -295,3 +295,10 @@ def base_images_auto_register_existing() -> bool:
 
 def base_images_retain_after_deploy() -> bool:
     return bool(_wagtail_core_value("base_images_retain_after_deploy", get_bool("base_images.retain_after_deploy", True)))
+
+def max_concurrent_shell_sessions() -> int:
+    return max(1, min(get_int("shell.max_concurrent_sessions_per_service", 1), 20))
+
+
+def shell_audit_retention_days() -> int:
+    return max(1, min(get_int("shell.audit_retention_days", 90), 3650))

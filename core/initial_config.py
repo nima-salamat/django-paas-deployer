@@ -215,6 +215,27 @@ DEFAULTS: list[dict] = [
         "label": "pip default timeout (seconds)",
         "description": "PIP_DEFAULT_TIMEOUT injected into Python Dockerfiles.",
     },
+    {
+        "key": "shell.max_concurrent_sessions_per_service",
+        "type": "int",
+        "category": "shell",
+        "label": "Max concurrent shell sessions per service",
+        "description": "How many active restricted shell sessions a single service may have at once (1–20). Configurable in Wagtail/System settings.",
+        "default": 1,
+        "is_editable": True,
+        "is_secret": False,
+    },
+    {
+        "key": "shell.audit_retention_days",
+        "type": "int",
+        "category": "shell",
+        "label": "Shell audit log retention (days)",
+        "description": "Audit events older than this many days may be purged by maintenance jobs.",
+        "default": 90,
+        "is_editable": True,
+        "is_secret": False,
+    },
+
 ]
 
 

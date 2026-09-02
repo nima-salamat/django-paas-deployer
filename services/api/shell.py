@@ -11,7 +11,7 @@ from rest_framework import status
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 from .common import _get_service_for_user_or_share
-from ..shell import authenticate_session, close_session, create_session, terminate_active_session, execute_command, command_catalog, _platform_for_service, _resolve_container, _safe_workdir, _assert_container_path_within, path_access, batch_path_writable
+from ..shell import authenticate_session, close_session, create_session, terminate_active_session, execute_command, command_catalog, _platform_for_service, _resolve_container, _safe_workdir, record_shell_audit, max_concurrent_shell_sessions, _assert_container_path_within, path_access, batch_path_writable
 
 
 def _resolve(request, service_id, action="can_shell"):
@@ -181,7 +181,7 @@ def shell_command_apiview(request, service_id):
         service = _resolve(request, service_id, action="can_shell")
         token = request.headers.get("X-Shell-Token") or request.data.get("token")
         session = authenticate_session(service, request.user, token)
-        result = execute_command(session, request.data.get("command", ""), confirm=bool(request.data.get("confirm", False)))
+        result = execute_command(session, request.data.get("command", ""), confirm=bool(request.data.get("confirm", False)), dry_run=bool(request.data.get("dry_run", False)))
         return Response({"result":"success", **result}, status=200)
     except (PermissionError, ValidationError) as exc:
         return Response({"result":"error","detail":str(exc)}, status=403 if isinstance(exc, PermissionError) else 400)
@@ -485,6 +485,7 @@ def shell_file_apiview(request, service_id):
                 raise DjangoValidationError(f"Unable to create file: {detail}")
             if privileged:
                 _reassign_to_runtime_user(container, safe_path)
+            record_shell_audit(service=service, user=request.user, session=session, action="file_write", path=safe_path, cwd=getattr(session, "workdir", "") or "", command=f"file:file_write {safe_path}", success=True)
             return Response({"result":"success", "path":safe_path, "action":"create", "content":"", "writable":True, "mode":"rw", "mount_writable":True, "effective_writable":True, "used_privileged_file_manager": privileged})
         if action == "create_folder":
             if safe_path == session.root_path:
@@ -510,6 +511,7 @@ def shell_file_apiview(request, service_id):
                 raise DjangoValidationError(f"Unable to create folder: {detail}")
             if privileged:
                 _reassign_to_runtime_user(container, safe_path)
+            record_shell_audit(service=service, user=request.user, session=session, action="file_mkdir", path=safe_path, cwd=getattr(session, "workdir", "") or "", command=f"file:file_mkdir {safe_path}", success=True)
             return Response({"result":"success", "path":safe_path, "action":"create_folder", "writable":True, "mode":"rw", "mount_writable":True, "effective_writable":True, "used_privileged_file_manager": privileged})
         if action == "delete":
             if safe_path == session.root_path:
@@ -544,6 +546,7 @@ def shell_file_apiview(request, service_id):
                 out, err = result.output if result is not None and isinstance(result.output, tuple) else ((result.output if result is not None else b"") or b"", b"")
                 detail = (err or out or b"Unable to delete path.").decode("utf-8", "replace").strip()
                 raise DjangoValidationError(detail)
+            record_shell_audit(service=service, user=request.user, session=session, action="file_delete", path=safe_path, cwd=getattr(session, "workdir", "") or "", command=f"file:file_delete {safe_path}", success=True)
             return Response({"result":"success", "path":safe_path, "action":"delete", "kind":kind, "used_privileged_file_manager": privileged})
         if action == "rename":
             if safe_path == session.root_path:
@@ -561,6 +564,7 @@ def shell_file_apiview(request, service_id):
                 out, err = result.output if result is not None and isinstance(result.output, tuple) else ((result.output if result is not None else b"") or b"", b"")
                 detail = (err or out or b"Unable to rename path.").decode("utf-8", "replace").strip()
                 raise DjangoValidationError(detail)
+            record_shell_audit(service=service, user=request.user, session=session, action="file_rename", path=safe_path, cwd=getattr(session, "workdir", "") or "", command=f"file:file_rename {safe_path}", success=True)
             return Response({"result":"success", "path":safe_path, "new_path":new_path, "action":"rename", "used_privileged_file_manager": privileged})
         if action == "read":
             result = container.exec_run(["cat", safe_path], workdir=session.workdir, stdout=True, stderr=True, demux=True, tty=False)
@@ -600,6 +604,7 @@ def shell_file_apiview(request, service_id):
                     if code == 0:
                         if exec_user == "0":
                             _reassign_to_runtime_user(container, safe_path)
+                        record_shell_audit(service=service, user=request.user, session=session, action="file_write", path=safe_path, cwd=getattr(session, "workdir", "") or "", command=f"file:file_write {safe_path}", success=True)
                         return Response({"result":"success", "path":safe_path, "action":"write", "writable":True, "mode":"rw", "mount_writable":True, "effective_writable":bool(access.get("effective_writable")), "managed_writable":True, "used_privileged_file_manager":exec_user == "0"})
                     last_detail = output.decode("utf-8", "replace").strip() or last_detail
                 except Exception as exc:
@@ -616,3 +621,170 @@ def shell_file_apiview(request, service_id):
         # operational error so the terminal can show the exact action that failed.
         detail = str(exc).strip() or "File operation failed."
         return Response({"result":"error","code":"SHELL_FILE_OPERATION_FAILED","detail":detail}, status=400)
+
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def shell_audit_apiview(request, service_id):
+    """Chronological activity log for the restricted shell (commands, files, sessions)."""
+    try:
+        service = _resolve(request, service_id, action="can_shell")
+        from services.models import ShellAuditEvent
+        limit = min(int(request.query_params.get("limit") or 100), 500)
+        offset = max(int(request.query_params.get("offset") or 0), 0)
+        action = (request.query_params.get("action") or "").strip()
+        qs = ShellAuditEvent.objects.filter(service=service).select_related("user")
+        if action:
+            qs = qs.filter(action=action)
+        total = qs.count()
+        rows = list(qs.order_by("-created_at")[offset : offset + limit])
+        data = [
+            {
+                "id": str(r.id),
+                "action": r.action,
+                "command": r.command,
+                "path": r.path,
+                "cwd": r.cwd,
+                "exit_code": r.exit_code,
+                "success": r.success,
+                "detail": r.detail,
+                "output_preview": r.output_preview,
+                "meta": r.meta,
+                "user_id": str(r.user_id) if r.user_id else None,
+                "user_email": getattr(r.user, "email", None) if r.user_id else None,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ]
+        return Response({"result": "success", "total": total, "events": data})
+    except (PermissionError, Exception) as exc:
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        if isinstance(exc, (PermissionError, DjangoValidationError)):
+            return Response({"result": "error", "detail": str(exc)}, status=403 if isinstance(exc, PermissionError) else 400)
+        return Response({"result": "error", "detail": str(exc)}, status=400)
+
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def shell_history_apiview(request, service_id):
+    """Command history for the current user on this service (from audit log)."""
+    try:
+        service = _resolve(request, service_id, action="can_shell")
+        from services.models import ShellAuditEvent
+        limit = min(int(request.query_params.get("limit") or 50), 200)
+        qs = (
+            ShellAuditEvent.objects.filter(
+                service=service, user=request.user, action__in=["command", "command_dry_run", "interactive_start"]
+            )
+            .exclude(command="")
+            .order_by("-created_at")
+        )
+        seen = set()
+        commands = []
+        for row in qs[: limit * 3]:
+            cmd = (row.command or "").strip()
+            if not cmd or cmd in seen:
+                continue
+            seen.add(cmd)
+            commands.append({"command": cmd, "created_at": row.created_at.isoformat() if row.created_at else None, "success": row.success})
+            if len(commands) >= limit:
+                break
+        return Response({"result": "success", "commands": commands})
+    except Exception as exc:
+        return Response({"result": "error", "detail": str(exc)}, status=400)
+
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def shell_env_apiview(request, service_id):
+    """Masked environment variables from the running container."""
+    try:
+        service = _resolve(request, service_id, action="can_shell")
+        container = _resolve_container(service)
+        container.reload()
+        raw = (container.attrs.get("Config") or {}).get("Env") or []
+        secret_keys = (
+            "PASSWORD", "SECRET", "TOKEN", "KEY", "PRIVATE", "CREDENTIAL",
+            "DATABASE_URL", "REDIS_URL", "MONGO", "AWS_", "MAIL_", "SMTP",
+        )
+        items = []
+        for entry in raw:
+            if not isinstance(entry, str) or "=" not in entry:
+                continue
+            key, _, value = entry.partition("=")
+            upper = key.upper()
+            masked = any(s in upper for s in secret_keys)
+            items.append({
+                "key": key,
+                "value": ("***" if not value else (value[:2] + "***" + value[-2:] if len(value) > 6 else "***")) if masked else value,
+                "masked": masked,
+            })
+        items.sort(key=lambda x: x["key"])
+        record_shell_audit(service=service, user=request.user, action="env_view", detail=f"{len(items)} vars")
+        return Response({"result": "success", "env": items})
+    except Exception as exc:
+        return Response({"result": "error", "detail": str(exc)}, status=400)
+
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def shell_health_apiview(request, service_id):
+    """Lightweight health snapshot for the service shell panel."""
+    try:
+        service = _resolve(request, service_id, action="can_shell")
+        platform = _platform_for_service(service)
+        info = {
+            "platform": platform,
+            "service_status": getattr(service, "status", None),
+            "read_only": bool(getattr(service, "read_only", False)),
+            "max_sessions": max_concurrent_shell_sessions(),
+            "container": {"running": False, "name": None},
+            "checks": [],
+        }
+        try:
+            container = _resolve_container(service)
+            container.reload()
+            info["container"] = {
+                "running": str(container.status) == "running",
+                "name": container.name,
+                "status": container.status,
+            }
+            # Platform-specific cheap probes
+            probes = []
+            if platform in {"laravel", "php"}:
+                probes = [
+                    (["php", "-v"], "php_version"),
+                    (["php", "artisan", "about", "--only=environment"], "laravel_env"),
+                ]
+            elif platform in {"django", "python"}:
+                probes = [(["python", "--version"], "python_version")]
+            elif platform == "node":
+                probes = [(["node", "-v"], "node_version"), (["npm", "-v"], "npm_version")]
+            for argv, label in probes:
+                try:
+                    result = container.exec_run(argv, workdir=DEFAULT_WORKDIR_FOR(platform), stdout=True, stderr=True, demux=True, tty=False)
+                    out, err = result.output if isinstance(result.output, tuple) else (result.output or b"", b"")
+                    text = ((out or b"") + (err or b"")).decode("utf-8", "replace").strip().splitlines()
+                    info["checks"].append({
+                        "id": label,
+                        "ok": int(result.exit_code or 0) == 0,
+                        "output": (text[0] if text else "")[:200],
+                    })
+                except Exception as exc:
+                    info["checks"].append({"id": label, "ok": False, "output": str(exc)[:200]})
+        except Exception as exc:
+            info["container"]["error"] = str(exc)[:300]
+        record_shell_audit(service=service, user=request.user, action="health_view", detail=platform)
+        return Response({"result": "success", **info})
+    except Exception as exc:
+        return Response({"result": "error", "detail": str(exc)}, status=400)
+
+
+def DEFAULT_WORKDIR_FOR(platform: str) -> str:
+    from services.shell import DEFAULT_WORKDIRS
+    return DEFAULT_WORKDIRS.get(platform, "/app")
+

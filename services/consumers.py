@@ -273,7 +273,15 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                 await self._write_stdin(control)
             return
         if message_type == "resize":
-            await self.send_json({"type": "resize.unsupported"})
+            # Best-effort: store cols/rows for subsequent execs via environment.
+            try:
+                cols = max(20, min(int(content.get("cols") or 120), 500))
+                rows = max(5, min(int(content.get("rows") or 40), 200))
+            except (TypeError, ValueError):
+                cols, rows = 120, 40
+            self.term_cols = cols
+            self.term_rows = rows
+            await self.send_json({"type": "resize.ack", "cols": cols, "rows": rows})
             return
         await self.send_json({"type": "error", "message": "Unsupported shell message."})
 
@@ -307,6 +315,10 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                     platform=getattr(self.session, "platform", None) or "",
                     root_path=getattr(self.session, "root_path", None) or "",
                 )
+                cols = getattr(self, "term_cols", None) or 120
+                rows = getattr(self, "term_rows", None) or 40
+                environment["COLUMNS"] = str(cols)
+                environment["LINES"] = str(rows)
                 created = api.exec_create(
                     container.id,
                     cmd=argv,
@@ -321,6 +333,14 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                 return created["Id"], sock
             self.exec_id, self.exec_socket = await loop.run_in_executor(None, create_exec)
             await self.send_json({"type": "process.started", "exec_id": self.exec_id, "cwd": self.session.workdir, "command": command})
+            try:
+                from .shell import record_shell_audit
+                await database_sync_to_async(record_shell_audit)(
+                    service=self.service, user=self.user, session=self.session,
+                    action="interactive_start", command=command, cwd=self.session.workdir,
+                )
+            except Exception:
+                pass
             self.exec_task = asyncio.create_task(self._read_exec_output(command))
         except Exception as exc:
             self.exec_id = None

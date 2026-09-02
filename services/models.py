@@ -621,13 +621,64 @@ class ShellSession(BaseModel):
 
     class Meta:
         indexes = [models.Index(fields=("service", "status", "expires_at"))]
-        constraints = [
-            models.UniqueConstraint(
-                fields=("service",),
-                condition=models.Q(status="active"),
-                name="uniq_active_shell_session_service",
-            )
-        ]
+        # Concurrent active sessions are limited in application code via
+        # SystemSetting ``shell.max_concurrent_sessions_per_service`` (Wagtail).
 
     def __str__(self):
         return f"Shell {self.service_id} / {self.user_id} / {self.status}"
+
+
+class ShellAuditEvent(BaseModel):
+    """Unified audit trail for every restricted-shell action.
+
+    Commands, file edits, session lifecycle, and interactive PTY events all
+    land here so the UI can show one chronological activity log.
+    """
+
+    class Action(models.TextChoices):
+        SESSION_OPEN = "session_open", _("Session open")
+        SESSION_CLOSE = "session_close", _("Session close")
+        SESSION_REPLACE = "session_replace", _("Session replace")
+        COMMAND = "command", _("Command")
+        COMMAND_DRY_RUN = "command_dry_run", _("Command dry-run")
+        FILE_READ = "file_read", _("File read")
+        FILE_WRITE = "file_write", _("File write")
+        FILE_DELETE = "file_delete", _("File delete")
+        FILE_RENAME = "file_rename", _("File rename")
+        FILE_MKDIR = "file_mkdir", _("File mkdir")
+        INTERACTIVE_START = "interactive_start", _("Interactive start")
+        INTERACTIVE_EXIT = "interactive_exit", _("Interactive exit")
+        ENV_VIEW = "env_view", _("Env view")
+        HEALTH_VIEW = "health_view", _("Health view")
+
+    service = models.ForeignKey(
+        "services.Service", on_delete=models.CASCADE, related_name="shell_audit_events"
+    )
+    user = models.ForeignKey(
+        "users.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="shell_audit_events"
+    )
+    session = models.ForeignKey(
+        "services.ShellSession", on_delete=models.SET_NULL, null=True, blank=True, related_name="audit_events"
+    )
+    action = models.CharField(max_length=32, choices=Action.choices, db_index=True)
+    command = models.TextField(blank=True, default="")
+    path = models.CharField(max_length=1024, blank=True, default="")
+    cwd = models.CharField(max_length=512, blank=True, default="")
+    exit_code = models.IntegerField(null=True, blank=True)
+    success = models.BooleanField(default=True)
+    detail = models.TextField(blank=True, default="")
+    meta = models.JSONField(default=dict, blank=True)
+    # Short stdout/stderr preview for forensics (not full output).
+    output_preview = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=("service", "-created_at")),
+            models.Index(fields=("service", "action", "-created_at")),
+            models.Index(fields=("user", "-created_at")),
+        ]
+
+    def __str__(self):
+        return f"ShellAudit {self.action} service={self.service_id}"
+
