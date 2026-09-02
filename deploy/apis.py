@@ -13,7 +13,7 @@ from uuid import uuid4
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.http import FileResponse
+from django.http import FileResponse, HttpResponse
 from pathlib import Path
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -238,10 +238,33 @@ class DeployViewSet(ModelViewSet):
 
 
     def list(self, request, *args, **kwargs):
+        from django.utils.dateparse import parse_datetime
         service_id = request.query_params.get("service_id", "")
-        queryset = self.get_queryset().order_by("-created_at")
+        status_f = (request.query_params.get("status") or "").strip()
+        stage_f = (request.query_params.get("stage") or "").strip()
+        q = (request.query_params.get("q") or "").strip()
+        created_by = (request.query_params.get("created_by") or "").strip()
+        from_ts = parse_datetime(request.query_params.get("from") or "") if request.query_params.get("from") else None
+        to_ts = parse_datetime(request.query_params.get("to") or "") if request.query_params.get("to") else None
+        ordering = (request.query_params.get("ordering") or "-created_at").strip()
+        allowed_ordering = {"created_at", "-created_at", "status", "-status"}
+        if ordering not in allowed_ordering:
+            ordering = "-created_at"
+        queryset = self.get_queryset().order_by(ordering)
         if service_id:
             queryset = queryset.filter(service=service_id)
+        if status_f:
+            queryset = queryset.filter(status=status_f)
+        if stage_f:
+            queryset = queryset.filter(stage=stage_f)
+        if q:
+            queryset = queryset.filter(name__icontains=q)
+        if created_by:
+            queryset = queryset.filter(created_by_id=created_by)
+        if from_ts:
+            queryset = queryset.filter(created_at__gte=from_ts)
+        if to_ts:
+            queryset = queryset.filter(created_at__lte=to_ts)
 
         page = self.paginate_queryset(queryset=queryset)
         serializer = self.get_serializer(page, many=True)
@@ -577,6 +600,11 @@ class DeployViewSet(ModelViewSet):
         if denied is not None:
             return denied
         return deploy_logs_apiview(request, pk)
+
+
+    @action(detail=True, methods=["get"], url_path="logs/export")
+    def export_logs(self, request, pk=None):
+        return deploy_logs_export_apiview(request, pk)
 
     @action(detail=True, methods=["post"])
     def rollback(self, request, pk=None):
@@ -1109,6 +1137,28 @@ def deploy_logs_apiview(request, pk):
 
     try:
         base_qs = DeployLog.objects.using(settings.DEPLOYMENT_LOG_DB_ALIAS).filter(deploy_id=deploy.pk)
+
+        q = (request.query_params.get("q") or "").strip()
+        level_f = (request.query_params.get("level") or "").strip()
+        stage_f = (request.query_params.get("stage") or "").strip()
+        event_type_f = (request.query_params.get("event_type") or "").strip()
+        from django.utils.dateparse import parse_datetime as _pdt
+        from_ts = _pdt(request.query_params.get("from") or "") if request.query_params.get("from") else None
+        to_ts = _pdt(request.query_params.get("to") or "") if request.query_params.get("to") else None
+
+        if q:
+            base_qs = base_qs.filter(message__icontains=q)
+        if level_f:
+            base_qs = base_qs.filter(level__iexact=level_f)
+        if stage_f:
+            base_qs = base_qs.filter(stage=stage_f)
+        if event_type_f:
+            base_qs = base_qs.filter(event_type=event_type_f)
+        if from_ts:
+            base_qs = base_qs.filter(created_at__gte=from_ts)
+        if to_ts:
+            base_qs = base_qs.filter(created_at__lte=to_ts)
+
         # Force a lightweight connection/table check now so the API can return
         # a stable service response instead of an uncaught DB exception.
         list(base_qs.values_list("id", flat=True)[:1])
@@ -1199,6 +1249,95 @@ def _extract_id(value):
                 pass
         return value or None
     return value
+
+
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def deploy_logs_export_apiview(request, pk):
+    """Bounded server-side export of DeployLog rows for one deployment."""
+    from django.http import StreamingHttpResponse, HttpResponse
+    from django.utils.dateparse import parse_datetime as _pdt
+    import json
+
+    deploy = get_object_or_404(
+        Deploy.objects.select_related("service", "service__user"),
+        pk=pk,
+    )
+    denied = _require_deploy_service_action(deploy, request.user, "can_view_deploy_logs")
+    if denied is not None:
+        return denied
+
+    EXPORT_MAX_ROWS = 5000
+    try:
+        limit = min(max(int(request.query_params.get("limit", EXPORT_MAX_ROWS)), 1), EXPORT_MAX_ROWS)
+    except ValueError:
+        limit = EXPORT_MAX_ROWS
+
+    fmt = (request.query_params.get("format") or "txt").lower()
+    if fmt not in {"txt", "jsonl"}:
+        fmt = "txt"
+
+    q = (request.query_params.get("q") or "").strip()
+    level_f = (request.query_params.get("level") or "").strip()
+    stage_f = (request.query_params.get("stage") or "").strip()
+    event_type_f = (request.query_params.get("event_type") or "").strip()
+    from_ts = _pdt(request.query_params.get("from") or "") if request.query_params.get("from") else None
+    to_ts = _pdt(request.query_params.get("to") or "") if request.query_params.get("to") else None
+
+    try:
+        qs = DeployLog.objects.using(settings.DEPLOYMENT_LOG_DB_ALIAS).filter(deploy_id=deploy.pk)
+        if q:
+            qs = qs.filter(message__icontains=q)
+        if level_f:
+            qs = qs.filter(level__iexact=level_f)
+        if stage_f:
+            qs = qs.filter(stage=stage_f)
+        if event_type_f:
+            qs = qs.filter(event_type=event_type_f)
+        if from_ts:
+            qs = qs.filter(created_at__gte=from_ts)
+        if to_ts:
+            qs = qs.filter(created_at__lte=to_ts)
+        rows = list(qs.order_by("created_at", "id")[:limit])
+    except Exception as exc:
+        logger.warning("DeployLog export DB unavailable: %s", exc)
+        return Response(
+            {"result": "error", "detail": _("Deployment logs are temporarily unavailable.")},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    def _line_txt(r):
+        ts = r.created_at.isoformat() if getattr(r, "created_at", None) else ""
+        return f"{ts} [{getattr(r, 'level', '') or ''}] [{getattr(r, 'stage', '') or ''}] {getattr(r, 'message', '') or ''}\n"
+
+    def _line_jsonl(r):
+        return json.dumps(
+            {
+                "id": str(getattr(r, "id", "")),
+                "created_at": r.created_at.isoformat() if getattr(r, "created_at", None) else None,
+                "level": getattr(r, "level", None),
+                "stage": getattr(r, "stage", None),
+                "event_type": getattr(r, "event_type", None),
+                "message": getattr(r, "message", None),
+            },
+            ensure_ascii=False,
+        ) + "\n"
+
+    if fmt == "jsonl":
+        body = "".join(_line_jsonl(r) for r in rows)
+        ctype = "application/x-ndjson; charset=utf-8"
+        filename = f"deploy-{deploy.pk}-logs.jsonl"
+    else:
+        body = "".join(_line_txt(r) for r in rows)
+        ctype = "text/plain; charset=utf-8"
+        filename = f"deploy-{deploy.pk}-logs.txt"
+
+    resp = HttpResponse(body, content_type=ctype)
+    resp["Content-Disposition"] = f'attachment; filename="{filename}"'
+    resp["X-Export-Count"] = str(len(rows))
+    return resp
 
 
 @api_view(["POST"])

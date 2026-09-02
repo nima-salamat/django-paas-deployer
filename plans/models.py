@@ -38,6 +38,30 @@ class Plan(BaseModel):
         choices=PlanTypeChoices.choices,
         default= PlanTypeChoices.APP
     )
+    # Runtime logging commercial limits (independent from max_storage app disk)
+    log_retention_days = models.PositiveIntegerField(
+        _("Log retention (days)"), null=True, blank=True,
+        help_text=_("Null inherits platform default."),
+    )
+    log_storage_mb = models.PositiveIntegerField(
+        _("Log storage quota (MB)"), null=True, blank=True,
+        help_text=_("Per-service persistent log storage. Null inherits platform default."),
+    )
+    log_ingest_bytes_per_sec = models.PositiveIntegerField(
+        _("Log ingest limit (bytes/sec)"), null=True, blank=True,
+    )
+    persistent_logging = models.BooleanField(
+        _("Persistent logging"), null=True, blank=True,
+        help_text=_("Null inherits platform default."),
+    )
+    realtime_logging = models.BooleanField(
+        _("Realtime logging"), null=True, blank=True,
+    )
+    log_quota_behavior = models.CharField(
+        _("Log quota behavior"), max_length=32, blank=True, default="",
+        help_text=_("fifo_delete | drop_new | realtime_only; blank inherits platform."),
+    )
+
 
     class Meta:
         verbose_name = _("Plan")

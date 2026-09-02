@@ -4,7 +4,7 @@ from .volume_files import (
     volume_files_apiview, volume_download_apiview, purge_service_runtime_apiview,
 )
 from .runtime import (
-    service_logs_apiview, start_service_apiview, stop_service_apiview,
+    service_logs_apiview, service_logs_export_apiview, start_service_apiview, stop_service_apiview,
     force_cancel_deploy_apiview, service_status_apiview, restart_service_apiview,
 )
 from .admin_services import (

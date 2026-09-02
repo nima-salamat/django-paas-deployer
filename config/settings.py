@@ -123,6 +123,7 @@ INSTALLED_APPS = [
     "auth_users",
     "plans",
     "deploy",
+    "logs",
     "deployments",
     "services",
     "core",
@@ -415,6 +416,14 @@ CELERY_BEAT_SCHEDULE = {
     "messenger_deliver_scheduled_messages": {
         "task": "messenger.tasks.deliver_scheduled_messages",
         "schedule": 15.0,  # every 15s
+    },
+    "logs_retain_all_services": {
+        "task": "logs.retain_all_services",
+        "schedule": 3600.0,  # hourly retention
+    },
+    "logs_reconcile_usage": {
+        "task": "logs.reconcile_usage",
+        "schedule": 21600.0,  # 6h
     },
 }
 CACHES = {

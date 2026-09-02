@@ -64,6 +64,7 @@ from .sharing import record_share_event
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def service_logs_apiview(request, pk):
+    """Historical runtime logs from the persistent log store only."""
     try:
         service, share = _get_service_for_user_or_share(
             request, pk, action="can_view_logs", for_update=False
@@ -78,36 +79,97 @@ def service_logs_apiview(request, pk):
             {"result": "error", "detail": _("Service not found.")},
             status=status.HTTP_404_NOT_FOUND,
         )
-    container_name = service.get_docker_service_name()
+
+    from logs.query import query_logs
+    from logs.exceptions import ExpiredCursorError
+    from logs.policy import resolve
+    from logs.usage import get_usage
+    from django.utils.dateparse import parse_datetime
+
+    from_ts = parse_datetime(request.query_params.get("from") or "") if request.query_params.get("from") else None
+    to_ts = parse_datetime(request.query_params.get("to") or "") if request.query_params.get("to") else None
     try:
-        client = Client()().containers.get(container_name)
-        logs = client.logs(tail=200, stdout=True, stderr=True, timestamps=True)
-        if isinstance(logs, bytes):
-            decoded = logs.decode("utf-8", "replace")
-        else:
-            decoded = str(logs)
-        return Response(
-            {"result": "success", "logs": decoded.splitlines()},
-            status=status.HTTP_200_OK,
+        data = query_logs(
+            service.pk,
+            from_ts=from_ts,
+            to_ts=to_ts,
+            level=(request.query_params.get("level") or "").strip(),
+            stream=(request.query_params.get("stream") or "").strip(),
+            q=(request.query_params.get("q") or "").strip(),
+            cursor=request.query_params.get("cursor") or None,
+            direction=(request.query_params.get("direction") or "older").strip(),
+            limit=int(request.query_params.get("limit") or 100),
         )
-    except DockerNotFound:
-        # A stopped/not-yet-deployed service has no container logs. Treat this
-        # as an empty log stream so the service page does not surface a noisy
-        # HTTP 404 while the deployment is being created or rebuilt.
+    except ExpiredCursorError as exc:
         return Response(
-            {
-                "result": "success",
-                "logs": [],
-                "container_available": False,
-                "detail": _("No service container is currently running."),
-            },
-            status=status.HTTP_200_OK,
+            {"result": "error", "code": "EXPIRED_CURSOR", "detail": str(exc)},
+            status=status.HTTP_409_CONFLICT,
         )
     except Exception as exc:
         return Response(
             {"result": "error", "detail": str(exc)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+    policy = resolve(service)
+    usage = get_usage(service.pk)
+    lines = [e.get("message") or "" for e in data.get("events") or []]
+    return Response(
+        {
+            "result": "success",
+            "source": "persistent",
+            "logs": lines,
+            "events": data.get("events") or [],
+            "next_cursor": data.get("next_cursor"),
+            "prev_cursor": data.get("prev_cursor"),
+            "has_more_older": data.get("has_more_older"),
+            "has_more_newer": data.get("has_more_newer"),
+            "policy": {
+                "retention_days": policy.retention_days,
+                "storage_quota_bytes": policy.storage_quota_bytes,
+                "persistent_enabled": policy.persistent_enabled,
+                "realtime_enabled": policy.realtime_enabled,
+                "quota_behavior": policy.quota_behavior,
+            },
+            "usage": usage,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def service_logs_export_apiview(request, pk):
+    try:
+        service, share = _get_service_for_user_or_share(
+            request, pk, action="can_view_logs", for_update=False
+        )
+    except PermissionError as pe:
+        return Response({"result": "error", "detail": str(pe)}, status=status.HTTP_403_FORBIDDEN)
+    except Service.DoesNotExist:
+        return Response({"result": "error", "detail": _("Service not found.")}, status=status.HTTP_404_NOT_FOUND)
+    from logs.query import export_logs
+    from django.utils.dateparse import parse_datetime
+    from django.http import HttpResponse
+
+    fmt = (request.query_params.get("format") or "txt").lower()
+    from_ts = parse_datetime(request.query_params.get("from") or "") if request.query_params.get("from") else None
+    to_ts = parse_datetime(request.query_params.get("to") or "") if request.query_params.get("to") else None
+    ctype, body = export_logs(
+        service.pk,
+        fmt=fmt if fmt in {"txt", "jsonl"} else "txt",
+        from_ts=from_ts,
+        to_ts=to_ts,
+        level=(request.query_params.get("level") or "").strip(),
+        stream=(request.query_params.get("stream") or "").strip(),
+        q=(request.query_params.get("q") or "").strip(),
+        limit=int(request.query_params.get("limit") or 5000),
+    )
+    resp = HttpResponse(body, content_type=ctype)
+    resp["Content-Disposition"] = f'attachment; filename="service-{service.pk}-logs.{"jsonl" if fmt=="jsonl" else "txt"}"'
+    return resp
 
 
 @api_view(["POST"])

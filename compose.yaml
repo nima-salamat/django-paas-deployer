@@ -496,6 +496,61 @@ services:
       - app-network
 
 
+
+
+  # ============================================================
+  # RUNTIME LOG COLLECTOR
+  # Continuous Docker log follow → persistent ServiceLogEntry.
+  # Independent of Celery (retention/reconcile only).
+  # Same Docker socket + image pattern as deployment-events.
+  # ============================================================
+  log-collector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        DOCKERFILE_DOCKER_MIRROR: ${DOCKERFILE_DOCKER_MIRROR}
+        DOCKERFILE_PYTHON_VERSION: ${DOCKERFILE_PYTHON_VERSION}
+        DOCKERFILE_PYTHON_MIRROR: ${DOCKERFILE_PYTHON_MIRROR}
+        DOCKERFILE_LINUX_MIRROR: ${DOCKERFILE_LINUX_MIRROR}
+        CODENAME: ${CODENAME}
+
+    container_name: deploy-log-collector
+    restart: unless-stopped
+    command: python manage.py run_log_collector
+
+    volumes:
+      - .:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    depends_on:
+      db:
+        condition: service_healthy
+      deployment-log-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    env_file:
+      - .env
+
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DEPLOYMENT_LOG_DB_HOST: deployment-log-db
+      DEPLOYMENT_LOG_DB_PORT: 5432
+      REDIS_URL: redis://redis:6379
+      CHANNEL_REDIS_URL: redis://redis:6379
+      # Optional tuning (defaults in command)
+      LOG_COLLECTOR_WORKERS: ${LOG_COLLECTOR_WORKERS:-8}
+      LOG_COLLECTOR_BUFFER_BYTES: ${LOG_COLLECTOR_BUFFER_BYTES:-8388608}
+      API_DOMAIN_NAME: ${API_DOMAIN_NAME}
+      DEPLOYMENT_DOMAIN: ${DEPLOYMENT_DOMAIN}
+
+    networks:
+      - app-network
+
+
 # ==============================================================
 # VOLUMES
 # ==============================================================

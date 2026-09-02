@@ -66,6 +66,27 @@ The consumer tracks managed container labels, especially:
 
 Relevant Docker lifecycle events such as `create`, `start`, `die`, `stop`, `kill`, `destroy`, health-status changes, and OOM signals can be mapped to deployment state/logging. The event consumer should run as a dedicated service in production.
 
+## Runtime log collector
+
+Run (Compose service `log-collector`):
+
+```bash
+docker compose up -d log-collector
+```
+
+Or the full stack already includes it:
+
+```bash
+docker compose -f compose.yaml up -d --build
+```
+
+Command: `python manage.py run_log_collector`
+
+The collector is independent of Celery. It mounts the Docker socket (same pattern as `deployment-events`), writes to the `deployment_logs` database, and publishes realtime events via Redis/Channels. Celery only runs retention (`logs.retain_all_services`) and usage reconciliation (`logs.reconcile_usage`).
+
+Optional env: `LOG_COLLECTOR_WORKERS`, `LOG_COLLECTOR_BUFFER_BYTES`, `LOG_COLLECTOR_ID`.
+
+
 ## Queue topology
 
 Long Docker builds run on the dedicated `deployments` / `operations` queues, isolated from generic application Celery work. Multiple `deployment-worker` replicas may consume the same queue. Build concurrency is separately bounded by the Redis build semaphore.
@@ -114,7 +135,7 @@ docker compose exec web python manage.py migrate
 docker compose exec web python manage.py createsuperuser
 ```
 
-Production should run the API, generic Celery workers, dedicated deployment workers, the Docker event consumer, Redis, PostgreSQL, and Traefik as separate services.
+Production should run the API, generic Celery workers, dedicated deployment workers, the Docker event consumer, the runtime log collector, Redis, PostgreSQL, and Traefik as separate services.
 
 ## Operational checks
 

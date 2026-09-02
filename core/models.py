@@ -26,6 +26,8 @@ class SettingCategory(models.TextChoices):
     DEPLOY = "deploy", _("Deployment behaviour")
     DOCKERFILE = "dockerfile", _("Dockerfile templates")
     GENERAL = "general", _("General")
+    LOGGING = "logging", _("Runtime logging")
+    SHELL = "shell", _("Restricted shell")
 
 
 class SystemSetting(models.Model):

@@ -1,3 +1,4 @@
+from logs.admin_api import logging_health_apiview
 from django.urls import path
 from rest_framework.routers import DefaultRouter
 
@@ -15,7 +16,7 @@ from services.apis import (
     force_cancel_deploy_apiview,
     service_status_apiview,
     restart_service_apiview,
-    service_logs_apiview,
+    service_logs_apiview, service_logs_export_apiview,
     volume_files_apiview,
     volume_download_apiview,
     purge_service_runtime_apiview,
@@ -82,6 +83,8 @@ urlpatterns = (
         path("services/<uuid:service_id>/shell/env/", shell_env_apiview, name="service_shell_env"),
         path("services/<uuid:service_id>/shell/health/", shell_health_apiview, name="service_shell_health"),
         path("service/<uuid:pk>/logs/", service_logs_apiview, name="service_logs"),
+        path("service/<uuid:pk>/logs/export/", service_logs_export_apiview, name="service_logs_export"),
+        path("admin/logging/health/", logging_health_apiview, name="logging_health"),
         path("volume/<uuid:pk>/files/", volume_files_apiview, name="volume_files"),
         path("volume/<uuid:pk>/download/", volume_download_apiview, name="volume_download"),
         # ------------------------------------------------------------------
