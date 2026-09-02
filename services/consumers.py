@@ -6,6 +6,7 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.shortcuts import get_object_or_404
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.tokens import AccessToken
 
@@ -260,7 +261,16 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
             await self._write_stdin(str(content.get("data") or ""))
             return
         if message_type == "signal":
-            await self._write_stdin("\x03" if content.get("name") == "ctrl-c" else "")
+            name = str(content.get("name") or "").strip().lower()
+            # Map UI signals to the matching terminal control bytes.
+            control = {
+                "ctrl-c": "\x03",  # ETX  — interrupt
+                "ctrl-d": "\x04",  # EOT  — EOF
+                "ctrl-z": "\x1a",  # SUB  — suspend (often ignored in containers)
+                "ctrl-l": "\x0c",  # FF   — form feed / clear
+            }.get(name, "")
+            if control:
+                await self._write_stdin(control)
             return
         if message_type == "resize":
             await self.send_json({"type": "resize.unsupported"})
