@@ -291,6 +291,19 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
             loop = asyncio.get_running_loop()
             def create_exec():
                 api = container.client.api
+                # PsySH / Laravel Tinker (and similar REPLs) try to write config &
+                # history under $HOME/.config/psysh. Many app containers run as
+                # root with a non-writable /root, which produces:
+                #   "Writing to directory /root/.config/psysh is not allowed."
+                # Point HOME (and XDG_CONFIG_HOME) at the service workspace so
+                # the interactive process can create its files.
+                root = self.session.root_path or self.session.workdir or "/tmp"
+                environment = [
+                    f"HOME={root}",
+                    f"XDG_CONFIG_HOME={root.rstrip('/')}/.config",
+                    f"XDG_DATA_HOME={root.rstrip('/')}/.local/share",
+                    f"XDG_CACHE_HOME={root.rstrip('/')}/.cache",
+                ]
                 created = api.exec_create(
                     container.id,
                     cmd=argv,
@@ -299,6 +312,7 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                     stdin=True,
                     tty=True,
                     workdir=self.session.workdir,
+                    environment=environment,
                 )
                 sock = api.exec_start(created["Id"], tty=True, socket=True)
                 return created["Id"], sock
