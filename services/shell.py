@@ -541,19 +541,49 @@ def _is_destructive_command(argv: list[str]) -> bool:
     return False
 
 def _assert_container_path_within(container, path: str, root: str) -> None:
-    """Resolve symlinks inside the container and reject workspace escapes."""
+    """Resolve a path inside the container and reject symlink/workspace escapes.
+
+    Do not depend on ``realpath -m`` or ``readlink -f --`` because many production
+    runtime images use BusyBox/minimal implementations with different flags.  The
+    fallback uses only a backend-owned, fixed POSIX shell snippet and passes the
+    user path as an argv value.
+    """
     safe = _safe_workdir(path, root)
+    root_norm = posixpath.normpath(root)
     target = None
-    for tool in (("realpath", "-m", "--"), ("readlink", "-f", "--")):
+
+    # Existing directory: canonicalise by entering it.
+    try:
+        probe = container.exec_run(
+            ["/bin/sh", "-c", 'cd "$1" 2>/dev/null && pwd -P', "probe", safe],
+            stdout=True, stderr=False, demux=False, tty=False,
+        )
+        out = probe.output if isinstance(probe.output, (bytes, bytearray)) else b""
+        if int(probe.exit_code if probe.exit_code is not None else 1) == 0 and out:
+            candidate = out.decode("utf-8", "replace").strip().splitlines()[-1:]
+            target = candidate[0] if candidate else None
+    except Exception:
+        pass
+
+    # Existing file/symlink or missing target: canonicalise its parent and append
+    # the basename. This also catches a symlink in any parent directory.
+    if target is None:
+        parent = posixpath.dirname(safe) or "/"
+        name = posixpath.basename(safe)
         try:
-            probe = container.exec_run([*tool, safe], stdout=True, stderr=True, demux=True, tty=False)
-            out, err = probe.output if isinstance(probe.output, tuple) else (probe.output or b"", b"")
-            if int(probe.exit_code or 0) == 0 and out:
-                target = out.decode("utf-8", "replace").strip().splitlines()[-1]
-                break
+            probe = container.exec_run(
+                ["/bin/sh", "-c", 'cd "$1" 2>/dev/null && pwd -P', "probe", parent],
+                stdout=True, stderr=False, demux=False, tty=False,
+            )
+            out = probe.output if isinstance(probe.output, (bytes, bytearray)) else b""
+            if int(probe.exit_code if probe.exit_code is not None else 1) == 0 and out:
+                canonical_parent = out.decode("utf-8", "replace").strip().splitlines()[-1:]
+                if canonical_parent:
+                    target = posixpath.join(canonical_parent[0], name)
         except Exception:
-            continue
-    if not target or not _path_is_within(target, root):
+            pass
+
+    if target is None or not _path_is_within(target, root_norm):
         raise ValidationError(f"Path resolves outside the service workspace: {path}")
 
 
@@ -614,7 +644,7 @@ def _probe_directory(container, path: str) -> tuple[bool, str]:
     target = posixpath.normpath(path)
     try:
         result = container.exec_run(
-            ["/bin/sh", "-c", 'cd -- "$1" 2>/dev/null && pwd -P', "probe", target],
+            ["/bin/sh", "-c", 'cd "$1" 2>/dev/null && pwd -P', "probe", target],
             stdout=True, stderr=True, demux=True, tty=False,
         )
         out, _err = result.output if isinstance(result.output, tuple) else (result.output or b"", b"")

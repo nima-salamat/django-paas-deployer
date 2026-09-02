@@ -475,7 +475,7 @@ def shell_file_apiview(request, service_id):
                 raise DjangoValidationError(f"The target is on a read-only Docker mount: {safe_path}.")
             parent = posixpath.dirname(safe_path) or session.root_path
             name = posixpath.basename(safe_path)
-            result, privileged = _file_manager_exec(container, ["touch", "--", name], workdir=parent)
+            result, privileged = _file_manager_exec(container, ["touch", name], workdir=parent)
             if result is None or int(result.exit_code if result.exit_code is not None else 1) != 0:
                 out, err = result.output if result is not None and isinstance(result.output, tuple) else ((result.output if result is not None else b"") or b"", b"")
                 detail = (err or out or b"permission denied").decode("utf-8", "replace").strip()
@@ -500,7 +500,7 @@ def shell_file_apiview(request, service_id):
                 raise DjangoValidationError(f"The target is on a read-only Docker mount: {safe_path}.")
             parent = posixpath.dirname(safe_path) or session.root_path
             name = posixpath.basename(safe_path)
-            result, privileged = _file_manager_exec(container, ["mkdir", "--", name], workdir=parent)
+            result, privileged = _file_manager_exec(container, ["mkdir", name], workdir=parent)
             if result is None or int(result.exit_code if result.exit_code is not None else 1) != 0:
                 out, err = result.output if result is not None and isinstance(result.output, tuple) else ((result.output if result is not None else b"") or b"", b"")
                 detail = (err or out or b"permission denied").decode("utf-8", "replace").strip()
@@ -535,7 +535,7 @@ def shell_file_apiview(request, service_id):
                 raise DjangoValidationError("Path does not exist or is not accessible.")
             kind_probe = container.exec_run(["sh", "-c", 'if [ -d "$1" ]; then printf dir; elif [ -f "$1" ]; then printf file; else printf other; fi', "kind", safe_path], workdir=session.workdir, stdout=True, stderr=False, tty=False)
             kind = (kind_probe.output or b"").decode("utf-8", "replace").strip() if isinstance(kind_probe.output, (bytes, bytearray)) else "other"
-            cmd = ["rmdir", "--", safe_path] if kind == "dir" else ["rm", "--", safe_path]
+            cmd = ["rmdir", safe_path] if kind == "dir" else ["rm", safe_path]
             result, privileged = _file_manager_exec(container, cmd, workdir=session.workdir)
             if result is None or int(result.exit_code if result.exit_code is not None else 1) != 0:
                 out, err = result.output if result is not None and isinstance(result.output, tuple) else ((result.output if result is not None else b"") or b"", b"")
@@ -553,7 +553,7 @@ def shell_file_apiview(request, service_id):
             access = path_access(container, safe_path, for_create=True)
             if not access.get("mount_writable", False):
                 raise DjangoValidationError(f"The target is on a read-only Docker mount: {safe_path}.")
-            result, privileged = _file_manager_exec(container, ["mv", "--", safe_path, new_path], workdir=parent)
+            result, privileged = _file_manager_exec(container, ["mv", safe_path, new_path], workdir=parent)
             if result is None or int(result.exit_code if result.exit_code is not None else 1) != 0:
                 out, err = result.output if result is not None and isinstance(result.output, tuple) else ((result.output if result is not None else b"") or b"", b"")
                 detail = (err or out or b"Unable to rename path.").decode("utf-8", "replace").strip()
@@ -602,6 +602,12 @@ def shell_file_apiview(request, service_id):
             raise DjangoValidationError(f"Unable to save file: {last_detail}")
         raise ValidationError("action must be read or write")
     except (PermissionError, ValidationError) as exc:
-        return Response({"result":"error","detail":str(exc)}, status=403 if isinstance(exc, PermissionError) else 400)
+        return Response({"result":"error","code":"SHELL_FILE_VALIDATION","detail":str(exc)}, status=403 if isinstance(exc, PermissionError) else 400)
     except Service.DoesNotExist:
-        return Response({"result":"error","detail":"Service not found."}, status=404)
+        return Response({"result":"error","code":"SERVICE_NOT_FOUND","detail":"Service not found."}, status=404)
+    except Exception as exc:
+        # Do not leak Docker internals and do not turn ordinary filesystem/runtime
+        # failures into an opaque HTTP 500. The restricted API returns a structured
+        # operational error so the terminal can show the exact action that failed.
+        detail = str(exc).strip() or "File operation failed."
+        return Response({"result":"error","code":"SHELL_FILE_OPERATION_FAILED","detail":detail}, status=400)
