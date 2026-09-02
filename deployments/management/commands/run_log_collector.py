@@ -174,6 +174,35 @@ class Command(BaseCommand):
                 logger.debug("buffer flush failed", exc_info=True)
                 self._buffer.push(service_id, stream_id, lines)
 
+    def _resolve_service_for_container(self, container, name_map, hex_map, services_by_id):
+        """Map a running container to a Service using name, labels, then hex id."""
+        name = (getattr(container, "name", None) or "").lstrip("/")
+        # 1) Exact docker service name
+        svc = name_map.get(name)
+        if svc:
+            return svc
+        # 2) Labels (if platform set them)
+        try:
+            labels = (container.labels or {}) if hasattr(container, "labels") else {}
+            if not labels and hasattr(container, "attrs"):
+                labels = (container.attrs.get("Config") or {}).get("Labels") or {}
+        except Exception:
+            labels = {}
+        for key in ("service.id", "service_id", "paas.service_id"):
+            raw = labels.get(key)
+            if raw and str(raw) in services_by_id:
+                return services_by_id[str(raw)]
+        # 3) Name pattern app-{8 hex}-{rest} from get_docker_service_name
+        if name.startswith("app-") and len(name) > 12:
+            hex8 = name[4:12]
+            if hex8 in hex_map:
+                return hex_map[hex8]
+        # 4) Prefix match (recreate suffixes rare but possible)
+        for expected, svc in name_map.items():
+            if name == expected or name.startswith(expected + "-"):
+                return svc
+        return None
+
     def _discover_and_attach(self, instance: str):
         from deployments.core.manager.client_manager import get_docker_client
         from services.models import Service
@@ -181,23 +210,54 @@ class Command(BaseCommand):
         from logs.policy import resolve
 
         client = get_docker_client()
-        containers = client.containers.list(all=False)
+        # Prefer managed platform containers (same label as event consumer)
+        try:
+            containers = client.containers.list(
+                all=False,
+                filters={"label": ["managed-by=django-paas-deployer"]},
+            )
+        except Exception:
+            logger.warning("label filter list failed; falling back to all running", exc_info=True)
+            containers = client.containers.list(all=False)
+
         services = list(Service.objects.select_related("plan").all()[:5000])
         name_map = {}
+        hex_map = {}
+        services_by_id = {}
         for s in services:
             try:
-                name_map[s.get_docker_service_name()] = s
+                dname = s.get_docker_service_name()
+                name_map[dname] = s
+                name_map[dname.lower()] = s
+                hex_map[s.id.hex[:8]] = s
+                services_by_id[str(s.pk)] = s
+                services_by_id[s.id.hex] = s
             except Exception:
                 continue
 
+        logger.info(
+            "log-collector discover: managed_containers=%s services=%s following=%s",
+            len(containers),
+            len(services),
+            len(self._following),
+        )
+
         seen_cids = set()
+        matched = 0
         for c in containers:
             name = (c.name or "").lstrip("/")
-            service = name_map.get(name)
+            service = self._resolve_service_for_container(c, name_map, hex_map, services_by_id)
             if not service:
+                logger.debug("log-collector skip unmatched container name=%s", name)
                 continue
-            policy = resolve(service)
+            matched += 1
+            try:
+                policy = resolve(service)
+            except Exception:
+                logger.exception("policy resolve failed service=%s", service.pk)
+                continue
             if not policy.persistent_enabled and not policy.realtime_enabled:
+                logger.info("logging disabled by policy service=%s", service.pk)
                 continue
             cid = c.id
             seen_cids.add(cid)
@@ -206,18 +266,35 @@ class Command(BaseCommand):
                     continue
                 stop_ev = threading.Event()
                 self._following[cid] = stop_ev
+            deploy_id = None
+            try:
+                deploy_id = getattr(service, "selected_deploy_id", None) or getattr(
+                    service, "active_deploy_id", None
+                )
+            except Exception:
+                deploy_id = None
             stream = get_or_create_stream(
                 service_id=service.pk,
                 container_id=cid,
                 container_name=name,
+                deploy_id=deploy_id,
             )
             if not acquire_lease(stream, instance):
+                logger.info("lease denied stream=%s container=%s", stream.pk, name)
                 with self._lock:
                     self._following.pop(cid, None)
                 continue
+            logger.info(
+                "log-collector attach service=%s container=%s stream=%s",
+                service.pk,
+                name,
+                stream.pk,
+            )
             self._executor.submit(
                 self._follow_container, instance, service, c, stream, policy, stop_ev
             )
+
+        logger.info("log-collector discover done matched=%s attached_new_check following=%s", matched, len(self._following))
 
         # Stop followers for gone containers
         with self._lock:
@@ -253,6 +330,7 @@ class Command(BaseCommand):
                 )
             except Exception as exc:
                 logger.warning("follow start failed %s: %s", container.name, exc)
+                time.sleep(2)
                 return
 
             batch = []
