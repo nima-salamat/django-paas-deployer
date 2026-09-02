@@ -291,19 +291,33 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
             loop = asyncio.get_running_loop()
             def create_exec():
                 api = container.client.api
-                # PsySH / Laravel Tinker (and similar REPLs) try to write config &
-                # history under $HOME/.config/psysh. Many app containers run as
-                # root with a non-writable /root, which produces:
-                #   "Writing to directory /root/.config/psysh is not allowed."
-                # Point HOME (and XDG_CONFIG_HOME) at the service workspace so
-                # the interactive process can create its files.
-                root = self.session.root_path or self.session.workdir or "/tmp"
+                # PsySH / Laravel Tinker try to write config & history under
+                # $HOME/.config/psysh (or $XDG_CONFIG_HOME/psysh). Many
+                # containers have a non-writable HOME (/root or empty), which
+                # produces "Writing to directory .../psysh is not allowed."
+                # Force a known-writable location under /tmp and ensure the
+                # directory exists before starting the PTY.
+                home = "/tmp"
+                config_home = "/tmp/.config"
+                psysh_dir = f"{config_home}/psysh"
                 environment = [
-                    f"HOME={root}",
-                    f"XDG_CONFIG_HOME={root.rstrip('/')}/.config",
-                    f"XDG_DATA_HOME={root.rstrip('/')}/.local/share",
-                    f"XDG_CACHE_HOME={root.rstrip('/')}/.cache",
+                    f"HOME={home}",
+                    f"XDG_CONFIG_HOME={config_home}",
+                    f"XDG_DATA_HOME=/tmp/.local/share",
+                    f"XDG_CACHE_HOME=/tmp/.cache",
+                    f"PSYSH_CONFIG_DIR={psysh_dir}",
                 ]
+                # Best-effort: create the config dir so is_writable() succeeds.
+                try:
+                    container.exec_run(
+                        ["/bin/sh", "-c", f"mkdir -p '{psysh_dir}' && chmod 700 '{psysh_dir}'"],
+                        user="0",
+                        stdout=False,
+                        stderr=False,
+                        tty=False,
+                    )
+                except Exception:
+                    pass
                 created = api.exec_create(
                     container.id,
                     cmd=argv,
