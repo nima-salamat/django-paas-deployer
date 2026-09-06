@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.core.exceptions import ValidationError
 from django.db import OperationalError, InterfaceError, ProgrammingError
 import logging
 
@@ -91,9 +92,10 @@ class DeploySerializer(serializers.ModelSerializer):
         from django.conf import settings
 
         try:
+            alias = getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", None) or "deployment_logs"
             logs = (
                 DeployLog.objects
-                .using(settings.DEPLOYMENT_LOG_DB_ALIAS)
+                .using(alias)
                 .filter(deploy_id=obj.pk)
                 .order_by("-created_at")[:20]
             )
@@ -104,6 +106,13 @@ class DeploySerializer(serializers.ModelSerializer):
             # leave the details in server logs rather than leaking DB errors.
             logger.warning(
                 "Deployment log database unavailable for deploy %s: %s",
+                getattr(obj, "pk", None),
+                exc,
+            )
+            return []
+        except Exception as exc:
+            logger.warning(
+                "get_recent_logs failed for deploy %s: %s",
                 getattr(obj, "pk", None),
                 exc,
             )
@@ -151,7 +160,6 @@ class DeploySerializer(serializers.ModelSerializer):
             logger.warning("validate_tenant_config failed: %s", exc)
             self._config_warnings = []
 
-
     def create(self, validated_data):
         request = self.context.get("request")
         service = validated_data.get("service")
@@ -172,7 +180,21 @@ class DeploySerializer(serializers.ModelSerializer):
         instance = Deploy(**validated_data)
         if request and (request.user.is_superuser or request.user.is_staff):
             instance.skip_zip_size_limit = True
-        instance.save()
+        try:
+            instance.save()
+        except ValidationError as exc:
+            # Model.full_clean() raises django ValidationError; convert to DRF
+            # so the API returns 400 instead of an unhandled 500.
+            detail = getattr(exc, "message_dict", None) or getattr(exc, "messages", None) or str(exc)
+            raise serializers.ValidationError(detail)
+        except Exception as exc:
+            # IntegrityError (unique name race) etc. — surface as 400 when possible
+            from django.db import IntegrityError
+            if isinstance(exc, IntegrityError):
+                raise serializers.ValidationError(
+                    {"name": "A deploy with this name already exists."}
+                )
+            raise
         return instance
 
     def update(self, instance, validated_data):
@@ -183,5 +205,16 @@ class DeploySerializer(serializers.ModelSerializer):
             setattr(instance, attr, value)
         if request and (request.user.is_superuser or request.user.is_staff):
             instance.skip_zip_size_limit = True
-        instance.save()
+        try:
+            instance.save()
+        except ValidationError as exc:
+            detail = getattr(exc, "message_dict", None) or getattr(exc, "messages", None) or str(exc)
+            raise serializers.ValidationError(detail)
+        except Exception as exc:
+            from django.db import IntegrityError
+            if isinstance(exc, IntegrityError):
+                raise serializers.ValidationError(
+                    {"name": "A deploy with this name already exists."}
+                )
+            raise
         return instance

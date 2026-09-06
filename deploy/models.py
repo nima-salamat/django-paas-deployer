@@ -75,33 +75,48 @@ class Deploy(BaseModel):
     class Meta:
         verbose_name = _("Deploy")
         verbose_name_plural = _("Deploy")
-    
+        
     def clean(self):
         super().clean()
         if getattr(self, "skip_zip_size_limit", False):
             return
-        if self.zip_file and self.zip_file.size > self.MAX_ZIP_SIZE_MB * 1024 * 1024:
-            raise ValidationError({
-                "zip_file": _(f"ZIP file size must be under {self.MAX_ZIP_SIZE_MB} MB.")
-            })
+        if self.zip_file:
+            try:
+                size = self.zip_file.size
+            except Exception:
+                # Missing storage object / closed file — skip size check rather
+                # than turn a later save() into an opaque 500.
+                return
+            if size is not None and size > self.MAX_ZIP_SIZE_MB * 1024 * 1024:
+                raise ValidationError({
+                    "zip_file": _(f"ZIP file size must be under {self.MAX_ZIP_SIZE_MB} MB.")
+                })
     
     def save(self, *args, **kwargs):
         skip = bool(kwargs.pop("skip_zip_size_limit", False) or getattr(self, "skip_zip_size_limit", False))
         if skip:
             self.skip_zip_size_limit = True
+        # full_clean is intentional so FileField size / other model rules run
+        # even when callers bypass the serializer. Callers that already
+        # validated (e.g. DRF) still get a clear ValidationError instead of
+        # an opaque 500 when something slips through.
         self.full_clean()
-        
+
         file_changed = False
-        if self.pk and Deploy.objects.filter(pk=self.pk).exists():
-            old = Deploy.objects.get(pk=self.pk)
-            if old.zip_file != self.zip_file:
-                file_changed = True
+        if self.pk:
+            try:
+                old = Deploy.objects.only("zip_file").get(pk=self.pk)
+                if old.zip_file != self.zip_file:
+                    file_changed = True
+            except Deploy.DoesNotExist:
+                file_changed = bool(self.zip_file)
         else:
             file_changed = bool(self.zip_file)
 
         if file_changed:
             self.updated_file_at = timezone.now()
-        super().save(*args, **kwargs)
+        super().save(*args, **kwargs)    
+    
     
     def __str__(self):
         return f"{self.name} (v{self.version})"
