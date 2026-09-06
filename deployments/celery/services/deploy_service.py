@@ -523,7 +523,12 @@ class DeployService:
                 or cfg.get("dotnet_version")
             ),
             package_manager=package_manager,
-            working_directory=cfg.get("working_directory") or runtime_options.get("working_directory") or "/app",
+            working_directory=(
+                cfg.get("working_directory")
+                or cfg.get("working_dir")
+                or runtime_options.get("working_directory")
+                or "/app"
+            ),
             build_dir=build_dir,
             install_command=install_command,
             build_command=build_command,

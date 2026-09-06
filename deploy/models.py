@@ -75,7 +75,7 @@ class Deploy(BaseModel):
     class Meta:
         verbose_name = _("Deploy")
         verbose_name_plural = _("Deploy")
-        
+    
     def clean(self):
         super().clean()
         if getattr(self, "skip_zip_size_limit", False):
@@ -115,8 +115,7 @@ class Deploy(BaseModel):
 
         if file_changed:
             self.updated_file_at = timezone.now()
-        super().save(*args, **kwargs)    
-    
+        super().save(*args, **kwargs)
     
     def __str__(self):
         return f"{self.name} (v{self.version})"

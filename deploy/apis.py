@@ -1386,7 +1386,7 @@ def set_deploy_apiview(request):
 
             deploy_item = Deploy.objects.select_related("service").get(id=deploy_id)
 
-            if deploy_item.service_id != service_item.id:
+            if str(deploy_item.service_id) != str(service_item.id):
                 return Response(
                     {
                         "result": "error",
@@ -1395,7 +1395,13 @@ def set_deploy_apiview(request):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            if str(deploy_item.service.user_id) != str(request.user.id):
+            # Owner / staff always allowed; share recipients need can_deploy_select.
+            is_owner = str(service_item.user_id) == str(request.user.id)
+            is_staff = bool(
+                getattr(request.user, "is_staff", False)
+                or getattr(request.user, "is_superuser", False)
+            )
+            if not is_owner and not is_staff:
                 from services.share_permissions import can_mutate_deploy
                 if not can_mutate_deploy(deploy_item, request.user, action="can_deploy_select"):
                     return Response(
@@ -1408,8 +1414,12 @@ def set_deploy_apiview(request):
                         status=status.HTTP_403_FORBIDDEN,
                     )
 
-            service_item.selected_deploy = deploy_item
-            service_item.save(update_fields=["selected_deploy"])
+            # Avoid model.save() full_clean side-effects; update FK + timestamp directly.
+            Service.objects.filter(pk=service_item.pk).update(
+                selected_deploy_id=deploy_item.pk,
+                selected_deploy_at=timezone.now(),
+            )
+            service_item.selected_deploy_id = deploy_item.pk
 
     except Service.DoesNotExist:
         return Response(
@@ -1421,10 +1431,16 @@ def set_deploy_apiview(request):
             {"result": "error", "detail": _("Deploy not found.")},
             status=status.HTTP_404_NOT_FOUND,
         )
-    except (ValueError, ValidationError):
+    except (ValueError, ValidationError) as exc:
         return Response(
-            {"result": "error", "detail": _("Invalid deploy_id or service_id.")},
+            {"result": "error", "detail": str(exc) or _("Invalid deploy_id or service_id.")},
             status=status.HTTP_400_BAD_REQUEST,
+        )
+    except Exception as exc:
+        logger.exception("set_deploy failed service=%s deploy=%s", service_id, deploy_id)
+        return Response(
+            {"result": "error", "detail": _("Could not select deploy."), "error": str(exc)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
     return Response(
@@ -1469,7 +1485,12 @@ def unset_deploy_apiview(request):
 
             deploy_item = Deploy.objects.select_related("service").get(id=deploy_id)
 
-            if str(deploy_item.service.user_id) != str(request.user.id):
+            is_owner = str(service_item.user_id) == str(request.user.id)
+            is_staff = bool(
+                getattr(request.user, "is_staff", False)
+                or getattr(request.user, "is_superuser", False)
+            )
+            if not is_owner and not is_staff:
                 from services.share_permissions import can_mutate_deploy
                 if not can_mutate_deploy(deploy_item, request.user, action="can_deploy_select"):
                     return Response(
@@ -1482,7 +1503,7 @@ def unset_deploy_apiview(request):
                         status=status.HTTP_403_FORBIDDEN,
                     )
 
-            if service_item.selected_deploy_id != deploy_item.id:
+            if str(service_item.selected_deploy_id or "") != str(deploy_item.id):
                 return Response(
                     {
                         "result": "error",
@@ -1491,8 +1512,10 @@ def unset_deploy_apiview(request):
                     status=status.HTTP_409_CONFLICT,
                 )
 
-            service_item.selected_deploy = None
-            service_item.save(update_fields=["selected_deploy"])
+            Service.objects.filter(pk=service_item.pk).update(
+                selected_deploy_id=None,
+                selected_deploy_at=timezone.now(),
+            )
 
     except Service.DoesNotExist:
         return Response(
@@ -1504,10 +1527,16 @@ def unset_deploy_apiview(request):
             {"result": "error", "detail": _("Deploy not found.")},
             status=status.HTTP_404_NOT_FOUND,
         )
-    except (ValueError, ValidationError):
+    except (ValueError, ValidationError) as exc:
         return Response(
-            {"result": "error", "detail": _("Invalid deploy_id or service_id.")},
+            {"result": "error", "detail": str(exc) or _("Invalid deploy_id or service_id.")},
             status=status.HTTP_400_BAD_REQUEST,
+        )
+    except Exception as exc:
+        logger.exception("unset_deploy failed service=%s deploy=%s", service_id, deploy_id)
+        return Response(
+            {"result": "error", "detail": _("Could not unselect deploy."), "error": str(exc)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
     return Response(

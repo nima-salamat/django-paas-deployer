@@ -134,6 +134,30 @@ TENANT_CONFIG_KEYS: dict[str, dict[str, Any]] = {
         "description": "Container working directory at runtime. Defaults to "
                        "``/app`` for Python/Node and ``/var/www/html`` for PHP.",
     },
+    "working_dir": {
+        "type": "string",
+        "description": "Alias for ``working_directory`` (normalized on save).",
+    },
+    "healthcheck_path": {
+        "type": "string",
+        "description": "HTTP path used by the runtime health probe "
+                       "(e.g. ``/health`` or ``/``). Informational for most "
+                       "platforms; platforms that emit a HEALTHCHECK may use it.",
+    },
+    "celery_module": {
+        "type": "string",
+        "description": "Alias for ``celery_app``.",
+    },
+    "django_settings_module": {
+        "type": "string",
+        "description": "Dotted Django settings module "
+                       "(e.g. ``myproject.settings``). Also injected as "
+                       "``DJANGO_SETTINGS_MODULE`` in env when set.",
+    },
+    "public_url_mode": {
+        "type": "string",
+        "description": "Shorthand for ``url_handling.mode``: auto, disabled, or custom.",
+    },
     "document_root": {
         "type": "string",
         "description": "Runtime-served application directory relative to the project root. PHP/Laravel defaults to public; absolute/parent-traversal paths are rejected.",
@@ -433,6 +457,50 @@ def sanitize_tenant_config(raw: Any) -> dict[str, Any]:
     """Strip tenant escape hatches before config is persisted or executed."""
     cfg = parse_config(raw)
     out = {k: v for k, v in cfg.items() if str(k) not in TENANT_BLOCKED_KEYS}
+
+    # --- Canonical aliases (UI / legacy keys → contract keys) ---------------
+    # working_dir was used in older frontends; backend reads working_directory.
+    if out.get("working_directory") in (None, "") and out.get("working_dir") not in (None, ""):
+        out["working_directory"] = out.pop("working_dir")
+    elif "working_dir" in out:
+        out.pop("working_dir", None)
+
+    # celery-beat / celery_module aliases
+    if "celery-beat" in out and "celery_beat" not in out:
+        out["celery_beat"] = out.pop("celery-beat")
+    else:
+        out.pop("celery-beat", None)
+    if out.get("celery_app") in (None, "") and out.get("celery_module") not in (None, ""):
+        out["celery_app"] = out.get("celery_module")
+    # keep celery_module as soft alias for readers that still look it up
+
+    # public_url_mode (flat UI field) → url_handling.mode
+    mode = out.get("public_url_mode")
+    if mode not in (None, ""):
+        uh = out.get("url_handling") if isinstance(out.get("url_handling"), dict) else {}
+        uh = dict(uh)
+        if not uh.get("mode"):
+            uh["mode"] = str(mode).strip().lower()
+        if out.get("public_url") and not uh.get("public_url"):
+            uh["public_url"] = out["public_url"]
+        if out.get("asset_url") and not uh.get("asset_url"):
+            uh["asset_url"] = out["asset_url"]
+        out["url_handling"] = uh
+
+    # django_settings_module → env.DJANGO_SETTINGS_MODULE when not already set
+    dsm = out.get("django_settings_module")
+    if dsm not in (None, ""):
+        env = out.get("env") if isinstance(out.get("env"), dict) else {}
+        env = dict(env)
+        env.setdefault("DJANGO_SETTINGS_MODULE", str(dsm).strip())
+        # also support environment alias
+        environment = out.get("environment") if isinstance(out.get("environment"), dict) else {}
+        if environment:
+            environment = dict(environment)
+            environment.setdefault("DJANGO_SETTINGS_MODULE", str(dsm).strip())
+            out["environment"] = environment
+        out["env"] = env
+
     build = out.get("build_options") or out.get("build")
     if isinstance(build, dict):
         out["build_options"] = {k: v for k, v in build.items() if k in SAFE_BUILD_OPTION_KEYS}

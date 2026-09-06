@@ -160,6 +160,7 @@ class DeploySerializer(serializers.ModelSerializer):
             logger.warning("validate_tenant_config failed: %s", exc)
             self._config_warnings = []
 
+
     def create(self, validated_data):
         request = self.context.get("request")
         service = validated_data.get("service")

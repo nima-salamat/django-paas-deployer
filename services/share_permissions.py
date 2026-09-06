@@ -29,6 +29,9 @@ DEFAULT_SHARE_RULES: dict[str, bool] = {
     "can_deploy_edit": False,        # edit own deploys only
     "can_deploy_remove": False,      # remove own deploys only
     "can_deploy_select": False,      # select active deploy on service
+    "can_deploy_download": False,    # download deploy zip
+    "can_deploy_edit_others": False, # edit deploys created by others
+    "can_deploy_remove_others": False,  # delete deploys created by others
     # volumes
     "can_volume_add": False,
     "can_volume_edit": False,
