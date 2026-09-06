@@ -1340,10 +1340,6 @@ def deploy_logs_export_apiview(request, pk):
     return resp
 
 
-@api_view(["POST"])
-@authentication_classes([JWTAuthentication])
-@permission_classes([IsAuthenticated])
-
 def _lock_service_for_user(service_id, user):
     """Lock service row if user is owner or has any active share (view)."""
     from services.api.sharing import user_can_access_service
@@ -1357,6 +1353,10 @@ def _lock_service_for_user(service_id, user):
         raise Service.DoesNotExist
     return svc
 
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
 def set_deploy_apiview(request):
     deploy_id = _extract_id(request.data.get("deploy_id"))
     service_id = _extract_id(request.data.get("service_id"))
