@@ -287,6 +287,7 @@ def mark_deploy_timeout(
     container_exists: bool,
     container_running: bool,
 ) -> bool:
+    """Request cancellation of a timed-out deployment; cleanup is worker-owned."""
     locked = (
         Deploy.objects
         .select_related("service")
@@ -303,7 +304,7 @@ def mark_deploy_timeout(
         DeploymentStatusChoices.ROLLED_BACK,
         DeploymentStatusChoices.CANCELLED,
     )
-    if locked.status in terminal:
+    if locked.status in terminal or locked.cancel_requested:
         return False
 
     try:
@@ -311,22 +312,17 @@ def mark_deploy_timeout(
         max_minutes = deploy_timeout_minutes()
     except Exception:
         max_minutes = 10
-    message = (
-        f"Deployment exceeded the maximum allowed time "
-        f"of {max_minutes} minutes."
-    )
-    now = timezone.now()
+    message = f"Deployment exceeded the maximum allowed time of {max_minutes} minutes."
 
     Deploy.objects.filter(pk=deploy.pk).update(
-        status=DeploymentStatusChoices.FAILED,
-        stage="timeout",
+        cancel_requested=True,
+        stage="timeout_requested",
+        status_message="Deployment timed out; stopping active deployment work.",
         error_message=message,
-        status_message="Deployment timed out.",
         progress=min(locked.progress or 0, 99),
-        completed_at=now,
     )
 
-    logger.warning("Deploy %s → timed out", deploy.pk)
+    logger.warning("Deploy %s → timeout cancellation requested", deploy.pk)
 
     refreshed = Deploy.objects.select_related("service").get(pk=deploy.pk)
     _create_deploy_log(
@@ -334,7 +330,7 @@ def mark_deploy_timeout(
         stage="timeout",
         message=message,
         level="error",
-        event_type="deployment.timeout",
+        event_type="deployment.timeout_requested",
         details={
             "container_exists": container_exists,
             "container_running": container_running,
@@ -342,18 +338,10 @@ def mark_deploy_timeout(
         },
     )
 
-    service = locked.service
-    if service and service.status not in (
-        SERVICE_STATUS_CHOICES.STOPPED,
-        SERVICE_STATUS_CHOICES.FAILED,
-    ):
-        Service.objects.filter(pk=service.pk).update(
-            status=SERVICE_STATUS_CHOICES.FAILED,
-            deploy_started=None,
-            task_id=None,
-        )
-        logger.warning("Service %s → failed (deploy timeout)", service.pk)
-
+    # The worker owns cleanup. It will observe ``cancel_requested``, close an
+    # active Docker build stream, stop/remove a replacement container, restore
+    # the previous release when necessary, and commit one terminal event.
+    # Avoid hard-revoking it here because SIGTERM can interrupt cleanup midway.
     return True
 
 

@@ -106,6 +106,9 @@ class Deploy:
         media_dir=None,
         document_root=None,
         url_handling=None,
+        healthcheck_path=None,
+        healthcheck_expected_status=None,
+        healthcheck_timeout=5.0,
         # Frontend build settings for full-stack PHP/Laravel services.
         # Carries npm_registry / package_manager / build_command overrides
         # so the Dockerfile generator can inject a real Node build step
@@ -153,6 +156,18 @@ class Deploy:
         self.media_dir = media_dir
         self.document_root = document_root
         self.url_handling = dict(url_handling or {})
+        self.healthcheck_path = (str(healthcheck_path).strip() or None) if healthcheck_path is not None else None
+        try:
+            statuses = healthcheck_expected_status or (200, 204)
+            if isinstance(statuses, int):
+                statuses = (statuses,)
+            self.healthcheck_expected_status = tuple(sorted({int(s) for s in statuses})) or (200, 204)
+        except (TypeError, ValueError):
+            self.healthcheck_expected_status = (200, 204)
+        try:
+            self.healthcheck_timeout = max(0.5, float(healthcheck_timeout))
+        except (TypeError, ValueError):
+            self.healthcheck_timeout = 5.0
         # Sanitize the frontend dict so a non-dict (or a string accidentally
         # supplied by the user) can never crash downstream code. Only string
         # keys/values are accepted; everything else is silently dropped.
@@ -253,6 +268,9 @@ class Deploy:
             runtime_options=self.runtime_options,
             labels=self.labels,
             base_images=getattr(self, "base_images", {}) or {},
+            healthcheck_path=self.healthcheck_path,
+            healthcheck_expected_status=self.healthcheck_expected_status,
+            healthcheck_timeout=self.healthcheck_timeout,
         )
 
     def deploy(self):

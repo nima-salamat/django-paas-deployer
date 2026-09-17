@@ -552,31 +552,35 @@ class DeployViewSet(ModelViewSet):
         task_id = getattr(deploy.service, "task_id", None)
         with transaction.atomic():
             locked = Deploy.objects.select_for_update().get(pk=deploy.pk)
-            if locked.status in {DEPLOY_PENDING, DEPLOY_RUNNING, DEPLOY_ROLLING_BACK}:
+            if locked.status == DEPLOY_PENDING:
                 Deploy.objects.filter(pk=locked.pk).update(
                     cancel_requested=True,
                     status=DEPLOY_CANCELLED,
                     stage="cancelled",
-                    progress=max(int(locked.progress or 0), 100),
+                    progress=100,
                     status_message="Deployment cancelled by user.",
                     error_message="",
                     completed_at=now,
                 )
+            elif locked.status in {DEPLOY_RUNNING, DEPLOY_ROLLING_BACK}:
+                # Do not claim terminal state while the worker is still doing
+                # real work. The worker will observe the token, terminate the
+                # active Docker operation where supported, clean resources, and
+                # commit the canonical terminal event.
+                Deploy.objects.filter(pk=locked.pk).update(
+                    cancel_requested=True,
+                    stage="cancel_requested",
+                    status_message="Cancellation requested; stopping deployment work.",
+                )
             else:
                 Deploy.objects.filter(pk=locked.pk).update(cancel_requested=True)
 
-        # Best-effort hard cancellation of the worker process. The DB state is
-        # updated above first, so even if Celery is unavailable the UI is not
-        # left waiting for a future scheduler tick.
-        revoke_result = "not_requested"
-        try:
-            if task_id:
-                from config.celery import app as celery_app
-                celery_app.control.revoke(str(task_id), terminate=True, signal="SIGTERM")
-                revoke_result = "revoked"
-        except Exception as exc:
-            logger.warning("Force-cancel revoke failed for deploy %s: %s", deploy.pk, exc)
-            revoke_result = "revoke_failed"
+        # Do not SIGTERM the worker immediately. The deployment worker owns
+        # Docker/build cleanup and needs a chance to observe the cancellation
+        # token, close an active build stream, stop the replacement container,
+        # restore the previous release, and commit the terminal event.
+        # ``task_id`` is still returned for operator observability.
+        revoke_result = "deferred_to_worker" if task_id else "no_task"
 
         return Response(
             {
@@ -757,9 +761,16 @@ class DeployViewSet(ModelViewSet):
                 teardown_error = exc
 
         if teardown_error is not None:
-            # Leave the service in a deterministic terminal state instead of
-            # pretending the rebuild was queued while the old container may
-            # still exist. The user can safely press rebuild again.
+            # Teardown failures are platform-side operation failures, not raw
+            # Python/Docker strings for the browser. Preserve the exception in
+            # logs while exposing an actionable, structured deployment error.
+            from deployments.common.exceptions import to_deployment_error
+
+            translated = to_deployment_error(teardown_error, stage="rebuild_teardown")
+            logger.exception(
+                "Rebuild teardown failed deploy=%s code=%s technical=%s",
+                deploy.pk, translated.code, translated.technical_message,
+            )
             Service.objects.filter(pk=service.pk).update(
                 status=SERVICE_STATUS_CHOICES.FAILED,
                 task_id=None,
@@ -769,13 +780,16 @@ class DeployViewSet(ModelViewSet):
                 status="failed",
                 stage="rebuild_teardown",
                 progress=100,
-                status_message="Failed to stop the previous container for rebuild.",
-                error_message=str(teardown_error)[:1000],
+                status_message=translated.user_message,
+                error_message=translated.user_message,
             )
             return Response(
                 {
                     "result": "error",
-                    "detail": _("Could not stop the previous container. Please retry the rebuild."),
+                    "detail": translated.user_message,
+                    "error_code": translated.code,
+                    "error_category": translated.category,
+                    "stage": translated.stage,
                 },
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )

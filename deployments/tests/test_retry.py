@@ -79,7 +79,7 @@ class TestIsRetryableException(unittest.TestCase):
         ))
 
     def test_recoverable_type_returns_true(self):
-        err = ImageBuildError("transient build failure")
+        err = ImageBuildError("transient build failure", recoverable=True)
         self.assertTrue(is_retryable_exception(
             err, recoverable_types=(ImageBuildError,),
         ))
@@ -109,7 +109,7 @@ class TestIsRetryableException(unittest.TestCase):
     def test_permanent_overrides_recoverable(self):
         # If exc is in permanent_types, return False even if it would
         # otherwise be retryable.
-        err = ImageBuildError("bad dockerfile")
+        err = ImageBuildError("bad dockerfile", recoverable=True)
         self.assertFalse(is_retryable_exception(
             err, permanent_types=(ImageBuildError,),
             recoverable_types=(ImageBuildError,),

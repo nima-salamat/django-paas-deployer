@@ -17,6 +17,8 @@ to import from here.
 
 from deployments.common.exceptions import (  # noqa: F401
     DeploymentError as CeleryDeploymentError,
+    InternalPlatformError,
+    to_deployment_error,
     DeploymentValidationError,
     InvalidServiceStateError,
     ContainerTimeoutError,
@@ -35,6 +37,8 @@ from deployments.common.exceptions import (  # noqa: F401
 
 __all__ = [
     "CeleryDeploymentError",
+    "InternalPlatformError",
+    "to_deployment_error",
     "DeploymentValidationError",
     "InvalidServiceStateError",
     "ContainerTimeoutError",

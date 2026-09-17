@@ -42,6 +42,7 @@ from deployments.common.config import (
 from deployments.common.exceptions import (
     InvalidServiceStateError,
     OrchestratorDeploymentError,
+    to_deployment_error,
 )
 
 from ..service_status import ServiceStateManager
@@ -99,10 +100,17 @@ class DeployService:
         except InvalidServiceStateError as exc:
             logger.info("Skipped deploy execution for ID %s: %s", deploy_id, str(exc))
             return
-        except Exception:
-            # The lock itself raised (e.g. DeploymentLockError) — log and exit.
-            logger.exception("Deploy %s could not acquire deployment lock.", deploy_id)
-            return
+        except Exception as exc:
+            # Do not turn a deterministic deployment bug into an invisible
+            # worker-side log.  DeploymentError instances retain their retry
+            # classification; unexpected exceptions are translated to a
+            # non-recoverable internal platform error for the Celery boundary.
+            translated = to_deployment_error(exc, stage="deployment_lock")
+            logger.exception(
+                "Deploy %s could not complete its deployment lock boundary: %s",
+                deploy_id, translated.technical_message,
+            )
+            raise translated from exc
 
     def _execute_locked(self, deploy_id: int, service_id: int) -> None:
         try:
@@ -147,22 +155,39 @@ class DeployService:
             logger.info("Successfully executed deploy cycle for container: %s", container_name)
 
         except Exception as exc:
-            logger.error(
-                "Deployment critical failure on %s: %s",
-                container_name, str(exc), exc_info=True,
+            traceback_text = traceback.format_exc()
+            translated = to_deployment_error(
+                exc,
+                stage=getattr(exc, "stage", None) or "deployment",
             )
-            state_tracker.record_exception(exc, traceback.format_exc())
-            if state_tracker.deploy.status not in {"failed", "cancelled"}:
+            logger.error(
+                "Deployment critical failure on %s: code=%s stage=%s technical=%s",
+                container_name,
+                translated.code,
+                translated.stage,
+                translated.technical_message,
+                exc_info=True,
+            )
+
+            # A lower layer may already have produced a terminal result (for
+            # example _process_deployment raises after orchestrator.finish()).
+            # In that case persist diagnostics silently and DO NOT emit another
+            # user-facing terminal failure event.
+            if state_tracker.deploy.status in {"failed", "cancelled"}:
+                state_tracker.record_exception(translated, traceback_text)
+            else:
                 state_tracker.finish(
                     MockOrchestratorResult(
                         success=False,
-                        stage=getattr(exc, "stage", "deployment_failed"),
-                        message=str(exc) or "Deployment failed.",
-                        error=str(exc),
-                    )
+                        stage=translated.stage,
+                        message=translated.user_message,
+                        error=translated.technical_message,
+                    ),
+                    exception=translated,
+                    traceback_text=traceback_text,
                 )
             ServiceStateManager.sync_legacy_failure(service_id, deploy_id=deploy_item.pk)
-            raise
+            raise translated from exc
 
     def _process_deployment(
         self, deploy_item: Deploy, container_name: str,
@@ -224,8 +249,12 @@ class DeployService:
         detected_project_cfg = runtime_options.get("project_cfg") or {}
         build_command = cfg.get("build_command") or detected_project_cfg.get("build_command")
         install_command = cfg.get("install_command") or detected_project_cfg.get("install_command")
-        _paths_cfg = cfg.get("paths") if isinstance(cfg.get("paths"), dict) else {}
-        build_dir = cfg.get("build_dir") or _paths_cfg.get("build_dir") or detected_project_cfg.get("build_dir")
+        paths_cfg = cfg.get("paths") if isinstance(cfg.get("paths"), dict) else {}
+        # Resolve legacy nested path configuration once and keep the resolved
+        # value on the orchestration config.  Downstream methods receive this
+        # same config rather than reaching into a caller's local variables.
+        cfg["resolved_paths"] = dict(paths_cfg)
+        build_dir = cfg.get("build_dir") or paths_cfg.get("build_dir") or detected_project_cfg.get("build_dir")
 
         # Validate scoped tenant customizations without disabling the rest of
         # automatic detection. Path/URL overrides are isolated to their
@@ -274,12 +303,10 @@ class DeployService:
                 container_name,
             )
             result = self._execute_orchestrator(
-                deploy_item, container_name, platform, dockerfile_text, state_tracker,
+                deploy_item, container_name, platform, dockerfile_text, state_tracker, cfg=cfg,
             )
 
         if getattr(result, "status", None) != "cancelled":
-            # Re-read config in case it changed (defensive).
-            cfg = parse_config(getattr(deploy_item, "config", None))
             use_celery = as_bool(cfg.get("celery"))
             wait_timeout = 90 if use_celery or platform == "django" else 45
             ContainerWaiter.wait_until_running(container_name, timeout=wait_timeout)
@@ -288,13 +315,12 @@ class DeployService:
     def _execute_orchestrator(
         self, deploy_item: Deploy, container_name: str, platform: str,
         dockerfile_text: str, state_tracker: DjangoDeploymentState,
+        *, cfg: dict,
     ):
         service = deploy_item.service
-        cfg = normalize_profile(
-            parse_config(getattr(deploy_item, "config", None)),
-            plan_cpu=getattr(getattr(service, "plan", None), "max_cpu", None),
-            plan_ram_mb=getattr(getattr(service, "plan", None), "max_ram", None),
-        )
+        # cfg is resolved by _process_deployment and explicitly handed to this
+        # stage.  Re-parsing Deploy.config here was the source of hidden
+        # configuration coupling and allowed path state to escape its scope.
         build_options = dict(cfg.get("build_options") or {})
         runtime_options = dict(cfg.get("runtime_options") or {})
         plan_cpu = getattr(getattr(service, "plan", None), "max_cpu", None)
@@ -306,6 +332,10 @@ class DeployService:
         install_command = cfg.get("install_command") or build_options.get("install_command") or detected_project_cfg.get("install_command")
         build_dir = cfg.get("build_dir") or build_options.get("build_dir") or detected_project_cfg.get("build_dir")
         package_manager = cfg.get("package_manager") or build_options.get("package_manager") or detected_project_cfg.get("package_manager")
+
+        healthcheck_path = cfg.get("healthcheck_path") or runtime_options.get("healthcheck_path")
+        expected_status = cfg.get("healthcheck_expected_status") or runtime_options.get("healthcheck_expected_status") or (200, 204)
+        healthcheck_timeout = cfg.get("healthcheck_timeout") or runtime_options.get("healthcheck_timeout") or 5.0
 
         # Port resolution: explicit config > platform default.
         raw_port = cfg.get("port")
@@ -534,10 +564,13 @@ class DeployService:
             build_command=build_command,
             start_command=cfg.get("start_command"),
             frontend=dict(cfg.get("frontend") or {}),
-            document_root=cfg.get("document_root") or _paths_cfg.get("document_root"),
-            static_dir=cfg.get("static_dir") or _paths_cfg.get("static_dir"),
-            media_dir=cfg.get("media_dir") or _paths_cfg.get("media_dir"),
+            document_root=cfg.get("document_root") or cfg.get("resolved_paths", {}).get("document_root"),
+            static_dir=cfg.get("static_dir") or cfg.get("resolved_paths", {}).get("static_dir"),
+            media_dir=cfg.get("media_dir") or cfg.get("resolved_paths", {}).get("media_dir"),
             url_handling=url_handling,
+            healthcheck_path=healthcheck_path,
+            healthcheck_expected_status=expected_status,
+            healthcheck_timeout=healthcheck_timeout,
             # Base runtime images are resolved by DeploymentOrchestrator after
             # project auto-detection. Do not reference a local ``config`` here;
             # no such variable exists in this service layer.
@@ -556,10 +589,12 @@ class DeployService:
         # every stage.
         def _cancel_check() -> bool:
             try:
-                fresh = Deploy.objects.filter(pk=deploy_item.pk).values_list(
-                    "cancel_requested", flat=True,
-                ).first()
-                return bool(fresh)
+                fresh = Deploy.objects.filter(pk=deploy_item.pk).values("cancel_requested", "stage").first()
+                if not fresh or not fresh.get("cancel_requested"):
+                    return False
+                if fresh.get("stage") == "timeout_requested":
+                    return "timeout"
+                return True
             except Exception:
                 return False
 
@@ -584,6 +619,16 @@ class DeployService:
             error_details = getattr(result, "details", {}) or {}
             raise OrchestratorDeploymentError(
                 result.message or "Orchestrator deployment failed.",
+                stage=getattr(result, "stage", None) or "orchestrator",
+                user_message=result.message or "Deployment failed during orchestration.",
+                technical_message=(
+                    error_details.get("technical_message")
+                    or getattr(result, "error", None)
+                    or result.message
+                ),
+                code=error_details.get("error_code") or "DEPLOYMENT_ORCHESTRATION_ERROR",
+                category=error_details.get("error_category") or "deployment_error",
+                recoverable=bool(error_details.get("recoverable", False)),
                 details={
                     "stage": getattr(result, "stage", None),
                     "container": getattr(result, "container_name", None),
@@ -594,6 +639,9 @@ class DeployService:
                     "error_type": error_details.get("error_type"),
                     "status_code": error_details.get("status_code"),
                     "last_stage": error_details.get("last_stage"),
+                    "error_code": error_details.get("error_code"),
+                    "error_category": error_details.get("error_category"),
+                    "technical_message": error_details.get("technical_message"),
                 },
             )
         return result

@@ -142,6 +142,9 @@ class DeploymentLogger:
             "previous_image_ref",
             "rollback_performed",
             "rollback_failed",
+            "error_code",
+            "error_category",
+            "recoverable",
         )
         parts = []
         for key in diagnostic_keys:

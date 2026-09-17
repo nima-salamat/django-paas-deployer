@@ -236,7 +236,7 @@ class DjangoDeploymentState:
                 stage,
             )
 
-    def finish(self, result):
+    def finish(self, result, *, exception: Exception | None = None, traceback_text: str = ""):
         self._finished = True
         # Cancellation wins over a late worker result. The API writes the
         # terminal state before revoking Celery, so a worker that unwinds
@@ -256,6 +256,16 @@ class DjangoDeploymentState:
         result_message = getattr(result, "message", None) or ""
         result_error = getattr(result, "error", None) or ""
         rollback_performed = bool(getattr(result, "rollback_performed", False))
+        result_details = getattr(result, "details", {}) or {}
+
+        error_code = getattr(exception, "code", None) or result_details.get("error_code")
+        error_category = getattr(exception, "category", None) or result_details.get("error_category")
+        error_recoverable = (
+            getattr(exception, "recoverable", None)
+            if exception is not None
+            else result_details.get("recoverable")
+        )
+        error_user_message = getattr(exception, "user_message", None) or result_details.get("user_message")
 
         update = {
             "completed_at": timezone.now(),
@@ -298,8 +308,17 @@ class DjangoDeploymentState:
                 {
                     "status": DeploymentStatusChoices.FAILED,
                     "stage": (result_stage or "deployment_failed")[:64],
-                    "status_message": result_message or "Deployment failed.",
-                    "error_message": (result_error or result_message or "")[:1000],
+                    "status_message": (
+                        error_user_message
+                        or result_message
+                        or "Deployment failed."
+                    )[:500],
+                    "error_message": (
+                        error_user_message
+                        or result_error
+                        or result_message
+                        or ""
+                    )[:1000],
                 }
             )
             if rollback_performed:
@@ -311,6 +330,24 @@ class DjangoDeploymentState:
 
         self._update_deploy(**update)
 
+        details = {
+            "rollback_performed": rollback_performed,
+            "error_code": error_code,
+            "error_category": error_category,
+            "recoverable": bool(error_recoverable) if error_recoverable is not None else None,
+        }
+        if result_details.get("technical_message"):
+            details["technical_message"] = result_details["technical_message"]
+        if error_code:
+            details["error_code"] = error_code
+        if error_category:
+            details["error_category"] = error_category
+        if error_recoverable is not None:
+            details["recoverable"] = bool(error_recoverable)
+
+        # One canonical terminal event is broadcast to the user. Technical
+        # exception/traceback data is persisted separately below so raw Python
+        # internals do not leak through the WebSocket lifecycle event.
         try:
             self.events.record(
                 DeploymentEvent(
@@ -318,7 +355,7 @@ class DjangoDeploymentState:
                     message=update.get("status_message") or result_message,
                     level=final_level,
                     progress=100,
-                    details={"rollback_performed": rollback_performed},
+                    details=details,
                 )
             )
         except Exception:
@@ -326,45 +363,76 @@ class DjangoDeploymentState:
                 "Failed to record finish event for deploy %s", self.deploy.pk
             )
 
-    def record_exception(self, exception: Exception, traceback_text: str):
-        stage = getattr(exception, "stage", None) or "deployment_failed"
-        message = str(exception) or "Deployment failed."
-        recoverable = bool(getattr(exception, "recoverable", False))
-
-        try:
-            self._update_deploy(
-                stage=str(stage)[:64],
-                status_message=message[:500],
-                error_message=message[:1000],
+        if exception is not None or traceback_text:
+            technical_stage = (getattr(exception, "stage", None) or final_stage)[:64]
+            technical_message = (
+                getattr(exception, "technical_message", None)
+                or getattr(exception, "message", None)
+                or str(exception)
+                or result_error
+                or result_message
+                or "Deployment failed."
             )
-        except Exception:
-            logger.exception(
-                "record_exception deploy update failed for %s", self.deploy.pk
-            )
-
-        event = DeploymentEvent(
-            stage=str(stage)[:64],
-            message=message,
-            level="error",
-            progress=getattr(self.deploy, "progress", None),
-            details={
-                "recoverable": recoverable,
-                "exception_type": type(exception).__name__,
-            },
-        )
-        try:
-            # Support both signatures: with / without exception kwargs
+            technical_details = {
+                "diagnostic": True,
+                "error_code": error_code,
+                "error_category": error_category,
+                "recoverable": error_recoverable,
+            }
             try:
                 self.events.record(
-                    event,
+                    DeploymentEvent(
+                        stage=technical_stage,
+                        message=technical_message,
+                        level="error",
+                        progress=100,
+                        details=technical_details,
+                    ),
                     exception=exception,
                     traceback_text=traceback_text or "",
+                    broadcast=False,
                 )
-            except TypeError:
-                self.events.record(event)
+            except Exception:
+                logger.exception(
+                    "Failed to persist technical deployment diagnostics for deploy %s",
+                    self.deploy.pk,
+                )
+
+    def record_exception(self, exception: Exception, traceback_text: str):
+        """Persist technical diagnostics without emitting a second lifecycle failure event.
+
+        Kept for compatibility with older callers; new failure paths should
+        call ``finish(..., exception=..., traceback_text=...)`` so the terminal
+        state and user-facing event remain canonical.
+        """
+        stage = str(getattr(exception, "stage", None) or self.deploy.stage or "deployment_failed")[:64]
+        message = (
+            getattr(exception, "technical_message", None)
+            or str(exception)
+            or type(exception).__name__
+        )
+        details = {
+            "diagnostic": True,
+            "error_code": getattr(exception, "code", None),
+            "error_category": getattr(exception, "category", None),
+            "recoverable": bool(getattr(exception, "recoverable", False)),
+        }
+        try:
+            self.events.record(
+                DeploymentEvent(
+                    stage=stage,
+                    message=message[:1000],
+                    level="error",
+                    progress=getattr(self.deploy, "progress", None),
+                    details=details,
+                ),
+                exception=exception,
+                traceback_text=traceback_text or "",
+                broadcast=False,
+            )
         except Exception:
             logger.exception(
-                "record_exception pipeline failed for deploy %s", self.deploy.pk
+                "Failed to persist deployment diagnostics for deploy %s", self.deploy.pk
             )
 
     # ------------------------------------------------------------------

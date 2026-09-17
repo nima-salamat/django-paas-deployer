@@ -49,6 +49,7 @@ from deployments.common.exceptions import (
     DeploymentValidationError,
     ContainerTimeoutError,
     OrchestratorDeploymentError,
+    to_deployment_error,
 )
 from deployments.common.retry import is_retryable_exception
 from deployments.core.state.locks import acquire_service_deployment_lock
@@ -131,19 +132,20 @@ def deploy(self, deploy_id) -> None:
             raise self.retry(exc=exc)
         logger.exception("Permanent deployment error for deploy_id: %s", deploy_id)
     except Exception as exc:
-        # Never retry a deployment that the operator cancelled while the
-        # worker was unwinding (for example after SIGTERM/revoke).
+        # Unknown Python exceptions are platform bugs by default, not
+        # transient deployment failures.  Translate them at the worker
+        # boundary so NameError/AttributeError/KeyError/internal invariant
+        # failures do not cause repeated deploy attempts.  Explicitly
+        # recoverable DeploymentError subclasses are handled above.
         if Deploy.objects.filter(pk=deploy_id, cancel_requested=True).exists():
             logger.info("Deploy %s was cancelled while failing; suppressing retry.", deploy_id)
             return
-        # Unknown errors are treated as transient — retry up to max.
-        if self.request.retries < self.max_retries:
-            logger.warning(
-                "Deploy execution error; re-enqueueing (ID: %s, attempt %d/%d)",
-                deploy_id, self.request.retries + 1, self.max_retries + 1,
-            )
-            raise self.retry(exc=exc)
-        logger.exception("Deploy exhausted retries for deploy_id: %s", deploy_id)
+        translated = to_deployment_error(exc, stage="deployment")
+        logger.exception(
+            "Non-recoverable deployment exception for deploy_id=%s: code=%s technical=%s",
+            deploy_id, translated.code, translated.technical_message,
+        )
+        return
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=10)

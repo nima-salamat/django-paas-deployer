@@ -42,7 +42,14 @@ class DeploymentEventPipeline:
         self.channel_layer = get_channel_layer()
         self.group_name = f"deploy_{deploy.pk}"
 
-    def record(self, event, *, exception: Exception | None = None, traceback_text: str = "") -> dict:
+    def record(
+        self,
+        event,
+        *,
+        exception: Exception | None = None,
+        traceback_text: str = "",
+        broadcast: bool = True,
+    ) -> dict:
         timestamp = datetime.now(timezone.utc).isoformat()
         details = sanitize(event.details or {})
         payload = {
@@ -82,7 +89,7 @@ class DeploymentEventPipeline:
         except Exception:
             logger.exception("Unable to persist deployment event for %s.", self.deploy.pk)
 
-        if self.channel_layer:
+        if broadcast and self.channel_layer:
             try:
                 async_to_sync(self.channel_layer.group_send)(
                     self.group_name,

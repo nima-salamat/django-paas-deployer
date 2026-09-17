@@ -52,6 +52,8 @@ PRE_CONTAINER_STAGES = frozenset({
     "dockerfile",
     "state_snapshot",
     "cancelled",
+    "cancel_requested",
+    "timeout_requested",
     "image_pull",
     "volume_creation",
     "network_creation",
@@ -280,6 +282,10 @@ def _reconcile_active_deploy(deploy: Deploy) -> None:
             return
         if locked.status not in ACTIVE_DEPLOY_STATUSES:
             return  # already terminal, skip
+        if locked.cancel_requested:
+            # Cancellation/timeout is owned by the deployment worker. Do not
+            # let the monitor race it by declaring a second terminal failure.
+            return
 
         service = locked.service
 

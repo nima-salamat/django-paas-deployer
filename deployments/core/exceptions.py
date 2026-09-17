@@ -10,6 +10,8 @@ This module re-exports the same names so existing imports such as
 
 from deployments.common.exceptions import (  # noqa: F401
     DeploymentError,
+    InternalPlatformError,
+    to_deployment_error,
     DeploymentValidationError,
     InvalidServiceStateError,
     DockerClientError,
@@ -29,6 +31,8 @@ from deployments.common.exceptions import (  # noqa: F401
 
 __all__ = [
     "DeploymentError",
+    "InternalPlatformError",
+    "to_deployment_error",
     "DeploymentValidationError",
     "InvalidServiceStateError",
     "DockerClientError",

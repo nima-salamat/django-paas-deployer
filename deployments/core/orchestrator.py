@@ -35,6 +35,7 @@ from deployments.common.exceptions import (
     DeploymentCancelled,
     DeploymentError,
     RollbackError,
+    to_deployment_error,
 )
 from .health import DockerHealthChecker
 from .manager.container_manager import Container
@@ -115,13 +116,10 @@ class DeploymentOrchestrator:
                 config = enrich_config_from_project(
                     config, project_root, logger_sink=self.logger,
                 )
+            except DeploymentError:
+                raise
             except Exception as exc:
-                self.logger.warning(
-                    "platform_detection",
-                    f"Could not inspect project tree: {exc}. Continuing without enrichment.",
-                    progress=11,
-                    details={"error": str(exc)},
-                )
+                raise to_deployment_error(exc, stage="platform_detection") from exc
 
             self._check_cancelled()
 
@@ -189,7 +187,7 @@ class DeploymentOrchestrator:
                 build_resource_policy=config.build_resource_policy,
                 deployment_id=self.logger.deployment_id,
             )
-            image.create(on_build_output=self._on_build_output)
+            image.create(on_build_output=self._on_build_output, cancel_check=self._cancel_check)
             image_built = True
             self.logger.info(
                 "image_build", "Docker image built successfully.",
@@ -297,6 +295,11 @@ class DeploymentOrchestrator:
                 config.name,
                 timeout=config.health_timeout,
                 interval=config.health_interval,
+                healthcheck_path=config.healthcheck_path,
+                expected_status=config.healthcheck_expected_status,
+                request_timeout=config.healthcheck_timeout,
+                port=config.port,
+                cancel_check=self._cancel_check,
             )
 
             # 10. Cleanup old container + prune dangling images
@@ -351,11 +354,7 @@ class DeploymentOrchestrator:
                 renamed_old_name=renamed_old_name,
             )
         except Exception as exc:
-            wrapped = DeploymentError(
-                "Unexpected deployment failure.",
-                stage="deployment",
-                details={"error": str(exc), "error_type": type(exc).__name__},
-            )
+            wrapped = to_deployment_error(exc, stage="deployment")
             return self._handle_failure(
                 config, wrapped,
                 snapshot=snapshot,
@@ -384,15 +383,22 @@ class DeploymentOrchestrator:
         if self._cancel_check is None:
             return
         try:
-            if self._cancel_check():
+            result = self._cancel_check()
+            if result:
+                timeout = result == "timeout"
                 raise DeploymentCancelled(
-                    "Deployment cancelled by user request.",
-                    stage="cancelled",
+                    "Deployment timed out while work was still running." if timeout else "Deployment cancelled by user request.",
+                    stage="timeout" if timeout else "cancelled",
+                    code="DEPLOYMENT_TIMEOUT" if timeout else None,
+                    user_message=(
+                        "The deployment exceeded its maximum allowed time and was stopped."
+                        if timeout else "Deployment cancelled by user request."
+                    ),
+                    details={"timeout": timeout},
                 )
         except DeploymentCancelled:
             raise
         except Exception:
-            # A broken cancel_check must never crash the deploy.
             return
 
     # ------------------------------------------------------------------
@@ -473,14 +479,21 @@ class DeploymentOrchestrator:
         return DeploymentResult(
             success=False,
             status="cancelled",
-            message=exc.message,
+            message=exc.user_message,
             image_ref=config.image_ref,
             container_name=config.name,
             previous_image_ref=snapshot.image_ref,
             rollback_performed=rollback_performed,
             rollback_failed=rollback_failed,
-            error=exc.message,
-            stage="cancelled",
+            error=exc.technical_message,
+            stage=exc.stage or "cancelled",
+            details={
+                "error_code": exc.code,
+                "error_category": exc.category,
+                "user_message": exc.user_message,
+                "technical_message": exc.technical_message,
+                **(exc.details or {}),
+            },
         )
 
     def _handle_failure(
@@ -503,6 +516,8 @@ class DeploymentOrchestrator:
         # We now include ``details['error']`` (the actual Docker error)
         # and ``details['error_type']`` when present.
         underlying_error = exc.details.get("error") if exc.details else None
+        if not underlying_error:
+            underlying_error = exc.technical_message if exc.technical_message != exc.user_message else None
         error_type = exc.details.get("error_type") if exc.details else None
         status_code = exc.details.get("status_code") if exc.details else None
 
@@ -516,11 +531,19 @@ class DeploymentOrchestrator:
         else:
             detailed_message = exc.message
 
-        self.logger.error(
+        # Keep the detailed failure in the operator log.  The user-facing
+        # deployment lifecycle gets exactly one terminal event below; emitting
+        # this intermediate error through the event sink would create two
+        # visible failure messages for one deployment attempt.
+        self.logger.logger.error(
+            "deploy=%s stage=%s code=%s category=%s recoverable=%s: %s",
+            self.logger.deployment_id,
             exc.stage,
+            exc.code,
+            exc.category,
+            exc.recoverable,
             detailed_message,
-            progress=95,
-            details={**exc.details, "recoverable": exc.recoverable},
+            exc_info=True,
         )
 
         # If the new container was started but failed health check, we
@@ -599,10 +622,15 @@ class DeploymentOrchestrator:
 
         self.logger.error(
             "deployment_failed",
-            "Deployment failed.",
+            exc.user_message,
             progress=100,
             details={
                 "stage": exc.stage,
+                "error_code": exc.code,
+                "error_category": exc.category,
+                "recoverable": exc.recoverable,
+                "user_message": exc.user_message,
+                "technical_message": exc.technical_message,
                 "rollback_performed": rollback_performed,
                 "rollback_failed": rollback_failed,
                 "error": underlying_error or "",
@@ -612,16 +640,21 @@ class DeploymentOrchestrator:
         return DeploymentResult(
             success=False,
             status="failed",
-            message=detailed_message,
+            message=exc.user_message,
             image_ref=config.image_ref,
             container_name=config.name,
             previous_image_ref=snapshot.image_ref,
             rollback_performed=rollback_performed,
             rollback_failed=rollback_failed,
-            error=detailed_message,
+            error=exc.technical_message,
             stage=exc.stage,
             details={
                 **exc.details,
+                "error_code": exc.code,
+                "error_category": exc.category,
+                "recoverable": exc.recoverable,
+                "user_message": exc.user_message,
+                "technical_message": exc.technical_message,
                 "rollback_performed": rollback_performed,
                 "rollback_failed": rollback_failed,
             },

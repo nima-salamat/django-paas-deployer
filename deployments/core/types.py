@@ -90,6 +90,9 @@ class DeploymentConfig:
     start_timeout: int = 45
     health_timeout: int = 60
     health_interval: float = 1.0
+    healthcheck_path: Optional[str] = None
+    healthcheck_expected_status: tuple[int, ...] = (200, 204)
+    healthcheck_timeout: float = 5.0
 
     # ------------------------------------------------------------------
     # Structured project model — produced once by the detector layer and

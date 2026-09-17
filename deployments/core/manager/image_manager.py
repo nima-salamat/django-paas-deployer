@@ -15,7 +15,7 @@ import docker
 import docker.errors
 from docker.errors import BuildError, ImageNotFound
 
-from deployments.core.exceptions import CleanupError, ImageBuildError
+from deployments.core.exceptions import CleanupError, DockerClientError, ImageBuildError, InternalPlatformError
 from deployments.common.build_slots import BuildSlot
 from .client_manager import Client
 
@@ -311,6 +311,17 @@ class Image(Client):
         on_build_output: Optional[Callable] = None,
     ) -> None:
         for chunk in self._iter_build_stream(response):
+            if cancel_check is not None and cancel_check():
+                try:
+                    response.close()
+                except Exception:
+                    pass
+                from deployments.common.exceptions import DeploymentCancelled
+                raise DeploymentCancelled(
+                    "Deployment cancellation requested during Docker image build.",
+                    stage="cancelled",
+                    details={"operation": "docker_build"},
+                )
             if on_build_output:
                 try:
                     on_build_output(chunk)
@@ -364,64 +375,94 @@ class Image(Client):
         self,
         response,
         on_build_output: Optional[Callable] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> Optional[str]:
-        """Consume build stream, log output, return final image ID."""
+        """Consume build stream and actively close it when cancellation is requested."""
+        import threading
+
         image_id: Optional[str] = None
+        cancelled = threading.Event()
+        watcher = None
 
-        for chunk in self._iter_build_stream(response):
-            if on_build_output:
-                try:
-                    on_build_output(chunk)
-                except Exception:
-                    logger.exception("on_build_output callback failed")
+        if cancel_check is not None:
+            def _watch_cancel():
+                while not cancelled.wait(0.25):
+                    try:
+                        if cancel_check():
+                            cancelled.set()
+                            try:
+                                response.close()
+                            except Exception:
+                                pass
+                            return
+                    except Exception:
+                        # Cancellation checks are best-effort; the deployment
+                        # must not fail merely because the DB check is unavailable.
+                        continue
 
-            if not isinstance(chunk, dict):
-                continue
+            watcher = threading.Thread(target=_watch_cancel, name="deploy-build-cancel", daemon=True)
+            watcher.start()
 
-            aux = chunk.get("aux") or {}
-            if isinstance(aux, dict):
-                cid = aux.get("ID") or aux.get("Id")
-                if cid:
-                    image_id = cid
-
-            if "stream" in chunk:
-                msg = (chunk.get("stream") or "").strip()
-                if msg:
-                    logger.info(msg)
-                    m = re.search(
-                        r"Successfully built ([0-9a-f]{12,})",
-                        msg,
-                        re.IGNORECASE,
+        try:
+            for chunk in self._iter_build_stream(response):
+                if cancelled.is_set():
+                    from deployments.common.exceptions import DeploymentCancelled
+                    raise DeploymentCancelled(
+                        "Deployment cancellation requested during Docker image build.",
+                        stage="cancelled",
+                        details={"operation": "docker_build"},
                     )
-                    if m:
-                        image_id = m.group(1)
-                    m2 = re.search(
-                        r"writing image (sha256:[0-9a-f]+)",
-                        msg,
-                        re.IGNORECASE,
-                    )
-                    if m2:
-                        image_id = m2.group(1)
-            elif "status" in chunk:
-                status = chunk.get("status")
-                progress = chunk.get("progress")
-                if progress:
-                    logger.info("%s %s", status, progress)
+                if on_build_output:
+                    try:
+                        on_build_output(chunk)
+                    except Exception:
+                        logger.exception("on_build_output callback failed")
+
+                if not isinstance(chunk, dict):
+                    continue
+
+                aux = chunk.get("aux") or {}
+                if isinstance(aux, dict):
+                    cid = aux.get("ID") or aux.get("Id")
+                    if cid:
+                        image_id = cid
+
+                if "stream" in chunk:
+                    msg = (chunk.get("stream") or "").strip()
+                    if msg:
+                        logger.info(msg)
+                        m = re.search(r"Successfully built ([0-9a-f]{12,})", msg, re.IGNORECASE)
+                        if m:
+                            image_id = m.group(1)
+                        m2 = re.search(r"writing image (sha256:[0-9a-f]+)", msg, re.IGNORECASE)
+                        if m2:
+                            image_id = m2.group(1)
+                elif "status" in chunk:
+                    status = chunk.get("status")
+                    progress = chunk.get("progress")
+                    logger.info("%s %s" % (status, progress) if progress else "%s" % status)
+                elif "error" in chunk or "errorDetail" in chunk:
+                    err = chunk.get("error") or ((chunk.get("errorDetail") or {}).get("message"))
+                    logger.error(err)
+                    raise BuildError(str(err), build_log=[chunk])
                 else:
-                    logger.info("%s", status)
-            elif "error" in chunk or "errorDetail" in chunk:
-                err = chunk.get("error") or (
-                    (chunk.get("errorDetail") or {}).get("message")
+                    logger.debug("Build chunk: %s", chunk)
+
+            if cancelled.is_set():
+                from deployments.common.exceptions import DeploymentCancelled
+                raise DeploymentCancelled(
+                    "Deployment cancellation requested during Docker image build.",
+                    stage="cancelled",
+                    details={"operation": "docker_build"},
                 )
-                logger.error(err)
-                raise BuildError(str(err), build_log=[chunk])
-            else:
-                logger.debug("Build chunk: %s", chunk)
+            return image_id
+        finally:
+            cancelled.set()
+            if watcher is not None:
+                watcher.join(timeout=0.5)
 
-        return image_id
 
-
-    def create(self, on_build_output: Optional[Callable] = None):
+    def create(self, on_build_output: Optional[Callable] = None, cancel_check: Optional[Callable[[], bool]] = None):
         """Build the exact model-derived image and apply its tag after build.
 
         The low-level docker-py ``api.build`` path is used with the exact
@@ -528,13 +569,26 @@ class Image(Client):
                             break
 
                     if response is None:
+                        if isinstance(last_err, docker.errors.DockerException):
+                            raise DockerClientError(
+                                "Docker could not execute the image build request.",
+                                details={
+                                    "image": target_ref,
+                                    "error": str(last_err),
+                                    "error_type": type(last_err).__name__,
+                                },
+                            ) from last_err
                         raise ImageBuildError(
-                            f"Docker api.build failed: {type(last_err).__name__ if last_err else 'unknown'}: {last_err}",
-                            details={"image": target_ref, "error": str(last_err), "error_type": type(last_err).__name__ if last_err else None},
+                            "Docker image build could not be started.",
+                            details={
+                                "image": target_ref,
+                                "error": str(last_err) if last_err else "unknown error",
+                                "error_type": type(last_err).__name__ if last_err else None,
+                            },
                         ) from last_err
 
                     image_id = self._handle_build_stream_collect_id(
-                        response, on_build_output=on_build_output
+                        response, on_build_output=on_build_output, cancel_check=cancel_check
                     )
                     if not image_id:
                         raise ImageBuildError(
@@ -551,21 +605,36 @@ class Image(Client):
                         return self.client.images.get(image_id)
 
         except BuildError as exc:
+            details = {"image": target_ref, "error": str(exc), "error_type": type(exc).__name__}
+            if getattr(exc, "build_log", None):
+                details["build_log"] = exc.build_log[-20:]
             raise ImageBuildError(
                 "Docker image build failed.",
-                details={"image": target_ref, "error": str(exc)},
+                details=details,
             ) from exc
         except ImageBuildError:
             raise
+        except docker.errors.DockerException as exc:
+            raise DockerClientError(
+                "Docker could not complete the image build.",
+                details={
+                    "image": target_ref,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                },
+            ) from exc
         except Exception as exc:
-            logger.error(
-                "Unexpected error while building Docker image: %s: %s",
-                type(exc).__name__, exc,
+            logger.exception(
+                "Unexpected platform error while building Docker image: %s",
+                target_ref,
             )
-            logger.error(traceback.format_exc())
-            raise ImageBuildError(
-                f"Unexpected error while building Docker image: {type(exc).__name__}: {exc}",
-                details={"image": target_ref, "error": str(exc), "error_type": type(exc).__name__},
+            raise InternalPlatformError(
+                stage="image_build",
+                technical_message=str(exc) or type(exc).__name__,
+                details={
+                    "image": target_ref,
+                    "exception_type": type(exc).__name__,
+                },
             ) from exc
 
 
