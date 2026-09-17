@@ -94,11 +94,12 @@ class ServiceStateManager:
         if service.status == SERVICE_STATUS_CHOICES.STOPPING:
             return service  # idempotent
 
-        service.status = SERVICE_STATUS_CHOICES.STOPPING
-        service.save(update_fields=["status"])
+        previous = service.status
+        StateManager.transition_service(service_id, SERVICE_STATUS_CHOICES.STOPPING)
+        service.refresh_from_db()
         logger.info(
             "ServiceStateManager: service %s %s -> stopping",
-            service_id, service.status,
+            service_id, previous,
         )
         return service
 

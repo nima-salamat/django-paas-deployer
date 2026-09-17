@@ -29,6 +29,7 @@ from deployments.core.deploy import Deploy as DeployFacade
 from deployments.core.types import VolumeSpec
 from deployments.core.manager.container_manager import Container
 from deployments.core.state.locks import acquire_service_deployment_lock
+from deployments.core.state.manager import StateManager
 from services.models import Volume  # type: ignore
 
 from deployments.common import parse_config, as_bool, as_int
@@ -74,7 +75,7 @@ _docker_safe_tag = _docker_tag_from_deploy
 class DeployService:
     """Orchestrates deployment execution flows coupled with state logging."""
 
-    def execute(self, deploy_id: int) -> None:
+    def execute(self, deploy_id: int, *, task_id: str | None = None) -> None:
         # 1. Acquire the per-service advisory lock BEFORE touching the
         #    row state.  This prevents two deploys for the same Service
         #    from racing even if the row-lock transaction boundary is
@@ -96,7 +97,7 @@ class DeployService:
 
         try:
             with acquire_service_deployment_lock(service_id):
-                self._execute_locked(deploy_id, service_id)
+                self._execute_locked(deploy_id, service_id, task_id=task_id)
         except InvalidServiceStateError as exc:
             logger.info("Skipped deploy execution for ID %s: %s", deploy_id, str(exc))
             return
@@ -112,15 +113,16 @@ class DeployService:
             )
             raise translated from exc
 
-    def _execute_locked(self, deploy_id: int, service_id: int) -> None:
+    def _execute_locked(self, deploy_id: int, service_id: int, *, task_id: str | None = None) -> None:
         try:
-            deploy_item = ServiceStateManager.lock_and_get_deployment(deploy_id)
+            deploy_item = ServiceStateManager.lock_and_get_deployment(deploy_id, task_id=task_id)
         except InvalidServiceStateError as exc:
             logger.info("Skipped deploy execution for ID %s: %s", deploy_id, str(exc))
             return
 
         container_name = deploy_item.service.get_docker_service_name()
         state_tracker = DjangoDeploymentState(deploy_item)
+        StateManager.heartbeat_deploy(deploy_item.pk, task_id=task_id, stage="starting")
 
         if deploy_item.cancel_requested:
             state_tracker.finish(
@@ -140,7 +142,30 @@ class DeployService:
             return
 
         try:
-            result = self._process_deployment(deploy_item, container_name, state_tracker)
+            StateManager.heartbeat_deploy(deploy_item.pk, task_id=task_id, stage="preparing")
+            previous_deploy_id = getattr(deploy_item, "previous_deploy_id", None)
+            def _activate_deployment() -> None:
+                from django.db import transaction
+                from django.utils import timezone
+                from services.models import Service
+                with transaction.atomic():
+                    service = Service.objects.select_for_update().get(pk=service_id)
+                    current = service.selected_deploy_id
+                    if current != previous_deploy_id:
+                        raise InvalidServiceStateError(
+                            "Active deployment changed while this deployment was preparing to activate.",
+                            details={"expected_previous_deploy": previous_deploy_id, "actual_selected_deploy": current},
+                        )
+                    Service.objects.filter(pk=service_id).update(
+                        selected_deploy_id=deploy_item.pk,
+                        selected_deploy_at=timezone.now(),
+                    )
+                logger.info("Activated deploy=%s for service=%s", deploy_item.pk, service_id)
+
+            result = self._process_deployment(
+                deploy_item, container_name, state_tracker, task_id=task_id,
+                activation_callback=_activate_deployment,
+            )
             if getattr(result, "status", None) == "cancelled":
                 ServiceStateManager.sync_legacy_stopped(service_id)
             else:
@@ -192,6 +217,9 @@ class DeployService:
     def _process_deployment(
         self, deploy_item: Deploy, container_name: str,
         state_tracker: DjangoDeploymentState,
+        *,
+        task_id: str | None = None,
+        activation_callback=None,
     ):
         cfg = normalize_profile(
             parse_config(getattr(deploy_item, "config", None)),
@@ -543,6 +571,7 @@ class DeployService:
             build_options={**build_options, "build_command": build_command, "install_command": install_command, "build_dir": build_dir, "package_manager": package_manager},
             runtime_options=runtime_options,
             labels={"deployment.id": str(deploy_item.pk), "service.id": str(service.pk)},
+            activation_callback=activation_callback,
             runtime_version=(
                 cfg.get("runtime_version")
                 or cfg.get("node_version")

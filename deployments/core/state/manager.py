@@ -167,6 +167,8 @@ class StateManager:
                 sm.DEPLOY_CANCELLED, sm.DEPLOY_ROLLED_BACK,
             ):
                 updates.setdefault("completed_at", now)
+                updates["worker_heartbeat_at"] = now
+                updates["execution_task_id"] = ""
 
             Deploy.objects.filter(pk=deploy_id).update(**updates)
             logger.info(
@@ -181,7 +183,7 @@ class StateManager:
     # ------------------------------------------------------------------
 
     @classmethod
-    def lock_and_get_deployment(cls, deploy_id: int):
+    def lock_and_get_deployment(cls, deploy_id: int, *, task_id: str | None = None):
         """
         Atomically:
           * Lock the Deploy + Service rows.
@@ -210,6 +212,25 @@ class StateManager:
                 ) from exc
 
             service = deploy.service
+            if task_id and getattr(service, "task_id", None) not in (None, "", task_id):
+                raise InvalidServiceStateError(
+                    f"Deploy ID {deploy_id} is owned by another task.",
+                    details={
+                        "deploy_id": deploy_id,
+                        "service_id": service.pk,
+                        "expected_task_id": task_id,
+                        "actual_task_id": getattr(service, "task_id", None),
+                    },
+                )
+            if deploy.execution_task_id and task_id and deploy.execution_task_id != task_id:
+                raise InvalidServiceStateError(
+                    f"Deploy ID {deploy_id} is owned by another execution task.",
+                    details={
+                        "deploy_id": deploy_id,
+                        "expected_task_id": task_id,
+                        "actual_task_id": deploy.execution_task_id,
+                    },
+                )
             if service.status != SERVICE_STATUS_CHOICES.QUEUED:
                 raise InvalidServiceStateError(
                     f"Deploy aborted. Service status is {service.status}, "
@@ -229,9 +250,14 @@ class StateManager:
             from deploy.models import DeploymentStatusChoices  # type: ignore
             deploy.status = DeploymentStatusChoices.RUNNING
             deploy.started_at = now
+            deploy.worker_heartbeat_at = now
+            deploy.execution_task_id = task_id or deploy.execution_task_id or ""
             deploy.stage = "starting"
             deploy.progress = 0
-            deploy.save(update_fields=["status", "started_at", "stage", "progress"])
+            deploy.save(update_fields=[
+                "status", "started_at", "worker_heartbeat_at",
+                "execution_task_id", "stage", "progress",
+            ])
 
             logger.info(
                 "StateManager.lock_and_get_deployment: deploy=%s service=%s",
@@ -351,6 +377,48 @@ class StateManager:
                 "status_message": message or "Deployment cancelled.",
             },
         )
+
+    @classmethod
+    def heartbeat_deploy(cls, deploy_id: int, *, task_id: str | None = None, stage: str | None = None) -> bool:
+        """Refresh ownership heartbeat without changing terminal state."""
+        from deploy.models import Deploy  # type: ignore
+
+        now = timezone.now()
+        filters = {"pk": deploy_id}
+        if task_id:
+            filters["execution_task_id"] = task_id
+            filters["service__task_id"] = task_id
+        updates = {"worker_heartbeat_at": now}
+        if stage:
+            updates["stage"] = stage[:64]
+        updated = Deploy.objects.filter(**filters).exclude(
+            status__in=(sm.DEPLOY_SUCCEEDED, sm.DEPLOY_FAILED, sm.DEPLOY_CANCELLED, sm.DEPLOY_ROLLED_BACK)
+        ).update(**updates)
+        return bool(updated)
+
+    @classmethod
+    def transition_deploy_terminal_if_owned(
+        cls, deploy_id: int, target: str, *, task_id: str | None = None, update_fields: Optional[dict] = None
+    ) -> bool:
+        """Commit a terminal transition only while this worker still owns the deploy."""
+        from deploy.models import Deploy  # type: ignore
+
+        with transaction.atomic():
+            deploy = Deploy.objects.select_for_update().filter(pk=deploy_id).first()
+            if deploy is None:
+                return False
+            if task_id and deploy.execution_task_id != task_id:
+                return False
+            if sm.is_deploy_terminal(deploy.status):
+                return False
+            sm.check_deploy_transition(deploy.status, target)
+            updates = dict(update_fields or {})
+            updates["status"] = target
+            updates.setdefault("completed_at", timezone.now())
+            updates["worker_heartbeat_at"] = timezone.now()
+            updates["execution_task_id"] = ""
+            Deploy.objects.filter(pk=deploy_id).update(**updates)
+            return True
 
 
 __all__ = ["StateManager"]

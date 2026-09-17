@@ -60,6 +60,8 @@ class Container(Client):
         entry_port: int | None = None,
         labels: dict | None = None,
         route_name: str | None = None,
+        router_name: str | None = None,
+        healthcheck_path: str | None = None,
         restart_policy: dict | None = None,
         extra_host_config: dict | None = None,
         resource_limits: dict | None = None,
@@ -83,6 +85,8 @@ class Container(Client):
         self.entry_port = entry_port
         self.labels = labels
         self.route_name = sanitize_route_name(route_name or name)
+        self.router_name = sanitize_route_name(router_name or self.route_name)
+        self.healthcheck_path = str(healthcheck_path or "").strip() or None
         self.restart_policy = self._normalize_restart_policy(
             restart_policy or {"Name": "unless-stopped"}
         )
@@ -270,15 +274,33 @@ class Container(Client):
             {
                 "traefik.enable": "true",
                 "traefik.docker.network": "proxy_net",
-                f"traefik.http.routers.{self.route_name}.rule": (
+                f"traefik.http.routers.{self.router_name}.rule": (
                     f"Host(`{self.route_name}.{_get_deployment_domain()}`)"
                 ),
-                f"traefik.http.routers.{self.route_name}.entrypoints": "web",
-                f"traefik.http.routers.{self.route_name}.service": self.route_name,
-                f"traefik.http.services.{self.route_name}.loadbalancer.server.port": str(self.entry_port),
+                f"traefik.http.routers.{self.router_name}.entrypoints": "web",
+                f"traefik.http.routers.{self.router_name}.service": self.router_name,
+                f"traefik.http.services.{self.router_name}.loadbalancer.server.port": str(self.entry_port),
+                # Give newer deployment routers deterministic precedence over
+                # the still-running previous deployment. If an application
+                # readiness path is configured, Traefik independently removes
+                # the new backend from rotation until that endpoint is healthy.
+                f"traefik.http.routers.{self.router_name}.priority": str(self._router_priority()),
             }
         )
+        if self.healthcheck_path:
+            labels.update({
+                f"traefik.http.services.{self.router_name}.loadbalancer.healthcheck.path": self.healthcheck_path,
+                f"traefik.http.services.{self.router_name}.loadbalancer.healthcheck.interval": "2s",
+                f"traefik.http.services.{self.router_name}.loadbalancer.healthcheck.timeout": "2s",
+            })
         return labels
+
+    def _router_priority(self) -> int:
+        raw = str((self.labels or {}).get("deployment.id") or "")
+        try:
+            return 10000 + int(raw)
+        except (TypeError, ValueError):
+            return 10000
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -854,6 +876,17 @@ class Container(Client):
             "restart_count": restart_count,
         }
 
+    @classmethod
+    def find_owned(cls, *, deployment_id: str | None = None, service_id: str | None = None, all: bool = True) -> list[dict]:
+        """List managed containers matching positive deployment/service ownership labels."""
+        client = cls("_unused")
+        filters = {"label": ["managed-by=django-paas-deployer"]}
+        if deployment_id is not None:
+            filters["label"].append(f"deployment.id={deployment_id}")
+        if service_id is not None:
+            filters["label"].append(f"service.id={service_id}")
+        return list(client.client.containers.list(all=all, filters=filters))
+
     # ------------------------------------------------------------------
     # Removal / rename
     # ------------------------------------------------------------------
@@ -874,6 +907,56 @@ class Container(Client):
                 f"Failed to remove container '{self.name}'.",
                 details={"container": self.name, "error": str(exc)},
             ) from exc
+
+    def disconnect_network(self, network_name: str) -> bool:
+        """Disconnect this container from a Docker network idempotently."""
+        try:
+            container = self.client.containers.get(self.name)
+        except docker.errors.NotFound:
+            return True
+        try:
+            network = self.client.networks.get(network_name)
+        except docker.errors.NotFound:
+            return True
+        try:
+            network.disconnect(container, force=False)
+            logger.info("Container '%s' disconnected from network '%s'.", self.name, network_name)
+        except docker.errors.APIError as exc:
+            if "is not connected" in str(exc).lower():
+                return True
+            raise ContainerError(
+                f"Failed to disconnect container '{self.name}' from network '{network_name}'.",
+                details={"container": self.name, "network": network_name, "error": str(exc)},
+            ) from exc
+        return True
+
+    def connect_network(self, network_name: str) -> bool:
+        """Connect this container to a Docker network idempotently."""
+        try:
+            container = self.client.containers.get(self.name)
+        except docker.errors.NotFound as exc:
+            raise ContainerError(
+                f"Cannot connect missing container '{self.name}' to network '{network_name}'.",
+                details={"container": self.name, "network": network_name},
+            ) from exc
+        try:
+            network = self.client.networks.get(network_name)
+        except docker.errors.NotFound as exc:
+            raise ContainerError(
+                f"Docker network '{network_name}' does not exist.",
+                details={"container": self.name, "network": network_name},
+            ) from exc
+        try:
+            network.connect(container)
+            logger.info("Container '%s' connected to network '%s'.", self.name, network_name)
+        except docker.errors.APIError as exc:
+            if "already connected" in str(exc).lower():
+                return True
+            raise ContainerError(
+                f"Failed to connect container '{self.name}' to network '{network_name}'.",
+                details={"container": self.name, "network": network_name, "error": str(exc)},
+            ) from exc
+        return True
 
     def rename(self, new_name: str) -> str:
         """

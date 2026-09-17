@@ -111,6 +111,8 @@ SERVICE_TRANSITIONS: FrozenSet[tuple[str | None, str]] = frozenset({
     (SERVICE_STOPPED, SERVICE_DEPLOYING),  # redeploy directly
     (SERVICE_FAILED, SERVICE_DEPLOYING),   # operator forced redeploy
     (SERVICE_RUNNING, SERVICE_DEPLOYING),  # new deploy over a running one
+    (SERVICE_RUNNING, SERVICE_QUEUED),     # queue replacement while old release remains live
+    (SERVICE_SUCCEEDED, SERVICE_QUEUED),   # legacy alias queue
 
     # Legacy alias: SUCCEEDED == RUNNING
     (SERVICE_SUCCEEDED, SERVICE_RUNNING),

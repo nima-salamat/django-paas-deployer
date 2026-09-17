@@ -10,6 +10,7 @@ from django.utils import timezone
 from core.global_settings.config import SERVICE_STATUS_CHOICES
 from deploy.models import Deploy, DeployLog, DeploymentStatusChoices, RollbackStatusChoices
 from services.models import Service
+from deployments.core.state.manager import StateManager
 
 logger = logging.getLogger(__name__)
 
@@ -105,11 +106,9 @@ def mark_service_running(service: Service, deploy: Deploy | None = None) -> bool
         return True
 
     now = timezone.now()
-    Service.objects.filter(pk=service.pk).update(
-        status=SERVICE_STATUS_CHOICES.RUNNING,
-        deployed_at=now,
-        deploy_started=None,
-        task_id=None,
+    StateManager.transition_service(
+        service.pk, SERVICE_STATUS_CHOICES.RUNNING,
+        update_fields={"deployed_at": now, "deploy_started": None, "task_id": None},
     )
 
     logger.info("Service %s → running", service.pk)
@@ -148,9 +147,9 @@ def mark_service_stopped(service: Service, deploy: Deploy | None = None) -> bool
     if locked.status == SERVICE_STATUS_CHOICES.STOPPED:
         return True
 
-    Service.objects.filter(pk=service.pk).update(
-        status=SERVICE_STATUS_CHOICES.STOPPED,
-        task_id=None,
+    StateManager.transition_service(
+        service.pk, SERVICE_STATUS_CHOICES.STOPPED,
+        update_fields={"task_id": None},
     )
 
     logger.info("Service %s → stopped", service.pk)
@@ -187,10 +186,9 @@ def mark_service_failed(
     if locked.status == SERVICE_STATUS_CHOICES.STOPPED:
         return False
 
-    Service.objects.filter(pk=service.pk).update(
-        status=SERVICE_STATUS_CHOICES.FAILED,
-        deploy_started=None,
-        task_id=None,
+    StateManager.transition_service(
+        service.pk, SERVICE_STATUS_CHOICES.FAILED,
+        update_fields={"deploy_started": None, "task_id": None},
     )
 
     logger.warning("Service %s → failed: %s", service.pk, message)
@@ -243,12 +241,12 @@ def mark_deploy_failed(
         return False
 
     now = timezone.now()
-    Deploy.objects.filter(pk=deploy.pk).update(
-        status=DeploymentStatusChoices.FAILED,
-        stage=stage,
-        error_message=message,
-        status_message="Deployment failed.",
-        completed_at=now,
+    StateManager.transition_deploy(
+        deploy.pk, DeploymentStatusChoices.FAILED,
+        update_fields={
+            "stage": stage, "error_message": message,
+            "status_message": "Deployment failed.",
+        },
     )
 
     logger.warning("Deploy %s → failed [%s]: %s", deploy.pk, stage, message)
@@ -270,10 +268,9 @@ def mark_deploy_failed(
         SERVICE_STATUS_CHOICES.STOPPED,
         SERVICE_STATUS_CHOICES.FAILED,
     ):
-        Service.objects.filter(pk=service.pk).update(
-            status=SERVICE_STATUS_CHOICES.FAILED,
-            deploy_started=None,
-            task_id=None,
+        StateManager.transition_service(
+            service.pk, SERVICE_STATUS_CHOICES.FAILED,
+            update_fields={"deploy_started": None, "task_id": None},
         )
         logger.warning("Service %s → failed (deploy failed)", service.pk)
 
@@ -357,13 +354,14 @@ def mark_rollback_complete(deploy: Deploy) -> bool:
     if locked is None or locked.status != DeploymentStatusChoices.ROLLING_BACK:
         return False
 
-    Deploy.objects.filter(pk=deploy.pk).update(
-        rollback_status=RollbackStatusChoices.SUCCEEDED,
-        status=DeploymentStatusChoices.ROLLED_BACK,
-        stage="rollback_completed",
-        progress=100,
-        status_message="Rollback completed successfully.",
-        completed_at=timezone.now(),
+    StateManager.transition_deploy(
+        deploy.pk, DeploymentStatusChoices.ROLLED_BACK,
+        update_fields={
+            "rollback_status": RollbackStatusChoices.SUCCEEDED,
+            "stage": "rollback_completed",
+            "progress": 100,
+            "status_message": "Rollback completed successfully.",
+        },
     )
 
     _create_deploy_log(
@@ -377,10 +375,9 @@ def mark_rollback_complete(deploy: Deploy) -> bool:
 
     service = locked.service
     if service:
-        Service.objects.filter(pk=service.pk).update(
-            status=SERVICE_STATUS_CHOICES.RUNNING,
-            deploy_started=None,
-            task_id=None,
+        StateManager.transition_service(
+            service.pk, SERVICE_STATUS_CHOICES.RUNNING,
+            update_fields={"deploy_started": None, "task_id": None},
         )
         logger.info("Service %s → running (rollback complete)", service.pk)
 
@@ -401,12 +398,13 @@ def mark_rollback_failed(deploy: Deploy) -> bool:
 
     message = "Rollback failed because the deployment container does not exist."
 
-    Deploy.objects.filter(pk=deploy.pk).update(
-        rollback_status=RollbackStatusChoices.FAILED,
-        status=DeploymentStatusChoices.FAILED,
-        stage="rollback_failed",
-        error_message=message,
-        completed_at=timezone.now(),
+    StateManager.transition_deploy(
+        deploy.pk, DeploymentStatusChoices.FAILED,
+        update_fields={
+            "rollback_status": RollbackStatusChoices.FAILED,
+            "stage": "rollback_failed",
+            "error_message": message,
+        },
     )
 
     _create_deploy_log(
@@ -422,10 +420,9 @@ def mark_rollback_failed(deploy: Deploy) -> bool:
         SERVICE_STATUS_CHOICES.STOPPED,
         SERVICE_STATUS_CHOICES.FAILED,
     ):
-        Service.objects.filter(pk=service.pk).update(
-            status=SERVICE_STATUS_CHOICES.FAILED,
-            deploy_started=None,
-            task_id=None,
+        StateManager.transition_service(
+            service.pk, SERVICE_STATUS_CHOICES.FAILED,
+            update_fields={"deploy_started": None, "task_id": None},
         )
         logger.warning("Service %s → failed (rollback failed)", service.pk)
 

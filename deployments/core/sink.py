@@ -197,34 +197,40 @@ class DBAndChannelEventSink:
             if message and not skip_message:
                 update_fields["status_message"] = message[:500]
 
+            terminal_transition = None
             if stage in self._SUCCESS_STAGES and progress == 100:
-                # SECURITY: never overwrite a terminal status (FAILED,
-                # CANCELLED, ROLLED_BACK) set by the monitor or by an
-                # explicit cancellation.  Legacy code did
-                # ``setdefault("status", SUCCEEDED)`` which would race
-                # with a monitor-set FAILED and silently mark a failed
-                # deploy as succeeded.
-                update_fields.setdefault("status", DeploymentStatusChoices.SUCCEEDED)
-                update_fields.setdefault("completed_at", timezone.now())
+                terminal_transition = (DeploymentStatusChoices.SUCCEEDED, {
+                    "stage": stage[:64] or "finished",
+                    "progress": 100,
+                    "status_message": message[:500],
+                    "error_message": "",
+                })
             elif level == "error" and stage in self._FAILURE_STAGES:
-                update_fields.setdefault("error_message", message[:1000])
+                terminal_transition = (DeploymentStatusChoices.FAILED, {
+                    "stage": stage[:64] or "deployment_failed",
+                    "progress": 100,
+                    "status_message": message[:500],
+                    "error_message": message[:1000],
+                })
+
+            if terminal_transition:
+                from deployments.core.state.manager import StateManager
+                StateManager.transition_deploy(
+                    int(self.deployment_id), terminal_transition[0],
+                    update_fields=terminal_transition[1],
+                )
+                update_fields = {k: v for k, v in update_fields.items() if k not in {"status", "completed_at"}}
 
             if update_fields:
-                # Guard against overwriting terminal statuses.  We use
-                # a .filter() exclusion so this is a single atomic
-                # UPDATE — no race window between read and write.
-                _terminal = (
-                    DeploymentStatusChoices.FAILED,
-                    DeploymentStatusChoices.CANCELLED,
-                    DeploymentStatusChoices.ROLLED_BACK,
-                )
-                # If we're about to set SUCCEEDED, exclude terminal
-                # source states — the monitor's FAILED / CANCELLED
-                # wins over our optimistic SUCCEEDED.
-                qs = Deploy.objects.filter(pk=self.deployment_id)
-                if update_fields.get("status") == DeploymentStatusChoices.SUCCEEDED:
-                    qs = qs.exclude(status__in=_terminal)
-                qs.update(**update_fields)
+                # Progress/stage/status-message updates never mutate Deploy.status.
+                Deploy.objects.filter(pk=self.deployment_id).exclude(
+                    status__in=(
+                        DeploymentStatusChoices.SUCCEEDED,
+                        DeploymentStatusChoices.FAILED,
+                        DeploymentStatusChoices.CANCELLED,
+                        DeploymentStatusChoices.ROLLED_BACK,
+                    )
+                ).update(**update_fields)
         except Exception:
             logger.exception(
                 "Failed to update Deploy row for %s", self.deployment_id

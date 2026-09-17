@@ -68,6 +68,19 @@ class Deploy(BaseModel):
     volume_status = models.CharField(_("Volume Status"), max_length=64, blank=True, default="")
     network_status = models.CharField(_("Network Status"), max_length=64, blank=True, default="")
     cancel_requested = models.BooleanField(_("Cancel Requested"), default=False)
+    execution_task_id = models.CharField(
+        _("Execution Task ID"), max_length=64, blank=True, default="", db_index=True,
+        help_text=_("Celery task currently owning this deployment execution."),
+    )
+    worker_heartbeat_at = models.DateTimeField(
+        _("Worker Heartbeat"), blank=True, null=True, db_index=True,
+        help_text=_("Last heartbeat from the worker that owns this deployment."),
+    )
+    previous_deploy = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="replacement_deployments",
+        help_text=_("Previously active deployment replaced by this deployment."),
+    )
     MAX_ZIP_SIZE_MB = 100
     # Set by admin API path to skip the zip size cap for staff/superuser uploads
     skip_zip_size_limit = False

@@ -6,6 +6,7 @@ from .event_pipeline import DeploymentEventPipeline
 from .models import Deploy, DeploymentStatusChoices, RollbackStatusChoices
 from deployments.core.exceptions import DeploymentCancelled
 from deployments.core.types import DeploymentEvent
+from deployments.core.state.manager import StateManager
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ STAGE_STATUS_MESSAGES = {
     "container_replacement": "Replacing existing container.",
     "container_startup": "Starting container.",
     "health_check": "Checking health.",
+    "activation": "Activating the ready deployment.",
     "rollback": "Rolling back deployment.",
     "cleanup": "Cleaning up resources.",
     "deployment_completed": "Deployment completed.",
@@ -65,43 +67,27 @@ class DjangoDeploymentState:
     def start(self):
         self._finished = False
 
-        # Serialize the transition with the API cancel transaction. This
-        # closes the race where a worker checked cancel_requested=False and
-        # then a force-cancel arrived just before the old implementation
-        # unconditionally reset the flag to False.
         with transaction.atomic():
             locked = Deploy.objects.select_for_update().get(pk=self.deploy.pk)
             if locked.cancel_requested or locked.status == DeploymentStatusChoices.CANCELLED:
-                Deploy.objects.filter(pk=locked.pk).update(
-                    status=DeploymentStatusChoices.CANCELLED,
-                    stage="cancelled",
-                    progress=100,
-                    status_message="Deployment cancelled before execution.",
-                    completed_at=timezone.now(),
+                StateManager.transition_deploy(
+                    locked.pk, DeploymentStatusChoices.CANCELLED,
+                    update_fields={
+                        "stage": "cancelled",
+                        "progress": 100,
+                        "status_message": "Deployment cancelled before execution.",
+                    },
                 )
                 self.deploy = locked
                 self._finished = True
                 emit_cancelled = True
             else:
-                fields = {
-                    "status": DeploymentStatusChoices.RUNNING,
-                    "stage": "deployment_started",
-                    "progress": 0,
-                    "status_message": "Deployment started.",
-                    "error_message": "",
-                    "rollback_status": RollbackStatusChoices.NOT_REQUIRED,
-                    "health_status": "pending",
-                    "container_status": "pending",
-                    "image_status": "pending",
-                    "volume_status": "pending",
-                    "network_status": "pending",
-                    "started_at": timezone.now(),
-                    "completed_at": None,
-                    "cancel_requested": False,
-                }
-                Deploy.objects.filter(pk=locked.pk).update(**fields)
-                for key, value in fields.items():
-                    setattr(self.deploy, key, value)
+                StateManager.heartbeat_deploy(
+                    locked.pk, task_id=getattr(locked, "execution_task_id", None),
+                    stage="deployment_started",
+                )
+                self.deploy = locked
+                self._finished = False
                 emit_cancelled = False
 
         try:
@@ -133,9 +119,23 @@ class DjangoDeploymentState:
         Raises DeploymentCancelled when the user has requested cancel so the
         orchestrator can abort cleanly.
         """
-        # Fresh read for cancel flag (avoid stale in-memory value)
-        if Deploy.objects.filter(pk=self.deploy.pk, cancel_requested=True).exists():
+        # Fresh read for cancellation and ownership. A stale worker must not
+        # publish progress or mutate a deployment that has been re-queued
+        # under a newer Celery task.
+        current = Deploy.objects.filter(pk=self.deploy.pk).values(
+            "cancel_requested", "execution_task_id", "status"
+        ).first()
+        if current and current.get("cancel_requested"):
             raise DeploymentCancelled("Deployment was cancelled by the user.")
+        owner = getattr(self.deploy, "execution_task_id", "") or ""
+        if owner and current and current.get("execution_task_id") != owner:
+            raise DeploymentCancelled(
+                "This deployment execution is no longer the active worker owner.",
+                stage="stale_worker",
+                code="DEPLOYMENT_STALE_WORKER",
+                user_message="This deployment attempt was superseded by another worker.",
+                details={"expected_task_id": owner, "actual_task_id": current.get("execution_task_id")},
+            )
 
         if self._finished:
             # Ignore late events after finish() already wrote terminal state
@@ -270,6 +270,8 @@ class DjangoDeploymentState:
         update = {
             "completed_at": timezone.now(),
             "progress": 100,
+            "execution_task_id": "",
+            "worker_heartbeat_at": timezone.now(),
         }
 
         if success:
@@ -464,7 +466,23 @@ class DjangoDeploymentState:
             return
         try:
             with transaction.atomic():
-                Deploy.objects.filter(pk=self.deploy.pk).update(**fields)
+                filters = {"pk": self.deploy.pk}
+                owner = getattr(self.deploy, "execution_task_id", "") or ""
+                if owner:
+                    filters["execution_task_id"] = owner
+                fields.setdefault("worker_heartbeat_at", timezone.now())
+                updated = Deploy.objects.filter(**filters).exclude(
+                    status__in=(
+                        DeploymentStatusChoices.SUCCEEDED,
+                        DeploymentStatusChoices.FAILED,
+                        DeploymentStatusChoices.CANCELLED,
+                        DeploymentStatusChoices.ROLLED_BACK,
+                    )
+                ).update(**fields)
+                if not updated and owner:
+                    raise RuntimeError(
+                        f"Deployment {self.deploy.pk} is no longer owned by task {owner}."
+                    )
                 for key, value in fields.items():
                     setattr(self.deploy, key, value)
         except Exception:

@@ -55,6 +55,7 @@ class DeploymentOrchestrator:
         event_sink: EventSink = None,
         deployment_id: Optional[str] = None,
         cancel_check: Optional[callable] = None,
+        activation_callback: Optional[callable] = None,
     ):
         """
         Parameters
@@ -76,6 +77,7 @@ class DeploymentOrchestrator:
         self.rollback_manager = RollbackManager(logger=self.logger)
         self.cleanup_manager = CleanupManager(logger=self.logger)
         self._cancel_check = cancel_check
+        self._activation_callback = activation_callback
         self._base_image_refs: list[str] = []
 
     # ------------------------------------------------------------------
@@ -245,6 +247,8 @@ class DeploymentOrchestrator:
                     "service.id": str(config.labels.get("service.id") or ""),
                     **{str(k): str(v) for k, v in config.labels.items()},
                 },
+                router_name=f"{config.name}-deploy-{self.logger.deployment_id or 'current'}",
+                healthcheck_path=config.healthcheck_path,
                 resource_limits=config.resource_limits,
             )
 
@@ -301,6 +305,18 @@ class DeploymentOrchestrator:
                 port=config.port,
                 cancel_check=self._cancel_check,
             )
+
+            # Activation boundary: database selection is changed only after
+            # the replacement is actually ready. If the activation write fails,
+            # raise so the normal rollback path restores the previous resource.
+            if self._activation_callback is not None:
+                self.logger.info(
+                    "activation",
+                    "Replacement is ready; committing active deployment.",
+                    progress=94,
+                    details={"container": config.name, "deployment_id": self.logger.deployment_id},
+                )
+                self._activation_callback()
 
             # 10. Cleanup old container + prune dangling images
             if renamed_old_name:

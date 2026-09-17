@@ -11,6 +11,7 @@ from core.utils import make_uuid4
 
 from core.global_settings.config import MAX_DEPLOY_TIME_MINUTE, SERVICE_STATUS_CHOICES
 from deployments.core.manager.container_manager import Container
+from deployments.core.state.manager import StateManager
 from deploy.models import (
     Deploy,
     DeployLog,
@@ -155,6 +156,7 @@ def monitor_services(self):
     # 2. Services that need runtime reconciliation
     # ------------------------------------------------------------------
     _retry_orphaned_queued_deploys()
+    _recover_stale_running_deploys(policies)
     _reconcile_base_runtime_builds(policies)
     services = (
         Service.objects
@@ -229,6 +231,8 @@ def _retry_orphaned_queued_deploys() -> None:
             task.apply_async(args=[str(deploy.id)], task_id=lock_id)
             Deploy.objects.filter(pk=deploy.pk, status=DeploymentStatusChoices.PENDING).update(
                 status_message="Deployment re-queued after temporary broker unavailability.",
+                execution_task_id=lock_id,
+                worker_heartbeat_at=None,
             )
             service.__class__.objects.filter(
                 pk=service.pk, status=SERVICE_STATUS_CHOICES.QUEUED
@@ -239,6 +243,179 @@ def _retry_orphaned_queued_deploys() -> None:
                 "Unable to re-queue deployment %s; broker may still be unavailable.",
                 deploy.pk, exc_info=True,
             )
+
+
+
+def _recover_stale_running_deploys(policies) -> None:
+    """Converge stale workers only when external resources prove ownership.
+
+    A service keeps its previous container under the canonical name during
+    image build, so inspecting only ``container running/healthy`` is unsafe: it
+    can describe the *previous* release rather than the stale deployment.
+    """
+    stale_after = int(policies.get("stale_worker_seconds", 120))
+    cutoff = timezone.now() - timedelta(seconds=max(stale_after * 2, 60))
+    candidates = (
+        Deploy.objects.select_related("service")
+        .filter(
+            status=DeploymentStatusChoices.RUNNING,
+            worker_heartbeat_at__isnull=False,
+            worker_heartbeat_at__lt=cutoff,
+        )
+        .order_by("worker_heartbeat_at")[: int(policies.get("monitor_batch_size", 50))]
+    )
+    for deploy in candidates:
+        try:
+            service_name = deploy.service.get_docker_service_name()
+            container = Container(service_name)
+            runtime = container.inspect_runtime()
+            labels = container.get_labels() if runtime.get("exists") else {}
+
+            with transaction.atomic():
+                locked = (
+                    Deploy.objects.select_for_update().select_related("service")
+                    .filter(pk=deploy.pk).first()
+                )
+                if not locked or locked.status != DeploymentStatusChoices.RUNNING:
+                    continue
+                if locked.worker_heartbeat_at and locked.worker_heartbeat_at >= cutoff:
+                    continue
+
+                owner_task = str(locked.execution_task_id or "")
+                service = locked.service
+                if owner_task and str(service.task_id or "") not in (owner_task, ""):
+                    logger.info("Skipping stale recovery for deploy=%s; service is now owned by task=%s", locked.pk, service.task_id)
+                    continue
+
+                owned_by_deploy = str(labels.get("deployment.id") or "") == str(locked.pk)
+                stage = (locked.stage or "").strip().lower()
+
+                # Only the activation boundary proves that readiness has already
+                # completed. A healthy canonical-name container during build/start
+                # may still be the previous release.
+                if owned_by_deploy and stage == "activation" and runtime.get("running") and runtime.get("health") in (None, "healthy"):
+                    current_selected = service.selected_deploy_id
+                    if current_selected != locked.pk:
+                        expected_previous = locked.previous_deploy_id
+                        if current_selected != expected_previous:
+                            logger.warning(
+                                "Refusing stale activation recovery for deploy=%s: active deploy changed from expected=%s to=%s",
+                                locked.pk, expected_previous, current_selected,
+                            )
+                            continue
+                        Service.objects.filter(pk=service.pk).update(
+                            selected_deploy_id=locked.pk,
+                            selected_deploy_at=timezone.now(),
+                        )
+
+                    StateManager.transition_deploy(
+                        locked.pk, DeploymentStatusChoices.SUCCEEDED,
+                        update_fields={
+                            "stage": "deployment_completed",
+                            "progress": 100,
+                            "status_message": "Deployment recovered after worker interruption; activation had already completed.",
+                            "error_message": "",
+                            "health_status": "healthy",
+                            "container_status": "running",
+                        },
+                    )
+                    StateManager.transition_service(
+                        locked.service_id, SERVICE_STATUS_CHOICES.RUNNING,
+                        update_fields={"deployed_at": timezone.now(), "deploy_started": None, "task_id": None},
+                    )
+                    logger.warning("Recovered stale activated deploy %s as succeeded.", locked.pk)
+                    continue
+
+                # If the canonical container belongs to the stale deployment
+                # but activation has not been committed, remove only that
+                # replacement and attempt to restore the recorded previous
+                # deployment resource. Never touch an unrelated/newer resource.
+                if owned_by_deploy and stage in {"container_creation", "container_startup", "health_check"}:
+                    if runtime.get("exists"):
+                        try:
+                            container.stop(timeout=5)
+                        except Exception:
+                            pass
+                        try:
+                            container.remove()
+                        except Exception as exc:
+                            logger.warning("Failed to remove stale replacement container for deploy=%s: %s", locked.pk, exc)
+
+                    restored = False
+                    previous_id = locked.previous_deploy_id
+                    if previous_id:
+                        previous_resources = Container.find_owned(
+                            deployment_id=str(previous_id), service_id=str(service.pk), all=True,
+                        )
+                        for previous in previous_resources:
+                            try:
+                                previous_name = previous.name
+                                previous_obj = Container(previous_name)
+                                previous_obj.rename(service_name)
+                                restored = True
+                                break
+                            except Exception as exc:
+                                logger.warning("Unable to restore previous deployment resource %s: %s", previous.name, exc)
+                    if restored:
+                        logger.warning("Rolled back stale deploy %s to previous deployment %s.", locked.pk, previous_id)
+                        StateManager.transition_deploy(
+                            locked.pk, DeploymentStatusChoices.ROLLED_BACK,
+                            update_fields={
+                                "stage": "rollback",
+                                "progress": 100,
+                                "status_message": "Deployment worker stopped before activation; previous deployment restored.",
+                                "error_message": "",
+                            },
+                        )
+                        StateManager.transition_service(
+                            locked.service_id, SERVICE_STATUS_CHOICES.RUNNING,
+                            update_fields={"deployed_at": timezone.now(), "deploy_started": None, "task_id": None},
+                        )
+                    else:
+                        message = (
+                            "Deployment worker stopped before activation and the previous deployment "
+                            "could not be restored automatically."
+                        )
+                        StateManager.transition_deploy(
+                            locked.pk, DeploymentStatusChoices.FAILED,
+                            update_fields={
+                                "stage": "worker_lost",
+                                "progress": 100,
+                                "status_message": message,
+                                "error_message": message,
+                            },
+                        )
+                        StateManager.transition_service(
+                            locked.service_id, SERVICE_STATUS_CHOICES.FAILED,
+                            update_fields={"deploy_started": None, "task_id": None},
+                        )
+                    continue
+
+                # Pre-container or otherwise ambiguous crashes are never inferred
+                # as success from the old canonical container. Fail closed.
+                message = (
+                    "Deployment worker stopped responding before activation. "
+                    "The platform could not prove that the replacement deployment became active."
+                )
+                StateManager.transition_deploy(
+                    locked.pk, DeploymentStatusChoices.FAILED,
+                    update_fields={
+                        "stage": "worker_lost",
+                        "progress": 100,
+                        "status_message": message,
+                        "error_message": message,
+                        "health_status": runtime.get("health") or "unknown",
+                        "container_status": runtime.get("status") or "unknown",
+                    },
+                )
+                if service.status not in (SERVICE_STATUS_CHOICES.STOPPED, SERVICE_STATUS_CHOICES.FAILED):
+                    StateManager.transition_service(
+                        locked.service_id, SERVICE_STATUS_CHOICES.FAILED,
+                        update_fields={"deploy_started": None, "task_id": None},
+                    )
+                logger.error("Marked stale deploy %s failed without inferring success from an unrelated container.", locked.pk)
+        except Exception:
+            logger.exception("Stale deployment recovery failed for deploy=%s", deploy.pk)
 
 
 def _reconcile_active_deploy(deploy: Deploy) -> None:

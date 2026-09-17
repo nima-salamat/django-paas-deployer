@@ -115,6 +115,7 @@ class Deploy:
         # (e.g. for Vite/Inertia) using the operator-configured npm mirror.
         frontend=None,
         base_images=None,
+        activation_callback=None,
     ):
         self.name = name
         self.tag = str(tag)
@@ -173,6 +174,7 @@ class Deploy:
         # keys/values are accepted; everything else is silently dropped.
         self.frontend = _sanitize_frontend_dict(frontend)
         self.base_images = {str(k): str(v) for k, v in (base_images or {}).items() if v}
+        self.activation_callback = activation_callback
         self.errors = []
         self.result = None
 
@@ -278,6 +280,7 @@ class Deploy:
             event_sink=self.event_sink,
             deployment_id=self.deployment_id,
             cancel_check=getattr(self, '_cancel_check', None),
+            activation_callback=self.activation_callback,
         )
         self.result = orchestrator.deploy(self._config())
         self.errors = [] if self.result.success else [DeployException(self.result.message, stage=self.result.stage)]
@@ -288,6 +291,7 @@ class Deploy:
             event_sink=self.event_sink,
             deployment_id=self.deployment_id,
             cancel_check=getattr(self, '_cancel_check', None),
+            activation_callback=self.activation_callback,
         )
         self.result = orchestrator.deploy(self._config())
         return self.result

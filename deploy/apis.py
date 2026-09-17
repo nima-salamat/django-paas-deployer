@@ -507,19 +507,29 @@ class DeployViewSet(ModelViewSet):
                     status=status.HTTP_409_CONFLICT,
                 )
 
-            service.selected_deploy = deploy
-            service.status = SERVICE_STATUS_CHOICES.QUEUED
-            service.deploy_started = timezone.now()
-            service.task_id = task_id
-            service.save()
-
-            Deploy.objects.filter(pk=deploy.pk).update(
-                status="pending",
-                stage="queued",
-                progress=0,
-                status_message="Deployment queued.",
-                error_message="",
-                cancel_requested=False,
+            previous_deploy_id = service.selected_deploy_id
+            if previous_deploy_id == deploy.pk:
+                previous_deploy_id = None
+            from deployments.core.state.manager import StateManager
+            StateManager.transition_service(
+                service.pk, SERVICE_STATUS_CHOICES.QUEUED,
+                update_fields={
+                    "deploy_started": timezone.now(),
+                    "task_id": task_id,
+                },
+            )
+            StateManager.transition_deploy(
+                deploy.pk, "pending",
+                update_fields={
+                    "stage": "queued",
+                    "progress": 0,
+                    "status_message": "Deployment queued.",
+                    "error_message": "",
+                    "cancel_requested": False,
+                    "execution_task_id": task_id,
+                    "worker_heartbeat_at": None,
+                    "previous_deploy_id": previous_deploy_id,
+                },
             )
 
             deploy_pk = str(deploy.pk)
@@ -546,6 +556,7 @@ class DeployViewSet(ModelViewSet):
         from deployments.common.state_machine import (
             DEPLOY_CANCELLED, DEPLOY_PENDING, DEPLOY_RUNNING, DEPLOY_ROLLING_BACK,
         )
+        from deployments.core.state.manager import StateManager
 
         now = timezone.now()
         old_status = deploy.status
@@ -553,14 +564,15 @@ class DeployViewSet(ModelViewSet):
         with transaction.atomic():
             locked = Deploy.objects.select_for_update().get(pk=deploy.pk)
             if locked.status == DEPLOY_PENDING:
-                Deploy.objects.filter(pk=locked.pk).update(
-                    cancel_requested=True,
-                    status=DEPLOY_CANCELLED,
-                    stage="cancelled",
-                    progress=100,
-                    status_message="Deployment cancelled by user.",
-                    error_message="",
-                    completed_at=now,
+                Deploy.objects.filter(pk=locked.pk).update(cancel_requested=True)
+                StateManager.transition_deploy(
+                    locked.pk, DEPLOY_CANCELLED,
+                    update_fields={
+                        "stage": "cancelled",
+                        "progress": 100,
+                        "status_message": "Deployment cancelled by user.",
+                        "error_message": "",
+                    },
                 )
             elif locked.status in {DEPLOY_RUNNING, DEPLOY_ROLLING_BACK}:
                 # Do not claim terminal state while the worker is still doing
@@ -710,18 +722,21 @@ class DeployViewSet(ModelViewSet):
                     status=status.HTTP_409_CONFLICT,
                 )
 
-            service.status = SERVICE_STATUS_CHOICES.STOPPING
-            service.task_id = task_id
-            service.deploy_started = timezone.now()
-            service.save(update_fields=["status", "task_id", "deploy_started"])
-
-            Deploy.objects.filter(pk=deploy.pk).update(
-                status="pending",
-                stage="rebuild_teardown",
-                progress=0,
-                status_message="Stopping the previous container before rebuild.",
-                error_message="",
-                cancel_requested=False,
+            from deployments.core.state.manager import StateManager
+            StateManager.transition_service(
+                service.pk, SERVICE_STATUS_CHOICES.STOPPING,
+                update_fields={"task_id": task_id, "deploy_started": timezone.now()},
+            )
+            StateManager.transition_deploy(
+                deploy.pk, "pending",
+                update_fields={
+                    "stage": "rebuild_teardown",
+                    "progress": 0,
+                    "status_message": "Stopping the previous container before rebuild.",
+                    "error_message": "",
+                    "cancel_requested": False,
+                    "execution_task_id": task_id,
+                },
             )
 
         container_name = service.get_docker_service_name()
@@ -771,17 +786,19 @@ class DeployViewSet(ModelViewSet):
                 "Rebuild teardown failed deploy=%s code=%s technical=%s",
                 deploy.pk, translated.code, translated.technical_message,
             )
-            Service.objects.filter(pk=service.pk).update(
-                status=SERVICE_STATUS_CHOICES.FAILED,
-                task_id=None,
-                deploy_started=None,
+            from deployments.core.state.manager import StateManager
+            StateManager.transition_deploy(
+                deploy.pk, "failed",
+                update_fields={
+                    "stage": "rebuild_teardown",
+                    "progress": 100,
+                    "status_message": translated.user_message,
+                    "error_message": translated.user_message,
+                },
             )
-            Deploy.objects.filter(pk=deploy.pk).update(
-                status="failed",
-                stage="rebuild_teardown",
-                progress=100,
-                status_message=translated.user_message,
-                error_message=translated.user_message,
+            StateManager.transition_service(
+                service.pk, SERVICE_STATUS_CHOICES.FAILED,
+                update_fields={"task_id": None, "deploy_started": None},
             )
             return Response(
                 {
@@ -799,23 +816,33 @@ class DeployViewSet(ModelViewSet):
         # from racing the container removal.
         with transaction.atomic():
             service = Service.objects.select_for_update().get(pk=service.pk)
-            service.selected_deploy = deploy
-            service.status = SERVICE_STATUS_CHOICES.QUEUED
-            service.deploy_started = timezone.now()
-            service.task_id = task_id
-            service.save(update_fields=["selected_deploy", "status", "deploy_started", "task_id"])
-
-            Deploy.objects.filter(pk=deploy.pk).update(
-                status="pending",
-                stage="queued",
-                progress=0,
-                status_message=(
-                    "Rebuild queued (force_reinit=true — volumes will be wiped)."
-                    if force_reinit
-                    else "Rebuild queued."
-                ),
-                error_message="",
-                cancel_requested=False,
+            previous_deploy_id = service.selected_deploy_id
+            if previous_deploy_id == deploy.pk:
+                previous_deploy_id = None
+            from deployments.core.state.manager import StateManager
+            StateManager.transition_service(
+                service.pk, SERVICE_STATUS_CHOICES.QUEUED,
+                update_fields={
+                    "deploy_started": timezone.now(),
+                    "task_id": task_id,
+                },
+            )
+            StateManager.transition_deploy(
+                deploy.pk, "pending",
+                update_fields={
+                    "stage": "queued",
+                    "progress": 0,
+                    "status_message": (
+                        "Rebuild queued (force_reinit=true — volumes will be wiped)."
+                        if force_reinit
+                        else "Rebuild queued."
+                    ),
+                    "error_message": "",
+                    "cancel_requested": False,
+                    "execution_task_id": task_id,
+                    "worker_heartbeat_at": None,
+                    "previous_deploy_id": previous_deploy_id,
+                },
             )
 
             deploy_pk = str(deploy.pk)

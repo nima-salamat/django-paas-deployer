@@ -53,6 +53,7 @@ from deployments.common.exceptions import (
 )
 from deployments.common.retry import is_retryable_exception
 from deployments.core.state.locks import acquire_service_deployment_lock
+from deployments.core.state.manager import StateManager
 from services.models import Service  # type: ignore
 
 from .services.deploy_service import DeployService
@@ -115,7 +116,7 @@ def deploy(self, deploy_id) -> None:
         if Deploy.objects.filter(pk=deploy_id, cancel_requested=True).exists():
             logger.info("Deploy %s is already cancelled; skipping worker execution.", deploy_id)
             return
-        DeployService().execute(deploy_id)
+        DeployService().execute(deploy_id, task_id=str(self.request.id))
     except (InvalidServiceStateError, DeploymentValidationError,
             OrchestratorDeploymentError, ContainerTimeoutError):
         # Permanent errors — log but do NOT retry.
@@ -629,26 +630,37 @@ def _create_deploy_log(
         )
 
 
-def _mark_success(deploy: Deploy, service: Service, result_message: str) -> None:
+def _mark_success(deploy: Deploy, service: Service, result_message: str, *, task_id: str | None = None) -> None:
     now = timezone.now()
-    with transaction.atomic():
-        Deploy.objects.filter(pk=deploy.pk).update(
-            status=DeploymentStatusChoices.SUCCEEDED,
-            stage="finished",
-            progress=100,
-            status_message=result_message or "Database deployed successfully.",
-            error_message="",
-            completed_at=now,
+    committed = StateManager.transition_deploy_terminal_if_owned(
+        deploy.pk, DeploymentStatusChoices.SUCCEEDED, task_id=task_id,
+        update_fields={
+            "stage": "finished",
+            "progress": 100,
+            "status_message": result_message or "Database deployed successfully.",
+            "error_message": "",
+        },
+    ) if task_id else False
+    if task_id and not committed:
+        logger.info("Ignoring stale DB deploy success for deploy=%s", deploy.pk)
+        return
+    if not task_id:
+        StateManager.transition_deploy(
+            deploy.pk, DeploymentStatusChoices.SUCCEEDED,
+            update_fields={
+                "stage": "finished", "progress": 100,
+                "status_message": result_message or "Database deployed successfully.",
+                "error_message": "",
+            },
         )
-        # Never overwrite a cleanly-stopped service.
-        Service.objects.filter(pk=service.pk).exclude(
-            status=SERVICE_STATUS_CHOICES.STOPPED
-        ).update(
-            status=SERVICE_STATUS_CHOICES.RUNNING,
-            deployed_at=now,
-            deploy_started=None,
-            task_id=None,
+    try:
+        StateManager.transition_service(
+            service.pk, SERVICE_STATUS_CHOICES.RUNNING,
+            update_fields={"deployed_at": now, "deploy_started": None, "task_id": None},
         )
+    except Exception:
+        logger.exception("Failed to transition service %s after successful DB deploy", service.pk)
+        raise
     _create_deploy_log(
         deploy, stage="finished",
         message=result_message or "Database deployed successfully.",
@@ -660,23 +672,31 @@ def _mark_success(deploy: Deploy, service: Service, result_message: str) -> None
 def _mark_failure(
     deploy: Deploy, service: Service, message: str, *,
     stage: str = "deployment_failed",
-    details: dict | None = None, tb: str = "",
+    details: dict | None = None, tb: str = "", task_id: str | None = None,
 ) -> None:
-    now = timezone.now()
-    with transaction.atomic():
-        Deploy.objects.filter(pk=deploy.pk).update(
-            status=DeploymentStatusChoices.FAILED,
-            stage=stage,
-            error_message=message,
-            status_message="Database deployment failed.",
-            completed_at=now,
+    committed = StateManager.transition_deploy_terminal_if_owned(
+        deploy.pk, DeploymentStatusChoices.FAILED, task_id=task_id,
+        update_fields={
+            "stage": stage,
+            "error_message": message,
+            "status_message": "Database deployment failed.",
+        },
+    ) if task_id else False
+    if task_id and not committed:
+        logger.info("Ignoring stale DB deploy failure for deploy=%s", deploy.pk)
+        return
+    if not task_id:
+        StateManager.transition_deploy(
+            deploy.pk, DeploymentStatusChoices.FAILED,
+            update_fields={
+                "stage": stage, "error_message": message,
+                "status_message": "Database deployment failed.",
+            },
         )
-        Service.objects.filter(pk=service.pk).exclude(
-            status=SERVICE_STATUS_CHOICES.STOPPED
-        ).update(
-            status=SERVICE_STATUS_CHOICES.FAILED,
-            deploy_started=None,
-            task_id=None,
+    if service.status not in (SERVICE_STATUS_CHOICES.STOPPED, SERVICE_STATUS_CHOICES.FAILED):
+        StateManager.transition_service(
+            service.pk, SERVICE_STATUS_CHOICES.FAILED,
+            update_fields={"deploy_started": None, "task_id": None},
         )
     _create_deploy_log(
         deploy, stage=stage, message=message, level="error",
@@ -688,7 +708,7 @@ def _mark_failure(
     )
 
 
-def _lock_for_db_deploy(deploy_id: str | int) -> tuple[Deploy, Service] | None:
+def _lock_for_db_deploy(deploy_id: str | int, *, task_id: str | None = None) -> tuple[Deploy, Service] | None:
     """
     Transition Service QUEUED -> DEPLOYING and Deploy -> RUNNING under
     row locks.
@@ -716,6 +736,14 @@ def _lock_for_db_deploy(deploy_id: str | int) -> tuple[Deploy, Service] | None:
             logger.error("run_db_deploy: Deploy %s has no service", deploy_id)
             return None
 
+        expected_owner = str(task_id or "")
+        if expected_owner and deploy.execution_task_id not in ("", expected_owner):
+            logger.info("run_db_deploy: skipping deploy=%s — stale task owner %s (current=%s)", deploy_id, expected_owner, deploy.execution_task_id)
+            return None
+        if expected_owner and service.task_id not in (None, "", expected_owner):
+            logger.info("run_db_deploy: skipping deploy=%s — service task owner mismatch", deploy_id)
+            return None
+
         # STRICT: only QUEUED is accepted.  A duplicate task delivery
         # (which is possible under Celery's at-least-once semantics)
         # will see DEPLOYING and no-op, leaving the original to finish.
@@ -738,18 +766,21 @@ def _lock_for_db_deploy(deploy_id: str | int) -> tuple[Deploy, Service] | None:
             return None
 
         now = timezone.now()
-        service.status = SERVICE_STATUS_CHOICES.DEPLOYING
-        service.deploy_started = now
-        service.save(update_fields=["status", "deploy_started"])
-
-        deploy.status = DeploymentStatusChoices.RUNNING
-        deploy.started_at = now
-        deploy.stage = "starting"
-        deploy.progress = 5
-        deploy.status_message = "Database deployment in progress."
-        deploy.save(update_fields=[
-            "status", "started_at", "stage", "progress", "status_message",
-        ])
+        StateManager.transition_service(
+            service.pk, SERVICE_STATUS_CHOICES.DEPLOYING,
+            update_fields={"deploy_started": now, "task_id": str(task_id or "")},
+        )
+        deploy.execution_task_id = str(task_id) if task_id else ""
+        StateManager.transition_deploy(
+            deploy.pk, DeploymentStatusChoices.RUNNING,
+            update_fields={
+                "started_at": now, "worker_heartbeat_at": now,
+                "execution_task_id": str(task_id or ""),
+                "stage": "starting", "progress": 5,
+                "status_message": "Database deployment in progress.",
+            },
+        )
+        deploy.refresh_from_db()
         return deploy, service
 
 
@@ -774,7 +805,7 @@ def run_db_deploy(self, deploy_id: str | int, force_reinit: bool = False) -> Non
         deploy_id, force_reinit,
     )
 
-    locked = _lock_for_db_deploy(deploy_id)
+    locked = _lock_for_db_deploy(deploy_id, task_id=str(self.request.id))
     if locked is None:
         return
 
@@ -796,9 +827,9 @@ def run_db_deploy(self, deploy_id: str | int, force_reinit: bool = False) -> Non
             "Deployment cancelled before execution.",
             stage="cancelled",
         )
-        Service.objects.filter(pk=service.pk).update(
-            status=SERVICE_STATUS_CHOICES.STOPPED,
-            task_id=None, deploy_started=None,
+        StateManager.transition_service(
+            service.pk, SERVICE_STATUS_CHOICES.STOPPED,
+            update_fields={"task_id": None, "deploy_started": None},
         )
         return
 
@@ -890,12 +921,12 @@ def run_db_deploy(self, deploy_id: str | int, force_reinit: bool = False) -> Non
             deploy, service,
             str(exc) or "Unexpected error during database deployment.",
             stage=getattr(exc, "stage", "deployment_failed"),
-            details={"error": str(exc)}, tb=tb,
+            details={"error": str(exc)}, tb=tb, task_id=str(self.request.id),
         )
         return
 
     if result.success:
-        _mark_success(deploy, service, result.message)
+        _mark_success(deploy, service, result.message, task_id=str(self.request.id))
     else:
         _mark_failure(
             deploy, service,
