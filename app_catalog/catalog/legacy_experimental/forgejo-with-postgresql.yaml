@@ -1,0 +1,61 @@
+# Source pattern: Coolify templates/compose/forgejo-with-runner-with-postgresql.yaml
+name: forgejo-with-postgresql
+x-passdeployer:
+  id: forgejo-with-postgresql
+  name: Forgejo with PostgreSQL
+  version: "15"
+  category: git
+  tags: [git, forge, collaboration]
+  description: Forgejo backed by PostgreSQL.
+  source_url: https://github.com/coollabsio/coolify/blob/main/templates/compose/forgejo-with-runner-with-postgresql.yaml
+  public_service: forgejo
+  fields:
+    - id: domain
+      label: Domain
+      type: domain
+      required: true
+    - id: postgres_password
+      label: PostgreSQL password
+      type: secret
+      generate: password:32
+services:
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:15
+    x-passdeployer:
+      role: app
+      public: true
+      readiness_path: /
+    environment:
+      FORGEJO__database__DB_TYPE: postgres
+      FORGEJO__database__HOST: postgresql
+      FORGEJO__database__NAME: forgejo
+      FORGEJO__database__USER: app
+      FORGEJO__database__PASSWD: ${secret.postgres_password}
+      FORGEJO__server__ROOT_URL: ${config.domain}
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    volumes:
+      - forgejo-data:/data
+    expose: [3000]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:3000"]
+      interval: 2s
+      timeout: 10s
+      retries: 15
+  postgresql:
+    image: postgres:16-alpine
+    x-passdeployer:
+      role: database
+      public: false
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: forgejo
+    volumes:
+      - forgejo-postgresql-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 20s
+      retries: 10

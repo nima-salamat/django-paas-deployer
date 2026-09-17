@@ -1,0 +1,108 @@
+id = "synapse"
+name = "Synapse"
+version = "1.159.0"
+description = "Matrix Synapse homeserver backed by PostgreSQL."
+category = "communication"
+[links]
+website = "https://element.io/server"
+repository = "https://github.com/element-hq/synapse"
+docker = "https://github.com/element-hq/synapse/tree/develop/docker"
+
+[variants.postgresql]
+label = "Synapse + PostgreSQL"
+availability = "supported"
+
+[[variants.postgresql.fields]]
+id = "domain"
+type = "domain"
+label = "Server name / domain"
+required = true
+pattern = "^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$"
+
+[[variants.postgresql.fields]]
+id = "synapse_version"
+type = "string"
+label = "Synapse version"
+default = "1.159.0"
+pattern = "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+
+[[variants.postgresql.fields]]
+id = "postgres_password"
+type = "secret"
+label = "PostgreSQL password"
+generate = "password:32"
+secret = true
+
+[[variants.postgresql.fields]]
+id = "report_stats"
+type = "choice"
+label = "Report anonymous statistics"
+default = "no"
+options = ["yes", "no"]
+
+[[variants.postgresql.services]]
+key = "postgres"
+role = "database"
+platform = "postgresql"
+plan_type = "DB"
+name_template = "${config.slug}-db"
+database_username = "synapse"
+database_name = "synapse"
+depends_on = []
+port = 5432
+
+[[variants.postgresql.services.volumes]]
+name = "data"
+target = "/var/lib/postgresql/data"
+size_mb = 8192
+
+[[variants.postgresql.services]]
+key = "synapse"
+role = "app"
+platform = "docker"
+plan_type = "APP"
+name_template = "${config.slug}"
+depends_on = ["postgres"]
+port = 8008
+healthcheck_path = "/health"
+healthcheck_timeout = 5
+image_template = "ghcr.io/element-hq/synapse:${config.synapse_version}"
+dockerfile = "FROM ${config.image_template}\nCOPY synapse-entrypoint.sh /usr/local/bin/passdeployer-synapse-entrypoint\nRUN chmod 0755 /usr/local/bin/passdeployer-synapse-entrypoint\nENTRYPOINT [\"/usr/local/bin/passdeployer-synapse-entrypoint\"]\n"
+
+[[variants.postgresql.services.volumes]]
+name = "data"
+target = "/data"
+size_mb = 8192
+
+[variants.postgresql.services.environment]
+SYNAPSE_SERVER_NAME = "${config.domain}"
+SYNAPSE_REPORT_STATS = "${config.report_stats}"
+SYNAPSE_CONFIG_DIR = "/data"
+SYNAPSE_CONFIG_PATH = "/data/homeserver.yaml"
+POSTGRES_HOST = "${service.postgres.host}"
+POSTGRES_USER = "synapse"
+POSTGRES_PASSWORD = "${secret.postgres_password}"
+POSTGRES_DB = "synapse"
+
+[variants.postgresql.services.files]
+"synapse-entrypoint.sh" = '''#!/bin/sh
+set -eu
+
+if [ ! -f /data/homeserver.yaml ]; then
+  /start.py generate
+fi
+
+cat > /data/passdeployer-database.yaml <<EOF2
+database:
+  name: psycopg2
+  args:
+    user: "${POSTGRES_USER}"
+    password: "${POSTGRES_PASSWORD}"
+    dbname: "${POSTGRES_DB}"
+    host: "${POSTGRES_HOST}"
+    cp_min: 5
+    cp_max: 10
+EOF2
+
+exec /start.py run -m synapse.app.homeserver --config-path=/data/homeserver.yaml --config-path=/data/passdeployer-database.yaml
+'''

@@ -95,6 +95,7 @@ class Deploy:
         build_resource_policy=None,
         runtime_options=None,
         labels=None,
+        public_host=None,
         runtime_version=None,
         package_manager=None,
         working_directory="/app",
@@ -146,6 +147,7 @@ class Deploy:
         self.build_resource_policy = dict(build_resource_policy or {})
         self.runtime_options = dict(runtime_options or {})
         self.labels = {str(k): str(v) for k, v in (labels or {}).items()}
+        self.public_host = (str(public_host).strip().lower().rstrip(".") or None) if public_host else None
         self.runtime_version = runtime_version
         self.package_manager = package_manager
         self.working_directory = working_directory or "/app"
@@ -193,7 +195,15 @@ class Deploy:
                 specs.append(spec)
                 seen.add(spec.name)
 
-        if str(self.platform_type) == str(PlanTypeChoices.APP) and "proxy_net" not in seen:
+        # Only services with a routed target port need to join the public
+        # Traefik network. Internal catalog services (databases, caches,
+        # workers, schedulers) must stay on their application-private
+        # network even when their platform type is APP.
+        if (
+            str(self.platform_type) == str(PlanTypeChoices.APP)
+            and self.port
+            and "proxy_net" not in seen
+        ):
             specs.append(NetworkSpec(name="proxy_net", driver="bridge", internal=False, attachable=True))
 
         return specs
@@ -269,6 +279,7 @@ class Deploy:
             build_resource_policy=self.build_resource_policy,
             runtime_options=self.runtime_options,
             labels=self.labels,
+            public_host=self.public_host,
             base_images=getattr(self, "base_images", {}) or {},
             healthcheck_path=self.healthcheck_path,
             healthcheck_expected_status=self.healthcheck_expected_status,

@@ -1,0 +1,245 @@
+{
+  "archive_total": 371,
+  "curated_selection": {
+    "count": 41,
+    "networking_classification": {
+      "STANDARD_WEB": 40,
+      "WEB_WITH_OPTIONAL_DIRECT_PORTS": 1
+    }
+  },
+  "networking_classification": {
+    "ADVANCED_NETWORKING": {
+      "count": 23,
+      "percentage": 6.2
+    },
+    "STANDARD_INTERNAL_SERVICE": {
+      "count": 23,
+      "percentage": 6.2
+    },
+    "STANDARD_WEB": {
+      "count": 279,
+      "percentage": 75.2
+    },
+    "UNSUPPORTED": {
+      "count": 30,
+      "percentage": 8.09
+    },
+    "WEB_WITH_OPTIONAL_DIRECT_PORTS": {
+      "count": 16,
+      "percentage": 4.31
+    }
+  },
+  "parser_classification": {
+    "IGNORED": {
+      "count": 28,
+      "percentage": 7.55
+    },
+    "INVALID": {
+      "count": 11,
+      "percentage": 2.96
+    },
+    "SUPPORTED": {
+      "count": 253,
+      "percentage": 68.19
+    },
+    "SUPPORTED_WITH_WARNINGS": {
+      "count": 0,
+      "percentage": 0.0
+    },
+    "UNSUPPORTED": {
+      "count": 79,
+      "percentage": 21.29
+    }
+  },
+  "top_incompatibilities": [
+    {
+      "count": 57,
+      "feature": "host_bind_mount",
+      "percentage": 15.36,
+      "templates": [
+        "appflowy",
+        "apprise-api",
+        "appwrite",
+        "authentik",
+        "autobase",
+        "beszel",
+        "beszel-agent",
+        "budibase",
+        "chaskiq",
+        "chibisafe",
+        "dashy",
+        "diun",
+        "docker-registry",
+        "dozzle",
+        "dozzle-with-auth",
+        "elasticsearch-with-kibana",
+        "esphome",
+        "filebrowser",
+        "firefly",
+        "foundryvtt",
+        "garage",
+        "gitea-runner",
+        "github-runner",
+        "glance",
+        "glances",
+        "homarr",
+        "home-assistant",
+        "homepage",
+        "immich",
+        "invoice-ninja",
+        "jenkins",
+        "jupyter-notebook-python",
+        "librechat",
+        "litellm",
+        "mailpit",
+        "metabase",
+        "minecraft",
+        "mosquitto",
+        "navidrome",
+        "obsidian-livesync",
+        "openpanel",
+        "opnform",
+        "paperless",
+        "portainer",
+        "rybbit",
+        "searxng",
+        "seaweedfs",
+        "signoz",
+        "soju",
+        "stalwart",
+        "supabase",
+        "superset-with-postgresql",
+        "swetrix",
+        "traccar",
+        "trigger",
+        "windmill",
+        "wings"
+      ]
+    },
+    {
+      "count": 10,
+      "feature": "capabilities",
+      "percentage": 2.7,
+      "templates": [
+        "anythingllm",
+        "changedetection",
+        "cloudflare-ddns",
+        "kuzzle",
+        "netbird-client",
+        "pi-hole",
+        "redlib",
+        "swetrix",
+        "tailscale-client",
+        "wireguard-easy"
+      ]
+    },
+    {
+      "count": 8,
+      "feature": "container_name",
+      "percentage": 2.16,
+      "templates": [
+        "appwrite",
+        "cloudflared",
+        "espocrm",
+        "healthchecks",
+        "immich",
+        "kimai",
+        "librespeed",
+        "supabase"
+      ]
+    },
+    {
+      "count": 7,
+      "feature": "network_mode",
+      "percentage": 1.89,
+      "templates": [
+        "beszel",
+        "beszel-agent",
+        "cloudflare-ddns",
+        "cloudflared",
+        "esphome",
+        "netbird-client",
+        "tailscale-client"
+      ]
+    },
+    {
+      "count": 5,
+      "feature": "hostname_override",
+      "percentage": 1.35,
+      "templates": [
+        "appwrite",
+        "changedetection",
+        "hatchet",
+        "rabbitmq",
+        "tailscale-client"
+      ]
+    },
+    {
+      "count": 5,
+      "feature": "ulimits",
+      "percentage": 1.35,
+      "templates": [
+        "argilla",
+        "kuzzle",
+        "openpanel",
+        "signoz",
+        "swetrix"
+      ]
+    },
+    {
+      "count": 4,
+      "feature": "security_opt",
+      "percentage": 1.08,
+      "templates": [
+        "cloudflare-ddns",
+        "github-runner",
+        "redlib",
+        "spacebot"
+      ]
+    },
+    {
+      "count": 3,
+      "feature": "privileged",
+      "percentage": 0.81,
+      "templates": [
+        "esphome",
+        "glances",
+        "home-assistant"
+      ]
+    },
+    {
+      "count": 2,
+      "feature": "custom_or_external_networks",
+      "percentage": 0.54,
+      "templates": [
+        "appwrite",
+        "jitsi"
+      ]
+    },
+    {
+      "count": 2,
+      "feature": "sysctls",
+      "percentage": 0.54,
+      "templates": [
+        "kuzzle",
+        "wireguard-easy"
+      ]
+    },
+    {
+      "count": 1,
+      "feature": "devices",
+      "percentage": 0.27,
+      "templates": [
+        "tailscale-client"
+      ]
+    },
+    {
+      "count": 1,
+      "feature": "host_pid_or_ipc",
+      "percentage": 0.27,
+      "templates": [
+        "glances"
+      ]
+    }
+  ]
+}

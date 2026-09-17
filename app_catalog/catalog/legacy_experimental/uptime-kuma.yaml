@@ -1,0 +1,34 @@
+# Source pattern: Coolify templates/compose/uptime-kuma.yaml
+name: uptime-kuma
+x-passdeployer:
+  id: uptime-kuma
+  name: Uptime Kuma
+  version: "2"
+  category: monitoring
+  tags: [monitoring, status, web]
+  description: Self-hosted monitoring and status pages.
+  source_url: https://github.com/coollabsio/coolify/blob/main/templates/compose/uptime-kuma.yaml
+  public_service: uptime-kuma
+  fields:
+    - id: domain
+      label: Domain
+      type: domain
+      required: true
+      description: Public hostname for Uptime Kuma.
+services:
+  uptime-kuma:
+    image: louislam/uptime-kuma:2
+    x-passdeployer:
+      role: app
+      public: true
+      readiness_path: /
+    environment: {}
+    volumes:
+      - uptime-kuma-data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "extra/healthcheck"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    expose:
+      - 3001

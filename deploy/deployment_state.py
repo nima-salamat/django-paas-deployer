@@ -238,11 +238,12 @@ class DjangoDeploymentState:
 
     def finish(self, result, *, exception: Exception | None = None, traceback_text: str = ""):
         self._finished = True
-        # Cancellation wins over a late worker result. The API writes the
-        # terminal state before revoking Celery, so a worker that unwinds
-        # afterwards must not overwrite CANCELLED with SUCCEEDED/FAILED.
+        # Compute the intended terminal outcome from the worker's result, then
+        # commit it through the ownership-checked StateManager boundary. A
+        # stale worker must never be able to overwrite a newer deployment,
+        # and cancellation must win over a late success/failure result.
         current = Deploy.objects.filter(pk=self.deploy.pk).values(
-            "status", "cancel_requested", "rollback_status", "progress"
+            "status", "cancel_requested", "rollback_status", "progress", "execution_task_id"
         ).first()
         cancelled_by_operator = bool(
             current and (
@@ -277,7 +278,6 @@ class DjangoDeploymentState:
         if success:
             update.update(
                 {
-                    "status": DeploymentStatusChoices.SUCCEEDED,
                     "stage": "deployment_completed",
                     "status_message": result_message or "Deployment completed.",
                     "error_message": "",
@@ -289,12 +289,12 @@ class DjangoDeploymentState:
                     "network_status": "ready",
                 }
             )
+            terminal_target = DeploymentStatusChoices.SUCCEEDED
             final_stage = "deployment_completed"
             final_level = "info"
         elif cancelled_by_operator or result_status == "cancelled" or result_stage == "cancelled":
             update.update(
                 {
-                    "status": DeploymentStatusChoices.CANCELLED,
                     "stage": "cancelled",
                     "status_message": (
                         "Deployment cancelled by the user." if cancelled_by_operator
@@ -303,12 +303,12 @@ class DjangoDeploymentState:
                     "error_message": result_error or result_message or "",
                 }
             )
+            terminal_target = DeploymentStatusChoices.CANCELLED
             final_stage = "cancelled"
             final_level = "warning"
         else:
             update.update(
                 {
-                    "status": DeploymentStatusChoices.FAILED,
                     "stage": (result_stage or "deployment_failed")[:64],
                     "status_message": (
                         error_user_message
@@ -327,10 +327,61 @@ class DjangoDeploymentState:
                 update["rollback_status"] = RollbackStatusChoices.SUCCEEDED
             elif getattr(self.deploy, "rollback_status", None) == RollbackStatusChoices.PENDING:
                 update["rollback_status"] = RollbackStatusChoices.FAILED
+            terminal_target = DeploymentStatusChoices.FAILED
             final_stage = update["stage"]
             final_level = "error"
 
-        self._update_deploy(**update)
+        owner = str((current or {}).get("execution_task_id") or getattr(self.deploy, "execution_task_id", "") or "")
+        committed = False
+        if owner:
+            committed = StateManager.transition_deploy_terminal_if_owned(
+                self.deploy.pk,
+                terminal_target,
+                task_id=owner,
+                update_fields=update,
+            )
+        else:
+            try:
+                StateManager.transition_deploy(
+                    self.deploy.pk,
+                    terminal_target,
+                    update_fields=update,
+                )
+                committed = True
+            except Exception:
+                committed = False
+
+        if not committed:
+            logger.info(
+                "Ignoring stale/duplicate terminal result for deploy=%s owner=%s",
+                self.deploy.pk,
+                owner or "<none>",
+            )
+            # Preserve technical diagnostics for operators, but do not emit a
+            # second user-facing terminal event for a stale worker.
+            if exception is not None or traceback_text:
+                try:
+                    self.events.record(
+                        DeploymentEvent(
+                            stage=(getattr(exception, "stage", None) or result_stage or self.deploy.stage or "deployment")[:64],
+                            message=(getattr(exception, "technical_message", None) or str(exception) or result_error or result_message or "Deployment result ignored by ownership check.")[:1000],
+                            level="error",
+                            progress=100,
+                            details={
+                                "diagnostic": True,
+                                "stale_worker": True,
+                                "error_code": error_code,
+                                "error_category": error_category,
+                                "recoverable": error_recoverable,
+                            },
+                        ),
+                        exception=exception,
+                        traceback_text=traceback_text or "",
+                        broadcast=False,
+                    )
+                except Exception:
+                    logger.exception("Failed to persist stale-worker diagnostics for deploy %s", self.deploy.pk)
+            return
 
         details = {
             "rollback_performed": rollback_performed,
@@ -347,9 +398,6 @@ class DjangoDeploymentState:
         if error_recoverable is not None:
             details["recoverable"] = bool(error_recoverable)
 
-        # One canonical terminal event is broadcast to the user. Technical
-        # exception/traceback data is persisted separately below so raw Python
-        # internals do not leak through the WebSocket lifecycle event.
         try:
             self.events.record(
                 DeploymentEvent(

@@ -43,6 +43,7 @@ from deployments.common.config import (
 from deployments.common.exceptions import (
     InvalidServiceStateError,
     OrchestratorDeploymentError,
+    DeploymentValidationError,
     to_deployment_error,
 )
 
@@ -166,9 +167,20 @@ class DeployService:
                 deploy_item, container_name, state_tracker, task_id=task_id,
                 activation_callback=_activate_deployment,
             )
-            if getattr(result, "status", None) == "cancelled":
+            # Synchronize legacy Service state only from the deployment state
+            # that was actually committed. A stale worker must not mark the
+            # service RUNNING after another deployment has won activation.
+            final = Deploy.objects.select_related("service").filter(pk=deploy_item.pk).values(
+                "status", "service__selected_deploy_id"
+            ).first()
+            if not final:
+                logger.warning("Deploy %s disappeared before final service sync.", deploy_id)
+                return
+            final_status = final.get("status")
+            selected_id = final.get("service__selected_deploy_id")
+            if final_status == "cancelled":
                 ServiceStateManager.sync_legacy_stopped(service_id)
-            else:
+            elif final_status == "succeeded" and str(selected_id or "") == str(deploy_item.pk):
                 # If rollback itself failed, surface that — don't claim success.
                 if getattr(result, "rollback_failed", False):
                     logger.error(
@@ -177,7 +189,15 @@ class DeployService:
                         deploy_id,
                     )
                 ServiceStateManager.sync_legacy_success(service_id, deploy_id=deploy_item.pk)
-            logger.info("Successfully executed deploy cycle for container: %s", container_name)
+            elif final_status == "failed":
+                ServiceStateManager.sync_legacy_failure(service_id, deploy_id=deploy_item.pk)
+            else:
+                logger.info(
+                    "Skipping legacy service sync for deploy=%s status=%s selected=%s; "
+                    "worker may be stale or another deployment may be authoritative.",
+                    deploy_id, final_status, selected_id,
+                )
+            logger.info("Completed deploy cycle for container: %s", container_name)
 
         except Exception as exc:
             traceback_text = traceback.format_exc()
@@ -305,9 +325,20 @@ class DeployService:
             )
             if cfg.get(k) is not None and str(cfg.get(k)).strip() != ""
         }
-        dockerfile_text = DeploymentHelper.get_dockerfile_text(
-            platform, version_overrides=version_overrides or None,
-        )
+        if str(cfg.get("dockerfile_source") or "").strip().lower() == "archive":
+            try:
+                archive_path = deploy_item.zip_file.path if getattr(deploy_item, "zip_file", None) else ""
+                dockerfile_text = DeploymentHelper.get_dockerfile_from_archive(archive_path)
+            except Exception as exc:
+                raise DeploymentValidationError(
+                    "The supplied deployment package has an invalid Dockerfile.",
+                    details={"technical_error": str(exc)},
+                    stage="validation",
+                ) from exc
+        else:
+            dockerfile_text = DeploymentHelper.get_dockerfile_text(
+                platform, version_overrides=version_overrides or None,
+            )
 
         DeploymentValidator.validate_for_deploy(deploy_item, dockerfile_text)
 
@@ -570,7 +601,12 @@ class DeployService:
             build_resource_policy=build_resource_policy,
             build_options={**build_options, "build_command": build_command, "install_command": install_command, "build_dir": build_dir, "package_manager": package_manager},
             runtime_options=runtime_options,
-            labels={"deployment.id": str(deploy_item.pk), "service.id": str(service.pk)},
+            labels={
+                **dict(cfg.get("labels") or {}),
+                "deployment.id": str(deploy_item.pk),
+                "service.id": str(service.pk),
+            },
+            public_host=cfg.get("public_host") or cfg.get("domain"),
             activation_callback=activation_callback,
             runtime_version=(
                 cfg.get("runtime_version")

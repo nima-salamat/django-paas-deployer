@@ -1427,6 +1427,17 @@ def set_deploy_apiview(request):
 
             deploy_item = Deploy.objects.select_related("service").get(id=deploy_id)
 
+            if deploy_item.status != DeploymentStatusChoices.SUCCEEDED:
+                return Response(
+                    {
+                        "result": "error",
+                        "detail": _("Only a successfully completed deployment can be selected as active."),
+                        "code": "deploy_not_ready",
+                        "status": deploy_item.status,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
             if str(deploy_item.service_id) != str(service_item.id):
                 return Response(
                     {

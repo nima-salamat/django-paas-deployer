@@ -1,0 +1,46 @@
+# Source pattern: Coolify templates/compose/minio.yaml
+name: minio
+x-passdeployer:
+  id: minio
+  name: MinIO
+  version: "latest"
+  category: storage
+  tags: [object-storage, s3, storage]
+  description: S3-compatible object storage.
+  source_url: https://github.com/coollabsio/coolify/blob/main/templates/compose/minio.yaml
+  public_service: minio
+  fields:
+    - id: domain
+      label: Domain
+      type: domain
+      required: true
+    - id: minio_root_user
+      label: Root username
+      type: string
+      default: admin
+    - id: minio_root_password
+      label: Root password
+      type: secret
+      generate: password:32
+  
+services:
+  minio:
+    image: quay.io/minio/minio:latest
+    x-passdeployer:
+      role: storage
+      public: true
+      readiness_path: /minio/health/live
+    command: [server, /data, --console-address, ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio-data:/data
+    expose:
+      - 9000
+      - 9001
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 20s
+      retries: 10

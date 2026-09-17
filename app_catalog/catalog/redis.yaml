@@ -1,0 +1,27 @@
+# Source pattern: Coolify Redis service templates
+name: redis
+x-passdeployer:
+  id: redis
+  name: Redis
+  version: "7.2-alpine"
+  category: database
+  tags: [cache, redis, key-value]
+  description: Redis in-memory data store.
+  source_url: https://github.com/coollabsio/coolify/tree/main/templates/compose
+  fields: []
+services:
+  redis:
+    image: redis:7.2-alpine
+    x-passdeployer:
+      role: cache
+      public: false
+    command: [redis-server, --appendonly, "yes"]
+    volumes:
+      - redis-data:/data
+    expose:
+      - 6379
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10

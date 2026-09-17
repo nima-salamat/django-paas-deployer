@@ -37,21 +37,35 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
         container = Container(name=service_name)
 
         if container.exists():
-            if container.is_running():
-                logger.info("Stopping running container '%s'...", service_name)
-                try:
-                    container.stop(timeout=10)
-                except Exception:
-                    logger.exception(
-                        "Failed to stop container '%s' (continuing with remove)",
-                        service_name,
-                    )
+            raw = container.client.containers.get(service_name)
+            labels = dict(getattr(raw, "labels", {}) or {})
+            expected_service = str(service.pk)
+            expected_deploy = str(getattr(instance.selected_deploy, "pk", "") or "")
+            managed = labels.get("managed-by") in {"django-paas-deployer", "passdeployer"}
+            owns_service = managed and labels.get("service.id") == expected_service
+            owns_selected_deploy = expected_deploy and labels.get("deployment.id") == expected_deploy
+            if not (owns_service or owns_selected_deploy):
+                logger.error(
+                    "Refusing to remove container '%s' during Service deletion: "
+                    "Docker ownership labels do not match service=%s/deploy=%s.",
+                    service_name, expected_service, expected_deploy or "<none>",
+                )
+            else:
+                if container.is_running():
+                    logger.info("Stopping running container '%s'...", service_name)
+                    try:
+                        container.stop(timeout=10)
+                    except Exception:
+                        logger.exception(
+                            "Failed to stop container '%s' (continuing with remove)",
+                            service_name,
+                        )
 
-            logger.info("Removing container '%s'...", service_name)
-            try:
-                container.remove()
-            except Exception:
-                logger.exception("Failed to remove container '%s'", service_name)
+                logger.info("Removing owned container '%s'...", service_name)
+                try:
+                    container.remove()
+                except Exception:
+                    logger.exception("Failed to remove owned container '%s'", service_name)
         else:
             logger.info(
                 "Container '%s' does not exist; nothing to stop/remove.",
@@ -93,6 +107,14 @@ def _cleanup_service_volumes(service: Service) -> None:
         # Remove Docker volume first
         try:
             docker_volume = DockerVolume(volume.get_docker_volume_name())
+            raw_volume = docker_volume.client.volumes.get(volume.get_docker_volume_name())
+            labels = dict(getattr(raw_volume, "attrs", {}).get("Labels") or {})
+            if labels.get("managed-by") != "django-paas-deployer":
+                logger.error(
+                    "Refusing to remove Docker volume '%s': ownership label is missing or unexpected.",
+                    volume.name,
+                )
+                continue
             try:
                 docker_volume.remove()
                 logger.info(
@@ -132,6 +154,14 @@ def cleanup_volume_on_delete(sender, instance: Volume, **kwargs):
     )
     try:
         docker_volume = DockerVolume(instance.get_docker_volume_name())
+        raw_volume = docker_volume.client.volumes.get(instance.get_docker_volume_name())
+        labels = dict(getattr(raw_volume, "attrs", {}).get("Labels") or {})
+        if labels.get("managed-by") != "django-paas-deployer":
+            logger.error(
+                "Refusing to remove Docker volume '%s': ownership label is missing or unexpected.",
+                instance.name,
+            )
+            return
         docker_volume.remove()
         logger.info("Docker volume '%s' removed successfully", instance.name)
     except Exception:
@@ -143,34 +173,30 @@ def cleanup_volume_on_delete(sender, instance: Volume, **kwargs):
 
 @receiver(pre_delete, sender=PrivateNetwork)
 def cleanup_network_on_delete(sender, instance: PrivateNetwork, **kwargs):
-    """Remove the Docker network when a PrivateNetwork row is deleted."""
+    """Remove the owned Docker network when a PrivateNetwork row is deleted."""
     logger.info(
-        "pre_delete PrivateNetwork '%s' → removing Docker network",
+        "pre_delete PrivateNetwork '%s' → removing owned Docker network",
         instance.name,
     )
     try:
         docker_name = instance.get_docker_network_name()
-        if Network.network_exists(docker_name):
-            docker_net = Network(name=docker_name)
-            docker_net.remove()
-            logger.info(
-                "Docker network '%s' removed successfully", docker_name
+        if not Network.network_exists(docker_name):
+            logger.info("Owned Docker network '%s' does not exist; nothing to remove", docker_name)
+            return
+
+        docker_network = Network(name=docker_name)
+        raw = docker_network.client.networks.get(docker_name)
+        labels = dict(getattr(raw, "attrs", {}).get("Labels") or {})
+        if labels.get("managed-by") != "django-paas-deployer":
+            logger.error(
+                "Refusing to remove Docker network '%s': ownership label is missing or unexpected.",
+                docker_name,
             )
-        else:
-            # Fallback: some code paths used plain name
-            if Network.network_exists(instance.name):
-                docker_net = Network(name=instance.name)
-                docker_net.remove()
-                logger.info(
-                    "Docker network '%s' removed successfully", instance.name
-                )
-            else:
-                logger.info(
-                    "Docker network '%s' does not exist; nothing to remove",
-                    docker_name,
-                )
+            return
+        docker_network.remove()
+        logger.info("Owned Docker network '%s' removed successfully", docker_name)
     except Exception:
         logger.exception(
-            "Failed to remove Docker network for PrivateNetwork '%s'",
+            "Failed to remove owned Docker network for PrivateNetwork '%s'",
             instance.name,
         )

@@ -1,0 +1,4766 @@
+{
+  "count": 330,
+  "source": "Coolify Compose template archive supplied by user",
+  "templates": [
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "actualbudget",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "actual_server"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "actual_server"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "affine",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "affine"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "affine",
+        "affine_migration",
+        "redis",
+        "postgres"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "alexandrie",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "backend",
+        "frontend",
+        "rustfs"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "frontend",
+        "backend",
+        "mysql",
+        "rustfs"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "anythingllm",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [
+        "anything-llm"
+      ],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "anything-llm"
+      ],
+      "unsupported_features": [
+        "capabilities"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "appflowy",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "appflowy_web"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "nginx",
+        "appflowy_web",
+        "appflowy_cloud",
+        "gotrue",
+        "admin_frontend",
+        "ai",
+        "appflowy_worker",
+        "minio",
+        "postgres",
+        "redis"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "apprise-api",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "apprise-api"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "apprise-api"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "appwrite",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [
+        "appwrite"
+      ],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "appwrite",
+        "appwrite-console",
+        "appwrite-realtime",
+        "appwrite-worker-audits",
+        "appwrite-worker-webhooks",
+        "appwrite-worker-deletes",
+        "appwrite-worker-databases",
+        "appwrite-worker-builds",
+        "appwrite-worker-certificates",
+        "appwrite-worker-functions",
+        "appwrite-worker-mails",
+        "appwrite-worker-messaging",
+        "appwrite-worker-migrations",
+        "appwrite-task-maintenance",
+        "appwrite-task-stats-resources",
+        "appwrite-worker-stats-resources",
+        "appwrite-worker-stats-usage",
+        "appwrite-task-scheduler-functions",
+        "appwrite-task-scheduler-executions",
+        "appwrite-task-scheduler-messages",
+        "appwrite-assistant",
+        "appwrite-browser",
+        "openruntimes-executor",
+        "appwrite-mariadb",
+        "appwrite-redis"
+      ],
+      "unsupported_features": [
+        "container_name",
+        "custom_or_external_networks",
+        "host_bind_mount",
+        "hostname_override"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "argilla",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "argilla"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "argilla",
+        "worker",
+        "postgres",
+        "redis",
+        "elasticsearch"
+      ],
+      "unsupported_features": [
+        "ulimits"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "authentik",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "authentik-server"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "authentik-server",
+        "authentik-worker",
+        "postgresql"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "autobase",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "autobase"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "autobase",
+        "autobase-db",
+        "autobase-api"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "azimutt",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "postgres",
+        "minio",
+        "createbuckets",
+        "smtp",
+        "backend"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "babybuddy",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "babybuddy"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "babybuddy"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "bento-pdf",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "bento-pdf"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "bento-pdf"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "beszel-agent",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "beszel-agent"
+      ],
+      "unsupported_features": [
+        "host_bind_mount",
+        "network_mode"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "beszel",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [
+        "beszel"
+      ],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "beszel",
+        "beszel-agent"
+      ],
+      "unsupported_features": [
+        "host_bind_mount",
+        "network_mode"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "bitcoin-core",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "bitcoin-core"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "bluesky-pds",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "pds"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "pds"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "booklore",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "booklore",
+        "mariadb"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "browserless",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "browserless"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "browserless"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "budge",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "budge"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "budge"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "budibase",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "app-service",
+        "worker-service",
+        "minio-service",
+        "proxy-service",
+        "couchdb-service",
+        "redis-service",
+        "watchtower-service"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "bugsink",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "mysql",
+        "web"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "INVALID",
+      "id": "buzz",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "buzz"
+      ],
+      "reason": "Template failed catalog parser/security validation.",
+      "services": [
+        "buzz",
+        "postgres",
+        "redis",
+        "minio",
+        "minio-init"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "calcom",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "calcom",
+        "postgresql"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "calibre-web-automated-book-downloader",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "calibre-web-automated",
+        "calibre-web-downloader"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "calibre-web",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "calibre-web"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "calibre-web"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "cap-captcha",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "cap"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "cap",
+        "valkey"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "cap",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "cap-web",
+        "cap-db"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "celld",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "celld"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "celld"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "changedetection",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [
+        "changedetection"
+      ],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "changedetection",
+        "browser-sockpuppet-chrome"
+      ],
+      "unsupported_features": [
+        "capabilities",
+        "hostname_override"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "chaskiq",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "chaskiq"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "chaskiq",
+        "sidekiq",
+        "postgresql",
+        "redis"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "checkmate",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "checkmate"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "checkmate",
+        "mongodb"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "chibisafe",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "chibisafe"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "chibisafe",
+        "chibisafe-server",
+        "caddy"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "chroma",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "chromadb"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "chromadb"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "classicpress-with-mariadb",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "classicpress"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "classicpress",
+        "mariadb"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "classicpress-with-mysql",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "classicpress"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "classicpress",
+        "mysql"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "classicpress-without-database",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "classicpress"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "classicpress"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "cloudflare-ddns",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "cloudflare-ddns"
+      ],
+      "unsupported_features": [
+        "capabilities",
+        "network_mode",
+        "security_opt"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "cloudflared",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "cloudflared"
+      ],
+      "unsupported_features": [
+        "container_name",
+        "network_mode"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "cloudreve",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "cloudreve"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "cloudreve",
+        "postgres",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "cockpit",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "cockpit"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "cockpit"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "coder",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "coder",
+        "coder-database"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "codimd",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "codimd"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "codimd",
+        "postgres"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "convertx",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "convertx"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "convertx"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "convex",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "backend",
+        "dashboard"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "backend",
+        "dashboard"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "cryptgeon",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "app",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "cyberchef",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "cyberchef"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "cyberchef"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "dashy",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "dashy"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "dashy"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "databasus",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "databasus"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "databasus"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "denoKV",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "denokv"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "denokv"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "dify",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "api",
+        "worker",
+        "web",
+        "db",
+        "redis",
+        "sandbox",
+        "ssrf_proxy",
+        "nginx",
+        "weaviate"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "directus",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "directus"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "directus"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "diun",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "diun"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "docker-registry",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "registry"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "registry"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "documenso",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "documenso"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "documenso",
+        "database"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "docuseal",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "docuseal"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "docuseal"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "dokuwiki",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "dokuwiki"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "dokuwiki"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "dozzle-with-auth",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "dozzle"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "dozzle"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "dozzle",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "dozzle"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "dozzle"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "drizzle-gateway",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "drizzle-gateway"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "drizzle-gateway"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "duplicati",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "duplicati"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "duplicati"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "edgedb",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "edgedb",
+        "postgresql"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "elasticsearch-with-kibana",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "kibana"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "elasticsearch",
+        "kibana",
+        "kibana-token-generator"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "elasticsearch",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "elasticsearch"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "elasticsearch"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "electricsql",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "electric"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "electric"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "emby",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "emby"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "emby"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "embystat",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "embystat"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "embystat"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "emqx-enterprise",
+      "networking_class": "WEB_WITH_OPTIONAL_DIRECT_PORTS",
+      "public_services": [
+        "emqx"
+      ],
+      "reason": "Direct host port(s) present; deferred to optional direct-port/advanced tier.",
+      "services": [
+        "emqx"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "ente-photos-with-s3",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "minio",
+        "museum",
+        "web"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "museum",
+        "web",
+        "postgres",
+        "minio",
+        "minio-init"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "ente-photos",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "museum",
+        "web"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "museum",
+        "web",
+        "postgres"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "esphome",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [
+        "esphome"
+      ],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "esphome"
+      ],
+      "unsupported_features": [
+        "host_bind_mount",
+        "network_mode",
+        "privileged"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "espocrm",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "espocrm",
+        "espocrm-websocket"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "espocrm",
+        "espocrm-daemon",
+        "espocrm-websocket",
+        "espocrm-db"
+      ],
+      "unsupported_features": [
+        "container_name"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "evolution-api",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "api",
+        "redis",
+        "postgres"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "excalidraw",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "excalidraw"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "excalidraw"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "executor",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "executor"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "executor"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "faraday",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "faraday"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "postgresql",
+        "redis",
+        "faraday"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "fider",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "fider"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "fider",
+        "database"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "filebrowser",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "filebrowser"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "filebrowser"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "fileflows",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "fileflows"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "fileflows"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "firefly",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "firefly"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "firefly",
+        "mysql",
+        "cron"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "firefox",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "firefox"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "firefox"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "fizzy",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "fizzy"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "fizzy"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "flipt",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "flipt"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "flipt"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "INVALID",
+      "id": "flowise-with-databases",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "flowise",
+        "qdrant"
+      ],
+      "reason": "Template failed catalog parser/security validation.",
+      "services": [
+        "flowise",
+        "pg-record-manager",
+        "redis-cache",
+        "qdrant"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "INVALID",
+      "id": "flowise",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "flowise"
+      ],
+      "reason": "Template failed catalog parser/security validation.",
+      "services": [
+        "flowise"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "forgejo-with-mariadb",
+      "networking_class": "WEB_WITH_OPTIONAL_DIRECT_PORTS",
+      "public_services": [
+        "forgejo"
+      ],
+      "reason": "Direct host port(s) present; deferred to optional direct-port/advanced tier.",
+      "services": [
+        "forgejo",
+        "mariadb"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "forgejo-with-mysql",
+      "networking_class": "WEB_WITH_OPTIONAL_DIRECT_PORTS",
+      "public_services": [
+        "forgejo"
+      ],
+      "reason": "Direct host port(s) present; deferred to optional direct-port/advanced tier.",
+      "services": [
+        "forgejo",
+        "mysql"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "forgejo-with-runner-with-mariadb",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "forgejo",
+        "mariadb",
+        "docker-in-docker",
+        "runner-register",
+        "runner"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "forgejo-with-runner-with-mysql",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "forgejo",
+        "mysql",
+        "docker-in-docker",
+        "runner-register",
+        "runner"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "forgejo-with-runner-with-postgresql",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "forgejo",
+        "postgresql",
+        "docker-in-docker",
+        "runner-register",
+        "runner"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "forgejo-with-runner",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "forgejo",
+        "docker-in-docker",
+        "runner-register",
+        "runner"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "forgejo",
+      "networking_class": "WEB_WITH_OPTIONAL_DIRECT_PORTS",
+      "public_services": [
+        "forgejo"
+      ],
+      "reason": "Direct host port(s) present; deferred to optional direct-port/advanced tier.",
+      "services": [
+        "forgejo"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "formbricks",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "formbricks"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "formbricks",
+        "postgresql",
+        "valkey",
+        "minio",
+        "minio-init"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "foundryvtt",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "foundryvtt"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "foundryvtt"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "freescout",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "freescout"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "freescout",
+        "mariadb"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "freshrss-with-mariadb",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "freshrss"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "freshrss",
+        "freshrss-db"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "freshrss-with-mysql",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "freshrss"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "freshrss",
+        "freshrss-db"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "freshrss",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "freshrss"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "freshrss"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "garage",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "garage"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "garage"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "getoutline",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "outline"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "outline",
+        "redis",
+        "postgres"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "gitea-runner",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "runner"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "gitea-with-mariadb",
+      "networking_class": "WEB_WITH_OPTIONAL_DIRECT_PORTS",
+      "public_services": [
+        "gitea"
+      ],
+      "reason": "Direct host port(s) present; deferred to optional direct-port/advanced tier.",
+      "services": [
+        "gitea",
+        "mariadb"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "gitea-with-mysql",
+      "networking_class": "WEB_WITH_OPTIONAL_DIRECT_PORTS",
+      "public_services": [
+        "gitea"
+      ],
+      "reason": "Direct host port(s) present; deferred to optional direct-port/advanced tier.",
+      "services": [
+        "gitea",
+        "mysql"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "gitea-with-postgresql",
+      "networking_class": "WEB_WITH_OPTIONAL_DIRECT_PORTS",
+      "public_services": [
+        "gitea"
+      ],
+      "reason": "Direct host port(s) present; deferred to optional direct-port/advanced tier.",
+      "services": [
+        "gitea",
+        "postgresql"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "gitea",
+      "networking_class": "WEB_WITH_OPTIONAL_DIRECT_PORTS",
+      "public_services": [
+        "gitea"
+      ],
+      "reason": "Direct host port(s) present; deferred to optional direct-port/advanced tier.",
+      "services": [
+        "gitea"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "github-runner",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "runner"
+      ],
+      "unsupported_features": [
+        "host_bind_mount",
+        "security_opt"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "gitlab",
+      "networking_class": "WEB_WITH_OPTIONAL_DIRECT_PORTS",
+      "public_services": [
+        "gitlab"
+      ],
+      "reason": "Direct host port(s) present; deferred to optional direct-port/advanced tier.",
+      "services": [
+        "gitlab"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "glance",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "glance"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "glance"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "glances",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [
+        "glances"
+      ],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "glances"
+      ],
+      "unsupported_features": [
+        "host_bind_mount",
+        "host_pid_or_ipc",
+        "privileged"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "glitchtip",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "postgres",
+        "redis",
+        "web",
+        "worker",
+        "migrate"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "glpi",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "glpi"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "glpi",
+        "glpi-db"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "goatcounter",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "goatcounter"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "goatcounter"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "gotenberg",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "gotenberg"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "gotenberg"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "gotify",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "gotify"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "gotify"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "gowa",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "gowa"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "gowa"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "grafana",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "grafana"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "grafana"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "INVALID",
+      "id": "gramps-web",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Template failed catalog parser/security validation.",
+      "services": [],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "grimmory",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "grimmory"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "grimmory",
+        "mariadb"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "grist",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "grist"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "grist",
+        "postgres",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "grocy",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "grocy"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "grocy"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "hatchet",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "rabbitmq"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "hatchet-dashboard",
+        "hatchet-engine",
+        "postgres",
+        "rabbitmq",
+        "migration",
+        "setup-config"
+      ],
+      "unsupported_features": [
+        "hostname_override"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "healthchecks",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "healthchecks"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "healthchecks"
+      ],
+      "unsupported_features": [
+        "container_name"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "heimdall",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "heimdall"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "heimdall"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "hermes-agent-with-webui",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "hermes-webui"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "hermes-agent",
+        "hermes-webui"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "heyform",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "heyform"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "heyform",
+        "mongo",
+        "keydb"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "homarr",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "homarr"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "homarr"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "home-assistant",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [
+        "homeassistant"
+      ],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "homeassistant"
+      ],
+      "unsupported_features": [
+        "host_bind_mount",
+        "privileged"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "homepage",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "homepage"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "homepage"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "INVALID",
+      "id": "hoppscotch",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Template failed catalog parser/security validation.",
+      "services": [
+        "backend",
+        "hoppscotch-db",
+        "db-migration"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "huly",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "mongodb",
+        "minio",
+        "elastic",
+        "account",
+        "front",
+        "collaborator",
+        "transactor",
+        "rekoni"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "imgcompress",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "imgcompress"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "imgcompress"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "immich",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "immich"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "immich",
+        "immich-machine-learning",
+        "redis",
+        "database"
+      ],
+      "unsupported_features": [
+        "container_name",
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "infisical",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "backend"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "backend",
+        "redis",
+        "db"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "influxdb",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "influxdb"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "influxdb"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "inngest",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "inngest"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "inngest",
+        "postgres",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "invoice-ninja",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "invoice-ninja"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "invoice-ninja",
+        "mariadb",
+        "redis"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "it-tools",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "it-tools"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "it-tools"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "jean",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "jean"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "jean"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "jellyfin",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "jellyfin"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "jellyfin"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "jenkins",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "jenkins"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "jenkins"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "jitsi",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "jitsi-web",
+        "prosody",
+        "jicofo",
+        "jvb"
+      ],
+      "unsupported_features": [
+        "custom_or_external_networks"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "joomla-with-mariadb",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "joomla"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "joomla",
+        "mariadb"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "jupyter-notebook-python",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "jupyter-notebook-python"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "jupyter-notebook-python"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "karakeep",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "web",
+        "chrome",
+        "meilisearch"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "keycloak",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "keycloak"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "keycloak"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "kimai",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "kimai"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "mysql",
+        "kimai"
+      ],
+      "unsupported_features": [
+        "container_name"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "kuzzle",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [
+        "kuzzle"
+      ],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "redis",
+        "elasticsearch",
+        "kuzzle"
+      ],
+      "unsupported_features": [
+        "capabilities",
+        "sysctls",
+        "ulimits"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "labelstudio",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "labelstudio"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "labelstudio",
+        "postgres"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "langflow",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "langflow"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "langflow",
+        "postgres"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "INVALID",
+      "id": "langfuse",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Template failed catalog parser/security validation.",
+      "services": [],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "leantime",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "leantime"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "leantime",
+        "mysql",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "librechat",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "librechat"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "librechat",
+        "mongodb",
+        "meilisearch",
+        "vectordb",
+        "rag-api"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "libreoffice",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "libreoffice"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "libreoffice"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "librespeed",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "librespeed"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "librespeed"
+      ],
+      "unsupported_features": [
+        "container_name"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "libretranslate",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "libretranslate"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "libretranslate"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "limesurvey",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "limesurvey"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "limesurvey",
+        "mariadb",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "linkding-plus",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "linkding-plus"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "linkding-plus"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "linkding",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "linkding"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "linkding"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "listmonk",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "listmonk"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "listmonk",
+        "listmonk-initial-database-setup",
+        "postgres"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "litellm",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "litellm"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "litellm",
+        "postgres",
+        "redis"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "litequeen",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "litequeen"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "lobe-chat",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "lobe-chat"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "lobe-chat"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "logto",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "logto"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "logto",
+        "postgres"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "lowcoder",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "lowcoder"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "lowcoder"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "macos",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "macos"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "mage-ai",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "mage-ai"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "mage-ai"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "mailpit",
+      "networking_class": "WEB_WITH_OPTIONAL_DIRECT_PORTS",
+      "public_services": [
+        "mailpit"
+      ],
+      "reason": "Direct host port(s) present; deferred to optional direct-port/advanced tier.",
+      "services": [
+        "mailpit"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "marimo",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "marimo"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "marimo"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "martin",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "martin"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "martin",
+        "postgresql"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "matrix-synapse-with-sqlite",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "synapse"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "synapse"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "mautic5",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "mysql",
+        "rabbitmq",
+        "mautic_web",
+        "mautic_cron",
+        "mautic_worker"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "maybe",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "maybe",
+        "worker",
+        "postgres",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "mediawiki",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "mediawiki"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "mediawiki"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "memos",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "memos"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "memos"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "metabase",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "metabase"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "metabase",
+        "postgresql"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "metamcp",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "app",
+        "postgres"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "metube",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "metube"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "metube"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "mindsdb",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "mindsdb"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "mindsdb",
+        "postgresql"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "minecraft",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "mc"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "mc"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "miniflux",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "miniflux"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "miniflux",
+        "postgres"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "minio-community-edition",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "minio"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "minio",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "minio"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "mixpost",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "mixpost"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "mixpost",
+        "mysql",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "INVALID",
+      "id": "moodle",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "moodle"
+      ],
+      "reason": "Template failed catalog parser/security validation.",
+      "services": [
+        "mariadb",
+        "moodle"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "mosquitto",
+      "networking_class": "WEB_WITH_OPTIONAL_DIRECT_PORTS",
+      "public_services": [
+        "mosquitto"
+      ],
+      "reason": "Direct host port(s) present; deferred to optional direct-port/advanced tier.",
+      "services": [
+        "mosquitto"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "n8n-with-postgresql",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "n8n"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "n8n",
+        "task-runners",
+        "postgresql"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "n8n",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "n8n"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "n8n",
+        "task-runners"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "navidrome",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "navidrome"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "navidrome"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "neon-ws-proxy",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "neon-proxy"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "neon-proxy",
+        "postgres"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "netbird-client",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "netbird-client"
+      ],
+      "unsupported_features": [
+        "capabilities",
+        "network_mode"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "newapi",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "new-api"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "new-api",
+        "postgresql",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "newt-pangolin",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "newt"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "next-image-transformation",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "next-image-transformation",
+        "imgproxy"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "nextcloud-with-mariadb",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "nextcloud"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "nextcloud",
+        "nextcloud-db",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "nextcloud-with-mysql",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "nextcloud"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "nextcloud",
+        "nextcloud-db",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "nextcloud",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "nextcloud"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "nextcloud"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "INVALID",
+      "id": "nexus-arm",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "nexus"
+      ],
+      "reason": "Template failed catalog parser/security validation.",
+      "services": [
+        "nexus"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "nexus",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "nexus"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "nexus"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "nitropage-with-postgresql",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "nitropage"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "nitropage",
+        "postgresql"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "nitropage",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "nitropage"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "nitropage"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "nocobase",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "nocobase"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "nocobase",
+        "postgres"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "nodebb",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "nodebb"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "nodebb",
+        "postgres"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "ntfy",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "ntfy"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "ntfy"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "observium",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "observium"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "observium",
+        "mariadb"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "obsidian-livesync",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "couchdb"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "couchdb"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "ollama-with-open-webui",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "ollama-api",
+        "open-webui"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "once-campfire",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "campfire"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "campfire"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "onedev",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "onedev"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "onedev",
+        "postgres"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "onetimesecret",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "onetimesecret"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "onetimesecret",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "open-archiver",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "open-archiver"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "open-archiver",
+        "postgres",
+        "valkey",
+        "meilisearch"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "openclaw",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "openclaw"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "openclaw",
+        "browser"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "openobserve",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "openobserve"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "openobserve"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "openpanel",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "openpanel-dashboard",
+        "openpanel-api",
+        "openpanel-worker",
+        "postgres",
+        "redis",
+        "clickhouse"
+      ],
+      "unsupported_features": [
+        "host_bind_mount",
+        "ulimits"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "opnform",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "nginx"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "opnform-api",
+        "api-worker",
+        "api-scheduler",
+        "opnform-ui",
+        "postgresql",
+        "redis",
+        "nginx"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "orangehrm",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "orangehrm"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "orangehrm",
+        "mariadb"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "organizr",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "organizr"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "organizr"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "osticket",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "osticket"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "osticket",
+        "mariadb"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "overseerr",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "overseerr"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "overseerr"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "owncloud",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "owncloud"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "owncloud",
+        "mariadb",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "pairdrop",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "pairdrop"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "pairdrop"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "palworld",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "palworld"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "paperless",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "paperless"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "redis",
+        "paperless"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "passbolt",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "passbolt"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "passbolt",
+        "mariadb"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "paymenter",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "paymenter"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "paymenter",
+        "mariadb",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "INVALID",
+      "id": "penpot-with-s3",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "frontend",
+        "mailpit"
+      ],
+      "reason": "Template failed catalog parser/security validation.",
+      "services": [
+        "frontend",
+        "penpot-backend",
+        "penpot-exporter",
+        "minio",
+        "minio-init",
+        "postgres",
+        "penpot-valkey",
+        "mailpit"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "penpot",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "frontend",
+        "mailpit"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "frontend",
+        "penpot-backend",
+        "penpot-exporter",
+        "mailpit",
+        "postgres",
+        "penpot-valkey"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "peppermint",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "postgres",
+        "peppermint"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "pgadmin",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "pgadmin"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "pgadmin"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "pgbackweb",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "pgbackweb"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "pgbackweb",
+        "postgres"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "phpmyadmin",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "phpmyadmin"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "phpmyadmin"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "pi-hole",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [
+        "pihole"
+      ],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "pihole"
+      ],
+      "unsupported_features": [
+        "capabilities"
+      ]
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "pingvinshare-with-clamav",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "pingvinshare",
+        "clamav"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "pingvinshare",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "pingvinshare"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "plane",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "proxy",
+        "web",
+        "space",
+        "admin",
+        "live",
+        "api",
+        "worker",
+        "beat-worker",
+        "migrator",
+        "plane-db",
+        "plane-redis",
+        "plane-mq",
+        "plane-minio"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "plausible",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "plausible",
+        "plausible-db",
+        "plausible-events-db"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "plex",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "plex"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "plex"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "plunk",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "plunk"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "plunk",
+        "postgresql",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "pocket-id-with-postgresql",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "pocket-id"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "pocket-id",
+        "postgresql"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "pocket-id",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "pocket-id"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "pocket-id"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "pocketbase",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "pocketbase"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "pocketbase"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "portainer",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "portainer"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "portainer"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "posthog",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "db",
+        "redis",
+        "clickhouse",
+        "zookeeper",
+        "kafka",
+        "object_storage",
+        "maildev",
+        "flower",
+        "web",
+        "worker",
+        "plugins",
+        "elasticsearch",
+        "temporal",
+        "temporal-admin-tools",
+        "temporal-ui",
+        "temporal-django-worker"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "prefect",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "prefect"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "prefect",
+        "postgresql",
+        "agent"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "privatebin",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "privatebin"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "privatebin"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "prowlarr",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "prowlarr"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "prowlarr"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "proxyscotch",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "proxyscotch"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "proxyscotch"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "pterodactyl-panel",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "mariadb",
+        "redis",
+        "pterodactyl"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "pterodactyl-with-wings",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "mariadb",
+        "redis",
+        "pterodactyl",
+        "wings"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "pydio-cells",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "cells"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "cells",
+        "mariadb"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "qbittorrent",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "qbit",
+        "vuetorrent-backend"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "qdrant",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "qdrant"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "qdrant"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "rabbitmq",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "rabbitmq"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "rabbitmq"
+      ],
+      "unsupported_features": [
+        "hostname_override"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "radarr",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "radarr"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "radarr"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "rallly",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "rallly"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "rallly_db",
+        "rallly"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "reactive-resume",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "minio",
+        "reactive-resume"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "reactive-resume",
+        "postgres",
+        "minio",
+        "chrome",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "readeck",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "readeck"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "readeck"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "redis-insight",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "redisinsight"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "redisinsight"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "redlib",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [
+        "redlib"
+      ],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "redlib"
+      ],
+      "unsupported_features": [
+        "capabilities",
+        "security_opt"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "rivet-engine",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "rivet-engine"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "rivet-engine"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "rustfs",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "rustfs"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "rybbit",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "rybbit"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "rybbit",
+        "rybbit_backend",
+        "rybbit_postgres",
+        "rybbit_clickhouse"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "ryot",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "ryot"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "ryot",
+        "postgresql"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "satisfactory",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "satisfactory-server"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "seafile",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "seafile"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "seafile",
+        "mariadb",
+        "memcached"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "searxng",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "searxng"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "searxng",
+        "redis"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "seaweedfs",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "seaweedfs-master",
+        "seaweedfs-admin"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "sequin",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "sequin"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "sequin",
+        "postgres",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "sessy",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "sessy"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "sessy"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "sftpgo",
+      "networking_class": "WEB_WITH_OPTIONAL_DIRECT_PORTS",
+      "public_services": [
+        "sftpgo"
+      ],
+      "reason": "Direct host port(s) present; deferred to optional direct-port/advanced tier.",
+      "services": [
+        "sftpgo",
+        "postgresql"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "shlink",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "shlink",
+        "shlink-web"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "shlink",
+        "shlink-web"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "signoz",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "signoz"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "init-clickhouse",
+        "zookeeper",
+        "clickhouse",
+        "signoz",
+        "otel-collector",
+        "schema-migrator-sync",
+        "schema-migrator-async"
+      ],
+      "unsupported_features": [
+        "host_bind_mount",
+        "ulimits"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "silverbullet",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "silverbullet"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "silverbullet"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "siyuan",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "siyuan"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "siyuan"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "slash",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "slash"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "slash"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "snapdrop",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "snapdrop"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "snapdrop"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "soju",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "gamja"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "soju",
+        "gamja"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "soketi-app-manager",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "soketi-app-manager"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "soketi-app-manager"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "soketi",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "soketi"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "soketi"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "sonarqube",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "sonarqube",
+        "postgresql"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "sonarr",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "sonarr"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "sonarr"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "spacebot",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [
+        "spacebot"
+      ],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "spacebot"
+      ],
+      "unsupported_features": [
+        "security_opt"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "sparkyfitness",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "sparkyfitness-frontend",
+        "sparkyfitness-server",
+        "sparkyfitness-db"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "stalwart",
+      "networking_class": "WEB_WITH_OPTIONAL_DIRECT_PORTS",
+      "public_services": [
+        "stalwart"
+      ],
+      "reason": "Direct host port(s) present; deferred to optional direct-port/advanced tier.",
+      "services": [
+        "stalwart"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "statusnook",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "statusnook"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "statusnook"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "supabase",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "supabase-kong"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "supabase-kong",
+        "supabase-studio",
+        "supabase-db",
+        "supabase-analytics",
+        "supabase-vector",
+        "supabase-rest",
+        "supabase-auth",
+        "realtime-dev",
+        "supabase-minio",
+        "minio-createbucket",
+        "supabase-storage",
+        "imgproxy",
+        "supabase-meta",
+        "supabase-edge-functions",
+        "supabase-supavisor"
+      ],
+      "unsupported_features": [
+        "container_name",
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "superset-with-postgresql",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "superset"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "superset",
+        "postgres",
+        "redis"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "supertokens-with-mysql",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "supertokens"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "supertokens",
+        "mysql"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "supertokens-with-postgresql",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "supertokens"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "supertokens",
+        "postgres"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "sure",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "web",
+        "worker",
+        "postgresql",
+        "valkey"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "swetrix",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [
+        "swetrix",
+        "swetrix-api"
+      ],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "swetrix",
+        "swetrix-api",
+        "redis",
+        "clickhouse"
+      ],
+      "unsupported_features": [
+        "capabilities",
+        "host_bind_mount",
+        "ulimits"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "syncthing",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [
+        "syncthing"
+      ],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "syncthing"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "tailscale-client",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "tailscale-client",
+        "nginx"
+      ],
+      "unsupported_features": [
+        "capabilities",
+        "devices",
+        "hostname_override",
+        "network_mode"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "teable",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "teable"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "teable",
+        "teable-db",
+        "teable-db-migrate",
+        "teable-cache"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "termix",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "termix"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "termix",
+        "guacd"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "terraria-server",
+      "networking_class": "WEB_WITH_OPTIONAL_DIRECT_PORTS",
+      "public_services": [
+        "terraria-server"
+      ],
+      "reason": "Direct host port(s) present; deferred to optional direct-port/advanced tier.",
+      "services": [
+        "terraria-server"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "tolgee",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "tolgee"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "tolgee",
+        "postgresql"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "traccar",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "traccar"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "traccar",
+        "postgres"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "trailbase",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "trailbase"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "trailbase"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "transmission",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "transmission"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "transmission"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "trigger",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "trigger"
+      ],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "trigger",
+        "supervisor",
+        "docker-proxy",
+        "postgresql",
+        "redis",
+        "electric",
+        "clickhouse"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "triliumnext",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "triliumnext"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "triliumnext"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "twenty",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "twenty"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "twenty",
+        "worker",
+        "postgres",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "typesense",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "typesense"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "typesense"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "INVALID",
+      "id": "unleash-with-postgresql",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "unleash"
+      ],
+      "reason": "Template failed catalog parser/security validation.",
+      "services": [
+        "unleash",
+        "postgres"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "INVALID",
+      "id": "unleash-without-database",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "unleash"
+      ],
+      "reason": "Template failed catalog parser/security validation.",
+      "services": [
+        "unleash"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "unstructured",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "unstructured"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "unstructured"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "uptime-kuma-with-mariadb",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "uptime-kuma"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "uptime-kuma",
+        "mariadb"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "uptime-kuma-with-mysql",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "uptime-kuma"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "uptime-kuma",
+        "mysql"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "usesend",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "usesend"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "postgres",
+        "redis",
+        "usesend"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "vault",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "vault"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "vault"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "vert",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "vert"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "vert"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "vikunja",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "vikunja"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "vikunja",
+        "init"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "vvveb-with-mariadb",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "vvveb"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "vvveb",
+        "mariadb"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "vvveb-with-mysql",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "vvveb"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "vvveb",
+        "mysql"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "vvveb",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "vvveb"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "vvveb"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "wakapi",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "wakapi"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "wakapi",
+        "postgres"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "weaviate",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "weaviate"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "weaviate"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "web-check",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "web-check"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "web-check"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "weblate",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "weblate"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "weblate",
+        "postgresql",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "whoogle",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "whoogle"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "whoogle"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "windmill",
+      "networking_class": "STANDARD_INTERNAL_SERVICE",
+      "public_services": [],
+      "reason": "Current importer/executor rejects required Compose/runtime features.",
+      "services": [
+        "db",
+        "windmill-server",
+        "windmill-worker-1",
+        "windmill-worker-2",
+        "windmill-worker-3",
+        "windmill-worker-native",
+        "lsp"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "windows",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "windows"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "wings",
+      "networking_class": "WEB_WITH_OPTIONAL_DIRECT_PORTS",
+      "public_services": [
+        "wings"
+      ],
+      "reason": "Direct host port(s) present; deferred to optional direct-port/advanced tier.",
+      "services": [
+        "wings"
+      ],
+      "unsupported_features": [
+        "host_bind_mount"
+      ]
+    },
+    {
+      "compatibility_status": "UNSUPPORTED",
+      "id": "wireguard-easy",
+      "networking_class": "ADVANCED_NETWORKING",
+      "public_services": [
+        "wg-easy"
+      ],
+      "reason": "Advanced networking/runtime requirements; deferred from standard catalog.",
+      "services": [
+        "wg-easy"
+      ],
+      "unsupported_features": [
+        "capabilities",
+        "sysctls"
+      ]
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "wordpress-with-mysql",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "wordpress"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "wordpress",
+        "mysql"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "wordpress-without-database",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "wordpress"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "wordpress"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "yamtrack-with-postgresql",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "yamtrack"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "yamtrack",
+        "postgres",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "yamtrack",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "yamtrack"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "yamtrack",
+        "redis"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "IGNORED",
+      "id": "zep",
+      "networking_class": "UNSUPPORTED",
+      "public_services": [],
+      "reason": "Upstream template marked ignore.",
+      "services": [
+        "postgres",
+        "nlp",
+        "zep"
+      ],
+      "unsupported_features": []
+    },
+    {
+      "compatibility_status": "SUPPORTED",
+      "id": "zipline",
+      "networking_class": "STANDARD_WEB",
+      "public_services": [
+        "zipline"
+      ],
+      "reason": "Not selected for the initial curated standard catalog.",
+      "services": [
+        "zipline",
+        "postgres"
+      ],
+      "unsupported_features": []
+    }
+  ]
+}

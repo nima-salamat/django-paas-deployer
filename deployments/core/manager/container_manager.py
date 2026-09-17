@@ -25,6 +25,7 @@ Key changes vs. the legacy implementation:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import docker
@@ -61,6 +62,7 @@ class Container(Client):
         labels: dict | None = None,
         route_name: str | None = None,
         router_name: str | None = None,
+        public_host: str | None = None,
         healthcheck_path: str | None = None,
         restart_policy: dict | None = None,
         extra_host_config: dict | None = None,
@@ -86,6 +88,13 @@ class Container(Client):
         self.labels = labels
         self.route_name = sanitize_route_name(route_name or name)
         self.router_name = sanitize_route_name(router_name or self.route_name)
+        self.public_host = (str(public_host).strip().lower().rstrip(".") or None) if public_host else None
+        if self.public_host:
+            if len(self.public_host) > 253 or not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", self.public_host):
+                raise ContainerError(
+                    "Public hostname is invalid.",
+                    details={"public_host": self.public_host},
+                )
         self.healthcheck_path = str(healthcheck_path or "").strip() or None
         self.restart_policy = self._normalize_restart_policy(
             restart_policy or {"Name": "unless-stopped"}
@@ -275,7 +284,7 @@ class Container(Client):
                 "traefik.enable": "true",
                 "traefik.docker.network": "proxy_net",
                 f"traefik.http.routers.{self.router_name}.rule": (
-                    f"Host(`{self.route_name}.{_get_deployment_domain()}`)"
+                    f"Host(`{self.public_host or f'{self.route_name}.{_get_deployment_domain()}'}`)"
                 ),
                 f"traefik.http.routers.{self.router_name}.entrypoints": "web",
                 f"traefik.http.routers.{self.router_name}.service": self.router_name,
@@ -337,13 +346,32 @@ class Container(Client):
         try:
             existing.reload()
             status = existing.status
+            labels = dict(getattr(existing, "labels", {}) or {})
         except Exception:
             status = "unknown"
+            labels = {}
 
         # Never remove a running container here — that would cause
-        # downtime.  Let the create error surface so an operator can
-        # decide what to do.
+        # downtime. More importantly, never remove a stopped resource that
+        # belongs to a different deployment. This path is invoked during
+        # name-conflict recovery and therefore must be ownership-aware.
         if status == "running":
+            return False
+        expected_deploy = str((self.labels or {}).get("deployment.id") or "")
+        expected_service = str((self.labels or {}).get("service.id") or "")
+        managed = labels.get("managed-by") in {"django-paas-deployer", "passdeployer"}
+        if expected_deploy:
+            owns_resource = managed and labels.get("deployment.id") == expected_deploy
+        else:
+            # Without a deployment identity, service-only ownership is too
+            # broad for stale-worker name-conflict cleanup: another deployment
+            # of the same service legitimately has the same service.id.
+            owns_resource = False
+        if not owns_resource:
+            logger.warning(
+                "Refusing to remove stopped container '%s' after name conflict: ownership mismatch.",
+                self.name,
+            )
             return False
 
         try:
@@ -397,129 +425,71 @@ class Container(Client):
         networking_config = self._networking_config()
         labels = self._labels()
 
-        # Progressive compatibility fallbacks. Security-critical controls
-        # (no-new-privileges and the private network) are intentionally never
-        # stripped. If the Docker engine cannot apply them, the deployment
-        # fails closed instead of silently running with weaker isolation.
-        # Resource constraints are security/billing boundaries, not optional
-        # compatibility hints. Never remove CPU/RAM limits as a fallback.
-        fallbacks = [
-            ("full config", lambda kw: kw),
-            ("without tmpfs", lambda kw: {k: v for k, v in kw.items() if k != "tmpfs"}),
-            ("without restart_policy", lambda kw: {k: v for k, v in kw.items() if k != "restart_policy"}),
-        ]
-
+        # Runtime semantics such as restart policy, tmpfs, resources, security
+        # options, and networking are part of the deployment contract. Do not
+        # silently drop any of them when Docker rejects the host config.
+        stage_desc = "full config"
         last_exc: Exception | None = None
-        last_stage_desc = ""
+        last_stage_desc = stage_desc
 
-        for attempt in range(2):
-            for stage_desc, mutator in fallbacks:
-                attempt_kwargs = mutator(dict(host_kwargs))
-                try:
-                    host_config = self.client.api.create_host_config(**attempt_kwargs)
-                except TypeError as te:
-                    # An option is unsupported by this docker-py version.
-                    logger.warning(
-                        "create_host_config rejected kwarg(s) in stage '%s' "
-                        "for container '%s': %s. Trying next fallback.",
-                        stage_desc, self.name, te,
-                    )
-                    last_exc = te
-                    last_stage_desc = stage_desc
-                    continue
-                except Exception as he:
-                    logger.warning(
-                        "create_host_config failed in stage '%s' for "
-                        "container '%s': %s. Trying next fallback.",
-                        stage_desc, self.name, he,
-                    )
-                    last_exc = he
-                    last_stage_desc = stage_desc
-                    continue
-
-                try:
-                    container = self.client.api.create_container(
-                        name=self.name,
-                        image=self.image_name,
-                        command=self.command,
-                        environment=self.environment,
-                        host_config=host_config,
-                        networking_config=networking_config,
-                        ports=self.exposed_ports or None,
-                        labels=labels,
-                    )
-                    logger.info(
-                        "Container '%s' created from image '%s' (stage='%s', "
-                        "attempt=%d).",
-                        self.name, self.image_name, stage_desc, attempt + 1,
-                    )
-                    return container
-                except docker.errors.APIError as exc:
-                    last_exc = exc
-                    last_stage_desc = stage_desc
-                    status_code = getattr(exc, "status_code", None)
-                    msg = str(exc).lower()
-
-                    # 409 Conflict — name already in use.  If the existing
-                    # container is stopped, remove it and retry the WHOLE
-                    # fallback list once.  If it's running, surface the
-                    # error (we never silently destroy a running container).
-                    if status_code == 409 or "conflict" in msg or "already in use" in msg:
-                        if attempt == 0:
-                            removed = self._remove_stale_container_if_present()
-                            if removed:
-                                logger.info(
-                                    "Retrying container create for '%s' after "
-                                    "removing stale container.", self.name,
-                                )
-                                break  # break inner loop; outer loop retries
-                        # If we couldn't remove it (running container, or
-                        # remove failed) continue to next fallback — it
-                        # won't help, but we'll surface a clear error
-                        # after exhausting fallbacks.
-                        logger.warning(
-                            "Container name '%s' already in use and could "
-                            "not be removed (attempt=%d, stage='%s').",
-                            self.name, attempt + 1, stage_desc,
+        try:
+            host_config = self.client.api.create_host_config(**host_kwargs)
+            container = self.client.api.create_container(
+                name=self.name,
+                image=self.image_name,
+                command=self.command,
+                environment=self.environment,
+                host_config=host_config,
+                networking_config=networking_config,
+                ports=self.exposed_ports or None,
+                labels=labels,
+            )
+            logger.info(
+                "Container '%s' created from image '%s'.",
+                self.name, self.image_name,
+            )
+            return container
+        except docker.errors.APIError as exc:
+            last_exc = exc
+            status_code = getattr(exc, "status_code", None)
+            msg = str(exc).lower()
+            if status_code == 409 or "conflict" in msg or "already in use" in msg:
+                removed = self._remove_stale_container_if_present()
+                if removed:
+                    try:
+                        host_config = self.client.api.create_host_config(**host_kwargs)
+                        container = self.client.api.create_container(
+                            name=self.name,
+                            image=self.image_name,
+                            command=self.command,
+                            environment=self.environment,
+                            host_config=host_config,
+                            networking_config=networking_config,
+                            ports=self.exposed_ports or None,
+                            labels=labels,
                         )
-                        continue
-
-                    # 404 Not Found — referenced resource (network/volume)
-                    # is missing.  No point in trying other fallbacks for
-                    # host_config; surface the error immediately.
-                    if status_code == 404:
-                        raise ContainerError(
-                            f"Failed to create container '{self.name}': "
-                            f"Docker reported a missing referenced resource. "
-                            f"Engine error: {exc}",
-                            details={
-                                "container": self.name,
-                                "image": self.image_name,
-                                "stage": stage_desc,
-                                "error": str(exc),
-                                "status_code": status_code,
-                            },
-                        ) from exc
-
-                    # Other API errors — try the next fallback
-                    logger.warning(
-                        "create_container failed in stage '%s' for "
-                        "container '%s' (status=%s): %s. Trying next fallback.",
-                        stage_desc, self.name, status_code, exc,
-                    )
-                    continue
-                except docker.errors.DockerException as exc:
-                    last_exc = exc
-                    last_stage_desc = stage_desc
-                    logger.warning(
-                        "create_container failed in stage '%s' for "
-                        "container '%s': %s. Trying next fallback.",
-                        stage_desc, self.name, exc,
-                    )
-                    continue
-            else:
-                # Inner loop completed without break — no fallback worked.
-                break
+                        logger.info(
+                            "Container '%s' created after owned stale-container cleanup.",
+                            self.name,
+                        )
+                        return container
+                    except Exception as retry_exc:
+                        last_exc = retry_exc
+            elif status_code == 404:
+                raise ContainerError(
+                    f"Failed to create container '{self.name}': Docker reported a missing referenced resource. Engine error: {exc}",
+                    details={
+                        "container": self.name,
+                        "image": self.image_name,
+                        "stage": stage_desc,
+                        "error": str(exc),
+                        "status_code": status_code,
+                    },
+                ) from exc
+        except docker.errors.DockerException as exc:
+            last_exc = exc
+        except Exception as exc:
+            last_exc = exc
 
         # All fallbacks exhausted.  Surface the actual error.
         err_msg = str(last_exc) if last_exc else "unknown error"

@@ -242,13 +242,19 @@ class DeploymentOrchestrator:
                 entry_port=config.port,
                 environment=dict(config.environment) if config.environment else {},
                 labels={
+                    **{
+                        str(k): str(v)
+                        for k, v in config.labels.items()
+                        if str(k) not in {"managed-by", "deployment.id", "service.id"}
+                    },
                     "managed-by": "django-paas-deployer",
                     "deployment.id": str(config.labels.get("deployment.id") or self.logger.deployment_id or ""),
                     "service.id": str(config.labels.get("service.id") or ""),
-                    **{str(k): str(v) for k, v in config.labels.items()},
                 },
                 router_name=f"{config.name}-deploy-{self.logger.deployment_id or 'current'}",
+                public_host=config.public_host,
                 healthcheck_path=config.healthcheck_path,
+                restart_policy=(config.runtime_options or {}).get("restart_policy") or None,
                 resource_limits=config.resource_limits,
             )
 

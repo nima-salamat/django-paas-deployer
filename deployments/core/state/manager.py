@@ -411,6 +411,16 @@ class StateManager:
                 return False
             if sm.is_deploy_terminal(deploy.status):
                 return False
+            # Cancellation wins the terminal race while the row is locked.
+            # A worker that computed SUCCESS/FAILED immediately before an API
+            # cancellation must not overwrite the user's cancellation.
+            if target != sm.DEPLOY_CANCELLED and deploy.cancel_requested:
+                target = sm.DEPLOY_CANCELLED
+                update_fields = {
+                    **dict(update_fields or {}),
+                    "stage": "cancelled",
+                    "status_message": "Deployment cancelled by the user.",
+                }
             sm.check_deploy_transition(deploy.status, target)
             updates = dict(update_fields or {})
             updates["status"] = target

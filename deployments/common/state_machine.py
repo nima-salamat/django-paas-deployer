@@ -98,6 +98,7 @@ SERVICE_TRANSITIONS: FrozenSet[tuple[str | None, str]] = frozenset({
     (SERVICE_DEPLOYING, SERVICE_RUNNING),  # deploy succeeded
     (SERVICE_DEPLOYING, SERVICE_FAILED),   # deploy failed
     (SERVICE_DEPLOYING, SERVICE_STOPPED),  # deploy failed but container cleaned
+    (SERVICE_RUNNING, SERVICE_FAILED),     # runtime failure (OOM/exit) after activation
 
     # Stop lifecycle
     (SERVICE_RUNNING, SERVICE_STOPPING),
@@ -118,6 +119,7 @@ SERVICE_TRANSITIONS: FrozenSet[tuple[str | None, str]] = frozenset({
     (SERVICE_SUCCEEDED, SERVICE_RUNNING),
     (SERVICE_SUCCEEDED, SERVICE_STOPPING),
     (SERVICE_SUCCEEDED, SERVICE_DEPLOYING),
+    (SERVICE_SUCCEEDED, SERVICE_FAILED),   # legacy alias runtime failure
     (SERVICE_RUNNING, SERVICE_SUCCEEDED),
 })
 

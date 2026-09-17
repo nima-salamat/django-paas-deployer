@@ -132,7 +132,7 @@ class Volume(Client):
                 name=self.name,
                 driver=self.driver,
                 driver_opts=opts or None,
-                labels={"managed-by": "django-paas-deployer"},
+                labels={"managed-by": "django-paas-deployer", "volume.name": self.name},
             )
             logger.info(
                 "Volume '%s' created with driver '%s' opts=%s (host free ~%s MB)",
@@ -144,7 +144,14 @@ class Volume(Client):
             return volume
         except docker.errors.APIError as exc:
             if getattr(exc, "status_code", None) == 409 or "already exists" in str(exc).lower():
-                return self.client.volumes.get(self.name)
+                volume = self.client.volumes.get(self.name)
+                labels = dict(getattr(volume, "attrs", {}).get("Labels") or {})
+                if labels.get("managed-by") != "django-paas-deployer":
+                    raise VolumeError(
+                        f"Docker volume '{self.name}' exists but is not owned by PassDeployer.",
+                        details={"volume": self.name, "labels": labels},
+                    )
+                return volume
             logger.error(
                 "Docker API error creating volume '%s' (driver=%s, opts=%s): %s",
                 self.name,

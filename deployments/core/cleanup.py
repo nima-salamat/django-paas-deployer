@@ -18,15 +18,18 @@ class CleanupManager:
         image.remove(force=True)
 
     def prune_dangling_images(self):
-        try:
-            Image.prune_dangling_images()
-            if self.logger:
-                self.logger.info("cleanup", "Dangling Docker images pruned.", progress=100)
-        except Exception as exc:
-            if self.logger:
-                self.logger.warning(
-                    "cleanup",
-                    "Could not prune dangling Docker images.",
-                    progress=100,
-                    details={"error": str(exc)},
-                )
+        """Do not globally prune the Docker daemon from an individual deploy.
+
+        A deployment worker shares the Docker host with unrelated deployments
+        and concurrent builds. Global dangling-image pruning is therefore not
+        an ownership-safe cleanup operation. Per-deployment cleanup removes the
+        failed image explicitly; host-wide garbage collection belongs to a
+        separate operator-controlled maintenance task.
+        """
+        if self.logger:
+            self.logger.info(
+                "cleanup",
+                "Skipped global dangling-image prune; host-wide Docker GC is operator-managed.",
+                progress=100,
+            )
+        return False

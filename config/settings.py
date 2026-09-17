@@ -125,6 +125,7 @@ INSTALLED_APPS = [
     "deploy",
     "logs",
     "deployments",
+    "app_catalog",
     "services",
     "core",
     "tickets.apps.TicketsConfig",
@@ -389,11 +390,18 @@ CELERY_TASK_ROUTES = {
     "deployments.celery.tasks.run_db_deploy": {"queue": "deployments"},
     "deployments.celery.tasks.stop": {"queue": "operations"},
     "deployments.celery.tasks.build_base_runtime_image": {"queue": "base-images"},
+    "app_catalog.start_application_installation": {"queue": "deployments"},
+    "app_catalog.gate_application_service": {"queue": "deployments"},
+    "app_catalog.advance_application_service": {"queue": "deployments"},
+    "app_catalog.application_service_failed": {"queue": "deployments"},
+    "app_catalog.cancel_application_installation": {"queue": "operations"},
+    "app_catalog.reconcile_application_installations": {"queue": "deployments"},
 }
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_TASK_ACKS_LATE = True
 CELERY_IMPORTS = (
     "deployments.celery.tasks",
+    "app_catalog.tasks",
     "core.tasks.email",
     "custom_emails.tasks",
     "messenger.tasks",
@@ -408,6 +416,10 @@ CELERY_BEAT_SCHEDULE = {
     "monitor_services_reconciliation": {
         "task": "deployments.celery.schedules.monitor_services",
         "schedule": 5.0,
+    },
+    "application_catalog_reconciliation": {
+        "task": "app_catalog.tasks.reconcile_application_installations",
+        "schedule": 10.0,
     },
     "expire_idle_shell_sessions": {
         "task": "deployments.celery.tasks.expire_idle_shell_sessions",
@@ -540,3 +552,6 @@ if not DEBUG:
 
 # Hard server-side upload boundary for untrusted deployment archives.
 DEPLOY_MAX_ZIP_BYTES = int(os.getenv("DEPLOY_MAX_ZIP_BYTES", str(100 * 1024 * 1024)))
+
+CATALOG_APPLICATION_TIMEOUT_MINUTES = 60
+CATALOG_DISPATCH_STALE_SECONDS = 300

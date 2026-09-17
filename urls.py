@@ -24,6 +24,7 @@ urlpatterns = [
     path("api/volumes/", include("services.volume_api_urls")),
     path("api/networks/", include("services.network_api_urls")),
     path("deploy/", include("deploy.urls")),
+    path("api/application-catalog/", include("app_catalog.urls")),
     path("api/system/", include("core.settings_urls")),
     path("media/", include("core.urls")),
     path("api/tickets/", include("tickets.urls")),

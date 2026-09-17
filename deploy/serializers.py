@@ -20,6 +20,44 @@ class MaskedDBConfigField(serializers.JSONField):
         data = super().to_representation(value)
         if not isinstance(data, dict):
             return data
+        request = self.context.get("request")
+
+        # Catalog-managed application deploys may contain generated secrets in
+        # their environment configuration even when their platform is Docker
+        # rather than a DB platform.  Never expose those values through the
+        # normal deploy API representation.
+        if data.get("catalog_managed"):
+            sensitive_tokens = ("password", "secret", "token", "private_key", "api_key", "signing_key")
+            cleaned = dict(data)
+            secret_values = set()
+            parent = getattr(self, "parent", None)
+            deploy = getattr(parent, "instance", None) if parent is not None else None
+            try:
+                binding = getattr(getattr(deploy, "service", None), "application_binding", None)
+                instance = getattr(binding, "instance", None)
+                secret_values = {str(value) for value in (getattr(instance, "secret_config", {}) or {}).values() if value not in (None, "")}
+            except Exception:
+                secret_values = set()
+
+            def redact(value):
+                if isinstance(value, dict):
+                    return {key: redact(item) for key, item in value.items()}
+                if isinstance(value, list):
+                    return [redact(item) for item in value]
+                if isinstance(value, str):
+                    out = value
+                    for secret in secret_values:
+                        if secret:
+                            out = out.replace(secret, "[REDACTED]")
+                    return out
+                return value
+
+            for key in list(cleaned):
+                lowered = str(key).lower()
+                if key in SENSITIVE_CONFIG_KEYS or any(token in lowered for token in sensitive_tokens):
+                    cleaned[key] = "[REDACTED]"
+            return redact(cleaned)
+
         platform = data.get("platform") or ""
         if platform not in DB_PLATFORMS:
             return data

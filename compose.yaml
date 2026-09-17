@@ -555,6 +555,56 @@ services:
 # ==============================================================
 # VOLUMES
 # ==============================================================
+
+  # ============================================================
+  # REAL READY-APP INTEGRATION TEST RUNNER
+  # Enabled only with: docker compose --profile integration ...
+  # Uses the normal Django/Celery/Docker path; never docker-compose deploys
+  # the application under test.
+  # ============================================================
+  integration-test:
+    profiles: ["integration"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        DOCKERFILE_DOCKER_MIRROR: ${DOCKERFILE_DOCKER_MIRROR}
+        DOCKERFILE_PYTHON_VERSION: ${DOCKERFILE_PYTHON_VERSION}
+        DOCKERFILE_PYTHON_MIRROR: ${DOCKERFILE_PYTHON_MIRROR}
+        DOCKERFILE_LINUX_MIRROR: ${DOCKERFILE_LINUX_MIRROR}
+    command: ["pytest", "-m", "deployment_integration", "-q", "app_catalog/tests/integration"]
+    environment:
+      RUN_DEPLOYMENT_INTEGRATION: "1"
+      DB_HOST: db
+      DB_PORT: 5432
+      DEPLOYMENT_LOG_DB_HOST: deployment-log-db
+      DEPLOYMENT_LOG_DB_PORT: 5432
+      REDIS_URL: redis://redis:6379
+      CELERY_BROKER_URL: redis://redis:6379
+      CELERY_RESULT_BACKEND: redis://redis:6379
+      CHANNEL_REDIS_URL: redis://redis:6379
+      API_DOMAIN_NAME: ${API_DOMAIN_NAME}
+      DEPLOYMENT_DOMAIN: ${DEPLOYMENT_DOMAIN}
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      db:
+        condition: service_healthy
+      deployment-log-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      deployment-worker:
+        condition: service_started
+      celery-beat:
+        condition: service_started
+    networks:
+      - app-network
+      - proxy_net
+
 volumes:
   postgres_data:
   deployment_log_data:

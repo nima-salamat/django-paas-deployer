@@ -559,7 +559,9 @@ def _build_db_cfg(deploy: Deploy, service: Service) -> dict[str, Any]:
             networks.insert(0, str(docker_net))
             seen_nets.add(str(docker_net))
 
-    _add_net("proxy_net")
+    public_db = bool(cfg.get("public") or cfg.get("public_host") or cfg.get("expose_public"))
+    if public_db:
+        _add_net("proxy_net")
     cfg["networks"] = networks
     logger.info(
         "DB networks for service=%s: %s",

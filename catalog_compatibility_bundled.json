@@ -1,0 +1,382 @@
+{
+  "summary": {
+    "classification": {
+      "IGNORED": 0,
+      "INVALID": 0,
+      "SUPPORTED": 7,
+      "SUPPORTED_WITH_WARNINGS": 0,
+      "UNSUPPORTED": 0
+    },
+    "top_incompatibilities": [],
+    "total": 7
+  },
+  "templates": [
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 3,
+        "none": 0
+      },
+      "category": null,
+      "classification": "SUPPORTED",
+      "dependencies": {
+        "docmost": [
+          "postgresql",
+          "redis"
+        ],
+        "postgresql": [],
+        "redis": []
+      },
+      "documentation_url": null,
+      "errors": [],
+      "features": {
+        "depends_on": 1,
+        "environment": 2,
+        "expose": 3,
+        "healthcheck": 3,
+        "image": 3,
+        "interpolation": 4,
+        "role_cache": 1,
+        "role_database": 1,
+        "role_scheduler": 0,
+        "role_worker": 0,
+        "services": 1,
+        "volumes": 3
+      },
+      "generated_secrets": [
+        "app_secret",
+        "postgres_password"
+      ],
+      "generated_variables": [
+        "domain"
+      ],
+      "healthchecks": 1,
+      "name": "Docmost",
+      "parser_result": "OK",
+      "path": "/mnt/data/current/work/catalog-pass/app_catalog/catalog/docmost.yaml",
+      "persistent_volumes": 3,
+      "plan_result": "OK",
+      "public_services": [
+        "docmost"
+      ],
+      "service_count": 3,
+      "services": [
+        "docmost",
+        "postgresql",
+        "redis"
+      ],
+      "tags": [],
+      "template_id": "docmost",
+      "unsupported_features": [],
+      "warnings": []
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": null,
+      "classification": "SUPPORTED",
+      "dependencies": {
+        "forgejo": [
+          "postgresql"
+        ],
+        "postgresql": []
+      },
+      "documentation_url": null,
+      "errors": [],
+      "features": {
+        "depends_on": 1,
+        "environment": 2,
+        "expose": 1,
+        "healthcheck": 2,
+        "image": 2,
+        "interpolation": 3,
+        "role_cache": 0,
+        "role_database": 1,
+        "role_scheduler": 0,
+        "role_worker": 0,
+        "services": 1,
+        "volumes": 2
+      },
+      "generated_secrets": [
+        "postgres_password"
+      ],
+      "generated_variables": [
+        "domain"
+      ],
+      "healthchecks": 1,
+      "name": "Forgejo With Postgresql",
+      "parser_result": "OK",
+      "path": "/mnt/data/current/work/catalog-pass/app_catalog/catalog/forgejo-with-postgresql.yaml",
+      "persistent_volumes": 2,
+      "plan_result": "OK",
+      "public_services": [
+        "forgejo"
+      ],
+      "service_count": 2,
+      "services": [
+        "forgejo",
+        "postgresql"
+      ],
+      "tags": [],
+      "template_id": "forgejo-with-postgresql",
+      "unsupported_features": [],
+      "warnings": []
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 1,
+        "none": 0
+      },
+      "category": null,
+      "classification": "SUPPORTED",
+      "dependencies": {
+        "minio": []
+      },
+      "documentation_url": null,
+      "errors": [],
+      "features": {
+        "command": 1,
+        "environment": 1,
+        "expose": 1,
+        "healthcheck": 1,
+        "image": 1,
+        "interpolation": 2,
+        "role_cache": 0,
+        "role_database": 0,
+        "role_scheduler": 0,
+        "role_worker": 0,
+        "services": 1,
+        "volumes": 1
+      },
+      "generated_secrets": [
+        "minio_root_password"
+      ],
+      "generated_variables": [
+        "minio_root_user"
+      ],
+      "healthchecks": 1,
+      "name": "Minio",
+      "parser_result": "OK",
+      "path": "/mnt/data/current/work/catalog-pass/app_catalog/catalog/minio.yaml",
+      "persistent_volumes": 1,
+      "plan_result": "OK",
+      "public_services": [
+        "minio"
+      ],
+      "service_count": 1,
+      "services": [
+        "minio"
+      ],
+      "tags": [],
+      "template_id": "minio",
+      "unsupported_features": [],
+      "warnings": []
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 4,
+        "none": 0
+      },
+      "category": null,
+      "classification": "SUPPORTED",
+      "dependencies": {
+        "n8n": [
+          "postgresql",
+          "redis"
+        ],
+        "n8n-worker": [
+          "n8n",
+          "postgresql",
+          "redis"
+        ],
+        "postgresql": [],
+        "redis": []
+      },
+      "documentation_url": null,
+      "errors": [],
+      "features": {
+        "command": 1,
+        "depends_on": 2,
+        "environment": 3,
+        "expose": 1,
+        "healthcheck": 3,
+        "image": 4,
+        "interpolation": 8,
+        "role_cache": 1,
+        "role_database": 1,
+        "role_scheduler": 0,
+        "role_worker": 1,
+        "services": 1,
+        "volumes": 4
+      },
+      "generated_secrets": [
+        "encryption_key",
+        "postgres_password"
+      ],
+      "generated_variables": [
+        "domain"
+      ],
+      "healthchecks": 1,
+      "name": "N8N With Postgres And Worker",
+      "parser_result": "OK",
+      "path": "/mnt/data/current/work/catalog-pass/app_catalog/catalog/n8n-with-postgres-and-worker.yaml",
+      "persistent_volumes": 4,
+      "plan_result": "OK",
+      "public_services": [
+        "n8n"
+      ],
+      "service_count": 4,
+      "services": [
+        "n8n",
+        "n8n-worker",
+        "postgresql",
+        "redis"
+      ],
+      "tags": [],
+      "template_id": "n8n-with-postgres-and-worker",
+      "unsupported_features": [],
+      "warnings": []
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 1,
+        "none": 0
+      },
+      "category": null,
+      "classification": "SUPPORTED",
+      "dependencies": {
+        "postgres": []
+      },
+      "documentation_url": null,
+      "errors": [],
+      "features": {
+        "environment": 1,
+        "expose": 1,
+        "healthcheck": 1,
+        "image": 1,
+        "interpolation": 3,
+        "role_cache": 0,
+        "role_database": 1,
+        "role_scheduler": 0,
+        "role_worker": 0,
+        "services": 1,
+        "volumes": 1
+      },
+      "generated_secrets": [
+        "postgres_password"
+      ],
+      "generated_variables": [
+        "postgres_db",
+        "postgres_user"
+      ],
+      "healthchecks": 0,
+      "name": "Postgresql",
+      "parser_result": "OK",
+      "path": "/mnt/data/current/work/catalog-pass/app_catalog/catalog/postgresql.yaml",
+      "persistent_volumes": 1,
+      "plan_result": "OK",
+      "public_services": [],
+      "service_count": 1,
+      "services": [
+        "postgres"
+      ],
+      "tags": [],
+      "template_id": "postgresql",
+      "unsupported_features": [],
+      "warnings": []
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 1,
+        "none": 0
+      },
+      "category": null,
+      "classification": "SUPPORTED",
+      "dependencies": {
+        "redis": []
+      },
+      "documentation_url": null,
+      "errors": [],
+      "features": {
+        "command": 1,
+        "expose": 1,
+        "healthcheck": 1,
+        "image": 1,
+        "role_cache": 1,
+        "role_database": 0,
+        "role_scheduler": 0,
+        "role_worker": 0,
+        "services": 1,
+        "volumes": 1
+      },
+      "generated_secrets": [],
+      "generated_variables": [],
+      "healthchecks": 0,
+      "name": "Redis",
+      "parser_result": "OK",
+      "path": "/mnt/data/current/work/catalog-pass/app_catalog/catalog/redis.yaml",
+      "persistent_volumes": 1,
+      "plan_result": "OK",
+      "public_services": [],
+      "service_count": 1,
+      "services": [
+        "redis"
+      ],
+      "tags": [],
+      "template_id": "redis",
+      "unsupported_features": [],
+      "warnings": []
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 1,
+        "none": 0
+      },
+      "category": null,
+      "classification": "SUPPORTED",
+      "dependencies": {
+        "uptime-kuma": []
+      },
+      "documentation_url": null,
+      "errors": [],
+      "features": {
+        "expose": 1,
+        "healthcheck": 1,
+        "image": 1,
+        "role_cache": 0,
+        "role_database": 0,
+        "role_scheduler": 0,
+        "role_worker": 0,
+        "services": 1,
+        "volumes": 1
+      },
+      "generated_secrets": [],
+      "generated_variables": [],
+      "healthchecks": 1,
+      "name": "Uptime Kuma",
+      "parser_result": "OK",
+      "path": "/mnt/data/current/work/catalog-pass/app_catalog/catalog/uptime-kuma.yaml",
+      "persistent_volumes": 1,
+      "plan_result": "OK",
+      "public_services": [
+        "uptime-kuma"
+      ],
+      "service_count": 1,
+      "services": [
+        "uptime-kuma"
+      ],
+      "tags": [],
+      "template_id": "uptime-kuma",
+      "unsupported_features": [],
+      "warnings": []
+    }
+  ]
+}

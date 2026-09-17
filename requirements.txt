@@ -44,3 +44,10 @@ bleach==6.2.0
 wagtail>=6.3,<7.0
 
 psutil>=5.9.0
+
+# Development/integration test runner. Kept in the main image because the
+# Docker Compose integration profile uses the same reproducible image.
+pytest>=8,<10
+pytest-django>=4.10,<6
+
+PyYAML>=6.0,<7

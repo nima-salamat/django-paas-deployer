@@ -85,6 +85,9 @@ class DeploymentConfig:
     build_resource_policy: dict[str, Any] = field(default_factory=dict)
     runtime_options: dict[str, Any] = field(default_factory=dict)
     labels: dict[str, str] = field(default_factory=dict)
+    # Optional explicit production hostname. When absent, the platform derives
+    # the hostname from the service name and DEPLOYMENT_DOMAIN.
+    public_host: Optional[str] = None
     # ------------------------------------------------------------------------
     stop_timeout: int = 15
     start_timeout: int = 45

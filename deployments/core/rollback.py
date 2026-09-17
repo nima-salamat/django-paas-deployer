@@ -27,6 +27,7 @@ swallowed) so the orchestrator can mark the deployment as
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -135,14 +136,19 @@ class ContainerSnapshot:
         # Labels
         labels = config.get("Labels") or {}
 
-        # Route name from labels (Traefik router key)
+        # Recover the public host from the router rule.  Do not use the
+        # router key as ``route_name``: deployment-specific router names are
+        # intentionally ephemeral, while rollback should preserve the public
+        # hostname and let the current deployment identity generate a fresh
+        # router name.
         route_name = None
-        for k in labels:
-            if k.startswith("traefik.http.routers.") and k.endswith(".rule"):
-                route_name = k.split(".")[3]
-                break
-        if not route_name:
-            route_name = name
+        public_host = None
+        for key, value in labels.items():
+            if key.startswith("traefik.http.routers.") and key.endswith(".rule"):
+                m = re.search(r"Host\(`([^`]+)`\)", str(value))
+                if m:
+                    public_host = m.group(1)
+                    break
 
         # CPU / RAM from HostConfig
         cpu_quota = host_config.get("CpuQuota") or 0

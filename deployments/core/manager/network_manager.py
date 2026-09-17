@@ -30,7 +30,15 @@ class Network(Client):
             return network
         except docker.errors.APIError as exc:
             if getattr(exc, "status_code", None) == 409 or "already exists" in str(exc):
-                return self.client.networks.get(self.name)
+                network = self.client.networks.get(self.name)
+                if self.name.startswith("net-"):
+                    labels = dict(getattr(network, "attrs", {}).get("Labels") or {})
+                    if labels.get("managed-by") != "django-paas-deployer":
+                        raise NetworkError(
+                            f"Docker network '{self.name}' exists but is not owned by PassDeployer.",
+                            details={"network": self.name, "labels": labels},
+                        )
+                return network
             raise NetworkError(
                 f"Failed to create Docker network '{self.name}'.",
                 details={"network": self.name, "driver": self.driver},
@@ -43,9 +51,21 @@ class Network(Client):
 
     def ensure(self):
         try:
-            return self.client.networks.get(self.name)
+            network = self.client.networks.get(self.name)
+            # Application-private networks use deterministic net-* names.
+            # Refuse to adopt an unrelated Docker network with the same name.
+            if self.name.startswith("net-"):
+                labels = dict(getattr(network, "attrs", {}).get("Labels") or {})
+                if labels.get("managed-by") != "django-paas-deployer":
+                    raise NetworkError(
+                        f"Docker network '{self.name}' exists but is not owned by PassDeployer.",
+                        details={"network": self.name, "labels": labels},
+                    )
+            return network
         except docker.errors.NotFound:
             return self.create()
+        except NetworkError:
+            raise
         except docker.errors.DockerException as exc:
             raise NetworkError(
                 f"Failed to inspect Docker network '{self.name}'.",

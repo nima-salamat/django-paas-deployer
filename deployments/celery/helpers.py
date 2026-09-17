@@ -1,5 +1,7 @@
 """deployments/celery/helpers.py — mirrors + versions from DB settings."""
 from dataclasses import dataclass
+import os
+import zipfile
 
 from deploy.models import Deploy
 from core.global_settings.config import Config
@@ -131,6 +133,37 @@ class DeploymentHelper:
                     str(overrides["build_dir"]).strip().lstrip("./").rstrip("/")
                 )
         return kwargs
+
+    @staticmethod
+    def get_dockerfile_from_archive(zip_path: str) -> str | None:
+        """Read a catalog/user supplied Dockerfile from the root of a ZIP.
+
+        Only an exact root-level ``Dockerfile`` is accepted. Archive safety is
+        delegated to the same primitives used by the normal deployment
+        extractor; symlinks and unsafe names are rejected here as well.
+        """
+        if not zip_path or not os.path.isfile(zip_path):
+            return None
+        from deployments.common.security import is_safe_archive_name, is_zip_symlink
+
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            matches = []
+            for info in zf.infolist():
+                name = info.filename.replace('\\', '/')
+                if not is_safe_archive_name(name):
+                    raise ValueError(f"Unsafe path in deployment ZIP: {info.filename}")
+                if is_zip_symlink(info):
+                    raise ValueError(f"Deployment ZIP contains a symlink: {info.filename}")
+                if name == 'Dockerfile':
+                    matches.append(info)
+            if not matches:
+                return None
+            if len(matches) > 1:
+                raise ValueError('Deployment ZIP contains duplicate root Dockerfile entries.')
+            text = zf.read(matches[0]).decode('utf-8')
+            if not text.strip():
+                raise ValueError('Deployment ZIP Dockerfile is empty.')
+            return text
 
     @staticmethod
     def get_dockerfile_text(

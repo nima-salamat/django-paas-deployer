@@ -1,0 +1,106 @@
+id = "mattermost"
+name = "Mattermost"
+version = "11.7.0"
+description = "Open-source team collaboration server backed by PostgreSQL."
+category = "collaboration"
+[links]
+website = "https://mattermost.com/"
+repository = "https://github.com/mattermost/mattermost"
+docker = "https://github.com/mattermost/docker"
+
+[variants.postgresql]
+label = "Mattermost + PostgreSQL"
+availability = "supported"
+
+[[variants.postgresql.fields]]
+id = "domain"
+type = "domain"
+label = "Domain"
+required = true
+description = "Public hostname for Mattermost."
+pattern = "^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$"
+
+[[variants.postgresql.fields]]
+id = "mattermost_version"
+type = "string"
+label = "Mattermost version"
+default = "11.7.0"
+pattern = "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+
+[[variants.postgresql.fields]]
+id = "storage_mb"
+type = "integer"
+label = "Application storage (MB)"
+default = 4096
+
+[[variants.postgresql.fields]]
+id = "postgres_password"
+type = "secret"
+label = "PostgreSQL password"
+generate = "password:32"
+secret = true
+
+[[variants.postgresql.services]]
+key = "postgres"
+role = "database"
+platform = "postgresql"
+plan_type = "DB"
+name_template = "${config.slug}-db"
+database_username = "mmuser"
+database_name = "mattermost"
+depends_on = []
+port = 5432
+
+[[variants.postgresql.services.volumes]]
+name = "data"
+target = "/var/lib/postgresql/data"
+size_mb = 8192
+
+[[variants.postgresql.services]]
+key = "mattermost"
+role = "app"
+platform = "docker"
+plan_type = "APP"
+name_template = "${config.slug}"
+depends_on = ["postgres"]
+port = 8065
+healthcheck_path = "/api/v4/system/ping"
+healthcheck_timeout = 5
+image_template = "mattermost/mattermost-team-edition:${config.mattermost_version}"
+dockerfile = "FROM ${config.image_template}\n"
+
+[[variants.postgresql.services.volumes]]
+name = "config"
+target = "/mattermost/config"
+size_mb = "${config.storage_mb}"
+
+[[variants.postgresql.services.volumes]]
+name = "data"
+target = "/mattermost/data"
+size_mb = "${config.storage_mb}"
+
+[[variants.postgresql.services.volumes]]
+name = "logs"
+target = "/mattermost/logs"
+size_mb = "${config.storage_mb}"
+
+[[variants.postgresql.services.volumes]]
+name = "plugins"
+target = "/mattermost/plugins"
+size_mb = "${config.storage_mb}"
+
+[[variants.postgresql.services.volumes]]
+name = "client-plugins"
+target = "/mattermost/client/plugins"
+size_mb = "${config.storage_mb}"
+
+[[variants.postgresql.services.volumes]]
+name = "bleve"
+target = "/mattermost/bleve-indexes"
+size_mb = "${config.storage_mb}"
+
+[variants.postgresql.services.environment]
+MM_SQLSETTINGS_DRIVERNAME = "postgres"
+MM_SQLSETTINGS_DATASOURCE = "postgres://mmuser:${secret.postgres_password}@${service.postgres.host}:5432/mattermost?sslmode=disable&connect_timeout=10"
+MM_SERVICESETTINGS_SITEURL = "https://${config.domain}"
+MM_BLEVESETTINGS_INDEXDIR = "/mattermost/bleve-indexes"

@@ -1,0 +1,1465 @@
+{
+  "applications": [
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 3,
+        "none": 0
+      },
+      "category": "automation",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_64_apikey",
+        "service_password_64_jwt",
+        "service_password_encryptionkey",
+        "service_password_postgres"
+      ],
+      "generated_variables": [
+        "ap_engine_executable_path",
+        "ap_environment",
+        "ap_execution_mode",
+        "ap_sandbox_run_time_seconds",
+        "ap_sign_up_enabled",
+        "ap_telemetry_enabled",
+        "ap_templates_source_url",
+        "ap_trigger_default_poll_interval",
+        "ap_webhook_timeout_seconds",
+        "domain",
+        "postgres_db",
+        "postgres_host",
+        "postgres_port",
+        "redis_host",
+        "redis_port",
+        "service_user_postgres"
+      ],
+      "healthchecks": 1,
+      "id": "activepieces",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 2,
+      "public_services": [
+        "activepieces"
+      ],
+      "reason": "Workflow automation with an HTTP web UI, PostgreSQL/Redis dependencies and standard healthchecks.",
+      "service_count": 3,
+      "services": [
+        "activepieces",
+        "postgres",
+        "redis"
+      ],
+      "source_sha256": "4384f8f5c470a32d72823bbd21e00eaac87c694b25f9da55fcf4df684e1452eb",
+      "source_template": "activepieces.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 1,
+        "none": 0
+      },
+      "category": "productivity",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [],
+      "generated_variables": [
+        "appsmith_disable_intercom",
+        "appsmith_disable_telemetry",
+        "appsmith_mail_enabled",
+        "appsmith_sentry_dsn",
+        "appsmith_smart_look_id",
+        "domain"
+      ],
+      "healthchecks": 1,
+      "id": "appsmith",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 1,
+      "public_services": [
+        "appsmith"
+      ],
+      "reason": "Well-known low-code/internal-tools platform using a single HTTP endpoint and persistent application storage.",
+      "service_count": 1,
+      "services": [
+        "appsmith"
+      ],
+      "source_sha256": "65da39d4adc7ffb9c81a37a371a0142bee66d63eb1c9cc1c69a3e4c94a2fb1c8",
+      "source_template": "appsmith.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 1,
+        "none": 0
+      },
+      "category": "media",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [],
+      "generated_variables": [
+        "domain",
+        "timezone"
+      ],
+      "healthchecks": 1,
+      "id": "audiobookshelf",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 4,
+      "public_services": [
+        "audiobookshelf"
+      ],
+      "reason": "Popular self-hosted audiobook/ebook server with HTTP routing and ordinary named persistent volumes.",
+      "service_count": 1,
+      "services": [
+        "audiobookshelf"
+      ],
+      "source_sha256": "2706a9e48b8a9511be26128fa2ba8a633440fe6374b4f44cc4d00f67a0556178",
+      "source_template": "audiobookshelf.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": "cms",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "github_app_secret",
+        "mail_password",
+        "service_password_appkey",
+        "service_password_mysql",
+        "service_password_mysqlroot"
+      ],
+      "generated_variables": [
+        "domain",
+        "github_app_id",
+        "mail_driver",
+        "mail_encryption",
+        "mail_from",
+        "mail_from_name",
+        "mail_host",
+        "mail_port",
+        "mail_username",
+        "mysql_database",
+        "queue_connection",
+        "service_user_mysql",
+        "tz"
+      ],
+      "healthchecks": 1,
+      "id": "bookstack",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 2,
+      "public_services": [
+        "bookstack"
+      ],
+      "reason": "Mature documentation/knowledge platform with web UI and conventional database dependency.",
+      "service_count": 2,
+      "services": [
+        "bookstack",
+        "mariadb"
+      ],
+      "source_sha256": "543362d4da830dbeca638d37cc73adfe4ce6371585ea9c41cfe13afb5d5062f2",
+      "source_template": "bookstack.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 3,
+        "none": 0
+      },
+      "category": "media",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_mysql",
+        "service_password_redis"
+      ],
+      "generated_variables": [
+        "cp_disable_https",
+        "domain",
+        "service_realbase64_64_salt",
+        "service_user_mysql"
+      ],
+      "healthchecks": 1,
+      "id": "castopod",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 3,
+      "public_services": [
+        "castopod"
+      ],
+      "reason": "Podcast publishing platform with a conventional HTTP frontend and database/storage services.",
+      "service_count": 3,
+      "services": [
+        "castopod",
+        "mariadb",
+        "redis"
+      ],
+      "source_sha256": "47847be54db61f17ee093d776c48300f15e1908a3cb00321fc5de5f150476664",
+      "source_template": "castopod.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 4,
+        "none": 0
+      },
+      "category": "helpdesk",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "chatwoot_smtp_password",
+        "service_password_chatwoot",
+        "service_password_postgres",
+        "service_password_redis"
+      ],
+      "generated_variables": [
+        "active_storage_service",
+        "chatwoot_default_locale",
+        "chatwoot_mailer_sender_email",
+        "chatwoot_smtp_address",
+        "chatwoot_smtp_authentication",
+        "chatwoot_smtp_domain",
+        "chatwoot_smtp_enable_starttls_auto",
+        "chatwoot_smtp_port",
+        "chatwoot_smtp_username",
+        "domain",
+        "enable_account_signup",
+        "force_ssl",
+        "installation_env",
+        "node_env",
+        "postgres_db",
+        "postgres_host",
+        "rails_env",
+        "rails_max_threads",
+        "redis_openssl_verify_mode",
+        "safe_fetch_allow_private_network",
+        "service_user_postgres"
+      ],
+      "healthchecks": 1,
+      "id": "chatwoot",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 4,
+      "public_services": [
+        "chatwoot"
+      ],
+      "reason": "Established customer-support/chat platform with web, worker, cache and database services; restart semantics are generic and safe.",
+      "service_count": 4,
+      "services": [
+        "chatwoot",
+        "sidekiq",
+        "postgres",
+        "redis"
+      ],
+      "source_sha256": "72902717ab42e6359c2fc7b52294dc09d3e193fdf40a805b2cfde137e5267d3f",
+      "source_template": "chatwoot.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 1,
+        "none": 0
+      },
+      "category": "devtools",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [],
+      "generated_variables": [
+        "domain"
+      ],
+      "healthchecks": 1,
+      "id": "cloudbeaver",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 1,
+      "public_services": [
+        "cloudbeaver"
+      ],
+      "reason": "Browser-based database administration platform suited to HTTPS routing.",
+      "service_count": 1,
+      "services": [
+        "cloudbeaver"
+      ],
+      "source_sha256": "724ae78db5ac4efaf2c3bedeaab7c230902faf7a9a3ba6d4d1e4ecbd187fd4e0",
+      "source_template": "cloudbeaver.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 1,
+        "none": 0
+      },
+      "category": "devtools",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_64_passwordcodeserver",
+        "service_password_sudocodeserver"
+      ],
+      "generated_variables": [
+        "domain"
+      ],
+      "healthchecks": 1,
+      "id": "code-server",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 1,
+      "public_services": [
+        "code-server"
+      ],
+      "reason": "Browser-hosted development environment with one HTTP endpoint and persistent home data.",
+      "service_count": 1,
+      "services": [
+        "code-server"
+      ],
+      "source_sha256": "34662bc26b52e2277f78fa85cd7dc660e2eb093dd791b97d2d513f63173048bc",
+      "source_template": "code-server.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 3,
+        "none": 0
+      },
+      "category": "cms",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_base64_64_secret",
+        "service_password_admin",
+        "service_password_postgresql"
+      ],
+      "generated_variables": [
+        "admin_email",
+        "cors_allowed_headers",
+        "cors_credentials",
+        "cors_enabled",
+        "cors_methods",
+        "cors_origin",
+        "domain",
+        "postgresql_database",
+        "service_base64_64_key",
+        "service_user_postgresql"
+      ],
+      "healthchecks": 1,
+      "id": "directus-with-postgresql",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 5,
+      "public_services": [
+        "directus"
+      ],
+      "reason": "Popular headless CMS/API with HTTP frontend and PostgreSQL dependency.",
+      "service_count": 3,
+      "services": [
+        "directus",
+        "postgresql",
+        "redis"
+      ],
+      "source_sha256": "4c3b25d1484c25a236788256e487fcd650152e4b66c21daa48efe7008d01aaaf",
+      "source_template": "directus-with-postgresql.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 3,
+        "none": 0
+      },
+      "category": "productivity",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "postmark_token",
+        "service_password_postgres",
+        "smtp_password"
+      ],
+      "generated_variables": [
+        "domain",
+        "mail_driver",
+        "mail_from_address",
+        "mail_from_name",
+        "service_base64_appkey",
+        "service_user_postgres",
+        "smtp_host",
+        "smtp_port",
+        "smtp_secure",
+        "smtp_username"
+      ],
+      "healthchecks": 1,
+      "id": "docmost",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 3,
+      "public_services": [
+        "docmost"
+      ],
+      "reason": "Collaborative documentation platform with PostgreSQL/Redis and a single public web service.",
+      "service_count": 3,
+      "services": [
+        "docmost",
+        "postgresql",
+        "redis"
+      ],
+      "source_sha256": "6daa37d2517dd9a49b999d0c09cb3a83683e58df424d14c429b8759198cc5059",
+      "source_template": "docmost.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": "productivity",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_postgres"
+      ],
+      "generated_variables": [
+        "domain",
+        "postgres_db",
+        "service_user_postgres"
+      ],
+      "healthchecks": 1,
+      "id": "docuseal-with-postgres",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 2,
+      "public_services": [
+        "docuseal"
+      ],
+      "reason": "Document-signing platform with conventional web + PostgreSQL topology.",
+      "service_count": 2,
+      "services": [
+        "docuseal",
+        "postgresql"
+      ],
+      "source_sha256": "b8f9f117d8038dd2fead06ba1d005001d0833c8e6f60c8c8c706160c1016ad5e",
+      "source_template": "docuseal-with-postgres.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": "productivity",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_dolibarr",
+        "service_password_mysql",
+        "service_password_root"
+      ],
+      "generated_variables": [
+        "doli_company_name",
+        "doli_cron",
+        "doli_init_demo",
+        "domain",
+        "mysql_database",
+        "service_user_dolibarr",
+        "service_user_mysql",
+        "www_group_id",
+        "www_user_id"
+      ],
+      "healthchecks": 1,
+      "id": "dolibarr",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 3,
+      "public_services": [
+        "dolibarr"
+      ],
+      "reason": "Mature ERP/CRM suite with standard HTTP access and database persistence.",
+      "service_count": 2,
+      "services": [
+        "dolibarr",
+        "mariadb"
+      ],
+      "source_sha256": "e412858e79a96058a7cdbf70bc2a97a1c37ccabb90b8fc26098b84b445c090e8",
+      "source_template": "dolibarr.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": "cms",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_postgres"
+      ],
+      "generated_variables": [
+        "domain"
+      ],
+      "healthchecks": 1,
+      "id": "drupal-with-postgresql",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 4,
+      "public_services": [
+        "drupal"
+      ],
+      "reason": "Mature CMS with conventional HTTP frontend and PostgreSQL.",
+      "service_count": 2,
+      "services": [
+        "drupal",
+        "postgres"
+      ],
+      "source_sha256": "3723d86bb0ab7d529020369900d90899cd89a9d156d4a29417ba13c19972f67c",
+      "source_template": "drupal-with-postgresql.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": "productivity",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_easyappointments"
+      ],
+      "generated_variables": [
+        "domain"
+      ],
+      "healthchecks": 0,
+      "id": "easyappointments",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 1,
+      "public_services": [
+        "easyappointments"
+      ],
+      "reason": "Appointment scheduling application with ordinary web/database topology.",
+      "service_count": 2,
+      "services": [
+        "easyappointments",
+        "mysql"
+      ],
+      "source_sha256": "20bd93f28d0c6b730870e7e15839a4b3533af3a5101fdcbbfbc46ccec2bef1d5",
+      "source_template": "easyappointments.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": "RSS",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_postgresql"
+      ],
+      "generated_variables": [
+        "cron_min",
+        "domain",
+        "postgresql_database",
+        "service_user_postgresql"
+      ],
+      "healthchecks": 0,
+      "id": "freshrss-with-postgresql",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 3,
+      "public_services": [
+        "freshrss"
+      ],
+      "reason": "Mature RSS reader with simple web + PostgreSQL topology.",
+      "service_count": 2,
+      "services": [
+        "freshrss",
+        "freshrss-db"
+      ],
+      "source_sha256": "aee7db023425a8ec8baf5922c5f392a68c82a3cf4c8b2454e3acfc0c7304e672",
+      "source_template": "freshrss-with-postgresql.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": "cms",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_mysql",
+        "service_password_mysqlroot"
+      ],
+      "generated_variables": [
+        "domain",
+        "mail_options_auth_pass",
+        "mail_options_auth_user",
+        "mail_options_host",
+        "mail_options_port",
+        "mail_options_secure",
+        "mail_options_service",
+        "mysql_database",
+        "service_user_mysql"
+      ],
+      "healthchecks": 0,
+      "id": "ghost",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 2,
+      "public_services": [
+        "ghost"
+      ],
+      "reason": "Popular publishing/CMS platform with HTTP web UI and persistent content storage.",
+      "service_count": 2,
+      "services": [
+        "ghost",
+        "mysql"
+      ],
+      "source_sha256": "10bc1e4a6ce0ff8f28675e6f29c9379d066b535e3304d5341dc960e1b17253ab",
+      "source_template": "ghost.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": "monitoring",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_grafana",
+        "service_password_postgres"
+      ],
+      "generated_variables": [
+        "domain",
+        "postgres_db",
+        "service_user_postgres"
+      ],
+      "healthchecks": 1,
+      "id": "grafana-with-postgresql",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 2,
+      "public_services": [
+        "grafana"
+      ],
+      "reason": "Widely used observability/dashboard platform with HTTP UI and PostgreSQL persistence.",
+      "service_count": 2,
+      "services": [
+        "grafana",
+        "postgresql"
+      ],
+      "source_sha256": "e44a7a33103e5d5ac6e051c849399556a164b63aa76a8da07b78df0aa152bea4",
+      "source_template": "grafana-with-postgresql.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 1,
+        "none": 0
+      },
+      "category": "productivity",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "hbox_mailer_password"
+      ],
+      "generated_variables": [
+        "domain",
+        "hbox_log_format",
+        "hbox_log_level",
+        "hbox_mailer_from",
+        "hbox_mailer_host",
+        "hbox_mailer_port",
+        "hbox_mailer_username",
+        "hbox_options_allow_registration",
+        "hbox_web_max_upload_size"
+      ],
+      "healthchecks": 1,
+      "id": "homebox",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 1,
+      "public_services": [
+        "homebox"
+      ],
+      "reason": "Useful household-inventory application with a simple HTTP service and persistent storage.",
+      "service_count": 1,
+      "services": [
+        "homebox"
+      ],
+      "source_sha256": "e93e963c619315a5f2fd742ef5d8b96a0af45c603cd9061e1be18f45db17bedd",
+      "source_template": "homebox.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": "productivity",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_64_postgres"
+      ],
+      "generated_variables": [
+        "domain",
+        "service_user_postgres"
+      ],
+      "healthchecks": 0,
+      "id": "joplin",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 1,
+      "public_services": [
+        "joplin"
+      ],
+      "reason": "Established note/synchronization server fitting standard HTTP routing and persistence.",
+      "service_count": 2,
+      "services": [
+        "postgres",
+        "joplin"
+      ],
+      "source_sha256": "0d343c33af83ff945bc95e3863f8fe357948befc34eb573323015f1a71a9a46c",
+      "source_template": "joplin.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": "auth",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_64_database",
+        "service_password_admin"
+      ],
+      "generated_variables": [
+        "domain",
+        "kc_health_enabled",
+        "kc_http_enabled",
+        "kc_proxy_headers",
+        "postgresql_database",
+        "service_user_admin",
+        "service_user_database",
+        "timezone"
+      ],
+      "healthchecks": 0,
+      "id": "keycloak-with-postgres",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 2,
+      "public_services": [
+        "keycloak"
+      ],
+      "reason": "Established identity and access-management server with HTTP endpoints and PostgreSQL.",
+      "service_count": 2,
+      "services": [
+        "keycloak",
+        "postgres"
+      ],
+      "source_sha256": "408fca4b8202d94bc4b6acc0ad84d6c3db9f64d38619eece44b21379c1d342e5",
+      "source_template": "keycloak-with-postgres.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": "messaging",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_admin",
+        "service_password_postgresql"
+      ],
+      "generated_variables": [
+        "domain",
+        "enable_registration",
+        "postgres_db",
+        "service_user_admin",
+        "service_user_postgresql",
+        "synapse_report_stats",
+        "synapse_server_name"
+      ],
+      "healthchecks": 1,
+      "id": "matrix-synapse-with-postgresql",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 2,
+      "public_services": [
+        "synapse"
+      ],
+      "reason": "Widely used Matrix homeserver with HTTP API/client endpoints and PostgreSQL; no media-UDP requirement in this template.",
+      "service_count": 2,
+      "services": [
+        "synapse",
+        "postgres"
+      ],
+      "source_sha256": "5ed35e84a952c3a0003c5f92dade22f103f3d5753fdcfefd8c3ffadf76cef7aa",
+      "source_template": "matrix-synapse-with-postgresql.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": "messaging",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_postgres"
+      ],
+      "generated_variables": [
+        "domain",
+        "postgres_db",
+        "service_user_postgres",
+        "tz"
+      ],
+      "healthchecks": 0,
+      "id": "mattermost",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 7,
+      "public_services": [
+        "mattermost"
+      ],
+      "reason": "Mature team collaboration/chat platform with web frontend and PostgreSQL.",
+      "service_count": 2,
+      "services": [
+        "mattermost",
+        "postgres"
+      ],
+      "source_sha256": "7d6990a3673983f71ba7072a07717ff9cb97d206c7452d41de11476c3b3ac151",
+      "source_template": "mattermost.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 1,
+        "none": 0
+      },
+      "category": "productivity",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [],
+      "generated_variables": [
+        "allow_signup",
+        "domain",
+        "max_workers",
+        "pgid",
+        "puid",
+        "tz",
+        "web_concurrency"
+      ],
+      "healthchecks": 0,
+      "id": "mealie",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 1,
+      "public_services": [
+        "mealie"
+      ],
+      "reason": "Popular self-hosted recipe/meal-planning application with one HTTP endpoint and persistent data.",
+      "service_count": 1,
+      "services": [
+        "mealie"
+      ],
+      "source_sha256": "5240516f7eca963ea22e2a6e345000cf946bbc67ddd4a45b60e434c1c9f9ca6b",
+      "source_template": "mealie.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 1,
+        "none": 0
+      },
+      "category": "search",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_meilisearch"
+      ],
+      "generated_variables": [
+        "domain",
+        "meili_env",
+        "meili_no_analytics"
+      ],
+      "healthchecks": 1,
+      "id": "meilisearch",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 1,
+      "public_services": [
+        "meilisearch"
+      ],
+      "reason": "Popular HTTP search engine with persistent storage and no special host networking.",
+      "service_count": 1,
+      "services": [
+        "meilisearch"
+      ],
+      "source_sha256": "fee6d10f2b10325bf3078451f2f1adb90333666def15a553e06e849b4d1ddb34",
+      "source_template": "meilisearch.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 5,
+        "none": 0
+      },
+      "category": "automation",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_encryption",
+        "service_password_n8n",
+        "service_password_postgres"
+      ],
+      "generated_variables": [
+        "domain",
+        "generic_timezone",
+        "n8n_block_env_access_in_node",
+        "n8n_enforce_settings_file_permissions",
+        "n8n_git_node_disable_bare_repos",
+        "n8n_native_python_runner",
+        "n8n_protocol",
+        "n8n_proxy_hops",
+        "n8n_runners_auto_shutdown_timeout",
+        "n8n_runners_broker_listen_address",
+        "n8n_runners_broker_port",
+        "n8n_runners_max_concurrency",
+        "n8n_runners_task_broker_uri",
+        "n8n_skip_auth_on_oauth_callback",
+        "postgres_db",
+        "service_user_postgres",
+        "tz"
+      ],
+      "healthchecks": 3,
+      "id": "n8n-with-postgres-and-worker",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 4,
+      "public_services": [
+        "n8n"
+      ],
+      "reason": "Widely adopted workflow automation platform demonstrating PostgreSQL, Redis and worker dependencies.",
+      "service_count": 5,
+      "services": [
+        "n8n",
+        "n8n-worker",
+        "postgresql",
+        "redis",
+        "task-runners"
+      ],
+      "source_sha256": "6f42dbd75569057c768f7d89875c6bb28a1844aa29cdad21e1689efcd34cff10",
+      "source_template": "n8n-with-postgres-and-worker.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 3,
+        "none": 0
+      },
+      "category": "storage",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_postgres"
+      ],
+      "generated_variables": [
+        "domain",
+        "postgres_db",
+        "service_user_postgres",
+        "tz"
+      ],
+      "healthchecks": 1,
+      "id": "nextcloud-with-postgres",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 4,
+      "public_services": [
+        "nextcloud"
+      ],
+      "reason": "Major self-hosted collaboration/cloud platform with HTTP frontend and PostgreSQL.",
+      "service_count": 3,
+      "services": [
+        "nextcloud",
+        "nextcloud-db",
+        "redis"
+      ],
+      "source_sha256": "68ca93fe74a44d16164b0b2a8c9f43b6e5fb39f08d01faf90e0c0431ffb278cd",
+      "source_template": "nextcloud-with-postgres.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 1,
+        "none": 0
+      },
+      "category": "productivity",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [],
+      "generated_variables": [
+        "domain"
+      ],
+      "healthchecks": 1,
+      "id": "nocodb",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 1,
+      "public_services": [
+        "nocodb"
+      ],
+      "reason": "Popular no-code database UI with conventional HTTP endpoint and persistent data.",
+      "service_count": 1,
+      "services": [
+        "nocodb"
+      ],
+      "source_sha256": "f2b5c9183eddb97bbb25114a5951cbef3d9ea5bd700ffaaed1ae316e34fe6469",
+      "source_template": "nocodb.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": "productivity",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_postgres"
+      ],
+      "generated_variables": [
+        "domain",
+        "service_user_postgres"
+      ],
+      "healthchecks": 1,
+      "id": "odoo",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 3,
+      "public_services": [
+        "odoo"
+      ],
+      "reason": "Mature business/ERP platform with HTTP frontend and PostgreSQL backend.",
+      "service_count": 2,
+      "services": [
+        "odoo",
+        "postgresql"
+      ],
+      "source_sha256": "ef8a3ec1122d4935db07a1a2f861bdd5ae6e4f97c81c8e075c1df5b94dd8fcf0",
+      "source_template": "odoo.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 1,
+        "none": 0
+      },
+      "category": "ai",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [],
+      "generated_variables": [
+        "domain"
+      ],
+      "healthchecks": 1,
+      "id": "open-webui",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 1,
+      "public_services": [
+        "open-webui"
+      ],
+      "reason": "Popular browser-based AI interface with standard HTTP routing and persistent application data.",
+      "service_count": 1,
+      "services": [
+        "open-webui"
+      ],
+      "source_sha256": "9cd0aafc416e86713ee905f44f801d38f6ee1151f81d7cd7af3006bacd6b40af",
+      "source_template": "open-webui.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 3,
+        "none": 0
+      },
+      "category": "analytics",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "cloudflare_secret_access_key",
+        "instagram_app_secret",
+        "service_discord_secret",
+        "service_discord_token",
+        "service_dribble_secret",
+        "service_facebook_secret",
+        "service_github_secret",
+        "service_linkedin_secret",
+        "service_mastodon_secret",
+        "service_password_jwtsecret",
+        "service_password_postgresql",
+        "service_password_redis",
+        "service_pinterest_secret",
+        "service_reddit_secret",
+        "service_slack_secret",
+        "service_threads_secret",
+        "service_tiktok_secret",
+        "service_x_secret",
+        "service_youtube_secret",
+        "slack_signing_secret",
+        "stripe_secret_key"
+      ],
+      "generated_variables": [
+        "cloudflare_access_key",
+        "cloudflare_account_id",
+        "cloudflare_bucket_url",
+        "cloudflare_bucketname",
+        "cloudflare_region",
+        "domain",
+        "email_from_address",
+        "email_from_name",
+        "email_provider",
+        "fee_amount",
+        "instagram_app_id",
+        "next_public_discord_support",
+        "next_public_polotno",
+        "next_public_upload_directory",
+        "next_public_upload_static_directory",
+        "not_secured",
+        "nx_add_plugins",
+        "postgresql_database",
+        "resend_api_key",
+        "service_beehiive_key",
+        "service_beehiive_pubid",
+        "service_discord_id",
+        "service_dribble_id",
+        "service_facebook_id",
+        "service_github_id",
+        "service_linkedin_id",
+        "service_mastodon_id",
+        "service_openai_key",
+        "service_pinterest_id",
+        "service_reddit_api",
+        "service_slack_id",
+        "service_threads_id",
+        "service_tiktok_id",
+        "service_x_api",
+        "service_youtube_id",
+        "storage_provider",
+        "stripe_publishable_key",
+        "stripe_signing_key",
+        "stripe_signing_key_connect",
+        "upload_directory"
+      ],
+      "healthchecks": 1,
+      "id": "postiz",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 4,
+      "public_services": [
+        "postiz"
+      ],
+      "reason": "Modern social/content scheduling platform with PostgreSQL/Redis-backed web service.",
+      "service_count": 3,
+      "services": [
+        "postiz",
+        "postgres",
+        "redis"
+      ],
+      "source_sha256": "f68bf532f01a039638a87951297308d9b1daf34f271c6a665e1c36ab7e94f7e5",
+      "source_template": "postiz.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": "productivity",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_64_postgres",
+        "service_password_64_redmine"
+      ],
+      "generated_variables": [
+        "domain",
+        "postgres_database",
+        "service_user_postgres"
+      ],
+      "healthchecks": 1,
+      "id": "redmine",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 5,
+      "public_services": [
+        "redmine"
+      ],
+      "reason": "Mature project-management application with HTTP UI and PostgreSQL dependency.",
+      "service_count": 2,
+      "services": [
+        "redmine",
+        "postgresql"
+      ],
+      "source_sha256": "fd63604dd1b0acb07abca40998ef7eb45d2068bbfbe1b2d48f8300727f8fa180",
+      "source_template": "redmine.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": "messaging",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "reg_token"
+      ],
+      "generated_variables": [
+        "domain",
+        "mail_url",
+        "mongodb_advertised_hostname",
+        "mongodb_database",
+        "mongodb_initial_primary_port_number",
+        "mongodb_replica_set_name"
+      ],
+      "healthchecks": 0,
+      "id": "rocketchat",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 1,
+      "public_services": [
+        "rocketchat"
+      ],
+      "reason": "Established team messaging platform with HTTP frontend and MongoDB dependency.",
+      "service_count": 2,
+      "services": [
+        "rocketchat",
+        "mongodb"
+      ],
+      "source_sha256": "698baf86ee2e88b5fc29b9e4da368b8c677003b25a0ae0f88261a8038ab053e7",
+      "source_template": "rocketchat.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 1,
+        "none": 0
+      },
+      "category": "productivity",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [],
+      "generated_variables": [
+        "domain"
+      ],
+      "healthchecks": 0,
+      "id": "stirling-pdf",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 4,
+      "public_services": [
+        "stirling-pdf"
+      ],
+      "reason": "Useful web PDF toolkit with conventional HTTP interface and named persistent storage.",
+      "service_count": 1,
+      "services": [
+        "stirling-pdf"
+      ],
+      "source_sha256": "a942daf3226e24e13b7110da4734737461bff40d6bbbd133ea9b6d8504196931",
+      "source_template": "stirling-pdf.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": "backend",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_base64_64_secret",
+        "service_password_postgresql"
+      ],
+      "generated_variables": [
+        "browser",
+        "domain",
+        "fast_refresh",
+        "node_env",
+        "postgresql_database",
+        "service_base64_64_key",
+        "service_user_postgresql",
+        "strapi_enforce_sourcemaps",
+        "strapi_license",
+        "strapi_plugin_i18n_init_locale_code",
+        "strapi_telemetry_disabled"
+      ],
+      "healthchecks": 1,
+      "id": "strapi",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 4,
+      "public_services": [
+        "strapi"
+      ],
+      "reason": "Widely used headless CMS/API with HTTP frontend and PostgreSQL.",
+      "service_count": 2,
+      "services": [
+        "strapi",
+        "postgresql"
+      ],
+      "source_sha256": "8e4f315d72138de65bb3caf93973f5464aeacbdcea246886d8fb8e4e431f4b7d",
+      "source_template": "strapi.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": "analytics",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_64_umami",
+        "service_password_postgres"
+      ],
+      "generated_variables": [
+        "domain",
+        "postgres_db",
+        "service_user_postgres"
+      ],
+      "healthchecks": 1,
+      "id": "umami",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 1,
+      "public_services": [
+        "umami"
+      ],
+      "reason": "Popular privacy-focused analytics platform with HTTP frontend and PostgreSQL.",
+      "service_count": 2,
+      "services": [
+        "umami",
+        "postgresql"
+      ],
+      "source_sha256": "d65b0d45133c26c36f1aaff7a462800cf032ebe2c1908de8ab49f78d07419007",
+      "source_template": "umami.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 1,
+        "none": 0
+      },
+      "category": "monitoring",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [],
+      "generated_variables": [
+        "domain"
+      ],
+      "healthchecks": 0,
+      "id": "uptime-kuma",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 1,
+      "public_services": [
+        "uptime-kuma"
+      ],
+      "reason": "Well-known monitoring/status application with HTTP UI, persistent data and healthcheck.",
+      "service_count": 1,
+      "services": [
+        "uptime-kuma"
+      ],
+      "source_sha256": "0d5ef68d484c0685bf1d20c88cf47c16547ac79f5ec5245305f3573445772f61",
+      "source_template": "uptime-kuma.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 1,
+        "none": 0
+      },
+      "category": "auth",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_64_admin"
+      ],
+      "generated_variables": [
+        "domain",
+        "push_enabled",
+        "push_service_id",
+        "push_service_key",
+        "signup_allowed",
+        "vaultwarden_db_url"
+      ],
+      "healthchecks": 1,
+      "id": "vaultwarden",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 1,
+      "public_services": [
+        "vaultwarden"
+      ],
+      "reason": "Widely used lightweight password-manager server with HTTP/HTTPS access and ordinary persistent storage.",
+      "service_count": 1,
+      "services": [
+        "vaultwarden"
+      ],
+      "source_sha256": "2bdb417afaec9b58f3913fbc985c9f3a94b86416142a34227b1bf707da7eafc1",
+      "source_template": "vaultwarden.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": "productivity",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_jwtsecret",
+        "service_password_postgresql"
+      ],
+      "generated_variables": [
+        "domain",
+        "postgresql_database",
+        "service_user_postgresql"
+      ],
+      "healthchecks": 0,
+      "id": "vikunja-with-postgresql",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 2,
+      "public_services": [
+        "vikunja"
+      ],
+      "reason": "Open-source task/project manager with HTTP UI and PostgreSQL backend.",
+      "service_count": 2,
+      "services": [
+        "vikunja",
+        "postgresql"
+      ],
+      "source_sha256": "c08fa415b37205c51ef66b3f7fd7c49e455402659b335e4d4c81c0d16c1a88a6",
+      "source_template": "vikunja-with-postgresql.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": "cms",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_postgres"
+      ],
+      "generated_variables": [
+        "domain",
+        "postgresql_database",
+        "service_user_postgres"
+      ],
+      "healthchecks": 0,
+      "id": "wikijs",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 1,
+      "public_services": [
+        "wikijs"
+      ],
+      "reason": "Popular self-hosted wiki with HTTP frontend and conventional database support.",
+      "service_count": 2,
+      "services": [
+        "wikijs",
+        "postgres"
+      ],
+      "source_sha256": "f3c7c113b724b37c0b3c81bf0601d3ddef60c40318a3b16ea013a36a1dc7e583",
+      "source_template": "wikijs.yaml"
+    },
+    {
+      "build_methods": {
+        "dockerfile": 0,
+        "image": 2,
+        "none": 0
+      },
+      "category": "cms",
+      "compatibility_status": "SUPPORTED",
+      "generated_secrets": [
+        "service_password_root",
+        "service_password_wordpress"
+      ],
+      "generated_variables": [
+        "domain",
+        "service_user_wordpress"
+      ],
+      "healthchecks": 0,
+      "id": "wordpress-with-mariadb",
+      "networking_class": "STANDARD_WEB",
+      "persistent_volumes": 2,
+      "public_services": [
+        "wordpress"
+      ],
+      "reason": "Extremely common CMS/blog deployment with HTTP frontend, MariaDB dependency and named persistent storage.",
+      "service_count": 2,
+      "services": [
+        "wordpress",
+        "mariadb"
+      ],
+      "source_sha256": "aa468025160b0b68e3e5827a631dea7a659fe1f17b6e329c03417c6ee582859b",
+      "source_template": "wordpress-with-mariadb.yaml"
+    }
+  ],
+  "count": 40,
+  "selection_policy": "Curated first-party Ready-to-Deploy: popular/useful, HTTP/HTTPS via Traefik first, ordinary named persistence, no privileged/host-network/device/Docker-socket/UDP-media requirements. One application (Forgejo) retains an optional direct SSH port from upstream and is classified WEB_WITH_OPTIONAL_DIRECT_PORTS.",
+  "source": "Coolify Compose template archive supplied by user",
+  "source_archive": "user-supplied Coolify template archive; original archive retained unchanged outside the curated catalog",
+  "excluded_from_first_party": [
+    {
+      "id": "forgejo-with-postgresql",
+      "reason": "Requires direct host IP:PORT publication for Forgejo SSH (22222/TCP); standard Ready-to-Deploy catalog only guarantees Traefik HTTP/HTTPS and internal networking.",
+      "source_template": "forgejo-with-postgresql.yaml"
+    }
+  ]
+}
