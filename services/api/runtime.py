@@ -703,11 +703,7 @@ def service_status_apiview(request):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def restart_service_apiview(request):
-    """
-    Restart = stop then start when allowed.
-    Requires can_restart (or owner).
-    Body: { "service_id": "<uuid>" }
-    """
+    """Queue an ordered runtime restart without creating a new revision."""
     service_id = request.data.get("service_id", "")
     share = None
     try:
@@ -717,15 +713,9 @@ def restart_service_apiview(request):
                     request, service_id, action="can_restart", for_update=True
                 )
             except PermissionError as pe:
-                return Response(
-                    {"result": "error", "detail": str(pe)},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
+                return Response({"result": "error", "detail": str(pe)}, status=status.HTTP_403_FORBIDDEN)
             except Service.DoesNotExist:
-                return Response(
-                    {"result": "error", "detail": _("Service not found.")},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+                return Response({"result": "error", "detail": _("Service not found.")}, status=status.HTTP_404_NOT_FOUND)
 
             if service_item.status in (
                 SERVICE_STATUS_CHOICES.QUEUED,
@@ -733,41 +723,21 @@ def restart_service_apiview(request):
                 SERVICE_STATUS_CHOICES.STOPPING,
             ):
                 return Response(
-                    {
-                        "result": "error",
-                        "detail": _("Service is busy; try again later."),
-                    },
+                    {"result": "error", "detail": _("Service is busy; try again later.")},
                     status=status.HTTP_409_CONFLICT,
                 )
 
-            # Stop path if running
-            custom_task_id = make_uuid4()
-            if str(service_item.status).lower() == str(SERVICE_STATUS_CHOICES.RUNNING).lower() or str(service_item.status).lower() == "running":
-                service_item.status = SERVICE_STATUS_CHOICES.STOPPING
-                service_item.task_id = custom_task_id
-                service_item.save(update_fields=["status", "task_id"])
-                transaction.on_commit(
-                    lambda: stop_service.apply_async(
-                        args=[str(service_id)], task_id=custom_task_id
-                    )
-                )
-            # Queue start after stop is best-effort; clients may call start separately.
-            # For a true restart we also queue deploy if selected_deploy exists.
-            deploy_item = service_item.selected_deploy
-            if deploy_item is not None:
-                start_task_id = make_uuid4()
+            task_id = make_uuid4()
+            service_item.status = SERVICE_STATUS_CHOICES.QUEUED
+            service_item.desired_state = "running"
+            service_item.task_id = task_id
+            service_item.deploy_started = timezone.now()
+            service_item.save(update_fields=["status", "desired_state", "task_id", "deploy_started", "updated_at"])
 
-                def _start_after():
-                    try:
-                        from deployments.celery.tasks import deploy as start_task
-                        start_task.apply_async(args=[str(deploy_item.id)], task_id=start_task_id)
-                    except Exception:
-                        logger.exception("restart: start enqueue failed")
-
-                transaction.on_commit(_start_after)
-                service_item.status = SERVICE_STATUS_CHOICES.QUEUED
-                service_item.task_id = start_task_id
-                service_item.save(update_fields=["status", "task_id"])
+            from deployments.celery.tasks import restart_service as restart_task
+            transaction.on_commit(
+                lambda: restart_task.apply_async(args=[str(service_id)], task_id=task_id)
+            )
 
             if share is not None:
                 try:
@@ -775,18 +745,18 @@ def restart_service_apiview(request):
                         share,
                         actor=request.user,
                         action="restart",
-                        metadata={},
+                        metadata={"task_id": str(task_id)},
                     )
                 except Exception:
                     logger.exception("restart share event failed")
     except Exception:
         logger.exception("restart failed")
         return Response(
-            {"result": "error", "detail": _("Could not restart service.")},
+            {"result": "error", "detail": _("Could not queue restart.")},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
     return Response(
-        {"result": "success", "detail": _("Restart queued.")},
+        {"result": "success", "detail": _("Restart queued."), "task_id": str(task_id)},
         status=status.HTTP_202_ACCEPTED,
     )
