@@ -231,6 +231,25 @@ class DeploymentOrchestrator:
             #   * Means rollback on create/start failure is just: stop+
             #     remove the half-built new container, rename the old
             #     one back.  No image rebuild needed.
+            public_endpoints = [
+                endpoint for endpoint in (config.endpoints or [])
+                if endpoint.enabled and endpoint.exposure == "public"
+            ]
+            primary_public = public_endpoints[0] if public_endpoints else None
+            if config.endpoints:
+                # EndpointSpec becomes the source of public routing. Do not
+                # synthesize a public Traefik route merely because a legacy
+                # platform has a default container port.
+                effective_entry_port = primary_public.target_port if primary_public else None
+                effective_public_host = (
+                    primary_public.hostname
+                    if primary_public and primary_public.hostname
+                    else config.public_host
+                )
+            else:
+                effective_entry_port = config.port
+                effective_public_host = config.public_host
+
             replacement_container = Container(
                 config.name,
                 config.image_ref,
@@ -239,7 +258,7 @@ class DeploymentOrchestrator:
                 [network.name for network in config.networks],
                 volume_binds,
                 config.read_only,
-                entry_port=config.port,
+                entry_port=effective_entry_port,
                 environment=dict(config.environment) if config.environment else {},
                 labels={
                     **self._endpoint_labels(config),
@@ -255,7 +274,7 @@ class DeploymentOrchestrator:
                 exposed_ports=(config.runtime_options or {}).get("exposed_ports") or {},
                 port_bindings=(config.runtime_options or {}).get("port_bindings") or {},
                 router_name=f"{config.name}-deploy-{self.logger.deployment_id or 'current'}",
-                public_host=config.public_host,
+                public_host=effective_public_host,
                 healthcheck_path=config.healthcheck_path,
                 restart_policy=(config.runtime_options or {}).get("restart_policy") or None,
                 resource_limits=config.resource_limits,
