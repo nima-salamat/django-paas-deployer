@@ -34,6 +34,14 @@ DEPLOYMENT_DOMAIN = os.environ.get("DEPLOYMENT_DOMAIN", "local")
 API_DOMAIN_NAME = os.environ.get("API_DOMAIN_NAME", "")
 
 
+# Docker Swarm runtime. Application workloads are deployed as Swarm services.
+SWARM_ENABLED = env_bool("SWARM_ENABLED", True)
+SWARM_CLUSTER_NAME = os.environ.get("SWARM_CLUSTER_NAME", "default").strip() or "default"
+SWARM_IMAGE_REGISTRY = os.environ.get("SWARM_IMAGE_REGISTRY", "").strip().rstrip("/")
+SWARM_IMAGE_NAMESPACE = os.environ.get("SWARM_IMAGE_NAMESPACE", "passdeployer").strip().strip("/") or "passdeployer"
+SWARM_LOCAL_VOLUME_PIN = env_bool("SWARM_LOCAL_VOLUME_PIN", True)
+
+
 def _admin_path(value: str, default: str) -> str:
     """Normalize and validate an admin URL path segment from the environment."""
     value = (value or default).strip().strip("/")
@@ -416,6 +424,10 @@ CELERY_BEAT_SCHEDULE = {
     "monitor_services_reconciliation": {
         "task": "deployments.celery.schedules.monitor_services",
         "schedule": 5.0,
+    },
+    "sync_swarm_infrastructure": {
+        "task": "deployments.celery.schedules.sync_swarm_infrastructure",
+        "schedule": 15.0,
     },
     "application_catalog_reconciliation": {
         "task": "app_catalog.tasks.reconcile_application_installations",
