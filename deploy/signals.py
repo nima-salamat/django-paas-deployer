@@ -10,6 +10,7 @@ from deployments.core.manager.container_manager import Container
 from deployments.core.manager.image_manager import Image
 from deployments.core.deploy import Deploy as OrchestratorDeploy
 from deployments.core.db_deployer import DB_PLATFORMS, DBDeployer
+from deployments.core.swarm import SwarmRuntime, swarm_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -70,63 +71,20 @@ def _cleanup_zip_and_dirs(instance: Deploy):
 @receiver(pre_delete, sender=Deploy)
 def cleanup_deploy_resources(sender, instance: Deploy, **kwargs):
     """
-    On Deploy delete:
-      - Remove zip + empty dirs
-      - If this deploy is selected by any Service, stop/remove its container
-        (and image for app platforms). Volumes stay with the Service —
-        they are exclusive and cleaned only when the Service is deleted.
+    A Deploy is an operation/history record, not runtime ownership.
+
+    Deleting a Deploy removes its source artifact/media and clears the legacy
+    selected_deploy compatibility projection. It must never stop an active
+    ServiceRevision/Swarm Service.
     """
     _cleanup_zip_and_dirs(instance)
-
     try:
-        services = Service.objects.filter(
-            selected_deploy=instance
-        ).select_related("plan")
-        if not services.exists():
-            return
-
-        platform = _resolve_platform(instance)
-        is_db = platform in DB_PLATFORMS
-
-        for service in services:
-            container_name = service.get_docker_service_name()
-            logger.info(
-                "Deploy '%s' is selected by Service '%s' → cleaning container '%s'",
-                instance.name,
-                service.name,
-                container_name,
-            )
-
-            try:
-                if is_db:
-                    DBDeployer().remove(container_name)
-                else:
-                    OrchestratorDeploy.remove_all(container_name)
-            except Exception:
-                logger.exception(
-                    "High-level cleanup failed for '%s', falling back to low-level managers",
-                    container_name,
-                )
-                try:
-                    container = Container(name=container_name)
-                    if container.exists():
-                        if container.is_running():
-                            container.stop(timeout=10)
-                        container.remove()
-                    Image.remove_by_name(container_name)
-                    Image.remove_by_name(f"{container_name}:latest")
-                except Exception:
-                    logger.exception(
-                        "Fallback cleanup also failed for '%s'", container_name
-                    )
-
-            Service.objects.filter(pk=service.pk).update(
-                selected_deploy=None,
-                selected_deploy_at=None,
-            )
-
+        Service.objects.filter(selected_deploy=instance).update(
+            selected_deploy=None,
+            selected_deploy_at=None,
+        )
     except Exception:
         logger.exception(
-            "Unexpected error while cleaning Docker resources for Deploy '%s'",
+            "Failed clearing legacy selected_deploy projection for Deploy '%s'",
             instance.name,
         )
