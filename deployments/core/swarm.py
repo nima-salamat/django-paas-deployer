@@ -784,6 +784,22 @@ class SwarmRuntime:
             return []
         return names
 
+    def restart_service_group(self, service_id: str, *, timeout: float = 60.0) -> dict[str, SwarmServiceState]:
+        """Restart every managed process service for one application in order."""
+        states: dict[str, SwarmServiceState] = {}
+        for name in self.service_names_for_service(service_id):
+            self.stop(name)
+            deadline = time.monotonic() + float(timeout)
+            while time.monotonic() < deadline:
+                state = self.inspect_service(name)
+                if state is None or state.replicas_running == 0:
+                    break
+                time.sleep(0.5)
+            service = self.client.services.get(_validate_service_name(name))
+            service.scale(1)
+            states[name] = self.wait_ready(name, timeout=timeout)
+        return states
+
     def stop_service_group(self, service_id: str) -> None:
         for name in self.service_names_for_service(service_id):
             self.stop(name)
