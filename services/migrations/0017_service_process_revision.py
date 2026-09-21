@@ -49,7 +49,7 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name="ServiceRevision",
             fields=[
-                ("id", models.UUIDField(editable=False, primary_key=True, serialize=False)),
+                ("id", models.UUIDField(default=uuid4, editable=False, primary_key=True, serialize=False)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 ("updated_at", models.DateTimeField(auto_now=True)),
                 (
