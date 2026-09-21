@@ -26,7 +26,6 @@ class PrivateNetwork(BaseModel):
 
     def get_docker_network_name(self):
         return f"net-{self.id.hex[:8]}-{self.name}"
-<<<<<<< HEAD
 
 
 class Service(BaseModel):
