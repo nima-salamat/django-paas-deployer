@@ -15,6 +15,7 @@ from deployments.core.manager.image_manager import Image
 from deployments.core.deploy import Deploy as OrchestratorDeploy
 from deployments.core.db_deployer import DB_PLATFORMS, DBDeployer
 from core.global_settings.config import PlanTypeChoices
+from services.revisioning import get_active_deploy
 
 logger = logging.getLogger(__name__)
 
