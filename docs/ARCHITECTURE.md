@@ -5,9 +5,9 @@ PassDeployer is a single-host Docker PaaS control plane. The application databas
 ## Core ownership
 
 Service owns source, build/runtime configuration, environment, secrets, processes, endpoints, networks, volumes and database bindings.
-ServiceRevision is an immutable executable snapshot.
-Deploy is an execution operation linked to a revision.
-Runtime is observed Docker state and is never the configuration source of truth.
+ServiceRevision is an immutable executable snapshot and owns the deployable source artifact.
+Deploy is an execution operation linked to a revision and keeps historical/provenance state.
+Service.desired_state is the declarative lifecycle target; Runtime is observed Docker state and is never the configuration source of truth.
 
 ## Execution flow
 
@@ -22,7 +22,7 @@ Compose is an input format. It is parsed and normalized; the PaaS does not make 
 User-owned deployable workload and lifecycle state.
 
 ### ServiceProcess
-Web, worker, scheduler or custom executable process.
+Web, worker, scheduler or custom executable process. Non-web processes are executed as independent, revision-labelled Docker containers; replicas are bounded by server policy.
 
 ### ServiceRevision
 Immutable snapshot containing source/build/runtime metadata, processes, endpoints, volumes, networks, environment metadata and versioned secret references.
