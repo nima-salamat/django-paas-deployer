@@ -531,6 +531,19 @@ def _sync_legacy_environment(service: Service, config: dict[str, Any], refs: lis
 
 
 @transaction.atomic
+def mark_revision_failed(revision_id) -> None:
+    revision = (
+        ServiceRevision.objects.select_for_update()
+        .filter(pk=revision_id)
+        .first()
+    )
+    if revision is None or revision.state == ServiceRevision.State.ACTIVE:
+        return
+    revision.state = ServiceRevision.State.FAILED
+    revision.save(update_fields=["state", "updated_at"])
+
+
+@transaction.atomic
 def activate_revision_locked(service: Service, revision_id) -> ServiceRevision:
     revision = (
         ServiceRevision.objects.select_for_update()
