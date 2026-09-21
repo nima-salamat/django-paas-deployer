@@ -5,6 +5,7 @@ FROM ${DOCKERFILE_DOCKER_MIRROR}/python:${DOCKERFILE_PYTHON_VERSION}
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app/src:/app
 
 WORKDIR /app
 
@@ -55,4 +56,4 @@ COPY . .
 
 EXPOSE 8000
 
-CMD ["uvicorn", "asgi:application", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+CMD ["uvicorn", "config.asgi:application", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]

@@ -20,9 +20,11 @@ from pathlib import Path
 
 # Make sure the backend root is importable. ``backend.zip`` was extracted
 # to /home/z/my-project/work, so the work dir is the package root.
-_WORK = Path(__file__).resolve().parents[1]
-if str(_WORK) not in sys.path:
-    sys.path.insert(0, str(_WORK))
+_WORK = Path(__file__).resolve().parent
+_SRC = _WORK / "src"
+for _path in (_SRC, _WORK):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 
 # ---------------------------------------------------------------------------

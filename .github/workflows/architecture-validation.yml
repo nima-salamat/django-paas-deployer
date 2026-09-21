@@ -19,4 +19,4 @@ jobs:
           python-version: "3.12"
       - name: Compile Python sources
         run: |
-          python -m compileall -q app_catalog auth_users core custom_emails deploy deployments logs plans services tickets users
+          python -m compileall -q src
