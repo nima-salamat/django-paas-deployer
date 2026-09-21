@@ -946,6 +946,7 @@ def run_db_deploy(self, deploy_id: str | int, force_reinit: bool = False) -> Non
                 cfg=cfg,
                 event_sink=event_sink,
                 deployment_id=str(deploy.pk),
+                service_id=str(service.pk),
                 force_reinit=force_reinit,
             )
     except Exception as exc:
