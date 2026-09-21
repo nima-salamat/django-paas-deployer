@@ -279,6 +279,15 @@ class ServiceRevision(BaseModel):
     config_snapshot = models.JSONField(default=dict)
     process_snapshot = models.JSONField(default=list)
     secret_keys = models.JSONField(default=list)
+    secret_refs = models.JSONField(default=list, blank=True)
+    source_snapshot = models.JSONField(default=dict, blank=True)
+    build_snapshot = models.JSONField(default=dict, blank=True)
+    runtime_snapshot = models.JSONField(default=dict, blank=True)
+    environment_snapshot = models.JSONField(default=dict, blank=True)
+    endpoint_snapshot = models.JSONField(default=list, blank=True)
+    volume_snapshot = models.JSONField(default=list, blank=True)
+    network_snapshot = models.JSONField(default=list, blank=True)
+    graph_snapshot = models.JSONField(default=dict, blank=True)
     activated_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
