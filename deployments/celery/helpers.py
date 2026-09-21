@@ -231,10 +231,8 @@ class DeploymentHelper:
         if service.deployed_at is None:
             return False
 
-        if (
-            service.selected_deploy_at
-            and service.selected_deploy_at > service.deployed_at
-        ):
+        active_revision = getattr(service, "active_revision", None)
+        if active_revision is not None and active_revision.activated_at and active_revision.activated_at > service.deployed_at:
             return False
 
         if (
