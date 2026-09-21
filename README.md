@@ -25,6 +25,42 @@ Celery Beat / reconciliation = repair mechanism, NOT runtime truth
 
 The Docker daemon is the runtime source of truth. The event consumer listens to Docker Engine events and updates deployment/container state immediately. WebSockets are delivery only; they are not the authoritative state store. Periodic reconciliation remains enabled to repair missed events, daemon restarts, Redis outages, or external Docker changes.
 
+## Service-centric architecture
+
+The deployment model is now service-centric rather than Deploy.config-centric.
+
+- Service is the user-owned workload.
+- ServiceProcess models web/worker/scheduler/custom processes.
+- ServiceRevision is the immutable executable snapshot.
+- Deploy is the execution operation linked to a revision.
+- ServiceEnvironmentVariable and versioned ServiceSecret own environment/secrets.
+- ServiceEndpoint owns target/public/internal/TCP/UDP endpoint intent.
+- ServicePortReservation prevents active host-port collisions.
+- DatabaseResource and ServiceDatabaseBinding model managed/external database dependencies.
+- ServiceRuntimeGraph is the internal Docker-neutral execution boundary.
+
+Compose and catalog inputs are normalized into the same Service domain instead of being executed directly by a separate runtime engine.
+
+See docs/ARCHITECTURE.md for the domain model, lifecycle and subsystem boundaries.
+
+## App and subsystem documentation
+
+Each major Django app and deployment subsystem keeps a local README with its responsibility and API surface:
+
+- services/README.md
+- deploy/README.md
+- deployments/README.md
+- app_catalog/README.md
+- plans/README.md
+- users/README.md
+- auth_users/README.md
+- tickets/README.md
+- messenger/README.md
+- custom_emails/README.md
+- logs/README.md
+- core/README.md
+- cms/README.md
+
 ## Resource governance
 
 **Tenants do not control CPU, RAM, swap, PIDs, worker counts, Docker host configuration, or build concurrency.**
