@@ -20,6 +20,7 @@ from deploy.models import (
     BaseRuntimeImage,
 )
 from services.models import Service
+from services.revisioning import ensure_revision_for_deploy, get_active_deploy
 
 from .monitoring.policies import ACTIVE_DEPLOY_STATUSES, ACTIVE_SERVICE_STATUSES, runtime_policies
 from .monitoring.actions import (
@@ -160,7 +161,7 @@ def monitor_services(self):
     _reconcile_base_runtime_builds(policies)
     services = (
         Service.objects
-        .select_related("selected_deploy")
+        .select_related("active_revision")
         .filter(status__in=ACTIVE_SERVICE_STATUSES)[: int(policies["monitor_batch_size"])]
     )
     for service in services:
@@ -294,7 +295,13 @@ def _recover_stale_running_deploys(policies) -> None:
                 # completed. A healthy canonical-name container during build/start
                 # may still be the previous release.
                 if owned_by_deploy and stage == "activation" and runtime.get("running") and runtime.get("health") in (None, "healthy"):
-                    current_selected = service.selected_deploy_id
+                    try:
+                        locked = ensure_revision_for_deploy(locked)
+                    except Exception:
+                        logger.exception("Could not materialize revision for stale deployment %s", locked.pk)
+                        continue
+                    current_active = get_active_deploy(service)
+                    current_selected = current_active.pk if current_active else None
                     if current_selected != locked.pk:
                         expected_previous = locked.previous_deploy_id
                         if current_selected != expected_previous:
@@ -304,6 +311,7 @@ def _recover_stale_running_deploys(policies) -> None:
                             )
                             continue
                         Service.objects.filter(pk=service.pk).update(
+                            active_revision_id=locked.revision_id,
                             selected_deploy_id=locked.pk,
                             selected_deploy_at=timezone.now(),
                         )
@@ -580,7 +588,7 @@ def _reconcile_service_runtime(service: Service) -> None:
         status_raw = "error"
 
     now = timezone.now()
-    deploy = service.selected_deploy  # may be None
+    deploy = get_active_deploy(service)
 
     with transaction.atomic():
         # Do NOT select_related("selected_deploy") with select_for_update:
@@ -597,8 +605,9 @@ def _reconcile_service_runtime(service: Service) -> None:
         if locked.status not in ACTIVE_SERVICE_STATUSES:
             return  # terminal or not monitored
 
-        # Load selected deploy separately (no FOR UPDATE on the join)
-        deploy = locked.selected_deploy  # may be None; simple FK access
+        # Resolve the active revision separately; selected_deploy is only a
+        # legacy fallback inside get_active_deploy().
+        deploy = get_active_deploy(locked)
 
         # ------------------------------------------------------------------
         # RUNNING (or SUCCEEDED legacy) → verify container is still up
