@@ -519,8 +519,14 @@ def _sync_legacy_environment(service: Service, config: dict[str, Any], refs: lis
         graph_snapshot=graph,
         created_by=deploy.created_by,
     )
-    Deploy.objects.filter(pk=deploy.pk).update(revision=revision)
+    Deploy.objects.filter(
+        pk=deploy.pk
+    ).update(
+        revision=revision,
+        config=redacted_snapshot,
+    )
     deploy.revision = revision
+    deploy.config = redacted_snapshot
     return deploy
 
 
