@@ -162,7 +162,7 @@ Build-scoped secrets are currently rejected because the active image build backe
 
 DatabaseResource represents a managed/external database resource. ServiceDatabaseBinding connects a workload Service to that resource.
 
-Database deployment is currently still implemented by the dedicated DB deployment path; the application workload runtime is Swarm-native. Converging database provisioning onto Swarm Services is a later boundary change, not an accidental second application runtime.
+Database provisioning still has a specialized DBDeployer because database initialization requires engine-specific readiness and credential reconciliation, but its runtime is now also a Docker Swarm Service. MySQL/MariaDB credential reconciliation executes against the live Swarm task container; persistent local volumes pin the database Service to the appropriate node.
 
 ## Reconciliation
 
