@@ -63,9 +63,12 @@ class StopService:
             logger.info("Skipped stop execution for service ID %s: %s", service_id, str(exc))
             return
 
-        # Desired state is declarative; runtime status remains observed state.
-        service.__class__.objects.filter(pk=service.pk).update(desired_state="stopped")
+        # Desired state is declarative; bump lifecycle so in-flight deploys cannot
+        # restore desired_state=running after this stop intent.
+        from services.lifecycle import bump_lifecycle
+        gen = bump_lifecycle(service.pk, desired_state="stopped")
         service.desired_state = "stopped"
+        service.lifecycle_generation = gen
 
         container_name = service.get_docker_service_name()
 
