@@ -43,7 +43,7 @@ from .manager.image_manager import Image
 from .manager.network_manager import Network
 from .platform_bridge import enrich_config_from_project, extract_zip_to_temp
 from .rollback import ContainerSnapshot, RollbackManager
-from .types import DeploymentConfig, DeploymentResult, EventSink
+from .types import DeploymentConfig, DeploymentResult, EventSink, EndpointSpec
 from .validation import DeploymentValidator
 from .volumes import VolumeMountManager
 
@@ -242,6 +242,7 @@ class DeploymentOrchestrator:
                 entry_port=config.port,
                 environment=dict(config.environment) if config.environment else {},
                 labels={
+                    **self._endpoint_labels(config),
                     **{
                         str(k): str(v)
                         for k, v in config.labels.items()
@@ -251,6 +252,8 @@ class DeploymentOrchestrator:
                     "deployment.id": str(config.labels.get("deployment.id") or self.logger.deployment_id or ""),
                     "service.id": str(config.labels.get("service.id") or ""),
                 },
+                exposed_ports=(config.runtime_options or {}).get("exposed_ports") or {},
+                port_bindings=(config.runtime_options or {}).get("port_bindings") or {},
                 router_name=f"{config.name}-deploy-{self.logger.deployment_id or 'current'}",
                 public_host=config.public_host,
                 healthcheck_path=config.healthcheck_path,
@@ -682,6 +685,35 @@ class DeploymentOrchestrator:
             },
         )
 
+    def _endpoint_labels(self, config: DeploymentConfig) -> dict[str, str]:
+        """Generate Traefik routes for all public HTTP-family endpoints."""
+        labels: dict[str, str] = {}
+        endpoints = [endpoint for endpoint in (config.endpoints or []) if endpoint.enabled and endpoint.exposure == "public"]
+        if not endpoints:
+            return labels
+        labels["traefik.enable"] = "true"
+        labels["traefik.docker.network"] = "proxy_net"
+        priority = 10000
+        for index, endpoint in enumerate(endpoints):
+            router = f"{config.name}-ep-{index}-{endpoint.name}".replace("_", "-")
+            safe_router = "".join(ch if ch.isalnum() or ch == "-" else "-" for ch in router).lower()
+            hostname = endpoint.hostname or config.public_host or ""
+            if not hostname:
+                continue
+            rule = f"Host(`{hostname}`)"
+            if endpoint.path:
+                rule += f" && PathPrefix(`{endpoint.path}`)"
+            labels[f"traefik.http.routers.{safe_router}.rule"] = rule
+            labels[f"traefik.http.routers.{safe_router}.entrypoints"] = "web"
+            labels[f"traefik.http.routers.{safe_router}.service"] = safe_router
+            labels[f"traefik.http.routers.{safe_router}.priority"] = str(priority + index)
+            labels[f"traefik.http.services.{safe_router}.loadbalancer.server.port"] = str(endpoint.target_port)
+            health_path = endpoint.metadata.get("healthcheck_path")
+            if health_path:
+                labels[f"traefik.http.services.{safe_router}.loadbalancer.healthcheck.path"] = str(health_path)
+                labels[f"traefik.http.services.{safe_router}.loadbalancer.healthcheck.interval"] = "2s"
+                labels[f"traefik.http.services.{safe_router}.loadbalancer.healthcheck.timeout"] = "2s"
+        return labels
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
