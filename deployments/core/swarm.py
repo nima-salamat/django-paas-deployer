@@ -171,7 +171,9 @@ def _placement_constraints(runtime_options: dict[str, Any] | None) -> list[str]:
 def _healthcheck_spec(raw: dict[str, Any] | None) -> dict[str, Any] | None:
     """Normalize the process healthcheck to Docker Engine units."""
     raw = dict(raw or {})
-    if not raw or raw.get("disable"):
+    if raw.get("disable"):
+        return {"test": ["NONE"]}
+    if not raw:
         return None
     test = raw.get("test") or raw.get("cmd") or raw.get("command")
     if not test:
