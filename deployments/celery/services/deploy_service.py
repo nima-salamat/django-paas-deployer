@@ -264,8 +264,19 @@ class DeployService:
         task_id: str | None = None,
         activation_callback=None,
     ):
+        # Revision is now the executable source of truth. Deploy.config remains
+        # only the compatibility input used when the revision is first created.
+        revision_config = (
+            getattr(getattr(deploy_item, "revision", None), "config_snapshot", None)
+            if getattr(deploy_item, "revision_id", None)
+            else None
+        )
         cfg = normalize_profile(
-            parse_config(getattr(deploy_item, "config", None)),
+            parse_config(
+                revision_config
+                if isinstance(revision_config, dict)
+                else getattr(deploy_item, "config", None)
+            ),
             plan_cpu=getattr(getattr(deploy_item.service, "plan", None), "max_cpu", None),
             plan_ram_mb=getattr(getattr(deploy_item.service, "plan", None), "max_ram", None),
         )
