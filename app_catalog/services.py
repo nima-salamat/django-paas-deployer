@@ -18,6 +18,7 @@ from deploy.naming import allocate_deploy_name
 from core.global_settings.config import PlanTypeChoices
 from .catalog import ApplicationCatalog, CatalogValidationError, resolve_variant
 from .models import ApplicationInstance, ApplicationInstanceService, ApplicationStatus
+from services.ports import sync_endpoint_reservation
 from .plan import plan_from_resolved
 import shlex
 
@@ -393,7 +394,7 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
                 published = int(parts[-2]) if len(parts) >= 2 and parts[-2].isdigit() else None
                 protocol = proto.lower()
 
-            ServiceEndpoint.objects.update_or_create(
+            endpoint_row, _ = ServiceEndpoint.objects.update_or_create(
                 service=service,
                 name=f"port-{target}-{protocol}",
                 defaults={
@@ -407,6 +408,7 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
                     "metadata": {"catalog_service_key": key},
                 },
             )
+            sync_endpoint_reservation(endpoint_row[0] if isinstance(endpoint_row, tuple) else endpoint_row)
 
         ServiceProcess.objects.update_or_create(
             service=service,
