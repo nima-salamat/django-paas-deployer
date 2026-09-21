@@ -31,9 +31,12 @@ class ServiceViewSet(SnippetViewSet):
     list_filter = ["status", "plan", "user", "read_only"]
     search_fields = ["name", "user__username", "plan__name"]
     panels = panels_for(
-        editable=["name", "user", "plan", "network", "selected_deploy", "read_only"],
+        editable=["name", "user", "plan", "network", "read_only"],
         read_only=[
             "id",
+            "active_revision",
+            "selected_deploy",
+            "desired_state",
             "selected_deploy_at",
             "deploy_started",
             "deployed_at",
