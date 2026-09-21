@@ -5,6 +5,15 @@ from rest_framework.routers import DefaultRouter
 from .api.shell import shell_info_apiview, shell_catalog_apiview, shell_create_apiview, shell_replace_apiview, shell_command_apiview, shell_close_apiview, shell_file_apiview, shell_tree_apiview, shell_tree_meta_apiview, shell_audit_apiview, shell_audit_export_apiview, shell_history_apiview, shell_env_apiview, shell_health_apiview
 
 from services.api.runtime import service_logs_apiview, service_logs_export_apiview
+from services.api.configuration import (
+    ServiceConfigurationAPIView,
+    ServiceEnvironmentAPIView,
+    ServiceSecretsAPIView,
+    ServiceEndpointAPIView,
+    ServiceRevisionAPIView,
+    ServiceRevisionDetailAPIView,
+    ServiceRevisionRollbackAPIView,
+)
 from services.apis import (
     ServiceViewSet,
     PrivateNetworkViewSet,
@@ -68,6 +77,13 @@ urlpatterns = (
         path("admin/stop_service/", admin_stop_service_apiview, name="admin_stop_service"),
         path("admin/purge_service_runtime/", admin_purge_service_runtime_apiview, name="admin_purge_service_runtime"),
         path("service_status/", service_status_apiview, name="service_status"),
+        path("service/<uuid:service_id>/configuration/", ServiceConfigurationAPIView.as_view(), name="service_configuration"),
+        path("service/<uuid:service_id>/environment/", ServiceEnvironmentAPIView.as_view(), name="service_environment"),
+        path("service/<uuid:service_id>/secrets/", ServiceSecretsAPIView.as_view(), name="service_secrets"),
+        path("service/<uuid:service_id>/endpoints/", ServiceEndpointAPIView.as_view(), name="service_endpoints"),
+        path("service/<uuid:service_id>/revisions/", ServiceRevisionAPIView.as_view(), name="service_revisions"),
+        path("service/<uuid:service_id>/revisions/<uuid:revision_id>/", ServiceRevisionDetailAPIView.as_view(), name="service_revision_detail"),
+        path("service/<uuid:service_id>/revisions/<uuid:revision_id>/rollback/", ServiceRevisionRollbackAPIView.as_view(), name="service_revision_rollback"),
         path("services/<uuid:service_id>/shell/", shell_info_apiview, name="service_shell_info"),
         path("services/<uuid:service_id>/shell/catalog/", shell_catalog_apiview, name="service_shell_catalog"),
         path("services/<uuid:service_id>/shell/session/", shell_create_apiview, name="service_shell_create"),
