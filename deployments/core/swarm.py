@@ -165,6 +165,34 @@ def _placement_constraints(runtime_options: dict[str, Any] | None) -> list[str]:
     return result
 
 
+
+
+
+def _healthcheck_spec(raw: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Normalize the process healthcheck to Docker Engine units."""
+    raw = dict(raw or {})
+    if not raw or raw.get("disable"):
+        return None
+    test = raw.get("test") or raw.get("cmd") or raw.get("command")
+    if not test:
+        return None
+    interval = float(raw.get("interval", 5) or 0)
+    timeout = float(raw.get("timeout", 3) or 0)
+    start_period = float(raw.get("start_period", raw.get("start-period", 0)) or 0)
+    retries = int(raw.get("retries", 3) or 0)
+    if isinstance(test, str):
+        test = ["CMD-SHELL", test]
+    else:
+        test = [str(item) for item in test]
+    return {
+        "test": test,
+        "interval": int(max(0, interval) * 1_000_000_000),
+        "timeout": int(max(0, timeout) * 1_000_000_000),
+        "retries": max(0, retries),
+        "start_period": int(max(0, start_period) * 1_000_000_000),
+    }
+
+
 def _service_labels(config) -> dict[str, str]:
     labels = {
         "managed-by": "django-paas-deployer",
@@ -205,6 +233,7 @@ def compile_compose_service(config, *, image_ref: str, replicas: int = 1) -> dic
     replicas = _validate_replicas(replicas)
     name = _validate_service_name(config.name)
     runtime_options = dict(config.runtime_options or {})
+    healthcheck = _healthcheck_spec(runtime_options.get("healthcheck"))
 
     service = {
         "image": image_ref,
@@ -213,6 +242,7 @@ def compile_compose_service(config, *, image_ref: str, replicas: int = 1) -> dic
         "working_dir": config.working_directory or "/app",
         "read_only": bool(config.read_only),
         "environment": _env_list(config.environment),
+        "healthcheck": healthcheck,
         "networks": [str(network.name) for network in (config.networks or ())],
         "volumes": _mount_strings(config.volumes),
         "deploy": {
@@ -509,7 +539,7 @@ class SwarmRuntime:
         )
 
     def _create_kwargs(self, config, *, image_ref: str, compose_spec: dict[str, Any]):
-        from docker.types import EndpointSpec, Mount, Resources, RestartPolicy, RollbackConfig, ServiceMode, UpdateConfig
+        from docker.types import EndpointSpec, Healthcheck, Mount, Resources, RestartPolicy, RollbackConfig, ServiceMode, UpdateConfig
 
         name = _validate_service_name(config.name)
         service_doc = compose_spec["services"][name]
@@ -544,6 +574,9 @@ class SwarmRuntime:
             memory_limit = int(str(limits["memory"]).rstrip("Mm")) * 1024 * 1024
         resources = Resources(cpu_limit=cpu_limit, mem_limit=memory_limit)
 
+        healthcheck_doc = service_doc.get("healthcheck")
+        healthcheck = Healthcheck(**healthcheck_doc) if healthcheck_doc else None
+
         restart_doc = deploy_doc.get("restart_policy") or {}
         restart_policy = RestartPolicy(
             condition=restart_doc.get("condition"),
@@ -575,6 +608,7 @@ class SwarmRuntime:
             "entrypoint": service_doc.get("entrypoint"),
             "workdir": service_doc.get("working_dir"),
             "read_only": bool(service_doc.get("read_only")),
+            "healthcheck": healthcheck,
             "env": service_doc.get("environment") or [],
             "labels": labels,
             "container_labels": labels,
@@ -619,6 +653,16 @@ class SwarmRuntime:
             docker_name = config.name if process_name == "web" else _validate_service_name(f"{config.name}-{process_name}")
             process_environment = dict(config.environment or {})
             process_environment.update({str(k): str(v) for k, v in (raw.get("environment") or {}).items()})
+            process_resources = dict(config.resource_limits or {})
+            process_resources.update({str(k): v for k, v in (raw.get("resources") or {}).items()})
+            process_metadata = dict(raw.get("metadata") or {})
+            process_runtime_options = dict(config.runtime_options or {})
+            process_runtime_options["healthcheck"] = dict(raw.get("healthcheck") or {})
+            process_runtime_options["placement_constraints"] = list(
+                process_metadata.get("placement_constraints")
+                or process_runtime_options.get("placement_constraints")
+                or []
+            )
             process_endpoints = [
                 endpoint for endpoint in (config.endpoints or ())
                 if endpoint.process in (None, "", process_name)
@@ -633,6 +677,8 @@ class SwarmRuntime:
                 start_command=raw.get("command") or (config.start_command if process_name == "web" else None),
                 entry_point=raw.get("entrypoint") or (config.entry_point if process_name == "web" else None),
                 endpoints=process_endpoints,
+                resource_limits=process_resources,
+                runtime_options=process_runtime_options,
                 labels={
                     **dict(config.labels or {}),
                     "process.name": process_name,
