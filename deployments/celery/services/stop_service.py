@@ -20,6 +20,7 @@ import logging
 from deploy.deployment_state import DjangoDeploymentState  # type: ignore
 from deployments.core.deploy import Deploy as DeployFacade
 from deployments.core.manager.container_manager import Container
+from deployments.core.swarm import SwarmRuntime, swarm_enabled
 from deployments.core.state.locks import acquire_service_deployment_lock
 from deployments.common.exceptions import InvalidServiceStateError
 from services.revisioning import get_active_deploy
@@ -72,34 +73,33 @@ class StopService:
         state_tracker = DjangoDeploymentState(active_deploy) if active_deploy else None
 
         try:
-            if Container.container_is_running(container_name):
-                logger.info("Dispatching stop request for container: %s", container_name)
-                DeployFacade.stop_container(container_name)
-                ContainerWaiter.wait_until_stopped(container_name, timeout=10)
+            if swarm_enabled():
+                runtime = SwarmRuntime()
+                state = runtime.inspect_service(container_name)
+                if state and state.replicas_running:
+                    logger.info("Stopping Swarm service group for service: %s", service_id)
+                    runtime.stop_service_group(str(service_id))
+                else:
+                    logger.info("Swarm service group for %s is already stopped.", service_id)
             else:
-                logger.info(
-                    "Container %s already matches terminal state: STOPPED.",
-                    container_name,
-                )
+                if Container.container_is_running(container_name):
+                    logger.info("Dispatching stop request for container: %s", container_name)
+                    DeployFacade.stop_container(container_name)
+                    ContainerWaiter.wait_until_stopped(container_name, timeout=10)
+                else:
+                    logger.info("Container %s already matches terminal state: STOPPED.", container_name)
 
-            # Remove the stopped container so it doesn't accumulate on
-            # disk.  Legacy code only stopped, leaving dozens of stopped
-            # containers per service over time.
-            if _should_remove_stopped_containers():
-                try:
-                    stopped = Container(container_name)
-                    if stopped.exists():
-                        stopped.remove()
-                        logger.info(
-                            "Removed stopped container '%s' to free disk.",
-                            container_name,
+                if _should_remove_stopped_containers():
+                    try:
+                        stopped = Container(container_name)
+                        if stopped.exists():
+                            stopped.remove()
+                            logger.info("Removed stopped container '%s' to free disk.", container_name)
+                    except Exception as cleanup_exc:
+                        logger.warning(
+                            "Failed to remove stopped container '%s': %s. Container remains stopped but on disk.",
+                            container_name, cleanup_exc,
                         )
-                except Exception as cleanup_exc:
-                    logger.warning(
-                        "Failed to remove stopped container '%s': %s. "
-                        "Container remains stopped but on disk.",
-                        container_name, cleanup_exc,
-                    )
 
             if state_tracker:
                 stop_result = MockOrchestratorResult(
