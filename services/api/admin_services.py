@@ -32,6 +32,7 @@ from deployments.core.db_deployer import DB_PLATFORMS, DBDeployer
 from deployments.core.deploy import Deploy as OrchestratorDeploy
 from deployments.core.manager.container_manager import Container
 from deployments.core.manager.client_manager import Client
+from deployments.core.swarm import SwarmRuntime, swarm_enabled
 from docker.errors import NotFound as DockerNotFound
 
 
@@ -41,6 +42,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Permission helpers (aligned with users.admin_apis Rule system)
 # ---------------------------------------------------------------------------
+
+from services.revisioning import get_active_deploy
 
 from .common import (  # explicit: import * skips names starting with _
     ServiceAdminPagination,
@@ -434,10 +437,10 @@ def admin_start_service_apiview(request):
     try:
         with transaction.atomic():
             service_item = Service.objects.select_for_update().get(id=service_id)
-            deploy_item = service_item.selected_deploy
+            deploy_item = get_active_deploy(service_item)
             if deploy_item is None:
                 return Response(
-                    {"result": "error", "detail": _("First select a deploy.")},
+                    {"result": "error", "detail": _("This service has no active revision/deployment.")},
                     status=status.HTTP_409_CONFLICT,
                 )
 
@@ -609,123 +612,40 @@ def admin_stop_service_apiview(request):
 
 
 def _force_cancel_runtime_cleanup(service, *, container_name: str) -> dict:
-    """
-    Best-effort cleanup after a forced deploy cancel.
+    """Best-effort cleanup after forced deployment cancellation."""
+    report = {"runtime": "docker-swarm" if swarm_enabled() else "docker", "services": [], "container": None, "images": [], "errors": []}
+    if swarm_enabled():
+        try:
+            runtime = SwarmRuntime()
+            for name in runtime.service_names_for_service(str(service.pk)):
+                runtime.remove(name)
+                report["services"].append({"name": name, "result": "removed"})
+        except Exception as exc:
+            report["errors"].append(f"swarm runtime: {exc}")
+        return report
 
-    - Revoke is done by the caller (needs task_id from DB).
-    - Here we only touch Docker: stop/remove the app container, related
-      images, and short-lived intermediate/build containers that share the
-      service name prefix or managed-by label.
-    - Volumes and networks are intentionally preserved.
-    """
-    report = {
-        "container": None,
-        "images": [],
-        "intermediate_containers": [],
-        "errors": [],
-    }
     try:
         client = Client()()
+        try:
+            c = client.containers.get(container_name)
+            c.remove(force=True)
+            report["container"] = "removed"
+        except Exception as exc:
+            report["container"] = "absent" if isinstance(exc, DockerNotFound) else "error"
+            if report["container"] == "error":
+                report["errors"].append(f"container: {exc}")
+        for ref in (container_name, f"{container_name}:latest"):
+            try:
+                client.images.remove(ref, force=True)
+                report["images"].append({"ref": ref, "result": "removed"})
+            except Exception as exc:
+                msg = str(exc).lower()
+                result = "absent" if "not found" in msg or "no such image" in msg else f"error: {exc}"
+                report["images"].append({"ref": ref, "result": result})
+        return report
     except Exception as exc:
         report["errors"].append(f"docker client: {exc}")
         return report
-
-    # 1) Primary service container
-    try:
-        c = client.containers.get(container_name)
-        try:
-            c.reload()
-            if getattr(c, "status", "") == "running":
-                c.stop(timeout=10)
-        except Exception as e:
-            report["errors"].append(f"stop: {e}")
-        try:
-            c.remove(force=True)
-            report["container"] = "removed"
-        except Exception as e:
-            report["errors"].append(f"remove container: {e}")
-            report["container"] = "failed"
-    except DockerNotFound:
-        report["container"] = "absent"
-    except Exception as e:
-        report["errors"].append(f"container: {e}")
-        report["container"] = "error"
-
-    # 2) Intermediate / orphaned build containers
-    #    docker build leaves exited helpers; also match name prefix so a
-    #    half-created replacement container is not left behind.
-    try:
-        name_prefix = container_name
-        short_id = ""
-        try:
-            short_id = str(service.id.hex[:8])
-        except Exception:
-            pass
-
-        candidates = client.containers.list(all=True)
-        for c in candidates:
-            try:
-                cname = (c.name or "").lstrip("/")
-                labels = (c.labels or {}) if hasattr(c, "labels") else {}
-                attrs_labels = {}
-                try:
-                    attrs_labels = (c.attrs or {}).get("Config", {}).get("Labels") or {}
-                except Exception:
-                    pass
-                labels = {**attrs_labels, **(labels or {})}
-
-                managed = str(labels.get("managed-by") or "")
-                same_name = cname == name_prefix or cname.startswith(name_prefix + "-")
-                same_label = (
-                    managed == "django-paas-deployer"
-                    and short_id
-                    and short_id in cname
-                )
-                # docker build temporary containers often have no useful name
-                # but share ancestor of an in-progress image for this service
-                if not (same_name or same_label):
-                    continue
-                if cname == name_prefix and report["container"] == "removed":
-                    continue  # already handled
-                try:
-                    if getattr(c, "status", "") == "running":
-                        c.stop(timeout=5)
-                except Exception:
-                    pass
-                try:
-                    c.remove(force=True)
-                    report["intermediate_containers"].append(
-                        {"name": cname, "result": "removed"}
-                    )
-                except Exception as e:
-                    report["intermediate_containers"].append(
-                        {"name": cname, "result": f"error: {e}"}
-                    )
-            except Exception as e:
-                report["errors"].append(f"intermediate scan: {e}")
-    except Exception as e:
-        report["errors"].append(f"list containers: {e}")
-
-    # 3) Images for this service (failed / partial builds)
-    for ref in (container_name, f"{container_name}:latest"):
-        try:
-            client.images.remove(ref, force=True)
-            report["images"].append({"ref": ref, "result": "removed"})
-        except Exception as e:
-            msg = str(e).lower()
-            if "no such image" in msg or "not found" in msg:
-                report["images"].append({"ref": ref, "result": "absent"})
-            else:
-                report["images"].append({"ref": ref, "result": f"error: {e}"})
-                report["errors"].append(f"image {ref}: {e}")
-
-    # 4) Dangling layers left by interrupted builds (best-effort, never fatal)
-    try:
-        client.images.prune(filters={"dangling": True})
-    except Exception as e:
-        report["errors"].append(f"prune dangling: {e}")
-
-    return report
 
 
 def admin_purge_service_runtime_apiview(request):
