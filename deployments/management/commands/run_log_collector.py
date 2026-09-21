@@ -18,6 +18,8 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
+from deployments.core.swarm import SwarmRuntime, swarm_enabled
+
 logger = logging.getLogger(__name__)
 
 MAX_FOLLOW_WORKERS = int(os.environ.get("LOG_COLLECTOR_WORKERS", "8"))
@@ -203,7 +205,166 @@ class Command(BaseCommand):
                 return svc
         return None
 
+    def _discover_and_attach_swarm(self, instance: str):
+        from services.models import Service
+        from logs.ingestion import acquire_lease, get_or_create_stream
+        from logs.policy import resolve
+
+        runtime = SwarmRuntime()
+        client = runtime.client
+        services = list(Service.objects.select_related("plan").all()[:5000])
+        services_by_id = {str(service.pk): service for service in services}
+
+        try:
+            swarm_services = client.services.list(
+                filters={"label": "managed-by=django-paas-deployer"}
+            )
+        except Exception:
+            logger.exception("Swarm service discovery failed")
+            return
+
+        seen_keys: set[str] = set()
+        matched = 0
+        for docker_service in swarm_services:
+            attrs = docker_service.attrs or {}
+            spec = attrs.get("Spec") or {}
+            labels = spec.get("Labels") or {}
+            service_id = str(labels.get("passdeployer.service") or "")
+            if not service_id or service_id not in services_by_id:
+                continue
+            service = services_by_id[service_id]
+            try:
+                policy = resolve(service)
+            except Exception:
+                logger.exception("policy resolve failed service=%s", service.pk)
+                continue
+            if not policy.persistent_enabled and not policy.realtime_enabled:
+                continue
+
+            key = f"swarm:{docker_service.id}"
+            seen_keys.add(key)
+            matched += 1
+            with self._lock:
+                if key in self._following:
+                    continue
+                stop_ev = threading.Event()
+                self._following[key] = stop_ev
+
+            deploy_id = labels.get("passdeployer.deployment") or getattr(service, "selected_deploy_id", None)
+            stream = get_or_create_stream(
+                service_id=service.pk,
+                container_id=str(docker_service.id),
+                container_name=str(docker_service.name),
+                deploy_id=deploy_id,
+            )
+            if not acquire_lease(stream, instance):
+                with self._lock:
+                    self._following.pop(key, None)
+                continue
+
+            self._executor.submit(
+                self._follow_swarm_service,
+                instance,
+                service,
+                docker_service,
+                stream,
+                policy,
+                stop_ev,
+                key,
+            )
+
+        with self._lock:
+            stale = [key for key in self._following if key.startswith("swarm:") and key not in seen_keys]
+            for key in stale:
+                self._following.pop(key).set()
+
+        logger.info(
+            "log-collector swarm discover: services=%s matched=%s following=%s",
+            len(swarm_services),
+            matched,
+            len(self._following),
+        )
+
+    def _follow_swarm_service(
+        self,
+        instance,
+        service,
+        docker_service,
+        stream,
+        policy,
+        stop_ev,
+        key,
+    ):
+        from logs.ingestion import ingest_lines, heartbeat_lease, close_stream
+        from logs.usage import bump_drop
+
+        rate = RateWindow(policy.max_bytes_per_second)
+        try:
+            self._catch_up(docker_service, stream, service, policy, instance, rate)
+            log_stream = docker_service.logs(
+                stream=True,
+                follow=True,
+                stdout=True,
+                stderr=True,
+                timestamps=True,
+                tail=0,
+            )
+            batch = []
+            last_hb = time.monotonic()
+            last_flush = time.monotonic()
+            try:
+                for raw in log_stream:
+                    if stop_ev.is_set() or self._stop.is_set():
+                        break
+                    pairs = self._demux_docker_chunk(raw) if isinstance(raw, (bytes, bytearray)) else [("stdout", str(raw))]
+                    for stream_kind, line in pairs:
+                        if not line:
+                            continue
+                        ts, msg = self._parse_ts_line(line)
+                        size = len(msg.encode("utf-8", "replace"))
+                        if not rate.allow(size):
+                            bump_drop(service.pk, entries=1, bytes_dropped=size)
+                            continue
+                        batch.append({
+                            "ts": ts or timezone.now(),
+                            "stream": stream_kind,
+                            "message": msg,
+                        })
+                    now = time.monotonic()
+                    if batch and (len(batch) >= 50 or now - last_flush >= 1.0):
+                        self._persist_batch(instance, service, stream, policy, batch)
+                        batch = []
+                        last_flush = now
+                    if now - last_hb >= 15:
+                        if not heartbeat_lease(stream, instance):
+                            break
+                        last_hb = now
+            finally:
+                if batch:
+                    self._persist_batch(instance, service, stream, policy, batch)
+                try:
+                    log_stream.close()
+                except Exception:
+                    pass
+        except Exception:
+            logger.exception(
+                "Swarm service log follow crashed service=%s swarm_service=%s",
+                service.pk,
+                getattr(docker_service, "name", key),
+            )
+        finally:
+            with self._lock:
+                self._following.pop(key, None)
+            try:
+                close_stream(stream, status="closed")
+            except Exception:
+                pass
+
     def _discover_and_attach(self, instance: str):
+        if swarm_enabled():
+            self._discover_and_attach_swarm(instance)
+            return
+
         from deployments.core.manager.client_manager import get_docker_client
         from services.models import Service
         from logs.ingestion import acquire_lease, get_or_create_stream
