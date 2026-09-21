@@ -105,6 +105,26 @@ class Service(BaseModel):
         default="stopped",
     )
 
+    def clean(self):
+        super().clean()
+        if self.pk:
+            old = (
+                type(self).objects
+                .filter(pk=self.pk)
+                .values("plan_id", "status")
+                .first()
+            )
+            transitional = {"queued", "deploying", "stopping"}
+            if old and old["plan_id"] != self.plan_id and str(old["status"] or "").lower() in transitional:
+                raise ValidationError(
+                    {
+                        "plan": (
+                            "Plan changes are unavailable while the service is "
+                            "transitioning. Stop the active operation first."
+                        )
+                    }
+                )
+
     def save(self, *args, **kwargs):
         self.full_clean()
 
