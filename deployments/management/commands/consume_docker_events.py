@@ -22,6 +22,7 @@ from django.utils import timezone
 
 from deploy.models import Deploy, DeploymentStatusChoices
 from deployments.core.manager.client_manager import get_docker_client
+from deployments.core.swarm import swarm_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,20 @@ class Command(BaseCommand):
     help = "Consume Docker Engine events and reconcile deployment runtime state."
 
     def handle(self, *args, **options):
+        if swarm_enabled():
+            self.stdout.write(
+                self.style.WARNING(
+                    "Docker container event reconciliation is disabled while the "
+                    "Swarm runtime is active; Swarm task state is reconciled by the scheduler."
+                )
+            )
+            while True:
+                try:
+                    time.sleep(60)
+                except KeyboardInterrupt:
+                    self.stdout.write("Docker event consumer stopped.")
+                    return
+
         backoff = 1.0
         max_backoff = 30.0
         while True:
