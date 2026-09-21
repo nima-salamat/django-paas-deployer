@@ -1,0 +1,21 @@
+# app_catalog
+
+## Responsibility
+Template/catalog installation and application-level multi-service coordination.
+
+It owns catalog definitions, variants, Compose normalization, application installations and dependency ordering. It does not replace Service deployment execution.
+
+## API
+GET /api/application-catalog/apps/
+GET /api/application-catalog/apps/<catalog_id>/
+POST /api/application-catalog/apps/<catalog_id>/resolve/
+GET/POST /api/application-catalog/installations/
+GET /api/application-catalog/installations/<uuid:pk>/
+DELETE /api/application-catalog/installations/<uuid:pk>/
+POST /api/application-catalog/installations/<uuid:pk>/cancel/
+
+## Compose
+plan_from_compose() is an input adapter. Supported Compose semantics are normalized into ApplicationPlan and then into Service-domain resources.
+
+## Secret policy
+New catalog installations do not persist resolved plaintext secrets in ApplicationInstance.secret_config. ServiceSecret versions are used instead. Secrets are rejected when a catalog tries to bake them into Dockerfile/build files.
