@@ -7,7 +7,7 @@ from django.conf import settings
 class Migration(migrations.Migration):
     dependencies = [
         ("services", "0016_shell_audit_and_concurrent"),
-        ("deploy", "0015_deploy_recovery_operation"),
+        migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
     operations = [
@@ -89,16 +89,6 @@ class Migration(migrations.Migration):
                         on_delete=django.db.models.deletion.CASCADE,
                         related_name="revisions",
                         to="services.service",
-                    ),
-                ),
-                (
-                    "source_deploy",
-                    models.ForeignKey(
-                        blank=True,
-                        null=True,
-                        on_delete=django.db.models.deletion.SET_NULL,
-                        related_name="source_revisions",
-                        to="deploy.deploy",
                     ),
                 ),
             ],
