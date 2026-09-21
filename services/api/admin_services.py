@@ -687,13 +687,18 @@ def admin_purge_service_runtime_apiview(request):
         )
 
     report = _purge_service_runtime(service)
-    ok = report.get("container") in ("removed", "absent") and not any(
+    runtime_ok = (
+        all(item.get("result") in {"removed", "absent"} for item in report.get("services", []))
+        if report.get("runtime") == "docker-swarm"
+        else report.get("container") in {"removed", "absent"}
+    )
+    ok = runtime_ok and not report.get("errors") and not any(
         str(i.get("result", "")).startswith("error") for i in report.get("images", [])
     )
     return Response(
         {
             "result": "success" if ok else "partial",
-            "detail": _("Container and image cleanup finished."),
+            "detail": _("Service runtime and image cleanup finished."),
             "report": report,
             "mutable": _service_is_mutable(Service.objects.get(pk=service.pk))[0],
         },
