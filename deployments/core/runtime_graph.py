@@ -71,7 +71,7 @@ class ServiceRuntimeGraph:
                     process_type=str(raw.get("process_type") or "custom"),
                     command=raw.get("command"),
                     entrypoint=raw.get("entrypoint"),
-                    replicas=max(1, int(raw.get("replicas") or 1)),
+                    replicas=int(raw.get("replicas") or 1),
                     enabled=bool(raw.get("enabled", True)),
                     environment={str(k): str(v) for k, v in (raw.get("environment") or {}).items()},
                     healthcheck=dict(raw.get("healthcheck") or {}),
@@ -107,6 +107,13 @@ class ServiceRuntimeGraph:
                 build_environment[str(key)] = value
             if scope in {"runtime", "both"}:
                 runtime_environment[str(key)] = value
+
+        for process in process_rows:
+            if process.replicas != 1:
+                raise ValueError(
+                    f"Unsupported replica count {process.replicas!r} for process {process.name!r}; "
+                    "PassDeployer currently supports exactly one replica."
+                )
 
         return cls(
             source=dict(revision.source_snapshot or {}),
