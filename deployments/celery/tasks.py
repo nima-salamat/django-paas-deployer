@@ -55,6 +55,7 @@ from deployments.common.retry import is_retryable_exception
 from deployments.core.state.locks import acquire_service_deployment_lock
 from deployments.core.state.manager import StateManager
 from services.models import Service  # type: ignore
+from services.revisioning import ensure_revision_for_deploy, materialize_revision_config, activate_revision_locked
 
 from .services.deploy_service import DeployService
 from .services.stop_service import StopService
@@ -479,9 +480,9 @@ def _ensure_default_db_volume(platform: str, service: Service) -> dict | None:
 
 
 def _build_db_cfg(deploy: Deploy, service: Service) -> dict[str, Any]:
-    """Merge Deploy.config credentials with live Service metadata."""
-    cfg: dict[str, Any] = {}
-    cfg.update(parse_config(getattr(deploy, "config", None)))
+    """Build DB runtime config from the immutable ServiceRevision."""
+    revision_cfg = materialize_revision_config(deploy.revision) if getattr(deploy, "revision_id", None) else parse_config(getattr(deploy, "config", None))
+    cfg: dict[str, Any] = dict(revision_cfg or {})
 
     platform = _resolve_platform(deploy)
     if platform:
@@ -656,12 +657,22 @@ def _mark_success(deploy: Deploy, service: Service, result_message: str, *, task
             },
         )
     try:
-        StateManager.transition_service(
-            service.pk, SERVICE_STATUS_CHOICES.RUNNING,
-            update_fields={"deployed_at": now, "deploy_started": None, "task_id": None},
-        )
+        with transaction.atomic():
+            locked_service = Service.objects.select_for_update().get(pk=service.pk)
+            if deploy.revision_id:
+                activate_revision_locked(locked_service, deploy.revision_id)
+            StateManager.transition_service(
+                locked_service.pk, SERVICE_STATUS_CHOICES.RUNNING,
+                update_fields={
+                    "deployed_at": now,
+                    "deploy_started": None,
+                    "task_id": None,
+                    "selected_deploy_id": deploy.pk,
+                    "selected_deploy_at": now,
+                },
+            )
     except Exception:
-        logger.exception("Failed to transition service %s after successful DB deploy", service.pk)
+        logger.exception("Failed to activate revision/service %s after successful DB deploy", service.pk)
         raise
     _create_deploy_log(
         deploy, stage="finished",
@@ -812,6 +823,9 @@ def run_db_deploy(self, deploy_id: str | int, force_reinit: bool = False) -> Non
         return
 
     deploy, service = locked
+    deploy = ensure_revision_for_deploy(deploy)
+    deploy.refresh_from_db(fields=["revision"])
+    service = Service.objects.select_related("plan", "network").get(pk=service.pk)
     container_name = service.get_docker_service_name()
     platform = _resolve_platform(deploy)
 
