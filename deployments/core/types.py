@@ -29,6 +29,21 @@ class VolumeSpec:
 
 
 @dataclass(frozen=True)
+class EndpointSpec:
+    name: str
+    target_port: int
+    published_port: Optional[int] = None
+    protocol: str = "tcp"
+    exposure: str = "internal"
+    hostname: str = ""
+    path: str = ""
+    tls: bool = False
+    enabled: bool = True
+    process: Optional[str] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class DeploymentConfig:
     name: str
     tag: str
@@ -123,6 +138,7 @@ class DeploymentConfig:
     # Operator-owned base runtime images resolved before final image build.
     # Keys: base_image, node_base_image, nginx_base_image.
     base_images: dict[str, str] = field(default_factory=dict)
+    endpoints: list[EndpointSpec] = field(default_factory=list)
 
     @property
     def image_ref(self) -> str:
