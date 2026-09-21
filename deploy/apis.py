@@ -769,13 +769,18 @@ class DeployViewSet(ModelViewSet):
             # Last-resort idempotent cleanup for app containers. Do not queue
             # the rebuild until Docker confirms that the old container is gone.
             try:
-                container = Container(name=container_name)
-                if container.exists():
-                    container.stop(timeout=10)
-                    container.remove()
-                if not is_db:
-                    Image.remove_by_name(container_name)
-                    Image.remove_by_name(f"{container_name}:latest")
+                if swarm_enabled() and not is_db:
+                    SwarmRuntime().remove_service_group(str(service.pk))
+                elif swarm_enabled() and is_db:
+                    SwarmRuntime().remove(container_name)
+                else:
+                    container = Container(name=container_name)
+                    if container.exists():
+                        container.stop(timeout=10)
+                        container.remove()
+                    if not is_db:
+                        Image.remove_by_name(container_name)
+                        Image.remove_by_name(f"{container_name}:latest")
                 teardown_error = None
             except Exception as exc:
                 logger.exception(
