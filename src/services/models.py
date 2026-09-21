@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 from django.db import models
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator, MaxValueValidator
@@ -105,6 +106,7 @@ class Service(BaseModel):
         choices=(("stopped", _("Stopped")), ("running", _("Running")), ("deleted", _("Deleted"))),
         default="stopped",
     )
+    lifecycle_generation = models.PositiveBigIntegerField(default=0)
 
     def clean(self):
         super().clean()
