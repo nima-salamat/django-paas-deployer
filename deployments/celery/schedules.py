@@ -66,6 +66,18 @@ PRE_CONTAINER_STAGES = frozenset({
 
 
 
+@shared_task(name="deployments.celery.schedules.sync_swarm_infrastructure")
+def sync_swarm_infrastructure():
+    if not swarm_enabled():
+        return {"status": "disabled"}
+    try:
+        from deployments.core.swarm import sync_swarm_nodes
+        return sync_swarm_nodes()
+    except Exception as exc:
+        logger.exception("Swarm infrastructure synchronization failed: %s", exc)
+        return {"status": "error", "error": str(exc)}
+
+
 def create_deploy_log(
     deploy,
     stage,
