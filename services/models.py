@@ -76,6 +76,35 @@ class Service(BaseModel):
 
     task_id = models.CharField(_("Task ID"), max_length=64, unique=True, null=True, blank=True)
 
+    class SourceKind(models.TextChoices):
+        ARCHIVE = "archive", _("Archive")
+        GIT = "git", _("Git")
+        DOCKERFILE = "dockerfile", _("Dockerfile")
+        IMAGE = "image", _("Existing image")
+        COMPOSE = "compose", _("Compose")
+        CATALOG = "catalog", _("Catalog")
+        GENERATED = "generated", _("Generated")
+
+    source_kind = models.CharField(
+        _("Source Kind"), max_length=20, choices=SourceKind.choices,
+        default=SourceKind.ARCHIVE,
+    )
+    source_config = models.JSONField(
+        _("Source Configuration"), default=dict, blank=True,
+        help_text=_("Normalized source metadata. No runtime Docker state belongs here."),
+    )
+    build_config = models.JSONField(
+        _("Build Configuration"), default=dict, blank=True,
+    )
+    runtime_config = models.JSONField(
+        _("Runtime Configuration"), default=dict, blank=True,
+    )
+    desired_state = models.CharField(
+        _("Desired State"), max_length=16,
+        choices=(("stopped", _("Stopped")), ("running", _("Running")), ("deleted", _("Deleted"))),
+        default="stopped",
+    )
+
     def save(self, *args, **kwargs):
         self.full_clean()
 
@@ -274,6 +303,184 @@ class ServiceRevision(BaseModel):
                 raise ValidationError("ServiceRevision is immutable after creation.")
         super().save(*args, **kwargs)
 
+
+
+
+class ServiceEnvironmentVariable(BaseModel):
+    """Non-secret or secret-backed environment variable owned by a Service."""
+    class Scope(models.TextChoices):
+        BUILD = "build", _("Build")
+        RUNTIME = "runtime", _("Runtime")
+        BOTH = "both", _("Build and runtime")
+
+    service = models.ForeignKey(Service, related_name="environment_variables", on_delete=models.CASCADE)
+    key = models.CharField(max_length=128)
+    value = models.TextField(blank=True, default="")
+    secret = models.ForeignKey(
+        "ServiceSecret", related_name="environment_variables",
+        on_delete=models.SET_NULL, null=True, blank=True,
+    )
+    scope = models.CharField(max_length=16, choices=Scope.choices, default=Scope.RUNTIME)
+    enabled = models.BooleanField(default=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ("key",)
+        constraints = [
+            models.UniqueConstraint(fields=("service", "key"), name="uniq_service_environment_key")
+        ]
+
+    def resolve_value(self) -> str:
+        if self.secret_id:
+            return self.secret.get_current_value()
+        return str(self.value or "")
+
+
+class ServiceSecret(BaseModel):
+    """Versioned encrypted secret container owned by a Service."""
+    service = models.ForeignKey(Service, related_name="secrets", on_delete=models.CASCADE)
+    key = models.CharField(max_length=128)
+    current_version = models.PositiveIntegerField(default=0)
+    description = models.CharField(max_length=255, blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+    enabled = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ("key",)
+        constraints = [
+            models.UniqueConstraint(fields=("service", "key"), name="uniq_service_secret_key")
+        ]
+
+    def get_current_value(self) -> str:
+        version = self.versions.filter(version=self.current_version).first()
+        if version is None:
+            return ""
+        return version.get_value()
+
+
+class ServiceSecretVersion(BaseModel):
+    """Immutable version of a ServiceSecret payload."""
+    secret = models.ForeignKey(ServiceSecret, related_name="versions", on_delete=models.CASCADE)
+    version = models.PositiveIntegerField()
+    ciphertext = models.TextField()
+    created_by = models.ForeignKey(
+        "users.User", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="service_secret_versions",
+    )
+    note = models.CharField(max_length=255, blank=True, default="")
+
+    class Meta:
+        ordering = ("-version",)
+        constraints = [
+            models.UniqueConstraint(fields=("secret", "version"), name="uniq_service_secret_version")
+        ]
+
+    def set_value(self, value: str):
+        from services.secret_store import encrypt_secret
+        self.ciphertext = encrypt_secret(str(value or ""))
+
+    def get_value(self) -> str:
+        from services.secret_store import decrypt_secret
+        return decrypt_secret(self.ciphertext)
+
+
+class ServiceEndpoint(BaseModel):
+    """Desired endpoint declaration independent from Docker port publication."""
+    class Exposure(models.TextChoices):
+        PUBLIC = "public", _("Public")
+        INTERNAL = "internal", _("Internal")
+
+    class Protocol(models.TextChoices):
+        HTTP = "http", _("HTTP")
+        HTTPS = "https", _("HTTPS")
+        TCP = "tcp", _("TCP")
+        UDP = "udp", _("UDP")
+        WS = "ws", _("WebSocket")
+
+    service = models.ForeignKey(Service, related_name="endpoints", on_delete=models.CASCADE)
+    process = models.ForeignKey(
+        "ServiceProcess", related_name="endpoints",
+        on_delete=models.SET_NULL, null=True, blank=True,
+    )
+    name = models.CharField(max_length=64)
+    target_port = models.PositiveIntegerField()
+    published_port = models.PositiveIntegerField(null=True, blank=True)
+    protocol = models.CharField(max_length=16, choices=Protocol.choices, default=Protocol.HTTP)
+    exposure = models.CharField(max_length=16, choices=Exposure.choices, default=Exposure.PUBLIC)
+    hostname = models.CharField(max_length=255, blank=True, default="")
+    path = models.CharField(max_length=255, blank=True, default="")
+    tls = models.BooleanField(default=False)
+    enabled = models.BooleanField(default=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ("name",)
+        constraints = [
+            models.UniqueConstraint(fields=("service", "name"), name="uniq_service_endpoint_name")
+        ]
+
+    @property
+    def is_host_published(self) -> bool:
+        return self.published_port is not None
+
+
+class ServiceNetworkAttachment(BaseModel):
+    """Many-to-many network attachment with an optional service alias."""
+    service = models.ForeignKey(Service, related_name="network_attachments", on_delete=models.CASCADE)
+    network = models.ForeignKey(PrivateNetwork, related_name="service_attachments", on_delete=models.CASCADE)
+    alias = models.CharField(max_length=128, blank=True, default="")
+    internal = models.BooleanField(default=False)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("service", "network"), name="uniq_service_network_attachment")
+        ]
+
+
+class DatabaseResource(BaseModel):
+    """Managed database resource represented independently from workload Services."""
+    class Engine(models.TextChoices):
+        MYSQL = "mysql", _("MySQL")
+        MARIADB = "mariadb", _("MariaDB")
+        POSTGRESQL = "postgresql", _("PostgreSQL")
+        MONGODB = "mongodb", _("MongoDB")
+        REDIS = "redis", _("Redis")
+        ORACLE = "oracle", _("Oracle")
+
+    owner = models.ForeignKey(User, related_name="database_resources", on_delete=models.CASCADE)
+    provider_service = models.OneToOneField(
+        Service, related_name="database_resource", on_delete=models.SET_NULL,
+        null=True, blank=True,
+    )
+    name = models.CharField(max_length=64)
+    engine = models.CharField(max_length=32, choices=Engine.choices)
+    host = models.CharField(max_length=255, blank=True, default="")
+    port = models.PositiveIntegerField(null=True, blank=True)
+    database_name = models.CharField(max_length=128, blank=True, default="")
+    access_policy = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=20, default="provisioning")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("owner", "name"), name="uniq_database_resource_owner_name")
+        ]
+
+
+class ServiceDatabaseBinding(BaseModel):
+    """Connects a workload Service to a managed DatabaseResource."""
+    service = models.ForeignKey(Service, related_name="database_bindings", on_delete=models.CASCADE)
+    database = models.ForeignKey(DatabaseResource, related_name="bindings", on_delete=models.CASCADE)
+    alias = models.CharField(max_length=64, default="default")
+    env_prefix = models.CharField(max_length=32, default="DB")
+    access_mode = models.CharField(max_length=16, default="rw")
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("service", "database", "alias"), name="uniq_service_database_binding")
+        ]
 
 class Volume(BaseModel):
     """
