@@ -63,10 +63,10 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             runtime_options={
                 "healthcheck": {
                     "test": "python -c 'print(1)'",
-                    "interval": 10,
-                    "timeout": 4,
+                    "interval": "10s",
+                    "timeout": "4s",
                     "retries": 5,
-                    "start_period": 15,
+                    "start_period": "15s",
                 },
                 "placement_constraints": ["node.labels.region == eu"],
             },
