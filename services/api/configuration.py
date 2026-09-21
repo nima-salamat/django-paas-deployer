@@ -20,6 +20,10 @@ from services.models import (
     ServiceEndpoint,
     ServiceRevision,
     ServiceSecret,
+    PrivateNetwork,
+    ServiceNetworkAttachment,
+    DatabaseResource,
+    ServiceDatabaseBinding,
 )
 from services.revisioning import materialize_revision_config, _get_or_create_secret
 from services.share_permissions import assert_share_action, SharePermissionError
@@ -414,7 +418,217 @@ class ServiceEndpointAPIView(ServiceConfigBaseAPIView):
         return Response(status=204)
 
 
-class ServiceRevisionAPIView(ServiceConfigBaseAPIView):
+
+
+class ServiceNetworksAPIView(ServiceConfigBaseAPIView):
+    """Manage a Service's explicit network attachments."""
+
+    def get(self, request, service_id):
+        service = self.service(request, service_id)
+        denied = self.assert_access(request, service, "can_view")
+        if denied:
+            return denied
+        rows = ServiceNetworkAttachment.objects.filter(service=service).select_related("network").order_by("network__name")
+        return Response({
+            "results": [
+                {
+                    "id": str(row.pk),
+                    "network": str(row.network_id),
+                    "network_name": row.network.name,
+                    "docker_name": row.network.get_docker_network_name(),
+                    "alias": row.alias,
+                    "internal": row.internal,
+                    "metadata": row.metadata or {},
+                }
+                for row in rows
+            ]
+        })
+
+    def post(self, request, service_id):
+        service = self.service(request, service_id)
+        denied = self.assert_access(request, service, "can_network_change")
+        if denied:
+            return denied
+        blocked = self.assert_mutable(service)
+        if blocked:
+            return blocked
+        network_id = request.data.get("network")
+        network = get_object_or_404(PrivateNetwork, pk=network_id, user=service.user)
+        row, _ = ServiceNetworkAttachment.objects.update_or_create(
+            service=service,
+            network=network,
+            defaults={
+                "alias": str(request.data.get("alias") or "")[:128],
+                "internal": bool(request.data.get("internal", False)),
+                "metadata": dict(request.data.get("metadata") or {}),
+            },
+        )
+        return Response({
+            "id": str(row.pk),
+            "network": str(network.pk),
+            "network_name": network.name,
+            "docker_name": network.get_docker_network_name(),
+            "alias": row.alias,
+            "internal": row.internal,
+            "metadata": row.metadata or {},
+        }, status=200)
+
+    def delete(self, request, service_id):
+        service = self.service(request, service_id)
+        denied = self.assert_access(request, service, "can_network_change")
+        if denied:
+            return denied
+        blocked = self.assert_mutable(service)
+        if blocked:
+            return blocked
+        network_id = request.query_params.get("network")
+        deleted, _ = ServiceNetworkAttachment.objects.filter(service=service, network_id=network_id).delete()
+        if not deleted:
+            return Response({"error": "Network attachment not found."}, status=404)
+        return Response(status=204)
+
+
+class ServiceDatabaseBindingsAPIView(ServiceConfigBaseAPIView):
+    """Expose managed DB resources and Service-to-DB bindings."""
+
+    def get(self, request, service_id):
+        service = self.service(request, service_id)
+        denied = self.assert_access(request, service, "can_view")
+        if denied:
+            return denied
+        rows = ServiceDatabaseBinding.objects.filter(service=service).select_related("database", "database__provider_service")
+        return Response({
+            "results": [
+                {
+                    "id": str(row.pk),
+                    "database": str(row.database_id),
+                    "database_name": row.database.name,
+                    "engine": row.database.engine,
+                    "host": row.database.host,
+                    "port": row.database.port,
+                    "database_name_runtime": row.database.database_name,
+                    "alias": row.alias,
+                    "env_prefix": row.env_prefix,
+                    "access_mode": row.access_mode,
+                    "provider_service": str(row.database.provider_service_id) if row.database.provider_service_id else None,
+                }
+                for row in rows
+            ]
+        })
+
+    def post(self, request, service_id):
+        service = self.service(request, service_id)
+        denied = self.assert_access(request, service, "can_change_config")
+        if denied:
+            return denied
+        blocked = self.assert_mutable(service)
+        if blocked:
+            return blocked
+        database_id = request.data.get("database")
+        database = get_object_or_404(
+            DatabaseResource.objects.filter(owner=service.user),
+            pk=database_id,
+        )
+        row, _ = ServiceDatabaseBinding.objects.update_or_create(
+            service=service,
+            database=database,
+            alias=str(request.data.get("alias") or "default")[:64],
+            defaults={
+                "env_prefix": str(request.data.get("env_prefix") or "DB")[:32],
+                "access_mode": str(request.data.get("access_mode") or "rw")[:16],
+                "metadata": dict(request.data.get("metadata") or {}),
+            },
+        )
+        return Response({
+            "id": str(row.pk),
+            "database": str(database.pk),
+            "database_name": database.name,
+            "engine": database.engine,
+            "alias": row.alias,
+            "env_prefix": row.env_prefix,
+            "access_mode": row.access_mode,
+        }, status=200)
+
+    def delete(self, request, service_id):
+        service = self.service(request, service_id)
+        denied = self.assert_access(request, service, "can_change_config")
+        if denied:
+            return denied
+        blocked = self.assert_mutable(service)
+        if blocked:
+            return blocked
+        alias = str(request.query_params.get("alias") or "default")
+        deleted, _ = ServiceDatabaseBinding.objects.filter(service=service, alias=alias).delete()
+        if not deleted:
+            return Response({"error": "Database binding not found."}, status=404)
+        return Response(status=204)
+
+
+class DatabaseResourceAPIView(ServiceConfigBaseAPIView):
+    """List/create database resources from existing provider services."""
+
+    def get(self, request, service_id):
+        service = self.service(request, service_id)
+        denied = self.assert_access(request, service, "can_view")
+        if denied:
+            return denied
+        rows = DatabaseResource.objects.filter(owner=service.user).select_related("provider_service").order_by("name")
+        return Response({
+            "results": [
+                {
+                    "id": str(row.pk),
+                    "name": row.name,
+                    "engine": row.engine,
+                    "host": row.host,
+                    "port": row.port,
+                    "database_name": row.database_name,
+                    "provider_service": str(row.provider_service_id) if row.provider_service_id else None,
+                    "status": row.status,
+                    "access_policy": row.access_policy or {},
+                }
+                for row in rows
+            ]
+        })
+
+    def post(self, request, service_id):
+        service = self.service(request, service_id)
+        denied = self.assert_access(request, service, "can_change_config")
+        if denied:
+            return denied
+        blocked = self.assert_mutable(service)
+        if blocked:
+            return blocked
+        provider_id = request.data.get("provider_service")
+        provider = None
+        if provider_id:
+            provider = get_object_or_404(Service, pk=provider_id, user=service.user)
+        name = str(request.data.get("name") or "").strip()
+        engine = str(request.data.get("engine") or "").strip().lower()
+        allowed = {choice[0] for choice in DatabaseResource.Engine.choices}
+        if not name or engine not in allowed:
+            return Response({"error": "name and a valid engine are required.", "allowed_engines": sorted(allowed)}, status=400)
+        resource, _ = DatabaseResource.objects.update_or_create(
+            owner=service.user,
+            name=name,
+            defaults={
+                "engine": engine,
+                "provider_service": provider,
+                "host": str(request.data.get("host") or ""),
+                "port": int(request.data["port"]) if request.data.get("port") not in (None, "") else None,
+                "database_name": str(request.data.get("database_name") or ""),
+                "access_policy": dict(request.data.get("access_policy") or {}),
+                "metadata": dict(request.data.get("metadata") or {}),
+                "status": str(request.data.get("status") or ("provisioned" if provider else "external")),
+            },
+        )
+        return Response({
+            "id": str(resource.pk),
+            "name": resource.name,
+            "engine": resource.engine,
+            "provider_service": str(provider.pk) if provider else None,
+            "status": resource.status,
+        }, status=200)
+\n\nclass ServiceRevisionAPIView(ServiceConfigBaseAPIView):
     def get(self, request, service_id):
         service = self.service(request, service_id)
         denied = self.assert_access(request, service, "can_view")
