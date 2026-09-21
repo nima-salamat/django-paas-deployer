@@ -21,6 +21,7 @@ from docker.errors import APIError, NotFound as DockerNotFound
 
 from deploy.models import Deploy
 from services.models import Service
+from services.revisioning import get_active_deploy
 
 
 SESSION_TTL_MINUTES = 30
@@ -220,7 +221,7 @@ def _platform_for_service(service: Service) -> str:
     not block legitimate developer commands. The label still drives the default
     work-root (Laravel → /var/www/html, others → /app).
     """
-    deploy = getattr(service, "selected_deploy", None)
+    deploy = get_active_deploy(service)
     config = getattr(deploy, "config", None) or {}
     candidates = [
         config.get("framework"),
