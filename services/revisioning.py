@@ -277,6 +277,8 @@ def _materialize_refs(root: dict[str, Any], revision: ServiceRevision) -> dict[s
     from services.secret_store import decrypt_secret
 
     out = deepcopy(root or {})
+    out.setdefault("env", {})
+    out.setdefault("build_env", {})
     for ref in revision.secret_refs or []:
         secret = ServiceSecret.objects.filter(
             service_id=revision.service_id,
@@ -287,14 +289,100 @@ def _materialize_refs(root: dict[str, Any], revision: ServiceRevision) -> dict[s
         version = secret.versions.filter(version=int(ref.get("version") or 0)).first()
         if version is None:
             raise ValueError(f"Revision secret version {ref.get('key')}:{ref.get('version')} no longer exists.")
+        value = decrypt_secret(version.ciphertext)
+        scope = str(ref.get("scope") or "runtime").lower()
         parts = str(ref.get("path") or "").split(".")
         if parts and parts[0] == "env":
-            out.setdefault("env", {})[parts[-1]] = decrypt_secret(version.ciphertext)
+            key = parts[-1]
+            if scope in {"runtime", "both"}:
+                out["env"][key] = value
+            if scope in {"build", "both"}:
+                out["build_env"][key] = value
         else:
-            _set_path(out, str(ref.get("path") or ""), decrypt_secret(version.ciphertext))
+            _set_path(out, str(ref.get("path") or ""), value)
+
+    # Non-secret environment values retain their declared scope.
     for key, item in (revision.environment_snapshot or {}).items():
-        out.setdefault("env", {})[key] = str(item.get("value") if isinstance(item, dict) else item)
+        if isinstance(item, dict):
+            value = str(item.get("value") or "")
+            scope = str(item.get("scope") or "runtime").lower()
+        else:
+            value = str(item)
+            scope = "runtime"
+        if scope in {"runtime", "both"}:
+            out["env"][key] = value
+        if scope in {"build", "both"}:
+            out["build_env"][key] = value
     return out
+
+
+def _database_environment_snapshot(
+    service: Service,
+    *,
+    created_by=None,
+) -> tuple[dict[str, str], list[dict[str, Any]]]:
+    """Resolve DB bindings into safe connection env plus versioned secrets."""
+    from services.models import DatabaseResource, ServiceDatabaseBinding
+
+    values: dict[str, str] = {}
+    refs: list[dict[str, Any]] = []
+    bindings = (
+        ServiceDatabaseBinding.objects
+        .filter(service=service)
+        .select_related("database")
+        .order_by("alias")
+    )
+    for binding in bindings:
+        database = binding.database
+        policy = dict(database.access_policy or {})
+        allowed = policy.get("allowed_service_ids") or policy.get("allowed_services")
+        if allowed:
+            allowed_ids = {str(item) for item in allowed}
+            if str(service.pk) not in allowed_ids:
+                raise PermissionError(
+                    f"Service {service.pk} is not allowed to access database resource {database.pk}."
+                )
+        if bool(policy.get("read_only")) and str(binding.access_mode).lower() == "rw":
+            raise PermissionError(
+                f"Database binding {binding.alias!r} requires read-only access."
+            )
+
+        prefix = str(binding.env_prefix or "DB").strip().upper()
+        if not prefix:
+            prefix = "DB"
+
+        plain = {
+            f"{prefix}_HOST": str(database.host or ""),
+            f"{prefix}_PORT": str(database.port or ""),
+            f"{prefix}_NAME": str(database.database_name or ""),
+            f"{prefix}_DATABASE": str(database.database_name or ""),
+            f"{prefix}_ENGINE": str(database.engine or ""),
+        }
+        for key, value in plain.items():
+            if value:
+                values[key] = value
+
+        credential = getattr(database, "credential", None)
+        if credential is not None:
+            if credential.username:
+                values[f"{prefix}_USER"] = str(credential.username)
+                values[f"{prefix}_USERNAME"] = str(credential.username)
+            if credential.password_ciphertext:
+                secret_key = f"{prefix}_PASSWORD"
+                secret, version = _get_or_create_secret(
+                    service,
+                    secret_key,
+                    credential.get_password(),
+                    created_by=created_by,
+                    note=f"Database binding {binding.alias} password",
+                )
+                refs.append({
+                    "path": f"env.{secret_key}",
+                    "key": secret.key,
+                    "version": version,
+                    "scope": ServiceEnvironmentVariable.Scope.RUNTIME,
+                })
+    return values, refs
 
 
 def materialize_revision_config(revision: ServiceRevision) -> dict[str, Any]:
@@ -440,6 +528,18 @@ def _sync_legacy_environment(service: Service, config: dict[str, Any], refs: lis
     _sync_legacy_environment(service, compiled, secret_refs, created_by=deploy.created_by)
 
     environment = dict(compiled.get("env") or compiled.get("environment") or {})
+    database_environment, database_secret_refs = _database_environment_snapshot(
+        service,
+        created_by=deploy.created_by,
+    )
+    for key, value in database_environment.items():
+        if key in environment and str(environment[key]) != str(value):
+            raise ValueError(
+                f"Environment variable {key!r} conflicts with a database binding. "
+                "Rename the application variable or change the binding prefix."
+            )
+        environment.setdefault(key, value)
+    secret_refs.extend(database_secret_refs)
     environment_snapshot = _service_environment_snapshot(
         service,
         refs=secret_refs,
