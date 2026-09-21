@@ -198,14 +198,13 @@ def _get_or_create_secret(
     current = secret.get_current_value() if secret.current_version else ""
     if current != str(value or ""):
         next_version = secret.current_version + 1
+        from services.secret_store import encrypt_secret
         version = secret.versions.create(
             version=next_version,
-            ciphertext="",
+            ciphertext=encrypt_secret(str(value or "")),
             created_by=created_by,
             note=note,
         )
-        version.set_value(str(value or ""))
-        version.save(update_fields=["ciphertext", "updated_at"])
         secret.current_version = next_version
         secret.save(update_fields=["current_version", "updated_at"])
     return secret, secret.current_version
