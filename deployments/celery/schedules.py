@@ -553,7 +553,7 @@ def _reconcile_active_deploy(deploy: Deploy) -> None:
         # 1. Timeout check
         if locked.status in ("pending", "running") and locked.started_at:
             minutes_elapsed = (now - locked.started_at).total_seconds() / 60.0
-            if minutes_elapsed >= int(policies["deploy_timeout_minutes"]):
+            if minutes_elapsed >= int(current_policies["deploy_timeout_minutes"]):
                 mark_deploy_timeout(
                     deploy=locked,
                     container_exists=exists,
@@ -647,6 +647,7 @@ def _reconcile_active_deploy_swarm(deploy: Deploy) -> None:
         locked = Deploy.objects.select_for_update().select_related("service").filter(pk=deploy.pk).first()
         if not locked or locked.status not in ACTIVE_DEPLOY_STATUSES or locked.cancel_requested:
             return
+        current_policies = runtime_policies()
         if locked.started_at:
             minutes_elapsed = (now - locked.started_at).total_seconds() / 60.0
             if minutes_elapsed >= int(policies["deploy_timeout_minutes"]):
@@ -908,6 +909,7 @@ def _reconcile_service_runtime_swarm(service: Service) -> None:
     running = bool(state and state.replicas_running == 1)
     now = timezone.now()
     deploy = get_active_deploy(service)
+    current_policies = runtime_policies()
     with transaction.atomic():
         locked = Service.objects.select_for_update().filter(pk=service.pk).first()
         if not locked or locked.status not in ACTIVE_SERVICE_STATUSES:
@@ -930,7 +932,7 @@ def _reconcile_service_runtime_swarm(service: Service) -> None:
         if locked.status in (SERVICE_STATUS_CHOICES.QUEUED, SERVICE_STATUS_CHOICES.DEPLOYING):
             if locked.deploy_started:
                 elapsed = (now - locked.deploy_started).total_seconds() / 60.0
-                if elapsed >= int(policies["queued_timeout_minutes"]):
+                if elapsed >= int(current_policies["queued_timeout_minutes"]):
                     mark_service_failed(
                         service=locked,
                         message="Service stuck in queue/deploying beyond timeout.",
@@ -946,7 +948,7 @@ def _reconcile_service_runtime_swarm(service: Service) -> None:
                 mark_service_stopped(locked, deploy=deploy)
             elif locked.deploy_started:
                 elapsed = (now - locked.deploy_started).total_seconds() / 60.0
-                if elapsed >= int(policies["stop_timeout_minutes"]):
+                if elapsed >= int(current_policies["stop_timeout_minutes"]):
                     try:
                         runtime.stop(service_name)
                     except Exception:
