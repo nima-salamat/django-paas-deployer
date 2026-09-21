@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from django.core.files import File
 import hashlib
 import re
 from typing import Any
@@ -519,6 +520,24 @@ def _sync_legacy_environment(service: Service, config: dict[str, Any], refs: lis
         graph_snapshot=graph,
         created_by=deploy.created_by,
     )
+
+    # Capture the deployable archive into revision-owned storage. The legacy
+    # Deploy row remains provenance only; deleting it must not break rollback.
+    if deploy.zip_file:
+        deploy.zip_file.open("rb")
+        try:
+            revision.artifact_file.save(
+                f"{deploy.name}.zip",
+                File(deploy.zip_file.file),
+                save=False,
+            )
+        finally:
+            try:
+                deploy.zip_file.close()
+            except Exception:
+                pass
+        revision.save(update_fields=["artifact_file", "updated_at"])
+
     Deploy.objects.filter(
         pk=deploy.pk
     ).update(
@@ -544,6 +563,33 @@ def mark_revision_failed(revision_id) -> None:
 
 
 @transaction.atomic
+def get_active_revision(service: Service, *, for_update: bool = False) -> ServiceRevision | None:
+    """Return the runtime-authoritative revision for a Service."""
+    qs = ServiceRevision.objects.select_related("source_deploy")
+    if for_update:
+        qs = qs.select_for_update()
+    revision = qs.filter(service_id=service.pk, pk=getattr(service, "active_revision_id", None)).first()
+    if revision is not None:
+        return revision
+
+    # One-way compatibility bridge for pre-revision services.
+    legacy_deploy = getattr(service, "selected_deploy", None)
+    legacy_revision_id = getattr(legacy_deploy, "revision_id", None)
+    if legacy_revision_id:
+        revision = qs.filter(service_id=service.pk, pk=legacy_revision_id).first()
+        if revision is not None:
+            Service.objects.filter(pk=service.pk, active_revision_id__isnull=True).update(active_revision=revision)
+            return revision
+    return None
+
+
+def get_active_deploy(service: Service, *, for_update: bool = False):
+    revision = get_active_revision(service, for_update=for_update)
+    if revision is None:
+        return None
+    return revision.source_deploy or revision.deployments.order_by("-created_at").first()
+
+
 def activate_revision_locked(service: Service, revision_id) -> ServiceRevision:
     revision = (
         ServiceRevision.objects.select_for_update()
