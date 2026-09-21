@@ -101,6 +101,19 @@ class ServiceSerializer(serializers.ModelSerializer):
                 "remaining_gb": 0,
             }
 
+    def validate(self, attrs):
+        if self.instance is not None and "plan" in attrs:
+            current = str(getattr(self.instance, "status", "") or "").lower()
+            transitional = {"queued", "deploying", "stopping"}
+            if current in transitional:
+                raise serializers.ValidationError({
+                    "plan": (
+                        "Plan changes are unavailable while the service is transitioning. "
+                        "Stop the active operation first."
+                    )
+                })
+        return attrs
+
     def get_fields(self):
         fields = super().get_fields()
         if self.instance:
