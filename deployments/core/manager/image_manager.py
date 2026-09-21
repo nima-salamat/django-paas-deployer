@@ -491,6 +491,10 @@ class Image(Client):
         )
 
         buildargs = {"BUILDKIT_INLINE_CACHE": "1"}
+        tenant_build_args = dict((self.build_options or {}).get("build_args") or {})
+        for key, value in tenant_build_args.items():
+            if isinstance(key, str) and key and value is not None:
+                buildargs[key] = str(value)
 
         try:
             with BuildSlot(deployment_id=self.deployment_id or target_ref, logger=logger):
