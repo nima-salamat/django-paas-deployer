@@ -274,6 +274,8 @@ def start_service_apiview(request):
                 try:
                     if is_db:
                         DBDeployer().remove(container_name)
+                    elif swarm_enabled():
+                        SwarmRuntime().remove_service_group(str(service_item.pk))
                     else:
                         OrchestratorDeploy.remove_all(container_name)
                 except Exception as exc:
