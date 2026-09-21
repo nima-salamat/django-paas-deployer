@@ -166,6 +166,8 @@ def monitor_services(self):
     )
     for service in services:
         try:
+            if _reconcile_desired_state(service):
+                continue
             _reconcile_service_runtime(service)
         except Exception:
             logger.exception("Monitor error for service %s", service.pk)
@@ -554,6 +556,61 @@ def _reconcile_active_deploy(deploy: Deploy) -> None:
             else:
                 mark_rollback_failed(locked)
             return
+
+
+def _reconcile_desired_state(service: Service) -> bool:
+    """Drive observed runtime toward Service.desired_state."""
+    desired = str(getattr(service, "desired_state", "stopped") or "stopped").lower()
+    container_name = service.get_docker_service_name()
+    container = Container(container_name)
+    try:
+        runtime = container.inspect_runtime()
+        running = bool(runtime.get("running"))
+    except Exception as exc:
+        logger.warning("Desired-state inspection failed for service %s: %s", service.pk, exc)
+        return False
+
+    if desired == "stopped":
+        if not running:
+            return False
+        if service.status != SERVICE_STATUS_CHOICES.STOPPING:
+            try:
+                from deployments.celery.tasks import stop as stop_service
+                stop_service.delay(str(service.pk))
+                logger.info("Queued stop reconciliation for service %s.", service.pk)
+                return True
+            except Exception:
+                logger.exception("Could not queue stop reconciliation for service %s.", service.pk)
+        return False
+
+    if desired == "running":
+        if running or service.status in ACTIVE_SERVICE_STATUSES:
+            return False
+        revision_deploy = get_active_deploy(service)
+        if revision_deploy is None:
+            return False
+        if revision_deploy.status not in {
+            DeploymentStatusChoices.SUCCEEDED,
+            DeploymentStatusChoices.FAILED,
+            DeploymentStatusChoices.CANCELLED,
+        }:
+            return False
+        try:
+            from deployments.celery.tasks import deploy as deploy_task
+            Service.objects.filter(pk=service.pk).update(
+                status=SERVICE_STATUS_CHOICES.QUEUED,
+                deploy_started=timezone.now(),
+            )
+            deploy_task.delay(str(revision_deploy.pk))
+            logger.info(
+                "Queued desired-state deployment for service %s from revision %s.",
+                service.pk,
+                revision_deploy.revision_id,
+            )
+            return True
+        except Exception:
+            logger.exception("Could not queue desired-state deployment for service %s", service.pk)
+    return False
 
 
 def _reconcile_service_runtime(service: Service) -> None:
