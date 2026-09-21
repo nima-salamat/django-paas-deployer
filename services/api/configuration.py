@@ -27,6 +27,7 @@ from services.models import (
 )
 from services.revisioning import materialize_revision_config, _get_or_create_secret
 from services.share_permissions import assert_share_action, SharePermissionError
+from services.ports import sync_endpoint_reservation, release_endpoint_port
 
 
 class ServiceConfigBaseAPIView(APIView):
@@ -412,9 +413,11 @@ class ServiceEndpointAPIView(ServiceConfigBaseAPIView):
         if blocked:
             return blocked
         name = str(request.query_params.get("name") or "").strip()
-        deleted, _ = ServiceEndpoint.objects.filter(service=service, name=name).delete()
-        if not deleted:
+        endpoint = ServiceEndpoint.objects.filter(service=service, name=name).first()
+        if endpoint is None:
             return Response({"error": "Endpoint not found."}, status=404)
+        release_endpoint_port(endpoint)
+        endpoint.delete()
         return Response(status=204)
 
 
