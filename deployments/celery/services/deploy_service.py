@@ -667,7 +667,7 @@ class DeployService:
 
         networks: list[tuple[str, str]] = []
         if getattr(service, "network", None) is not None and getattr(service.network, "name", None):
-            networks.append((service.network.get_docker_network_name(), "bridge"))
+            networks.append((service.network.get_docker_network_name(), "overlay"))
 
         zip_path = ""
         if getattr(deploy_item, "zip_file", None):
