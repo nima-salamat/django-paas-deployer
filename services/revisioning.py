@@ -86,13 +86,16 @@ def _normalize_process_specs(service: Service, config: dict[str, Any]) -> list[d
             name = str(item.get("name") or item.get("type") or "").strip()
             if not name:
                 continue
+            replicas = int(item.get("replicas") or 1)
+            if replicas != 1:
+                raise ValueError("PassDeployer currently supports exactly one replica per process.")
             normalized.append(
                 {
                     "name": name[:64],
                     "process_type": str(item.get("process_type") or item.get("type") or "custom")[:32],
                     "command": item.get("command"),
                     "entrypoint": item.get("entrypoint"),
-                    "replicas": max(1, int(item.get("replicas") or 1)),
+                    "replicas": replicas,
                     "enabled": bool(item.get("enabled", True)),
                     "environment": dict(item.get("environment") or {}),
                     "healthcheck": dict(item.get("healthcheck") or {}),
@@ -113,7 +116,7 @@ def _normalize_process_specs(service: Service, config: dict[str, Any]) -> list[d
             "process_type": "web",
             "command": config.get("start_command"),
             "entrypoint": config.get("entry_point"),
-            "replicas": max(1, int(config.get("worker_count") or 1)),
+            "replicas": 1,
             "enabled": True,
             "environment": {},
             "healthcheck": {},
