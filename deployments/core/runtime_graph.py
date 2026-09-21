@@ -52,6 +52,8 @@ class ServiceRuntimeGraph:
     source: dict[str, Any] = field(default_factory=dict)
     build: dict[str, Any] = field(default_factory=dict)
     runtime: dict[str, Any] = field(default_factory=dict)
+    build_environment: dict[str, str] = field(default_factory=dict)
+    runtime_environment: dict[str, str] = field(default_factory=dict)
     environment: dict[str, str] = field(default_factory=dict)
     processes: tuple[RuntimeProcess, ...] = ()
     endpoints: tuple[RuntimeEndpoint, ...] = ()
@@ -96,16 +98,24 @@ class ServiceRuntimeGraph:
                 )
             )
 
+        build_environment: dict[str, str] = {}
+        runtime_environment: dict[str, str] = {}
+        for key, item in (revision.environment_snapshot or {}).items():
+            value = str(item.get("value") if isinstance(item, dict) else item)
+            scope = str(item.get("scope") if isinstance(item, dict) else "runtime").lower()
+            if scope in {"build", "both"}:
+                build_environment[str(key)] = value
+            if scope in {"runtime", "both"}:
+                runtime_environment[str(key)] = value
+
         return cls(
             source=dict(revision.source_snapshot or {}),
             build=dict(revision.build_snapshot or {}),
             runtime=dict(revision.runtime_snapshot or {}),
-            environment={
-                str(key): str(
-                    item.get("value") if isinstance(item, dict) else item
-                )
-                for key, item in (revision.environment_snapshot or {}).items()
-            },
+            build_environment=build_environment,
+            runtime_environment=runtime_environment,
+            environment=runtime_environment,
+
             processes=tuple(process_rows),
             endpoints=tuple(endpoint_rows),
             volumes=tuple(dict(v) for v in (revision.volume_snapshot or [])),
