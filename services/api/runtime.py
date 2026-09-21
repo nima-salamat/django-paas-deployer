@@ -462,20 +462,43 @@ def stop_service_apiview(request):
 
 
 def _force_cancel_runtime_cleanup(service, *, container_name: str, deploy=None) -> dict:
-    """Cancel only artifacts belonging to the target deployment.
+    """Cancel only artifacts belonging to the target deployment."""
+    report = {
+        "runtime": "docker-swarm" if swarm_enabled() else "docker",
+        "target_deploy": getattr(deploy, "pk", None),
+        "container": None,
+        "services": [],
+        "images": [],
+        "intermediate_containers": [],
+        "errors": [],
+    }
+    deploy_id = str(getattr(deploy, "pk", "")) if deploy is not None else ""
 
-    The currently serving container/image is preserved when it belongs to an
-    older successful deployment. This avoids turning a build cancellation into
-    an outage.
-    """
-    report = {"target_deploy": getattr(deploy, "pk", None), "container": None, "images": [], "intermediate_containers": [], "errors": []}
+    if swarm_enabled():
+        try:
+            runtime = SwarmRuntime()
+            names = runtime.service_names_for_service(str(service.pk))
+            for name in names:
+                try:
+                    docker_service = runtime.client.services.get(name)
+                    labels = ((docker_service.attrs or {}).get("Spec") or {}).get("Labels") or {}
+                    owner = str(labels.get("passdeployer.deployment") or "")
+                    if deploy_id and owner not in {"", deploy_id}:
+                        continue
+                    runtime.remove(name)
+                    report["services"].append({"name": name, "result": "removed"})
+                except Exception as exc:
+                    report["errors"].append(f"swarm service {name}: {exc}")
+        except Exception as exc:
+            report["errors"].append(f"swarm runtime: {exc}")
+        return report
+
     try:
         client = Client()()
     except Exception as exc:
         report["errors"].append(f"docker client: {exc}")
         return report
 
-    deploy_id = str(getattr(deploy, "pk", "")) if deploy is not None else ""
     version = str(getattr(deploy, "version", "latest")) if deploy is not None else "latest"
     try:
         from deployments.celery.services.deploy_service import _docker_tag_from_deploy
@@ -483,7 +506,6 @@ def _force_cancel_runtime_cleanup(service, *, container_name: str, deploy=None) 
     except Exception:
         target_image = None
 
-    # Remove only containers explicitly labeled for this deployment.
     try:
         candidates = client.containers.list(all=True)
         for c in candidates:
@@ -516,7 +538,6 @@ def _force_cancel_runtime_cleanup(service, *, container_name: str, deploy=None) 
             report["images"].append({"ref": target_image, "result": result})
             if result.startswith("error"):
                 report["errors"].append(f"image {target_image}: {exc}")
-
     return report
 
 
@@ -582,7 +603,11 @@ def force_cancel_deploy_apiview(request):
     # Reconcile the service state instead of blindly marking STOPPED. A force
     # cancel may happen while an older successful container is still serving.
     try:
-        running = Container.container_is_running(service_item.get_docker_service_name())
+        if swarm_enabled():
+            runtime_state = SwarmRuntime().inspect_service(service_item.get_docker_service_name())
+            running = bool(runtime_state and runtime_state.replicas_running == 1)
+        else:
+            running = Container.container_is_running(service_item.get_docker_service_name())
     except Exception:
         running = False
     fallback_status = SERVICE_STATUS_CHOICES.RUNNING if running else SERVICE_STATUS_CHOICES.STOPPED
