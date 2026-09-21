@@ -97,6 +97,41 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         with self.assertRaises(Exception):
             _validate_replicas(2)
 
+    def test_compiles_multiple_public_http_endpoints(self):
+        config = _config(
+            endpoints=[
+                EndpointSpec(
+                    name="web",
+                    target_port=8000,
+                    exposure="public",
+                    protocol="http",
+                    hostname="demo.deploy.example.com",
+                ),
+                EndpointSpec(
+                    name="api",
+                    target_port=9000,
+                    exposure="public",
+                    protocol="http",
+                    hostname="api.demo.deploy.example.com",
+                    path="/v1",
+                ),
+            ]
+        )
+        spec = compile_compose_service(config, image_ref="demo:r1")
+        labels = spec["services"]["demo"]["deploy"]["labels"]
+        self.assertEqual(
+            labels["traefik.http.services.demo-web.loadbalancer.server.port"],
+            "8000",
+        )
+        self.assertEqual(
+            labels["traefik.http.services.demo-api.loadbalancer.server.port"],
+            "9000",
+        )
+        self.assertIn(
+            "PathPrefix(` /v1 `)".replace(" ", ""),
+            labels["traefik.http.routers.demo-api.rule"],
+        )
+
     def test_compiles_udp_public_port(self):
         config = _config(
             endpoints=[
