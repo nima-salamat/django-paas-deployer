@@ -1,5 +1,6 @@
 from django.db import models
 from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator
 from django.db.models import Sum, Q
 from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
@@ -248,7 +249,7 @@ class ServiceProcess(BaseModel):
     process_type = models.CharField(max_length=32, default="custom")
     command = models.TextField(blank=True, null=True)
     entrypoint = models.TextField(blank=True, null=True)
-    replicas = models.PositiveIntegerField(default=1)
+    replicas = models.PositiveIntegerField(default=1, validators=[MaxValueValidator(8)])
     enabled = models.BooleanField(default=True)
     environment = models.JSONField(default=dict, blank=True)
     healthcheck = models.JSONField(default=dict, blank=True)
@@ -488,6 +489,23 @@ class ServiceEndpoint(BaseModel):
         constraints = [
             models.UniqueConstraint(fields=("service", "name"), name="uniq_service_endpoint_name")
         ]
+
+    def clean(self):
+        super().clean()
+        protocol = str(self.protocol or "").lower()
+        exposure = str(self.exposure or "").lower()
+        if not 1 <= int(self.target_port or 0) <= 65535:
+            raise ValidationError({"target_port": "Target port must be between 1 and 65535."})
+        if self.published_port is not None and not 1 <= int(self.published_port) <= 65535:
+            raise ValidationError({"published_port": "Published port must be between 1 and 65535."})
+        if exposure == self.Exposure.PUBLIC and protocol in {"tcp", "udp"} and self.published_port is None:
+            raise ValidationError(
+                {"published_port": "Public TCP/UDP endpoints require an explicit published host port."}
+            )
+        if protocol in {"tcp", "udp"} and self.path:
+            raise ValidationError({"path": "TCP/UDP endpoints cannot define an HTTP path."})
+        if protocol in {"tcp", "udp"} and self.tls:
+            raise ValidationError({"tls": "TLS is only supported by HTTP-family endpoints."})
 
     @property
     def is_host_published(self) -> bool:
