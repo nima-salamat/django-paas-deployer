@@ -191,23 +191,29 @@ def _get_or_create_secret(
     created_by=None,
     note: str = "",
 ) -> tuple[ServiceSecret, int]:
-    secret = ServiceSecret.objects.filter(service=service, key=key).first()
-    if secret is None:
-        secret = ServiceSecret.objects.create(service=service, key=key, current_version=0)
-
-    current = secret.get_current_value() if secret.current_version else ""
-    if current != str(value or ""):
-        next_version = secret.current_version + 1
-        from services.secret_store import encrypt_secret
-        version = secret.versions.create(
-            version=next_version,
-            ciphertext=encrypt_secret(str(value or "")),
-            created_by=created_by,
-            note=note,
+    from services.secret_store import encrypt_secret
+    with transaction.atomic():
+        secret = (
+            ServiceSecret.objects
+            .select_for_update()
+            .filter(service=service, key=key)
+            .first()
         )
-        secret.current_version = next_version
-        secret.save(update_fields=["current_version", "updated_at"])
-    return secret, secret.current_version
+        if secret is None:
+            secret = ServiceSecret.objects.create(service=service, key=key, current_version=0)
+
+        current = secret.get_current_value() if secret.current_version else ""
+        if current != str(value or ""):
+            next_version = secret.current_version + 1
+            secret.versions.create(
+                version=next_version,
+                ciphertext=encrypt_secret(str(value or "")),
+                created_by=created_by,
+                note=note,
+            )
+            secret.current_version = next_version
+            secret.save(update_fields=["current_version", "updated_at"])
+        return secret, secret.current_version
 
 
 def _extract_and_store_secrets(
