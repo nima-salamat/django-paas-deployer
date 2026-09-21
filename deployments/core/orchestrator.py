@@ -2,12 +2,11 @@
 deployments/core/orchestrator.py
 --------------------------------
 Deployment orchestrator — the pipeline that takes a DeploymentConfig
-end-to-end from validation to a running healthy container.
+end-to-end from validation to a running Docker Swarm Service/Task.
 
 Key changes vs. legacy:
-  * ``ContainerSnapshot.capture()`` is taken BEFORE any mutation so
-    rollback can restore the EXACT previous state (env, command, labels,
-    restart_policy) instead of just image + networks.
+  * The legacy container snapshot path is used only when Swarm is disabled. When Swarm is enabled,
+    the Swarm Service is the runtime state and its update/rollback policy owns task replacement.
   * Container replacement uses the rename-old strategy: rename the old
     container out of the way, create + start the new one, then remove
     the old.  This eliminates the stop-old → create-new downtime window
@@ -164,7 +163,7 @@ class DeploymentOrchestrator:
 
             # 5. Snapshot existing container for rollback (BEFORE any mutation)
             existing_container = Container(config.name)
-            if existing_container.exists():
+            if not swarm_enabled() and existing_container.exists():
                 snapshot = ContainerSnapshot.capture(existing_container)
                 self.logger.info(
                     "state_snapshot",
