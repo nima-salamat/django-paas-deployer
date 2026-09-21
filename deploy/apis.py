@@ -52,6 +52,7 @@ from .serializers import DeployLogSerializer, DeploySerializer
 from services.models import Service
 from core.utils import make_uuid4
 from core.throttling import ScopedRateThrottle
+from services.revisioning import ensure_revision_for_deploy, get_active_deploy
 
 logger = logging.getLogger(__name__)
 
@@ -1476,11 +1477,14 @@ def set_deploy_apiview(request):
                         status=status.HTTP_403_FORBIDDEN,
                     )
 
-            # Avoid model.save() full_clean side-effects; update FK + timestamp directly.
+            # Revision is runtime authority; selected_deploy is compatibility state.
+            deploy_item = ensure_revision_for_deploy(deploy_item)
             Service.objects.filter(pk=service_item.pk).update(
+                active_revision_id=deploy_item.revision_id,
                 selected_deploy_id=deploy_item.pk,
                 selected_deploy_at=timezone.now(),
             )
+            service_item.active_revision_id = deploy_item.revision_id
             service_item.selected_deploy_id = deploy_item.pk
 
     except Service.DoesNotExist:
@@ -1565,7 +1569,8 @@ def unset_deploy_apiview(request):
                         status=status.HTTP_403_FORBIDDEN,
                     )
 
-            if str(service_item.selected_deploy_id or "") != str(deploy_item.id):
+            active_deploy = get_active_deploy(service_item)
+            if active_deploy is None or str(active_deploy.id) != str(deploy_item.id):
                 return Response(
                     {
                         "result": "error",
@@ -1575,6 +1580,7 @@ def unset_deploy_apiview(request):
                 )
 
             Service.objects.filter(pk=service_item.pk).update(
+                active_revision_id=None,
                 selected_deploy_id=None,
                 selected_deploy_at=timezone.now(),
             )
