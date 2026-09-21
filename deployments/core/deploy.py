@@ -201,9 +201,14 @@ class Deploy:
         # Traefik network. Internal catalog services (databases, caches,
         # workers, schedulers) must stay on their application-private
         # network even when their platform type is APP.
+        has_public_endpoint = any(
+            endpoint.enabled and endpoint.exposure == "public"
+            for endpoint in self.endpoints
+        )
+        legacy_routed_service = not self.endpoints and bool(self.port)
         if (
             str(self.platform_type) == str(PlanTypeChoices.APP)
-            and self.port
+            and (has_public_endpoint or legacy_routed_service)
             and "proxy_net" not in seen
         ):
             specs.append(NetworkSpec(name="proxy_net", driver="bridge", internal=False, attachable=True))
