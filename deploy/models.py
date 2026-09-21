@@ -31,6 +31,15 @@ class RollbackStatusChoices(models.TextChoices):
 class Deploy(BaseModel):
     name = models.CharField(verbose_name=_("Name"), max_length=50)
     service = models.ForeignKey(Service, verbose_name=_("Service"), on_delete=models.CASCADE)
+    revision = models.ForeignKey(
+        "services.ServiceRevision",
+        verbose_name=_("Service Revision"),
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="deployments",
+        help_text=_("Immutable service configuration snapshot executed by this deployment."),
+    )
     created_by = models.ForeignKey(
         "users.User",
         verbose_name=_("Created by"),
