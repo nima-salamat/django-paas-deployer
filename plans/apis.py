@@ -270,6 +270,7 @@ class PlanApplyAPIView(APIView):
     def post(self, request, planId=None):
         from django.shortcuts import get_object_or_404
         from services.models import Service
+        from services.revisioning import get_active_deploy
         from deployments.celery.tasks import deploy as start_service
         from core.global_settings.config import SERVICE_STATUS_CHOICES
         from django.db import transaction
