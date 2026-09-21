@@ -708,9 +708,11 @@ class ServiceRevisionRollbackAPIView(ServiceConfigBaseAPIView):
             pk=revision_id,
             service=service,
         )
-        if revision.source_deploy is None or not revision.source_deploy.zip_file:
+        platform = str(getattr(service.plan, "platform", "") or "").lower()
+        requires_source_artifact = platform not in {"mysql", "mariadb", "postgresql", "postgres", "mongodb", "mongo", "redis", "oracle"}
+        if requires_source_artifact and (revision.source_deploy is None or not revision.source_deploy.zip_file):
             return Response(
-                {"error": "This revision has no deployable source artifact."},
+                {"error": "This application revision has no deployable source artifact."},
                 status=409,
             )
 
@@ -737,7 +739,7 @@ class ServiceRevisionRollbackAPIView(ServiceConfigBaseAPIView):
                 created_by=request.user,
                 version=revision.revision_number,
                 revision=revision,
-                zip_file=revision.source_deploy.zip_file.name,
+                zip_file=(revision.source_deploy.zip_file.name if revision.source_deploy and revision.source_deploy.zip_file else None),
                 config={"rollback_revision": str(revision.pk), "platform": getattr(service.plan, "platform", "docker")},
                 previous_deploy_id=current,
             )
