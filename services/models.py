@@ -1,6 +1,6 @@
 from django.db import models
 from django.core.exceptions import ValidationError
-from django.core.validators import MaxValueValidator
+from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db.models import Sum, Q
 from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
@@ -249,7 +249,7 @@ class ServiceProcess(BaseModel):
     process_type = models.CharField(max_length=32, default="custom")
     command = models.TextField(blank=True, null=True)
     entrypoint = models.TextField(blank=True, null=True)
-    replicas = models.PositiveIntegerField(default=1, validators=[MaxValueValidator(1)])
+    replicas = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1), MaxValueValidator(1)])
     enabled = models.BooleanField(default=True)
     environment = models.JSONField(default=dict, blank=True)
     healthcheck = models.JSONField(default=dict, blank=True)
