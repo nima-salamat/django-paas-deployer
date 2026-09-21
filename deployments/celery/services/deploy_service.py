@@ -32,7 +32,7 @@ from deployments.core.manager.container_manager import Container
 from deployments.core.state.locks import acquire_service_deployment_lock
 from deployments.core.state.manager import StateManager
 from services.models import Volume  # type: ignore
-from services.revisioning import ensure_revision_for_deploy, activate_revision_locked, materialize_revision_config, mark_revision_failed
+from services.revisioning import ensure_revision_for_deploy, activate_revision_locked, materialize_revision_config, mark_revision_failed, get_active_deploy
 
 from deployments.common import parse_config, as_bool, as_int
 from deployments.common.deployment_profile import normalize_profile
@@ -168,16 +168,16 @@ class DeployService:
                 from services.models import Service
                 with transaction.atomic():
                     service = Service.objects.select_for_update().get(pk=service_id)
-                    current = service.selected_deploy_id
+                    active_deploy = get_active_deploy(service)
+                    current = active_deploy.pk if active_deploy else None
                     if current != previous_deploy_id:
                         raise InvalidServiceStateError(
-                            "Active deployment changed while this deployment was preparing to activate.",
-                            details={"expected_previous_deploy": previous_deploy_id, "actual_selected_deploy": current},
+                            "Active revision changed while this deployment was preparing to activate.",
+                            details={"expected_previous_deploy": previous_deploy_id, "actual_active_deploy": current},
                         )
                     activate_revision_locked(service, deploy_item.revision_id)
                     Service.objects.filter(pk=service_id).update(
-                        selected_deploy_id=deploy_item.pk,
-                        selected_deploy_at=timezone.now(),
+                        desired_state="running",
                     )
                 logger.info(
                     "Activated deploy=%s revision=%s for service=%s",
@@ -194,13 +194,13 @@ class DeployService:
             # that was actually committed. A stale worker must not mark the
             # service RUNNING after another deployment has won activation.
             final = Deploy.objects.select_related("service").filter(pk=deploy_item.pk).values(
-                "status", "service__selected_deploy_id", "service__active_revision_id"
+                "status", "service__active_revision_id"
             ).first()
             if not final:
                 logger.warning("Deploy %s disappeared before final service sync.", deploy_id)
                 return
             final_status = final.get("status")
-            selected_id = final.get("service__selected_deploy_id")
+            selected_id = None
             active_revision_id = final.get("service__active_revision_id")
             if final_status == "cancelled":
                 ServiceStateManager.sync_legacy_stopped(service_id)
@@ -221,9 +221,9 @@ class DeployService:
                 ServiceStateManager.sync_legacy_failure(service_id, deploy_id=deploy_item.pk)
             else:
                 logger.info(
-                    "Skipping legacy service sync for deploy=%s status=%s selected=%s; "
+                    "Skipping legacy service sync for deploy=%s status=%s active_revision=%s; "
                     "worker may be stale or another deployment may be authoritative.",
-                    deploy_id, final_status, selected_id,
+                    deploy_id, final_status, active_revision_id,
                 )
             logger.info("Completed deploy cycle for container: %s", container_name)
 
