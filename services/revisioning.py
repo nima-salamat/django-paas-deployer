@@ -9,12 +9,15 @@ from typing import Any
 from django.db import transaction
 from django.utils import timezone
 
+from services.ports import sync_endpoint_reservation
+
 from services.models import (
     Service,
     ServiceProcess,
     ServiceRevision,
     ServiceEnvironmentVariable,
     ServiceSecret,
+    ServiceEndpoint,
 )
 
 
@@ -312,8 +315,96 @@ def materialize_revision_config(revision: ServiceRevision) -> dict[str, Any]:
     return cfg
 
 
-@transaction.atomic
-def ensure_revision_for_deploy(deploy, *, force_new: bool = False):
+
+
+def _sync_legacy_endpoints(service: Service, config: dict[str, Any], *, public_default: bool = False) -> None:
+    """Import legacy Deploy.config ports into first-class ServiceEndpoint rows."""
+    if ServiceEndpoint.objects.filter(service=service).exists():
+        return
+    raw_ports = config.get("endpoints") or config.get("ports") or []
+    if isinstance(raw_ports, dict):
+        raw_ports = list(raw_ports.values())
+    if not isinstance(raw_ports, list):
+        return
+
+    for index, raw in enumerate(raw_ports):
+        try:
+            if isinstance(raw, dict):
+                target = int(raw.get("target") or raw.get("target_port") or raw.get("published"))
+                published = raw.get("published")
+                protocol = str(raw.get("protocol") or "tcp").lower()
+                hostname = str(raw.get("hostname") or config.get("public_host") or config.get("domain") or "")
+                exposure = str(raw.get("exposure") or ("public" if public_default or raw.get("public") else "internal")).lower()
+            elif isinstance(raw, int):
+                target = int(raw)
+                published = None
+                protocol = "tcp"
+                hostname = str(config.get("public_host") or config.get("domain") or "")
+                exposure = "public" if public_default else "internal"
+            else:
+                text_value = str(raw)
+                parts = text_value.split(":")
+                endpoint = parts[-1]
+                protocol = "tcp"
+                if "/" in endpoint:
+                    endpoint, protocol = endpoint.split("/", 1)
+                target = int(endpoint)
+                published = int(parts[-2]) if len(parts) > 1 and parts[-2].isdigit() else None
+                hostname = str(config.get("public_host") or config.get("domain") or "")
+                exposure = "public" if public_default else "internal"
+        except (TypeError, ValueError):
+            continue
+
+        endpoint, _ = ServiceEndpoint.objects.update_or_create(
+            service=service,
+            name=f"legacy-{target}-{protocol}-{index}",
+            defaults={
+                "target_port": target,
+                "published_port": int(published) if published not in (None, "") else None,
+                "protocol": protocol if protocol in {"tcp", "udp"} else "tcp",
+                "exposure": exposure if exposure in {"public", "internal"} else "internal",
+                "hostname": hostname if exposure == "public" else "",
+                "tls": bool(config.get("tls")),
+                "enabled": True,
+                "metadata": {"migrated_from_deploy_config": True},
+            },
+        )
+        sync_endpoint_reservation(endpoint)
+
+
+def _sync_legacy_environment(service: Service, config: dict[str, Any], refs: list[dict[str, Any]], *, created_by=None) -> None:
+    """Move legacy env values into ServiceEnvironmentVariable rows."""
+    environment = dict(config.get("env") or config.get("environment") or {})
+    for key, value in environment.items():
+        key = str(key)
+        secret_ref = next(
+            (
+                ref for ref in refs
+                if ref.get("path") == f"env.{key}"
+            ),
+            None,
+        )
+        if secret_ref:
+            secret = ServiceSecret.objects.get(service=service, key=secret_ref["key"])
+            defaults = {
+                "secret": secret,
+                "value": "",
+                "scope": ServiceEnvironmentVariable.Scope.RUNTIME,
+                "enabled": True,
+            }
+        else:
+            defaults = {
+                "secret": None,
+                "value": str(value),
+                "scope": ServiceEnvironmentVariable.Scope.RUNTIME,
+                "enabled": True,
+            }
+        ServiceEnvironmentVariable.objects.update_or_create(
+            service=service,
+            key=key[:128],
+            defaults=defaults,
+        )
+\n\n@transaction.atomic\ndef ensure_revision_for_deploy(deploy, *, force_new: bool = False):
     """Compile the mutable Service domain into an immutable executable revision."""
     from deploy.models import Deploy
 
@@ -342,6 +433,9 @@ def ensure_revision_for_deploy(deploy, *, force_new: bool = False):
         compiled,
         created_by=deploy.created_by,
     )
+
+    _sync_legacy_endpoints(service, compiled, public_default=bool(compiled.get("public") or compiled.get("public_host") or compiled.get("domain")))
+    _sync_legacy_environment(service, compiled, secret_refs, created_by=deploy.created_by)
 
     environment = dict(compiled.get("env") or compiled.get("environment") or {})
     environment_snapshot = _service_environment_snapshot(
