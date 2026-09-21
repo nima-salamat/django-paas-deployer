@@ -297,9 +297,9 @@ class PlanApplyAPIView(APIView):
 
                 # Optionally trigger redeploy if requested and a deploy is selected
                 if apply_immediately:
-                    deploy_item = service.selected_deploy
-                    if deploy_item is None:
-                        return Response({"result": "error", "detail": _('Service has no selected deploy to apply.')}, status=status.HTTP_409_CONFLICT)
+                    deploy_item = get_active_deploy(service)
+                    if deploy_item is None or service.active_revision_id is None:
+                        return Response({"result": "error", "detail": _('Service has no active revision to apply.')}, status=status.HTTP_409_CONFLICT)
 
                     if service.status in (
                         SERVICE_STATUS_CHOICES.QUEUED,
