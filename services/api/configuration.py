@@ -647,7 +647,8 @@ class DatabaseResourceAPIView(ServiceConfigBaseAPIView):
             "provider_service": str(provider.pk) if provider else None,
             "status": resource.status,
         }, status=200)
-\n\nclass ServiceRevisionAPIView(ServiceConfigBaseAPIView):
+
+class ServiceRevisionAPIView(ServiceConfigBaseAPIView):
     def get(self, request, service_id):
         service = self.service(request, service_id)
         denied = self.assert_access(request, service, "can_view")
