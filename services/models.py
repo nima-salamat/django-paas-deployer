@@ -299,13 +299,24 @@ class ServiceRevision(BaseModel):
     def save(self, *args, **kwargs):
         if self.pk and not self._state.adding:
             old = type(self).objects.filter(pk=self.pk).values(
-                "config_snapshot", "process_snapshot", "secret_keys",
-                "revision_number", "service_id",
+                "config_snapshot", "process_snapshot", "secret_keys", "secret_refs",
+                "source_snapshot", "build_snapshot", "runtime_snapshot",
+                "environment_snapshot", "endpoint_snapshot", "volume_snapshot",
+                "network_snapshot", "graph_snapshot", "revision_number", "service_id",
             ).first()
             if old and any([
                 old["config_snapshot"] != self.config_snapshot,
                 old["process_snapshot"] != self.process_snapshot,
                 old["secret_keys"] != self.secret_keys,
+                old["secret_refs"] != self.secret_refs,
+                old["source_snapshot"] != self.source_snapshot,
+                old["build_snapshot"] != self.build_snapshot,
+                old["runtime_snapshot"] != self.runtime_snapshot,
+                old["environment_snapshot"] != self.environment_snapshot,
+                old["endpoint_snapshot"] != self.endpoint_snapshot,
+                old["volume_snapshot"] != self.volume_snapshot,
+                old["network_snapshot"] != self.network_snapshot,
+                old["graph_snapshot"] != self.graph_snapshot,
                 old["revision_number"] != self.revision_number,
                 old["service_id"] != self.service_id,
             ]):
