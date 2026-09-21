@@ -40,7 +40,7 @@ class Migration(migrations.Migration):
             options={
                 "constraints": [
                     models.UniqueConstraint(
-                        condition=Q(("state", "active")),
+                        condition=Q(state="active"),
                         fields=("host_port", "protocol"),
                         name="uniq_active_host_port_protocol",
                     )
