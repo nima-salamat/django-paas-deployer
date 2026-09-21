@@ -11,6 +11,19 @@ from .naming import allocate_deploy_name, normalize_deploy_name
 logger = logging.getLogger(__name__)
 
 
+def _unique_deploy_name(service, requested_name):
+    """Allocate a deployment name unique within one service."""
+    base = str(requested_name or getattr(service, "name", "deploy") or "deploy").strip()[:50]
+    base = base or "deploy"
+    candidate = base
+    index = 2
+    while Deploy.objects.filter(service=service, name=candidate).exists():
+        suffix = f"-{index}"
+        candidate = f"{base[:50 - len(suffix)]}{suffix}"
+        index += 1
+    return candidate
+
+
 class MaskedDBConfigField(serializers.JSONField):
     """JSONField that strips sensitive DB credentials on read, but accepts full dict on write.
 
@@ -128,7 +141,7 @@ class DeploySerializer(serializers.ModelSerializer):
         model = Deploy
         fields = [
             "id", "name", "service", "created_by", "version", "zip_file",
-            "config",
+            "revision", "config",
             "started_at", "completed_at", "status", "stage", "progress",
             "status_message", "error_message", "rollback_status",
             "health_status", "container_status", "image_status",
@@ -140,7 +153,7 @@ class DeploySerializer(serializers.ModelSerializer):
             "status_message", "error_message", "rollback_status",
             "health_status", "container_status", "image_status",
             "volume_status", "network_status",
-            "recent_logs", "created_at", "updated_at", "updated_file_at", "created_by",
+            "recent_logs", "created_at", "updated_at", "updated_file_at", "created_by", "revision",
         ]
 
     def get_recent_logs(self, obj):
@@ -174,8 +187,19 @@ class DeploySerializer(serializers.ModelSerializer):
             return []
 
     def validate(self, attrs):
-        """Validate permissions and deployment-name collisions.
-
+        # Once execution has produced a revision, the Deploy is no longer a
+        # mutable configuration object. Create a new Deploy to produce a new
+        # immutable ServiceRevision.
+        if self.instance is not None and getattr(self.instance, "revision_id", None):
+            changed = set(attrs) & {"service", "version", "zip_file", "config"}
+            if changed:
+                raise serializers.ValidationError({
+                    "revision": (
+                        "This deployment already has an immutable service revision. "
+                        "Create a new deployment instead of changing its executable configuration."
+                    )
+                })
+        """Validate permissions, immutable revisions, and scoped names."""
         Create requests may reuse a deployment name; the create path allocates
         a unique suffix. Existing deployments keep strict name uniqueness when
         renamed so an update cannot silently change identity.
