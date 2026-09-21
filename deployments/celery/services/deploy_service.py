@@ -123,6 +123,8 @@ class DeployService:
             logger.info("Skipped deploy execution for ID %s: %s", deploy_id, str(exc))
             return
 
+        deploy_item.service.__class__.objects.filter(pk=deploy_item.service_id).update(desired_state="running")
+        deploy_item.service.desired_state = "running"
         container_name = deploy_item.service.get_docker_service_name()
         state_tracker = DjangoDeploymentState(deploy_item)
         StateManager.heartbeat_deploy(deploy_item.pk, task_id=task_id, stage="starting")
