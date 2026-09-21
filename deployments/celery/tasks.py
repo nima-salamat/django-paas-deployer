@@ -54,8 +54,9 @@ from deployments.common.exceptions import (
 from deployments.common.retry import is_retryable_exception
 from deployments.core.state.locks import acquire_service_deployment_lock
 from deployments.core.state.manager import StateManager
+from deployments.core.swarm import SwarmRuntime, swarm_enabled
 from services.models import Service  # type: ignore
-from services.revisioning import ensure_revision_for_deploy, materialize_revision_config, activate_revision_locked, mark_revision_failed
+from services.revisioning import ensure_revision_for_deploy, materialize_revision_config, activate_revision_locked, mark_revision_failed, get_active_deploy
 
 from .services.deploy_service import DeployService
 from .services.stop_service import StopService
@@ -166,6 +167,40 @@ def stop(self, service_id) -> None:
             raise self.retry(exc=exc)
         logger.exception("Stop exhausted retries for service_id: %s", service_id)
 
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=10, name="deployments.celery.tasks.restart_service")
+def restart_service(self, service_id) -> None:
+    """Restart a running application through the selected runtime backend."""
+    try:
+        service = Service.objects.get(pk=service_id)
+        if swarm_enabled():
+            SwarmRuntime().restart_service_group(str(service.pk))
+            Service.objects.filter(pk=service.pk).update(
+                status=SERVICE_STATUS_CHOICES.RUNNING,
+                desired_state="running",
+                task_id=None,
+                deploy_started=None,
+                deployed_at=timezone.now(),
+            )
+            logger.info("Restarted Swarm service group for service=%s", service_id)
+            return
+
+        # Legacy fallback keeps the existing deploy semantics.
+        from deployments.celery.services.stop_service import StopService
+        StopService().execute(str(service.pk))
+        deploy_item = get_active_deploy(service)
+        if deploy_item is None:
+            raise InvalidServiceStateError("Service has no active deployment.")
+        deploy_item.status = DeploymentStatusChoices.PENDING
+        deploy_item.stage = "queued"
+        deploy_item.progress = 0
+        deploy_item.status_message = "Restart queued."
+        deploy_item.save(update_fields=["status", "stage", "progress", "status_message", "updated_at"])
+        DeployService().execute(str(deploy_item.pk), task_id=str(self.request.id))
+    except Exception as exc:
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc)
+        logger.exception("Restart exhausted retries for service=%s", service_id)
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=10)
 def build_base_runtime_image(self, base_image_id, force_rebuild=False) -> None:
