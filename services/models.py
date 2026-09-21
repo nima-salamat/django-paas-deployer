@@ -249,7 +249,7 @@ class ServiceProcess(BaseModel):
     process_type = models.CharField(max_length=32, default="custom")
     command = models.TextField(blank=True, null=True)
     entrypoint = models.TextField(blank=True, null=True)
-    replicas = models.PositiveIntegerField(default=1, validators=[MaxValueValidator(8)])
+    replicas = models.PositiveIntegerField(default=1, validators=[MaxValueValidator(1)])
     enabled = models.BooleanField(default=True)
     environment = models.JSONField(default=dict, blank=True)
     healthcheck = models.JSONField(default=dict, blank=True)
