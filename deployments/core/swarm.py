@@ -202,29 +202,29 @@ def _service_labels(config) -> dict[str, str]:
     }
     labels.update({str(k): str(v) for k, v in (config.labels or {}).items()})
 
-    endpoints = [
+    for endpoint in (
         item for item in (config.endpoints or ())
         if item.enabled and item.exposure == "public"
-    ]
-    primary = endpoints[0] if endpoints else None
-    if primary is not None and primary.protocol in {"http", "https", "ws"}:
+        and item.protocol in {"http", "https", "ws"}
+    ):
         router = re.sub(
-            r"[^a-z0-9-]", "-", f"{config.name}-{primary.name}".lower()
+            r"[^a-z0-9-]",
+            "-",
+            f"{config.name}-{endpoint.name}".lower(),
         ).strip("-")[:50]
         tick = chr(96)
-        host = primary.hostname or config.public_host or ""
+        host = endpoint.hostname or config.public_host or ""
+        rule = f"Host({tick}{host}{tick})" if host else ""
+        if endpoint.path:
+            path_rule = f"PathPrefix({tick}{endpoint.path}{tick})"
+            rule = f"{rule} && {path_rule}" if rule else path_rule
         labels["traefik.enable"] = "true"
         labels["traefik.swarm.network"] = "proxy_net"
-        labels[f"traefik.http.routers.{router}.rule"] = f"Host({tick}{host}{tick})"
-        # Host Nginx terminates public TLS in the current installation.
-        # Traefik therefore receives HTTP on its internal web entrypoint.
+        if rule:
+            labels[f"traefik.http.routers.{router}.rule"] = rule
         labels[f"traefik.http.routers.{router}.entrypoints"] = "web"
         labels[f"traefik.http.routers.{router}.service"] = router
-        labels[f"traefik.http.services.{router}.loadbalancer.server.port"] = str(primary.target_port)
-        if primary.path:
-            labels[f"traefik.http.routers.{router}.rule"] += (
-                f" && PathPrefix({tick}{primary.path}{tick})"
-            )
+        labels[f"traefik.http.services.{router}.loadbalancer.server.port"] = str(endpoint.target_port)
     return labels
 
 
