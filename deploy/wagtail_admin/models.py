@@ -5,7 +5,7 @@ from django.conf import settings
 from django.utils.translation import gettext_lazy as _
 
 from cms.wagtail_admin.utils import panels_for, read_only_panels
-from deploy.models import Deploy, DeployLog, BaseRuntimeImage
+from deploy.models import Deploy, DeployLog, BaseRuntimeImage, SwarmCluster, SwarmNode
 from wagtail.permission_policies.base import ModelPermissionPolicy
 from wagtail.snippets.views.snippets import SnippetViewSet, SnippetViewSetGroup
 
@@ -77,6 +77,44 @@ class BaseRuntimeImageViewSet(SnippetViewSet):
     )
 
 
+class SwarmClusterViewSet(SnippetViewSet):
+    model = SwarmCluster
+    icon = "site"
+    menu_label = _("Docker Swarm clusters")
+    menu_order = 107
+    list_display = ["name", "enabled", "manager_endpoint", "last_synced_at", "last_error"]
+    list_filter = ["enabled"]
+    search_fields = ["name", "manager_endpoint", "last_error"]
+    ordering = ["name"]
+    panels = panels_for(
+        editable=["name", "enabled", "manager_endpoint"],
+        read_only=["id", "last_synced_at", "last_error", "created_at", "updated_at"],
+    )
+
+
+class SwarmNodeViewSet(SnippetViewSet):
+    model = SwarmNode
+    icon = "site"
+    menu_label = _("Docker Swarm nodes")
+    menu_order = 108
+    list_display = [
+        "hostname", "cluster", "role", "desired_availability",
+        "observed_availability", "observed_state", "cpus", "manager_reachable",
+        "last_synced_at",
+    ]
+    list_filter = ["cluster", "role", "desired_availability", "observed_availability", "observed_state", "manager_reachable"]
+    search_fields = ["hostname", "docker_id", "address", "last_error"]
+    ordering = ["hostname"]
+    panels = panels_for(
+        editable=["cluster", "desired_availability", "desired_labels"],
+        read_only=[
+            "id", "docker_id", "hostname", "role", "observed_availability",
+            "observed_state", "address", "labels", "cpus", "memory_bytes",
+            "manager_reachable", "last_synced_at", "last_error", "created_at", "updated_at",
+        ],
+    )
+
+
 class ReadOnlyModelPermissionPolicy(ModelPermissionPolicy):
     """Permission policy that only allows listing/reading, never mutating."""
 
@@ -142,6 +180,8 @@ class DeployGroup(SnippetViewSetGroup):
         DeployViewSet,
         DeployLogViewSet,
         BaseRuntimeImageViewSet,
+        SwarmClusterViewSet,
+        SwarmNodeViewSet,
     )
     menu_label = _("Deploy")
     menu_icon = "upload"
