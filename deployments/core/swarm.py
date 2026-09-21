@@ -738,6 +738,129 @@ class SwarmRuntime:
                 pass
         return removed
 
+    def apply_external_image_service(
+        self,
+        *,
+        name: str,
+        image_ref: str,
+        environment: dict[str, Any] | None = None,
+        command: Any = None,
+        networks: Iterable[str] = (),
+        volumes: Iterable[dict[str, Any]] = (),
+        target_port: int | None = None,
+        published_port: int | None = None,
+        protocol: str = "tcp",
+        resources: dict[str, Any] | None = None,
+        labels: dict[str, str] | None = None,
+        placement_constraints: Iterable[str] = (),
+        healthcheck: dict[str, Any] | None = None,
+    ) -> SwarmServiceState:
+        """Run a prebuilt external image as a managed Swarm Service."""
+        from types import SimpleNamespace
+
+        network_specs = [
+            SimpleNamespace(name=str(network), driver="overlay", internal=True, attachable=True)
+            for network in networks
+            if str(network).strip()
+        ]
+        volume_specs = [
+            SimpleNamespace(
+                source=str(item.get("source") or item.get("name") or ""),
+                target=str(item.get("target") or item.get("bind") or ""),
+                mode=str(item.get("mode") or "rw"),
+                mount_type="volume",
+            )
+            for item in (volumes or ())
+            if isinstance(item, dict)
+            and (item.get("source") or item.get("name"))
+            and (item.get("target") or item.get("bind"))
+        ]
+        endpoint_specs = []
+        if target_port:
+            endpoint_specs.append(
+                SimpleNamespace(
+                    name="database",
+                    target_port=int(target_port),
+                    published_port=int(published_port) if published_port else None,
+                    protocol=str(protocol or "tcp").lower(),
+                    exposure="public" if published_port else "internal",
+                    hostname="",
+                    path="",
+                    tls=False,
+                    enabled=True,
+                    process=None,
+                    metadata={},
+                )
+            )
+        config = SimpleNamespace(
+            name=_validate_service_name(name),
+            tag="external",
+            image_ref=image_ref,
+            environment={str(k): str(v) for k, v in (environment or {}).items()},
+            start_command=command,
+            entry_point=None,
+            working_directory="/",
+            read_only=False,
+            resource_limits=dict(resources or {}),
+            runtime_options={
+                "placement_constraints": [str(item) for item in (placement_constraints or ())],
+                "healthcheck": dict(healthcheck or {}),
+            },
+            networks=network_specs,
+            volumes=volume_specs,
+            endpoints=endpoint_specs,
+            labels={str(k): str(v) for k, v in (labels or {}).items()},
+            public_host=None,
+            health_timeout=180,
+            process=None,
+        )
+        self.assert_active()
+        for network in network_specs:
+            self.ensure_network(network.name, attachable=True)
+        if endpoint_specs and any(
+            endpoint.protocol in {"http", "https", "ws"} and endpoint.exposure == "public"
+            for endpoint in endpoint_specs
+        ):
+            self.ensure_network("proxy_net", attachable=True)
+
+        spec = compile_compose_service(config, image_ref=image_ref, replicas=1)
+        service_name = _validate_service_name(name)
+        constraints = self._apply_local_volume_pin(
+            config,
+            _placement_constraints(config.runtime_options),
+        )
+        spec["services"][service_name]["deploy"]["placement"]["constraints"] = constraints
+        kwargs = self._create_kwargs(
+            config,
+            image_ref=image_ref,
+            compose_spec=spec,
+        )
+        try:
+            service = self.client.services.get(service_name)
+            service.reload()
+            service.update(
+                image=image_ref,
+                **{key: value for key, value in kwargs.items() if key != "name"},
+            )
+        except docker.errors.NotFound:
+            try:
+                service = self.client.services.create(image_ref, **kwargs)
+            except docker.errors.APIError as exc:
+                raise DeploymentError(
+                    f"Unable to create Swarm service {service_name!r}: {exc}",
+                    stage="swarm_create",
+                    code="SWARM_SERVICE_CREATE_FAILED",
+                    recoverable=True,
+                ) from exc
+        except docker.errors.APIError as exc:
+            raise DeploymentError(
+                f"Unable to update Swarm service {service_name!r}: {exc}",
+                stage="swarm_update",
+                code="SWARM_SERVICE_UPDATE_FAILED",
+                recoverable=True,
+            ) from exc
+        return self.wait_ready(service_name, timeout=180)
+
     def apply(self, config, *, image_ref: str) -> SwarmServiceState:
         self.assert_active()
         for network in config.networks or ():
