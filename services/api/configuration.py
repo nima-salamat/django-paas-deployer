@@ -25,7 +25,7 @@ from services.models import (
     DatabaseResource,
     ServiceDatabaseBinding,
 )
-from services.revisioning import materialize_revision_config, _get_or_create_secret, redact_config
+from services.revisioning import materialize_revision_config, _get_or_create_secret, redact_config, get_active_deploy
 from services.share_permissions import assert_share_action, SharePermissionError
 from services.ports import sync_endpoint_reservation, release_endpoint_port
 
@@ -735,7 +735,8 @@ class ServiceRevisionRollbackAPIView(ServiceConfigBaseAPIView):
                 status=409,
             )
 
-        current = service.active_revision_id
+        active_deploy = get_active_deploy(service)
+        current = active_deploy.pk if active_deploy else None
         name_base = f"{service.name}-rollback-{revision.revision_number}"
         name = name_base[:50]
         suffix = 2
