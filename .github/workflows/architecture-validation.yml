@@ -20,3 +20,26 @@ jobs:
       - name: Compile Python sources
         run: |
           python -m compileall -q src
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-django
+      - name: Run unit and regression tests
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings
+          SECRET_KEY: test-secret-key-for-ci
+          DEBUG: "1"
+          SWARM_ENABLED: "0"
+        run: |
+          # Unit/regression suite only. Real Docker/Swarm tests are marked
+          # deployment_integration and are not executed in this job.
+          pytest -q -m "not deployment_integration" --ignore=scripts
