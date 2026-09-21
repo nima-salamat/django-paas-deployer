@@ -727,6 +727,25 @@ class SwarmRuntime:
         except docker.errors.NotFound:
             return
 
+    def service_names_for_service(self, service_id: str) -> list[str]:
+        names: list[str] = []
+        try:
+            services = self.client.services.list(
+                filters={"label": f"passdeployer.service={service_id}"}
+            )
+            names = [str(service.name) for service in services]
+        except docker.errors.DockerException:
+            return []
+        return names
+
+    def stop_service_group(self, service_id: str) -> None:
+        for name in self.service_names_for_service(service_id):
+            self.stop(name)
+
+    def remove_service_group(self, service_id: str) -> None:
+        for name in self.service_names_for_service(service_id):
+            self.remove(name)
+
     def remove(self, name: str) -> None:
         try:
             self.client.services.get(_validate_service_name(name)).remove()
