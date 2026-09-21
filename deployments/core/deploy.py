@@ -13,7 +13,7 @@ from deployments.core.manager.client_manager import Client
 from deployments.core.manager.container_manager import Container
 from deployments.core.manager.image_manager import Image
 from deployments.core.orchestrator import DeploymentOrchestrator
-from deployments.core.types import DeploymentConfig, NetworkSpec, VolumeSpec
+from deployments.core.types import DeploymentConfig, EndpointSpec, NetworkSpec, VolumeSpec
 
 
 logger = logging.getLogger(__name__)
@@ -116,6 +116,7 @@ class Deploy:
         # (e.g. for Vite/Inertia) using the operator-configured npm mirror.
         frontend=None,
         base_images=None,
+        endpoints=None,
         activation_callback=None,
     ):
         self.name = name
@@ -176,6 +177,7 @@ class Deploy:
         # keys/values are accepted; everything else is silently dropped.
         self.frontend = _sanitize_frontend_dict(frontend)
         self.base_images = {str(k): str(v) for k, v in (base_images or {}).items() if v}
+        self.endpoints = list(endpoints or [])
         self.activation_callback = activation_callback
         self.errors = []
         self.result = None
@@ -281,6 +283,10 @@ class Deploy:
             labels=self.labels,
             public_host=self.public_host,
             base_images=getattr(self, "base_images", {}) or {},
+            endpoints=[
+                item if isinstance(item, EndpointSpec) else EndpointSpec(**item)
+                for item in getattr(self, "endpoints", [])
+            ],
             healthcheck_path=self.healthcheck_path,
             healthcheck_expected_status=self.healthcheck_expected_status,
             healthcheck_timeout=self.healthcheck_timeout,
