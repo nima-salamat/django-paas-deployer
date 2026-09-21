@@ -32,7 +32,7 @@ from deployments.core.manager.container_manager import Container
 from deployments.core.state.locks import acquire_service_deployment_lock
 from deployments.core.state.manager import StateManager
 from services.models import Volume  # type: ignore
-from services.revisioning import ensure_revision_for_deploy, activate_revision_locked, materialize_revision_config
+from services.revisioning import ensure_revision_for_deploy, activate_revision_locked, materialize_revision_config, mark_revision_failed
 
 from deployments.common import parse_config, as_bool, as_int
 from deployments.common.deployment_profile import normalize_profile
@@ -186,6 +186,8 @@ class DeployService:
                 deploy_item, container_name, state_tracker, task_id=task_id,
                 activation_callback=_activate_deployment,
             )
+            if deploy_item.revision_id and getattr(result, "status", None) in {"failed", "cancelled"}:
+                mark_revision_failed(deploy_item.revision_id)
             # Synchronize legacy Service state only from the deployment state
             # that was actually committed. A stale worker must not mark the
             # service RUNNING after another deployment has won activation.
@@ -229,6 +231,11 @@ class DeployService:
                 exc,
                 stage=getattr(exc, "stage", None) or "deployment",
             )
+            if getattr(deploy_item, "revision_id", None):
+                try:
+                    mark_revision_failed(deploy_item.revision_id)
+                except Exception:
+                    logger.exception("Failed to mark revision %s as failed", deploy_item.revision_id)
             logger.error(
                 "Deployment critical failure on %s: code=%s stage=%s technical=%s",
                 container_name,
