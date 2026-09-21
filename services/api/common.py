@@ -33,6 +33,7 @@ from deployments.core.deploy import Deploy as OrchestratorDeploy
 from deployments.core.manager.container_manager import Container
 from deployments.core.manager.client_manager import Client
 from docker.errors import NotFound as DockerNotFound
+from deployments.core.swarm import SwarmRuntime, swarm_enabled
 
 
 logger = logging.getLogger(__name__)
@@ -228,54 +229,84 @@ def _get_service_for_user_or_share(
 
 
 def _purge_service_runtime(service) -> dict:
-    """Force-stop/remove container and related images. Always best-effort."""
+    """Stop/remove the service runtime using the active Docker runtime backend."""
     name = service.get_docker_service_name()
-    report = {"container": None, "images": [], "errors": []}
-    try:
-        client = Client()()
-    except Exception as exc:
-        report["errors"].append(str(exc))
-        return report
+    report = {"runtime": "docker-swarm" if swarm_enabled() else "docker", "services": [], "container": None, "images": [], "errors": []}
 
-    # Container
-    try:
-        c = client.containers.get(name)
+    if swarm_enabled():
         try:
-            c.reload()
-            if getattr(c, "status", "") == "running":
-                c.stop(timeout=15)
-        except Exception as e:
-            report["errors"].append(f"stop: {e}")
+            runtime = SwarmRuntime()
+            names = runtime.service_names_for_service(str(service.pk))
+            for service_name in names:
+                try:
+                    runtime.stop(service_name)
+                    runtime.remove(service_name)
+                    report["services"].append({"name": service_name, "result": "removed"})
+                except Exception as exc:
+                    report["errors"].append(f"swarm service {service_name}: {exc}")
+            if not names:
+                report["services"] = [{"name": name, "result": "absent"}]
+        except Exception as exc:
+            report["errors"].append(f"swarm runtime: {exc}")
         try:
-            c.remove(force=True)
-            report["container"] = "removed"
-        except Exception as e:
-            report["errors"].append(f"remove container: {e}")
-            report["container"] = "failed"
-    except DockerNotFound:
-        report["container"] = "absent"
-    except Exception as e:
-        report["errors"].append(f"container: {e}")
-        report["container"] = "error"
+            client = Client()()
+            for ref in (name, f"{name}:latest"):
+                try:
+                    client.images.remove(ref, force=True)
+                    report["images"].append({"ref": ref, "result": "removed"})
+                except Exception as exc:
+                    msg = str(exc).lower()
+                    result = "absent" if "no such image" in msg or "not found" in msg else f"error: {exc}"
+                    report["images"].append({"ref": ref, "result": result})
+                    if result.startswith("error"):
+                        report["errors"].append(f"image {ref}: {exc}")
+        except Exception as exc:
+            report["errors"].append(f"docker client: {exc}")
+    else:
+        try:
+            client = Client()()
+        except Exception as exc:
+            report["errors"].append(str(exc))
+            return report
+        try:
+            c = client.containers.get(name)
+            try:
+                c.reload()
+                if getattr(c, "status", "") == "running":
+                    c.stop(timeout=15)
+            except Exception as exc:
+                report["errors"].append(f"stop: {exc}")
+            try:
+                c.remove(force=True)
+                report["container"] = "removed"
+            except Exception as exc:
+                report["errors"].append(f"remove container: {exc}")
+                report["container"] = "failed"
+        except DockerNotFound:
+            report["container"] = "absent"
+        except Exception as exc:
+            report["errors"].append(f"container: {exc}")
+            report["container"] = "error"
 
-    # Images by reference name
-    for ref in (name, f"{name}:latest"):
-        try:
-            client.images.remove(ref, force=True)
-            report["images"].append({"ref": ref, "result": "removed"})
-        except Exception as e:
-            msg = str(e).lower()
-            if "no such image" in msg or "not found" in msg:
-                report["images"].append({"ref": ref, "result": "absent"})
-            else:
-                report["images"].append({"ref": ref, "result": f"error: {e}"})
-                report["errors"].append(f"image {ref}: {e}")
+        for ref in (name, f"{name}:latest"):
+            try:
+                client.images.remove(ref, force=True)
+                report["images"].append({"ref": ref, "result": "removed"})
+            except Exception as exc:
+                msg = str(exc).lower()
+                result = "absent" if "no such image" in msg or "not found" in msg else f"error: {exc}"
+                report["images"].append({"ref": ref, "result": result})
+                if result.startswith("error"):
+                    report["errors"].append(f"image {ref}: {exc}")
 
-    # Update service status if needed
     try:
         from core.global_settings.config import SERVICE_STATUS_CHOICES as SSC
-
-        Service.objects.filter(pk=service.pk).update(status=SSC.STOPPED)
+        Service.objects.filter(pk=service.pk).update(
+            status=SSC.STOPPED,
+            desired_state="stopped",
+            task_id=None,
+            deploy_started=None,
+        )
     except Exception:
         try:
             Service.objects.filter(pk=service.pk).update(status="stopped")
@@ -283,7 +314,6 @@ def _purge_service_runtime(service) -> dict:
             pass
 
     return report
-
 
 
 
