@@ -571,6 +571,28 @@ class DatabaseResource(BaseModel):
         ]
 
 
+class DatabaseCredential(BaseModel):
+    """Encrypted credential material owned by a DatabaseResource."""
+    database = models.OneToOneField(
+        DatabaseResource,
+        related_name="credential",
+        on_delete=models.CASCADE,
+    )
+    username = models.CharField(max_length=128, blank=True, default="")
+    password_ciphertext = models.TextField(blank=True, default="")
+    version = models.PositiveIntegerField(default=1)
+
+    def set_password(self, value: str) -> None:
+        from services.secret_store import encrypt_secret
+        self.password_ciphertext = encrypt_secret(str(value or ""))
+
+    def get_password(self) -> str:
+        if not self.password_ciphertext:
+            return ""
+        from services.secret_store import decrypt_secret
+        return decrypt_secret(self.password_ciphertext)
+
+
 class ServiceDatabaseBinding(BaseModel):
     """Connects a workload Service to a managed DatabaseResource."""
     service = models.ForeignKey(Service, related_name="database_bindings", on_delete=models.CASCADE)
