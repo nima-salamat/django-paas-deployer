@@ -11,6 +11,7 @@ from core.utils import make_uuid4
 
 from core.global_settings.config import MAX_DEPLOY_TIME_MINUTE, SERVICE_STATUS_CHOICES
 from deployments.core.manager.container_manager import Container
+from deployments.core.swarm import SwarmRuntime, swarm_enabled
 from deployments.core.state.manager import StateManager
 from deploy.models import (
     Deploy,
@@ -250,6 +251,8 @@ def _retry_orphaned_queued_deploys() -> None:
 
 
 def _recover_stale_running_deploys(policies) -> None:
+    if swarm_enabled():
+        return _recover_stale_running_deploys_swarm(policies)
     """Converge stale workers only when external resources prove ownership.
 
     A service keeps its previous container under the canonical name during
@@ -427,6 +430,63 @@ def _recover_stale_running_deploys(policies) -> None:
         except Exception:
             logger.exception("Stale deployment recovery failed for deploy=%s", deploy.pk)
 
+
+
+def _recover_stale_running_deploys_swarm(policies) -> None:
+    """Recover stale workers from the Swarm service/task state."""
+    stale_after = int(policies.get("stale_worker_seconds", 120))
+    cutoff = timezone.now() - timedelta(seconds=max(stale_after * 2, 60))
+    candidates = (
+        Deploy.objects.select_related("service", "revision")
+        .filter(
+            status=DeploymentStatusChoices.RUNNING,
+            worker_heartbeat_at__isnull=False,
+            worker_heartbeat_at__lt=cutoff,
+        )
+        .order_by("worker_heartbeat_at")[: int(policies.get("monitor_batch_size", 50))]
+    )
+    runtime = SwarmRuntime()
+    for deploy in candidates:
+        try:
+            service_name = deploy.service.get_docker_service_name()
+            state = runtime.inspect_service(service_name)
+            if state is None or state.replicas_running != 1:
+                continue
+            docker_service = runtime.client.services.get(service_name)
+            labels = ((docker_service.attrs or {}).get("Spec") or {}).get("Labels") or {}
+            if str(labels.get("passdeployer.deployment") or "") != str(deploy.pk):
+                continue
+            with transaction.atomic():
+                locked = Deploy.objects.select_for_update().select_related("service").filter(pk=deploy.pk).first()
+                if not locked or locked.status != DeploymentStatusChoices.RUNNING:
+                    continue
+                revision = ensure_revision_for_deploy(locked)
+                current = get_active_deploy(locked.service)
+                if current is not None and current.pk != locked.pk:
+                    logger.warning("Refusing stale Swarm recovery for deploy=%s; active deploy=%s", locked.pk, current.pk)
+                    continue
+                Service.objects.filter(pk=locked.service_id).update(
+                    active_revision_id=revision.revision_id,
+                    selected_deploy_id=locked.pk,
+                    selected_deploy_at=timezone.now(),
+                )
+                StateManager.transition_deploy(
+                    locked.pk, DeploymentStatusChoices.SUCCEEDED,
+                    update_fields={
+                        "stage": "deployment_completed",
+                        "progress": 100,
+                        "status_message": "Deployment recovered from a running Swarm service after worker interruption.",
+                        "error_message": "",
+                        "health_status": "running",
+                        "container_status": "running",
+                    },
+                )
+                StateManager.transition_service(
+                    locked.service_id, SERVICE_STATUS_CHOICES.RUNNING,
+                    update_fields={"deployed_at": timezone.now(), "deploy_started": None, "task_id": None},
+                )
+        except Exception:
+            logger.exception("Swarm stale deployment recovery failed for deploy=%s", deploy.pk)
 
 def _reconcile_active_deploy(deploy: Deploy) -> None:
     """
