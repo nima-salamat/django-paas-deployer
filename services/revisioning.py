@@ -131,7 +131,7 @@ def _normalize_process_specs(service: Service, config: dict[str, Any]) -> list[d
                 "process_type": "worker",
                 "command": config.get("worker_command") or "celery -A $CELERY_APP worker",
                 "entrypoint": None,
-                "replicas": max(1, int(config.get("worker_count") or 1)),
+                "replicas": 1,
                 "enabled": True,
                 "environment": {},
                 "healthcheck": {},
