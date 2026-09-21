@@ -12,7 +12,7 @@ from django.db import transaction
 from django.utils.text import slugify
 
 from plans.models import Plan
-from services.models import PrivateNetwork, Service
+from services.models import PrivateNetwork, Service, ServiceProcess, ServiceEnvironmentVariable, ServiceSecret, Volume, ServiceEndpoint
 from deploy.models import Deploy
 from deploy.naming import allocate_deploy_name
 from core.global_settings.config import PlanTypeChoices
@@ -194,6 +194,17 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
             plan=plan,
             network=network,
             read_only=False,
+            source_kind=Service.SourceKind.CATALOG,
+            source_config={
+                "catalog_id": definition.id,
+                "definition_version": definition.definition_version,
+                "software_version": definition.software_version,
+                "variant": str(payload["variant"]),
+                "service_key": key,
+            },
+            build_config={},
+            runtime_config={},
+            desired_state="running",
         )
         service_rows.append((sequence, spec, service, plan))
 
@@ -225,32 +236,91 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
         }
 
         env = {
-            k: _render_service_value(str(v), config=resolved_config, secrets=resolved["secrets"], service_hosts=service_hosts)
+            k: _render_service_value(
+                str(v),
+                config=resolved_config,
+                secrets=resolved["secrets"],
+                service_hosts=service_hosts,
+            )
             for k, v in (spec.get("environment") or {}).items()
         }
-        image = _render_service_value(str(spec.get("image_template") or spec.get("image") or ""), config=resolved_config, secrets=resolved["secrets"], service_hosts=service_hosts)
+
+        from services.revisioning import _get_or_create_secret
+        for secret_key, secret_value in (resolved.get("secrets") or {}).items():
+            _get_or_create_secret(
+                service,
+                str(secret_key),
+                str(secret_value),
+                created_by=created_by,
+                note=f"Catalog secret for {definition.id}:{key}",
+            )
+
+        for env_key, raw_value in (spec.get("environment") or {}).items():
+            text_value = str(raw_value)
+            secret_match = re.fullmatch(r"\$\{secret\.([A-Za-z0-9_]+)\}", text_value)
+            if secret_match:
+                secret_key = secret_match.group(1)
+                secret = ServiceSecret.objects.get(service=service, key=secret_key)
+                ServiceEnvironmentVariable.objects.update_or_create(
+                    service=service,
+                    key=str(env_key),
+                    defaults={
+                        "secret": secret,
+                        "value": "",
+                        "scope": ServiceEnvironmentVariable.Scope.RUNTIME,
+                        "enabled": True,
+                    },
+                )
+            else:
+                ServiceEnvironmentVariable.objects.update_or_create(
+                    service=service,
+                    key=str(env_key),
+                    defaults={
+                        "secret": None,
+                        "value": _render_service_value(text_value, config=resolved_config, secrets={}, service_hosts=service_hosts),
+                        "scope": ServiceEnvironmentVariable.Scope.RUNTIME,
+                        "enabled": True,
+                    },
+                )
+
+        image = _render_service_value(
+            str(spec.get("image_template") or spec.get("image") or ""),
+            config=resolved_config,
+            secrets={},
+            service_hosts=service_hosts,
+        )
         dockerfile = spec.get("dockerfile")
         healthcheck = spec.get("healthcheck") if isinstance(spec.get("healthcheck"), dict) else None
         if dockerfile:
-            dockerfile_text = _render_service_value(str(dockerfile), config=resolved_config, secrets=resolved["secrets"], service_hosts=service_hosts).replace("${config.image_template}", image)
+            dockerfile_text = _render_service_value(
+                str(dockerfile),
+                config=resolved_config,
+                secrets=resolved["secrets"],
+                service_hosts=service_hosts,
+            ).replace("$"+"{config.image_template}", image)
         elif image:
             dockerfile_text = f"FROM {image}\n"
-        healthcheck_instruction = _dockerfile_healthcheck(healthcheck)
-        if healthcheck_instruction and "HEALTHCHECK" not in dockerfile_text:
-            dockerfile_text = dockerfile_text.rstrip() + "\n" + healthcheck_instruction + "\n"
         else:
             raise CatalogValidationError(f"Catalog service {key} must define an image or Dockerfile.")
 
+        healthcheck_instruction = _dockerfile_healthcheck(healthcheck)
+        if healthcheck_instruction and "HEALTHCHECK" not in dockerfile_text:
+            dockerfile_text = dockerfile_text.rstrip() + "\n" + healthcheck_instruction + "\n"
+
         files = {
-            str(name): _render_service_value(str(content), config=resolved_config, secrets=resolved["secrets"], service_hosts=service_hosts)
+            str(name): _render_service_value(
+                str(content),
+                config=resolved_config,
+                secrets=resolved["secrets"],
+                service_hosts=service_hosts,
+            )
             for name, content in (spec.get("files") or {}).items()
         }
+
         public = bool(spec.get("public", False))
         port = spec.get("port")
         if public and not port:
-            ports = spec.get("ports") or []
-            if ports:
-                first = ports[0]
+            for first in spec.get("ports") or []:
                 if isinstance(first, dict):
                     port = first.get("target") or first.get("published")
                 elif isinstance(first, int):
@@ -258,31 +328,127 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
                 else:
                     text = str(first)
                     port = int(text.split(":")[-1].split("/")[0])
-        cfg.update({
-            "dockerfile_source": "archive",
-            "env": env,
-            "port": int(port) if public and port else None,
+                if port:
+                    break
+
+        runtime_config = {
+            "platform": "docker",
+            "catalog_platform": str(spec.get("platform") or "docker"),
+            "catalog_service_key": key,
+            "catalog_managed": True,
+            "depends_on": list(spec.get("depends_on") or []),
+            "required": bool(spec.get("required", True)),
+            "start_command": (
+                shlex.join([str(x) for x in (spec.get("command") or [])])
+                if isinstance(spec.get("command"), (list, tuple)) and spec.get("command")
+                else (str(spec.get("command")) if spec.get("command") else None)
+            ),
+            "entry_point": (
+                shlex.join([str(x) for x in (spec.get("entrypoint") or [])])
+                if isinstance(spec.get("entrypoint"), (list, tuple)) and spec.get("entrypoint")
+                else (str(spec.get("entrypoint")) if spec.get("entrypoint") else None)
+            ),
+            "restart_policy": dict(spec.get("restart_policy") or {}),
+            "working_directory": spec.get("working_directory"),
+            "port": int(port) if port else None,
+            "public": public,
+            "public_host": resolved_config.get("domain") if public else None,
             "healthcheck": healthcheck,
             "healthcheck_path": spec.get("healthcheck_path"),
             "healthcheck_timeout": float(spec.get("healthcheck_timeout") or 5),
-            "public": public,
-            "public_host": resolved_config.get("domain") if public else None,
-            "start_command": shlex.join([str(x) for x in (spec.get("command") or [])]) if isinstance(spec.get("command"), (list, tuple)) and spec.get("command") else (str(spec.get("command")) if spec.get("command") else None),
-            "entry_point": shlex.join([str(x) for x in (spec.get("entrypoint") or [])]) if isinstance(spec.get("entrypoint"), (list, tuple)) and spec.get("entrypoint") else (str(spec.get("entrypoint")) if spec.get("entrypoint") else None),
-            "restart_policy": dict(spec.get("restart_policy") or {}),
-            "working_directory": spec.get("working_directory"),
-            "volumes": [
-                {
-                    "source": f"{slug}-{safe_slug(str(v.get('source') or v.get('name') or key))}",
-                    "target": str(v["target"]),
-                    "mode": str(v.get("mode") or "rw"),
-                    "mount_type": "volume",
-                    "size_mb": _render_volume_size(v.get("size_mb"), config=resolved_config, secrets=resolved["secrets"]),
-                    "persistent": bool(v.get("persistent", True)),
-                }
-                for v in (spec.get("volumes") or [])
-            ],
-        })
+        }
+        service.runtime_config = runtime_config
+        service.build_config = {
+            "dockerfile_source": "archive",
+            "dockerfile": dockerfile_text,
+            "files": files,
+        }
+        service.save(update_fields=["runtime_config", "build_config", "updated_at"])
+
+        raw_ports = list(spec.get("ports") or [])
+        if not raw_ports and port:
+            raw_ports = [{"target": int(port)}]
+        for raw_port in raw_ports:
+            if isinstance(raw_port, dict):
+                target = int(raw_port.get("target") or raw_port.get("published"))
+                published = raw_port.get("published")
+                protocol = str(raw_port.get("protocol") or "tcp").lower()
+            elif isinstance(raw_port, int):
+                target = int(raw_port)
+                published = None
+                protocol = "tcp"
+            else:
+                text_value = str(raw_port)
+                parts = text_value.split(":")
+                endpoint_part = parts[-1]
+                proto = "tcp"
+                if "/" in endpoint_part:
+                    endpoint_part, proto = endpoint_part.split("/", 1)
+                target = int(endpoint_part)
+                published = int(parts[-2]) if len(parts) >= 2 and parts[-2].isdigit() else None
+                protocol = proto.lower()
+
+            ServiceEndpoint.objects.update_or_create(
+                service=service,
+                name=f"port-{target}-{protocol}",
+                defaults={
+                    "target_port": target,
+                    "published_port": int(published) if published not in (None, "") else None,
+                    "protocol": protocol if protocol in {"tcp", "udp"} else "tcp",
+                    "exposure": "public" if public else "internal",
+                    "hostname": str(resolved_config.get("domain") or "") if public else "",
+                    "tls": bool(resolved_config.get("https") or False),
+                    "enabled": True,
+                    "metadata": {"catalog_service_key": key},
+                },
+            )
+
+        ServiceProcess.objects.update_or_create(
+            service=service,
+            name="web",
+            defaults={
+                "process_type": str(spec.get("role") or "web"),
+                "command": runtime_config.get("start_command"),
+                "entrypoint": runtime_config.get("entry_point"),
+                "replicas": 1,
+                "enabled": True,
+                "environment": {},
+                "healthcheck": healthcheck or {},
+                "resources": {},
+                "metadata": {"catalog_service_key": key},
+            },
+        )
+
+        for volume_spec in spec.get("volumes") or []:
+            bind = str(volume_spec.get("target") or "")
+            if not bind:
+                continue
+            size_mb = _render_volume_size(volume_spec.get("size_mb"), config=resolved_config, secrets={})
+            ok, msg = service.can_allocate_storage(size_mb)
+            if not ok:
+                raise CatalogValidationError(
+                    f"Persistent volume {bind!r} for service {key!r} exceeds the service plan storage quota: {msg}"
+                )
+            vol_name = f"cat-{service.id.hex[:8]}-{safe_slug(str(volume_spec.get('source') or bind))}"[:32]
+            volume, _ = Volume.objects.get_or_create(
+                name=vol_name,
+                defaults={
+                    "user": user,
+                    "service": service,
+                    "service_attachments": {
+                        str(service.id): {
+                            "bind": bind,
+                            "mode": str(volume_spec.get("mode") or "rw"),
+                        }
+                    },
+                    "default_bind": bind,
+                    "default_mode": str(volume_spec.get("mode") or "rw"),
+                    "size_mb": size_mb,
+                },
+            )
+            if volume.service_id is None:
+                volume.attach_to_service(service, bind=bind, mode=str(volume_spec.get("mode") or "rw"))
+
         deploy = Deploy.objects.create(
             name=allocate_deploy_name(service),
             service=service,
