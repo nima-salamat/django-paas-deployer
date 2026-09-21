@@ -28,6 +28,7 @@ from core.global_settings.config import default_ports  # type: ignore
 from deployments.core.deploy import Deploy as DeployFacade
 from deployments.core.types import EndpointSpec, VolumeSpec
 from deployments.core.runtime_graph import ServiceRuntimeGraph
+from deployments.core.swarm import swarm_enabled
 from deployments.core.manager.container_manager import Container
 from deployments.core.state.locks import acquire_service_deployment_lock
 from deployments.core.state.manager import StateManager
@@ -386,7 +387,7 @@ class DeployService:
 
         DeploymentValidator.validate_for_deploy(deploy_item, dockerfile_text)
 
-        if DeploymentHelper.is_restart_only(deploy_item, container_name):
+        if not swarm_enabled() and DeploymentHelper.is_restart_only(deploy_item, container_name):
             logger.info(
                 "Fast-path conditions met. Restarting existing container: %s",
                 container_name,
@@ -409,7 +410,7 @@ class DeployService:
                 deploy_item, container_name, platform, dockerfile_text, state_tracker, cfg=cfg,
             )
 
-        if getattr(result, "status", None) != "cancelled":
+        if not swarm_enabled() and getattr(result, "status", None) != "cancelled":
             use_celery = as_bool(cfg.get("celery"))
             wait_timeout = 90 if use_celery or platform == "django" else 45
             ContainerWaiter.wait_until_running(container_name, timeout=wait_timeout)
