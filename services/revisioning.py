@@ -392,6 +392,9 @@ def ensure_revision_for_deploy(deploy, *, force_new: bool = False):
 
     safe_snapshot = compiled
     redacted_snapshot, secret_keys = redact_config(safe_snapshot)
+    redacted_source, _ = redact_config(service.source_config or {})
+    redacted_build, _ = redact_config(service.build_config or {})
+    redacted_runtime, _ = redact_config(service.runtime_config or {})
     previous = ServiceRevision.objects.filter(service=service).order_by("-revision_number").first()
     next_number = (previous.revision_number if previous else 0) + 1
 
@@ -411,9 +414,9 @@ def ensure_revision_for_deploy(deploy, *, force_new: bool = False):
         process_snapshot=process_specs,
         secret_keys=secret_keys,
         secret_refs=secret_refs,
-        source_snapshot=deepcopy(service.source_config or {}),
-        build_snapshot=deepcopy(service.build_config or {}),
-        runtime_snapshot=deepcopy(service.runtime_config or {}),
+        source_snapshot=redacted_source,
+        build_snapshot=redacted_build,
+        runtime_snapshot=redacted_runtime,
         environment_snapshot=environment_snapshot,
         endpoint_snapshot=endpoints,
         volume_snapshot=volumes,
