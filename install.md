@@ -269,7 +269,25 @@ There is deliberately no general scale API yet. Replica counts other than 1 are 
 
 Stopping the application is different: the existing Docker Swarm Service objects can be scaled to zero as part of the declarative stopped state.
 
-## 10. Volumes on multiple nodes
+## 19. Database services
+
+Database plans (PostgreSQL, MySQL, MariaDB, MongoDB, Redis and Oracle) also run as Docker Swarm Services.
+
+The database deployment layer keeps engine-specific initialization and credential reconciliation, but it no longer creates a standalone Docker container. The runtime path is:
+
+```text
+Database Service
+  -> ServiceRevision
+  -> Swarm Service
+  -> Swarm Task
+  -> persistent volume
+```
+
+For MySQL/MariaDB, PassDeployer waits for the actual Swarm task to become reachable before reconciling root/application credentials. On multi-node Swarm, database Services with local persistent volumes are pinned to the node that owns the local Docker volume.
+
+The force_reinit rebuild option removes and recreates the managed data volumes before the database Service is updated. Treat this as a destructive operation.
+
+## 11. Volumes on multiple nodes
 
 Docker's default local volume driver is node-local.
 
