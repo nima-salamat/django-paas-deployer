@@ -823,6 +823,7 @@ def _reconcile_mysql_credentials(
     username: str = "",
     user_password: str = "",
     database: str = "",
+    container_obj=None,
 ) -> tuple[bool, str]:
 
     """
@@ -841,10 +842,17 @@ def _reconcile_mysql_credentials(
     if not root_password:
         return False, "root password is empty"
 
-    try:
-        container = client.containers.get(container_name)
-    except Exception as exc:
-        return False, f"container not found: {exc}"
+    container = container_obj
+    if container is None:
+        try:
+            if swarm_enabled():
+                container = SwarmRuntime().primary_task_container(container_name)
+                if container is None:
+                    return False, "running Swarm task container is not available on the connected manager"
+            else:
+                container = client.containers.get(container_name)
+        except Exception as exc:
+            return False, f"container not found: {exc}"
 
     # ------------------------------------------------------------------------
     # First determine whether root password already works.
