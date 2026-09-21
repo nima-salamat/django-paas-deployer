@@ -670,6 +670,45 @@ def _reconcile_active_deploy_swarm(deploy: Deploy) -> None:
 
 def _reconcile_desired_state(service: Service) -> bool:
     """Drive observed runtime toward Service.desired_state."""
+    if swarm_enabled():
+        runtime = SwarmRuntime()
+        try:
+            state = runtime.inspect_service(service.get_docker_service_name())
+            running = bool(state and state.replicas_running == 1)
+        except Exception as exc:
+            logger.warning("Swarm desired-state inspection failed for service %s: %s", service.pk, exc)
+            return False
+        desired = str(getattr(service, "desired_state", "stopped") or "stopped").lower()
+        if desired == "stopped":
+            if not running:
+                return False
+            if service.status != SERVICE_STATUS_CHOICES.STOPPING:
+                try:
+                    from deployments.celery.tasks import stop as stop_service
+                    stop_service.delay(str(service.pk))
+                    return True
+                except Exception:
+                    logger.exception("Could not queue Swarm stop reconciliation for service %s", service.pk)
+            return False
+        if desired == "running" and not running and service.status not in ACTIVE_SERVICE_STATUSES:
+            revision_deploy = get_active_deploy(service)
+            if revision_deploy and revision_deploy.status in {
+                DeploymentStatusChoices.SUCCEEDED,
+                DeploymentStatusChoices.FAILED,
+                DeploymentStatusChoices.CANCELLED,
+            }:
+                try:
+                    from deployments.celery.tasks import deploy as deploy_task
+                    Service.objects.filter(pk=service.pk).update(
+                        status=SERVICE_STATUS_CHOICES.QUEUED,
+                        deploy_started=timezone.now(),
+                    )
+                    deploy_task.delay(str(revision_deploy.pk))
+                    return True
+                except Exception:
+                    logger.exception("Could not queue Swarm desired-state deployment for service %s", service.pk)
+        return False
+
     desired = str(getattr(service, "desired_state", "stopped") or "stopped").lower()
     container_name = service.get_docker_service_name()
     container = Container(container_name)
@@ -724,6 +763,9 @@ def _reconcile_desired_state(service: Service) -> bool:
 
 
 def _reconcile_service_runtime(service: Service) -> None:
+    if swarm_enabled():
+        _reconcile_service_runtime_swarm(service)
+        return
     """
     Reconcile a service's DB status against the real container state.
 
@@ -841,6 +883,64 @@ def _reconcile_service_runtime(service: Service) -> None:
                         logger.warning("Force stop failed for '%s': %s", container_name, exc)
                     mark_service_stopped(locked, deploy=deploy)
             return
+
+
+def _reconcile_service_runtime_swarm(service: Service) -> None:
+    runtime = SwarmRuntime()
+    service_name = service.get_docker_service_name()
+    try:
+        state = runtime.inspect_service(service_name)
+    except Exception as exc:
+        logger.warning("Failed to inspect Swarm service '%s': %s", service_name, exc)
+        return
+    running = bool(state and state.replicas_running == 1)
+    now = timezone.now()
+    deploy = get_active_deploy(service)
+    with transaction.atomic():
+        locked = Service.objects.select_for_update().filter(pk=service.pk).first()
+        if not locked or locked.status not in ACTIVE_SERVICE_STATUSES:
+            return
+        if locked.status in (SERVICE_STATUS_CHOICES.RUNNING, SERVICE_STATUS_CHOICES.SUCCEEDED):
+            if not running:
+                mark_service_failed(
+                    service=locked,
+                    message="Swarm service has no running task.",
+                    deploy=deploy,
+                    details={
+                        "runtime": "docker-swarm",
+                        "service": service_name,
+                        "replicas_desired": state.replicas_desired if state else 0,
+                    },
+                )
+            elif locked.status == SERVICE_STATUS_CHOICES.SUCCEEDED:
+                mark_service_running(locked, deploy=deploy)
+            return
+        if locked.status in (SERVICE_STATUS_CHOICES.QUEUED, SERVICE_STATUS_CHOICES.DEPLOYING):
+            if locked.deploy_started:
+                elapsed = (now - locked.deploy_started).total_seconds() / 60.0
+                if elapsed >= int(policies["queued_timeout_minutes"]):
+                    mark_service_failed(
+                        service=locked,
+                        message="Service stuck in queue/deploying beyond timeout.",
+                        deploy=deploy,
+                        details={"runtime": "docker-swarm", "elapsed_minutes": round(elapsed, 1)},
+                    )
+                    return
+            if running:
+                mark_service_running(locked, deploy=deploy)
+            return
+        if locked.status == SERVICE_STATUS_CHOICES.STOPPING:
+            if not running:
+                mark_service_stopped(locked, deploy=deploy)
+            elif locked.deploy_started:
+                elapsed = (now - locked.deploy_started).total_seconds() / 60.0
+                if elapsed >= int(policies["stop_timeout_minutes"]):
+                    try:
+                        runtime.stop(service_name)
+                    except Exception:
+                        logger.exception("Failed to force-stop Swarm service %s", service_name)
+                    mark_service_stopped(locked, deploy=deploy)
+
 
 
 # ---- (removed old handlers, replaced by monitoring.actions) ----
