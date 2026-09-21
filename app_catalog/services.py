@@ -408,7 +408,7 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
                     "metadata": {"catalog_service_key": key},
                 },
             )
-            sync_endpoint_reservation(endpoint_row[0] if isinstance(endpoint_row, tuple) else endpoint_row)
+            sync_endpoint_reservation(endpoint_row)
 
         ServiceProcess.objects.update_or_create(
             service=service,
