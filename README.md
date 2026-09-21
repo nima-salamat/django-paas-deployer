@@ -2,6 +2,21 @@
 
 A self-hosted multi-tenant PaaS control plane that turns application archives into isolated Docker workloads. It supports application builds, Laravel/React-style frontend builds, database deployments, live deployment logs, Docker event reconciliation, rollback, and plan-based resource governance.
 
+## Docker Swarm runtime
+
+Application workloads run as Docker Swarm Services. Docker Compose remains the control-plane installation/development mechanism and a normalized runtime specification format; it is not the application scheduler.
+
+The current runtime model is:
+
+```text
+PassDeployer Service
+  -> ServiceRevision
+  -> one Swarm Service per process
+  -> one Task per process (replica = 1)
+```
+
+For installation, including single-node and multi-node Swarm, registry setup, overlay networking, and Wagtail node management, see [install.md](install.md).
+
 ## Architecture
 
 ```text
