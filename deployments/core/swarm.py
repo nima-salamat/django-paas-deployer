@@ -168,6 +168,26 @@ def _placement_constraints(runtime_options: dict[str, Any] | None) -> list[str]:
 
 
 
+def _duration_seconds(value: Any, default: float = 0.0) -> float:
+    if value in (None, ""):
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().lower()
+    units = (
+        ("ms", 0.001),
+        ("us", 0.000001),
+        ("ns", 0.000000001),
+        ("m", 60.0),
+        ("h", 3600.0),
+        ("s", 1.0),
+    )
+    for suffix, multiplier in units:
+        if text.endswith(suffix):
+            return float(text[:-len(suffix)]) * multiplier
+    return float(text)
+
+
 def _healthcheck_spec(raw: dict[str, Any] | None) -> dict[str, Any] | None:
     """Normalize the process healthcheck to Docker Engine units."""
     raw = dict(raw or {})
@@ -178,9 +198,9 @@ def _healthcheck_spec(raw: dict[str, Any] | None) -> dict[str, Any] | None:
     test = raw.get("test") or raw.get("cmd") or raw.get("command")
     if not test:
         return None
-    interval = float(raw.get("interval", 5) or 0)
-    timeout = float(raw.get("timeout", 3) or 0)
-    start_period = float(raw.get("start_period", raw.get("start-period", 0)) or 0)
+    interval = _duration_seconds(raw.get("interval", 5), 5.0)
+    timeout = _duration_seconds(raw.get("timeout", 3), 3.0)
+    start_period = _duration_seconds(raw.get("start_period", raw.get("start-period", 0)), 0.0)
     retries = int(raw.get("retries", 3) or 0)
     if isinstance(test, str):
         test = ["CMD-SHELL", test]
