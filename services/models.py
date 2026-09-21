@@ -29,40 +29,65 @@ class PrivateNetwork(BaseModel):
 
 class Service(BaseModel):
     name = models.CharField(_("Name"), max_length=30, unique=True)
-    user = models.ForeignKey(User, verbose_name=_("User"), on_delete=models.CASCADE)
-    plan = models.ForeignKey(Plan, verbose_name=_("Plan"), on_delete=models.CASCADE)
-    network = models.ForeignKey(
-        PrivateNetwork, verbose_name=_("Private Network"),
-        on_delete=models.SET_NULL, null=True, related_name="Service",
+    user = models.ForeignKey(
+        User,
+        verbose_name=_("User"),
+        on_delete=models.CASCADE,
     )
-    read_only = models.BooleanField(_("Read only"), default=not settings.DEBUG)
+    plan = models.ForeignKey(
+        Plan,
+        verbose_name=_("Plan"),
+        on_delete=models.CASCADE,
+    )
+    network = models.ForeignKey(
+        PrivateNetwork,
+        verbose_name=_("Private Network"),
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="Service",
+    )
+
+    read_only = models.BooleanField(_("Read only"), default=not (settings.DEBUG))
 
     selected_deploy = models.OneToOneField(
-        "deploy.Deploy", verbose_name=_("Selected Deploy"),
-        on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
-    )
-    active_revision = models.ForeignKey(
-        "ServiceRevision", verbose_name=_("Active Revision"),
-        on_delete=models.SET_NULL, null=True, blank=True,
-        related_name="active_for_services",
+        "deploy.Deploy",
+        verbose_name=_("Selected Deploy"),
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
     )
     selected_deploy_at = models.DateTimeField(blank=True, null=True)
+    active_revision = models.ForeignKey(
+        "ServiceRevision",
+        verbose_name=_("Active Revision"),
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="active_for_services",
+    )
     deploy_started = models.DateTimeField(blank=True, null=True)
     deployed_at = models.DateTimeField(blank=True, null=True)
     status = models.CharField(
-        _("Deploy Status"), choices=SERVICE_STATUS_CHOICES.choices,
+        _("Deploy Status"),
+        choices=SERVICE_STATUS_CHOICES.choices,
         default=SERVICE_STATUS_CHOICES.STOPPED,
     )
+
     task_id = models.CharField(_("Task ID"), max_length=64, unique=True, null=True, blank=True)
 
     def save(self, *args, **kwargs):
         self.full_clean()
+
         selected_deploy_changed = False
+
         if self.pk and Service.objects.filter(pk=self.pk).exists():
             old = Service.objects.get(pk=self.pk)
-            selected_deploy_changed = old.selected_deploy != self.selected_deploy
+            if old.selected_deploy != self.selected_deploy:
+                selected_deploy_changed = True
         else:
             selected_deploy_changed = bool(self.selected_deploy)
+
         if selected_deploy_changed:
             self.selected_deploy_at = timezone.now()
         super().save(*args, **kwargs)
@@ -74,41 +99,75 @@ class Service(BaseModel):
     def get_service_name(self):
         return self.get_docker_service_name()
 
+    # ------------------------------------------------------------------
+    # Storage quota helpers (plan.max_storage is GB → MB)
+    # ------------------------------------------------------------------
+
     def get_storage_quota_mb(self) -> int:
+        """Plan max_storage is in GB. Convert to MiB (1024-based)."""
         plan = None
         try:
             plan = self.plan
         except Exception:
-            pass
-        if plan is None and getattr(self, "plan_id", None):
-            plan = Plan.objects.filter(pk=self.plan_id).only("max_storage").first()
+            plan = None
+        if plan is None:
+            try:
+                plan_id = getattr(self, "plan_id", None)
+                if plan_id:
+                    from plans.models import Plan
+                    plan = Plan.objects.filter(pk=plan_id).only("max_storage").first()
+            except Exception:
+                plan = None
         try:
-            gb = float(getattr(plan, "max_storage", 0) or 0) if plan else 0.0
+            gb = float(getattr(plan, "max_storage", 0) or 0) if plan is not None else 0.0
         except (TypeError, ValueError):
             gb = 0.0
         return max(0, int(gb * 1024))
 
     def get_used_storage_mb(self, *, exclude_volume_id=None) -> int:
+        """
+        Sum of size_mb of EVERY volume owned by this service.
+
+        CRITICAL quota rule (same as Railway / Render persistent disks):
+          - Ownership is Volume.service_id == this.id.
+          - Soft-detached volumes (service_attachments cleared, FK kept)
+            STILL count toward the plan limit.
+          - Only hard-release (service=None) or permanent delete frees quota.
+          - Attach vs detach does NOT change the sum — both are included.
+          - Also includes any legacy row that still lists this service in
+            service_attachments.
+        """
+        from django.db.models import Q
+
         sid = str(self.pk)
-        qs = Volume.objects.filter(Q(service_id=self.pk) | Q(service_attachments__has_key=sid)).distinct()
+        qs = Volume.objects.filter(
+            Q(service_id=self.pk) | Q(service_attachments__has_key=sid)
+        ).distinct()
         if exclude_volume_id:
             qs = qs.exclude(pk=exclude_volume_id)
-        return int(qs.aggregate(s=Sum("size_mb"))["s"] or 0)
+        total = qs.aggregate(s=Sum("size_mb"))["s"]
+        return int(total or 0)
 
     def get_remaining_storage_mb(self, *, exclude_volume_id=None) -> int:
-        return max(0, self.get_storage_quota_mb() - self.get_used_storage_mb(exclude_volume_id=exclude_volume_id))
+        quota = self.get_storage_quota_mb()
+        used = self.get_used_storage_mb(exclude_volume_id=exclude_volume_id)
+        return max(0, quota - used)
 
     def storage_quota_summary(self) -> dict:
         quota = self.get_storage_quota_mb()
         used = self.get_used_storage_mb()
+        remaining = max(0, quota - used)
         return {
-            "quota_mb": quota, "used_mb": used, "remaining_mb": max(0, quota - used),
+            "quota_mb": quota,
+            "used_mb": used,
+            "remaining_mb": remaining,
             "quota_gb": round(quota / 1024, 2) if quota else 0,
             "used_gb": round(used / 1024, 2) if used else 0,
-            "remaining_gb": round(max(0, quota - used) / 1024, 2) if quota else 0,
+            "remaining_gb": round(remaining / 1024, 2) if remaining else 0,
         }
 
     def can_allocate_storage(self, size_mb: int, *, exclude_volume_id=None) -> tuple[bool, str]:
+        """Return (ok, error_message)."""
         try:
             size = int(size_mb)
         except (TypeError, ValueError):
@@ -117,16 +176,24 @@ class Service(BaseModel):
             return False, "Volume size must be greater than zero."
         remaining = self.get_remaining_storage_mb(exclude_volume_id=exclude_volume_id)
         if size > remaining:
-            return False, f"Not enough storage on this service plan. Requested {size} MB, remaining {remaining} MB (plan limit {self.get_storage_quota_mb()} MB)."
+            return (
+                False,
+                (
+                    f"Not enough storage on this service plan. "
+                    f"Requested {size} MB, remaining {remaining} MB "
+                    f"(plan limit {self.get_storage_quota_mb()} MB)."
+                ),
+            )
         return True, ""
 
     def __str__(self):
         return f"Service: {self.name}"
 
 
+
+
 class ServiceProcess(BaseModel):
     """Mutable desired process definition owned by a Service."""
-
     service = models.ForeignKey(Service, related_name="processes", on_delete=models.CASCADE)
     name = models.CharField(max_length=64)
     process_type = models.CharField(max_length=32, default="custom")
@@ -145,7 +212,7 @@ class ServiceProcess(BaseModel):
             models.UniqueConstraint(fields=("service", "name"), name="uniq_service_process_name")
         ]
 
-    def to_snapshot(self) -> dict:
+    def to_snapshot(self):
         return {
             "name": self.name,
             "process_type": self.process_type,
@@ -161,7 +228,7 @@ class ServiceProcess(BaseModel):
 
 
 class ServiceRevision(BaseModel):
-    """Immutable executable snapshot for a Service deployment."""
+    """Immutable executable snapshot for a Service."""
 
     class State(models.TextChoices):
         CREATED = "created", _("Created")
@@ -193,7 +260,10 @@ class ServiceRevision(BaseModel):
 
     def save(self, *args, **kwargs):
         if self.pk and not self._state.adding:
-            old = type(self).objects.filter(pk=self.pk).values("config_snapshot", "process_snapshot", "secret_keys", "revision_number", "service_id").first()
+            old = type(self).objects.filter(pk=self.pk).values(
+                "config_snapshot", "process_snapshot", "secret_keys",
+                "revision_number", "service_id",
+            ).first()
             if old and any([
                 old["config_snapshot"] != self.config_snapshot,
                 old["process_snapshot"] != self.process_snapshot,
@@ -206,12 +276,49 @@ class ServiceRevision(BaseModel):
 
 
 class Volume(BaseModel):
+    """
+    Docker volume owned by at most ONE service (exclusive).
+
+    - Volumes do NOT share between services.
+    - A service may have multiple volumes.
+    - Total size_mb of volumes for a service must not exceed plan.max_storage (GB → MB).
+    - service_attachments keeps bind/mode for the owning service only
+      (single key = str(service.id)).
+    """
+
     name = models.CharField(unique=True, max_length=32)
-    user = models.ForeignKey(User, verbose_name=_("User"), on_delete=models.CASCADE)
-    service = models.ForeignKey(Service, verbose_name=_("Service"), related_name="volumes", on_delete=models.SET_NULL, null=True, blank=True)
-    service_attachments = models.JSONField(_("Service Attachments"), default=dict, blank=True)
-    default_bind = models.CharField(_("Default Bind Directory"), max_length=255, blank=True, default="")
-    default_mode = models.CharField(_("Default Mode"), max_length=255, choices=VOLUME_MODE_CHOICES.choices, default=VOLUME_MODE_CHOICES.READ_WRITE, blank=True)
+    user = models.ForeignKey(
+        User,
+        verbose_name=_("User"),
+        on_delete=models.CASCADE,
+    )
+    # Exclusive ownership — one service only (null = unused / orphan)
+    service = models.ForeignKey(
+        Service,
+        verbose_name=_("Service"),
+        related_name="volumes",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        help_text=_("Owning service. Volumes cannot be shared across services."),
+    )
+    # bind/mode for the owning service only: { "<service_id>": {"bind": "...", "mode": "rw"} }
+    service_attachments = models.JSONField(
+        _("Service Attachments"),
+        default=dict,
+        blank=True,
+        help_text=_("Owning service ID → {bind, mode}. Only one service is allowed."),
+    )
+    default_bind = models.CharField(
+        _("Default Bind Directory"), max_length=255, blank=True, default=""
+    )
+    default_mode = models.CharField(
+        _("Default Mode"),
+        max_length=255,
+        choices=VOLUME_MODE_CHOICES.choices,
+        default=VOLUME_MODE_CHOICES.READ_WRITE,
+        blank=True,
+    )
     size_mb = models.PositiveIntegerField()
 
     class Meta:
@@ -220,46 +327,115 @@ class Volume(BaseModel):
 
     def clean(self):
         super().clean()
+        # Enforce exclusive ownership: attachments may only contain the owning service
         attachments = self.service_attachments or {}
         if self.service_id:
             sid = str(self.service_id)
-            self.service_attachments = {sid: attachments[sid]} if sid in attachments else {}
-            ok, msg = self.service.can_allocate_storage(self.size_mb, exclude_volume_id=self.pk)
+            # Drop any foreign service keys; allow empty att = soft-detached
+            if attachments:
+                if sid in attachments:
+                    self.service_attachments = {sid: attachments[sid]}
+                else:
+                    self.service_attachments = {}
+            # Quota check when assigned to a service (mounted or soft-detached)
+            ok, msg = self.service.can_allocate_storage(
+                self.size_mb, exclude_volume_id=self.pk
+            )
             if not ok:
                 raise ValidationError({"size_mb": msg})
-        elif attachments:
-            self.service_attachments = {}
+        else:
+            # Unused volume: no attachments allowed
+            if attachments:
+                self.service_attachments = {}
 
     def save(self, *args, **kwargs):
         self.full_clean()
+        # Keep attachments consistent with exclusive ownership.
+        #
+        # IMPORTANT: empty service_attachments + service_id set means
+        # soft-detached (owned, counts toward quota, NOT mounted).
+        # Do NOT auto-recreate attachment metadata on every save — that
+        # made detach appear to succeed then immediately re-attach.
         if self.service_id:
             sid = str(self.service_id)
             att = dict(self.service_attachments or {})
-            self.service_attachments = {sid: att[sid]} if sid in att else {}
+            if att:
+                # Keep only the owning service key; drop foreign keys
+                if sid in att:
+                    self.service_attachments = {sid: att[sid]}
+                else:
+                    # Stale keys only → treat as soft-detached
+                    self.service_attachments = {}
+            else:
+                self.service_attachments = {}
         else:
             self.service_attachments = {}
         super().save(*args, **kwargs)
 
     def attach_to_service(self, service: Service, bind: str = None, mode: str = None):
+        """
+        Attach (or re-attach) exclusively to one service.
+        Raises ValidationError if quota exceeded or ownership conflict.
+        """
         if str(service.user_id) != str(self.user_id):
             raise ValidationError(_("Volume and service must belong to the same user."))
+
+        # Already owned by a different service?
         if self.service_id and str(self.service_id) != str(service.id):
-            raise ValidationError(_("This volume is already attached to another service. Volumes cannot be shared between services."))
-        ok, msg = service.can_allocate_storage(self.size_mb, exclude_volume_id=self.pk)
+            raise ValidationError(
+                _(
+                    "This volume is already attached to another service. "
+                    "Volumes cannot be shared between services."
+                )
+            )
+
+        # Quota
+        ok, msg = service.can_allocate_storage(
+            self.size_mb, exclude_volume_id=self.pk
+        )
         if not ok:
             raise ValidationError(msg)
+
+        if bind is None:
+            bind = self.default_bind or "/data"
+        if mode is None:
+            mode = self.default_mode or "rw"
+
         self.service = service
-        self.service_attachments = {str(service.id): {"bind": bind or self.default_bind or "/data", "mode": mode or self.default_mode or "rw", "attached_at": timezone.now().isoformat()}}
+        self.service_attachments = {
+            str(service.id): {
+                "bind": bind,
+                "mode": mode,
+                "attached_at": timezone.now().isoformat(),
+            }
+        }
         self.save()
 
     def detach_from_service(self, service: Service = None):
+        """
+        Soft-detach: clear mount metadata but KEEP ownership (service FK).
+
+        Quota is based on ownership, so size_mb still counts toward the
+        service plan until the volume is released or deleted.
+
+        Uses QuerySet.update to avoid any save()/clean() path that could
+        re-populate service_attachments.
+        """
         if service is not None and self.service_id and str(self.service_id) != str(service.id):
             return
         Volume.objects.filter(pk=self.pk).update(service_attachments={})
         self.service_attachments = {}
-        self.refresh_from_db(fields=["service_attachments"])
+        # refresh in-memory
+        try:
+            self.refresh_from_db(fields=["service_attachments"])
+        except Exception:
+            pass
 
     def release_from_service(self, service: Service = None):
+        """
+        Hard-release: drop ownership so the volume no longer counts toward
+        any service quota and can be attached elsewhere.
+        """
         if service is not None and self.service_id and str(self.service_id) != str(service.id):
             return
         self.service = None
@@ -267,27 +443,37 @@ class Volume(BaseModel):
         self.save(update_fields=["service", "service_attachments"])
 
     def get_attached_services(self):
-        return Service.objects.filter(pk=self.service_id) if self.service_id else Service.objects.none()
+        """Return list of Service objects (0 or 1)."""
+        if self.service_id:
+            return Service.objects.filter(pk=self.service_id)
+        return Service.objects.none()
 
     def get_bind_for_service(self, service: Service):
         if not service or str(service.id) != str(self.service_id or ""):
             return self.default_bind
-        return (self.service_attachments or {}).get(str(service.id), {}).get("bind", self.default_bind)
+        return (self.service_attachments or {}).get(str(service.id), {}).get(
+            "bind", self.default_bind
+        )
 
     def get_mode_for_service(self, service: Service):
         if not service or str(service.id) != str(self.service_id or ""):
             return self.default_mode
-        return (self.service_attachments or {}).get(str(service.id), {}).get("mode", self.default_mode)
+        return (self.service_attachments or {}).get(str(service.id), {}).get(
+            "mode", self.default_mode
+        )
 
     def is_attached_to_service(self, service: Service):
+        """True if this service owns the volume (counts toward quota)."""
         return bool(service and str(service.id) == str(self.service_id or ""))
 
     def is_mounted_on_service(self, service: Service = None) -> bool:
+        """True if mount metadata exists for the owner (or given) service."""
         if not self.service_id:
             return False
         if service is not None and str(service.id) != str(self.service_id):
             return False
-        return str(self.service_id) in (self.service_attachments or {})
+        atts = self.service_attachments or {}
+        return str(self.service_id) in atts
 
     def get_docker_volume_name(self):
         return f"vol-{self.id.hex[:8]}-{self.name}"
@@ -296,17 +482,86 @@ class Volume(BaseModel):
         return f"Volume: {self.name} ({self.size_mb} MB)"
 
 
+# ---------------------------------------------------------------------------
+# Service Sharing (group / user sharing with fine-grained rules)
+# ---------------------------------------------------------------------------
+
 class ServiceShare(BaseModel):
-    service = models.ForeignKey(Service, verbose_name=_("Service"), related_name="shares", on_delete=models.CASCADE)
-    group = models.ForeignKey("messenger.Conversation", verbose_name=_("Shared with Group"), related_name="shared_services", on_delete=models.CASCADE, null=True, blank=True)
-    target_user = models.ForeignKey(User, verbose_name=_("Shared with User"), related_name="received_service_shares", on_delete=models.CASCADE, null=True, blank=True)
-    shared_by = models.ForeignKey(User, verbose_name=_("Shared by"), related_name="created_service_shares", on_delete=models.CASCADE)
-    rules = models.JSONField(_("Permission Rules"), default=dict, blank=True)
+    """
+    Share a service with a messenger group (Conversation) or directly with a user.
+    The owner retains full control; members can only perform actions allowed by `rules`.
+    """
+    service = models.ForeignKey(
+        Service,
+        verbose_name=_("Service"),
+        related_name="shares",
+        on_delete=models.CASCADE,
+    )
+    # Exactly one of group / target_user should be set
+    group = models.ForeignKey(
+        "messenger.Conversation",
+        verbose_name=_("Shared with Group"),
+        related_name="shared_services",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        help_text=_("Messenger group this service is shared into."),
+    )
+    target_user = models.ForeignKey(
+        User,
+        verbose_name=_("Shared with User"),
+        related_name="received_service_shares",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
+    shared_by = models.ForeignKey(
+        User,
+        verbose_name=_("Shared by"),
+        related_name="created_service_shares",
+        on_delete=models.CASCADE,
+    )
+    # Fine-grained permissions the recipients may exercise.
+    # Example:
+    # {
+    #   "can_view": true,
+    #   "can_start": true,
+    #   "can_stop": true,
+    #   "can_restart": false,
+    #   "can_deploy": false,
+    #   "can_view_logs": true,
+    #   "can_view_metrics": true,
+    #   "can_attach_volume": false,
+    #   "can_change_config": false
+    # }
+    rules = models.JSONField(
+        _("Permission Rules"),
+        default=dict,
+        blank=True,
+        help_text=_("JSON map of allowed actions for recipients of this share."),
+    )
     is_active = models.BooleanField(_("Active"), default=True)
     note = models.CharField(_("Note"), max_length=255, blank=True, default="")
-    expires_at = models.DateTimeField(_("Expires at"), null=True, blank=True)
-    admin_only = models.BooleanField(_("Admins only"), default=False)
-    preset = models.CharField(_("Preset"), max_length=32, blank=True, default="")
+    # Optional expiry — after this time the share is treated as inactive
+    expires_at = models.DateTimeField(
+        _("Expires at"),
+        null=True,
+        blank=True,
+        help_text=_("When set, share stops applying after this timestamp."),
+    )
+    # When True, only group owner/admin may use the shared service (members see it but cannot act)
+    admin_only = models.BooleanField(
+        _("Admins only"),
+        default=False,
+        help_text=_("If set, only group owner/admin participants may exercise rules."),
+    )
+    preset = models.CharField(
+        _("Preset"),
+        max_length=32,
+        blank=True,
+        default="",
+        help_text=_("Optional preset name: viewer, operator, developer, ops."),
+    )
 
     class Meta:
         verbose_name = _("Service Share")
@@ -329,9 +584,14 @@ class ServiceShare(BaseModel):
     def clean(self):
         super().clean()
         if bool(self.group_id) == bool(self.target_user_id):
-            raise ValidationError(_("Exactly one of group or target_user must be set."))
-        if self.service_id and self.shared_by_id and str(self.service.user_id) != str(self.shared_by_id):
-            raise ValidationError(_("Only the service owner can create a share."))
+            raise ValidationError(
+                _("Exactly one of group or target_user must be set.")
+            )
+        if self.service_id and self.shared_by_id:
+            if str(self.service.user_id) != str(self.shared_by_id):
+                raise ValidationError(
+                    _("Only the service owner can create a share.")
+                )
 
     def save(self, *args, **kwargs):
         self.full_clean()
@@ -340,6 +600,7 @@ class ServiceShare(BaseModel):
         super().save(*args, **kwargs)
 
     def allows(self, action: str) -> bool:
+        """Return True if the given action key is permitted by rules."""
         from services.share_permissions import normalize_rules
         rules = normalize_rules(self.rules or {})
         if action == "daily_deploy_limit":
@@ -351,33 +612,168 @@ class ServiceShare(BaseModel):
         return f"Share({self.service_id} → {target})"
 
 
+
 class ServiceShareMember(BaseModel):
-    share = models.ForeignKey(ServiceShare, verbose_name=_("Share"), related_name="member_rules", on_delete=models.CASCADE)
-    user = models.ForeignKey(User, verbose_name=_("Member"), related_name="service_share_member_rules", on_delete=models.CASCADE)
-    rules = models.JSONField(_("Permission Rules"), default=dict, blank=True)
-    is_enabled = models.BooleanField(_("Enabled"), default=True)
+    """
+    Per-member permission overrides inside a group share.
+    If no row exists for a participant, the parent ServiceShare.rules apply.
+    """
+    share = models.ForeignKey(
+        ServiceShare,
+        verbose_name=_("Share"),
+        related_name="member_rules",
+        on_delete=models.CASCADE,
+    )
+    user = models.ForeignKey(
+        User,
+        verbose_name=_("Member"),
+        related_name="service_share_member_rules",
+        on_delete=models.CASCADE,
+    )
+    rules = models.JSONField(
+        _("Permission Rules"),
+        default=dict,
+        blank=True,
+        help_text=_("Overrides parent share rules for this member only."),
+    )
+    is_enabled = models.BooleanField(
+        _("Enabled"),
+        default=True,
+        help_text=_("If false, this member has no access despite being in the group."),
+    )
 
     class Meta:
         verbose_name = _("Service Share Member Rule")
         verbose_name_plural = _("Service Share Member Rules")
-        constraints = [
-            models.UniqueConstraint(fields=("share", "user"), name="service_share_member_unique_user"),
+        unique_together = ("share", "user")
+        indexes = [
+            models.Index(fields=["share", "user"]),
         ]
 
-    def clean(self):
-        super().clean()
-        if self.share_id and self.user_id:
-            share = self.share
-            if share.group_id:
-                from services.api.sharing import _group_member_ids
-                if str(self.user_id) not in {str(uid) for uid in _group_member_ids(share.group_id)}:
-                    raise ValidationError(_("Selected user is not a member of the shared group."))
+    def __str__(self):
+        return f"ShareMember {self.share_id} → {self.user_id}"
 
-    def save(self, *args, **kwargs):
-        self.full_clean()
+    def effective_rules(self):
         from services.share_permissions import normalize_rules
-        self.rules = normalize_rules(self.rules or {})
-        super().save(*args, **kwargs)
+        base = normalize_rules(self.share.rules if self.share_id else {})
+        if not self.is_enabled:
+            return {k: False for k in base}
+        over = normalize_rules(self.rules or {})
+        # Member override wins for keys they set; we store full map usually
+        return over if self.rules else base
 
 
-# Keep legacy shell/session models and any additional models below this point.
+class ServiceShareEvent(BaseModel):
+    """
+    Audit / activity events for a shared service.
+    These are also posted as system messages into the messenger group.
+    """
+    share = models.ForeignKey(
+        ServiceShare,
+        related_name="events",
+        on_delete=models.CASCADE,
+    )
+    actor = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    action = models.CharField(max_length=64)  # start, stop, deploy, share, unshare, ...
+    message = models.TextField(blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        verbose_name = _("Service Share Event")
+        verbose_name_plural = _("Service Share Events")
+        ordering = ("-created_at",)
+
+    def __str__(self):
+        return f"{self.action} on share {self.share_id}"
+
+
+class ShellSession(BaseModel):
+    """Short-lived, single-user restricted shell session for a service."""
+
+    class Status(models.TextChoices):
+        ACTIVE = "active", _("Active")
+        CLOSED = "closed", _("Closed")
+        EXPIRED = "expired", _("Expired")
+
+    service = models.ForeignKey("services.Service", on_delete=models.CASCADE, related_name="shell_sessions")
+    user = models.ForeignKey("users.User", on_delete=models.CASCADE, related_name="shell_sessions")
+    token_hash = models.CharField(max_length=64, unique=True)
+    platform = models.CharField(max_length=32)
+    root_path = models.CharField(max_length=512, default="/app")
+    workdir = models.CharField(max_length=512, default="/app")
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
+    last_used_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField()
+    closed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=("service", "status", "expires_at"))]
+        # Concurrent active sessions are limited in application code via
+        # SystemSetting ``shell.max_concurrent_sessions_per_service`` (Wagtail).
+
+    def __str__(self):
+        return f"Shell {self.service_id} / {self.user_id} / {self.status}"
+
+
+class ShellAuditEvent(BaseModel):
+    """Unified audit trail for every restricted-shell action.
+
+    Commands, file edits, session lifecycle, and interactive PTY events all
+    land here so the UI can show one chronological activity log.
+    """
+
+    class Action(models.TextChoices):
+        SESSION_OPEN = "session_open", _("Session open")
+        SESSION_CLOSE = "session_close", _("Session close")
+        SESSION_REPLACE = "session_replace", _("Session replace")
+        COMMAND = "command", _("Command")
+        COMMAND_DRY_RUN = "command_dry_run", _("Command dry-run")
+        FILE_READ = "file_read", _("File read")
+        FILE_WRITE = "file_write", _("File write")
+        FILE_DELETE = "file_delete", _("File delete")
+        FILE_RENAME = "file_rename", _("File rename")
+        FILE_MKDIR = "file_mkdir", _("File mkdir")
+        INTERACTIVE_START = "interactive_start", _("Interactive start")
+        INTERACTIVE_EXIT = "interactive_exit", _("Interactive exit")
+        ENV_VIEW = "env_view", _("Env view")
+        HEALTH_VIEW = "health_view", _("Health view")
+        AUDIT_SEARCH = "audit_search", _("Audit search")
+        AUDIT_DOWNLOAD = "audit_download", _("Audit download")
+
+    service = models.ForeignKey(
+        "services.Service", on_delete=models.CASCADE, related_name="shell_audit_events"
+    )
+    user = models.ForeignKey(
+        "users.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="shell_audit_events"
+    )
+    session = models.ForeignKey(
+        "services.ShellSession", on_delete=models.SET_NULL, null=True, blank=True, related_name="audit_events"
+    )
+    action = models.CharField(max_length=32, choices=Action.choices, db_index=True)
+    command = models.TextField(blank=True, default="")
+    path = models.CharField(max_length=1024, blank=True, default="")
+    cwd = models.CharField(max_length=512, blank=True, default="")
+    exit_code = models.IntegerField(null=True, blank=True)
+    success = models.BooleanField(default=True)
+    detail = models.TextField(blank=True, default="")
+    meta = models.JSONField(default=dict, blank=True)
+    # Short stdout/stderr preview for forensics (not full output).
+    output_preview = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=("service", "-created_at")),
+            models.Index(fields=("service", "action", "-created_at")),
+            models.Index(fields=("user", "-created_at")),
+        ]
+
+    def __str__(self):
+        return f"ShellAudit {self.action} service={self.service_id}"
+
