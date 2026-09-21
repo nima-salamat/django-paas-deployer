@@ -175,7 +175,7 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
         variant_id=str(payload["variant"]),
         definition_snapshot=copy.deepcopy(definition.data),
         config=dict(resolved["config"]),
-        secret_config=dict(resolved["secrets"]),
+        secret_config={},
         status=ApplicationStatus.PENDING,
         network=network,
     )
@@ -302,6 +302,11 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
             dockerfile_text = f"FROM {image}\n"
         else:
             raise CatalogValidationError(f"Catalog service {key} must define an image or Dockerfile.")
+
+        if "${secret." in dockerfile_text.lower():
+            raise CatalogValidationError(
+                f"Catalog service {key} attempts to bake a secret into its Dockerfile. Move the secret to an environment variable instead."
+            )
 
         healthcheck_instruction = _dockerfile_healthcheck(healthcheck)
         if healthcheck_instruction and "HEALTHCHECK" not in dockerfile_text:
