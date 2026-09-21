@@ -337,7 +337,19 @@ node.labels.storage == ssd
 
 Do not edit the Docker node role (manager/worker) from the current UI. Promotion/demotion is deliberately kept as an explicit cluster-topology operation instead of a casual form edit.
 
-## 12. Multiple PassDeployer Services
+## 12. Interactive shell on multi-node Swarm
+
+The application shell is intentionally conservative in multi-node mode.
+
+The Docker Swarm manager can inspect a Service and its Tasks, but `docker exec` operates against a container on the Docker Engine that owns that container. PassDeployer therefore allows the current shell implementation to exec into a task only when that task is running on the connected Docker node.
+
+When the task is scheduled on another node, the shell returns a clear "connected Docker node" error instead of pretending the manager can execute on a remote container.
+
+Application logs and runtime state remain available from the Swarm manager.
+
+A future multi-node shell transport can connect directly to the task's node using a secured Docker SSH/TLS endpoint.
+
+## 13. Multiple PassDeployer Services
 
 One Swarm can run many independent PassDeployer Services:
 
@@ -360,7 +372,7 @@ You should **not**:
 
 PassDeployer creates/updates the runtime Swarm Services from the active ServiceRevision.
 
-## 13. Updating a node
+## 14. Updating a node
 
 To temporarily stop scheduling new tasks on a node:
 
@@ -384,7 +396,7 @@ docker service ls
 docker service ps <service-name>
 \`\`\`
 
-## 14. Updating application code
+## 15. Updating application code
 
 The normal PassDeployer deployment flow remains:
 
@@ -401,7 +413,7 @@ source
 
 Swarm owns restart/scheduling/task replacement. PassDeployer owns the desired Service/Revision model and deployment operation history.
 
-## 15. Rollout behavior
+## 16. Rollout behavior
 
 Application Swarm Services are created with conservative update/rollback settings:
 
@@ -412,7 +424,7 @@ Application Swarm Services are created with conservative update/rollback setting
 
 The platform still records the deployment as a PassDeployer operation so API/admin history remains independent from Swarm's task history.
 
-## 16. Troubleshooting checklist
+## 17. Troubleshooting checklist
 
 ### Swarm is not active
 
@@ -456,7 +468,7 @@ The application service must be attached to \`proxy_net\`, and the generated ser
 
 PassDeployer intentionally fails rather than silently mixing bridge and Swarm networking. Migrate the network to an attachable overlay before deploying application workloads.
 
-## 17. Useful verification commands
+## 18. Useful verification commands
 
 Manager:
 
@@ -488,7 +500,7 @@ docker login <REGISTRY>
 docker pull <REGISTRY>/<NAMESPACE>/<IMAGE>:<TAG>
 \`\`\`
 
-## 18. Architecture invariant
+## 19. Architecture invariant
 
 Do not bypass the runtime abstraction by creating application containers manually.
 
