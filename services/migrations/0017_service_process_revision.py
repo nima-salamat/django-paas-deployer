@@ -1,4 +1,5 @@
 from django.db import migrations, models
+from uuid import uuid4
 import django.db.models.deletion
 from django.conf import settings
 
@@ -13,7 +14,7 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name="ServiceProcess",
             fields=[
-                ("id", models.UUIDField(editable=False, primary_key=True, serialize=False)),
+                ("id", models.UUIDField(default=uuid4, editable=False, primary_key=True, serialize=False)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 ("updated_at", models.DateTimeField(auto_now=True)),
                 ("name", models.CharField(max_length=64)),
