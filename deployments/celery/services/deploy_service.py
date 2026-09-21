@@ -478,6 +478,18 @@ class DeployService:
                 for process in runtime_graph.processes
             ]
             cfg["endpoints"] = runtime_graph.public_endpoints()
+            runtime_options["processes"] = [
+                {
+                    "name": process.name,
+                    "process_type": process.process_type,
+                    "command": process.command,
+                    "entrypoint": process.entrypoint,
+                    "replicas": process.replicas,
+                    "enabled": process.enabled,
+                    "environment": process.environment,
+                }
+                for process in runtime_graph.processes
+            ]
             if runtime_graph.networks:
                 cfg["networks"] = list(runtime_graph.networks)
             runtime_options.setdefault("exposed_ports", runtime_graph.exposed_ports())
