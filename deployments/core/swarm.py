@@ -768,7 +768,7 @@ class SwarmRuntime:
                 source=str(item.get("source") or item.get("name") or ""),
                 target=str(item.get("target") or item.get("bind") or ""),
                 mode=str(item.get("mode") or "rw"),
-                mount_type="volume",
+                mount_type="bind" if str(item.get("source") or item.get("name") or "").startswith("/") else "volume",
             )
             for item in (volumes or ())
             if isinstance(item, dict)
