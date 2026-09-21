@@ -2649,6 +2649,21 @@ class DBDeployer:
         container_name: str,
     ) -> bool:
 
+        if swarm_enabled():
+            try:
+                # Resolve the managed Swarm Service by its canonical name.
+                removed = SwarmRuntime().remove(container_name)
+                logger.info("DB Swarm service '%s' removed.", container_name)
+                return True
+            except docker.errors.NotFound:
+                return False
+            except (APIError, docker.errors.DockerException) as exc:
+                raise DeploymentError(
+                    f"Failed to remove DB Swarm service '{container_name}'.",
+                    stage="container_removal",
+                    details={"error": str(exc)},
+                ) from exc
+
         try:
 
             client = Client()()
