@@ -822,7 +822,8 @@ class DeployViewSet(ModelViewSet):
         # from racing the container removal.
         with transaction.atomic():
             service = Service.objects.select_for_update().get(pk=service.pk)
-            previous_deploy_id = service.selected_deploy_id
+            previous_active = get_active_deploy(service)
+            previous_deploy_id = previous_active.pk if previous_active else None
             if previous_deploy_id == deploy.pk:
                 previous_deploy_id = None
             from deployments.core.state.manager import StateManager
