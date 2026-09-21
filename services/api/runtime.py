@@ -31,7 +31,9 @@ from core.global_settings.config import SERVICE_STATUS_CHOICES
 from core.utils import make_uuid4
 from deployments.core.db_deployer import DB_PLATFORMS, DBDeployer
 from deployments.core.deploy import Deploy as OrchestratorDeploy
+from services.revisioning import get_active_deploy
 from deployments.core.manager.container_manager import Container
+from deployments.core.swarm import SwarmRuntime, swarm_enabled
 from deployments.core.manager.client_manager import Client
 from docker.errors import NotFound as DockerNotFound
 
@@ -211,10 +213,10 @@ def start_service_apiview(request):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            deploy_item = service_item.selected_deploy
+            deploy_item = get_active_deploy(service_item)
             if deploy_item is None:
                 return Response(
-                    {"result": "error", "detail": _("First select a deploy.")},
+                    {"result": "error", "detail": _("This service has no active revision/deployment.")},
                     status=status.HTTP_409_CONFLICT,
                 )
 
@@ -641,41 +643,15 @@ def service_status_apiview(request):
 
     name = service_item.get_docker_service_name()
     try:
-        container = Container(name=name)
-        stats = container.get_container_stats() or {}
-
-        running_raw = stats.get("running", stats.get("is_running", 0))
-        if isinstance(running_raw, bool):
-            running = running_raw
-        elif isinstance(running_raw, (int, float)):
-            running = int(running_raw) == 1
-        elif isinstance(running_raw, str):
-            running = running_raw.strip().lower() in (
-                "1",
-                "true",
-                "yes",
-                "running",
-            )
+        if swarm_enabled():
+            stats = SwarmRuntime().service_stats(name)
         else:
-            running = False
+            stats = Container(name=name).get_container_stats() or {}
 
-        def _as_percent(value):
-            try:
-                n = float(value if value is not None else 0.0)
-            except (TypeError, ValueError):
-                return 0.0
-            if n < 0:
-                n = 0.0
-            return round(min(n, 100.0), 2)
-
-        cpu = _as_percent(stats.get("cpu", stats.get("cpu_percent", 0.0)))
-        ram = _as_percent(
-            stats.get("memory", stats.get("mem_percent", stats.get("ram", 0.0)))
-        )
-
-        detail = (
-            _("Service is running.") if running else _("Service is not running.")
-        )
+        running = bool(stats.get("running"))
+        cpu = float(stats.get("cpu", stats.get("cpu_percent", 0.0)) or 0.0)
+        ram = float(stats.get("memory", stats.get("mem_percent", stats.get("ram", 0.0))) or 0.0)
+        detail = _("Service is running.") if running else _("Service is not running.")
     except Exception as e:
         logger.exception("service_status error: %s", e)
         running = False
