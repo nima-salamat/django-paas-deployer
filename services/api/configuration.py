@@ -437,7 +437,17 @@ class ServiceRevisionDetailAPIView(ServiceConfigBaseAPIView):
                 "activated_at": revision.activated_at,
                 "graph": revision.graph_snapshot,
                 "secret_keys": revision.secret_keys,
-                "config": materialize_revision_config(revision) if str(service.user_id) == str(request.user.id) else revision.config_snapshot,
+                "config": revision.config_snapshot,
+                "runtime_graph": {
+                    "source": revision.source_snapshot,
+                    "build": revision.build_snapshot,
+                    "runtime": revision.runtime_snapshot,
+                    "environment": revision.environment_snapshot,
+                    "processes": revision.process_snapshot,
+                    "endpoints": revision.endpoint_snapshot,
+                    "volumes": revision.volume_snapshot,
+                    "networks": revision.network_snapshot,
+                },
             }
         )
 
