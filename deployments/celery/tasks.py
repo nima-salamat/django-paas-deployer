@@ -55,7 +55,7 @@ from deployments.common.retry import is_retryable_exception
 from deployments.core.state.locks import acquire_service_deployment_lock
 from deployments.core.state.manager import StateManager
 from services.models import Service  # type: ignore
-from services.revisioning import ensure_revision_for_deploy, materialize_revision_config, activate_revision_locked
+from services.revisioning import ensure_revision_for_deploy, materialize_revision_config, activate_revision_locked, mark_revision_failed
 
 from .services.deploy_service import DeployService
 from .services.stop_service import StopService
@@ -687,6 +687,12 @@ def _mark_failure(
     stage: str = "deployment_failed",
     details: dict | None = None, tb: str = "", task_id: str | None = None,
 ) -> None:
+    if getattr(deploy, "revision_id", None):
+        try:
+            mark_revision_failed(deploy.revision_id)
+        except Exception:
+            logger.exception("Failed to mark DB revision %s as failed", deploy.revision_id)
+
     committed = StateManager.transition_deploy_terminal_if_owned(
         deploy.pk, DeploymentStatusChoices.FAILED, task_id=task_id,
         update_fields={
