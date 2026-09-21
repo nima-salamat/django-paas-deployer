@@ -450,6 +450,10 @@ class DeployService:
 
         environment = dict(cfg.get("env") or cfg.get("environment") or {})
         environment = {str(k): str(v) for k, v in environment.items()}
+        build_environment = {
+            str(k): str(v)
+            for k, v in dict(cfg.get("build_env") or {}).items()
+        }
 
         # The revision is the normalized runtime graph boundary. Legacy
         # profile keys are still accepted, but endpoint publication,
@@ -460,7 +464,8 @@ class DeployService:
             else None
         )
         if runtime_graph is not None:
-            environment.update(runtime_graph.environment)
+            environment = dict(runtime_graph.runtime_environment)
+            build_environment.update(runtime_graph.build_environment)
             cfg["processes"] = [
                 {
                     "name": process.name,
@@ -693,7 +698,17 @@ class DeployService:
             worker_count=worker_count,
             resource_limits=resource_limits,
             build_resource_policy=build_resource_policy,
-            build_options={**build_options, "build_command": build_command, "install_command": install_command, "build_dir": build_dir, "package_manager": package_manager},
+            build_options={
+                **build_options,
+                "build_command": build_command,
+                "install_command": install_command,
+                "build_dir": build_dir,
+                "package_manager": package_manager,
+                "build_args": {
+                    **build_environment,
+                    **dict(build_options.get("build_args") or {}),
+                },
+            },
             runtime_options=runtime_options,
             labels={
                 **dict(cfg.get("labels") or {}),
