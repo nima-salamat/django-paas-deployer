@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import migrations, models
+from uuid import uuid4
 import django.db.models.deletion
 
 
@@ -58,7 +59,7 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name="ServiceSecret",
             fields=[
-                ("id", models.UUIDField(editable=False, primary_key=True, serialize=False)),
+                ("id", models.UUIDField(default=uuid4, editable=False, primary_key=True, serialize=False)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 ("updated_at", models.DateTimeField(auto_now=True)),
                 ("key", models.CharField(max_length=128)),
@@ -76,7 +77,7 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name="ServiceSecretVersion",
             fields=[
-                ("id", models.UUIDField(editable=False, primary_key=True, serialize=False)),
+                ("id", models.UUIDField(default=uuid4, editable=False, primary_key=True, serialize=False)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 ("updated_at", models.DateTimeField(auto_now=True)),
                 ("version", models.PositiveIntegerField()),
@@ -106,7 +107,7 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name="ServiceEnvironmentVariable",
             fields=[
-                ("id", models.UUIDField(editable=False, primary_key=True, serialize=False)),
+                ("id", models.UUIDField(default=uuid4, editable=False, primary_key=True, serialize=False)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 ("updated_at", models.DateTimeField(auto_now=True)),
                 ("key", models.CharField(max_length=128)),
@@ -138,7 +139,7 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name="ServiceEndpoint",
             fields=[
-                ("id", models.UUIDField(editable=False, primary_key=True, serialize=False)),
+                ("id", models.UUIDField(default=uuid4, editable=False, primary_key=True, serialize=False)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 ("updated_at", models.DateTimeField(auto_now=True)),
                 ("name", models.CharField(max_length=64)),
@@ -175,7 +176,7 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name="ServiceNetworkAttachment",
             fields=[
-                ("id", models.UUIDField(editable=False, primary_key=True, serialize=False)),
+                ("id", models.UUIDField(default=uuid4, editable=False, primary_key=True, serialize=False)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 ("updated_at", models.DateTimeField(auto_now=True)),
                 ("alias", models.CharField(blank=True, default="", max_length=128)),
@@ -194,7 +195,7 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name="DatabaseResource",
             fields=[
-                ("id", models.UUIDField(editable=False, primary_key=True, serialize=False)),
+                ("id", models.UUIDField(default=uuid4, editable=False, primary_key=True, serialize=False)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 ("updated_at", models.DateTimeField(auto_now=True)),
                 ("name", models.CharField(max_length=64)),
@@ -218,7 +219,7 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name="ServiceDatabaseBinding",
             fields=[
-                ("id", models.UUIDField(editable=False, primary_key=True, serialize=False)),
+                ("id", models.UUIDField(default=uuid4, editable=False, primary_key=True, serialize=False)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 ("updated_at", models.DateTimeField(auto_now=True)),
                 ("alias", models.CharField(default="default", max_length=64)),
