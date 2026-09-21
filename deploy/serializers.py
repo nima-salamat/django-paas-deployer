@@ -187,9 +187,7 @@ class DeploySerializer(serializers.ModelSerializer):
             return []
 
     def validate(self, attrs):
-        # Once execution has produced a revision, the Deploy is no longer a
-        # mutable configuration object. Create a new Deploy to produce a new
-        # immutable ServiceRevision.
+        """Validate permissions/warnings and enforce revision immutability."""
         if self.instance is not None and getattr(self.instance, "revision_id", None):
             changed = set(attrs) & {"service", "version", "zip_file", "config"}
             if changed:
@@ -199,11 +197,6 @@ class DeploySerializer(serializers.ModelSerializer):
                         "Create a new deployment instead of changing its executable configuration."
                     )
                 })
-        """Validate permissions, immutable revisions, and scoped names."""
-        Create requests may reuse a deployment name; the create path allocates
-        a unique suffix. Existing deployments keep strict name uniqueness when
-        renamed so an update cannot silently change identity.
-        """
         attrs = super().validate(attrs)
         request = self.context.get("request")
         service = attrs.get("service") or getattr(self.instance, "service", None)
