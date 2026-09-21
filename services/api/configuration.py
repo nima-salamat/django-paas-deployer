@@ -19,6 +19,7 @@ from services.models import (
     ServiceEnvironmentVariable,
     ServiceEndpoint,
     ServiceRevision,
+    ServiceSecret,
 )
 from services.revisioning import materialize_revision_config, _get_or_create_secret
 from services.share_permissions import assert_share_action, SharePermissionError
@@ -473,7 +474,7 @@ class ServiceRevisionRollbackAPIView(ServiceConfigBaseAPIView):
         with transaction.atomic():
             service = Service.objects.select_for_update().get(pk=service.pk)
             service_status = str(service.status).lower()
-            if service_status in {"queued", "deploying", "stopping", "running"}:
+            if service_status in {"queued", "deploying", "stopping"}:
                 return Response(
                     {"error": "Stop the service before requesting a revision rollback."},
                     status=409,
