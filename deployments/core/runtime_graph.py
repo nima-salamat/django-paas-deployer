@@ -139,7 +139,8 @@ class ServiceRuntimeGraph:
     def exposed_ports(self) -> dict[str, dict]:
         ports: dict[str, dict] = {}
         for endpoint in self.enabled_endpoints():
-            ports[f"{endpoint.target_port}/{endpoint.protocol}"] = {}
+            docker_protocol = "udp" if endpoint.protocol == "udp" else "tcp"
+            ports[f"{endpoint.target_port}/{docker_protocol}"] = {}
         return ports
 
     def port_bindings(self) -> dict[str, list[dict[str, str]]]:
@@ -147,7 +148,8 @@ class ServiceRuntimeGraph:
         for endpoint in self.enabled_endpoints():
             if endpoint.published_port is None:
                 continue
-            key = f"{endpoint.target_port}/{endpoint.protocol}"
+            docker_protocol = "udp" if endpoint.protocol == "udp" else "tcp"
+            key = f"{endpoint.target_port}/{docker_protocol}"
             bindings[key] = [{"HostPort": str(endpoint.published_port)}]
         return bindings
 
