@@ -188,13 +188,11 @@ def _service_labels(config) -> dict[str, str]:
         labels["traefik.enable"] = "true"
         labels["traefik.docker.network"] = "proxy_net"
         labels[f"traefik.http.routers.{router}.rule"] = f"Host({tick}{host}{tick})"
-        labels[f"traefik.http.routers.{router}.entrypoints"] = (
-            "websecure" if primary.protocol == "https" or primary.tls else "web"
-        )
+        # Host Nginx terminates public TLS in the current installation.
+        # Traefik therefore receives HTTP on its internal web entrypoint.
+        labels[f"traefik.http.routers.{router}.entrypoints"] = "web"
         labels[f"traefik.http.routers.{router}.service"] = router
         labels[f"traefik.http.services.{router}.loadbalancer.server.port"] = str(primary.target_port)
-        if primary.protocol == "https" or primary.tls:
-            labels[f"traefik.http.routers.{router}.tls"] = "true"
         if primary.path:
             labels[f"traefik.http.routers.{router}.rule"] += (
                 f" && PathPrefix({tick}{primary.path}{tick})"
