@@ -55,64 +55,13 @@ def cleanup_user_resources(sender, instance: User, **kwargs):
         user_id,
     )
 
-    services = list(
-        Service.objects.filter(user=instance).select_related(
-            "plan", "active_revision"
-        )
+    services = list(Service.objects.filter(user=instance).values_list("pk", flat=True))
+    logger.info(
+        "User %s owns %s service(s); Service pre_delete handlers own their Swarm/container runtime cleanup.",
+        user_id,
+        len(services),
     )
 
-    for service in services:
-        container_name = service.get_docker_service_name()
-        logger.info(
-            "Cleaning service '%s' → container '%s'",
-            service.name,
-            container_name,
-        )
-
-        try:
-            is_db = (
-                getattr(service.plan, "plan_type", None)
-                == PlanTypeChoices.DATABASE
-                or (
-                    get_active_deploy(service)
-                    and _resolve_platform(get_active_deploy(service))
-                    in DB_PLATFORMS
-                )
-            )
-
-            if is_db:
-                try:
-                    DBDeployer().remove(container_name)
-                except Exception:
-                    logger.exception(
-                        "DBDeployer.remove failed for %s", container_name
-                    )
-                    c = Container(name=container_name)
-                    if c.exists():
-                        if c.is_running():
-                            c.stop(timeout=10)
-                        c.remove()
-            else:
-                try:
-                    OrchestratorDeploy.remove_all(container_name)
-                except Exception:
-                    logger.exception(
-                        "OrchestratorDeploy.remove_all failed for %s",
-                        container_name,
-                    )
-                    c = Container(name=container_name)
-                    if c.exists():
-                        if c.is_running():
-                            c.stop(timeout=10)
-                        c.remove()
-                    Image.remove_by_name(container_name)
-                    Image.remove_by_name(f"{container_name}:latest")
-
-        except Exception:
-            logger.exception(
-                "Failed to clean Docker resources for service '%s'",
-                service.name,
-            )
 
     # Exclusive volumes: every volume for this user is removed
     volumes = list(Volume.objects.filter(user=instance))
