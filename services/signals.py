@@ -5,6 +5,7 @@ from django.dispatch import receiver
 
 from .models import Service, Volume, PrivateNetwork
 from deployments.core.manager.container_manager import Container
+from deployments.core.swarm import SwarmRuntime, swarm_enabled
 from deployments.core.manager.volume_manager import Volume as DockerVolume
 from deployments.core.manager.image_manager import Image
 from deployments.core.manager.network_manager import Network
@@ -34,6 +35,15 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
     )
 
     try:
+        if swarm_enabled():
+            try:
+                SwarmRuntime().remove_service_group(str(service.pk))
+            except Exception:
+                logger.exception(
+                    "Failed cleaning Docker Swarm services for service '%s'.",
+                    service.name,
+                )
+
         container = Container(name=service_name)
 
         if container.exists():
