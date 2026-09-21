@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 from django.db import models
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator, MaxValueValidator
@@ -27,6 +26,7 @@ class PrivateNetwork(BaseModel):
 
     def get_docker_network_name(self):
         return f"net-{self.id.hex[:8]}-{self.name}"
+<<<<<<< HEAD
 
 
 class Service(BaseModel):
