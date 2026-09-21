@@ -57,6 +57,42 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             "8000",
         )
 
+
+    def test_compiles_healthcheck_resource_and_process_placement(self):
+        config = _config(
+            runtime_options={
+                "healthcheck": {
+                    "test": "python -c 'print(1)'",
+                    "interval": 10,
+                    "timeout": 4,
+                    "retries": 5,
+                    "start_period": 15,
+                },
+                "placement_constraints": ["node.labels.region == eu"],
+            },
+            resource_limits={"cpu": 1.5, "memory_mb": 768},
+        )
+        spec = compile_compose_service(config, image_ref="demo:r1")
+        service = spec["services"]["demo"]
+        self.assertEqual(
+            service["healthcheck"],
+            {
+                "test": ["CMD-SHELL", "python -c 'print(1)'"],
+                "interval": 10_000_000_000,
+                "timeout": 4_000_000_000,
+                "retries": 5,
+                "start_period": 15_000_000_000,
+            },
+        )
+        self.assertEqual(
+            service["deploy"]["resources"]["limits"],
+            {"cpus": "1.5", "memory": "768M"},
+        )
+        self.assertEqual(
+            service["deploy"]["placement"]["constraints"],
+            ["node.labels.region == eu"],
+        )
+
     def test_rejects_more_than_one_replica(self):
         with self.assertRaises(Exception):
             _validate_replicas(2)
