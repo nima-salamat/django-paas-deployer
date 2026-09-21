@@ -31,7 +31,7 @@ from deployments.core.manager.container_manager import Container
 from deployments.core.state.locks import acquire_service_deployment_lock
 from deployments.core.state.manager import StateManager
 from services.models import Volume  # type: ignore
-from services.revisioning import ensure_revision_for_deploy, activate_revision_locked
+from services.revisioning import ensure_revision_for_deploy, activate_revision_locked, materialize_revision_config
 
 from deployments.common import parse_config, as_bool, as_int
 from deployments.common.deployment_profile import normalize_profile
@@ -267,7 +267,7 @@ class DeployService:
         # Revision is now the executable source of truth. Deploy.config remains
         # only the compatibility input used when the revision is first created.
         revision_config = (
-            getattr(getattr(deploy_item, "revision", None), "config_snapshot", None)
+            materialize_revision_config(deploy_item.revision)
             if getattr(deploy_item, "revision_id", None)
             else None
         )
