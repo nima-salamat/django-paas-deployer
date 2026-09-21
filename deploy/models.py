@@ -272,3 +272,73 @@ class BaseRuntimeImage(BaseModel):
 
     def __str__(self):
         return f"{self.logical_runtime} {self.runtime_version} ({self.variant}) — {self.status}"
+
+
+
+class SwarmCluster(BaseModel):
+    """Operator-visible metadata for the Docker Swarm controlled by PassDeployer."""
+
+    name = models.CharField(max_length=128, unique=True, default="default")
+    enabled = models.BooleanField(default=True)
+    manager_endpoint = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text=_("Informational Docker manager endpoint. Credentials are never stored here."),
+    )
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True, default="")
+
+    class Meta:
+        verbose_name = _("Docker Swarm cluster")
+        verbose_name_plural = _("Docker Swarm clusters")
+
+    def __str__(self):
+        return self.name
+
+
+class SwarmNode(BaseModel):
+    """Declarative operator state plus observed state for one Swarm node."""
+
+    class Availability(models.TextChoices):
+        ACTIVE = "active", _("Active")
+        PAUSE = "pause", _("Pause")
+        DRAIN = "drain", _("Drain")
+
+    cluster = models.ForeignKey(
+        SwarmCluster,
+        on_delete=models.CASCADE,
+        related_name="nodes",
+    )
+    docker_id = models.CharField(max_length=128, unique=True)
+    hostname = models.CharField(max_length=255)
+    role = models.CharField(max_length=16, blank=True, default="")
+    desired_availability = models.CharField(
+        max_length=16,
+        choices=Availability.choices,
+        default=Availability.ACTIVE,
+    )
+    observed_availability = models.CharField(max_length=16, blank=True, default="")
+    observed_state = models.CharField(max_length=32, blank=True, default="")
+    address = models.CharField(max_length=255, blank=True, default="")
+    labels = models.JSONField(default=dict, blank=True)
+    desired_labels = models.JSONField(default=dict, blank=True)
+    cpus = models.PositiveIntegerField(default=0)
+    memory_bytes = models.BigIntegerField(default=0)
+    manager_reachable = models.BooleanField(default=False)
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True, default="")
+
+    class Meta:
+        verbose_name = _("Docker Swarm node")
+        verbose_name_plural = _("Docker Swarm nodes")
+        ordering = ("hostname",)
+        constraints = [
+            models.UniqueConstraint(
+                fields=("cluster", "hostname"),
+                name="uniq_swarm_cluster_node_hostname",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.hostname} ({self.role or 'worker'})"
