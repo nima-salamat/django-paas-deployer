@@ -838,9 +838,12 @@ class DeploymentOrchestrator:
             if endpoint.path:
                 rule += f" && PathPrefix(`{endpoint.path}`)"
             labels[f"traefik.http.routers.{safe_router}.rule"] = rule
-            labels[f"traefik.http.routers.{safe_router}.entrypoints"] = "web"
+            entrypoint = "websecure" if endpoint.protocol == "https" or endpoint.tls else "web"
+            labels[f"traefik.http.routers.{safe_router}.entrypoints"] = entrypoint
             labels[f"traefik.http.routers.{safe_router}.service"] = safe_router
             labels[f"traefik.http.routers.{safe_router}.priority"] = str(priority + index)
+            if endpoint.protocol == "https" or endpoint.tls:
+                labels[f"traefik.http.routers.{safe_router}.tls"] = "true"
             labels[f"traefik.http.services.{safe_router}.loadbalancer.server.port"] = str(endpoint.target_port)
             health_path = endpoint.metadata.get("healthcheck_path")
             if health_path:
