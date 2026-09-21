@@ -796,6 +796,75 @@ class SwarmRuntime:
         except docker.errors.NotFound:
             return
 
+    def inspect_group(self, service_id: str, *, names: list[str] | None = None) -> dict[str, SwarmServiceState]:
+        result: dict[str, SwarmServiceState] = {}
+        names = names or self.service_names_for_service(service_id)
+        for name in names:
+            state = self.inspect_service(name)
+            if state is not None:
+                result[name] = state
+        return result
+
+    def primary_task_container(self, name: str):
+        """Return the locally accessible task container, if the task is on this node."""
+        service = self.client.services.get(_validate_service_name(name))
+        tasks = service.tasks(filters={"desired-state": "running"}) or []
+        local_node_id = str(((self.client.info() or {}).get("Swarm") or {}).get("NodeID") or "")
+        for task in tasks:
+            status = task.get("Status") or {}
+            if str(status.get("State") or "").lower() != "running":
+                continue
+            task_node_id = str(task.get("NodeID") or "")
+            container_id = str((status.get("ContainerStatus") or {}).get("ContainerID") or "")
+            if not container_id:
+                continue
+            if task_node_id and local_node_id and task_node_id != local_node_id:
+                continue
+            try:
+                container = self.client.containers.get(container_id)
+                container.reload()
+                if str(getattr(container, "status", "")).lower() == "running":
+                    return container
+            except docker.errors.NotFound:
+                continue
+        return None
+
+    def service_stats(self, name: str) -> dict[str, Any]:
+        state = self.inspect_service(name)
+        result: dict[str, Any] = {
+            "exists": state is not None,
+            "running": bool(state and state.replicas_running == 1),
+            "replicas_desired": state.replicas_desired if state else 0,
+            "replicas_running": state.replicas_running if state else 0,
+            "tasks": [task.__dict__ for task in (state.tasks if state else ())],
+            "cpu": 0.0,
+            "memory": 0.0,
+        }
+        container = None
+        try:
+            container = self.primary_task_container(name)
+        except Exception:
+            container = None
+        if container is not None:
+            try:
+                stats = container.stats(stream=False) or {}
+                cpu_stats = stats.get("cpu_stats") or {}
+                precpu = stats.get("precpu_stats") or {}
+                cpu_delta = float((cpu_stats.get("cpu_usage") or {}).get("total_usage") or 0)
+                precpu_delta = float((precpu.get("cpu_usage") or {}).get("total_usage") or 0)
+                system_delta = float((cpu_stats.get("system_cpu_usage") or 0) - (precpu.get("system_cpu_usage") or 0))
+                online_cpus = float(cpu_stats.get("online_cpus") or 1)
+                if cpu_delta > 0 and system_delta > 0:
+                    result["cpu"] = round((cpu_delta / system_delta) * online_cpus * 100.0, 2)
+                memory = stats.get("memory_stats") or {}
+                used = float(memory.get("usage") or 0)
+                limit = float(memory.get("limit") or 0)
+                if limit > 0:
+                    result["memory"] = round((used / limit) * 100.0, 2)
+            except Exception:
+                pass
+        return result
+
     def service_logs(self, name: str, *, tail: int | str = 200):
         try:
             return self.client.services.get(_validate_service_name(name)).logs(
