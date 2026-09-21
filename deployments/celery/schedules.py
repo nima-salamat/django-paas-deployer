@@ -489,6 +489,8 @@ def _recover_stale_running_deploys_swarm(policies) -> None:
             logger.exception("Swarm stale deployment recovery failed for deploy=%s", deploy.pk)
 
 def _reconcile_active_deploy(deploy: Deploy) -> None:
+    if swarm_enabled():
+        return _reconcile_active_deploy_swarm(deploy)
     """
     Reconcile a single deployment in pipeline (pending/running/rolling_back).
 
@@ -617,6 +619,54 @@ def _reconcile_active_deploy(deploy: Deploy) -> None:
                 mark_rollback_failed(locked)
             return
 
+
+
+def _reconcile_active_deploy_swarm(deploy: Deploy) -> None:
+    runtime = SwarmRuntime()
+    service_name = deploy.service.get_docker_service_name()
+    try:
+        state = runtime.inspect_service(service_name)
+    except Exception as exc:
+        logger.warning("Failed to inspect Swarm service '%s': %s", service_name, exc)
+        state = None
+    running = bool(state and state.replicas_running == 1)
+    now = timezone.now()
+    with transaction.atomic():
+        locked = Deploy.objects.select_for_update().select_related("service").filter(pk=deploy.pk).first()
+        if not locked or locked.status not in ACTIVE_DEPLOY_STATUSES or locked.cancel_requested:
+            return
+        if locked.started_at:
+            minutes_elapsed = (now - locked.started_at).total_seconds() / 60.0
+            if minutes_elapsed >= int(policies["deploy_timeout_minutes"]):
+                mark_deploy_timeout(
+                    deploy=locked,
+                    container_exists=bool(state),
+                    container_running=running,
+                )
+                return
+        if locked.status == DeploymentStatusChoices.PENDING and running:
+            locked.status = DeploymentStatusChoices.RUNNING
+            locked.stage = "running"
+            locked.progress = max(locked.progress, 85)
+            locked.status_message = "Swarm service has a running task."
+            locked.save(update_fields=["status", "stage", "progress", "status_message"])
+            return
+        if locked.status == DeploymentStatusChoices.RUNNING and not running:
+            stage = (locked.stage or "").strip().lower()
+            if stage in PRE_CONTAINER_STAGES or int(locked.progress or 0) < 85:
+                return
+            mark_deploy_failed(
+                deploy=locked,
+                message="The Swarm service has no running task.",
+                stage="swarm_service_not_running",
+                details={"service": service_name, "runtime": "docker-swarm"},
+            )
+            return
+        if locked.status == DeploymentStatusChoices.ROLLING_BACK:
+            if running:
+                mark_rollback_complete(locked)
+            else:
+                mark_rollback_failed(locked)
 
 def _reconcile_desired_state(service: Service) -> bool:
     """Drive observed runtime toward Service.desired_state."""
