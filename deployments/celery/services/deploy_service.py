@@ -26,7 +26,8 @@ from deploy.models import Deploy  # type: ignore
 from deploy.deployment_state import DjangoDeploymentState  # type: ignore
 from core.global_settings.config import default_ports  # type: ignore
 from deployments.core.deploy import Deploy as DeployFacade
-from deployments.core.types import VolumeSpec
+from deployments.core.types import EndpointSpec, VolumeSpec
+from deployments.core.runtime_graph import ServiceRuntimeGraph
 from deployments.core.manager.container_manager import Container
 from deployments.core.state.locks import acquire_service_deployment_lock
 from deployments.core.state.manager import StateManager
@@ -443,6 +444,40 @@ class DeployService:
         environment = dict(cfg.get("env") or cfg.get("environment") or {})
         environment = {str(k): str(v) for k, v in environment.items()}
 
+        # The revision is the normalized runtime graph boundary. Legacy
+        # profile keys are still accepted, but endpoint publication,
+        # processes, networks and environment are derived from the graph.
+        runtime_graph = (
+            ServiceRuntimeGraph.from_revision(deploy_item.revision)
+            if getattr(deploy_item, "revision_id", None)
+            else None
+        )
+        if runtime_graph is not None:
+            environment.update(runtime_graph.environment)
+            cfg["processes"] = [
+                {
+                    "name": process.name,
+                    "process_type": process.process_type,
+                    "command": process.command,
+                    "entrypoint": process.entrypoint,
+                    "replicas": process.replicas,
+                    "enabled": process.enabled,
+                }
+                for process in runtime_graph.processes
+            ]
+            cfg["endpoints"] = runtime_graph.public_endpoints()
+            if runtime_graph.networks:
+                cfg["networks"] = list(runtime_graph.networks)
+            runtime_options.setdefault("exposed_ports", runtime_graph.exposed_ports())
+            runtime_options.setdefault("port_bindings", runtime_graph.port_bindings())
+            runtime_options["public_endpoints"] = runtime_graph.public_endpoints()
+            primary_endpoint = runtime_graph.primary_public_endpoint()
+            if primary_endpoint is not None:
+                port = primary_endpoint.target_port
+                if primary_endpoint.hostname:
+                    cfg["public_host"] = primary_endpoint.hostname
+
+
         # URL handling is intentionally scoped: it can change the public/asset
         # URL policy without disabling platform detection, builds or static
         # serving. Explicit environment values always win.
@@ -586,6 +621,24 @@ class DeployService:
             explicit_workers, plan_cpu, plan_ram,
         )
 
+        endpoint_specs = []
+        for raw_endpoint in (runtime_graph.endpoints if runtime_graph is not None else ()):
+            endpoint_specs.append(
+                EndpointSpec(
+                    name=raw_endpoint.name,
+                    target_port=raw_endpoint.target_port,
+                    published_port=raw_endpoint.published_port,
+                    protocol=raw_endpoint.protocol,
+                    exposure=raw_endpoint.exposure,
+                    hostname=raw_endpoint.hostname,
+                    path=raw_endpoint.path,
+                    tls=raw_endpoint.tls,
+                    enabled=raw_endpoint.enabled,
+                    process=raw_endpoint.process,
+                    metadata=raw_endpoint.metadata,
+                )
+            )
+
         networks: list[tuple[str, str]] = []
         if getattr(service, "network", None) is not None and getattr(service.network, "name", None):
             networks.append((service.network.get_docker_network_name(), "bridge"))
@@ -641,6 +694,7 @@ class DeployService:
                 "service.id": str(service.pk),
             },
             public_host=cfg.get("public_host") or cfg.get("domain"),
+            endpoints=endpoint_specs,
             activation_callback=activation_callback,
             runtime_version=(
                 cfg.get("runtime_version")
