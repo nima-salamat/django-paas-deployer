@@ -25,6 +25,7 @@ Key changes vs. legacy:
 from __future__ import annotations
 
 import shutil
+import re
 from typing import Optional
 
 from .cleanup import CleanupManager
