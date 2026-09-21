@@ -98,8 +98,8 @@ class ServiceConfigurationAPIView(ServiceConfigBaseAPIView):
                     for row in variables
                 ],
                 "secrets": sorted(
-                    ServiceSecretRefSerializer(secret).data
-                    for secret in service.secrets.filter(enabled=True)
+                    (ServiceSecretRefSerializer(secret).data for secret in service.secrets.filter(enabled=True)),
+                    key=lambda item: item["key"],
                 ),
                 "processes": [row.to_snapshot() for row in service.processes.all()],
                 "endpoints": EndpointSerializer(service.endpoints.filter(enabled=True), many=True).data,
@@ -119,6 +119,34 @@ class ServiceConfigurationAPIView(ServiceConfigBaseAPIView):
             return blocked
 
         data = request.data if isinstance(request.data, dict) else dict(request.data)
+
+        def contains_sensitive_keys(value):
+            sensitive = (
+                "password", "secret", "token", "private_key",
+                "api_key", "apikey", "signing_key", "authorization",
+            )
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    lowered = str(key).lower()
+                    if any(token in lowered for token in sensitive):
+                        return True
+                    if contains_sensitive_keys(item):
+                        return True
+            elif isinstance(value, list):
+                return any(contains_sensitive_keys(item) for item in value)
+            return False
+
+        for field_name in ("source_config", "build_config", "runtime_config"):
+            if field_name in data and contains_sensitive_keys(data[field_name]):
+                return Response(
+                    {
+                        "error": f"Sensitive values must be stored through /secrets or secret-backed environment variables, not {field_name}.",
+                        "code": "secret_requires_secret_resource",
+                        "field": field_name,
+                    },
+                    status=400,
+                )
+
         with transaction.atomic():
             service = Service.objects.select_for_update().get(pk=service.pk)
             if "source_kind" in data:
