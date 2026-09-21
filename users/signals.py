@@ -57,7 +57,7 @@ def cleanup_user_resources(sender, instance: User, **kwargs):
 
     services = list(
         Service.objects.filter(user=instance).select_related(
-            "plan", "selected_deploy"
+            "plan", "active_revision"
         )
     )
 
