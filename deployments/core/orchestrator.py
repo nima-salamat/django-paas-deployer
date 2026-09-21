@@ -47,6 +47,7 @@ from .rollback import ContainerSnapshot, RollbackManager
 from .types import DeploymentConfig, DeploymentResult, EventSink, EndpointSpec
 from .validation import DeploymentValidator
 from .volumes import VolumeMountManager
+from .swarm import SwarmRuntime, swarm_enabled
 
 
 class DeploymentOrchestrator:
@@ -198,6 +199,9 @@ class DeploymentOrchestrator:
             )
 
             self._check_cancelled()
+
+            if swarm_enabled():
+                return self._deploy_swarm_runtime(config, image_ref=config.image_ref)
 
             # 7. Networks + volumes
             self._ensure_networks(config)
@@ -429,6 +433,85 @@ class DeploymentOrchestrator:
                 self.logger.warning("cleanup", f"Failed to release base image leases: {exc}", progress=99)
             if inspect_temp_dir:
                 shutil.rmtree(inspect_temp_dir, ignore_errors=True)
+
+    def _deploy_swarm_runtime(self, config: DeploymentConfig, *, image_ref: str) -> DeploymentResult:
+        """Build the real runtime from Docker Swarm services.
+
+        The image is the only artifact produced by the Dockerfile build. All
+        process lifecycle, networking, restart and rollout behavior is owned
+        by Swarm services.
+        """
+        self.logger.info(
+            "swarm_validation",
+            "Validating Docker Swarm runtime.",
+            progress=40,
+            details={"service": config.name},
+        )
+        runtime = SwarmRuntime()
+        states = runtime.apply_processes(config, image_ref=image_ref)
+        self._check_cancelled()
+
+        self.logger.info(
+            "swarm_startup",
+            "All requested Swarm services reached one running task.",
+            progress=88,
+            details={
+                "services": {
+                    key: {
+                        "service_id": state.service_id,
+                        "replicas_desired": state.replicas_desired,
+                        "replicas_running": state.replicas_running,
+                        "tasks": [task.__dict__ for task in state.tasks],
+                    }
+                    for key, state in states.items()
+                }
+            },
+        )
+
+        if self._activation_callback is not None:
+            self.logger.info(
+                "activation",
+                "Swarm runtime is ready; committing active revision.",
+                progress=94,
+                details={"service": config.name, "deployment_id": self.logger.deployment_id},
+            )
+            self._activation_callback()
+
+        removed = runtime.cleanup_legacy_containers(
+            service_id=str(config.labels.get("service.id") or "")
+        )
+        self.logger.info(
+            "cleanup",
+            "Legacy container runtime cleanup completed.",
+            progress=98,
+            details={"removed_containers": removed},
+        )
+        self.logger.info(
+            "deployment_completed",
+            "Deployment completed successfully on Docker Swarm.",
+            progress=100,
+            details={
+                "runtime": "docker-swarm",
+                "image": image_ref,
+                "services": sorted(states.keys()),
+            },
+        )
+        primary = states.get("web") or next(iter(states.values()))
+        return DeploymentResult(
+            success=True,
+            status="succeeded",
+            message="Deployment completed successfully on Docker Swarm.",
+            image_ref=image_ref,
+            container_name=config.name,
+            details={
+                "runtime": "docker-swarm",
+                "swarm_service": config.name,
+                "services": sorted(states.keys()),
+                "replicas": {name: state.replicas_running for name, state in states.items()},
+                "primary_task": primary.tasks[0].task_id if primary.tasks else None,
+                "removed_legacy_containers": removed,
+            },
+        )
 
     # ------------------------------------------------------------------
     # Cancellation
