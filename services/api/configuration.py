@@ -25,7 +25,7 @@ from services.models import (
     DatabaseResource,
     ServiceDatabaseBinding,
 )
-from services.revisioning import materialize_revision_config, _get_or_create_secret
+from services.revisioning import materialize_revision_config, _get_or_create_secret, redact_config
 from services.share_permissions import assert_share_action, SharePermissionError
 from services.ports import sync_endpoint_reservation, release_endpoint_port
 
@@ -88,10 +88,10 @@ class ServiceConfigurationAPIView(ServiceConfigBaseAPIView):
                 "service": str(service.pk),
                 "source": {
                     "kind": service.source_kind,
-                    "config": service.source_config or {},
+                    "config": redact_config(service.source_config or {})[0],
                 },
-                "build": service.build_config or {},
-                "runtime": service.runtime_config or {},
+                "build": redact_config(service.build_config or {})[0],
+                "runtime": redact_config(service.runtime_config or {})[0],
                 "desired_state": service.desired_state,
                 "environment": [
                     {
@@ -215,7 +215,7 @@ class ServiceEnvironmentAPIView(ServiceConfigBaseAPIView):
         scope = str(request.data.get("scope") or ServiceEnvironmentVariable.Scope.RUNTIME)
         if scope not in {choice[0] for choice in ServiceEnvironmentVariable.Scope.choices}:
             return Response({"error": "Invalid scope."}, status=400)
-        is_secret = bool(request.data.get("is_secret"))
+        is_secret = str(request.data.get("is_secret") or "").lower() in {"1", "true", "yes", "on"}
         value = str(request.data.get("value") or "")
 
         with transaction.atomic():
@@ -378,6 +378,14 @@ class ServiceEndpointAPIView(ServiceConfigBaseAPIView):
                 raise ValueError
         except (TypeError, ValueError):
             return Response({"error": "target_port must be between 1 and 65535."}, status=400)
+        protocol = str(data.get("protocol") or ServiceEndpoint.Protocol.HTTP).lower()
+        allowed_protocols = {choice[0] for choice in ServiceEndpoint.Protocol.choices}
+        if protocol not in allowed_protocols:
+            return Response({"error": "Invalid protocol.", "allowed": sorted(allowed_protocols)}, status=400)
+        exposure = str(data.get("exposure") or ServiceEndpoint.Exposure.PUBLIC).lower()
+        allowed_exposures = {choice[0] for choice in ServiceEndpoint.Exposure.choices}
+        if exposure not in allowed_exposures:
+            return Response({"error": "Invalid exposure.", "allowed": sorted(allowed_exposures)}, status=400)
         published = data.get("published_port")
         if published not in (None, ""):
             try:
@@ -393,8 +401,8 @@ class ServiceEndpointAPIView(ServiceConfigBaseAPIView):
                 "process_id": data.get("process") or None,
                 "target_port": target,
                 "published_port": published,
-                "protocol": str(data.get("protocol") or ServiceEndpoint.Protocol.HTTP),
-                "exposure": str(data.get("exposure") or ServiceEndpoint.Exposure.PUBLIC),
+                "protocol": protocol,
+                "exposure": exposure,
                 "hostname": str(data.get("hostname") or ""),
                 "path": str(data.get("path") or ""),
                 "tls": bool(data.get("tls")),
@@ -462,7 +470,7 @@ class ServiceNetworksAPIView(ServiceConfigBaseAPIView):
             network=network,
             defaults={
                 "alias": str(request.data.get("alias") or "")[:128],
-                "internal": bool(request.data.get("internal", False)),
+                "internal": str(request.data.get("internal", False)).lower() in {"1", "true", "yes", "on"},
                 "metadata": dict(request.data.get("metadata") or {}),
             },
         )
