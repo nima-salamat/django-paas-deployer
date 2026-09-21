@@ -34,6 +34,7 @@ from core.global_settings.config import SERVICE_STATUS_CHOICES
 from deployments.celery.tasks import deploy as deploy_task
 from deployments.celery.tasks import stop as stop_service
 from deployments.celery.tasks import run_db_deploy  # DB platforms — NOT deploy.tasks
+from deployments.core.swarm import SwarmRuntime, swarm_enabled
 from deployments.core.db_deployer import (
     DB_PLATFORMS,
     DBDeployer,
@@ -751,6 +752,8 @@ class DeployViewSet(ModelViewSet):
             try:
                 if is_db:
                     DBDeployer().remove(container_name)
+                elif swarm_enabled():
+                    SwarmRuntime().remove_service_group(str(service.pk))
                 else:
                     OrchestratorDeploy.remove_all(container_name)
                 teardown_error = None
