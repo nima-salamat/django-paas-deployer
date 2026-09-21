@@ -186,7 +186,7 @@ def _service_labels(config) -> dict[str, str]:
         tick = chr(96)
         host = primary.hostname or config.public_host or ""
         labels["traefik.enable"] = "true"
-        labels["traefik.docker.network"] = "proxy_net"
+        labels["traefik.swarm.network"] = "proxy_net"
         labels[f"traefik.http.routers.{router}.rule"] = f"Host({tick}{host}{tick})"
         # Host Nginx terminates public TLS in the current installation.
         # Traefik therefore receives HTTP on its internal web entrypoint.
