@@ -74,8 +74,8 @@ def cleanup_user_resources(sender, instance: User, **kwargs):
                 getattr(service.plan, "plan_type", None)
                 == PlanTypeChoices.DATABASE
                 or (
-                    service.selected_deploy
-                    and _resolve_platform(service.selected_deploy)
+                    get_active_deploy(service)
+                    and _resolve_platform(get_active_deploy(service))
                     in DB_PLATFORMS
                 )
             )
