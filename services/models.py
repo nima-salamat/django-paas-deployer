@@ -276,8 +276,20 @@ class ServiceProcess(BaseModel):
         }
 
 
+def revision_artifact_path(instance, filename):
+    service_id = getattr(instance, "service_id", None) or "unknown"
+    revision = getattr(instance, "revision_number", None) or "pending"
+    safe = str(filename).replace("\\", "/").split("/")[-1]
+    return f"service-revisions/{service_id}/r{revision}/{safe}"
+
+
 class ServiceRevision(BaseModel):
-    """Immutable executable snapshot for a Service."""
+    """Immutable executable snapshot for a Service.
+
+    A revision owns its deployable source artifact. ``source_deploy`` is kept
+    only as historical provenance and must not be required to reproduce the
+    revision.
+    """
 
     class State(models.TextChoices):
         CREATED = "created", _("Created")
@@ -291,6 +303,12 @@ class ServiceRevision(BaseModel):
     source_deploy = models.ForeignKey(
         "deploy.Deploy", related_name="source_revisions",
         on_delete=models.SET_NULL, null=True, blank=True,
+    )
+    artifact_file = models.FileField(
+        upload_to=revision_artifact_path,
+        null=True,
+        blank=True,
+        help_text=_("Immutable source artifact captured for this revision."),
     )
     created_by = models.ForeignKey(
         User, related_name="service_revisions",
@@ -322,7 +340,7 @@ class ServiceRevision(BaseModel):
                 "config_snapshot", "process_snapshot", "secret_keys", "secret_refs",
                 "source_snapshot", "build_snapshot", "runtime_snapshot",
                 "environment_snapshot", "endpoint_snapshot", "volume_snapshot",
-                "network_snapshot", "graph_snapshot", "revision_number", "service_id",
+                "network_snapshot", "graph_snapshot", "artifact_file", "revision_number", "service_id",
             ).first()
             if old and any([
                 old["config_snapshot"] != self.config_snapshot,
@@ -337,6 +355,7 @@ class ServiceRevision(BaseModel):
                 old["volume_snapshot"] != self.volume_snapshot,
                 old["network_snapshot"] != self.network_snapshot,
                 old["graph_snapshot"] != self.graph_snapshot,
+                old["artifact_file"] != self.artifact_file,
                 old["revision_number"] != self.revision_number,
                 old["service_id"] != self.service_id,
             ]):
@@ -414,6 +433,17 @@ class ServiceSecretVersion(BaseModel):
         constraints = [
             models.UniqueConstraint(fields=("secret", "version"), name="uniq_service_secret_version")
         ]
+
+    def save(self, *args, **kwargs):
+        if self.pk and not self._state.adding:
+            old = type(self).objects.filter(pk=self.pk).values("secret_id", "version", "ciphertext").first()
+            if old and (
+                old["secret_id"] != self.secret_id
+                or old["version"] != self.version
+                or old["ciphertext"] != self.ciphertext
+            ):
+                raise ValidationError("ServiceSecretVersion is immutable after creation.")
+        super().save(*args, **kwargs)
 
     def set_value(self, value: str):
         from services.secret_store import encrypt_secret
