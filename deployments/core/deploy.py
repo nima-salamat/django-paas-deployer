@@ -140,7 +140,7 @@ class Deploy:
         self.celery_beat = bool(celery_beat) and self.celery
         self.entry_point = (entry_point or "").strip() or None
         try:
-            self.worker_count = max(1, int(worker_count or 1))
+            self.worker_count = 1
         except (TypeError, ValueError):
             self.worker_count = 1
         self.resource_limits = dict(resource_limits or {})
@@ -211,7 +211,7 @@ class Deploy:
             and (has_public_endpoint or legacy_routed_service)
             and "proxy_net" not in seen
         ):
-            specs.append(NetworkSpec(name="proxy_net", driver="bridge", internal=False, attachable=True))
+            specs.append(NetworkSpec(name="proxy_net", driver="overlay", internal=False, attachable=True))
 
         return specs
 
