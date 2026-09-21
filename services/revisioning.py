@@ -299,8 +299,6 @@ def _materialize_refs(root: dict[str, Any], revision: ServiceRevision) -> dict[s
 def materialize_revision_config(revision: ServiceRevision) -> dict[str, Any]:
     """Resolve one immutable revision into the legacy DeploymentConfig shape."""
     cfg = deepcopy(revision.config_snapshot or {})
-    cfg = _materialize_refs(cfg, revision)
-
     cfg.update(deepcopy(revision.runtime_snapshot or {}))
     cfg.setdefault("source", deepcopy(revision.source_snapshot or {}))
     cfg.setdefault("build", deepcopy(revision.build_snapshot or {}))
@@ -312,7 +310,10 @@ def materialize_revision_config(revision: ServiceRevision) -> dict[str, Any]:
         cfg["volumes"] = deepcopy(revision.volume_snapshot)
     if revision.network_snapshot:
         cfg["networks"] = deepcopy(revision.network_snapshot)
-    return cfg
+
+    # Resolve secret refs LAST so redacted runtime/source snapshots can never
+    # overwrite the exact secret version selected by this revision.
+    return _materialize_refs(cfg, revision)
 
 
 
