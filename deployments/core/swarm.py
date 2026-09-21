@@ -591,6 +591,87 @@ class SwarmRuntime:
             "constraints": constraints,
         }
 
+    def apply_processes(self, config, *, image_ref: str) -> dict[str, SwarmServiceState]:
+        """Apply the ServiceProcess graph as independent Swarm services."""
+        from dataclasses import replace
+
+        process_specs = list((config.runtime_options or {}).get("processes") or [])
+        if not process_specs:
+            process_specs = [{
+                "name": "web",
+                "process_type": "web",
+                "command": config.start_command,
+                "entrypoint": config.entry_point,
+                "enabled": True,
+                "environment": {},
+            }]
+
+        self.assert_active()
+        results: dict[str, SwarmServiceState] = {}
+        for raw in process_specs:
+            if not isinstance(raw, dict) or raw.get("enabled", True) is False:
+                continue
+            process_name = str(raw.get("name") or "web").strip().lower()
+            if not re.fullmatch(r"[a-z0-9](?:[a-z0-9_.-]{0,30})", process_name):
+                raise DeploymentError(
+                    f"Invalid Swarm process name: {process_name!r}",
+                    stage="swarm_validation",
+                    code="SWARM_INVALID_PROCESS_NAME",
+                )
+            docker_name = config.name if process_name == "web" else _validate_service_name(f"{config.name}-{process_name}")
+            process_environment = dict(config.environment or {})
+            process_environment.update({str(k): str(v) for k, v in (raw.get("environment") or {}).items()})
+            process_endpoints = [
+                endpoint for endpoint in (config.endpoints or ())
+                if endpoint.process in (None, "", process_name)
+            ] if process_name == "web" else [
+                endpoint for endpoint in (config.endpoints or ())
+                if endpoint.process == process_name
+            ]
+            process_config = replace(
+                config,
+                name=docker_name,
+                environment=process_environment,
+                start_command=raw.get("command") or (config.start_command if process_name == "web" else None),
+                entry_point=raw.get("entrypoint") or (config.entry_point if process_name == "web" else None),
+                endpoints=process_endpoints,
+                labels={
+                    **dict(config.labels or {}),
+                    "process.name": process_name,
+                    "process.type": str(raw.get("process_type") or "custom"),
+                },
+            )
+            replicas = int(raw.get("replicas") or 1)
+            if replicas != 1:
+                raise DeploymentError(
+                    "Only one running replica is supported for every PassDeployer process.",
+                    stage="swarm_validation",
+                    code="SWARM_REPLICA_COUNT_UNSUPPORTED",
+                )
+            results[process_name] = self.apply(process_config, image_ref=image_ref)
+        return results
+
+    def cleanup_legacy_containers(self, *, service_id: str) -> int:
+        """Remove old container-based runtime resources after Swarm activation."""
+        removed = 0
+        try:
+            containers = self.client.containers.list(
+                all=True,
+                filters={"label": f"service.id={service_id}"},
+            )
+        except docker.errors.DockerException:
+            return 0
+        for container in containers:
+            labels = getattr(container, "labels", {}) or {}
+            if labels.get("managed-by") not in {"django-paas-deployer", "passdeployer"}:
+                continue
+            try:
+                container.remove(force=True)
+                removed += 1
+            except docker.errors.DockerException:
+                pass
+        return removed
+
     def apply(self, config, *, image_ref: str) -> SwarmServiceState:
         self.assert_active()
         for network in config.networks or ():
