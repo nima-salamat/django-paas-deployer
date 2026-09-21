@@ -889,6 +889,40 @@ def _validate_platform_command(argv: list[str], platform: str, root: str, *, all
 
 def _resolve_container(service: Service):
     name = service.get_docker_service_name()
+    if os.environ.get("SWARM_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}:
+        from deployments.core.swarm import SwarmRuntime
+
+        runtime = SwarmRuntime()
+        state = runtime.inspect_service(name)
+        if state is None or state.replicas_running != 1:
+            raise ValidationError("The service does not currently have a running Swarm task.")
+        try:
+            docker_service = runtime.client.services.get(name)
+            tasks = docker_service.tasks(filters={"desired-state": "running"}) or []
+            task = next(
+                (
+                    row for row in tasks
+                    if str((row.get("Status") or {}).get("State") or "").lower() == "running"
+                ),
+                None,
+            )
+            container_id = str(((task or {}).get("Status") or {}).get("ContainerStatus", {}).get("ContainerID") or "")
+            if not container_id:
+                raise ValidationError("The running Swarm task has no container ID yet.")
+            local_node_id = str(((runtime.client.info() or {}).get("Swarm") or {}).get("NodeID") or "")
+            task_node_id = str((task or {}).get("NodeID") or "")
+            if task_node_id and local_node_id and task_node_id != local_node_id:
+                raise ValidationError(
+                    "Interactive shell is currently available only when the Swarm task is on the connected Docker node."
+                )
+            container = runtime.client.containers.get(container_id)
+            container.reload()
+            if str(container.status) != "running":
+                raise ValidationError("The Swarm task container is no longer running.")
+            return container
+        except DockerNotFound as exc:
+            raise ValidationError("The running Swarm task container is not available on the connected Docker node.") from exc
+
     try:
         container = Client()().containers.get(name)
         container.reload()
