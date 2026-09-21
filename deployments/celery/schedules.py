@@ -553,7 +553,7 @@ def _reconcile_active_deploy(deploy: Deploy) -> None:
         # 1. Timeout check
         if locked.status in ("pending", "running") and locked.started_at:
             minutes_elapsed = (now - locked.started_at).total_seconds() / 60.0
-            if minutes_elapsed >= int(current_policies["deploy_timeout_minutes"]):
+            if minutes_elapsed >= int(policies["deploy_timeout_minutes"]):
                 mark_deploy_timeout(
                     deploy=locked,
                     container_exists=exists,
@@ -650,7 +650,7 @@ def _reconcile_active_deploy_swarm(deploy: Deploy) -> None:
         current_policies = runtime_policies()
         if locked.started_at:
             minutes_elapsed = (now - locked.started_at).total_seconds() / 60.0
-            if minutes_elapsed >= int(policies["deploy_timeout_minutes"]):
+            if minutes_elapsed >= int(current_policies["deploy_timeout_minutes"]):
                 mark_deploy_timeout(
                     deploy=locked,
                     container_exists=bool(state),
