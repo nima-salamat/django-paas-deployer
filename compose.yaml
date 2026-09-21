@@ -446,6 +446,9 @@ services:
   # ============================================================
   deployment-events:
     image: ${BACKEND_IMAGE:-passdeployer-backend:local}
+    # Legacy container-runtime event consumer. Swarm runtime uses the
+    # Service/Task reconciler instead and does not run this by default.
+    profiles: ["legacy-runtime"]
 
     container_name: deploy-events
     restart: unless-stopped
