@@ -182,7 +182,11 @@ def ensure_revision_for_deploy(deploy, *, force_new: bool = False):
     config = deepcopy(deploy.config) if isinstance(deploy.config, dict) else {}
 
     snapshot, secret_keys = redact_config(config)
-    process_specs = _normalize_process_specs(service, config)
+    # The revision is an internal runtime snapshot, not an API representation.
+    # Keep original values for execution; secret_keys marks fields that must
+    # never be exposed by API serializers.
+    runtime_snapshot = deepcopy(config)
+    process_specs = _normalize_process_specs(service, runtime_snapshot)
     _sync_processes(service, process_specs)
 
     previous = (
@@ -197,7 +201,7 @@ def ensure_revision_for_deploy(deploy, *, force_new: bool = False):
         revision_number=next_number,
         source_deploy=deploy,
         state=ServiceRevision.State.CREATED,
-        config_snapshot=snapshot if isinstance(snapshot, dict) else {},
+        config_snapshot=runtime_snapshot if isinstance(runtime_snapshot, dict) else {},
         process_snapshot=process_specs,
         secret_keys=secret_keys,
         created_by=deploy.created_by,
