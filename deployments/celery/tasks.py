@@ -667,8 +667,6 @@ def _mark_success(deploy: Deploy, service: Service, result_message: str, *, task
                     "deployed_at": now,
                     "deploy_started": None,
                     "task_id": None,
-                    "selected_deploy_id": deploy.pk,
-                    "selected_deploy_at": now,
                 },
             )
     except Exception:
