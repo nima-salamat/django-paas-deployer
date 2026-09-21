@@ -22,6 +22,7 @@ from deployments.core.deploy import Deploy as DeployFacade
 from deployments.core.manager.container_manager import Container
 from deployments.core.state.locks import acquire_service_deployment_lock
 from deployments.common.exceptions import InvalidServiceStateError
+from services.revisioning import get_active_deploy
 
 from ..service_status import ServiceStateManager
 from ..helpers import MockOrchestratorResult
