@@ -444,6 +444,39 @@ class ServiceEndpoint(BaseModel):
         return self.published_port is not None
 
 
+class ServicePortReservation(BaseModel):
+    """Exclusive reservation for a published host TCP/UDP port."""
+
+    class State(models.TextChoices):
+        ACTIVE = "active", _("Active")
+        RELEASED = "released", _("Released")
+
+    service = models.ForeignKey(
+        Service, related_name="port_reservations",
+        on_delete=models.CASCADE,
+    )
+    endpoint = models.OneToOneField(
+        ServiceEndpoint, related_name="port_reservation",
+        on_delete=models.CASCADE,
+    )
+    host_port = models.PositiveIntegerField()
+    protocol = models.CharField(max_length=8, default="tcp")
+    state = models.CharField(max_length=16, choices=State.choices, default=State.ACTIVE)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("host_port", "protocol"),
+                condition=models.Q(state="active"),
+                name="uniq_active_host_port_protocol",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=("host_port", "protocol", "state")),
+        ]
+
+
 class ServiceNetworkAttachment(BaseModel):
     """Many-to-many network attachment with an optional service alias."""
     service = models.ForeignKey(Service, related_name="network_attachments", on_delete=models.CASCADE)
