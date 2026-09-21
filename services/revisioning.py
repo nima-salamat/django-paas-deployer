@@ -1,18 +1,21 @@
-"""Service-centric revision helpers.
-
-A Service owns its desired configuration. A Revision is the immutable snapshot
-that a Deployment executes. Legacy Deploy rows remain supported while the
-runtime migrates away from using Deploy.config as the source of truth.
-"""
+"""Service-centric revision compiler and activation helpers."""
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
+import re
 from typing import Any
 
 from django.db import transaction
 from django.utils import timezone
 
-from services.models import Service, ServiceProcess, ServiceRevision
+from services.models import (
+    Service,
+    ServiceProcess,
+    ServiceRevision,
+    ServiceEnvironmentVariable,
+    ServiceSecret,
+)
 
 
 _SENSITIVE_KEY_TOKENS = (
@@ -23,6 +26,8 @@ _SENSITIVE_KEY_TOKENS = (
     "api_key",
     "apikey",
     "signing_key",
+    "authorization",
+    "credential",
 )
 
 
@@ -31,8 +36,15 @@ def _is_sensitive_key(key: object) -> bool:
     return any(token in lowered for token in _SENSITIVE_KEY_TOKENS)
 
 
+def _secret_name(path: str) -> str:
+    raw = re.sub(r"[^A-Za-z0-9_]+", "_", path.upper()).strip("_")
+    raw = raw[:100] or "VALUE"
+    digest = hashlib.sha256(path.encode("utf-8")).hexdigest()[:10].upper()
+    return f"LEGACY_{raw}_{digest}"[:128]
+
+
 def redact_config(value: Any) -> tuple[Any, list[str]]:
-    """Return a recursively redacted copy and the keys that were redacted."""
+    """Return a recursively redacted copy and the paths that contain secrets."""
     secret_keys: list[str] = []
 
     def walk(node: Any, path: str = "") -> Any:
@@ -41,7 +53,7 @@ def redact_config(value: Any) -> tuple[Any, list[str]]:
             for key, item in node.items():
                 key_path = f"{path}.{key}" if path else str(key)
                 if _is_sensitive_key(key):
-                    output[key] = "[REDACTED]"
+                    output[key] = "[SECRET_REF]"
                     secret_keys.append(key_path)
                 else:
                     output[key] = walk(item, key_path)
@@ -54,7 +66,6 @@ def redact_config(value: Any) -> tuple[Any, list[str]]:
 
 
 def _normalize_process_specs(service: Service, config: dict[str, Any]) -> list[dict[str, Any]]:
-    """Normalize explicit process config, with a safe legacy fallback."""
     raw = config.get("processes")
 
     if isinstance(raw, dict):
@@ -88,13 +99,11 @@ def _normalize_process_specs(service: Service, config: dict[str, Any]) -> list[d
         if normalized:
             return normalized
 
-    existing = list(
-        ServiceProcess.objects.filter(service=service).order_by("created_at", "name")
-    )
+    existing = list(ServiceProcess.objects.filter(service=service).order_by("created_at", "name"))
     if existing:
         return [process.to_snapshot() for process in existing]
 
-    fallback = [
+    specs = [
         {
             "name": "web",
             "process_type": "web",
@@ -108,9 +117,8 @@ def _normalize_process_specs(service: Service, config: dict[str, Any]) -> list[d
             "metadata": {},
         }
     ]
-
     if bool(config.get("celery")):
-        fallback.append(
+        specs.append(
             {
                 "name": "worker",
                 "process_type": "worker",
@@ -125,12 +133,11 @@ def _normalize_process_specs(service: Service, config: dict[str, Any]) -> list[d
             }
         )
         if bool(config.get("celery_beat")):
-            fallback.append(
+            specs.append(
                 {
                     "name": "scheduler",
                     "process_type": "scheduler",
-                    "command": config.get("scheduler_command")
-                    or "celery -A $CELERY_APP beat",
+                    "command": config.get("scheduler_command") or "celery -A $CELERY_APP beat",
                     "entrypoint": None,
                     "replicas": 1,
                     "enabled": True,
@@ -140,12 +147,10 @@ def _normalize_process_specs(service: Service, config: dict[str, Any]) -> list[d
                     "metadata": {"derived_from_legacy_celery_beat": True},
                 }
             )
-
-    return fallback
+    return specs
 
 
 def _sync_processes(service: Service, specs: list[dict[str, Any]]) -> None:
-    """Bring the mutable ServiceProcess layer in line with explicit specs."""
     for spec in specs:
         ServiceProcess.objects.update_or_create(
             service=service,
@@ -164,9 +169,152 @@ def _sync_processes(service: Service, specs: list[dict[str, Any]]) -> None:
         )
 
 
+def _set_path(root: dict[str, Any], path: str, value: Any) -> None:
+    parts = path.split(".")
+    node = root
+    for part in parts[:-1]:
+        if part not in node or not isinstance(node[part], dict):
+            node[part] = {}
+        node = node[part]
+    node[parts[-1]] = value
+
+
+def _get_or_create_secret(
+    service: Service,
+    key: str,
+    value: str,
+    *,
+    created_by=None,
+    note: str = "",
+) -> tuple[ServiceSecret, int]:
+    secret = ServiceSecret.objects.filter(service=service, key=key).first()
+    if secret is None:
+        secret = ServiceSecret.objects.create(service=service, key=key, current_version=0)
+
+    current = secret.get_current_value() if secret.current_version else ""
+    if current != str(value or ""):
+        next_version = secret.current_version + 1
+        version = secret.versions.create(
+            version=next_version,
+            ciphertext="",
+            created_by=created_by,
+            note=note,
+        )
+        version.set_value(str(value or ""))
+        version.save(update_fields=["ciphertext", "updated_at"])
+        secret.current_version = next_version
+        secret.save(update_fields=["current_version", "updated_at"])
+    return secret, secret.current_version
+
+
+def _extract_and_store_secrets(
+    service: Service,
+    config: dict[str, Any],
+    *,
+    created_by=None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    refs: list[dict[str, Any]] = []
+
+    def walk(node: Any, path: str = "") -> Any:
+        if isinstance(node, dict):
+            output = {}
+            for key, value in node.items():
+                key_path = f"{path}.{key}" if path else str(key)
+                if _is_sensitive_key(key) and value not in (None, "") and not isinstance(value, (dict, list)):
+                    secret_key = _secret_name(key_path)
+                    secret, version = _get_or_create_secret(
+                        service,
+                        secret_key,
+                        str(value),
+                        created_by=created_by,
+                        note=f"Imported from legacy deployment path {key_path}",
+                    )
+                    refs.append({"path": key_path, "key": secret.key, "version": version})
+                    output[key] = "[SECRET_REF]"
+                else:
+                    output[key] = walk(value, key_path)
+            return output
+        if isinstance(node, list):
+            return [walk(item, f"{path}[{index}]") for index, item in enumerate(node)]
+        return deepcopy(node)
+
+    return walk(config), refs
+
+
+def _service_environment_snapshot(
+    service: Service,
+    *,
+    refs: list[dict[str, Any]],
+    environment: dict[str, Any],
+    created_by=None,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for row in ServiceEnvironmentVariable.objects.filter(service=service, enabled=True).select_related("secret"):
+        if row.secret_id:
+            secret = row.secret
+            version = secret.current_version
+            refs.append(
+                {
+                    "path": f"env.{row.key}",
+                    "key": secret.key,
+                    "version": version,
+                    "scope": row.scope,
+                }
+            )
+            continue
+        out[row.key] = {"value": row.resolve_value(), "scope": row.scope}
+    for key, value in (environment or {}).items():
+        if key not in out:
+            out[str(key)] = {"value": str(value), "scope": ServiceEnvironmentVariable.Scope.RUNTIME}
+    return out
+
+
+def _materialize_refs(root: dict[str, Any], revision: ServiceRevision) -> dict[str, Any]:
+    from services.secret_store import decrypt_secret
+
+    out = deepcopy(root or {})
+    for ref in revision.secret_refs or []:
+        secret = ServiceSecret.objects.filter(
+            service_id=revision.service_id,
+            key=ref.get("key"),
+        ).first()
+        if secret is None:
+            raise ValueError(f"Revision secret {ref.get('key')!r} no longer exists.")
+        version = secret.versions.filter(version=int(ref.get("version") or 0)).first()
+        if version is None:
+            raise ValueError(f"Revision secret version {ref.get('key')}:{ref.get('version')} no longer exists.")
+        parts = str(ref.get("path") or "").split(".")
+        if parts and parts[0] == "env":
+            out.setdefault("env", {})[parts[-1]] = decrypt_secret(version.ciphertext)
+        else:
+            _set_path(out, str(ref.get("path") or ""), decrypt_secret(version.ciphertext))
+    for key, item in (revision.environment_snapshot or {}).items():
+        out.setdefault("env", {})[key] = str(item.get("value") if isinstance(item, dict) else item)
+    return out
+
+
+def materialize_revision_config(revision: ServiceRevision) -> dict[str, Any]:
+    """Resolve one immutable revision into the legacy DeploymentConfig shape."""
+    cfg = deepcopy(revision.config_snapshot or {})
+    cfg = _materialize_refs(cfg, revision)
+
+    cfg.update(deepcopy(revision.runtime_snapshot or {}))
+    cfg.setdefault("source", deepcopy(revision.source_snapshot or {}))
+    cfg.setdefault("build", deepcopy(revision.build_snapshot or {}))
+    if revision.process_snapshot:
+        cfg["processes"] = deepcopy(revision.process_snapshot)
+    if revision.endpoint_snapshot:
+        cfg["endpoints"] = deepcopy(revision.endpoint_snapshot)
+    if revision.volume_snapshot:
+        cfg["volumes"] = deepcopy(revision.volume_snapshot)
+    if revision.network_snapshot:
+        cfg["networks"] = deepcopy(revision.network_snapshot)
+    return cfg
+
+
 @transaction.atomic
 def ensure_revision_for_deploy(deploy, *, force_new: bool = False):
-    """Create or reuse the immutable revision targeted by a Deploy."""
+    """Compile the mutable Service domain into an immutable executable revision."""
     from deploy.models import Deploy
 
     deploy = (
@@ -174,39 +322,105 @@ def ensure_revision_for_deploy(deploy, *, force_new: bool = False):
         .select_related("service", "created_by")
         .get(pk=deploy.pk)
     )
-
     if deploy.revision_id and not force_new:
         return deploy
 
     service = Service.objects.select_for_update().get(pk=deploy.service_id)
-    config = deepcopy(deploy.config) if isinstance(deploy.config, dict) else {}
+    legacy_config = deepcopy(deploy.config) if isinstance(deploy.config, dict) else {}
 
-    snapshot, secret_keys = redact_config(config)
-    # The revision is an internal runtime snapshot, not an API representation.
-    # Keep original values for execution; secret_keys marks fields that must
-    # never be exposed by API serializers.
-    runtime_snapshot = deepcopy(config)
-    process_specs = _normalize_process_specs(service, runtime_snapshot)
+    # Service-owned configuration is authoritative. Legacy Deploy.config is
+    # retained as a migration fallback for fields that haven't moved yet.
+    compiled: dict[str, Any] = deepcopy(legacy_config)
+    compiled.update(deepcopy(service.source_config or {}))
+    compiled.update(deepcopy(service.build_config or {}))
+    compiled.update(deepcopy(service.runtime_config or {}))
+    compiled["source_kind"] = service.source_kind
+
+    # Convert old plaintext secrets in Deploy.config into versioned ServiceSecret rows.
+    compiled, secret_refs = _extract_and_store_secrets(
+        service,
+        compiled,
+        created_by=deploy.created_by,
+    )
+
+    environment = dict(compiled.get("env") or compiled.get("environment") or {})
+    environment_snapshot = _service_environment_snapshot(
+        service,
+        refs=secret_refs,
+        environment=environment,
+        created_by=deploy.created_by,
+    )
+
+    process_specs = _normalize_process_specs(service, compiled)
     _sync_processes(service, process_specs)
 
-    previous = (
-        ServiceRevision.objects.filter(service=service)
-        .order_by("-revision_number")
-        .first()
-    )
+    endpoints = [
+        {
+            "name": row.name,
+            "process": row.process.name if row.process_id else None,
+            "target_port": row.target_port,
+            "published_port": row.published_port,
+            "protocol": row.protocol,
+            "exposure": row.exposure,
+            "hostname": row.hostname,
+            "path": row.path,
+            "tls": row.tls,
+            "enabled": row.enabled,
+            "metadata": dict(row.metadata or {}),
+        }
+        for row in service.endpoints.filter(enabled=True).select_related("process").order_by("name")
+    ]
+
+    volumes = [
+        {
+            "source": row.get_docker_volume_name(),
+            "target": row.get_bind_for_service(service),
+            "mode": row.get_mode_for_service(service) or "rw",
+            "size_mb": row.size_mb,
+        }
+        for row in service.volumes.all()
+        if row.is_mounted_on_service(service)
+    ]
+
+    networks = []
+    if service.network_id:
+        networks.append(service.network.get_docker_network_name())
+    for attachment in service.network_attachments.select_related("network").all():
+        docker_name = attachment.network.get_docker_network_name()
+        if docker_name not in networks:
+            networks.append(docker_name)
+
+    safe_snapshot = compiled
+    redacted_snapshot, secret_keys = redact_config(safe_snapshot)
+    previous = ServiceRevision.objects.filter(service=service).order_by("-revision_number").first()
     next_number = (previous.revision_number if previous else 0) + 1
+
+    graph = {
+        "processes": process_specs,
+        "endpoints": endpoints,
+        "volumes": volumes,
+        "networks": networks,
+    }
 
     revision = ServiceRevision.objects.create(
         service=service,
         revision_number=next_number,
         source_deploy=deploy,
         state=ServiceRevision.State.CREATED,
-        config_snapshot=runtime_snapshot if isinstance(runtime_snapshot, dict) else {},
+        config_snapshot=redacted_snapshot,
         process_snapshot=process_specs,
         secret_keys=secret_keys,
+        secret_refs=secret_refs,
+        source_snapshot=deepcopy(service.source_config or {}),
+        build_snapshot=deepcopy(service.build_config or {}),
+        runtime_snapshot=deepcopy(service.runtime_config or {}),
+        environment_snapshot=environment_snapshot,
+        endpoint_snapshot=endpoints,
+        volume_snapshot=volumes,
+        network_snapshot=networks,
+        graph_snapshot=graph,
         created_by=deploy.created_by,
     )
-
     Deploy.objects.filter(pk=deploy.pk).update(revision=revision)
     deploy.revision = revision
     return deploy
@@ -214,7 +428,6 @@ def ensure_revision_for_deploy(deploy, *, force_new: bool = False):
 
 @transaction.atomic
 def activate_revision_locked(service: Service, revision_id) -> ServiceRevision:
-    """Activate a revision while the caller already holds the service lock."""
     revision = (
         ServiceRevision.objects.select_for_update()
         .filter(pk=revision_id, service_id=service.pk)
@@ -226,9 +439,7 @@ def activate_revision_locked(service: Service, revision_id) -> ServiceRevision:
     ServiceRevision.objects.filter(
         service=service,
         state=ServiceRevision.State.ACTIVE,
-    ).exclude(pk=revision.pk).update(
-        state=ServiceRevision.State.SUPERSEDED,
-    )
+    ).exclude(pk=revision.pk).update(state=ServiceRevision.State.SUPERSEDED)
 
     revision.state = ServiceRevision.State.ACTIVE
     revision.activated_at = timezone.now()
