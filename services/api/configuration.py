@@ -394,22 +394,30 @@ class ServiceEndpointAPIView(ServiceConfigBaseAPIView):
                     raise ValueError
             except (TypeError, ValueError):
                 return Response({"error": "published_port must be between 1 and 65535."}, status=400)
-        endpoint, _ = ServiceEndpoint.objects.update_or_create(
-            service=service,
-            name=name,
-            defaults={
-                "process_id": data.get("process") or None,
-                "target_port": target,
-                "published_port": published,
-                "protocol": protocol,
-                "exposure": exposure,
-                "hostname": str(data.get("hostname") or ""),
-                "path": str(data.get("path") or ""),
-                "tls": bool(data.get("tls")),
-                "enabled": bool(data.get("enabled", True)),
-                "metadata": dict(data.get("metadata") or {}),
-            },
-        )
+        try:
+            with transaction.atomic():
+                endpoint, _ = ServiceEndpoint.objects.update_or_create(
+                    service=service,
+                    name=name,
+                    defaults={
+                        "process_id": data.get("process") or None,
+                        "target_port": target,
+                        "published_port": published,
+                        "protocol": protocol,
+                        "exposure": exposure,
+                        "hostname": str(data.get("hostname") or ""),
+                        "path": str(data.get("path") or ""),
+                        "tls": bool(data.get("tls")),
+                        "enabled": str(data.get("enabled", True)).lower() in {"1", "true", "yes", "on"},
+                        "metadata": dict(data.get("metadata") or {}),
+                    },
+                )
+                sync_endpoint_reservation(endpoint)
+        except Exception as exc:
+            return Response(
+                {"error": str(exc), "code": "host_port_unavailable"},
+                status=409,
+            )
         return Response(EndpointSerializer(endpoint).data, status=200)
 
     def delete(self, request, service_id):
