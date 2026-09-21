@@ -1,5 +1,5 @@
 from django.db import migrations, models
-from django.core.validators import MaxValueValidator
+from django.core.validators import MinValueValidator, MaxValueValidator
 
 
 class Migration(migrations.Migration):
@@ -13,7 +13,7 @@ class Migration(migrations.Migration):
             name="replicas",
             field=models.PositiveIntegerField(
                 default=1,
-                validators=[MaxValueValidator(1)],
+                validators=[MinValueValidator(1), MaxValueValidator(1)],
             ),
         ),
     ]
