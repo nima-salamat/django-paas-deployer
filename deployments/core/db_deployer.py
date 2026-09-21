@@ -53,6 +53,7 @@ from docker.errors import APIError, NotFound
 from core.global_settings.config import MIRROR_DOCKER
 from deployments.core.exceptions import DeploymentError
 from deployments.core.manager.client_manager import Client
+from deployments.core.swarm import SwarmRuntime, swarm_enabled
 from deployments.common.security import validate_bind_source, validate_docker_name
 
 
@@ -1157,6 +1158,215 @@ def _reconcile_mysql_credentials(
 # ============================================================================
 
 class DBDeployer:
+
+    def _deploy_swarm_database(
+        self,
+        *,
+        service_id: str,
+        container_name: str,
+        platform: str,
+        full_image: str,
+        environment: dict[str, str],
+        command: Any,
+        networks: list[str],
+        volume_binds: dict[str, dict],
+        target_port: int | None,
+        published_port: int | None,
+        host_port: int | None,
+        cfg: dict[str, Any],
+        force_reinit: bool,
+        deployment_id: str | None,
+        log,
+    ) -> DBDeployResult:
+        runtime = SwarmRuntime()
+        labels = {
+            "managed-by": "django-paas-deployer",
+            "passdeployer.service": str(service_id),
+            "passdeployer.deployment": str(deployment_id or ""),
+            "passdeployer.process": "database",
+            "passdeployer.process.type": "database",
+            "platform": platform,
+            "platform-type": "DB",
+        }
+
+        if force_reinit:
+            for source in list(volume_binds):
+                if str(source).startswith("/"):
+                    continue
+                try:
+                    volume = runtime.client.volumes.get(str(source))
+                    volume.remove(force=True)
+                    runtime.client.volumes.create(name=str(source))
+                    log.info(
+                        "volume_creation",
+                        f"Recreated database volume '{source}' for force reinitialization.",
+                        progress=28,
+                    )
+                except docker.errors.NotFound:
+                    try:
+                        runtime.client.volumes.create(name=str(source))
+                    except Exception:
+                        pass
+                except docker.errors.DockerException as exc:
+                    return DBDeployResult(
+                        success=False,
+                        message=f"Failed to reinitialize database volume '{source}': {exc}",
+                        container_name=container_name,
+                        platform=platform,
+                        error=str(exc),
+                    )
+
+        try:
+            state = runtime.apply_external_image_service(
+                name=container_name,
+                image_ref=full_image,
+                environment=environment,
+                command=command,
+                networks=networks,
+                volumes=[
+                    {
+                        "source": source,
+                        "target": spec.get("bind"),
+                        "mode": spec.get("mode", "rw"),
+                    }
+                    for source, spec in volume_binds.items()
+                ],
+                target_port=target_port,
+                published_port=host_port,
+                protocol="tcp",
+                resources={
+                    "cpu": cfg.get("max_cpu"),
+                    "memory_mb": cfg.get("max_ram"),
+                },
+                labels=labels,
+            )
+        except DeploymentError as exc:
+            log.error(
+                "swarm_create",
+                str(exc),
+                progress=100,
+            )
+            return DBDeployResult(
+                success=False,
+                message=getattr(exc, "user_message", None) or str(exc),
+                container_name=container_name,
+                platform=platform,
+                error=str(exc),
+                details=getattr(exc, "details", {}) or {},
+            )
+
+        if platform in {"mysql", "mariadb"}:
+            root_password = _clean(
+                environment.get("MYSQL_ROOT_PASSWORD")
+                or environment.get("MARIADB_ROOT_PASSWORD")
+            )
+            deadline = time.monotonic() + 180
+            container = None
+            last_error = ""
+            while time.monotonic() < deadline:
+                try:
+                    container = runtime.primary_task_container(container_name)
+                    if container is not None:
+                        exit_code, output = container.exec_run(
+                            [
+                                "mysqladmin",
+                                "ping",
+                                "-uroot",
+                                "--protocol=socket",
+                                "--silent",
+                            ],
+                            environment={"MYSQL_PWD": root_password},
+                        )
+                        text = (
+                            output.decode("utf-8", "replace")
+                            if isinstance(output, bytes)
+                            else str(output or "")
+                        )
+                        if int(exit_code) == 0:
+                            break
+                        last_error = text
+                except Exception as exc:
+                    last_error = str(exc)
+                time.sleep(1)
+            else:
+                return DBDeployResult(
+                    success=False,
+                    message=(
+                        "MySQL did not become ready in the Docker Swarm task within 180 seconds. "
+                        f"Last probe: {last_error[-1000:]}"
+                    ),
+                    container_name=container_name,
+                    platform=platform,
+                    error=last_error,
+                    details={"runtime": "docker-swarm", "service": container_name},
+                )
+
+            if container is None:
+                return DBDeployResult(
+                    success=False,
+                    message="The running MySQL Swarm task container is not accessible from the connected manager.",
+                    container_name=container_name,
+                    platform=platform,
+                    error="missing_local_task_container",
+                    details={"runtime": "docker-swarm", "service": container_name},
+                )
+
+            username = _clean(cfg.get("username"))
+            user_password = _clean(cfg.get("password")) or root_password
+            database = _clean(
+                cfg.get("database")
+                or environment.get("MYSQL_DATABASE")
+                or environment.get("MARIADB_DATABASE")
+            )
+            ok, credential_message = _reconcile_mysql_credentials(
+                runtime.client,
+                container_name,
+                root_password=root_password,
+                username=username,
+                user_password=user_password,
+                database=database,
+                container_obj=container,
+            )
+            if not ok:
+                return DBDeployResult(
+                    success=False,
+                    message=f"MySQL credential reconciliation failed: {credential_message}",
+                    container_name=container_name,
+                    platform=platform,
+                    error=credential_message,
+                    details={"runtime": "docker-swarm"},
+                )
+
+        log.info(
+            "deployment_completed",
+            f"Database '{platform}' deployed successfully on Docker Swarm.",
+            progress=100,
+            details={
+                "runtime": "docker-swarm",
+                "platform": platform,
+                "image": full_image,
+                "container_port": target_port,
+                "host_port": host_port,
+                "publish_port": bool(host_port),
+                "replicas": state.replicas_running,
+            },
+        )
+        return DBDeployResult(
+            success=True,
+            message=f"Database '{platform}' deployed successfully on Docker Swarm.",
+            container_name=container_name,
+            platform=platform,
+            port=host_port or target_port,
+            details={
+                "runtime": "docker-swarm",
+                "image": full_image,
+                "container_port": target_port,
+                "host_port": host_port,
+                "publish_port": bool(host_port),
+                "service_id": state.service_id,
+                "replicas": state.replicas_running,
+            },
+        )
 
     def deploy(
         self,
