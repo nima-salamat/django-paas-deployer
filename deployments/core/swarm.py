@@ -759,3 +759,108 @@ class SwarmRuntime:
             )
         except docker.errors.NotFound:
             return b""
+
+
+def sync_swarm_nodes(*, cluster_name: str | None = None) -> dict[str, Any]:
+    """Synchronize Swarm node facts and declarative admin settings."""
+    from deploy.models import SwarmCluster, SwarmNode
+
+    name = str(
+        cluster_name
+        or getattr(settings, "SWARM_CLUSTER_NAME", "")
+        or os.environ.get("SWARM_CLUSTER_NAME", "default")
+    ).strip() or "default"
+    cluster, _ = SwarmCluster.objects.get_or_create(name=name)
+    if not cluster.enabled:
+        return {"status": "disabled", "cluster": cluster.name}
+
+    runtime = SwarmRuntime()
+    try:
+        runtime.assert_active()
+        docker_nodes = runtime.client.nodes.list()
+    except Exception as exc:
+        SwarmCluster.objects.filter(pk=cluster.pk).update(
+            last_error=str(exc),
+            updated_at=__import__("django.utils.timezone", fromlist=["timezone"]).timezone.now(),
+        )
+        raise
+
+    observed_ids = set()
+    now = __import__("django.utils.timezone", fromlist=["timezone"]).timezone.now()
+    for node in docker_nodes:
+        attrs = node.attrs or {}
+        spec = attrs.get("Spec") or {}
+        status = attrs.get("Status") or {}
+        description = attrs.get("Description") or {}
+        manager = attrs.get("ManagerStatus") or {}
+        docker_id = str(node.id)
+        observed_ids.add(docker_id)
+        labels = dict(spec.get("Labels") or {})
+        row, _ = SwarmNode.objects.get_or_create(
+            docker_id=docker_id,
+            defaults={
+                "cluster": cluster,
+                "hostname": str(description.get("Hostname") or node.name),
+                "desired_availability": str(spec.get("Availability") or "active"),
+                "desired_labels": labels,
+            },
+        )
+        if row.cluster_id != cluster.pk:
+            row.cluster_id = cluster.pk
+        desired_availability = row.desired_availability or "active"
+        desired_labels = dict(row.desired_labels or {})
+        if desired_availability not in {"active", "pause", "drain"}:
+            desired_availability = "active"
+            row.desired_availability = desired_availability
+
+        current_name = str(spec.get("Name") or description.get("Hostname") or node.name)
+        current_role = str(spec.get("Role") or "")
+        current_availability = str(spec.get("Availability") or "")
+        if (
+            current_availability != desired_availability
+            or labels != desired_labels
+        ):
+            try:
+                node.update(
+                    {
+                        "Name": current_name,
+                        "Role": current_role,
+                        "Availability": desired_availability,
+                        "Labels": desired_labels,
+                    }
+                )
+                labels = desired_labels
+                current_availability = desired_availability
+            except Exception as exc:
+                row.last_error = str(exc)
+
+        row.hostname = str(description.get("Hostname") or node.name)
+        row.role = current_role
+        row.observed_availability = current_availability
+        row.observed_state = str(status.get("State") or "")
+        row.address = str((manager.get("Addr") or "") or ((status.get("Addr") or "")))
+        row.labels = labels
+        row.cpus = int((description.get("Resources") or {}).get("NanoCPUs") or 0) // 1_000_000_000
+        row.memory_bytes = int((description.get("Resources") or {}).get("MemoryBytes") or 0)
+        row.manager_reachable = bool(manager.get("Leader") or manager.get("Addr"))
+        row.last_synced_at = now
+        row.save(update_fields=[
+            "cluster", "hostname", "role", "desired_availability",
+            "observed_availability", "observed_state", "address", "labels",
+            "cpus", "memory_bytes", "manager_reachable", "last_synced_at",
+            "last_error", "updated_at",
+        ])
+
+    stale = SwarmNode.objects.filter(cluster=cluster).exclude(docker_id__in=observed_ids)
+    stale.update(manager_reachable=False, observed_state="missing", last_synced_at=now, updated_at=now)
+    SwarmCluster.objects.filter(pk=cluster.pk).update(
+        last_synced_at=now,
+        last_error="",
+        updated_at=now,
+    )
+    return {
+        "status": "ok",
+        "cluster": cluster.name,
+        "nodes": len(docker_nodes),
+        "reachable": sum(1 for node in docker_nodes if (node.attrs or {}).get("Status", {}).get("State") == "ready"),
+    }
