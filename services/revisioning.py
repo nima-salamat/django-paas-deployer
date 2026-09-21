@@ -507,7 +507,9 @@ def _sync_legacy_environment(service: Service, config: dict[str, Any], refs: lis
             key=key[:128],
             defaults=defaults,
         )
-\n\n@transaction.atomic\ndef ensure_revision_for_deploy(deploy, *, force_new: bool = False):
+
+@transaction.atomic
+def ensure_revision_for_deploy(deploy, *, force_new: bool = False):
     """Compile the mutable Service domain into an immutable executable revision."""
     from deploy.models import Deploy
 
