@@ -334,6 +334,15 @@ class DeploymentOrchestrator:
                 cancel_check=self._cancel_check,
             )
 
+            process_specs = list((config.runtime_options or {}).get("processes") or [])
+            if process_specs:
+                self._deploy_process_containers(
+                    config,
+                    process_specs=process_specs,
+                    runtime_environment=dict(config.environment or {}),
+                    volume_binds=volume_binds,
+                )
+
             # Activation boundary: database selection is changed only after
             # the replacement is actually ready. If the activation write fails,
             # raise so the normal rollback path restores the previous resource.
@@ -349,6 +358,7 @@ class DeploymentOrchestrator:
             # 10. Cleanup old container + prune dangling images
             if renamed_old_name:
                 self._cleanup_old_container(renamed_old_name, config.stop_timeout)
+            self._cleanup_previous_process_containers(config)
 
             try:
                 self.cleanup_manager.prune_dangling_images()
@@ -704,6 +714,108 @@ class DeploymentOrchestrator:
             },
         )
 
+    def _deploy_process_containers(
+        self,
+        config: DeploymentConfig,
+        *,
+        process_specs: list[dict[str, object]],
+        runtime_environment: dict[str, str],
+        volume_binds: dict,
+    ) -> list[Container]:
+        """Create revision-scoped non-web process containers."""
+        containers: list[Container] = []
+        deployment_id = str((config.labels or {}).get("deployment.id") or self.logger.deployment_id or "")
+        service_id = str((config.labels or {}).get("service.id") or "")
+        deployment_suffix = re.sub(r"[^a-z0-9-]+", "-", deployment_id.lower())[-12:] or "current"
+
+        for raw in process_specs or []:
+            if not raw.get("enabled", True):
+                continue
+            process_name = str(raw.get("name") or "process").strip().lower()
+            if process_name in {"web", "http", "frontend"}:
+                continue
+            safe_process = "".join(ch if ch.isalnum() or ch == "-" else "-" for ch in process_name).strip("-") or "process"
+            try:
+                replicas = max(1, min(8, int(raw.get("replicas") or 1)))
+            except (TypeError, ValueError):
+                replicas = 1
+            command = raw.get("command") or raw.get("entrypoint")
+            if not command:
+                raise DeploymentValidationError(
+                    f"Process '{process_name}' has no command or entrypoint.",
+                    details={"process": process_name},
+                )
+
+            process_env = dict(runtime_environment or {})
+            process_env.update({str(k): str(v) for k, v in (raw.get("environment") or {}).items()})
+
+            for replica in range(1, replicas + 1):
+                name = f"{config.name}-{safe_process}-{replica}-{deployment_suffix}"
+                labels = {
+                    "managed-by": "django-paas-deployer",
+                    "deployment.id": deployment_id,
+                    "service.id": service_id,
+                    "process.name": safe_process,
+                    "process.replica": str(replica),
+                }
+                container = Container(
+                    name,
+                    config.image_ref,
+                    config.max_cpu,
+                    config.max_ram,
+                    [network.name for network in config.networks],
+                    volume_binds,
+                    config.read_only,
+                    command=str(command),
+                    environment=process_env,
+                    labels=labels,
+                    resource_limits=config.resource_limits,
+                    restart_policy=(config.runtime_options or {}).get("restart_policy") or None,
+                )
+                self.logger.info(
+                    "process_container_creation",
+                    f"Creating process '{process_name}' replica {replica}.",
+                    details={"container": name, "process": process_name, "replica": replica},
+                )
+                try:
+                    container.create()
+                    container.start()
+                except Exception:
+                    try:
+                        if container.exists():
+                            container.remove()
+                    except Exception:
+                        pass
+                    raise
+                containers.append(container)
+
+        return containers
+
+    def _cleanup_previous_process_containers(self, config: DeploymentConfig) -> None:
+        """Remove older managed process containers after activation."""
+        service_id = str((config.labels or {}).get("service.id") or "")
+        current_deployment = str((config.labels or {}).get("deployment.id") or self.logger.deployment_id or "")
+        if not service_id:
+            return
+        try:
+            for container in Container.find_owned(service_id=service_id, all=True):
+                labels = container.labels or {}
+                deployment_id = str(labels.get("deployment.id") or "")
+                if deployment_id == current_deployment:
+                    continue
+                if not labels.get("process.name"):
+                    continue
+                try:
+                    Container(container.name).stop(timeout=10)
+                    Container(container.name).remove()
+                except Exception as exc:
+                    self.logger.warning(
+                        "cleanup",
+                        f"Failed to remove previous process container '{container.name}': {exc}",
+                    )
+        except Exception as exc:
+            self.logger.warning("cleanup", f"Could not enumerate previous process containers: {exc}")
+
     def _endpoint_labels(self, config: DeploymentConfig) -> dict[str, str]:
         """Generate Traefik routes for all public HTTP-family endpoints."""
         labels: dict[str, str] = {}
@@ -714,6 +826,8 @@ class DeploymentOrchestrator:
         labels["traefik.docker.network"] = "proxy_net"
         priority = 10000
         for index, endpoint in enumerate(endpoints):
+            if endpoint.protocol not in {"http", "https", "ws"}:
+                continue
             router = f"{config.name}-ep-{index}-{endpoint.name}".replace("_", "-")
             safe_router = "".join(ch if ch.isalnum() or ch == "-" else "-" for ch in router).lower()
             hostname = endpoint.hostname or config.public_host or ""
