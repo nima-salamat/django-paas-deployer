@@ -65,8 +65,8 @@ class StopService:
         container_name = service.get_docker_service_name()
 
         state_tracker = (
-            DjangoDeploymentState(service.selected_deploy)
-            if service.selected_deploy else None
+            active_deploy = get_active_deploy(service)
+            DjangoDeploymentState(active_deploy) if active_deploy else None
         )
 
         try:
