@@ -1384,6 +1384,7 @@ class DBDeployer:
         cfg: dict[str, Any],
         event_sink=None,
         deployment_id: str | None = None,
+        service_id: str | None = None,
         force_reinit: bool = False,
     ) -> DBDeployResult:
 
@@ -1910,6 +1911,25 @@ class DBDeployer:
                             source,
                             exc,
                         )
+
+        if swarm_enabled():
+            return self._deploy_swarm_database(
+                service_id=str(service_id or ""),
+                container_name=container_name,
+                platform=platform,
+                full_image=full_image,
+                environment=environment,
+                command=command,
+                networks=networks,
+                volume_binds=volume_binds,
+                target_port=container_port,
+                published_port=host_port,
+                host_port=host_port,
+                cfg=cfg,
+                force_reinit=force_reinit,
+                deployment_id=deployment_id,
+                log=log,
+            )
 
         # ====================================================================
         # 10. Remove old container FIRST
