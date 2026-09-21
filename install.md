@@ -173,6 +173,24 @@ SWARM_IMAGE_REGISTRY_PASSWORD=
 
 The deployment worker builds the image on the manager and publishes it to the registry before Swarm schedules the task. Without a registry, a multi-node deployment is rejected instead of creating a task that cannot pull its image.
 
+## 6.5. Legacy container-runtime compatibility
+
+The default control-plane stack does not start the old Docker container event consumer.
+
+If an operator intentionally uses the legacy non-Swarm runtime with:
+
+```dotenv
+SWARM_ENABLED=0
+```
+
+start its event consumer explicitly:
+
+```bash
+docker compose --profile legacy-runtime up -d deployment-events
+```
+
+Normal Swarm installations should not enable this profile.
+
 ## 6. Docker socket / remote manager
 
 PassDeployer and Traefik currently use the Docker Engine socket:
