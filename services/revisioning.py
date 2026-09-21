@@ -255,6 +255,11 @@ def _service_environment_snapshot(
     out: dict[str, Any] = {}
     for row in ServiceEnvironmentVariable.objects.filter(service=service, enabled=True).select_related("secret"):
         if row.secret_id:
+            if row.scope in {ServiceEnvironmentVariable.Scope.BUILD, ServiceEnvironmentVariable.Scope.BOTH}:
+                raise ValueError(
+                    f"Build-scoped secret {row.key!r} is not supported by the current Docker build backend. "
+                    "Use a runtime-scoped secret until BuildKit secret mounts are enabled."
+                )
             secret = row.secret
             version = secret.current_version
             refs.append(
