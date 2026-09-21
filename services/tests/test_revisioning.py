@@ -15,8 +15,8 @@ class RevisioningContractTests(SimpleTestCase):
 
         redacted, keys = redact_config(source)
 
-        self.assertEqual(redacted["password"], "[REDACTED]")
-        self.assertEqual(redacted["env"]["DATABASE_URL"], "[REDACTED]")
+        self.assertEqual(redacted["password"], "[SECRET_REF]")
+        self.assertEqual(redacted["env"]["DATABASE_URL"], "[SECRET_REF]")
         self.assertEqual(redacted["env"]["PUBLIC"], "ok")
         self.assertIn("password", keys)
         self.assertIn("env.DATABASE_URL", keys)
@@ -40,3 +40,48 @@ class RevisioningContractTests(SimpleTestCase):
         self.assertEqual(specs[0]["command"], "gunicorn app.wsgi")
         self.assertEqual(specs[1]["replicas"], 2)
         self.assertEqual(specs[2]["process_type"], "scheduler")
+
+
+class RuntimeGraphContractTests(SimpleTestCase):
+    def test_environment_scope_is_preserved(self):
+        from deployments.core.runtime_graph import ServiceRuntimeGraph
+
+        revision = SimpleNamespace(
+            pk="revision-id",
+            revision_number=3,
+            source_snapshot={},
+            build_snapshot={},
+            runtime_snapshot={},
+            environment_snapshot={
+                "BUILD_ONLY": {"value": "build", "scope": "build"},
+                "RUNTIME_ONLY": {"value": "runtime", "scope": "runtime"},
+                "BOTH": {"value": "both", "scope": "both"},
+            },
+            process_snapshot=[
+                {"name": "web", "process_type": "web", "replicas": 1, "enabled": True}
+            ],
+            endpoint_snapshot=[
+                {
+                    "name": "http",
+                    "target_port": 8080,
+                    "published_port": None,
+                    "protocol": "http",
+                    "exposure": "public",
+                    "hostname": "app.example.com",
+                    "path": "",
+                    "tls": False,
+                    "enabled": True,
+                }
+            ],
+            volume_snapshot=[],
+            network_snapshot=[],
+        )
+
+        graph = ServiceRuntimeGraph.from_revision(revision)
+
+        self.assertEqual(graph.build_environment["BUILD_ONLY"], "build")
+        self.assertEqual(graph.runtime_environment["RUNTIME_ONLY"], "runtime")
+        self.assertEqual(graph.runtime_environment["BOTH"], "both")
+        self.assertNotIn("BUILD_ONLY", graph.runtime_environment)
+        self.assertNotIn("RUNTIME_ONLY", graph.build_environment)
+        self.assertEqual(graph.exposed_ports(), {"8080/tcp": {}})
