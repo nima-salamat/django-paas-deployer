@@ -62,6 +62,10 @@ class StopService:
             logger.info("Skipped stop execution for service ID %s: %s", service_id, str(exc))
             return
 
+        # Desired state is declarative; runtime status remains observed state.
+        service.__class__.objects.filter(pk=service.pk).update(desired_state="stopped")
+        service.desired_state = "stopped"
+
         container_name = service.get_docker_service_name()
 
         active_deploy = get_active_deploy(service)
