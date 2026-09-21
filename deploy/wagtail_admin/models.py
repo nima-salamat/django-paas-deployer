@@ -77,8 +77,19 @@ class BaseRuntimeImageViewSet(SnippetViewSet):
     )
 
 
+
+class SwarmInfrastructurePermissionPolicy(ModelPermissionPolicy):
+    """Infrastructure records are discovered from Docker; operators edit desired state only."""
+
+    def user_has_permission(self, user, action):
+        if action in {"add", "delete"}:
+            return False
+        return super().user_has_permission(user, action)
+
+
 class SwarmClusterViewSet(SnippetViewSet):
     model = SwarmCluster
+    permission_policy = SwarmInfrastructurePermissionPolicy(SwarmCluster)
     icon = "site"
     menu_label = _("Docker Swarm clusters")
     menu_order = 107
@@ -87,13 +98,14 @@ class SwarmClusterViewSet(SnippetViewSet):
     search_fields = ["name", "manager_endpoint", "last_error"]
     ordering = ["name"]
     panels = panels_for(
-        editable=["name", "enabled", "manager_endpoint"],
-        read_only=["id", "last_synced_at", "last_error", "created_at", "updated_at"],
+        editable=["enabled"],
+        read_only=["id", "name", "manager_endpoint", "last_synced_at", "last_error", "created_at", "updated_at"],
     )
 
 
 class SwarmNodeViewSet(SnippetViewSet):
     model = SwarmNode
+    permission_policy = SwarmInfrastructurePermissionPolicy(SwarmNode)
     icon = "site"
     menu_label = _("Docker Swarm nodes")
     menu_order = 108
