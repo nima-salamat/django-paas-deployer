@@ -31,6 +31,7 @@ from deployments.core.manager.container_manager import Container
 from deployments.core.state.locks import acquire_service_deployment_lock
 from deployments.core.state.manager import StateManager
 from services.models import Volume  # type: ignore
+from services.revisioning import ensure_revision_for_deploy, activate_revision_locked
 
 from deployments.common import parse_config, as_bool, as_int
 from deployments.common.deployment_profile import normalize_profile
@@ -144,6 +145,19 @@ class DeployService:
 
         try:
             StateManager.heartbeat_deploy(deploy_item.pk, task_id=task_id, stage="preparing")
+
+            # A deployment executes an immutable ServiceRevision snapshot.
+            # Keep Deploy.config as a compatibility input during migration,
+            # but stop treating it as the runtime source of truth.
+            deploy_item = ensure_revision_for_deploy(deploy_item)
+            deploy_item.refresh_from_db(fields=["revision"])
+            if deploy_item.revision_id is None:
+                raise DeploymentValidationError(
+                    "Deployment could not create a service revision snapshot.",
+                    stage="revision",
+                    user_message="The deployment configuration could not be snapshotted.",
+                )
+
             previous_deploy_id = getattr(deploy_item, "previous_deploy_id", None)
             def _activate_deployment() -> None:
                 from django.db import transaction
@@ -157,11 +171,15 @@ class DeployService:
                             "Active deployment changed while this deployment was preparing to activate.",
                             details={"expected_previous_deploy": previous_deploy_id, "actual_selected_deploy": current},
                         )
+                    activate_revision_locked(service, deploy_item.revision_id)
                     Service.objects.filter(pk=service_id).update(
                         selected_deploy_id=deploy_item.pk,
                         selected_deploy_at=timezone.now(),
                     )
-                logger.info("Activated deploy=%s for service=%s", deploy_item.pk, service_id)
+                logger.info(
+                    "Activated deploy=%s revision=%s for service=%s",
+                    deploy_item.pk, deploy_item.revision_id, service_id,
+                )
 
             result = self._process_deployment(
                 deploy_item, container_name, state_tracker, task_id=task_id,
@@ -171,16 +189,21 @@ class DeployService:
             # that was actually committed. A stale worker must not mark the
             # service RUNNING after another deployment has won activation.
             final = Deploy.objects.select_related("service").filter(pk=deploy_item.pk).values(
-                "status", "service__selected_deploy_id"
+                "status", "service__selected_deploy_id", "service__active_revision_id"
             ).first()
             if not final:
                 logger.warning("Deploy %s disappeared before final service sync.", deploy_id)
                 return
             final_status = final.get("status")
             selected_id = final.get("service__selected_deploy_id")
+            active_revision_id = final.get("service__active_revision_id")
             if final_status == "cancelled":
                 ServiceStateManager.sync_legacy_stopped(service_id)
-            elif final_status == "succeeded" and str(selected_id or "") == str(deploy_item.pk):
+            elif (
+                final_status == "succeeded"
+                and str(selected_id or "") == str(deploy_item.pk)
+                and str(active_revision_id or "") == str(deploy_item.revision_id)
+            ):
                 # If rollback itself failed, surface that — don't claim success.
                 if getattr(result, "rollback_failed", False):
                     logger.error(
