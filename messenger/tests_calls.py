@@ -98,3 +98,38 @@ class CallLifecycleTests(APITestCase):
 
         call = CallSession.objects.get(public_id=response.data["data"]["call_id"])
         self.assertFalse(call.is_video)
+
+
+    def test_group_member_can_decline_without_ending_session(self):
+        self.client.force_authenticate(self.caller)
+        started = self.client.post(
+            self._url(),
+            {"video": True, "audio": True},
+            format="json",
+        )
+        self.assertEqual(started.status_code, 200)
+        call_id = started.data["data"]["call_id"]
+
+        self.client.force_authenticate(self.peer)
+        declined = self.client.post(
+            self._url("call/end/"),
+            {"call_id": call_id, "reason": "declined"},
+            format="json",
+        )
+        self.assertEqual(declined.status_code, 200)
+        self.assertTrue(declined.data["data"]["active"])
+        self.assertEqual(
+            CallSession.objects.get(public_id=call_id).status,
+            CallSession.Status.RINGING,
+        )
+        self.assertTrue(
+            CallSessionParticipant.objects.get(
+                call__public_id=call_id,
+                user=self.peer,
+            ).left_at
+        )
+
+        active = self.client.get(self._url("call/active/"))
+        self.assertEqual(active.status_code, 200)
+        self.assertTrue(active.data["data"]["active"])
+        self.assertEqual(active.data["data"]["participant_state"], "left")
