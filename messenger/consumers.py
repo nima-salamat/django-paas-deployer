@@ -22,6 +22,56 @@ from rest_framework_simplejwt.tokens import AccessToken
 User = get_user_model()
 logger = logging.getLogger("messenger.ws")
 
+# Call delivery: the personal WS channel replays only live ringing calls.
+CALL_RING_SECONDS = 30
+
+
+def _pending_ringing_for_user(user_id: int):
+    """Return still-live incoming call events for a user's active conversations."""
+    from datetime import timedelta
+    from django.utils import timezone
+    from .models import CallSession, ConversationParticipant
+
+    if not user_id:
+        return []
+    cutoff = timezone.now() - timedelta(seconds=CALL_RING_SECONDS)
+    sessions = (
+        CallSession.objects
+        .filter(
+            conversation__participants__user_id=user_id,
+            conversation__participants__left_at__isnull=True,
+            status=CallSession.Status.RINGING,
+            started_at__gte=cutoff,
+        )
+        .exclude(initiator_id=user_id)
+        .select_related("initiator")
+        .order_by("started_at")
+        .distinct()
+    )
+    now = timezone.now()
+    events = []
+    for session in sessions:
+        elapsed = max(0, int((now - session.started_at).total_seconds()))
+        remaining = max(0, CALL_RING_SECONDS - elapsed)
+        if remaining <= 0:
+            continue
+        initiator = session.initiator
+        events.append({
+            "type": "call.started",
+            "conversation_id": session.conversation_id,
+            "call_id": str(session.public_id),
+            "is_video": bool(session.is_video),
+            "media": {"video": bool(session.is_video), "audio": True},
+            "ring_timeout": remaining,
+            "ring_remaining": remaining,
+            "started_at": session.started_at.isoformat() if session.started_at else None,
+            "initiator": {
+                "id": session.initiator_id,
+                "username": (getattr(initiator, "username", "") or f"User-{session.initiator_id}") if initiator else f"User-{session.initiator_id}",
+            },
+        })
+    return events
+
 # Presence: connection-counted + short TTL (refreshed by ping without rebroadcast)
 ONLINE_KEY = "messenger:online:{uid}"
 ONLINE_CONNS_KEY = "messenger:online_conns:{uid}"
