@@ -358,16 +358,16 @@ class ConversationCallJoinAPIView(APIView):
                 user=request.user,
                 defaults={"left_at": None},
             )
-                try:
-                    broadcast_call_event(conv.id, {
-                        "type": "call.answered",
-                        "conversation_id": conv.id,
-                        "call_id": str(session.public_id),
-                        "user_id": request.user.id,
-                        "username": getattr(request.user, "username", "") or "",
-                    })
-                except Exception:
-                    logger.exception("broadcast call.answered failed")
+            try:
+                broadcast_call_event(conv.id, {
+                    "type": "call.answered",
+                    "conversation_id": conv.id,
+                    "call_id": str(session.public_id),
+                    "user_id": request.user.id,
+                    "username": getattr(request.user, "username", "") or "",
+                })
+            except Exception:
+                logger.exception("broadcast call.answered failed")
 
         cfg = _jitsi_config(request, conv, room_name=session.room_name or None)
         cfg["call_id"] = str(session.public_id)
@@ -599,6 +599,7 @@ class ConversationCallActiveAPIView(APIView):
             else "left" if participant_row
             else "not_joined"
         )
+        current_participant = bool(participant_row and participant_row.left_at is None)
         return ok(data={
             "active": True,
             "participant_state": participant_state,
