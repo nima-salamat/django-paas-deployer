@@ -1,0 +1,43 @@
+# Git and repository metadata
+.git
+.gitignore
+.gitattributes
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example
+
+# Python caches / local environments
+__pycache__
+*.py[cod]
+*.pyo
+.venv
+venv
+env
+ENV
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+coverage.xml
+htmlcov
+
+# Local build/runtime artifacts
+staticfiles
+media
+*.log
+logs
+
+# Editors / OS metadata
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Frontend / unrelated local dependencies if present
+node_modules
+dist
+build
