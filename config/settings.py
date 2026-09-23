@@ -466,9 +466,13 @@ CORS_ALLOW_HEADERS = list(getattr(__import__("corsheaders.defaults", fromlist=["
     "content-type",
 ]
 
+# Browser frontend origins that may call the API. Keep this explicit so a
+# missing/malformed DOMAIN_NAME environment value cannot silently disable the
+# production frontend.
 CORS_ALLOWED_ORIGINS = [
     origin
     for origin in {
+        "https://echonode.website",
         f"https://{DOMAIN_NAME}" if DOMAIN_NAME else "",
         f"http://{DOMAIN_NAME}" if DOMAIN_NAME else "",
         f"https://{API_DOMAIN_NAME}" if API_DOMAIN_NAME else "",
