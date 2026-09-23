@@ -104,6 +104,10 @@ services:
   # DJANGO / DAPHNE
   # ============================================================
   web:
+    image: ${BACKEND_IMAGE:-passdeployer-backend:local}
+
+    # Build the canonical backend image once. All other Python services below
+    # consume this exact image instead of declaring their own build.
     build:
       context: .
       dockerfile: Dockerfile
@@ -454,15 +458,7 @@ services:
   # DOCKER EVENT CONSUMER
   # ============================================================
   deployment-events:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        DOCKERFILE_DOCKER_MIRROR: ${DOCKERFILE_DOCKER_MIRROR}
-        DOCKERFILE_PYTHON_VERSION: ${DOCKERFILE_PYTHON_VERSION}
-        DOCKERFILE_PYTHON_MIRROR: ${DOCKERFILE_PYTHON_MIRROR}
-        DOCKERFILE_LINUX_MIRROR: ${DOCKERFILE_LINUX_MIRROR}
-        CODENAME: ${CODENAME}
+    image: ${BACKEND_IMAGE:-passdeployer-backend:local}
 
     container_name: deploy-events
     restart: unless-stopped
@@ -506,15 +502,7 @@ services:
   # Same Docker socket + image pattern as deployment-events.
   # ============================================================
   log-collector:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        DOCKERFILE_DOCKER_MIRROR: ${DOCKERFILE_DOCKER_MIRROR}
-        DOCKERFILE_PYTHON_VERSION: ${DOCKERFILE_PYTHON_VERSION}
-        DOCKERFILE_PYTHON_MIRROR: ${DOCKERFILE_PYTHON_MIRROR}
-        DOCKERFILE_LINUX_MIRROR: ${DOCKERFILE_LINUX_MIRROR}
-        CODENAME: ${CODENAME}
+    image: ${BACKEND_IMAGE:-passdeployer-backend:local}
 
     container_name: deploy-log-collector
     restart: unless-stopped
