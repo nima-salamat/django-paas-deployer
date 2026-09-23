@@ -296,6 +296,12 @@ class MessageListCreateAPIView(APIView):
         if files and not part.can_send_media:
             return err("You cannot send media")
 
+        if len(files) > 10:
+            return err(
+                "You can attach up to 10 files per message",
+                status.HTTP_400_BAD_REQUEST,
+            )
+
         valid_files = []
         invalid_files = []
         for f in files[:10]:
