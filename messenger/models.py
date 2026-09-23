@@ -452,3 +452,32 @@ class CallSession(models.Model):
     def __str__(self):
         return f"Call {self.public_id} ({self.status})"
 
+
+class CallSessionParticipant(models.Model):
+    """Tracks which users are currently present in a call session."""
+
+    call = models.ForeignKey(
+        CallSession, on_delete=models.CASCADE, related_name="participants"
+    )
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="messenger_call_participations"
+    )
+    joined_at = models.DateTimeField(auto_now_add=True)
+    left_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["call", "user"],
+                name="uniq_user_per_call_session",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["call", "left_at"]),
+            models.Index(fields=["user", "left_at"]),
+        ]
+
+    def __str__(self):
+        state = "left" if self.left_at else "joined"
+        return f"Call participant {self.call_id}/{self.user_id} ({state})"
+
