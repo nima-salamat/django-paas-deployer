@@ -443,6 +443,36 @@ class ConversationCallEndAPIView(APIView):
                     "status": session.status,
                 })
 
+            # In a ringing group call, decline/busy/no-answer applies only to
+            # this member. The initiator keeps the ringing session alive for
+            # the remaining members until someone joins or the timeout fires.
+            if session.status == CallSession.Status.RINGING and conv.type == Conversation.Type.GROUP and session.initiator_id != request.user.id:
+                participant, _ = CallSessionParticipant.objects.get_or_create(
+                    call=session,
+                    user=request.user,
+                )
+                if participant.left_at is None:
+                    participant.left_at = _tz.now()
+                    participant.save(update_fields=["left_at"])
+                try:
+                    from ..consumers import broadcast_call_event
+                    payload = {
+                        "type": "call.participant_left",
+                        "conversation_id": conv.id,
+                        "call_id": str(session.public_id),
+                        "user_id": request.user.id,
+                        "username": getattr(request.user, "username", "") or "",
+                        "status": reason,
+                    }
+                    transaction.on_commit(lambda payload=payload: broadcast_call_event(conv.id, payload))
+                except Exception:
+                    logger.exception("broadcast group call participant_left failed")
+                return ok("Call declined", data={
+                    "call_id": str(session.public_id),
+                    "status": session.status,
+                    "duration": 0,
+                    "active": True,
+                })
             # Group calls are shared sessions: leaving one participant must
             # not terminate the conference for everyone else.
             if session.status == CallSession.Status.ACTIVE and conv.type == Conversation.Type.GROUP and reason == "ended":
@@ -560,13 +590,18 @@ class ConversationCallActiveAPIView(APIView):
         elapsed = int((_tz.now() - session.started_at).total_seconds())
         remaining = max(0, 30 - elapsed) if session.status == CallSession.Status.RINGING else None
         cfg = _jitsi_config(request, conv, room_name=session.room_name or None)
-        current_participant = CallSessionParticipant.objects.filter(
+        participant_row = CallSessionParticipant.objects.filter(
             call=session,
             user=request.user,
-            left_at__isnull=True,
-        ).exists()
+        ).first()
+        participant_state = (
+            "joined" if participant_row and participant_row.left_at is None
+            else "left" if participant_row
+            else "not_joined"
+        )
         return ok(data={
             "active": True,
+            "participant_state": participant_state,
             "call_id": str(session.public_id),
             "participant_active": current_participant,
             "status": session.status,
