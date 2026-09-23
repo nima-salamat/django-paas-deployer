@@ -199,7 +199,7 @@ class ConversationCallStartAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
-        from ..models import CallSession, Message
+        from ..models import CallSession, CallSessionParticipant, Message
         from ..consumers import broadcast_message, broadcast_call_event
 
         conv = get_object_or_404(Conversation, pk=pk)
@@ -240,6 +240,10 @@ class ConversationCallStartAPIView(APIView):
                 is_video=video,
                 status=CallSession.Status.RINGING,
                 room_name=room,
+            )
+            CallSessionParticipant.objects.create(
+                call=session,
+                user=request.user,
             )
 
         initiator_name = getattr(request.user, "username", "") or f"User-{request.user.id}"
@@ -319,7 +323,7 @@ class ConversationCallJoinAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
-        from ..models import CallSession
+        from ..models import CallSession, CallSessionParticipant
         from ..consumers import broadcast_call_event
 
         conv = get_object_or_404(Conversation, pk=pk)
@@ -348,6 +352,12 @@ class ConversationCallJoinAPIView(APIView):
                 session.status = CallSession.Status.ACTIVE
                 session.answered_at = _tz.now()
                 session.save(update_fields=["status", "answered_at"])
+
+            CallSessionParticipant.objects.update_or_create(
+                call=session,
+                user=request.user,
+                defaults={"left_at": None},
+            )
                 try:
                     broadcast_call_event(conv.id, {
                         "type": "call.answered",
@@ -379,7 +389,7 @@ class ConversationCallEndAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
-        from ..models import CallSession
+        from ..models import CallSession, CallSessionParticipant
 
         conv = get_object_or_404(Conversation, pk=pk)
         part = ConversationParticipant.objects.filter(
@@ -433,7 +443,43 @@ class ConversationCallEndAPIView(APIView):
                     "status": session.status,
                 })
 
-            # Caller cancels while ringing → missed for callee.
+            # Group calls are shared sessions: leaving one participant must
+            # not terminate the conference for everyone else.
+            if session.status == CallSession.Status.ACTIVE and conv.type == Conversation.Type.GROUP and reason == "ended":
+                participant, _ = CallSessionParticipant.objects.get_or_create(
+                    call=session,
+                    user=request.user,
+                )
+                if participant.left_at is None:
+                    participant.left_at = _tz.now()
+                    participant.save(update_fields=["left_at"])
+
+                remaining = CallSessionParticipant.objects.filter(
+                    call=session,
+                    left_at__isnull=True,
+                ).exclude(user_id=request.user.id).count()
+                if remaining > 0:
+                    return ok("Left call", data={
+                        "call_id": str(session.public_id),
+                        "status": session.status,
+                        "duration": session.duration_seconds,
+                        "active": True,
+                    })
+
+                _finish_call(
+                    session,
+                    CallSession.Status.ENDED,
+                    ended_by_user=request.user,
+                )
+                return ok("Call ended", data={
+                    "call_id": str(session.public_id),
+                    "status": session.status,
+                    "duration": session.duration_seconds,
+                    "active": False,
+                })
+
+            # Private calls and ringing-call decline/cancel still terminate the
+            # single session.
             if session.status == CallSession.Status.RINGING:
                 if session.initiator_id == request.user.id:
                     final = CallSession.Status.MISSED
@@ -466,7 +512,7 @@ class ConversationCallActiveAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
-        from ..models import CallSession
+        from ..models import CallSession, CallSessionParticipant
         from datetime import timedelta
 
         conv = get_object_or_404(Conversation, pk=pk)
@@ -514,9 +560,15 @@ class ConversationCallActiveAPIView(APIView):
         elapsed = int((_tz.now() - session.started_at).total_seconds())
         remaining = max(0, 30 - elapsed) if session.status == CallSession.Status.RINGING else None
         cfg = _jitsi_config(request, conv, room_name=session.room_name or None)
+        current_participant = CallSessionParticipant.objects.filter(
+            call=session,
+            user=request.user,
+            left_at__isnull=True,
+        ).exists()
         return ok(data={
             "active": True,
             "call_id": str(session.public_id),
+            "participant_active": current_participant,
             "status": session.status,
             "is_video": bool(session.is_video),
             "media": {"video": bool(session.is_video), "audio": True},
