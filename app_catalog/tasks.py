@@ -7,7 +7,7 @@ from django.db import transaction
 from django.utils import timezone
 from datetime import timedelta
 
-from deployments.celery.tasks import deploy_task
+from deployments.celery.tasks import deploy as deploy_task
 from deployments.common.exceptions import to_deployment_error
 from deploy.models import DeploymentStatusChoices
 from .models import ApplicationInstance, ApplicationInstanceService, ApplicationStatus
