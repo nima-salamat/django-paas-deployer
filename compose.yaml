@@ -227,14 +227,7 @@ services:
   # CELERY WORKER
   # ============================================================
   celery:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        DOCKERFILE_DOCKER_MIRROR: ${DOCKERFILE_DOCKER_MIRROR}
-        DOCKERFILE_PYTHON_VERSION: ${DOCKERFILE_PYTHON_VERSION}
-        DOCKERFILE_PYTHON_MIRROR: ${DOCKERFILE_PYTHON_MIRROR}
-        DOCKERFILE_LINUX_MIRROR: ${DOCKERFILE_LINUX_MIRROR}
+    image: ${BACKEND_IMAGE:-passdeployer-backend:local}
 
     container_name: deploy-celery
     restart: unless-stopped
@@ -301,14 +294,7 @@ services:
   # Scale horizontally with: docker compose up --scale deployment-worker=2
   # ============================================================
   deployment-worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        DOCKERFILE_DOCKER_MIRROR: ${DOCKERFILE_DOCKER_MIRROR}
-        DOCKERFILE_PYTHON_VERSION: ${DOCKERFILE_PYTHON_VERSION}
-        DOCKERFILE_PYTHON_MIRROR: ${DOCKERFILE_PYTHON_MIRROR}
-        DOCKERFILE_LINUX_MIRROR: ${DOCKERFILE_LINUX_MIRROR}
+    image: ${BACKEND_IMAGE:-passdeployer-backend:local}
 
     restart: unless-stopped
 
@@ -359,14 +345,7 @@ services:
   # CELERY BEAT
   # ============================================================
   celery-beat:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        DOCKERFILE_DOCKER_MIRROR: ${DOCKERFILE_DOCKER_MIRROR}
-        DOCKERFILE_PYTHON_VERSION: ${DOCKERFILE_PYTHON_VERSION}
-        DOCKERFILE_PYTHON_MIRROR: ${DOCKERFILE_PYTHON_MIRROR}
-        DOCKERFILE_LINUX_MIRROR: ${DOCKERFILE_LINUX_MIRROR}
+    image: ${BACKEND_IMAGE:-passdeployer-backend:local}
 
     container_name: deploy-celery-beat
     restart: unless-stopped
@@ -551,15 +530,9 @@ services:
   # the application under test.
   # ============================================================
   integration-test:
+    image: ${BACKEND_IMAGE:-passdeployer-backend:local}
+
     profiles: ["integration"]
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        DOCKERFILE_DOCKER_MIRROR: ${DOCKERFILE_DOCKER_MIRROR}
-        DOCKERFILE_PYTHON_VERSION: ${DOCKERFILE_PYTHON_VERSION}
-        DOCKERFILE_PYTHON_MIRROR: ${DOCKERFILE_PYTHON_MIRROR}
-        DOCKERFILE_LINUX_MIRROR: ${DOCKERFILE_LINUX_MIRROR}
     command: ["pytest", "-m", "deployment_integration", "-q", "app_catalog/tests/integration"]
     environment:
       RUN_DEPLOYMENT_INTEGRATION: "1"
