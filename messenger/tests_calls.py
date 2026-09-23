@@ -133,3 +133,29 @@ class CallLifecycleTests(APITestCase):
         self.assertEqual(active.status_code, 200)
         self.assertTrue(active.data["data"]["active"])
         self.assertEqual(active.data["data"]["participant_state"], "left")
+
+
+    def test_declined_group_call_is_not_replayed_to_same_member(self):
+        from .consumers import _pending_ringing_for_user
+
+        self.client.force_authenticate(self.caller)
+        started = self.client.post(
+            self._url(),
+            {"video": False, "audio": True},
+            format="json",
+        )
+        self.assertEqual(started.status_code, 200)
+        call_id = started.data["data"]["call_id"]
+
+        self.client.force_authenticate(self.peer)
+        declined = self.client.post(
+            self._url("call/end/"),
+            {"call_id": call_id, "reason": "declined"},
+            format="json",
+        )
+        self.assertEqual(declined.status_code, 200)
+
+        self.assertEqual(_pending_ringing_for_user(self.peer.id), [])
+        replay_for_other = _pending_ringing_for_user(self.other.id)
+        self.assertEqual(len(replay_for_other), 1)
+        self.assertEqual(replay_for_other[0]["call_id"], str(call_id))
