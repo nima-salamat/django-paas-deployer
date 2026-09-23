@@ -34,6 +34,23 @@ from ..utils import validate_messenger_file, detect_kind, users_blocked, can_see
 from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger
 
 User = get_user_model()
+
+
+def _as_bool(value, default=False):
+    """Parse API boolean inputs without treating the string "false" as true."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off", ""}:
+        return False
+    return default
+
 def _call_body(payload: dict) -> str:
     """Machine-readable system message body for call events."""
     return "__call__:" + _json.dumps(payload, separators=(",", ":"))
@@ -96,7 +113,7 @@ def _jitsi_config(request, conv: Conversation, room_name: str | None = None):
 
 
 def _finish_call(session, status: str, ended_by_user=None, display_status: str | None = None):
-    """Mark session finished, post system message, broadcast."""
+    """Atomically finish a call and publish side effects only after commit."""
     from ..models import CallSession, Message
     from ..consumers import broadcast_message, broadcast_call_event
 
@@ -140,32 +157,37 @@ def _finish_call(session, status: str, ended_by_user=None, display_status: str |
     )
     session.end_message = msg
     session.save(update_fields=["end_message"])
-    # Keep Redis/message cache in sync so hang-up / missed / declined
-    # system messages appear immediately on next fetch.
-    try:
-        from ..message_cache import schedule_add_message
-        schedule_add_message(msg)
-    except Exception:
-        logger.exception("schedule_add_message for call end failed")
-    try:
-        broadcast_message(msg)
-    except Exception:
-        logger.exception("broadcast call end message failed")
-    try:
-        broadcast_call_event(session.conversation_id, {
-            "type": "call.ended",
-            "conversation_id": session.conversation_id,
-            "call_id": str(session.public_id),
-            "status": shown,
-            "duration": session.duration_seconds,
-            "is_video": bool(session.is_video),
-            "user_id": getattr(ended_by_user, "id", None),
-            "username": getattr(ended_by_user, "username", "") or "",
-        })
-    except Exception:
-        logger.exception("broadcast call.ended failed")
-    return session
 
+    event_data = {
+        "type": "call.ended",
+        "conversation_id": session.conversation_id,
+        "call_id": str(session.public_id),
+        "status": shown,
+        "duration": session.duration_seconds,
+        "is_video": bool(session.is_video),
+        "user_id": getattr(ended_by_user, "id", None),
+        "username": getattr(ended_by_user, "username", "") or "",
+    }
+
+    def publish():
+        try:
+            from ..message_cache import schedule_add_message
+            schedule_add_message(msg)
+        except Exception:
+            logger.exception("schedule_add_message for call end failed")
+        try:
+            broadcast_message(msg)
+        except Exception:
+            logger.exception("broadcast call end message failed")
+        try:
+            broadcast_call_event(session.conversation_id, event_data)
+        except Exception:
+            logger.exception("broadcast call.ended failed")
+
+    # Publish only after the DB transaction commits so peers never react to
+    # a call state that is later rolled back.
+    transaction.on_commit(publish)
+    return session
 
 class ConversationCallStartAPIView(APIView):
     """Start a call — creates DB session, system message, rings peers 30s.
@@ -187,8 +209,8 @@ class ConversationCallStartAPIView(APIView):
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
 
-        video = bool(request.data.get("video", True))
-        audio = bool(request.data.get("audio", True))
+        video = _as_bool(request.data.get("video"), True)
+        audio = _as_bool(request.data.get("audio"), True)
 
         # Serialize call creation per conversation. A stale ringing session is
         # terminal after the ring window, while an active call remains active
@@ -255,6 +277,8 @@ class ConversationCallStartAPIView(APIView):
         cfg["call_id"] = str(session.public_id)
         cfg["call_status"] = session.status
         cfg["ring_timeout"] = 30
+        cfg["ring_remaining"] = 30
+        cfg["started_at"] = session.started_at.isoformat() if session.started_at else None
         cfg["initiator"] = {
             "id": request.user.id,
             "username": initiator_name,
@@ -338,6 +362,8 @@ class ConversationCallJoinAPIView(APIView):
         cfg = _jitsi_config(request, conv, room_name=session.room_name or None)
         cfg["call_id"] = str(session.public_id)
         cfg["call_status"] = session.status
+        cfg["started_at"] = session.started_at.isoformat() if session.started_at else None
+        cfg["ring_remaining"] = max(0, 30 - int((_tz.now() - session.started_at).total_seconds())) if session.status == CallSession.Status.RINGING and session.started_at else None
         cfg["media"] = {"video": bool(session.is_video), "audio": True}
         cfg["config"]["startWithVideoMuted"] = not bool(session.is_video)
         return ok(data=cfg)
@@ -386,13 +412,16 @@ class ConversationCallEndAPIView(APIView):
                 # caller may have already finalized the session on another device.
                 try:
                     from ..consumers import broadcast_call_event
-                    broadcast_call_event(conv.id, {
+                    payload = {
                         "type": "call.ended",
                         "conversation_id": conv.id,
                         "user_id": request.user.id,
                         "username": getattr(request.user, "username", "") or "",
                         "status": reason,
-                    })
+                    }
+                    if call_id:
+                        payload["call_id"] = str(call_id)
+                    transaction.on_commit(lambda payload=payload: broadcast_call_event(conv.id, payload))
                 except Exception:
                     logger.exception("broadcast idempotent call.ended failed")
                 return ok("Call already ended", data={"active": False})
