@@ -27,10 +27,10 @@ CALL_RING_SECONDS = 30
 
 
 def _pending_ringing_for_user(user_id: int):
-    """Return still-live incoming call events for a user's active conversations."""
+    """Return live ringing calls the user has not already joined or declined."""
     from datetime import timedelta
     from django.utils import timezone
-    from .models import CallSession, ConversationParticipant
+    from .models import CallSession, CallSessionParticipant
 
     if not user_id:
         return []
@@ -44,7 +44,8 @@ def _pending_ringing_for_user(user_id: int):
             started_at__gte=cutoff,
         )
         .exclude(initiator_id=user_id)
-        .select_related("initiator")
+        .exclude(participants__user_id=user_id)
+        .select_related("initiator", "conversation")
         .order_by("started_at")
         .distinct()
     )
@@ -65,13 +66,13 @@ def _pending_ringing_for_user(user_id: int):
             "ring_timeout": remaining,
             "ring_remaining": remaining,
             "started_at": session.started_at.isoformat() if session.started_at else None,
+            "is_group": session.conversation.type == "group",
             "initiator": {
                 "id": session.initiator_id,
                 "username": (getattr(initiator, "username", "") or f"User-{session.initiator_id}") if initiator else f"User-{session.initiator_id}",
             },
         })
     return events
-
 # Presence: connection-counted + short TTL (refreshed by ping without rebroadcast)
 ONLINE_KEY = "messenger:online:{uid}"
 ONLINE_CONNS_KEY = "messenger:online_conns:{uid}"
