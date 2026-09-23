@@ -14,14 +14,21 @@ def finalize_unanswered_call(call_public_id: str):
     try:
         from .models import CallSession
         from .api.calls import _finish_call
-        session = CallSession.objects.select_related("initiator").filter(
-            public_id=call_public_id
-        ).first()
-        if not session:
-            return
-        if session.status != CallSession.Status.RINGING:
-            return
-        _finish_call(session, CallSession.Status.NO_ANSWER, ended_by_user=session.initiator)
+        from django.db import transaction
+
+        with transaction.atomic():
+            session = (
+                CallSession.objects
+                .select_for_update()
+                .select_related("initiator")
+                .filter(public_id=call_public_id)
+                .first()
+            )
+            if not session:
+                return
+            if session.status != CallSession.Status.RINGING:
+                return
+            _finish_call(session, CallSession.Status.NO_ANSWER, ended_by_user=session.initiator)
     except Exception:
         logger.exception("finalize_unanswered_call failed for %s", call_public_id)
 
