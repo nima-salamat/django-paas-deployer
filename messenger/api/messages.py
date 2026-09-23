@@ -438,6 +438,13 @@ class MessageForwardAPIView(APIView):
         ).first()
         if not part or not part.can_send_messages:
             return err("Cannot send to target", status.HTTP_403_FORBIDDEN)
+
+        if src.attachments.filter(is_view_once=True).exists():
+            return err(
+                "View-once media cannot be forwarded",
+                status.HTTP_400_BAD_REQUEST,
+            )
+
         new_msg = Message.objects.create(
             conversation=target,
             sender=request.user,
@@ -458,6 +465,8 @@ class MessageForwardAPIView(APIView):
                 width=att.width,
                 height=att.height,
                 duration=att.duration,
+                is_spoiler=att.is_spoiler,
+                is_view_once=False,
             )
         try:
             from ..message_cache import schedule_add_message
