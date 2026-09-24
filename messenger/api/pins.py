@@ -52,7 +52,7 @@ class ConversationPinAPIView(APIView):
         # successful toggle is hidden behind stale Redis data until TTL expiry.
         try:
             from ..message_cache import ConversationCacheService
-            ConversationCacheService.invalidate_conv_lists_for_conversation(pk)
+            ConversationCacheService.invalidate_user_conv_list(request.user.id)
         except Exception:
             logger.exception(
                 "conversation pin cache invalidation failed conv=%s user=%s",
