@@ -109,26 +109,52 @@ class Deploy(BaseModel):
         skip = bool(kwargs.pop("skip_zip_size_limit", False) or getattr(self, "skip_zip_size_limit", False))
         if skip:
             self.skip_zip_size_limit = True
-        # full_clean is intentional so FileField size / other model rules run
-        # even when callers bypass the serializer. Callers that already
-        # validated (e.g. DRF) still get a clear ValidationError instead of
-        # an opaque 500 when something slips through.
-        self.full_clean()
 
+        # Only inspect zip_file when this save will persist that field. This
+        # keeps partial update_fields saves from deleting an unrelated archive.
+        update_fields = kwargs.get("update_fields")
+        zip_field_will_save = update_fields is None or "zip_file" in update_fields
+
+        old_zip_name = None
+        old_zip_storage = None
         file_changed = False
-        if self.pk:
+        if self.pk and zip_field_will_save:
             try:
                 old = Deploy.objects.only("zip_file").get(pk=self.pk)
-                if old.zip_file != self.zip_file:
-                    file_changed = True
+                old_name = getattr(old.zip_file, "name", "") if old.zip_file else ""
+                new_name = getattr(self.zip_file, "name", "") if self.zip_file else ""
+                file_changed = old_name != new_name
+                if file_changed and old_name:
+                    old_zip_name = old_name
+                    old_zip_storage = old.zip_file.storage
             except Deploy.DoesNotExist:
                 file_changed = bool(self.zip_file)
-        else:
+        elif not self.pk and zip_field_will_save:
             file_changed = bool(self.zip_file)
 
         if file_changed:
             self.updated_file_at = timezone.now()
+            if update_fields is not None:
+                update_fields = set(update_fields)
+                update_fields.update({"zip_file", "updated_file_at"})
+                kwargs["update_fields"] = update_fields
+
+        self.full_clean()
         super().save(*args, **kwargs)
+
+        # Django FileField does not remove the previous storage object when a
+        # new archive replaces it. Delete it only after the new save succeeds.
+        if old_zip_name and old_zip_storage:
+            try:
+                if old_zip_storage.exists(old_zip_name):
+                    old_zip_storage.delete(old_zip_name)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception(
+                    "Failed to remove replaced ZIP for Deploy %s: %s",
+                    self.pk,
+                    old_zip_name,
+                )
     
     def __str__(self):
         return f"{self.name} (v{self.version})"
