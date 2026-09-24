@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import tempfile
-from pathlib import Path
-
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from rest_framework.test import APIRequestFactory, force_authenticate
+from unittest.mock import patch
 
 from deploy.apis import DeployViewSet
 from deploy.models import Deploy
@@ -60,7 +59,11 @@ class DeploymentFileUploadRegressionTests(TestCase):
             format="multipart",
         )
         force_authenticate(request, user=self.user)
-        response = DeployViewSet.as_view({"post": "create"})(request)
+        with patch(
+            "deploy.daily_limits.assert_daily_deploy_allowed",
+            return_value=(True, "", 0, 100),
+        ):
+            response = DeployViewSet.as_view({"post": "create"})(request)
 
         self.assertEqual(response.status_code, 201)
         deploy = Deploy.objects.get(name="file-create")
