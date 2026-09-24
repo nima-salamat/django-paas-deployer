@@ -27,6 +27,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.viewsets import ModelViewSet
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.decorators import action
 
 from core.global_settings.config import SERVICE_STATUS_CHOICES
@@ -193,6 +194,8 @@ def _require_deploy_service_action(deploy, user, action: str):
     return None
 
 class DeployViewSet(ModelViewSet):
+    # Explicit parser contract for deployment JSON + ZIP uploads.
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "deploy.action"
     throttle_rate = "20/min"
@@ -311,15 +314,10 @@ class DeployViewSet(ModelViewSet):
                 status=status.HTTP_429_TOO_MANY_REQUESTS,
             )
 
-        # Prefer the raw request payload for nested config.  Using
-        # dict(request.data.items()) is fine for flat form fields but can
-        # surprise callers when config arrives as a nested JSON object.
-        data = {}
-        try:
-            for k, v in request.data.items():
-                data[str(k)] = v
-        except Exception:
-            data = dict(request.data) if isinstance(request.data, dict) else {}
+        # Preserve UploadedFile objects from multipart requests. A
+        # QueryDict.copy() retains the file object; dict(request.data) can turn
+        # a file field into a one-item list and break FileField persistence.
+        data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
 
         service_id = data.get("service") or request.data.get("service")
         # Read config from the original request first (preserves nested dicts).
@@ -974,13 +972,13 @@ class DeployViewSet(ModelViewSet):
         # Defense in depth: if this is a DB platform and the request
         # includes a ``config`` dict, merge it with the existing config
         # and drop any empty password sentinels before saving.
-        data = request.data
-        if hasattr(data, "_mutable"):
-            try:
-                data._mutable = True
-            except Exception:
-                pass
-        data = dict(data) if hasattr(data, "items") else dict(data)
+        # Preserve multipart UploadedFile objects. Never normalize a
+        # QueryDict with dict(data), because zip_file then becomes a list.
+        data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+
+        # A deployment belongs to its original service. Ignore service in
+        # generic update requests so an edit cannot move it across services.
+        data.pop("service", None)
 
         platform = _resolve_platform(deploy)
         if platform in DB_PLATFORMS and isinstance(data.get("config"), dict):
