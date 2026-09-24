@@ -431,6 +431,19 @@ class MessengerConsumer(AsyncJsonWebsocketConsumer):
             conversation_id=conversation_id, user_id=self.user.id, left_at__isnull=True
         ).update(draft_text=text, draft_updated_at=timezone.now())
 
+        # Conversation list responses are cached per user and include draft_text.
+        # Without invalidation, a reload can read the stale pre-clear draft even
+        # though the database row was already updated.
+        try:
+            from .message_cache import ConversationCacheService
+            ConversationCacheService.invalidate_user_conv_list(self.user.id)
+        except Exception:
+            logger.exception(
+                "failed to invalidate conversation list cache after draft update user=%s conversation=%s",
+                self.user.id,
+                conversation_id,
+            )
+
     async def messenger_event(self, event):
         data = event.get("data") or {}
         # Don't echo typing events back to the sender
