@@ -5,7 +5,7 @@ urlpatterns = [
     path(
         "<uuid:pk>/download/",
         DeploymentDownloadAPIView.as_view(),
-        name="deploy-download",
+        name="legacy-deployment-download",
     ),
     # Protected media — JWT-authenticated file serving.
     # Accepts Authorization header or ?token= query (so <img src="..."> works).
