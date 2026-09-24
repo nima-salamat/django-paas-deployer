@@ -46,6 +46,20 @@ class ConversationPinAPIView(APIView):
         part.is_pinned = not part.is_pinned
         part.pinned_at = timezone.now() if part.is_pinned else None
         part.save(update_fields=["is_pinned", "pinned_at"])
+
+        # Conversation lists are cached per user and include pin state/order.
+        # Invalidate them before the client reloads the list; otherwise the
+        # successful toggle is hidden behind stale Redis data until TTL expiry.
+        try:
+            from ..message_cache import ConversationCacheService
+            ConversationCacheService.invalidate_conv_lists_for_conversation(pk)
+        except Exception:
+            logger.exception(
+                "conversation pin cache invalidation failed conv=%s user=%s",
+                pk,
+                request.user.id,
+            )
+
         return ok(
             "Pinned" if part.is_pinned else "Unpinned",
             data={"is_pinned": part.is_pinned},
