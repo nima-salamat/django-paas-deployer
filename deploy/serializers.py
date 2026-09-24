@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.urls import reverse
 from django.core.exceptions import ValidationError
 from django.db import OperationalError, InterfaceError, ProgrammingError
 import logging
@@ -101,8 +102,24 @@ class DeployLogSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class DeploymentZipField(serializers.FileField):
+    """Write ZIP uploads normally, but return the authenticated download URL on read."""
+
+    def to_representation(self, value):
+        if not value:
+            return None
+        serializer = getattr(self, "parent", None)
+        deploy = getattr(serializer, "instance", None)
+        deploy_id = getattr(deploy, "pk", None)
+        if deploy_id:
+            path = reverse("deploy-download", args=[deploy_id])
+            request = self.context.get("request")
+            return request.build_absolute_uri(path) if request is not None else path
+        return super().to_representation(value)
+
+
 class DeploySerializer(serializers.ModelSerializer):
-    # Use the writable field – no more SerializerMethodField
+    zip_file = DeploymentZipField(required=False, allow_null=True)
     config = MaskedDBConfigField()
 
     recent_logs = serializers.SerializerMethodField()
@@ -238,6 +255,8 @@ class DeploySerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         request = self.context.get("request")
+        validated_data.pop("service", None)
+
         for attr, value in validated_data.items():
             if attr == "config":
                 value = sanitize_tenant_config(value)
