@@ -63,7 +63,6 @@ class BoundedBuffer:
     def push(self, service_id, stream_id, lines: list) -> None:
         with self._lock:
             for line in lines:
-                size = sum(len(str(line.get("message") or "").encode()) for _ in [0])
                 size = len(str(line.get("message") or "").encode("utf-8", "replace"))
                 while self._bytes + size > self.max_bytes and self._items:
                     old = self._items.pop(0)
@@ -134,6 +133,8 @@ class Command(BaseCommand):
         self._stop = threading.Event()
         self._following: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
+        self._rate_windows: dict[str, RateWindow] = {}
+        self._rate_lock = threading.Lock()
         self._buffer = BoundedBuffer()
         self._executor = ThreadPoolExecutor(max_workers=MAX_FOLLOW_WORKERS, thread_name_prefix="log-follow")
         backoff = 1.0
@@ -158,6 +159,23 @@ class Command(BaseCommand):
             for ev in list(self._following.values()):
                 ev.set()
             self._executor.shutdown(wait=False, cancel_futures=True)
+
+    def _rate_for_service(self, service, max_bps: int) -> RateWindow:
+        """Return one rate window shared by all streams of a service in this collector."""
+        key = str(service.pk)
+        with getattr(self, "_rate_lock", threading.Lock()):
+            windows = getattr(self, "_rate_windows", None)
+            if windows is None:
+                windows = {}
+                self._rate_windows = windows
+                self._rate_lock = getattr(self, "_rate_lock", threading.Lock())
+            rate = windows.get(key)
+            if rate is None:
+                rate = RateWindow(max_bps)
+                windows[key] = rate
+            else:
+                rate.max_bps = max(1024, int(max_bps))
+            return rate
 
     def _heartbeat(self, instance: str, status: str, error: str):
         try:
@@ -334,7 +352,7 @@ class Command(BaseCommand):
         from logs.ingestion import ingest_lines, heartbeat_lease, close_stream
         from logs.usage import bump_drop
 
-        rate = RateWindow(policy.max_bytes_per_second)
+        rate = self._rate_for_service(service, policy.max_bytes_per_second)
         try:
             self._catch_up(docker_service, stream, service, policy, instance, rate)
             log_stream = docker_service.logs(
@@ -524,7 +542,7 @@ class Command(BaseCommand):
         from logs.usage import bump_drop
         from logs.models import ServiceLogStream
 
-        rate = RateWindow(policy.max_bytes_per_second)
+        rate = self._rate_for_service(service, policy.max_bytes_per_second)
         cid = container.id
         try:
             # ---- Catch-up ----
