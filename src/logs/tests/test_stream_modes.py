@@ -1,6 +1,7 @@
 """Regression coverage for runtime stream modes and recovery semantics."""
 from __future__ import annotations
 
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -16,7 +17,7 @@ class StreamModeTests(SimpleTestCase):
             retention_days=7,
             storage_quota_bytes=1024 * 1024,
             max_bytes_per_second=100_000,
-            max_entry_size=16_384,
+            max_entry_size=64,
             persistent_enabled=persistent,
             realtime_enabled=realtime,
             quota_behavior=behavior,
@@ -27,14 +28,11 @@ class StreamModeTests(SimpleTestCase):
         self.assertEqual(self.policy(realtime=False).mode, "persistent_only")
         self.assertEqual(self.policy(persistent=False).mode, "realtime_only")
         self.assertEqual(self.policy(persistent=False, realtime=False).mode, "disabled")
-        self.assertEqual(
-            self.policy(behavior="realtime_only").mode,
-            "realtime_only",
-        )
+        self.assertEqual(self.policy(behavior="realtime_only").mode, "realtime_only")
 
     @patch("logs.realtime.publish_log_events")
     @patch("logs.ingestion.ingest_lines")
-    def test_realtime_only_publishes_ephemeral(self, mock_ingest, mock_publish):
+    def test_realtime_only_publishes_sanitized_ephemeral(self, mock_ingest, mock_publish):
         from deployments.management.commands.run_log_collector import Command
 
         mock_ingest.return_value = {
@@ -45,20 +43,31 @@ class StreamModeTests(SimpleTestCase):
             "persisted": False,
             "realtime_only": True,
             "inserted_entries": [],
+            "realtime_lines": [{
+                "ts": timezone.now(),
+                "stream": "stderr",
+                "message": "[REDACTED]",
+                "byte_size": 10,
+                "truncated": False,
+                "level": "",
+            }],
         }
         cmd = Command()
         cmd._buffer = MagicMock()
         service = SimpleNamespace(pk="service-1")
-        stream = SimpleNamespace(pk=10)
-        lines = [{"ts": timezone.now(), "stream": "stderr", "message": "live"}]
+        stream = SimpleNamespace(pk=10, owner_id="collector-1", lease_until=timezone.now() + timedelta(seconds=30))
 
-        cmd._persist_batch("collector-1", service, stream, self.policy(persistent=False), lines)
+        cmd._persist_batch(
+            "collector-1", service, stream, self.policy(persistent=False),
+            [{"ts": timezone.now(), "stream": "stderr", "message": "secret"}],
+        )
 
         mock_publish.assert_called_once()
         event = mock_publish.call_args.args[1][0]
         self.assertFalse(event["persisted"])
         self.assertTrue(event["ephemeral"])
         self.assertEqual(event["stream"], "stderr")
+        self.assertEqual(event["message"], "[REDACTED]")
         self.assertIsNone(event["cursor"])
 
     @patch("logs.realtime.publish_log_events")
@@ -71,24 +80,24 @@ class StreamModeTests(SimpleTestCase):
             "duplicates": 0,
             "dropped": 2,
             "bytes": 0,
-            "persisted": True,
+            "persisted": False,
             "inserted_entries": [],
+            "realtime_lines": [
+                {"ts": timezone.now(), "stream": "stdout", "message": "a", "byte_size": 1, "truncated": False, "level": ""},
+                {"ts": timezone.now(), "stream": "stderr", "message": "b", "byte_size": 1, "truncated": False, "level": ""},
+            ],
         }
         cmd = Command()
         cmd._buffer = MagicMock()
         service = SimpleNamespace(pk="service-1")
-        stream = SimpleNamespace(pk=10)
-        lines = [
-            {"ts": timezone.now(), "stream": "stdout", "message": "a"},
-            {"ts": timezone.now(), "stream": "stderr", "message": "b"},
-        ]
+        stream = SimpleNamespace(pk=10, owner_id="collector-1", lease_until=timezone.now() + timedelta(seconds=30))
 
         cmd._persist_batch(
-            "collector-1",
-            service,
-            stream,
-            self.policy(behavior="drop_new"),
-            lines,
+            "collector-1", service, stream, self.policy(behavior="drop_new"),
+            [
+                {"ts": timezone.now(), "stream": "stdout", "message": "a"},
+                {"ts": timezone.now(), "stream": "stderr", "message": "b"},
+            ],
         )
 
         mock_publish.assert_called_once()
@@ -119,6 +128,7 @@ class StreamModeTests(SimpleTestCase):
                 "byte_size": 14,
                 "truncated": False,
             }],
+            "realtime_lines": [],
         }
         cmd = Command()
         cmd._buffer = MagicMock()
@@ -130,19 +140,34 @@ class StreamModeTests(SimpleTestCase):
         ]
 
         with patch("logs.query.encode_cursor", return_value="cursor"):
-            cmd._persist_batch(
-                "collector-1",
-                service,
-                stream,
-                self.policy(),
-                lines,
-            )
+            cmd._persist_batch("collector-1", service, stream, self.policy(), lines)
 
+        mock_publish.assert_called_once()
         event = mock_publish.call_args.args[1][0]
         self.assertEqual(event["id"], 55)
         self.assertEqual(event["seq"], 7)
         self.assertEqual(event["stream"], "stderr")
         self.assertTrue(event["persisted"])
+
+    @patch("logs.ingestion._redact", return_value="[REDACTED]")
+    def test_non_persistent_ingestion_sanitizes_before_realtime(self, redact):
+        from logs.ingestion import ingest_lines
+
+        stream = SimpleNamespace(
+            service_id="service-1",
+            owner_id="collector-1",
+            lease_until=timezone.now() + timedelta(seconds=30),
+        )
+        result = ingest_lines(
+            stream,
+            [{"ts": timezone.now(), "stream": "stderr", "message": "password=secret"}],
+            policy=self.policy(persistent=False, realtime=True),
+            owner_id="collector-1",
+        )
+
+        self.assertFalse(result["persisted"])
+        self.assertEqual(result["realtime_lines"][0]["message"], "[REDACTED]")
+        redact.assert_called_once_with("password=secret")
 
     def test_cursor_with_entry_id_roundtrip(self):
         from logs.query import _decode_cursor_parts, decode_cursor, encode_cursor
@@ -172,9 +197,7 @@ class StreamModeTests(SimpleTestCase):
         container = SimpleNamespace(name="app-test", logs=MagicMock(return_value=raw))
         stream = SimpleNamespace(last_persisted_ts=None)
         service = SimpleNamespace(pk="service-1")
-
-        from logs.policy import EffectiveLoggingPolicy
-        policy = EffectiveLoggingPolicy(7, 1024 * 1024, 100_000, 16_384, True, False, "fifo_delete")
+        policy = EffectiveLoggingPolicy(7, 1024 * 1024, 100_000, 64, True, False, "fifo_delete")
         cmd._catch_up(container, stream, service, policy, "collector-1", RateWindow(100_000))
         lines = cmd._persist_batch.call_args.args[4]
         self.assertEqual([item["stream"] for item in lines], ["stdout", "stderr"])
