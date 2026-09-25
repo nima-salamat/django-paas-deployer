@@ -18,4 +18,14 @@ def test_control_plane_migration_has_one_runtime_owner():
         1,
     )[0]
     assert 'entrypoint: ["/bin/sh", "/app/entrypoint.sh"]' in web_block
+    assert "CODENAME:" not in web_block
     assert "command:\n      - daphne" in web_block
+
+
+def test_dockerfile_uses_base_image_codename_and_normalizes_linux_mirror():
+    dockerfile = (ROOT / "Dockerfile").read_text()
+
+    assert "ARG CODENAME=" not in dockerfile
+    assert 'codename="$${VERSION_CODENAME}"' in dockerfile
+    assert 'case "$mirror" in' in dockerfile
+    assert '*) mirror="http://$mirror" ;;' in dockerfile
