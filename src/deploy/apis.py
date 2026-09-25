@@ -49,6 +49,10 @@ from docker.errors import APIError, NotFound as DockerNotFound
 
 from .models import Deploy, DeployLog
 from deployments.common.config import sanitize_tenant_config
+from deployments.application.cancel import CancelDeploymentUseCase
+from deployments.infrastructure.django_cancellation import (
+    DjangoDeploymentCancellationGateway,
+)
 from .serializers import DeployLogSerializer, DeploySerializer
 from services.models import Service
 from core.utils import make_uuid4
@@ -558,54 +562,26 @@ class DeployViewSet(ModelViewSet):
         if denied is not None:
             return denied
 
-
-        from django.db import transaction
-        from deployments.common.state_machine import (
-            DEPLOY_CANCELLED, DEPLOY_PENDING, DEPLOY_RUNNING, DEPLOY_ROLLING_BACK,
-        )
-        from deployments.core.state.manager import StateManager
-
-        now = timezone.now()
-        old_status = deploy.status
-        task_id = getattr(deploy.service, "task_id", None)
-        with transaction.atomic():
-            locked = Deploy.objects.select_for_update().get(pk=deploy.pk)
-            if locked.status == DEPLOY_PENDING:
-                Deploy.objects.filter(pk=locked.pk).update(cancel_requested=True)
-                StateManager.transition_deploy(
-                    locked.pk, DEPLOY_CANCELLED,
-                    update_fields={
-                        "stage": "cancelled",
-                        "progress": 100,
-                        "status_message": "Deployment cancelled by user.",
-                        "error_message": "",
-                    },
-                )
-            elif locked.status in {DEPLOY_RUNNING, DEPLOY_ROLLING_BACK}:
-                # Do not claim terminal state while the worker is still doing
-                # real work. The worker will observe the token, terminate the
-                # active Docker operation where supported, clean resources, and
-                # commit the canonical terminal event.
-                Deploy.objects.filter(pk=locked.pk).update(
-                    cancel_requested=True,
-                    stage="cancel_requested",
-                    status_message="Cancellation requested; stopping deployment work.",
-                )
-            else:
-                Deploy.objects.filter(pk=locked.pk).update(cancel_requested=True)
+        result = CancelDeploymentUseCase(
+            DjangoDeploymentCancellationGateway()
+        ).execute(deploy.pk)
 
         # Do not SIGTERM the worker immediately. The deployment worker owns
         # Docker/build cleanup and needs a chance to observe the cancellation
         # token, close an active build stream, stop the replacement container,
         # restore the previous release, and commit the terminal event.
         # ``task_id`` is still returned for operator observability.
-        revoke_result = "deferred_to_worker" if task_id else "no_task"
+        revoke_result = (
+            "deferred_to_worker"
+            if result.execution_task_id
+            else "no_task"
+        )
 
         return Response(
             {
                 "result": "success",
                 "detail": _(f"Deployment {deploy.name} cancelled."),
-                "previous_status": old_status,
+                "previous_status": result.decision.previous_status,
                 "task_revoke": revoke_result,
             },
             status=status.HTTP_200_OK,
