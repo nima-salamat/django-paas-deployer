@@ -397,10 +397,22 @@ class StateManager:
         return bool(updated)
 
     @classmethod
-    def transition_deploy_terminal_if_owned(
-        cls, deploy_id: int, target: str, *, task_id: str | None = None, update_fields: Optional[dict] = None
+    def transition_deploy_if_owned(
+        cls,
+        deploy_id: int,
+        target: str,
+        *,
+        task_id: str | None = None,
+        update_fields: Optional[dict] = None,
+        terminal: bool = False,
     ) -> bool:
-        """Commit a terminal transition only while this worker still owns the deploy."""
+        """Transition a deployment only while ``task_id`` still owns it.
+
+        The ownership check, cancellation fence, transition validation, and
+        write happen under one row lock.  This is the state-manager primitive
+        used by the application-layer lifecycle adapter; callers must not
+        perform a separate read-then-write ownership check.
+        """
         from deploy.models import Deploy  # type: ignore
 
         with transaction.atomic():
@@ -409,26 +421,76 @@ class StateManager:
                 return False
             if task_id and deploy.execution_task_id != task_id:
                 return False
-            if sm.is_deploy_terminal(deploy.status):
+            if terminal and sm.is_deploy_terminal(deploy.status):
                 return False
-            # Cancellation wins the terminal race while the row is locked.
-            # A worker that computed SUCCESS/FAILED immediately before an API
-            # cancellation must not overwrite the user's cancellation.
+
+            effective_target = target
+            effective_updates = dict(update_fields or {})
             if target != sm.DEPLOY_CANCELLED and deploy.cancel_requested:
-                target = sm.DEPLOY_CANCELLED
-                update_fields = {
-                    **dict(update_fields or {}),
-                    "stage": "cancelled",
-                    "status_message": "Deployment cancelled by the user.",
-                }
-            sm.check_deploy_transition(deploy.status, target)
-            updates = dict(update_fields or {})
-            updates["status"] = target
-            updates.setdefault("completed_at", timezone.now())
-            updates["worker_heartbeat_at"] = timezone.now()
-            updates["execution_task_id"] = ""
+                effective_target = sm.DEPLOY_CANCELLED
+                effective_updates.update(
+                    {
+                        "stage": "cancelled",
+                        "status_message": "Deployment cancelled by the user.",
+                    }
+                )
+
+            try:
+                sm.check_deploy_transition(deploy.status, effective_target)
+            except sm.InvalidTransition as exc:
+                raise InvalidServiceStateError(
+                    str(exc),
+                    details={
+                        "entity": "Deploy",
+                        "deploy_id": deploy_id,
+                        "src": deploy.status,
+                        "target": effective_target,
+                        "allowed": list(exc.allowed),
+                    },
+                ) from exc
+
+            updates = {"status": effective_target, **effective_updates}
+            now = timezone.now()
+            if effective_target == sm.DEPLOY_RUNNING:
+                updates.setdefault("started_at", now)
+            elif terminal or effective_target in (
+                sm.DEPLOY_SUCCEEDED,
+                sm.DEPLOY_FAILED,
+                sm.DEPLOY_CANCELLED,
+                sm.DEPLOY_ROLLED_BACK,
+            ):
+                updates.setdefault("completed_at", now)
+                updates["worker_heartbeat_at"] = now
+                updates["execution_task_id"] = ""
+
             Deploy.objects.filter(pk=deploy_id).update(**updates)
+            logger.info(
+                "StateManager: owned deploy %s %s -> %s",
+                deploy_id,
+                deploy.status,
+                effective_target,
+                extra={
+                    "entity": "Deploy",
+                    "deploy_id": deploy_id,
+                    "src": deploy.status,
+                    "dst": effective_target,
+                    "task_id": task_id,
+                },
+            )
             return True
+
+    @classmethod
+    def transition_deploy_terminal_if_owned(
+        cls, deploy_id: int, target: str, *, task_id: str | None = None, update_fields: Optional[dict] = None
+    ) -> bool:
+        """Commit a terminal transition only while this worker still owns the deploy."""
+        return cls.transition_deploy_if_owned(
+            deploy_id,
+            target,
+            task_id=task_id,
+            update_fields=update_fields,
+            terminal=True,
+        )
 
 
 __all__ = ["StateManager"]
