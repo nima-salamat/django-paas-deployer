@@ -322,7 +322,8 @@ class DeployViewSet(ModelViewSet):
             )
 
         # Build a shallow mutable mapping. QueryDict.copy() deep-copies
-        # UploadedFile internals and can fail on BufferedRandom-backed files.\n        data = _shallow_request_data(request.data)
+        # UploadedFile internals and can fail on BufferedRandom-backed files.
+        data = _shallow_request_data(request.data)
 
         service_id = data.get("service") or request.data.get("service")
         # Read config from the original request first (preserves nested dicts).
@@ -978,7 +979,8 @@ class DeployViewSet(ModelViewSet):
         # includes a ``config`` dict, merge it with the existing config
         # and drop any empty password sentinels before saving.
         # Build a shallow mutable mapping so multipart UploadedFile objects
-        # remain intact and are never deep-copied.\n        data = _shallow_request_data(request.data)
+        # remain intact and are never deep-copied.
+        data = _shallow_request_data(request.data)
 
         # A deployment belongs to its original service. Ignore service in
         # generic update requests so an edit cannot move it across services.
