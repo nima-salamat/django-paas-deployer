@@ -21,6 +21,26 @@ TICKET_USER_TTL = 3600
 TICKET_ADMIN_TTL = 3600
 USER_ADMIN_TTL = 3600
 
+_CACHE_TTL_DEFAULTS = {
+    "service_user": SERVICE_USER_TTL,
+    "service_admin": SERVICE_ADMIN_TTL,
+    "plan": PLAN_TTL,
+    "ticket_user": TICKET_USER_TTL,
+    "ticket_admin": TICKET_ADMIN_TTL,
+    "user_admin": USER_ADMIN_TTL,
+}
+
+
+def get_cache_ttl(name: str) -> int:
+    """Read an operator-controlled cache TTL with a safe upper bound."""
+    default = int(_CACHE_TTL_DEFAULTS.get(name, 3600))
+    try:
+        from core.settings_service import get_int
+        value = get_int(f"cache.{name}_ttl", default)
+    except Exception:
+        value = default
+    return max(0, min(int(value), 7 * 24 * 3600))
+
 SERVICE_USER_LIMIT = 50
 SERVICE_ADMIN_LIMIT = 100
 TICKET_USER_LIMIT = 50
