@@ -169,6 +169,57 @@ DEFAULTS: list[dict] = [
         "category": "build", "label": "Build slot wait timeout (minutes)",
         "description": "Maximum time a deployment waits for a distributed build slot before failing.",
     },
+    # ----- cache policy -----
+    {
+        "key": "cache.service_user_ttl", "default": 3600, "value_type": "integer",
+        "category": "general", "label": "Service user cache TTL (seconds)",
+        "description": "TTL for cached service lists returned to users.",
+    },
+    {
+        "key": "cache.service_admin_ttl", "default": 3600, "value_type": "integer",
+        "category": "general", "label": "Service admin cache TTL (seconds)",
+        "description": "TTL for cached service lists used by admin APIs.",
+    },
+    {
+        "key": "cache.plan_ttl", "default": 86400, "value_type": "integer",
+        "category": "general", "label": "Plan cache TTL (seconds)",
+        "description": "TTL for cached plan API responses.",
+    },
+    {
+        "key": "cache.ticket_user_ttl", "default": 3600, "value_type": "integer",
+        "category": "general", "label": "Ticket user cache TTL (seconds)",
+        "description": "TTL for cached ticket lists returned to users.",
+    },
+    {
+        "key": "cache.ticket_admin_ttl", "default": 3600, "value_type": "integer",
+        "category": "general", "label": "Ticket admin cache TTL (seconds)",
+        "description": "TTL for cached ticket lists used by admin APIs.",
+    },
+    {
+        "key": "cache.user_admin_ttl", "default": 3600, "value_type": "integer",
+        "category": "general", "label": "User admin cache TTL (seconds)",
+        "description": "TTL for cached user administration lists.",
+    },
+    {
+        "key": "cache.message_size", "default": 1000, "value_type": "integer",
+        "category": "general", "label": "Messenger message cache size",
+        "description": "Maximum newest messages retained per conversation in the hot cache.",
+    },
+    {
+        "key": "cache.message_ttl", "default": 21600, "value_type": "integer",
+        "category": "general", "label": "Messenger message cache TTL (seconds)",
+        "description": "TTL for Messenger conversation message windows.",
+    },
+    {
+        "key": "cache.messenger_list_ttl", "default": 300, "value_type": "integer",
+        "category": "general", "label": "Messenger list cache TTL (seconds)",
+        "description": "TTL for cached Messenger conversation lists.",
+    },
+    {
+        "key": "cache.messenger_conv_ttl", "default": 120, "value_type": "integer",
+        "category": "general", "label": "Messenger conversation cache TTL (seconds)",
+        "description": "TTL for cached Messenger conversation metadata and participants.",
+    },
     # ----- deploy behaviour -----
     {
         "key": "deploy.max_time_minute",
