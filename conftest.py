@@ -97,7 +97,12 @@ def _install_core_stubs():
         cfg.StorageTypeChoices = _Storage
         cfg.NameChoices = _Names
         cfg.VOLUME_MODE_CHOICES = _VolumeModes
-        cfg.PaymentChoices = _PTC
+        class _Payments:
+            PAYED = "PAYED"
+            NOT_PAYED = "NOT_PAYED"
+            CANCELED = "CANCELED"
+            choices = ((PAYED, PAYED), (NOT_PAYED, NOT_PAYED), (CANCELED, CANCELED))
+        cfg.PaymentChoices = _Payments
         class _Config:
             php = ""
             laravel = ""
