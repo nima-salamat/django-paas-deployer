@@ -1,5 +1,4 @@
 from rest_framework import serializers
-from django.urls import reverse
 from django.core.exceptions import ValidationError
 from django.db import OperationalError, InterfaceError, ProgrammingError
 import logging
@@ -112,7 +111,7 @@ class DeploymentZipField(serializers.FileField):
         deploy = getattr(serializer, "instance", None)
         deploy_id = getattr(deploy, "pk", None)
         if deploy_id:
-            path = reverse("deploy-download", args=[deploy_id])
+            path = f"/deploy/{deploy_id}/download/"
             request = self.context.get("request")
             return request.build_absolute_uri(path) if request is not None else path
         return super().to_representation(value)
