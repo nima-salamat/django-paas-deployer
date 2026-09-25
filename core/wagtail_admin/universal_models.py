@@ -28,7 +28,6 @@ MODEL_LABELS = (
     "auth_users.InviteUsage",
     "auth_users.AuthCode",
     "auth_users.LoginLog",
-    "core.SystemSetting",
     "custom_emails.EmailTemplate",
     "custom_emails.EmailLog",
     "deploy.Deploy",
