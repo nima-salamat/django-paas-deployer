@@ -123,6 +123,48 @@ class DeploymentFileUploadRegressionTests(TestCase):
         with deploy.zip_file.open("rb") as fh:
             self.assertEqual(fh.read(), b"new-body")
 
+    def test_same_deploy_name_is_allowed_on_different_services(self):
+        service_two = Service.objects.create(
+            name="deploy-file-service-two",
+            user=self.user,
+            plan=self.plan,
+        )
+        Deploy.objects.create(
+            name="shared-deploy-name",
+            service=self.service,
+            version="1.0",
+            config={},
+        )
+        other = Deploy.objects.create(
+            name="shared-deploy-name",
+            service=service_two,
+            version="1.0",
+            config={},
+        )
+
+        self.assertEqual(other.service_id, service_two.pk)
+        self.assertEqual(
+            Deploy.objects.filter(name="shared-deploy-name").count(),
+            2,
+        )
+
+    def test_duplicate_deploy_name_on_same_service_is_rejected(self):
+        Deploy.objects.create(
+            name="same-service-name",
+            service=self.service,
+            version="1.0",
+            config={},
+        )
+        from django.core.exceptions import ValidationError
+
+        with self.assertRaises(ValidationError):
+            Deploy.objects.create(
+                name="same-service-name",
+                service=self.service,
+                version="1.0",
+                config={},
+            )
+
     def test_zip_file_representation_points_to_authenticated_download(self):
         deploy = Deploy.objects.create(
             name="file-url",
