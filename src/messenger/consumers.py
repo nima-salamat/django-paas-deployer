@@ -16,8 +16,6 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.layers import get_channel_layer
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
-from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
-from rest_framework_simplejwt.tokens import AccessToken
 from rest_framework.exceptions import AuthenticationFailed
 from auth_users.session_auth import resolve_session
 
@@ -253,26 +251,17 @@ async def authenticate_from_scope(scope):
     access_token = (params.get("token") or [None])[0]
     if not access_token:
         return None
+    from auth_users.authentication import resolve_user_from_access_token
+    user = await database_sync_to_async(resolve_user_from_access_token)(access_token)
+    if not user:
+        return None
     try:
+        from rest_framework_simplejwt.tokens import AccessToken
         validated = AccessToken(access_token)
-        user_id = validated["user_id"]
-    except (InvalidToken, TokenError, KeyError):
+        if validated.get("sid"):
+            scope["auth_session_id"] = str(validated["sid"])
+    except Exception:
         return None
-    try:
-        user = await database_sync_to_async(
-            User.objects.only("id", "is_active", "username").get
-        )(pk=user_id)
-    except User.DoesNotExist:
-        return None
-    if not user.is_active:
-        return None
-    session_id = validated.get("sid")
-    if session_id:
-        try:
-            await database_sync_to_async(resolve_session)(session_id, user_id=user.id)
-        except AuthenticationFailed:
-            return None
-        scope["auth_session_id"] = str(session_id)
     return user
 
 

@@ -8,11 +8,6 @@ from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.layers import get_channel_layer
-from django.contrib.auth import get_user_model
-from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
-from rest_framework_simplejwt.tokens import AccessToken
-
-User = get_user_model()
 logger = logging.getLogger("tickets.ws")
 
 
@@ -22,21 +17,8 @@ async def authenticate_from_scope(scope):
     access_token = (params.get("token") or [None])[0]
     if not access_token:
         return None
-    try:
-        validated = AccessToken(access_token)
-        user_id = validated["user_id"]
-    except (InvalidToken, TokenError, KeyError) as exc:
-        logger.info("tickets.ws bad token: %s", type(exc).__name__)
-        return None
-    try:
-        user = await database_sync_to_async(
-            User.objects.only("id", "is_active", "is_staff", "is_superuser", "username").get
-        )(pk=user_id)
-    except User.DoesNotExist:
-        return None
-    if not user.is_active:
-        return None
-    return user
+    from auth_users.authentication import resolve_user_from_access_token
+    return await database_sync_to_async(resolve_user_from_access_token)(access_token)
 
 
 class TicketEventsConsumer(AsyncJsonWebsocketConsumer):

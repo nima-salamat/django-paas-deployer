@@ -45,36 +45,22 @@ class AttachmentDownloadAPIView(APIView):
     permission_classes = []
 
     def _authenticate(self, request):
-        from rest_framework_simplejwt.tokens import AccessToken
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
+        from auth_users.authentication import resolve_user_from_access_token
 
         # 1) Authorization: Bearer <access>
         auth = request.META.get("HTTP_AUTHORIZATION", "") or ""
         if auth.startswith("Bearer "):
             tok = auth[7:].strip()
-            try:
-                access = AccessToken(tok)
-                user_id = access.get("user_id") or access.get("user")
-                if user_id:
-                    user = User.objects.filter(pk=user_id, is_active=True).first()
-                    if user:
-                        return user
-            except Exception:
-                pass
+            user = resolve_user_from_access_token(tok)
+            if user:
+                return user
 
         # 2) ?token=<access>  (img / audio / video tags)
         tok = request.GET.get("token") or request.query_params.get("token")
         if tok:
-            try:
-                access = AccessToken(tok)
-                user_id = access.get("user_id") or access.get("user")
-                if user_id:
-                    user = User.objects.filter(pk=user_id, is_active=True).first()
-                    if user:
-                        return user
-            except Exception:
-                pass
+            user = resolve_user_from_access_token(tok)
+            if user:
+                return user
 
         # 3) Session auth
         if getattr(request, "user", None) and getattr(request.user, "is_authenticated", False):

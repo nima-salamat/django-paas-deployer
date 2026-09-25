@@ -5,17 +5,11 @@ import urllib.parse
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.shortcuts import get_object_or_404
-from django.contrib.auth import get_user_model
 from django.utils import timezone
-from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
-from rest_framework_simplejwt.tokens import AccessToken
 
 from .models import Service
 from deployments.core.manager.client_manager import Client
 from docker.errors import NotFound as DockerNotFound
-
-
-User = get_user_model()
 
 
 class ServiceLogsConsumer(AsyncJsonWebsocketConsumer):
@@ -36,14 +30,11 @@ class ServiceLogsConsumer(AsyncJsonWebsocketConsumer):
             await self.close(code=4001)
             return
 
-        try:
-            validated = AccessToken(access_token)
-            user_id = validated["user_id"]
-        except (InvalidToken, TokenError, KeyError):
+        from auth_users.authentication import resolve_user_from_access_token
+        self.user = await database_sync_to_async(resolve_user_from_access_token)(access_token)
+        if self.user is None:
             await self.close(code=4002)
             return
-
-        self.user = await database_sync_to_async(User.objects.get)(pk=user_id)
         self.service_id = self.scope["url_route"]["kwargs"].get("service_id")
 
         allowed = await database_sync_to_async(self._authorize)(self.user, self.service_id)
@@ -157,13 +148,14 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
         if not access_token or not shell_token:
             await self.close(code=4001)
             return
+        from auth_users.authentication import resolve_user_from_access_token
         try:
-            validated = AccessToken(access_token)
-            user_id = validated["user_id"]
-            self.user = await database_sync_to_async(User.objects.get)(pk=user_id)
+            self.user = await database_sync_to_async(resolve_user_from_access_token)(access_token)
+            if self.user is None:
+                raise PermissionError("Invalid authentication session")
             self.service = await database_sync_to_async(self._get_service)(service_id)
             self.session = await database_sync_to_async(self._authenticate_shell)(shell_token)
-        except (InvalidToken, TokenError, KeyError, User.DoesNotExist, Service.DoesNotExist, PermissionError):
+        except (Service.DoesNotExist, PermissionError):
             await self.close(code=4003)
             return
         self.exec_socket = None

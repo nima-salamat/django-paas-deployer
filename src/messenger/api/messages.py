@@ -7,6 +7,7 @@ import mimetypes
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db.models import Q, Count, Prefetch
+from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -263,6 +264,22 @@ class MessageListCreateAPIView(APIView):
         if getattr(conv, "only_admins_send", False) and part.role not in ("owner", "admin"):
             return err("Only admins can send messages in this group", status.HTTP_403_FORBIDDEN)
 
+        client_message_id = str(request.data.get("client_message_id") or "").strip()[:128] or None
+        if client_message_id:
+            existing = (
+                Message.objects.filter(
+                    conversation=conv,
+                    sender=request.user,
+                    client_message_id=client_message_id,
+                )
+                .select_related("sender", "reply_to", "reply_to__sender")
+                .prefetch_related("attachments")
+                .first()
+            )
+            if existing is not None:
+                ctx = build_message_list_context(request, [existing], conversation_id=conv.id)
+                return ok("Already sent", data=MessageSerializer(existing, context=ctx).data)
+
         raw_body = request.data.get("body")
         if isinstance(raw_body, (list, tuple)):
             raw_body = raw_body[0] if raw_body else ""
@@ -342,59 +359,76 @@ class MessageListCreateAPIView(APIView):
 
         created_msgs = []
         is_sched = bool(scheduled_for)
-        for idx, chunk in enumerate(chunks):
-            msg = Message.objects.create(
-                conversation=conv,
-                sender=request.user,
-                body=chunk,
-                reply_to=reply_to if idx == 0 else None,
-                scheduled_for=scheduled_for if is_sched else None,
-                is_scheduled=is_sched,
-            )
-            # Attach files only to the first chunk
-            if idx == 0:
-                # Media flags (apply to all files in this message)
-                def _flag(name):
-                    v = request.data.get(name)
-                    if isinstance(v, (list, tuple)):
-                        v = v[0] if v else False
-                    if isinstance(v, str):
-                        return v.strip().lower() in ("1", "true", "yes", "on")
-                    return bool(v)
+        try:
+            with transaction.atomic():
+                def _publish_cache(message):
+                    try:
+                        from ..message_cache import schedule_add_message
+                        schedule_add_message(message)
+                    except Exception:
+                        logger.exception("message cache schedule add failed")
 
-                is_spoiler = _flag("is_spoiler") or _flag("spoiler")
-                is_view_once = _flag("is_view_once") or _flag("view_once")
-                # view_once only meaningful for image/video/gif
-                for f in valid_files:
-                    content_type = getattr(f, "content_type", "") or mimetypes.guess_type(getattr(f, "name", ""))[0] or ""
-                    kind = detect_kind(f.name, content_type)
-                    att_spoiler = is_spoiler and kind in ("image", "gif", "video")
-                    att_once = is_view_once and kind in ("image", "gif", "video")
-                    MessageAttachment.objects.create(
+                for idx, chunk in enumerate(chunks):
+                    msg = Message.objects.create(
                         conversation=conv,
-                        message=msg,
-                        uploaded_by=request.user,
-                        file=f,
-                        original_filename=getattr(f, "name", "file")[:255],
-                        content_type=content_type,
-                        size=getattr(f, "size", 0) or 0,
-                        kind=kind,
-                        is_spoiler=att_spoiler,
-                        is_view_once=att_once,
+                        sender=request.user,
+                        body=chunk,
+                        client_message_id=client_message_id if idx == 0 else None,
+                        reply_to=reply_to if idx == 0 else None,
+                        scheduled_for=scheduled_for if is_sched else None,
+                        is_scheduled=is_sched,
                     )
-            created_msgs.append(msg)
-            # Cache after DB commit (non-blocking for the HTTP response).
-            if not is_sched:
-                try:
-                    from ..message_cache import schedule_add_message
-                    schedule_add_message(msg)
-                except Exception:
-                    logger.exception("message cache schedule add failed")
-                try:
-                    from ..consumers import broadcast_message
-                    broadcast_message(msg)
-                except Exception:
-                    logger.exception("broadcast failed")
+                    # Attach files only to the first chunk.
+                    if idx == 0:
+                        def _flag(name):
+                            v = request.data.get(name)
+                            if isinstance(v, (list, tuple)):
+                                v = v[0] if v else False
+                            if isinstance(v, str):
+                                return v.strip().lower() in ("1", "true", "yes", "on")
+                            return bool(v)
+
+                        is_spoiler = _flag("is_spoiler") or _flag("spoiler")
+                        is_view_once = _flag("is_view_once") or _flag("view_once")
+                        for f in valid_files:
+                            content_type = (
+                                getattr(f, "content_type", "")
+                                or mimetypes.guess_type(getattr(f, "name", ""))[0]
+                                or ""
+                            )
+                            kind = detect_kind(f.name, content_type)
+                            MessageAttachment.objects.create(
+                                conversation=conv,
+                                message=msg,
+                                uploaded_by=request.user,
+                                file=f,
+                                original_filename=getattr(f, "name", "file")[:255],
+                                content_type=content_type,
+                                size=getattr(f, "size", 0) or 0,
+                                kind=kind,
+                                is_spoiler=is_spoiler and kind in ("image", "gif", "video"),
+                                is_view_once=is_view_once and kind in ("image", "gif", "video"),
+                            )
+                    created_msgs.append(msg)
+                    if not is_sched:
+                        try:
+                            from ..events import record_message_created
+                            record_message_created(msg)
+                        except Exception:
+                            logger.exception("durable messenger event failed")
+                            raise
+                        transaction.on_commit(lambda message=msg: _publish_cache(message))
+        except IntegrityError:
+            if client_message_id:
+                existing = Message.objects.filter(
+                    conversation=conv,
+                    sender=request.user,
+                    client_message_id=client_message_id,
+                ).first()
+                if existing is not None:
+                    ctx = build_message_list_context(request, [existing], conversation_id=conv.id)
+                    return ok("Already sent", data=MessageSerializer(existing, context=ctx).data)
+            raise
 
         # Return last created (or single) for UI
         last = created_msgs[-1]

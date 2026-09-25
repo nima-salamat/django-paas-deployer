@@ -87,31 +87,16 @@ class ProtectedMediaView(APIView):
     ALLOWED_PREFIXES = ("messenger/", "images/", "tickets/")
 
     def _authenticate(self, request):
-        from rest_framework_simplejwt.tokens import AccessToken
-        from django.contrib.auth import get_user_model
-
-        User = get_user_model()
+        from auth_users.authentication import resolve_user_from_access_token
         # 1. Authorization header
         auth = request.META.get("HTTP_AUTHORIZATION", "")
         if auth.startswith("Bearer "):
             tok = auth[7:].strip()
-            try:
-                access = AccessToken(tok)
-                user_id = access.get("user_id") or access.get("user")
-                if user_id:
-                    return User.objects.filter(pk=user_id).first()
-            except Exception:
-                return None
+            return resolve_user_from_access_token(tok)
         # 2. ?token= query
         tok = request.GET.get("token")
         if tok:
-            try:
-                access = AccessToken(tok)
-                user_id = access.get("user_id") or access.get("user")
-                if user_id:
-                    return User.objects.filter(pk=user_id).first()
-            except Exception:
-                return None
+            return resolve_user_from_access_token(tok)
         # 3. Session auth (logged-in via browser)
         if request.user and request.user.is_authenticated:
             return request.user

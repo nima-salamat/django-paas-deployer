@@ -190,12 +190,16 @@ def send_otp(user=None, contact="", channel="email", purpose=AuthCode.PURPOSE_LO
         else:
             import logging
             logging.getLogger("auth_users").info(
-                f"OTP for contact={contact} purpose={purpose} code={code}"
+                "OTP delivery pending for contact=%s purpose=%s",
+                contact,
+                purpose,
             )
     else:
         import logging
         logging.getLogger("auth_users").info(
-            f"SMS not implemented. contact={contact or (user.username if user else '')} code={code}"
+            "SMS delivery not implemented. contact=%s purpose=%s",
+            contact or (user.username if user else ""),
+            purpose,
         )
     return code
 

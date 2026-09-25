@@ -4,6 +4,7 @@ import uuid
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework.exceptions import AuthenticationFailed
 
 from users.models import User
 from .models import Device, LoginSettings, UserSession
@@ -83,6 +84,6 @@ class UserSessionTests(TestCase):
         self.assertIsNotNone(cache.get(session_cache_key(session_id)))
 
         self.assertTrue(invalidate_session(session_id))
-        with self.assertRaises(Exception):
+        with self.assertRaises(AuthenticationFailed):
             resolve_session(session_id, user_id=self.user.id)
         self.assertIsNone(cache.get(session_cache_key(session_id)))

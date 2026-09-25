@@ -7,8 +7,6 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
-from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
-from rest_framework_simplejwt.tokens import AccessToken
 
 from deploy.models import Deploy
 
@@ -36,14 +34,13 @@ class DeploymentConsumer(AsyncJsonWebsocketConsumer):
             await self.close(code=4001)
             return
 
-        try:
-            validated = AccessToken(access_token)
-            user_id = validated["user_id"]
-        except (InvalidToken, TokenError, KeyError):
+        from auth_users.authentication import resolve_user_from_access_token
+        self.user = await database_sync_to_async(resolve_user_from_access_token)(access_token)
+        if self.user is None:
             await self.close(code=4002)
             return
 
-        self.user_id = int(user_id)
+        self.user_id = int(self.user.id)
         # Normalise to string so group name matches sink (deploy_<str(pk)>)
         raw_id = self.scope["url_route"]["kwargs"].get("deploy_id")
         self.deploy_id = str(raw_id) if raw_id is not None else None

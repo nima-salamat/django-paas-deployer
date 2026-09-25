@@ -289,6 +289,12 @@ class Message(models.Model):
     is_edited = models.BooleanField(default=False)
     is_system = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)  # soft delete for others
+    client_message_id = models.CharField(
+        max_length=128,
+        null=True,
+        blank=True,
+        help_text="Client-generated idempotency key for message submission.",
+    )
     # When set in the future, message is held (visible only to sender) until due.
     scheduled_for = models.DateTimeField(null=True, blank=True, db_index=True)
     is_scheduled = models.BooleanField(default=False, db_index=True)
@@ -302,6 +308,16 @@ class Message(models.Model):
             models.Index(fields=["conversation", "id"]),
             models.Index(fields=["is_scheduled", "scheduled_for"]),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["conversation", "sender", "client_message_id"],
+                condition=models.Q(
+                    client_message_id__isnull=False,
+                    sender__isnull=False,
+                ),
+                name="uniq_message_client_operation",
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
@@ -314,6 +330,34 @@ class Message(models.Model):
 
     def __str__(self):
         return f"Msg {self.pk} in {self.conversation_id}"
+
+
+class MessengerEvent(models.Model):
+    """Durable event metadata used for post-commit fan-out and reconnects."""
+
+    event_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
+    event_type = models.CharField(max_length=64, db_index=True)
+    conversation = models.ForeignKey(
+        Conversation, on_delete=models.CASCADE, related_name="messenger_events"
+    )
+    actor = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="messenger_events"
+    )
+    message = models.ForeignKey(
+        Message, on_delete=models.SET_NULL, null=True, blank=True, related_name="messenger_events"
+    )
+    call = models.ForeignKey(
+        "CallSession", on_delete=models.SET_NULL, null=True, blank=True, related_name="messenger_events"
+    )
+    payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        indexes = [
+            models.Index(fields=["conversation", "created_at", "id"]),
+            models.Index(fields=["event_type", "created_at"]),
+        ]
 
 
 class MessageReaction(models.Model):
