@@ -16,6 +16,19 @@ class EffectiveLoggingPolicy:
     realtime_enabled: bool
     quota_behavior: str  # fifo_delete | drop_new | realtime_only
 
+    @property
+    def mode(self) -> str:
+        """Effective runtime delivery mode used by collectors and clients."""
+        if self.quota_behavior == "realtime_only":
+            return "realtime_only" if self.realtime_enabled else "disabled"
+        if self.persistent_enabled and self.realtime_enabled:
+            return "persistent_realtime"
+        if self.persistent_enabled:
+            return "persistent_only"
+        if self.realtime_enabled:
+            return "realtime_only"
+        return "disabled"
+
 
 def _clamp(value: int, low: int, high: int) -> int:
     return max(low, min(int(value), high))
@@ -60,6 +73,11 @@ def resolve(service) -> EffectiveLoggingPolicy:
             qb = str(qb).strip().lower()
             if qb in {"fifo_delete", "drop_new", "realtime_only"}:
                 quota_behavior = qb
+
+    # realtime_only is a delivery mode; persistence is disabled for that
+    # effective policy so every layer observes the same semantics.
+    if quota_behavior == "realtime_only":
+        persistent = False
 
     return EffectiveLoggingPolicy(
         retention_days=default_retention,
