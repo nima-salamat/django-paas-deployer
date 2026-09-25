@@ -121,15 +121,17 @@ services:
     container_name: deploy-web
     restart: unless-stopped
 
-    command: >
-      sh -c "
-        python manage.py migrate &&
-        python manage.py setup_wagtail_site &&
-        python manage.py collectstatic --noinput &&
-        python manage.py setup_deployment_log_db &&
-        python manage.py migrate logs --database=deployment_logs &&
-        daphne -b 0.0.0.0 -p 8000 asgi:application
-      "
+    # Only the web service performs control-plane startup tasks.
+    # entrypoint.sh owns the main migration and setup_deployment_log_db, which
+    # in turn owns the deployment-log DB migration.
+    entrypoint: ["/app/entrypoint.sh"]
+    command:
+      - daphne
+      - -b
+      - 0.0.0.0
+      - -p
+      - "8000"
+      - asgi:application
 
     volumes:
       - .:/app
