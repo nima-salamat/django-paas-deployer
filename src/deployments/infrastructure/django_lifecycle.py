@@ -31,12 +31,16 @@ class DjangoDeploymentLifecycleStore:
         if self.is_terminal():
             return False
         context.assert_owner()
-        return StateManager.transition_deploy_if_owned(
+        transitioned = StateManager.transition_deploy_if_owned(
             self.deployment_id,
             sm.DEPLOY_RUNNING,
             task_id=self.task_id or context.worker_task_id,
             update_fields={"stage": "deployment_started"},
         )
+        # The state manager can turn this request into CANCELLED when the
+        # token was set before its row lock was acquired.  Do not let the
+        # executor continue planning after that terminal decision.
+        return transitioned and self.status == sm.DEPLOY_RUNNING
 
     def transition(
         self,

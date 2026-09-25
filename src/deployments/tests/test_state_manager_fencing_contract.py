@@ -25,3 +25,12 @@ def test_terminal_compatibility_helper_delegates_to_owned_transition():
 
     assert "transition_deploy_if_owned" in method
     assert "terminal=True" in method
+
+
+def test_django_lifecycle_store_does_not_continue_after_cancel_wins_start_race():
+    source = (ROOT / "deployments/infrastructure/django_lifecycle.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "transitioned and self.status == sm.DEPLOY_RUNNING" in source
+    assert "continue planning after that terminal decision" in source
