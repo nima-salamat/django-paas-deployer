@@ -18,6 +18,8 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.tokens import AccessToken
+from rest_framework.exceptions import AuthenticationFailed
+from auth_users.session_auth import resolve_session
 
 User = get_user_model()
 logger = logging.getLogger("messenger.ws")
@@ -264,6 +266,13 @@ async def authenticate_from_scope(scope):
         return None
     if not user.is_active:
         return None
+    session_id = validated.get("sid")
+    if session_id:
+        try:
+            await database_sync_to_async(resolve_session)(session_id, user_id=user.id)
+        except AuthenticationFailed:
+            return None
+        scope["auth_session_id"] = str(session_id)
     return user
 
 
@@ -303,6 +312,15 @@ class MessengerConsumer(AsyncJsonWebsocketConsumer):
         if t == "ping":
             # Heartbeat only — do not rebroadcast online (that caused sticky presence)
             if getattr(self, "user", None):
+                session_id = self.scope.get("auth_session_id")
+                if session_id:
+                    try:
+                        await database_sync_to_async(resolve_session)(
+                            session_id, user_id=self.user.id
+                        )
+                    except AuthenticationFailed:
+                        await self.close(code=4401)
+                        return
                 await database_sync_to_async(refresh_user_online)(self.user.id)
                 # Re-check ringing calls (covers offline→online within 30s window)
                 try:

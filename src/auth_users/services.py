@@ -2,25 +2,122 @@
 Business logic helpers for the customizable auth system.
 """
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.db.models import Q
 from django.core.exceptions import ValidationError
+from django.utils import timezone
+from django.conf import settings as django_settings
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.settings import api_settings as jwt_settings
 from rest_framework_simplejwt.exceptions import AuthenticationFailed
 from django.utils.translation import gettext as _
+import hashlib
+import uuid
 
-from .models import LoginSettings, AuthCode, InviteLink
+from .models import Device, LoginSettings, AuthCode, InviteLink, UserSession
 
 User = get_user_model()
 
 
-def get_tokens_for_user(user):
+class SessionLimitExceeded(AuthenticationFailed):
+    """Raised when the configured login policy rejects a new session."""
+
+
+def _request_metadata(request):
+    if request is None:
+        return {}
+    xff = request.META.get("HTTP_X_FORWARDED_FOR", "")
+    ip = xff.split(",", 1)[0].strip() if xff else request.META.get("REMOTE_ADDR")
+    return {
+        "last_ip": ip or None,
+        "user_agent": (request.META.get("HTTP_USER_AGENT", "") or "")[:500],
+    }
+
+
+def _device_id(value):
+    if not value:
+        return uuid.uuid4()
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError, AttributeError):
+        return uuid.uuid4()
+
+
+def issue_tokens_for_user(user, *, request=None, device_id=None, device=None):
+    """Create a revocable session and issue JWTs carrying its session identity.
+
+    The user row is locked while the active-session policy is enforced. The
+    refresh token is hashed into the session row; no token credential is
+    persisted in plaintext.
+    """
     if not user.is_active:
         raise AuthenticationFailed(_("error::user is not active"))
-    refresh = RefreshToken.for_user(user)
-    return {
-        "refresh": str(refresh),
-        "access": str(refresh.access_token),
-    }
+
+    metadata = _request_metadata(request)
+    with transaction.atomic():
+        locked_user = User.objects.select_for_update().get(pk=user.pk)
+        if not locked_user.is_active:
+            raise AuthenticationFailed(_("error::user is not active"))
+
+        policy = LoginSettings.get_solo()
+        now = timezone.now()
+        active = UserSession.objects.filter(
+            user=locked_user,
+            revoked_at__isnull=True,
+            expires_at__gt=now,
+        ).order_by("created_at")
+        active_count = active.count()
+        if active_count >= policy.max_active_sessions:
+            if policy.session_eviction_policy == LoginSettings.SessionEvictionPolicy.REJECT_NEW:
+                raise SessionLimitExceeded(_("error::session limit reached"))
+            revoke_count = active_count - policy.max_active_sessions + 1
+            for old in active[:revoke_count]:
+                old.revoke(at=now)
+                old.save(update_fields=["revoked_at"])
+
+        refresh = RefreshToken.for_user(locked_user)
+        session_id = str(refresh["jti"])
+        refresh["sid"] = session_id
+        access = refresh.access_token
+        device_obj = device
+        if device_obj is None:
+            requested_device_id = _device_id(device_id)
+            device_obj, _ = Device.objects.get_or_create(
+                user=locked_user,
+                public_id=requested_device_id,
+                defaults={
+                    "platform": str((request.data.get("platform") if request else "") or "")[:64],
+                    "client": str((request.data.get("client") if request else "") or "")[:120],
+                    **metadata,
+                },
+            )
+        else:
+            device_obj.user = locked_user
+        if device_obj.revoked_at is not None:
+            raise AuthenticationFailed(_("error::device is revoked"))
+        Device.objects.filter(pk=device_obj.pk).update(
+            last_seen_at=now,
+            last_ip=metadata.get("last_ip"),
+            user_agent=metadata.get("user_agent", ""),
+        )
+
+        refresh_text = str(refresh)
+        session = UserSession.objects.create(
+            session_id=session_id,
+            user=locked_user,
+            device=device_obj,
+            credential_hash=hashlib.sha256(refresh_text.encode("utf-8")).hexdigest(),
+            expires_at=now + jwt_settings.REFRESH_TOKEN_LIFETIME,
+            last_ip=metadata.get("last_ip"),
+            user_agent=metadata.get("user_agent", ""),
+        )
+
+    return {"refresh": refresh_text, "access": str(access), "session_id": session.session_id}
+
+
+def get_tokens_for_user(user, *, request=None, device_id=None):
+    """Compatibility entry point used by existing auth flows."""
+    return issue_tokens_for_user(user, request=request, device_id=device_id)
 
 
 def resolve_user_from_identifiers(data, settings: LoginSettings):

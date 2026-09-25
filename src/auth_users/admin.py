@@ -2,7 +2,42 @@ from django.contrib import admin
 from django.utils.html import format_html
 from django.utils import timezone
 from django.urls import reverse
-from .models import LoginSettings, AuthCode, InviteLink, InviteUsage, LoginLog
+from .models import Device, LoginSettings, AuthCode, InviteLink, InviteUsage, LoginLog, UserSession
+
+
+@admin.register(Device)
+class DeviceAdmin(admin.ModelAdmin):
+    list_display = ("public_id", "user", "client", "platform", "last_seen_at", "revoked_at")
+    list_filter = ("platform", "revoked_at")
+    search_fields = ("public_id", "user__username", "user__email", "client")
+    readonly_fields = ("public_id", "created_at", "last_seen_at")
+    actions = ["revoke_devices"]
+
+    @admin.action(description="Revoke selected devices")
+    def revoke_devices(self, request, queryset):
+        updated = queryset.filter(revoked_at__isnull=True).update(revoked_at=timezone.now())
+        self.message_user(request, f"{updated} device(s) revoked.")
+
+
+@admin.register(UserSession)
+class UserSessionAdmin(admin.ModelAdmin):
+    list_display = ("session_id_short", "user", "device", "created_at", "last_seen_at", "expires_at", "revoked_at")
+    list_filter = ("revoked_at", "expires_at")
+    search_fields = ("session_id", "user__username", "user__email", "device__public_id")
+    readonly_fields = (
+        "session_id", "user", "device", "credential_hash", "created_at", "last_seen_at",
+        "expires_at", "revoked_at", "auth_generation", "last_ip", "user_agent", "metadata",
+    )
+    actions = ["revoke_sessions"]
+
+    @admin.display(description="Session")
+    def session_id_short(self, obj):
+        return f"{obj.session_id[:12]}…"
+
+    @admin.action(description="Revoke selected sessions")
+    def revoke_sessions(self, request, queryset):
+        updated = queryset.filter(revoked_at__isnull=True).update(revoked_at=timezone.now())
+        self.message_user(request, f"{updated} session(s) revoked.")
 
 
 # ─────────────────────────────────────────────────────────────

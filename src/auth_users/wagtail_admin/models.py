@@ -85,6 +85,13 @@ class LoginSettingsViewSet(SnippetViewSet):
             ],
             heading=_("OTP settings"),
         ),
+        MultiFieldPanel(
+            [
+                FieldPanel("max_active_sessions"),
+                FieldPanel("session_eviction_policy"),
+            ],
+            heading=_("Session policy"),
+        ),
         FieldPanel("updated_at", read_only=True),
     ]
 
@@ -176,6 +183,7 @@ class LoginLogViewSet(SnippetViewSet):
             "created_at",
         ],
     )
+
 
 class AuthUsersGroup(SnippetViewSetGroup):
     items = (

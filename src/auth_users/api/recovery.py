@@ -277,7 +277,7 @@ class PasswordRecoveryConfirmAPIView(APIView):
                 status.HTTP_403_FORBIDDEN,
             )
 
-        tokens = get_tokens_for_user(user)
+        tokens = get_tokens_for_user(user, request=request, device_id=request.data.get("device_id"))
         LoginLog.record(
             user=user,
             request=request,

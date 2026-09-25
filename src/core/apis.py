@@ -4,7 +4,7 @@ from django.http import FileResponse, Http404
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import SessionAuthentication
-from rest_framework_simplejwt.authentication import JWTAuthentication
+from auth_users.authentication import SessionJWTAuthentication as JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 
 from deploy.models import Deploy

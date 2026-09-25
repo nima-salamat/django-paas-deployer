@@ -5,7 +5,7 @@ Mounted at: /auth/api/admin/login-settings/
 """
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, BasePermission
-from rest_framework_simplejwt.authentication import JWTAuthentication
+from .authentication import SessionJWTAuthentication as JWTAuthentication
 from rest_framework.response import Response
 from rest_framework import status
 from django.utils.translation import gettext as _

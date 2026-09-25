@@ -170,7 +170,7 @@ class StartAuthAPIView(APIView):
                     _("error::account is inactive. contact admin"),
                     status.HTTP_403_FORBIDDEN,
                 )
-            tokens = get_tokens_for_user(user)
+            tokens = get_tokens_for_user(user, request=request, device_id=data.get("device_id"))
             _log_success(user, request, data, LoginLog.METHOD_OTHER)
             return ok(_("success::logged in"), tokens)
 
@@ -282,7 +282,7 @@ class ValidateOTPAPIView(APIView):
                 _("error::account is inactive. contact admin"),
                 status.HTTP_403_FORBIDDEN,
             )
-        tokens = get_tokens_for_user(user)
+        tokens = get_tokens_for_user(user, request=request, device_id=data.get("device_id"))
         _log_success(user, request, data, LoginLog.METHOD_OTP)
         return ok(
             _("success::user is valid"),
@@ -359,7 +359,7 @@ class FinalAuthAPIView(APIView):
                 status.HTTP_403_FORBIDDEN,
             )
 
-        tokens = get_tokens_for_user(user)
+        tokens = get_tokens_for_user(user, request=request, device_id=data.get("device_id"))
         method = LoginLog.METHOD_OTP_PASSWORD if settings.require_otp else LoginLog.METHOD_PASSWORD
         _log_success(user, request, data, method)
         return ok(_("success::user logged in"), tokens)
@@ -447,7 +447,7 @@ class SetPasswordAPIView(APIView):
                 status.HTTP_403_FORBIDDEN,
             )
 
-        tokens = get_tokens_for_user(user)
+        tokens = get_tokens_for_user(user, request=request, device_id=data.get("device_id"))
         _log_success(user, request, data, LoginLog.METHOD_PASSWORD)
         return ok(_("success::password set and logged in"), {**tokens, "next_step": "done"})
 

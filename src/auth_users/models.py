@@ -4,6 +4,7 @@ from users.models import User
 import string
 import random
 import secrets
+import uuid
 from django.utils import timezone
 from datetime import timedelta
 
@@ -154,6 +155,22 @@ class LoginSettings(models.Model):
         help_text="Max wrong OTP attempts before code is invalidated",
     )
 
+    # ---------- Server-side session policy ----------
+    class SessionEvictionPolicy(models.TextChoices):
+        REVOKE_OLDEST = "revoke_oldest", "Revoke oldest session"
+        REJECT_NEW = "reject_new", "Reject new login"
+
+    max_active_sessions = models.PositiveSmallIntegerField(
+        default=5,
+        help_text="Maximum number of active authenticated sessions per user.",
+    )
+    session_eviction_policy = models.CharField(
+        max_length=24,
+        choices=SessionEvictionPolicy.choices,
+        default=SessionEvictionPolicy.REVOKE_OLDEST,
+        help_text="How a login behaves when the active-session limit is reached.",
+    )
+
     # ---------- Misc ----------
     is_active = models.BooleanField(
         default=True,
@@ -191,6 +208,8 @@ class LoginSettings(models.Model):
             )
         if self.min_password_length < 4:
             raise ValidationError("Minimum password length must be at least 4.")
+        if self.max_active_sessions < 1:
+            raise ValidationError("Maximum active sessions must be at least 1.")
 
     def save(self, *args, **kwargs):
         self.full_clean()
@@ -228,6 +247,71 @@ class LoginSettings(models.Model):
         if self.password_as_second_factor:
             return True
         return self.require_password
+
+
+class Device(models.Model):
+    """A client installation identity; descriptive metadata is not authority."""
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="auth_devices")
+    name = models.CharField(max_length=120, blank=True, default="")
+    platform = models.CharField(max_length=64, blank=True, default="")
+    client = models.CharField(max_length=120, blank=True, default="")
+    user_agent = models.CharField(max_length=500, blank=True, default="")
+    last_ip = models.GenericIPAddressField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
+    revoked_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        ordering = ["-last_seen_at"]
+        indexes = [
+            models.Index(fields=["user", "revoked_at"]),
+            models.Index(fields=["user", "-last_seen_at"]),
+        ]
+
+    @property
+    def is_active(self):
+        return self.revoked_at is None
+
+    def __str__(self):
+        return self.name or self.client or str(self.public_id)
+
+
+class UserSession(models.Model):
+    """Revocable server-side authentication authority for one login instance."""
+
+    session_id = models.CharField(max_length=128, unique=True, editable=False, db_index=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="auth_sessions")
+    device = models.ForeignKey(
+        Device, on_delete=models.CASCADE, related_name="sessions"
+    )
+    credential_hash = models.CharField(max_length=128, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
+    expires_at = models.DateTimeField(db_index=True)
+    revoked_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    auth_generation = models.PositiveIntegerField(default=1)
+    last_ip = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=500, blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "revoked_at", "expires_at"]),
+            models.Index(fields=["device", "revoked_at"]),
+        ]
+
+    @property
+    def is_active(self):
+        return self.revoked_at is None and self.expires_at > timezone.now()
+
+    def revoke(self, *, at=None):
+        self.revoked_at = at or timezone.now()
+
+    def __str__(self):
+        return f"{self.user_id}:{self.session_id[:12]}"
 
 
 # ---------------------------------------------------------------------------
