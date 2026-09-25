@@ -81,6 +81,11 @@ class Deploy(BaseModel):
         related_name="replacement_deployments",
         help_text=_("Previously active deployment replaced by this deployment."),
     )
+    operation = models.CharField(blank=True, db_index=True, default="", max_length=64)
+    operation_started_at = models.DateTimeField(blank=True, null=True)
+    operation_resource_id = models.CharField(blank=True, default="", max_length=255)
+    operation_previous_resource_id = models.CharField(blank=True, default="", max_length=255)
+    recovery_metadata = models.JSONField(blank=True, null=True)
     MAX_ZIP_SIZE_MB = 100
     # Set by admin API path to skip the zip size cap for staff/superuser uploads
     skip_zip_size_limit = False
