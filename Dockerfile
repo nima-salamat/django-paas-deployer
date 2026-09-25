@@ -9,16 +9,22 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 ARG DOCKERFILE_LINUX_MIRROR=http://deb.debian.org/debian
-ARG CODENAME=trixie
-# Configure Debian Linux mirror
+# Configure Debian Linux mirror. Normalize bare hostnames and always use the
+# codename from the base image instead of a separate Compose/Docker ARG.
 RUN set -eux; \
     . /etc/os-release; \
-    CODENAME="${VERSION_CODENAME}"; \
+    mirror="${DOCKERFILE_LINUX_MIRROR}"; \
+    case "$mirror" in \
+        http://*|https://*) ;; \
+        *) mirror="http://$mirror" ;; \
+    esac; \
+    mirror="${mirror%/}"; \
+    codename="${VERSION_CODENAME}"; \
     rm -f /etc/apt/sources.list.d/*.sources; \
     rm -f /etc/apt/sources.list.d/*.list; \
     printf '%s\n' \
-        "deb ${DOCKERFILE_LINUX_MIRROR} ${CODENAME} main" \
-        "deb ${DOCKERFILE_LINUX_MIRROR} ${CODENAME}-updates main" \
+        "deb $mirror $codename main" \
+        "deb $mirror $codename-updates main" \
         > /etc/apt/sources.list; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
