@@ -50,7 +50,7 @@ from deployments.common.exceptions import (
     to_deployment_error,
 )
 from deployments.planning import ConfigurationResolver, DeploymentPlanCompiler
-from deployments.runtime import RuntimeIdentity, RuntimeRegistry
+from deployments.runtime import RuntimeBackend, RuntimeIdentity, RuntimeRegistry
 
 from ..service_status import ServiceStateManager
 from ..validators import DeploymentValidator
@@ -879,7 +879,7 @@ class DeployService:
         without a revision, and explicit legacy Docker mode, retain the old
         path until the compatibility backend is registered.
         """
-        if runtime_graph is None or not swarm_enabled():
+        if runtime_graph is None:
             return None
 
         network_specs = [
@@ -906,9 +906,10 @@ class DeployService:
             service=service,
             revision=getattr(deploy_item, "revision", None),
             deployment=deploy_item,
-            policy={"backend": "swarm"},
             probe=False,
         )
+        if selection.backend != RuntimeBackend.SWARM.value:
+            return None
         identity = RuntimeIdentity(
             service_id=str(service.pk),
             deployment_id=str(deploy_item.pk),
