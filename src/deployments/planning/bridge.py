@@ -29,8 +29,25 @@ class DeploymentPlanCompatibilityCompiler:
         runtime_options = dict(config.runtime_options or {})
         if plan.placement:
             runtime_options["placement_constraints"] = list(plan.placement)
-        if plan.health_policy:
-            runtime_options["healthcheck"] = dict(plan.health_policy)
+        # DeploymentPlan.health_policy includes application readiness fields
+        # such as path/expected_status.  Only translate Docker healthcheck
+        # fields here; never overwrite an existing Docker healthcheck with a
+        # readiness-policy dictionary.
+        docker_healthcheck_keys = {
+            "test", "cmd", "command", "interval", "timeout",
+            "start_period", "start-period", "retries", "disable",
+        }
+        has_docker_healthcheck = any(
+            key in plan.health_policy
+            for key in {"test", "cmd", "command", "disable"}
+        )
+        docker_healthcheck = {
+            key: value
+            for key, value in plan.health_policy.items()
+            if key in docker_healthcheck_keys
+        }
+        if has_docker_healthcheck and docker_healthcheck:
+            runtime_options["healthcheck"] = docker_healthcheck
 
         labels = dict(config.labels or {})
         labels["service.id"] = str(plan.identity.service_id)

@@ -1,5 +1,6 @@
 """Tests for configuration precedence, provenance, plans, and the bridge."""
 
+from pathlib import Path
 import pytest
 
 from deployments.core.runtime_graph import RuntimeEndpoint, RuntimeProcess, ServiceRuntimeGraph
@@ -100,7 +101,9 @@ def test_plan_compiler_derives_capabilities_and_bridge_preserves_legacy_config()
         revision_id="revision-1",
         runtime_name="app-service-1",
     )
-    base = _deployment_config()
+    base = _deployment_config(
+        runtime_options={"healthcheck": {"test": "true", "retries": 2}}
+    )
 
     plan = DeploymentPlanCompiler().compile(
         identity=identity,
@@ -124,3 +127,17 @@ def test_plan_compiler_derives_capabilities_and_bridge_preserves_legacy_config()
     assert bridged.runtime_options["placement_constraints"] == [
         "node.role == worker"
     ]
+    assert bridged.runtime_options["healthcheck"] == {
+        "test": "true",
+        "retries": 2,
+    }
+
+
+def test_current_swarm_service_path_compiles_a_plan_before_the_legacy_facade():
+    source = Path("src/deployments/celery/services/deploy_service.py").read_text()
+
+    assert "def _compile_compatibility_plan(" in source
+    assert "execution_plan = self._compile_compatibility_plan(" in source
+    assert "execution_plan=execution_plan" in source
+    assert "RuntimeRegistry.with_swarm().resolve(" in source
+    assert "DeploymentPlanCompiler().compile(" in source

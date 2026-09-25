@@ -88,7 +88,11 @@ class DeploymentPlanCompiler:
             required.add(RuntimeCapability.PERSISTENT_VOLUMES)
         if graph.networks:
             required.add(RuntimeCapability.OVERLAY_NETWORKS)
-        if graph.runtime.get("healthcheck") or resolved.get("healthcheck"):
+        if (
+            graph.runtime.get("healthcheck")
+            or resolved.get("healthcheck")
+            or resolved.get("health_policy")
+        ):
             required.add(RuntimeCapability.HEALTH_CHECKS)
         runtime_options = dict(resolved.get("runtime_options") or {})
         if runtime_options.get("placement_constraints"):

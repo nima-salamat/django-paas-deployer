@@ -14,6 +14,7 @@ from deployments.core.manager.container_manager import Container
 from deployments.core.manager.image_manager import Image
 from deployments.core.orchestrator import DeploymentOrchestrator
 from deployments.core.types import DeploymentConfig, EndpointSpec, NetworkSpec, VolumeSpec
+from deployments.planning.bridge import DeploymentPlanCompatibilityCompiler
 
 
 logger = logging.getLogger(__name__)
@@ -118,6 +119,7 @@ class Deploy:
         base_images=None,
         endpoints=None,
         activation_callback=None,
+        execution_plan=None,
     ):
         self.name = name
         self.tag = str(tag)
@@ -179,6 +181,9 @@ class Deploy:
         self.base_images = {str(k): str(v) for k, v in (base_images or {}).items() if v}
         self.endpoints = list(endpoints or [])
         self.activation_callback = activation_callback
+        # Transitional plan-to-legacy-executor bridge.  The orchestrator is
+        # intentionally unchanged while callers migrate to DeploymentPlan.
+        self.execution_plan = execution_plan
         self.errors = []
         self.result = None
 
@@ -250,7 +255,7 @@ class Deploy:
         return specs
 
     def _config(self):
-        return DeploymentConfig(
+        config = DeploymentConfig(
             name=self.name,
             tag=self.tag,
             zip_path=self.zip_filename,
@@ -296,6 +301,12 @@ class Deploy:
             healthcheck_expected_status=self.healthcheck_expected_status,
             healthcheck_timeout=self.healthcheck_timeout,
         )
+        if self.execution_plan is not None:
+            config = DeploymentPlanCompatibilityCompiler().compile(
+                self.execution_plan,
+                base_config=config,
+            )
+        return config
 
     def deploy(self):
         orchestrator = DeploymentOrchestrator(

@@ -26,7 +26,7 @@ from deploy.models import Deploy  # type: ignore
 from deploy.deployment_state import DjangoDeploymentState  # type: ignore
 from core.global_settings.config import default_ports  # type: ignore
 from deployments.core.deploy import Deploy as DeployFacade
-from deployments.core.types import EndpointSpec, VolumeSpec
+from deployments.core.types import EndpointSpec, NetworkSpec, VolumeSpec
 from deployments.core.runtime_graph import ServiceRuntimeGraph
 from deployments.core.swarm import swarm_enabled
 from deployments.core.manager.container_manager import Container
@@ -49,6 +49,8 @@ from deployments.common.exceptions import (
     DeploymentValidationError,
     to_deployment_error,
 )
+from deployments.planning import ConfigurationResolver, DeploymentPlanCompiler
+from deployments.runtime import RuntimeIdentity, RuntimeRegistry
 
 from ..service_status import ServiceStateManager
 from ..validators import DeploymentValidator
@@ -670,6 +672,23 @@ class DeployService:
         if getattr(service, "network", None) is not None and getattr(service.network, "name", None):
             networks.append((service.network.get_docker_network_name(), "overlay"))
 
+        volume_specs = self._volume_specs(deploy_item, platform=platform)
+        execution_plan = self._compile_compatibility_plan(
+            deploy_item=deploy_item,
+            service=service,
+            container_name=container_name,
+            runtime_graph=runtime_graph,
+            environment=environment,
+            runtime_options=runtime_options,
+            resource_limits=resource_limits,
+            networks=networks,
+            volume_specs=volume_specs,
+            endpoint_specs=endpoint_specs,
+            healthcheck_path=healthcheck_path,
+            healthcheck_expected_status=expected_status,
+            healthcheck_timeout=healthcheck_timeout,
+        )
+
         zip_path = ""
         if getattr(deploy_item, "zip_file", None):
             try:
@@ -696,7 +715,7 @@ class DeployService:
             max_cpu=resource_limits["cpu"],
             max_ram=resource_limits["memory_mb"],
             networks=networks,
-            volumes=self._volume_specs(deploy_item, platform=platform),
+            volumes=volume_specs,
             port=port,
             # Laravel/PHP need writable storage even when service.read_only
             # is True (root FS RO).  Named volumes cover storage paths.
@@ -733,6 +752,7 @@ class DeployService:
             public_host=cfg.get("public_host") or cfg.get("domain"),
             endpoints=endpoint_specs,
             activation_callback=activation_callback,
+            execution_plan=execution_plan,
             runtime_version=(
                 cfg.get("runtime_version")
                 or cfg.get("node_version")
@@ -835,6 +855,73 @@ class DeployService:
                 },
             )
         return result
+
+    @staticmethod
+    def _compile_compatibility_plan(
+        *,
+        deploy_item: Deploy,
+        service,
+        container_name: str,
+        runtime_graph: ServiceRuntimeGraph | None,
+        environment: dict[str, str],
+        runtime_options: dict,
+        resource_limits: dict,
+        networks: list[tuple[str, str]],
+        volume_specs: list[VolumeSpec],
+        endpoint_specs: list[EndpointSpec],
+        healthcheck_path,
+        healthcheck_expected_status,
+        healthcheck_timeout,
+    ):
+        """Compile the current Swarm path without changing its executor.
+
+        This is intentionally a transitional bridge.  Legacy deployments
+        without a revision, and explicit legacy Docker mode, retain the old
+        path until the compatibility backend is registered.
+        """
+        if runtime_graph is None or not swarm_enabled():
+            return None
+
+        network_specs = [
+            NetworkSpec(name=str(name), driver=str(driver or "overlay"))
+            for name, driver in networks
+        ]
+        resolver = ConfigurationResolver()
+        resolved = resolver.resolve(
+            platform_policy={"resource_limits": dict(resource_limits)},
+            revision_snapshot={
+                "environment": dict(environment),
+                "runtime_options": dict(runtime_options),
+                "networks": network_specs,
+                "volumes": list(volume_specs),
+                "endpoints": list(endpoint_specs),
+                "health_policy": {
+                    "path": healthcheck_path,
+                    "expected_status": list(healthcheck_expected_status or (200, 204)),
+                    "timeout": healthcheck_timeout,
+                },
+            },
+        )
+        selection = RuntimeRegistry.with_swarm().resolve(
+            service=service,
+            revision=getattr(deploy_item, "revision", None),
+            deployment=deploy_item,
+            policy={"backend": "swarm"},
+            probe=False,
+        )
+        identity = RuntimeIdentity(
+            service_id=str(service.pk),
+            deployment_id=str(deploy_item.pk),
+            revision_id=str(getattr(deploy_item, "revision_id", "") or "") or None,
+            runtime_name=str(container_name),
+        )
+        return DeploymentPlanCompiler().compile(
+            identity=identity,
+            graph=runtime_graph,
+            selection=selection,
+            resolved=resolved,
+            image_ref=f"{container_name}:{_docker_tag_from_deploy(deploy_item.version)}",
+        )
 
     # ------------------------------------------------------------------
     # Volume resolution (unchanged)
