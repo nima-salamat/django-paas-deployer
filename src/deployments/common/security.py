@@ -133,6 +133,11 @@ def validate_bind_source(source: str) -> str:
                 "allowed_prefixes": list(allowed),
             },
         )
+    # Docker bind paths are POSIX paths even when the control-plane tests run
+    # on Windows. Preserve that representation for absolute POSIX input while
+    # still using the host-normalized form for containment validation above.
+    if os.name == "nt" and source.startswith("/") and not re.match(r"^[A-Za-z]:[\\/]", source):
+        return "/" + source.lstrip("/").replace("\\", "/")
     return normalised
 
 
