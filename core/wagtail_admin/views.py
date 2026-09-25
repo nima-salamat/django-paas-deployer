@@ -27,11 +27,13 @@ def _is_staff(user):
 
 
 def _policy_values():
-    from core.settings_service import get_int
-    return {
-        form_key: max(minimum, min(get_int(setting_key, default), maximum))
-        for form_key, setting_key, _label, default, minimum, maximum in CACHE_POLICY
-    }
+    from core.app_cache import get_cache_ttl
+    values = {}
+    for form_key, setting_key, _label, default, minimum, maximum in CACHE_POLICY:
+        cache_name = setting_key.removeprefix("cache.").removesuffix("_ttl")
+        value = get_cache_ttl(cache_name)
+        values[form_key] = max(minimum, min(value, maximum))
+    return values
 
 
 def _save_policy(post_data, actor):
@@ -151,14 +153,6 @@ def cache_dashboard(request):
     total_list = messenger["list_hit"] + messenger["list_miss"]
 
     policy = _policy_values()
-    policy.update({
-        "service_user_ttl": get_cache_ttl("service_user"),
-        "service_admin_ttl": get_cache_ttl("service_admin"),
-        "plan_ttl": get_cache_ttl("plan"),
-        "ticket_user_ttl": get_cache_ttl("ticket_user"),
-        "ticket_admin_ttl": get_cache_ttl("ticket_admin"),
-        "user_admin_ttl": get_cache_ttl("user_admin"),
-    })
 
     return render(
         request,
