@@ -101,30 +101,51 @@ def get_or_create_stream(
     deploy_id: UUID | str | None = None,
 ) -> ServiceLogStream:
     alias = _alias()
-    existing = (
-        ServiceLogStream.objects.using(alias)
-        .filter(container_id=container_id, status=ServiceLogStream.Status.ACTIVE)
-        .first()
-    )
+    filters = {
+        "service_id": str(service_id),
+        "container_id": container_id,
+        "status": ServiceLogStream.Status.ACTIVE,
+    }
+    existing = ServiceLogStream.objects.using(alias).filter(**filters).first()
     if existing:
         return existing
-    return ServiceLogStream.objects.using(alias).create(
-        service_id=str(service_id),
-        deploy_id=str(deploy_id) if deploy_id else None,
-        container_id=container_id,
-        container_name=container_name or "",
-        status=ServiceLogStream.Status.ACTIVE,
-        started_at=timezone.now(),
-    )
+
+    try:
+        with transaction.atomic(using=alias):
+            return ServiceLogStream.objects.using(alias).create(
+                service_id=str(service_id),
+                deploy_id=str(deploy_id) if deploy_id else None,
+                container_id=container_id,
+                container_name=container_name or "",
+                status=ServiceLogStream.Status.ACTIVE,
+                started_at=timezone.now(),
+            )
+    except IntegrityError:
+        # Another collector won the active-stream race.
+        existing = ServiceLogStream.objects.using(alias).filter(**filters).first()
+        if existing:
+            return existing
+        raise
 
 
-def close_stream(stream: ServiceLogStream, *, status: str = ServiceLogStream.Status.CLOSED) -> None:
+def close_stream(
+    stream: ServiceLogStream,
+    *,
+    status: str = ServiceLogStream.Status.CLOSED,
+    owner_id: str | None = None,
+) -> None:
     alias = _alias()
-    ServiceLogStream.objects.using(alias).filter(pk=stream.pk).update(
+    qs = ServiceLogStream.objects.using(alias).filter(pk=stream.pk)
+    if owner_id:
+        # A stale collector must never close a stream after its lease is lost.
+        qs = qs.filter(owner_id=owner_id)
+    qs.update(
         status=status,
         ended_at=timezone.now(),
         owner_id="",
         lease_until=None,
+        lease_token="",
+        heartbeat_at=None,
         updated_at=timezone.now(),
     )
 
@@ -172,7 +193,15 @@ def ingest_lines(
     alias = _alias()
     policy = policy or resolve_for_service_id(stream.service_id)
     if not policy.persistent_enabled or policy.quota_behavior == "realtime_only":
-        return {"inserted": 0, "duplicates": 0, "dropped": 0, "bytes": 0, "realtime_only": True}
+        return {
+            "inserted": 0,
+            "duplicates": 0,
+            "dropped": 0,
+            "bytes": 0,
+            "realtime_only": True,
+            "persisted": False,
+            "inserted_entries": [],
+        }
 
     if owner_id and stream.owner_id and stream.owner_id != owner_id:
         if stream.lease_until and stream.lease_until > timezone.now():
@@ -182,6 +211,7 @@ def ingest_lines(
     duplicates = 0
     dropped = 0
     total_bytes = 0
+    inserted_entries = []
     last_ts = stream.last_persisted_ts
     last_fp = stream.last_persisted_fingerprint or ""
     next_seq = int(stream.last_seq or 0)
@@ -218,7 +248,14 @@ def ingest_lines(
         )
 
     if not prepared:
-        return {"inserted": 0, "duplicates": 0, "dropped": 0, "bytes": 0}
+        return {
+            "inserted": 0,
+            "duplicates": 0,
+            "dropped": 0,
+            "bytes": 0,
+            "persisted": True,
+            "inserted_entries": [],
+        }
 
     need = sum(p["byte_size"] for p in prepared)
     usage = get_usage(stream.service_id)
@@ -241,7 +278,7 @@ def ingest_lines(
         for p in prepared:
             next_seq += 1
             try:
-                ServiceLogEntry.objects.using(alias).create(
+                entry = ServiceLogEntry.objects.using(alias).create(
                     service_id=str(stream.service_id),
                     stream_id=stream.pk,
                     deploy_id=str(stream.deploy_id) if stream.deploy_id else None,
@@ -256,6 +293,19 @@ def ingest_lines(
                 )
                 inserted += 1
                 total_bytes += p["byte_size"]
+                inserted_entries.append(
+                    {
+                        "id": entry.id,
+                        "stream_id": entry.stream_id,
+                        "ts": entry.ts,
+                        "seq": entry.seq,
+                        "stream": entry.stream,
+                        "level": entry.level or "",
+                        "message": entry.message,
+                        "byte_size": entry.byte_size,
+                        "truncated": entry.truncated,
+                    }
+                )
                 last_ts = p["ts"]
                 last_fp = p["fingerprint"]
             except IntegrityError:
@@ -273,11 +323,17 @@ def ingest_lines(
         stream.last_persisted_fingerprint = last_fp
 
     if inserted:
-        bump_ingest(stream.service_id, bytes_added=total_bytes, entries=inserted)
+        try:
+            bump_ingest(stream.service_id, bytes_added=total_bytes, entries=inserted)
+        except Exception:
+            # The rows are already durable; reconciliation can repair counters.
+            logger.exception("usage accounting failed service=%s", stream.service_id)
 
     return {
         "inserted": inserted,
         "duplicates": duplicates,
         "dropped": dropped,
         "bytes": total_bytes,
+        "persisted": True,
+        "inserted_entries": inserted_entries,
     }
