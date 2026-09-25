@@ -2,7 +2,7 @@
 <section class="w-panel system-gauges-panel" aria-label="{% trans 'System resources' %}">
   <div class="w-panel__header">
     <h2 class="w-panel__heading">{% trans "System resources" %}</h2>
-    <p class="w-panel__subtitle" style="margin:0;opacity:.7;font-size:.85rem;">
+    <p class="w-panel__subtitle" class="sg-subtitle">
       {% trans "Live resource usage" %}
     </p>
   </div>
@@ -40,6 +40,11 @@
 
 <style>
   .system-gauges-panel { margin-bottom: 1.5rem; }
+  .sg-subtitle {
+    margin: 0;
+    color: var(--w-color-text-context);
+    font-size: .85rem;
+  }
   .sg-row {
     display: flex;
     flex-wrap: wrap;
@@ -48,7 +53,7 @@
     padding: .5rem 0 1rem;
   }
   .sg-card {
-    background: var(--w-color-surface-panels, #fff);
+    background: var(--w-color-surface-dashboard-panel);
     border: 1px solid var(--w-color-border-furniture, #e5e7eb);
     border-radius: 12px;
     padding: 1rem 1.25rem 1.1rem;
@@ -90,19 +95,19 @@
     font-size: 1.6rem;
     font-weight: 700;
     line-height: 1.1;
-    color: var(--w-color-text-label, #111);
+    color: var(--w-color-text-label);
   }
   .sg-label {
     font-size: .75rem;
     font-weight: 600;
     letter-spacing: .04em;
     text-transform: uppercase;
-    opacity: .55;
+    color: var(--w-color-text-context);
     margin-top: 2px;
   }
   .sg-meta {
+    color: var(--w-color-text-context);
     font-size: .8rem;
-    opacity: .7;
     min-height: 1.2em;
   }
   .sg-value.is-warn { stroke: #f59e0b; }
