@@ -19,19 +19,50 @@ def _alias() -> str:
     return getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", None) or "default"
 
 
-def encode_cursor(ts: datetime, seq: int) -> str:
-    payload = json.dumps({"ts": ts.isoformat(), "seq": int(seq)})
-    return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+def encode_cursor(
+    ts: datetime,
+    seq: int,
+    *,
+    entry_id: int | None = None,
+) -> str:
+    """Encode a cursor with a global tie-breaker across stream instances."""
+    payload = {"ts": ts.isoformat(), "seq": int(seq)}
+    if entry_id is not None:
+        payload["id"] = int(entry_id)
+    raw = json.dumps(payload, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
-def decode_cursor(value: str) -> tuple[datetime, int]:
+def _decode_cursor_parts(value: str) -> tuple[datetime, int, int | None]:
     pad = "=" * (-len(value) % 4)
     raw = base64.urlsafe_b64decode(value + pad)
     data = json.loads(raw.decode())
     ts = parse_datetime(data["ts"])
     if ts is None:
         raise ValueError("invalid cursor ts")
-    return ts, int(data["seq"])
+    entry_id = data.get("id")
+    return ts, int(data["seq"]), (int(entry_id) if entry_id is not None else None)
+
+
+def decode_cursor(value: str) -> tuple[datetime, int]:
+    """Backward-compatible decoder for callers that only need ts/seq."""
+    ts, seq, _ = _decode_cursor_parts(value)
+    return ts, seq
+
+
+def _cursor_filter(qs, cursor_ts, cursor_seq, cursor_id, direction):
+    if cursor_id is not None:
+        if direction == "older":
+            return qs.filter(
+                Q(ts__lt=cursor_ts) | Q(ts=cursor_ts, id__lt=cursor_id)
+            )
+        return qs.filter(
+            Q(ts__gt=cursor_ts) | Q(ts=cursor_ts, id__gt=cursor_id)
+        )
+
+    if direction == "older":
+        return qs.filter(Q(ts__lt=cursor_ts) | Q(ts=cursor_ts, seq__lt=cursor_seq))
+    return qs.filter(Q(ts__gt=cursor_ts) | Q(ts=cursor_ts, seq__gt=cursor_seq))
 
 
 def query_logs(
@@ -43,7 +74,7 @@ def query_logs(
     stream: str = "",
     q: str = "",
     cursor: str | None = None,
-    direction: str = "older",  # older = before cursor (default history), newer = after
+    direction: str = "older",
     limit: int = 100,
 ) -> dict[str, Any]:
     alias = _alias()
@@ -60,33 +91,36 @@ def query_logs(
     if q:
         qs = qs.filter(Q(message__icontains=q))
 
-    cursor_ts = cursor_seq = None
+    cursor_ts = cursor_seq = cursor_id = None
     if cursor:
         try:
-            cursor_ts, cursor_seq = decode_cursor(cursor)
+            cursor_ts, cursor_seq, cursor_id = _decode_cursor_parts(cursor)
         except Exception as exc:
             raise ValueError("invalid cursor") from exc
-        # Expired if no rows exist at/near cursor and nothing newer/older in range
-        exists_near = qs.filter(ts=cursor_ts, seq=cursor_seq).exists()
+
+        exists_near = (
+            qs.filter(pk=cursor_id).exists()
+            if cursor_id is not None
+            else qs.filter(ts=cursor_ts, seq=cursor_seq).exists()
+        )
+        candidate_qs = _cursor_filter(
+            qs, cursor_ts, cursor_seq, cursor_id, direction
+        )
+        if not exists_near and not candidate_qs.exists() and qs.exists():
+            raise ExpiredCursorError("cursor expired or no data in requested direction")
+
+        qs = candidate_qs
         if direction == "older":
-            if not exists_near and not qs.filter(ts__lt=cursor_ts).exists() and not qs.filter(ts=cursor_ts, seq__lt=cursor_seq).exists():
-                # still allow if there is older data without exact match
-                if not qs.filter(Q(ts__lt=cursor_ts) | Q(ts=cursor_ts, seq__lt=cursor_seq)).exists():
-                    if not qs.exists():
-                        raise ExpiredCursorError("cursor expired or empty history")
-            qs = qs.filter(Q(ts__lt=cursor_ts) | Q(ts=cursor_ts, seq__lt=cursor_seq))
-            rows = list(qs.order_by("-ts", "-seq")[: limit + 1])
+            rows = list(qs.order_by("-ts", "-id")[: limit + 1])
             has_more = len(rows) > limit
             rows = rows[:limit]
-            rows.reverse()  # chronological for UI
+            rows.reverse()
         else:
-            qs = qs.filter(Q(ts__gt=cursor_ts) | Q(ts=cursor_ts, seq__gt=cursor_seq))
-            rows = list(qs.order_by("ts", "seq")[: limit + 1])
+            rows = list(qs.order_by("ts", "id")[: limit + 1])
             has_more = len(rows) > limit
             rows = rows[:limit]
     else:
-        # Latest page (oldest of the newest window) when no cursor: last N
-        rows_desc = list(qs.order_by("-ts", "-seq")[: limit + 1])
+        rows_desc = list(qs.order_by("-ts", "-id")[: limit + 1])
         has_more = len(rows_desc) > limit
         rows = list(reversed(rows_desc[:limit]))
 
@@ -101,15 +135,15 @@ def query_logs(
             "message": r.message,
             "byte_size": r.byte_size,
             "truncated": r.truncated,
-            "cursor": encode_cursor(r.ts, r.seq) if r.ts else None,
+            "cursor": encode_cursor(r.ts, r.seq, entry_id=r.id) if r.ts else None,
         }
         for r in rows
     ]
     next_cursor = None
     prev_cursor = None
     if rows:
-        next_cursor = encode_cursor(rows[0].ts, rows[0].seq)  # load older
-        prev_cursor = encode_cursor(rows[-1].ts, rows[-1].seq)  # load newer
+        next_cursor = encode_cursor(rows[0].ts, rows[0].seq, entry_id=rows[0].id)
+        prev_cursor = encode_cursor(rows[-1].ts, rows[-1].seq, entry_id=rows[-1].id)
     return {
         "events": events,
         "has_more_older": has_more if direction == "older" or not cursor else has_more,
