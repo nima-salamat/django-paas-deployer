@@ -17,7 +17,7 @@ from .serializers import (
 
 from .models import User, Profile
 from rest_framework.permissions import IsAuthenticated
-from rest_framework_simplejwt.authentication import JWTAuthentication
+from auth_users.authentication import SessionJWTAuthentication as JWTAuthentication
 
 from django.utils.translation import gettext as _
 

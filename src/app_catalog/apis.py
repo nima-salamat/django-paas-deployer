@@ -3,7 +3,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
-from rest_framework_simplejwt.authentication import JWTAuthentication
+from auth_users.authentication import SessionJWTAuthentication as JWTAuthentication
 from .catalog import ApplicationCatalog, CatalogValidationError, redact_resolved, redacted_definition, resolve_variant
 from .models import ApplicationInstance, ApplicationStatus
 from .serializers import ApplicationInstanceSerializer, catalog_listing

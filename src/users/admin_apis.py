@@ -31,7 +31,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import BasePermission, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.authentication import JWTAuthentication
+from auth_users.authentication import SessionJWTAuthentication as JWTAuthentication
 
 from .models import Rule, Profile
 

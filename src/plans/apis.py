@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated, BasePermission, AllowAny
-from rest_framework_simplejwt.authentication import JWTAuthentication
+from auth_users.authentication import SessionJWTAuthentication as JWTAuthentication
 from core.global_settings import config
 from core.utils import is_valid_uuid4
 from django.utils.translation import gettext as _

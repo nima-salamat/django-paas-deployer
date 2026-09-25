@@ -13,7 +13,7 @@ from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.decorators import action
-from rest_framework_simplejwt.authentication import JWTAuthentication
+from auth_users.authentication import SessionJWTAuthentication as JWTAuthentication
 from django.utils import timezone
 from .models import Document, DocumentAsset, DocumentCategory
 from .serializers import DocumentSerializer, DocumentAssetSerializer, CategorySerializer
