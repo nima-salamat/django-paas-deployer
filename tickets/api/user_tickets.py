@@ -87,7 +87,7 @@ class MyTicketListCreateAPIView(APIView):
     parser_classes = [JSONParser, MultiPartParser, FormParser]
     def get(self, request):
         from core.app_cache import (
-            cache_get, cache_set, ticket_user_list_key, TICKET_USER_TTL, TICKET_USER_LIMIT,
+            cache_get, cache_set, ticket_user_list_key, get_cache_ttl("ticket_user"), TICKET_USER_LIMIT,
         )
         params = {k: request.query_params.get(k) or "" for k in ("status", "priority", "department", "search", "page", "page_size")}
         key = ticket_user_list_key(request.user.id, params)
@@ -111,7 +111,7 @@ class MyTicketListCreateAPIView(APIView):
         data = TicketListSerializer(page, many=True, context={"request": request}).data
         resp = paginator.get_paginated_response(data)
         try:
-            cache_set(key, resp.data, TICKET_USER_TTL)
+            cache_set(key, resp.data, get_cache_ttl("ticket_user"))
         except Exception:
             pass
         return resp
