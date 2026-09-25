@@ -182,7 +182,9 @@ def cache_dashboard(request):
             "policy_error": request.GET.get("policy_error") == "1",
             "stats_reset": request.GET.get("stats_reset") == "1",
             "conversation_action": request.GET.get("conversation_action") or "",
-            "policy_fields": CACHE_POLICY,
+            "policy_fields": [
+                (*item, policy[item[0]]) for item in CACHE_POLICY
+            ],
         },
     )
 
