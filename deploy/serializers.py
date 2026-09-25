@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.core.exceptions import ValidationError
-from django.db import OperationalError, InterfaceError, ProgrammingError
+from django.db import OperationalError, InterfaceError, ProgrammingError, transaction
 import logging
 
 from deployments.core.db_deployer import DB_PLATFORMS, SENSITIVE_CONFIG_KEYS
@@ -173,47 +173,38 @@ class DeploySerializer(serializers.ModelSerializer):
             return []
 
     def validate(self, attrs):
-        """Enforce share can_deploy_add on create (non-owners) and surface
-        friendly warnings about unknown / blocked config keys.
+        """Validate permissions and deployment-name collisions.
 
-        We never HARD-fail on unknown tenant config keys — a typo should not
-        block a deploy. Instead, the warnings are surfaced through the
-        serializer's ``_config_warnings`` attribute so the view can include
-        them in the API response.
+        Create requests may reuse a deployment name; the create path allocates
+        a unique suffix. Existing deployments keep strict name uniqueness when
+        renamed so an update cannot silently change identity.
         """
-        request = self.context.get("request")
-        if request is None or self.instance is not None:
-            return attrs
-        service = attrs.get("service")
-        user = getattr(request, "user", None)
-        if service is None or user is None or not getattr(user, "is_authenticated", False):
-            raise serializers.ValidationError({"service": "Service is required."})
-        if str(service.user_id) == str(user.id):
-            self._collect_config_warnings(attrs)
-            return attrs
-        from services.api.sharing import user_can_access_service
-        allowed, share = user_can_access_service(service, user, action="can_deploy_add")
-        if not allowed:
-            raise serializers.ValidationError(
-                {
-                    "service": "You do not have permission to add deploys on this shared service.",
-                    "code": "share_permission_denied",
-                    "action": "can_deploy_add",
-                }
-            )
-        self._collect_config_warnings(attrs)
-        return attrs
-
-    def validate(self, attrs):
         attrs = super().validate(attrs)
+        request = self.context.get("request")
         service = attrs.get("service") or getattr(self.instance, "service", None)
         name = str(attrs.get("name") or getattr(self.instance, "name", "")).strip()
         if "name" in attrs:
             attrs["name"] = name
-        if service is not None and name:
-            qs = Deploy.objects.filter(service=service, name=name)
-            if self.instance is not None:
-                qs = qs.exclude(pk=self.instance.pk)
+
+        if request is not None and self.instance is None:
+            user = getattr(request, "user", None)
+            if service is None or user is None or not getattr(user, "is_authenticated", False):
+                raise serializers.ValidationError({"service": "Service is required."})
+            if str(service.user_id) != str(user.id):
+                from services.api.sharing import user_can_access_service
+                allowed, share = user_can_access_service(service, user, action="can_deploy_add")
+                if not allowed:
+                    raise serializers.ValidationError(
+                        {
+                            "service": "You do not have permission to add deploys on this shared service.",
+                            "code": "share_permission_denied",
+                            "action": "can_deploy_add",
+                        }
+                    )
+            self._collect_config_warnings(attrs)
+
+        if self.instance is not None and service is not None and name:
+            qs = Deploy.objects.filter(service=service, name=name).exclude(pk=self.instance.pk)
             if qs.exists():
                 raise serializers.ValidationError(
                     {"name": "A deploy with this name already exists for this service."}
@@ -246,26 +237,37 @@ class DeploySerializer(serializers.ModelSerializer):
                         "action": "can_deploy_add",
                     }
                 )
+
         if "config" in validated_data:
             validated_data["config"] = sanitize_tenant_config(validated_data["config"])
-        instance = Deploy(**validated_data)
-        if request and (request.user.is_superuser or request.user.is_staff):
-            instance.skip_zip_size_limit = True
-        try:
-            instance.save()
-        except ValidationError as exc:
-            # Model.full_clean() raises django ValidationError; convert to DRF
-            # so the API returns 400 instead of an unhandled 500.
-            detail = getattr(exc, "message_dict", None) or getattr(exc, "messages", None) or str(exc)
-            raise serializers.ValidationError(detail)
-        except Exception as exc:
-            # IntegrityError (unique name race) etc. — surface as 400 when possible
-            from django.db import IntegrityError
-            if isinstance(exc, IntegrityError):
-                raise serializers.ValidationError(
-                    {"name": "A deploy with this name already exists."}
+
+        # Lock the service row while choosing the deployment name. This makes
+        # successive creates deterministic under normal concurrent requests and
+        # keeps the database uniqueness constraint as the final guard.
+        with transaction.atomic():
+            if service is not None:
+                service = service.__class__.objects.select_for_update().get(pk=service.pk)
+                validated_data["service"] = service
+                validated_data["name"] = _unique_deploy_name(
+                    service,
+                    validated_data.get("name"),
                 )
-            raise
+
+            instance = Deploy(**validated_data)
+            if request and (request.user.is_superuser or request.user.is_staff):
+                instance.skip_zip_size_limit = True
+            try:
+                instance.save()
+            except ValidationError as exc:
+                detail = getattr(exc, "message_dict", None) or getattr(exc, "messages", None) or str(exc)
+                raise serializers.ValidationError(detail)
+            except Exception as exc:
+                from django.db import IntegrityError
+                if isinstance(exc, IntegrityError):
+                    raise serializers.ValidationError(
+                        {"name": "A deploy with this name already exists."}
+                    )
+                raise
         return instance
 
     def update(self, instance, validated_data):
