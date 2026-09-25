@@ -82,7 +82,7 @@ class ServiceViewSet(ModelViewSet):
     def list(self, request, *args, **kwargs):
         from core.app_cache import (
             cache_get, cache_set, service_user_list_key,
-            SERVICE_USER_TTL, SERVICE_USER_LIMIT,
+            get_cache_ttl("service_user"), SERVICE_USER_LIMIT,
         )
         params = {
             "q": request.query_params.get("q_search") or request.query_params.get("q") or "",
@@ -107,10 +107,10 @@ class ServiceViewSet(ModelViewSet):
         serializer = GetServiceSerializer(page if page is not None else query, many=True)
         if page is not None:
             resp = self.get_paginated_response(serializer.data)
-            cache_set(key, resp.data, SERVICE_USER_TTL)
+            cache_set(key, resp.data, get_cache_ttl("service_user"))
             return resp
         data = {"count": len(serializer.data), "results": serializer.data}
-        cache_set(key, data, SERVICE_USER_TTL)
+        cache_set(key, data, get_cache_ttl("service_user"))
         return Response(data)
 
     def create(self, request, *args, **kwargs):
