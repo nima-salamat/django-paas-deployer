@@ -307,12 +307,18 @@ class SwarmRuntimeAdapter:
         )
         ready = state.replicas_desired == state.replicas_running and state.replicas_running > 0
         status = RuntimeObservedStatus.READY if ready else RuntimeObservedStatus.DEGRADED
+        labels = dict(state.labels or {})
+        observed_revision = (
+            labels.get("revision.id")
+            or labels.get("passdeployer.revision")
+            or identity.revision_id
+        )
         return RuntimeObservation(
-            identity=identity,
+            identity=replace(identity, revision_id=observed_revision),
             status=status,
             runtime_id=state.service_id,
             desired_replicas=state.replicas_desired,
             ready_replicas=state.replicas_running,
             tasks=tasks,
-            details={"service_name": state.name},
+            details={"service_name": state.name, "labels": labels},
         )

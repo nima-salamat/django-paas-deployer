@@ -125,6 +125,7 @@ class _StubSwarmRuntime:
                     message="",
                 ),
             ),
+            labels={"revision.id": "revision-observed"},
         )
 
     def assert_active(self):
@@ -170,6 +171,7 @@ def test_swarm_adapter_translates_existing_runtime_state_without_exposing_sdk_ty
     assert result.success is True
     assert result.observation.ready is True
     assert inspected.runtime_id == "swarm-service-1"
+    assert inspected.identity.revision_id == "revision-observed"
     assert ready.observation.tasks[0].task_id == "task-1"
     assert not hasattr(ready.observation, "attrs")
     assert adapter.logs(identity) == b"ready\n"

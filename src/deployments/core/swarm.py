@@ -9,8 +9,8 @@ from __future__ import annotations
 import os
 import re
 import time
-from dataclasses import dataclass
-from typing import Any, Iterable
+from dataclasses import dataclass, field
+from typing import Any, Iterable, Mapping
 
 import docker
 import yaml
@@ -38,6 +38,7 @@ class SwarmServiceState:
     replicas_desired: int
     replicas_running: int
     tasks: tuple[SwarmTaskState, ...]
+    labels: Mapping[str, str] = field(default_factory=dict)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -513,6 +514,10 @@ class SwarmRuntime:
             replicas_desired=replicas,
             replicas_running=running,
             tasks=tasks,
+            labels={
+                str(key): str(value)
+                for key, value in dict(((service.attrs or {}).get("Spec") or {}).get("Labels") or {}).items()
+            },
         )
 
     def wait_ready(self, name: str, *, timeout: float = 60.0) -> SwarmServiceState:
