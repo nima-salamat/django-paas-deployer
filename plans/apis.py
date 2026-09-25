@@ -212,7 +212,7 @@ class PlansApiView(APIView):
         GET /plans/?id=1,2,3 
         GET /plans/?id=1   
         """
-        from core.app_cache import cache_get, cache_set, plan_list_key, plan_detail_key, get_cache_ttl("plan")
+        from core.app_cache import cache_get, cache_set, plan_list_key, plan_detail_key, get_cache_ttl
         ids = request.query_params.get("id", "")
         if not ids:
             key = plan_list_key({"page": request.query_params.get("page") or "1"})
