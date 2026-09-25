@@ -204,6 +204,20 @@ class DeploySerializer(serializers.ModelSerializer):
         self._collect_config_warnings(attrs)
         return attrs
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        service = attrs.get("service") or getattr(self.instance, "service", None)
+        name = str(attrs.get("name") or getattr(self.instance, "name", "")).strip()
+        if service is not None and name:
+            qs = Deploy.objects.filter(service=service, name=name)
+            if self.instance is not None:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError(
+                    {"name": "A deploy with this name already exists for this service."}
+                )
+        return attrs
+
     def _collect_config_warnings(self, attrs):
         """Run the tenant-config contract checker and stash the result."""
         try:
