@@ -254,6 +254,16 @@ class DeploymentCancelled(DeploymentError):
     recoverable = False
 
 
+class StaleDeploymentWorkerError(DeploymentError):
+    """The worker lost execution ownership and must stop mutating state."""
+
+    default_stage = "ownership"
+    default_code = "STALE_DEPLOYMENT_WORKER"
+    default_category = "ownership_error"
+    default_user_message = "This deployment worker is no longer the active owner."
+    recoverable = False
+
+
 class OrchestratorDeploymentError(DeploymentError):
     """The orchestrator returned a failed DeploymentResult."""
     default_stage = "orchestrator"
@@ -291,6 +301,7 @@ __all__ = [
     "CleanupError",
     "DeploymentLockError",
     "DeploymentCancelled",
+    "StaleDeploymentWorkerError",
     "OrchestratorDeploymentError",
     "DeploymentSecurityError",
 ]

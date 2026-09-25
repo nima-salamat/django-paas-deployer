@@ -35,7 +35,6 @@ Design
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import FrozenSet
 
 
@@ -145,24 +144,9 @@ DEPLOY_TRANSITIONS: FrozenSet[tuple[str | None, str]] = frozenset({
 })
 
 
-@dataclass(frozen=True)
 class InvalidTransition(Exception):
     """Raised when a state transition is not in the allowed table."""
-    entity: str
-    src: str | None
-    dst: str
-    allowed: tuple[str, ...]
 
-    def __str__(self) -> str:  # noqa: D401 - keep exception message informative
-        return (
-            f"Invalid {self.entity} state transition: "
-            f"{self.src!r} -> {self.dst!r}. "
-            f"Allowed targets from {self.src!r}: {self.allowed}"
-        )
-
-
-# Make it a real Exception subclass (dataclass + Exception is awkward)
-class InvalidTransition(Exception):
     def __init__(self, entity: str, src: str | None, dst: str,
                  allowed: tuple[str, ...]) -> None:
         self.entity = entity

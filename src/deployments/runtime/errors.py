@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from deployments.common.exceptions import DeploymentError
 
-class RuntimeOperationError(Exception):
+
+class RuntimeOperationError(DeploymentError):
     """A normalized runtime failure safe for application-layer handling."""
 
     def __init__(
@@ -18,12 +20,15 @@ class RuntimeOperationError(Exception):
         details: Mapping[str, Any] | None = None,
         user_message: str | None = None,
     ) -> None:
-        super().__init__(message)
-        self.code = code
-        self.recoverable = bool(recoverable)
-        self.category = category
-        self.details = dict(details or {})
-        self.user_message = user_message or message
+        super().__init__(
+            message,
+            stage="runtime",
+            recoverable=bool(recoverable),
+            category=category,
+            code=code,
+            details=dict(details or {}),
+            user_message=user_message or message,
+        )
 
 
 class RuntimeUnavailableError(RuntimeOperationError):
