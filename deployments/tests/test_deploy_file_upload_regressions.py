@@ -148,7 +148,36 @@ class DeploymentFileUploadRegressionTests(TestCase):
             2,
         )
 
-    def test_duplicate_deploy_name_on_same_service_is_rejected(self):
+    def test_duplicate_api_deploy_name_gets_unique_suffix(self):
+        existing = Deploy.objects.create(
+            name="same-service-name",
+            service=self.service,
+            version="1.0",
+            config={},
+        )
+
+        request = APIRequestFactory().post(
+            "/deploy/",
+            {
+                "name": "same-service-name",
+                "service": str(self.service.pk),
+                "version": "1.0",
+                "config": "{}",
+            },
+            format="json",
+        )
+        force_authenticate(request, user=self.user)
+        with patch(
+            "deploy.daily_limits.assert_daily_deploy_allowed",
+            return_value=(True, "", 0, 100),
+        ):
+            response = DeployViewSet.as_view({"post": "create"})(request)
+
+        self.assertEqual(response.status_code, 201)
+        created = Deploy.objects.exclude(pk=existing.pk).get(service=self.service)
+        self.assertEqual(created.name, "same-service-name-2")
+
+    def test_duplicate_model_deploy_name_is_still_rejected(self):
         Deploy.objects.create(
             name="same-service-name",
             service=self.service,
