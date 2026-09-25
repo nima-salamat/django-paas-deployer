@@ -48,16 +48,16 @@ def _unique_service_name(user, base: str) -> str:
 
 
 def _unique_deploy_name(service: Service) -> str:
-    """Deploy.name is globally unique; bind it to the already-unique service name."""
+    """Generate a deployment name unique within its service."""
     base = str(service.name)[:50].strip("-") or "app"
     from deploy.models import Deploy
-    if not Deploy.objects.filter(name=base).exists():
+    if not Deploy.objects.filter(service=service, name=base).exists():
         return base
     i = 2
     while True:
         suffix = f"-{i}"
         candidate = (base[: 50 - len(suffix)] + suffix).strip("-")
-        if not Deploy.objects.filter(name=candidate).exists():
+        if not Deploy.objects.filter(service=service, name=candidate).exists():
             return candidate
         i += 1
 
