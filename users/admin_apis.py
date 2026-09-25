@@ -204,7 +204,7 @@ class AdminUserListAPIView(APIView):
 
     def get(self, request):
         from core.app_cache import (
-            cache_get, cache_set, user_admin_list_key, get_cache_ttl("user_admin"), USER_ADMIN_LIMIT,
+            cache_get, cache_set, user_admin_list_key, get_cache_ttl, USER_ADMIN_LIMIT,
         )
         u = request.user
         allowed = (
