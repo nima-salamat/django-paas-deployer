@@ -11,6 +11,14 @@ from .naming import allocate_deploy_name, normalize_deploy_name
 logger = logging.getLogger(__name__)
 
 
+def _integrity_constraint_name(exc: IntegrityError) -> str:
+    """Return PostgreSQL's named constraint when the driver exposes it."""
+    cause = getattr(exc, "__cause__", None) or getattr(exc, "orig", None)
+    diag = getattr(cause, "diag", None)
+    return str(getattr(diag, "constraint_name", "") or "").strip()
+
+
+
 class MaskedDBConfigField(serializers.JSONField):
     """JSONField that strips sensitive DB credentials on read, but accepts full dict on write.
 
@@ -266,12 +274,13 @@ class DeploySerializer(serializers.ModelSerializer):
                 detail = getattr(exc, "message_dict", None) or getattr(exc, "messages", None) or str(exc)
                 raise serializers.ValidationError(detail)
             except IntegrityError as exc:
-                if "deploy_deploy_name_key" in str(exc):
-                    logger.error(
-                        "Legacy global deploy-name constraint is still present; "
-                        "deploy.0017_drop_legacy_deploy_name_unique must be applied: %s",
-                        exc,
-                    )
+                constraint = _integrity_constraint_name(exc)
+                logger.error(
+                    "Deploy create IntegrityError constraint=%s detail=%s",
+                    constraint or "?",
+                    exc,
+                )
+                if constraint == "deploy_deploy_name_key":
                     raise serializers.ValidationError(
                         {
                             "name": (
@@ -281,8 +290,16 @@ class DeploySerializer(serializers.ModelSerializer):
                             "code": "deployment_schema_out_of_date",
                         }
                     )
+                if constraint == "uniq_deploy_service_name":
+                    raise serializers.ValidationError(
+                        {"name": "A deploy with this name already exists for this service."}
+                    )
                 raise serializers.ValidationError(
-                    {"name": "A deploy with this name already exists for this service."}
+                    {
+                        "error": "Deployment could not be created because of a database integrity error.",
+                        "code": "deployment_integrity_error",
+                        "constraint": constraint or None,
+                    }
                 )
         return instance
 
@@ -302,12 +319,13 @@ class DeploySerializer(serializers.ModelSerializer):
             detail = getattr(exc, "message_dict", None) or getattr(exc, "messages", None) or str(exc)
             raise serializers.ValidationError(detail)
         except IntegrityError as exc:
-            if "deploy_deploy_name_key" in str(exc):
-                logger.error(
-                    "Legacy global deploy-name constraint is still present during update; "
-                    "deploy.0017_drop_legacy_deploy_name_unique must be applied: %s",
-                    exc,
-                )
+            constraint = _integrity_constraint_name(exc)
+            logger.error(
+                "Deploy update IntegrityError constraint=%s detail=%s",
+                constraint or "?",
+                exc,
+            )
+            if constraint == "deploy_deploy_name_key":
                 raise serializers.ValidationError(
                     {
                         "name": (
@@ -317,7 +335,15 @@ class DeploySerializer(serializers.ModelSerializer):
                         "code": "deployment_schema_out_of_date",
                     }
                 )
+            if constraint == "uniq_deploy_service_name":
+                raise serializers.ValidationError(
+                    {"name": "A deploy with this name already exists for this service."}
+                )
             raise serializers.ValidationError(
-                {"name": "A deploy with this name already exists for this service."}
+                {
+                    "error": "Deployment could not be updated because of a database integrity error.",
+                    "code": "deployment_integrity_error",
+                    "constraint": constraint or None,
+                }
             )
         return instance
