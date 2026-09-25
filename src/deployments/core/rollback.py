@@ -55,6 +55,7 @@ class ContainerSnapshot:
     read_only: bool = True
     entry_port: int | None = None
     route_name: str | None = None
+    public_host: str | None = None
     max_cpu: float | None = None
     max_ram: int | None = None
     restart_policy: dict | None = None
@@ -179,6 +180,7 @@ class ContainerSnapshot:
             read_only=bool(host_config.get("ReadonlyRootfs", True)),
             entry_port=entry_port,
             route_name=route_name,
+            public_host=public_host,
             max_cpu=max_cpu,
             max_ram=max_ram,
             restart_policy=restart_policy,
@@ -257,6 +259,7 @@ class RollbackManager:
                 entry_port=snapshot.entry_port,
                 labels=snapshot.labels or None,
                 route_name=snapshot.route_name,
+                public_host=snapshot.public_host,
                 restart_policy=snapshot.restart_policy or None,
                 extra_host_config={
                     "pids_limit": snapshot.host_config_extra.get("PidsLimit") or 4096,

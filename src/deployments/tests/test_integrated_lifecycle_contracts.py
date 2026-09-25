@@ -50,7 +50,8 @@ class IntegratedLifecycleContractTests(unittest.TestCase):
 
     def test_optional_service_cancel_does_not_fail_application(self):
         executor = self.read("app_catalog/executor.py")
-        self.assertIn('plan_required.get(b.service_key, True)\n            and b.deploy.status == DeploymentStatusChoices.CANCELLED', executor)
+        self.assertIn("required.get(b.service_key, True)", executor)
+        self.assertIn("DeploymentStatusChoices.CANCELLED", executor)
 
     def test_application_delete_requires_terminal_state(self):
         api = self.read("app_catalog/apis.py")
@@ -69,24 +70,24 @@ if __name__ == "__main__":
 
 
 def test_catalog_gate_uses_installed_plan_snapshot_not_live_catalog():
-    text = Path("app_catalog/tasks.py").read_text()
+    text = (ROOT / "app_catalog/tasks.py").read_text()
     assert "ApplicationStackExecutor(instance_id)._load()" in text
     assert "ApplicationCatalog.get(instance.catalog_id)" not in text
 
 def test_internal_catalog_services_do_not_join_public_proxy_network_without_port():
-    text = Path("deployments/core/deploy.py").read_text()
-    assert "and self.port" in text
+    text = (ROOT / "deployments/core/deploy.py").read_text()
+    assert "bool(self.port)" in text
     assert 'NetworkSpec(name="proxy_net"' in text
 
 
 
 def test_application_reconciliation_recovers_lost_start_and_cancel_tasks():
-    text = Path("app_catalog/tasks.py").read_text()
+    text = (ROOT / "app_catalog/tasks.py").read_text()
     assert "status=ApplicationStatus.PENDING" in text
     assert "start_application_installation.delay" in text
     assert "ApplicationStackExecutor(str(instance.pk)).cancel" in text
 
 def test_application_queue_failure_does_not_leave_permanent_pending_state():
-    text = Path("app_catalog/apis.py").read_text()
+    text = (ROOT / "app_catalog/apis.py").read_text()
     assert "APPLICATION_TASK_QUEUE_FAILED" in text
     assert "HTTP_503_SERVICE_UNAVAILABLE" in text

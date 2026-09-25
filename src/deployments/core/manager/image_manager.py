@@ -385,6 +385,18 @@ class Image(Client):
         watcher = None
 
         if cancel_check is not None:
+            if cancel_check():
+                try:
+                    response.close()
+                except Exception:
+                    pass
+                from deployments.common.exceptions import DeploymentCancelled
+                raise DeploymentCancelled(
+                    "Deployment cancellation requested during Docker image build.",
+                    stage="cancelled",
+                    details={"operation": "docker_build"},
+                )
+
             def _watch_cancel():
                 while not cancelled.wait(0.25):
                     try:

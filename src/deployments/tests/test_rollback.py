@@ -100,7 +100,7 @@ class TestContainerSnapshotCapture(unittest.TestCase):
         self.assertEqual(snap.max_cpu, 1.0)
         self.assertEqual(snap.max_ram, 512)
         self.assertEqual(snap.restart_policy["Name"], "unless-stopped")
-        self.assertEqual(snap.route_name, "myservice")  # from labels
+        self.assertEqual(snap.public_host, "myservice.example.com")  # from labels
 
 
 class TestRollbackManagerRestore(unittest.TestCase):
