@@ -136,7 +136,7 @@ class AdminServiceViewSet(ModelViewSet):
 
         if cache_key is not None:
             try:
-                from core.app_cache import cache_set, get_cache_ttl("service_admin")
+                from core.app_cache import cache_set, get_cache_ttl
                 cache_set(cache_key, body, get_cache_ttl("service_admin"))
             except Exception:
                 logger.exception("admin services: cache write failed")
