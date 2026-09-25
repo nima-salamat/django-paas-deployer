@@ -111,7 +111,7 @@ class AdminServiceViewSet(ModelViewSet):
         """Admin service list. Never slice QS before paginate."""
         cache_key = None
         try:
-            from core.app_cache import cache_get, cache_set, service_admin_list_key, get_cache_ttl("service_admin")
+            from core.app_cache import cache_get, cache_set, service_admin_list_key, get_cache_ttl
             params = {
                 k: request.query_params.get(k) or ""
                 for k in ("q", "q_search", "page", "page_size", "user_id", "status")
