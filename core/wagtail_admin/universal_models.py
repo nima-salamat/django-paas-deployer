@@ -216,10 +216,9 @@ def _viewset_class(model, *, read_only=False):
         "list_display": _list_display(model),
         "list_filter": _list_filter(model),
         "search_fields": _search_fields(model),
-        "ordering": tuple(
-            field.name for field in model._meta.fields
-            if field.name == "created_at"
-        ) or None,
+        "ordering": ("-created_at",) if any(
+            field.name == "created_at" for field in model._meta.fields
+        ) else None,
         "panels": _panels(model, force_read_only=read_only),
         "inspect_view_enabled": True,
         "copy_view_enabled": not read_only,
