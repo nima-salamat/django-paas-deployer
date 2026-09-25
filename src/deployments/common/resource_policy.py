@@ -38,11 +38,19 @@ def build_limits(plan: Any = None) -> dict[str, int | float]:
     A tenant can never select this mode or the resulting numbers.
     """
     mode = str(_operator("build.resource_mode", _get("DEPLOY_BUILD_RESOURCE_MODE", "static"))).strip().lower()
-    hard_cpu = max(0.25, min(float(_operator("build.max_cpu", _get("DEPLOY_BUILD_MAX_CPU", BUILD_CPU_DEFAULT))), 8.0))
-    hard_ram = max(256, min(int(_operator("build.max_ram_mb", _get("DEPLOY_BUILD_MAX_RAM_MB", BUILD_RAM_MB_DEFAULT))), 8192))
+    configured_cpu = _operator("build.max_cpu", _get("DEPLOY_BUILD_MAX_CPU", None))
+    configured_ram = _operator("build.max_ram_mb", _get("DEPLOY_BUILD_MAX_RAM_MB", None))
+    hard_cpu = (
+        max(0.25, min(float(configured_cpu), 8.0))
+        if configured_cpu not in (None, "") else 8.0
+    )
+    hard_ram = (
+        max(256, min(int(configured_ram), 8192))
+        if configured_ram not in (None, "") else 8192
+    )
 
-    cpu = hard_cpu
-    ram = hard_ram
+    cpu = min(BUILD_CPU_DEFAULT, hard_cpu)
+    ram = min(BUILD_RAM_MB_DEFAULT, hard_ram)
     if mode == "plan" and plan is not None:
         try:
             plan_cpu = float(plan.max_cpu)
