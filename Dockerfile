@@ -43,6 +43,11 @@ RUN pip install \
 
 COPY . .
 
+# The startup script is invoked only by the web service in compose.yaml.
+# Do not make it a global ENTRYPOINT because celery/beat/event/log workers
+# share this image and must not run Django startup migrations.
+RUN chmod +x /app/entrypoint.sh
+
 EXPOSE 8000
 
 CMD ["uvicorn", "asgi:application", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
