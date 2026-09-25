@@ -203,7 +203,7 @@ class SwarmRuntimeAdapter:
                 details=getattr(exc, "details", {}) or {},
                 user_message=getattr(exc, "user_message", None),
             ) from exc
-        observation = self._observation(identity, state)
+        observation = self._observation(identity, state, assume_identity_revision=True)
         handle = RuntimeHandle(
             backend=self.backend,
             identity=identity,
@@ -228,7 +228,11 @@ class SwarmRuntimeAdapter:
                 code=str(getattr(exc, "code", "swarm_inspect_failed") or "swarm_inspect_failed").lower(),
                 recoverable=bool(getattr(exc, "recoverable", False)),
             ) from exc
-        return self._observation(identity, state)
+        # Inspection is observed state, not desired state. If an externally
+        # created service has no managed revision label, keep the revision
+        # unknown so reconciliation can request operator intervention instead
+        # of silently declaring it converged.
+        return self._observation(identity, state, assume_identity_revision=False)
 
     def wait_ready(
         self,
@@ -257,7 +261,7 @@ class SwarmRuntimeAdapter:
                 details=getattr(exc, "details", {}) or {},
                 user_message=getattr(exc, "user_message", None),
             ) from exc
-        observation = self._observation(handle.identity, state)
+        observation = self._observation(handle.identity, state, assume_identity_revision=True)
         return RuntimeOperationResult(success=True, changed=True, handle=handle, observation=observation)
 
     def stop(self, handle: RuntimeHandle, *, operation_key: str) -> RuntimeOperationResult:
@@ -290,7 +294,12 @@ class SwarmRuntimeAdapter:
         return self.runtime.service_logs(identity.resource_name(), tail=tail)
 
     @staticmethod
-    def _observation(identity: RuntimeIdentity, state: SwarmServiceState | None) -> RuntimeObservation:
+    def _observation(
+        identity: RuntimeIdentity,
+        state: SwarmServiceState | None,
+        *,
+        assume_identity_revision: bool = False,
+    ) -> RuntimeObservation:
         if state is None:
             return RuntimeObservation(identity=identity, status=RuntimeObservedStatus.MISSING)
         tasks = tuple(
@@ -311,7 +320,7 @@ class SwarmRuntimeAdapter:
         observed_revision = (
             labels.get("revision.id")
             or labels.get("passdeployer.revision")
-            or identity.revision_id
+            or (identity.revision_id if assume_identity_revision else None)
         )
         return RuntimeObservation(
             identity=replace(identity, revision_id=observed_revision),

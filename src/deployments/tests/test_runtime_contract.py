@@ -175,3 +175,25 @@ def test_swarm_adapter_translates_existing_runtime_state_without_exposing_sdk_ty
     assert ready.observation.tasks[0].task_id == "task-1"
     assert not hasattr(ready.observation, "attrs")
     assert adapter.logs(identity) == b"ready\n"
+
+
+def test_swarm_inspection_does_not_treat_an_unlabelled_external_service_as_current_revision():
+    runtime = _StubSwarmRuntime()
+    runtime.state = SwarmServiceState(
+        name=runtime.state.name,
+        service_id=runtime.state.service_id,
+        replicas_desired=runtime.state.replicas_desired,
+        replicas_running=runtime.state.replicas_running,
+        tasks=runtime.state.tasks,
+    )
+    adapter = SwarmRuntimeAdapter(runtime=runtime, operator_enabled=True)
+    identity = RuntimeIdentity(
+        service_id="service-1",
+        deployment_id="deployment-1",
+        revision_id="desired-revision",
+        runtime_name="app-service-1",
+    )
+
+    observed = adapter.inspect(identity)
+
+    assert observed.identity.revision_id is None
