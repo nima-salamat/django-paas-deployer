@@ -182,6 +182,29 @@ class StreamModeTests(SimpleTestCase):
         self.assertEqual(legacy_ts, ts)
         self.assertEqual(legacy_seq, 3)
 
+    def test_rate_window_is_shared_per_service(self):
+        from deployments.management.commands.run_log_collector import Command
+
+        cmd = Command()
+        cmd._rate_windows = {}
+        cmd._rate_lock = __import__("threading").Lock()
+        service = SimpleNamespace(pk="service-1")
+
+        first = cmd._rate_for_service(service, 100)
+        second = cmd._rate_for_service(service, 200)
+
+        self.assertIs(first, second)
+        self.assertEqual(first.max_bps, 200)
+
+    def test_partial_lines_are_reassembled(self):
+        from deployments.management.commands.run_log_collector import DockerLineAssembler
+
+        assembler = DockerLineAssembler()
+        self.assertEqual(assembler.feed([("stdout", "hello ")]), [])
+        self.assertEqual(assembler.feed([("stdout", "world\nnext")]), [("stdout", "hello world")])
+        self.assertEqual(assembler.feed([("stderr", "error")]), [])
+        self.assertEqual(assembler.flush(), [("stdout", "next"), ("stderr", "error")])
+
     def test_catch_up_preserves_stderr(self):
         from deployments.management.commands.run_log_collector import Command, RateWindow
 
