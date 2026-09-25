@@ -17,5 +17,5 @@ def test_control_plane_migration_has_one_runtime_owner():
         "\n  # ============================================================\n  # REDIS",
         1,
     )[0]
-    assert 'entrypoint: ["/app/entrypoint.sh"]' in web_block
+    assert 'entrypoint: ["/bin/sh", "/app/entrypoint.sh"]' in web_block
     assert "command:\n      - daphne" in web_block
