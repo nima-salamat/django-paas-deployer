@@ -7,11 +7,31 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 from unittest.mock import patch
 
 from deploy.apis import DeployViewSet
+from deploy.apis import _shallow_request_data
 from deploy.models import Deploy
 from deploy.serializers import DeploySerializer
 from plans.models import Plan
 from services.models import Service
 from users.models import User
+
+
+class DeploymentRequestDataRegressionTests(TestCase):
+    def test_shallow_request_data_preserves_uploaded_file_identity(self):
+        uploaded = self._zip_for_regression("app.zip", b"body")
+        from django.http import QueryDict
+
+        data = QueryDict("", mutable=True)
+        data["name"] = "file"
+        data.setlist("zip_file", [uploaded])
+
+        mapped = _shallow_request_data(data)
+
+        self.assertIs(mapped["zip_file"], uploaded)
+        self.assertEqual(mapped["name"], "file")
+
+    @staticmethod
+    def _zip_for_regression(name, body):
+        return SimpleUploadedFile(name, body, content_type="application/zip")
 
 
 class DeploymentFileUploadRegressionTests(TestCase):
