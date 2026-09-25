@@ -127,11 +127,13 @@ def service_logs_apiview(request, pk):
             "has_more_older": data.get("has_more_older"),
             "has_more_newer": data.get("has_more_newer"),
             "policy": {
+                "mode": policy.mode,
                 "retention_days": policy.retention_days,
                 "storage_quota_bytes": policy.storage_quota_bytes,
                 "persistent_enabled": policy.persistent_enabled,
                 "realtime_enabled": policy.realtime_enabled,
                 "quota_behavior": policy.quota_behavior,
+                "history_available": policy.persistent_enabled,
             },
             "usage": usage,
         },
