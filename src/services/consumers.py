@@ -100,6 +100,7 @@ class ServiceLogsConsumer(AsyncJsonWebsocketConsumer):
                     "events": data.get("events") or [],
                     "next_cursor": data.get("next_cursor"),
                     "prev_cursor": data.get("prev_cursor"),
+                    "mode": getattr(self, "log_mode", "realtime_only"),
                 }
             )
         except Exception:
