@@ -82,7 +82,7 @@ class ServiceViewSet(ModelViewSet):
     def list(self, request, *args, **kwargs):
         from core.app_cache import (
             cache_get, cache_set, service_user_list_key,
-            get_cache_ttl("service_user"), SERVICE_USER_LIMIT,
+            get_cache_ttl, SERVICE_USER_LIMIT,
         )
         params = {
             "q": request.query_params.get("q_search") or request.query_params.get("q") or "",
