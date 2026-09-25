@@ -47,6 +47,7 @@ BESPOKE = {
     "messenger.ProfilePhotoPrivacy", "messenger.ProfilePhotoAllowed",
     "messenger.Conversation", "messenger.ConversationParticipant",
     "messenger.GroupInviteLink", "messenger.JoinRequest", "messenger.Message",
+    "messenger.CallSessionParticipant",
     "messenger.MessageReaction", "messenger.MessageReadReceipt",
     "messenger.MessageAttachment", "messenger.AttachmentViewOnceOpen",
     "messenger.PinnedMessage", "messenger.CallSession",
