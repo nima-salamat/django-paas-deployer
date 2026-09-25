@@ -1,10 +1,12 @@
 from django.test import SimpleTestCase
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[2]
+
 
 class LoggingIsolationTests(SimpleTestCase):
     def test_consumer_has_no_docker_follow(self):
-        body = Path("services/consumers.py").read_text()
+        body = (ROOT / "services/consumers.py").read_text(encoding="utf-8")
         # ServiceLogsConsumer must not call docker follow
         # Allow RestrictedShell and other classes; check the ServiceLogsConsumer section
         start = body.find("class ServiceLogsConsumer")
@@ -15,7 +17,7 @@ class LoggingIsolationTests(SimpleTestCase):
         self.assertNotIn("containers.get", section)
 
     def test_runtime_api_no_docker_fallback(self):
-        body = Path("services/api/runtime.py").read_text()
+        body = (ROOT / "services/api/runtime.py").read_text(encoding="utf-8")
         start = body.find("def service_logs_apiview")
         end = body.find("\ndef ", start + 10)
         section = body[start:end]
@@ -23,6 +25,6 @@ class LoggingIsolationTests(SimpleTestCase):
         self.assertNotIn("containers.get", section)
 
     def test_celery_tasks_are_maintenance_only(self):
-        body = Path("logs/tasks.py").read_text()
+        body = (ROOT / "logs/tasks.py").read_text(encoding="utf-8")
         self.assertNotIn("container.logs", body)
         self.assertNotIn("follow=True", body)
