@@ -19,7 +19,11 @@ from deployments.common.exceptions import (
     to_deployment_error,
 )
 from deployments.runtime.contract import RuntimeContract, RuntimeHandle, RuntimeOperationResult
-from deployments.runtime.errors import RuntimeOperationError
+from deployments.runtime.errors import (
+    RuntimeOperationError,
+    RuntimeUnavailableError,
+    RuntimeUnsupportedError,
+)
 
 from .context import DeploymentExecutionContext
 
@@ -152,6 +156,7 @@ class DeploymentLifecycleExecutor:
         applied: RuntimeOperationResult | None = None
         try:
             context.assert_can_continue()
+            self._assert_runtime_selection(context)
             context.emit("planning", "Deployment plan is being prepared.", progress=10)
             plan = strategy.plan(context)
             context.assert_can_continue()
@@ -257,6 +262,23 @@ class DeploymentLifecycleExecutor:
                 rollback_performed=rollback_performed,
                 rollback_failed=rollback_failed,
                 details=error.details,
+            )
+
+    @staticmethod
+    def _assert_runtime_selection(context: DeploymentExecutionContext) -> None:
+        selection = context.runtime_selection
+        missing = selection.missing_capabilities
+        if missing:
+            raise RuntimeUnsupportedError(
+                "The selected runtime cannot satisfy this deployment.",
+                details={"missing": sorted(value.value for value in missing)},
+            )
+        availability = selection.availability
+        if availability.state.value != "unknown" and not availability.can_execute:
+            raise RuntimeUnavailableError(
+                availability.message or "The selected runtime is unavailable.",
+                code=availability.reason_code or "runtime_unavailable",
+                details={"availability": availability.state.value},
             )
 
     def _finish_cancellation(

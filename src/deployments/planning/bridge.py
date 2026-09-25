@@ -55,6 +55,7 @@ class DeploymentPlanCompatibilityCompiler:
             labels["deployment.id"] = str(plan.identity.deployment_id)
         if plan.identity.revision_id:
             labels["revision.id"] = str(plan.identity.revision_id)
+        labels["passdeployer.strategy"] = str(plan.strategy_kind)
 
         return replace(
             config,

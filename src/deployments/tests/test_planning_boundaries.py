@@ -124,6 +124,7 @@ def test_plan_compiler_derives_capabilities_and_bridge_preserves_legacy_config()
     assert [network.name for network in bridged.networks] == ["demo-net"]
     assert [volume.target for volume in bridged.volumes] == ["/data"]
     assert bridged.labels["revision.id"] == "revision-1"
+    assert bridged.labels["passdeployer.strategy"] == "application"
     assert bridged.runtime_options["placement_constraints"] == [
         "node.role == worker"
     ]
@@ -133,8 +134,25 @@ def test_plan_compiler_derives_capabilities_and_bridge_preserves_legacy_config()
     }
 
 
+def test_plan_rejects_unknown_strategy_kind():
+    identity = RuntimeIdentity("service-1", "deployment-1", "revision-1")
+    selection = RuntimeRegistry({"swarm": FakeRuntime()}).resolve(policy={"backend": "swarm"})
+    resolved = ConfigurationResolver().resolve()
+
+    with pytest.raises(ValueError, match="Unknown deployment strategy kind"):
+        DeploymentPlanCompiler().compile(
+            identity=identity,
+            graph=_graph(),
+            selection=selection,
+            resolved=resolved,
+            image_ref="registry.example/app:1",
+            strategy_kind="unknown",
+        )
+
+
 def test_current_swarm_service_path_compiles_a_plan_before_the_legacy_facade():
-    source = Path("src/deployments/celery/services/deploy_service.py").read_text()
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "deployments" / "celery" / "services" / "deploy_service.py").read_text()
 
     assert "def _compile_compatibility_plan(" in source
     assert "execution_plan = self._compile_compatibility_plan(" in source

@@ -826,5 +826,50 @@ The repository does not need another global settings file or a large speculative
 
 This report is the first deliverable. The next phase should begin with characterization tests and contract definitions, not a wholesale rewrite of DeploymentOrchestrator, SwarmRuntime, or DBDeployer.
 
+## 21. Implementation status on `refactor/service-centric-runtime`
 
+The first incremental implementation slices now exist and are intentionally
+compatible with the current runtime rather than pretending that the migration
+is complete:
+
+- characterization tests cover the current runtime graph and Swarm
+  configuration identity;
+- `deployments.runtime` defines backend identity, capabilities, availability,
+  observations, typed runtime errors, a fake runtime, a registry, and a
+  Swarm adapter around the existing runtime implementation;
+- `deployments.planning` resolves scoped configuration with provenance and
+  compiles a capability-checked `DeploymentPlan`;
+- a compatibility compiler translates a plan into the existing
+  `DeploymentConfig`, preserving current Swarm names, labels, resources, and
+  explicit health checks;
+- the revision-backed Swarm path now compiles that compatibility plan before
+  invoking the existing facade;
+- `deployments.application` provides a pure, fenced lifecycle executor with
+  ownership checks, cancellation, retry classification, rollback hooks, and
+  terminal idempotency;
+- the application layer now has one strategy-resolution seam for application
+  and database workloads, so specialized planners can share the lifecycle
+  contract without routing database deployments through an application build
+  pipeline;
+- `deployments.reconciliation` provides a pure desired-versus-observed
+  decision planner.
+
+The following are still transitional and are not claimed as complete:
+
+- the Celery worker still owns the surrounding orchestration and has not yet
+  been fully migrated to the lifecycle executor;
+- the Django state manager, event sinks, API actions, Wagtail controls, and
+  database/application strategy selection are not yet unified behind the new
+  ports;
+- runtime observations are not yet the active reconciliation input for every
+  deployment path;
+- legacy local-Docker behavior remains compatibility behavior and is not yet
+  an explicit, fully isolated backend;
+- PostgreSQL, Docker/Swarm, Wagtail, and full-suite verification remain
+  environment-sensitive release work.
+
+This status is part of the design contract: new code must extend the seams
+above or explicitly document why an existing compatibility path remains. It
+must not introduce another direct Docker path or another independent
+deployment state machine.
 

@@ -1,5 +1,6 @@
 """Pure lifecycle tests for ownership, cancellation, retry and rollback."""
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -163,3 +164,46 @@ def test_invalid_terminal_transition_remains_rejected():
 
     assert store.ensure_running(context) is False
     assert store.status == sm.DEPLOY_SUCCEEDED
+
+
+def test_known_unavailable_runtime_is_blocked_before_planning():
+    runtime = FakeRuntime(reachable=False)
+    identity = RuntimeIdentity(service_id="service-1", runtime_name="app-service-1")
+    selection = RuntimeRegistry({"swarm": runtime}).resolve(
+        policy={"backend": "swarm"}, probe=True
+    )
+    context = DeploymentExecutionContext(
+        deployment_id="deployment-1",
+        service_id=identity.service_id,
+        revision_id=identity.revision_id,
+        worker_task_id="worker-1",
+        operation_key="deployment-1/attempt-1",
+        runtime_selection=selection,
+    )
+    strategy = _Strategy(_plan(identity))
+
+    result = DeploymentLifecycleExecutor(InMemoryLifecycleStore()).execute(
+        context, strategy, runtime
+    )
+
+    assert result.status == sm.DEPLOY_FAILED
+    assert result.error.code == "runtime_unreachable"
+    assert strategy.activated == 0
+
+
+def test_unsupported_runtime_capability_is_blocked_before_planning():
+    runtime = FakeRuntime(supported=set())
+    identity = RuntimeIdentity(service_id="service-1", runtime_name="app-service-1")
+    selection = RuntimeRegistry({"swarm": runtime}).resolve(
+        policy={"backend": "swarm"},
+        required_capabilities={"service_scheduling"},
+    )
+    context = _context(identity)
+    context = replace(context, runtime_selection=selection)
+
+    result = DeploymentLifecycleExecutor(InMemoryLifecycleStore()).execute(
+        context, _Strategy(_plan(identity)), runtime
+    )
+
+    assert result.status == sm.DEPLOY_FAILED
+    assert result.error.code == "runtime_capability_unsupported"

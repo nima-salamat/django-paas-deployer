@@ -24,6 +24,7 @@ class DeploymentPlan:
     runtime_selection: RuntimeSelection
     process_graph: ServiceRuntimeGraph
     image_ref: str
+    strategy_kind: str = "application"
     environment: Mapping[str, str] = field(default_factory=dict)
     secret_references: tuple[str, ...] = ()
     networks: tuple[NetworkSpec, ...] = ()
@@ -52,6 +53,7 @@ class DeploymentPlan:
             "deployment_id": self.identity.deployment_id,
             "revision_id": self.identity.revision_id,
             "runtime": self.runtime_selection.backend,
+            "strategy": self.strategy_kind,
             "cluster": self.runtime_selection.cluster,
             "image_ref": self.image_ref,
             "environment": {"keys": sorted(self.environment)},
@@ -73,10 +75,13 @@ class DeploymentPlanCompiler:
         selection: RuntimeSelection,
         resolved: ResolvedConfiguration,
         image_ref: str,
+        strategy_kind: str = "application",
         deployment_config: Any | None = None,
     ) -> DeploymentPlan:
         if not image_ref:
             raise ValueError("A deployment plan requires an image reference.")
+        if strategy_kind not in {"application", "database", "specialized"}:
+            raise ValueError(f"Unknown deployment strategy kind: {strategy_kind!r}.")
 
         required = {
             RuntimeCapability.SERVICE_SCHEDULING,
@@ -139,6 +144,7 @@ class DeploymentPlanCompiler:
             runtime_selection=effective_selection,
             process_graph=graph,
             image_ref=str(image_ref),
+            strategy_kind=strategy_kind,
             environment={str(key): str(value) for key, value in environment.items()},
             secret_references=tuple(
                 str(value) for value in (resolved.get("secret_references") or ())
