@@ -42,6 +42,21 @@ class ServiceLogsConsumer(AsyncJsonWebsocketConsumer):
             await self.close(code=4003)
             return
 
+        from logs.policy import resolve_for_service_id
+        policy = await database_sync_to_async(resolve_for_service_id)(self.service_id)
+        if not policy.realtime_enabled:
+            await self.accept()
+            await self.send_json({
+                "type": "logs.error",
+                "code": "REALTIME_DISABLED",
+                "detail": "Realtime runtime logging is disabled for this service.",
+                "mode": policy.mode,
+            })
+            await self.close(code=4004)
+            return
+
+        self.log_mode = policy.mode
+
         from logs.realtime import group_name
 
         self.log_group = group_name(self.service_id)
