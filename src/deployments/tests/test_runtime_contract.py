@@ -98,6 +98,18 @@ def test_registry_resolves_backend_and_reports_operator_disabled_state():
     assert selection.can_execute is False
 
 
+def test_registry_uses_operator_managed_cluster_scope_and_enabled_state():
+    runtime = FakeRuntime()
+    selection = RuntimeRegistry({"swarm": runtime}).resolve(
+        cluster=SimpleNamespace(name="primary", enabled=False),
+        probe=False,
+    )
+
+    assert selection.cluster == "primary"
+    assert selection.availability.operator_enabled is False
+    assert selection.can_execute is False
+
+
 def test_registry_reads_swarm_enabled_only_as_compatibility_input(monkeypatch):
     monkeypatch.setenv("SWARM_ENABLED", "0")
     selection = RuntimeRegistry({}).resolve(probe=False)
@@ -105,6 +117,21 @@ def test_registry_reads_swarm_enabled_only_as_compatibility_input(monkeypatch):
     assert selection.backend == "legacy_docker"
     assert selection.availability.state == RuntimeAvailabilityState.UNSUPPORTED
     assert selection.reason == "legacy SWARM_ENABLED compatibility input"
+
+
+def test_registry_does_not_allow_deployment_or_revision_to_select_backend(monkeypatch):
+    monkeypatch.delenv("DEPLOYMENT_RUNTIME_BACKEND", raising=False)
+    monkeypatch.delenv("SWARM_ENABLED", raising=False)
+    runtime = FakeRuntime()
+
+    selection = RuntimeRegistry({"swarm": runtime}).resolve(
+        service={"backend": "legacy_docker"},
+        revision={"runtime_backend": "legacy_docker"},
+        deployment={"backend": "legacy_docker"},
+    )
+
+    assert selection.backend == "swarm"
+    assert selection.reason == "default backend: swarm"
 
 
 class _StubSwarmRuntime:

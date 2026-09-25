@@ -191,6 +191,25 @@ def test_known_unavailable_runtime_is_blocked_before_planning():
     assert strategy.activated == 0
 
 
+def test_operator_disabled_runtime_is_blocked_even_without_a_probe():
+    runtime = FakeRuntime(operator_enabled=False)
+    identity = RuntimeIdentity(service_id="service-1", runtime_name="app-service-1")
+    selection = RuntimeRegistry({"swarm": runtime}).resolve(
+        policy={"backend": "swarm", "operator_enabled": False},
+        probe=False,
+    )
+    context = replace(_context(identity), runtime_selection=selection)
+    strategy = _Strategy(_plan(identity))
+
+    result = DeploymentLifecycleExecutor(InMemoryLifecycleStore()).execute(
+        context, strategy, runtime
+    )
+
+    assert result.status == sm.DEPLOY_FAILED
+    assert result.error.code == "runtime_disabled"
+    assert strategy.activated == 0
+
+
 def test_unsupported_runtime_capability_is_blocked_before_planning():
     runtime = FakeRuntime(supported=set())
     identity = RuntimeIdentity(service_id="service-1", runtime_name="app-service-1")

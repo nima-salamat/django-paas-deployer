@@ -157,5 +157,5 @@ def test_current_swarm_service_path_compiles_a_plan_before_the_legacy_facade():
     assert "def _compile_compatibility_plan(" in source
     assert "execution_plan = self._compile_compatibility_plan(" in source
     assert "execution_plan=execution_plan" in source
-    assert "RuntimeRegistry.with_swarm().resolve(" in source
+    assert "DjangoRuntimeSelectionResolver().resolve(" in source
     assert "DeploymentPlanCompiler().compile(" in source

@@ -854,6 +854,12 @@ is complete:
 - `deployments.application` provides a pure, fenced lifecycle executor with
   ownership checks, cancellation, retry classification, rollback hooks, and
   terminal idempotency;
+- deployment cancellation now flows through a pure cancellation policy,
+  Django persistence adapter, and API use case; the production lifecycle
+  adapter uses an ownership-aware `StateManager` transition primitive;
+- runtime backend selection now excludes deployment/revision/service input as
+  an infrastructure-policy authority, and the revision-backed Swarm bridge
+  resolves the operator-managed `SwarmCluster` record before compiling;
 - the application layer now has one strategy-resolution seam for application
   and database workloads, so specialized planners can share the lifecycle
   contract without routing database deployments through an application build
@@ -865,9 +871,10 @@ The following are still transitional and are not claimed as complete:
 
 - the Celery worker still owns the surrounding orchestration and has not yet
   been fully migrated to the lifecycle executor;
-- the Django state manager, event sinks, API actions, Wagtail controls, and
-  database/application strategy selection are not yet unified behind the new
-  ports;
+- most Django state/event paths, API actions, Wagtail controls, and
+  database/application execution are not yet unified behind the new ports;
+  cancellation and the revision-backed runtime selection path are the first
+  bounded integrations;
 - runtime observations are not yet the active reconciliation input for every
   deployment path;
 - legacy local-Docker behavior remains compatibility behavior and is not yet

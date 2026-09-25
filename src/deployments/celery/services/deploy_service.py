@@ -50,7 +50,9 @@ from deployments.common.exceptions import (
     to_deployment_error,
 )
 from deployments.planning import ConfigurationResolver, DeploymentPlanCompiler
-from deployments.runtime import RuntimeBackend, RuntimeIdentity, RuntimeRegistry
+from deployments.runtime import RuntimeBackend, RuntimeIdentity
+from deployments.infrastructure.django_runtime import DjangoRuntimeSelectionResolver
+from deployments.runtime.errors import RuntimeUnavailableError
 
 from ..service_status import ServiceStateManager
 from ..validators import DeploymentValidator
@@ -902,7 +904,7 @@ class DeployService:
                 },
             },
         )
-        selection = RuntimeRegistry.with_swarm().resolve(
+        selection = DjangoRuntimeSelectionResolver().resolve(
             service=service,
             revision=getattr(deploy_item, "revision", None),
             deployment=deploy_item,
@@ -910,6 +912,12 @@ class DeployService:
         )
         if selection.backend != RuntimeBackend.SWARM.value:
             return None
+        if not selection.availability.operator_enabled:
+            raise RuntimeUnavailableError(
+                "The selected runtime is disabled by operator policy.",
+                code="runtime_disabled",
+                details={"cluster": selection.cluster},
+            )
         identity = RuntimeIdentity(
             service_id=str(service.pk),
             deployment_id=str(deploy_item.pk),

@@ -118,7 +118,11 @@ class RuntimeRegistry:
 
     @staticmethod
     def _resolve_backend(service: Any, revision: Any, deployment: Any, policy: Any, cluster: Any) -> str:
-        for source in (deployment, revision, service, policy, cluster):
+        # Backend choice is infrastructure policy, not executable tenant
+        # configuration.  ``deployment``, ``revision`` and ``service`` are
+        # intentionally not consulted here: allowing their ``backend`` field
+        # to win would let a deployment request select host infrastructure.
+        for source in (policy, cluster):
             value = _value(source, "runtime_backend") or _value(source, "backend")
             if value:
                 return str(getattr(value, "value", value)).strip().lower()

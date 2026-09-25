@@ -274,6 +274,16 @@ class DeploymentLifecycleExecutor:
                 details={"missing": sorted(value.value for value in missing)},
             )
         availability = selection.availability
+        if not availability.operator_enabled:
+            raise RuntimeUnavailableError(
+                availability.message or "The selected runtime is disabled by operator policy.",
+                code=(
+                    availability.reason_code
+                    if availability.reason_code not in {"", "availability_not_probed"}
+                    else "runtime_disabled"
+                ),
+                details={"availability": availability.state.value},
+            )
         if availability.state.value != "unknown" and not availability.can_execute:
             raise RuntimeUnavailableError(
                 availability.message or "The selected runtime is unavailable.",
