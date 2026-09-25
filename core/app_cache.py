@@ -113,10 +113,11 @@ def cache_delete(*keys: str) -> None:
         logger.exception("cache_delete failed")
 
 
-def cache_delete_pattern(pattern: str) -> None:
+def cache_delete_pattern(pattern: str) -> int:
     r = _redis()
     if not r:
-        return
+        return 0
+    deleted = 0
     try:
         patterns = [pattern]
         if not pattern.startswith(":"):
@@ -133,9 +134,10 @@ def cache_delete_pattern(pattern: str) -> None:
             if n >= 5000:
                 break
         if n:
-            pipe.execute()
+            deleted += int(sum(pipe.execute()) or 0)
     except Exception:
         logger.exception("cache_delete_pattern failed pattern=%s", pattern)
+    return deleted
 
 
 def make_query_key(prefix: str, user_id: Any, params: dict) -> str:
@@ -158,18 +160,22 @@ def service_admin_list_key(params: dict | None = None) -> str:
     return make_query_key("svc:admin", "all", params or {})
 
 
-def invalidate_user_services(user_id: int) -> None:
+def invalidate_user_services(user_id: int) -> int:
     # List keys: svc:user:u:{user_id}:q:{digest}
     # Detail keys: svc:user:u:{user_id}:id:{service_id}
     # Also clear any legacy keys that used svc:user:{user_id}:...
-    cache_delete_pattern(f"svc:user:u:{user_id}:*")
-    cache_delete_pattern(f"svc:user:{user_id}:*")
-    cache_delete_pattern("svc:admin:*")
+    return (
+        cache_delete_pattern(f"svc:user:u:{user_id}:*")
+        + cache_delete_pattern(f"svc:user:{user_id}:*")
+        + cache_delete_pattern("svc:admin:*")
+    )
 
 
-def invalidate_all_services() -> None:
-    cache_delete_pattern("svc:user:*")
-    cache_delete_pattern("svc:admin:*")
+def invalidate_all_services() -> int:
+    return (
+        cache_delete_pattern("svc:user:*")
+        + cache_delete_pattern("svc:admin:*")
+    )
 
 
 def plan_list_key(params: dict | None = None) -> str:
@@ -184,8 +190,8 @@ def plan_detail_key(plan_id: str) -> str:
     return f"plan:id:{plan_id}"
 
 
-def invalidate_all_plans() -> None:
-    cache_delete_pattern("plan:*")
+def invalidate_all_plans() -> int:
+    return cache_delete_pattern("plan:*")
 
 
 def ticket_user_list_key(user_id: int, params: dict | None = None) -> str:
@@ -196,25 +202,29 @@ def ticket_admin_list_key(params: dict | None = None) -> str:
     return make_query_key("tkt:admin", "all", params or {})
 
 
-def invalidate_user_tickets(user_id: int) -> None:
+def invalidate_user_tickets(user_id: int) -> int:
     # List keys: tkt:user:u:{user_id}:q:{digest}
     # Also clear any legacy keys that used tkt:user:{user_id}:...
-    cache_delete_pattern(f"tkt:user:u:{user_id}:*")
-    cache_delete_pattern(f"tkt:user:{user_id}:*")
-    cache_delete_pattern("tkt:admin:*")
+    return (
+        cache_delete_pattern(f"tkt:user:u:{user_id}:*")
+        + cache_delete_pattern(f"tkt:user:{user_id}:*")
+        + cache_delete_pattern("tkt:admin:*")
+    )
 
 
-def invalidate_all_tickets() -> None:
-    cache_delete_pattern("tkt:user:*")
-    cache_delete_pattern("tkt:admin:*")
+def invalidate_all_tickets() -> int:
+    return (
+        cache_delete_pattern("tkt:user:*")
+        + cache_delete_pattern("tkt:admin:*")
+    )
 
 
 def user_admin_list_key(params: dict | None = None) -> str:
     return make_query_key("usr:admin", "all", params or {})
 
 
-def invalidate_all_users_admin() -> None:
-    cache_delete_pattern("usr:admin:*")
+def invalidate_all_users_admin() -> int:
+    return cache_delete_pattern("usr:admin:*")
 
 
 def scan_app_cache_keys(prefix: str = "", limit: int = 100) -> list:
@@ -279,26 +289,25 @@ def get_app_cache_overview() -> dict:
     return overview
 
 
-def invalidate_namespace(ns: str) -> None:
+def invalidate_namespace(ns: str) -> int:
     """Flush one logical cache namespace, including Messenger when requested."""
     if ns == "messenger":
         from messenger.message_cache import invalidate_all_cache
-        invalidate_all_cache(reset_stats=False)
-        return
+        return invalidate_all_cache(reset_stats=False)
     if ns == "all":
-        for p in ("svc:*", "plan:*", "tkt:*", "usr:*"):
-            cache_delete_pattern(p)
+        deleted = sum(cache_delete_pattern(p) for p in ("svc:*", "plan:*", "tkt:*", "usr:*"))
         # Messenger owns its cache layout and therefore its invalidation logic.
         try:
             from messenger.message_cache import invalidate_all_cache
-            invalidate_all_cache(reset_stats=False)
+            deleted += invalidate_all_cache(reset_stats=False)
         except Exception:
             logger.exception("invalidate_namespace: messenger cache flush failed")
-        return
+        return deleted
     mapping = {"svc": "svc:*", "plan": "plan:*", "tkt": "tkt:*", "usr": "usr:*"}
     pat = mapping.get(ns)
     if pat:
-        cache_delete_pattern(pat)
+        return cache_delete_pattern(pat)
+    return 0
 
 
 def get_cache_key_preview(key: str, max_len: int = 400) -> dict:
