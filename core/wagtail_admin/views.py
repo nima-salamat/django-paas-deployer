@@ -61,7 +61,6 @@ def cache_dashboard(request):
         delete_cache_keys,
         get_app_cache_overview,
         get_cache_key_preview,
-        get_cache_ttl,
         invalidate_namespace,
         scan_app_cache_keys,
     )
@@ -85,9 +84,10 @@ def cache_dashboard(request):
         if action == "flush":
             ns = request.POST.get("ns") or "all"
             if ns == "all":
-                deleted = 0
-                for namespace in ("svc", "plan", "tkt", "usr"):
+                deleted = sum(
                     invalidate_namespace(namespace)
+                    for namespace in ("svc", "plan", "tkt", "usr")
+                )
                 deleted += invalidate_all_cache(reset_stats=False)
                 return redirect(
                     reverse("wagtail_core_cache_dashboard")
@@ -96,8 +96,7 @@ def cache_dashboard(request):
             if ns == "messenger":
                 deleted = invalidate_all_cache(reset_stats=False)
             else:
-                invalidate_namespace(ns)
-                deleted = 0
+                deleted = invalidate_namespace(ns)
             return redirect(
                 reverse("wagtail_core_cache_dashboard")
                 + f"?flushed={ns}&deleted={deleted}"
