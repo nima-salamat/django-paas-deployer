@@ -27,4 +27,4 @@ The HTTP log API remains the historical/persistent interface. Its response expos
 
 ## Future work
 
-The current bounded in-process buffer is deliberately not a durable queue. A production-grade implementation can add a Redis-backed or disk-backed spool, per-service aggregate rate limiting across collector processes, explicit gap/sequence metadata for ephemeral realtime mode, compression or partitioning for large log stores, and server-side filter/search streams.
+The bounded in-process buffer is deliberately not a durable queue. The collector now shares one rate window across all streams of a service within the same collector process; a production deployment with multiple collectors still needs a Redis-backed distributed token bucket or equivalent coordination. Other next steps are a durable Redis/disk spool, explicit gap/sequence metadata for ephemeral realtime mode, compression or partitioning for large log stores, and server-side filter/search streams.
