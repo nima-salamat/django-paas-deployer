@@ -232,8 +232,6 @@
     </div>
     <div class="cache-section__body">
       <div class="cache-actions">
-        {% for ns, label in "svc,Service|plan,Plans|tkt,Tickets|usr,Users|messenger,Messenger"|split:"|" %}
-        {% endfor %}
         <form method="post">{% csrf_token %}<input type="hidden" name="action" value="flush"><input type="hidden" name="ns" value="svc"><button type="submit" class="button button-secondary">{% trans "Flush services" %}</button></form>
         <form method="post">{% csrf_token %}<input type="hidden" name="action" value="flush"><input type="hidden" name="ns" value="plan"><button type="submit" class="button button-secondary">{% trans "Flush plans" %}</button></form>
         <form method="post">{% csrf_token %}<input type="hidden" name="action" value="flush"><input type="hidden" name="ns" value="tkt"><button type="submit" class="button button-secondary">{% trans "Flush tickets" %}</button></form>
