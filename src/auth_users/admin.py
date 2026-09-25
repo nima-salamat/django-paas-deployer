@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.utils.html import format_html
 from django.utils import timezone
 from django.urls import reverse
-from .models import Device, LoginSettings, AuthCode, InviteLink, InviteUsage, LoginLog, UserSession
+from .models import Device, LoginSettings, AuthCode, InviteLink, InviteUsage, LoginLog, UserSession, UserContactChange
 
 
 @admin.register(Device)
@@ -38,6 +38,20 @@ class UserSessionAdmin(admin.ModelAdmin):
     def revoke_sessions(self, request, queryset):
         updated = queryset.filter(revoked_at__isnull=True).update(revoked_at=timezone.now())
         self.message_user(request, f"{updated} session(s) revoked.")
+
+
+@admin.register(UserContactChange)
+class UserContactChangeAdmin(admin.ModelAdmin):
+    list_display = ("public_id", "user", "field", "old_value", "new_value", "status", "requested_at", "verified_at")
+    list_filter = ("field", "status", "requested_at")
+    search_fields = ("user__username", "user__email", "old_value", "new_value", "public_id")
+    readonly_fields = (
+        "public_id", "user", "field", "old_value", "new_value", "status", "requested_at",
+        "verified_at", "cancelled_at", "requested_ip", "user_agent",
+    )
+
+    def has_add_permission(self, request):
+        return False
 
 
 # ─────────────────────────────────────────────────────────────

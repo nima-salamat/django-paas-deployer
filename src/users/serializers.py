@@ -167,7 +167,11 @@ class UpdateUserSerializer(serializers.Serializer):
     color = serializers.ChoiceField(choices=COLOR_CHOICES)
 
     def validate(self, data):
-        return CreateUserSerializer.validate(self, data)
+        if "email" in data or "phone_number" in data:
+            raise serializers.ValidationError(
+                "Email and phone changes require OTP verification through the contact-change API."
+            )
+        return data
     def update(self, user, data):
         username = data.get("username", None)
         phone_number = data.get("phone_number", None)
@@ -178,13 +182,6 @@ class UpdateUserSerializer(serializers.Serializer):
         
         if username is not None:
             user.username = username
-        if phone_number is not None:
-            user.phone_number = phone_number
-            user.phone_number_verified=False
-            
-        if email is not None:
-            user.email = email
-            user.email_verified=False
         if birthdate is not None:
             user.birthdate = birthdate
         if color is not None:
@@ -288,4 +285,3 @@ class DeletePasswordSerializer(serializers.Serializer):
         self.user.password = ""
         self.user.save()
         return self.user
-    

@@ -186,7 +186,11 @@ def send_otp(user=None, contact="", channel="email", purpose=AuthCode.PURPOSE_LO
 
     if channel == "email":
         if user:
-            send_code_via_email.delay(user.id)
+            send_code_via_email.delay(
+                user.id,
+                recipient=contact or None,
+                purpose=purpose,
+            )
         else:
             import logging
             logging.getLogger("auth_users").info(

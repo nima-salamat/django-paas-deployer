@@ -314,6 +314,42 @@ class UserSession(models.Model):
         return f"{self.user_id}:{self.session_id[:12]}"
 
 
+class UserContactChange(models.Model):
+    """Audit record and pending transaction for a verified email/phone change."""
+
+    class Field(models.TextChoices):
+        EMAIL = "email", "Email"
+        PHONE = "phone_number", "Phone number"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        VERIFIED = "verified", "Verified"
+        CANCELLED = "cancelled", "Cancelled"
+        EXPIRED = "expired", "Expired"
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="contact_changes")
+    field = models.CharField(max_length=20, choices=Field.choices, db_index=True)
+    old_value = models.CharField(max_length=255, blank=True, default="")
+    new_value = models.CharField(max_length=255)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING, db_index=True)
+    requested_at = models.DateTimeField(auto_now_add=True)
+    verified_at = models.DateTimeField(null=True, blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    requested_ip = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=500, blank=True, default="")
+
+    class Meta:
+        ordering = ["-requested_at"]
+        indexes = [
+            models.Index(fields=["user", "field", "status"]),
+            models.Index(fields=["new_value", "field", "status"]),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id}:{self.field}:{self.status}:{self.public_id}"
+
+
 # ---------------------------------------------------------------------------
 # Invite Link system
 # ---------------------------------------------------------------------------
@@ -491,11 +527,13 @@ class AuthCode(models.Model):
     PURPOSE_SIGNUP = "signup"
     PURPOSE_RECOVERY = "recovery"
     PURPOSE_PASSWORD_RESET = "password_reset"
+    PURPOSE_CONTACT_CHANGE = "contact_change"
     PURPOSE_CHOICES = [
         (PURPOSE_LOGIN, "Login / Verify"),
         (PURPOSE_SIGNUP, "Signup"),
         (PURPOSE_RECOVERY, "Username Recovery"),
         (PURPOSE_PASSWORD_RESET, "Password Reset"),
+        (PURPOSE_CONTACT_CHANGE, "Contact Change"),
     ]
 
     user = models.ForeignKey(
@@ -569,6 +607,10 @@ class AuthCode(models.Model):
             lookup["user"] = None
 
         instance, created = cls.objects.get_or_create(**lookup)
+        if user is not None and contact and instance.contact != contact:
+            instance.contact = contact
+            instance.attempts = 0
+            instance.save(update_fields=["contact", "attempts", "updated_at"])
         if created or instance.is_expired() or instance.is_locked():
             instance.update_code()
         return instance
@@ -584,6 +626,9 @@ class AuthCode(models.Model):
         else:
             lookup["contact"] = contact
             lookup["user"] = None
+
+        if user and contact:
+            lookup["contact"] = contact
 
         try:
             instance = cls.objects.get(**lookup)

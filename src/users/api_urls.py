@@ -9,9 +9,12 @@ from .apis import (
 )
 from . import admin_apis
 from . import admin_tables_api
+from .contact_api import ContactChangeRequestAPIView, ContactChangeConfirmAPIView
 
 urlpatterns = [
     path("user/", UserAPIView.as_view(), name="user_api"),
+    path("user/contact-change/", ContactChangeRequestAPIView.as_view(), name="contact_change_request"),
+    path("user/contact-change/<uuid:change_id>/confirm/", ContactChangeConfirmAPIView.as_view(), name="contact_change_confirm"),
     path("password-status/", PasswordStatusAPIView.as_view(), name="password_status"),
     path("set-password/", SetPasswordAPIView.as_view(), name="set_password"),
     path("change-password/", ChangePasswordAPIView.as_view(), name="change_password"),

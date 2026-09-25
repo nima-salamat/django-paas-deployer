@@ -57,10 +57,15 @@ def configure_resend_proxy():
 
 
 @shared_task
-def send_code_via_email(user_id):
+def send_code_via_email(user_id, recipient=None, purpose=None):
     try:
         user = User.objects.get(pk=user_id)
-        token = AuthCode.objects.get(user=user)
+        code_query = AuthCode.objects.filter(user=user)
+        if purpose:
+            code_query = code_query.filter(purpose=purpose)
+        token = code_query.order_by("-updated_at").first()
+        if token is None:
+            raise AuthCode.DoesNotExist
 
         confirm_code = token.code
 
@@ -307,10 +312,13 @@ def send_code_via_email(user_id):
         # Configure proxy if enabled
         configure_resend_proxy()
 
+        destination = recipient or user.email
+        if not destination:
+            raise ValueError("No email recipient is available for OTP delivery.")
         response = resend.Emails.send(
             {
                 "from": settings.EMAIL_ADDR,
-                "to": [user.email],
+                "to": [destination],
                 "subject": subject,
                 "html": html_message,
             }
@@ -319,13 +327,13 @@ def send_code_via_email(user_id):
         logger.info(
             "Confirmation email sent successfully to %s. "
             "Resend response: %s",
-            user.email,
+            destination,
             response,
         )
 
         return {
             "success": True,
-            "email": user.email,
+            "email": destination,
             "resend_response": response,
         }
 
