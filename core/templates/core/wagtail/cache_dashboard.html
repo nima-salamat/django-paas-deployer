@@ -5,302 +5,332 @@
 
 {% block content %}
 <style>
-  .cache-admin { max-width: 1280px; }
+  .cache-page { max-width: 1400px; margin: 0 auto; }
   .cache-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 12px;
-    margin-bottom: 20px;
+    margin: 0 0 24px;
   }
-  .cache-metric {
-    border: 1px solid var(--w-color-border-furniture);
-    background: var(--w-color-surface-panel);
-    padding: 16px;
+  .cache-card,
+  .cache-section {
+    background: var(--w-color-surface-panel, var(--w-color-surface, #fff));
+    border: 1px solid var(--w-color-border-furniture, #d9d9d9);
+    border-radius: 6px;
   }
-  .cache-metric__label {
-    display: block;
-    color: var(--w-color-text-label-menus);
+  .cache-card { padding: 16px; min-width: 0; }
+  .cache-card__label {
+    margin: 0 0 6px;
+    color: var(--w-color-text-context, #666);
     font-size: 12px;
     font-weight: 600;
-    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
   }
-  .cache-metric__value {
-    color: var(--w-color-text-label);
-    font-size: 22px;
-    font-weight: 700;
+  .cache-card__value {
+    color: var(--w-color-text-label, currentColor);
+    font-size: 24px;
     line-height: 1.15;
+    font-weight: 700;
   }
-  .cache-metric__meta {
-    color: var(--w-color-text-label-menus);
-    font-size: 12px;
+  .cache-card__meta {
     margin-top: 5px;
+    color: var(--w-color-text-context, #666);
+    font-size: 12px;
   }
+  .cache-card__value--ok { color: var(--w-color-positive-200, #15803d); }
+  .cache-card__value--bad { color: var(--w-color-critical-200, #b91c1c); }
+
   .cache-section { margin-bottom: 20px; }
   .cache-section__header {
-    display: flex;
-    gap: 16px;
-    justify-content: space-between;
-    align-items: flex-start;
-    flex-wrap: wrap;
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--w-color-border-furniture, #d9d9d9);
   }
-  .cache-form-grid {
+  .cache-section__header h2 { margin: 0; font-size: 17px; }
+  .cache-section__header p { margin: 5px 0 0; color: var(--w-color-text-context, #666); }
+  .cache-section__body { padding: 18px; }
+
+  .cache-policy {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 16px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px 18px;
   }
-  .cache-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .cache-field label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 600;
+  }
+  .cache-field input {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 40px;
+  }
+  .cache-field__help {
+    margin-top: 4px;
+    color: var(--w-color-text-context, #666);
+    font-size: 12px;
+  }
+
+  .cache-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 12px;
+  }
+  .cache-toolbar__field { flex: 1 1 260px; }
+  .cache-toolbar__field--small { flex: 0 1 110px; }
+  .cache-toolbar__field label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 600;
+  }
+  .cache-toolbar__field input { width: 100%; box-sizing: border-box; }
+
+  .cache-actions { display: flex; flex-wrap: wrap; gap: 8px; }
   .cache-actions form { margin: 0; }
-  .cache-muted { color: var(--w-color-text-label-menus); }
-  .cache-code {
-    max-height: 360px;
-    overflow: auto;
-    white-space: pre-wrap;
-    word-break: break-word;
-    margin: 0;
+
+  .cache-notice {
+    margin-bottom: 18px;
+    padding: 12px 14px;
+    border: 1px solid var(--w-color-positive-100, #86efac);
+    background: var(--w-color-positive-50, #f0fdf4);
+    color: var(--w-color-positive-200, #166534);
+    border-radius: 6px;
   }
+  .cache-notice--error {
+    border-color: var(--w-color-critical-100, #fecaca);
+    background: var(--w-color-critical-50, #fef2f2);
+    color: var(--w-color-critical-200, #991b1b);
+  }
+
   .cache-table-wrap { overflow-x: auto; }
-  .cache-table code { word-break: break-all; }
-  .cache-status { margin-bottom: 16px; }
-  .cache-inline { display: inline-flex; gap: 8px; align-items: center; }
-  .cache-conversation-messages { max-height: 420px; overflow: auto; }
-  .cache-message {
-    padding: 10px 0;
-    border-bottom: 1px solid var(--w-color-border-furniture);
+  .cache-table { width: 100%; }
+  .cache-table td code {
+    display: inline-block;
+    max-width: 620px;
+    overflow-wrap: anywhere;
   }
-  .cache-message:last-child { border-bottom: 0; }
-  .cache-message__meta { font-size: 12px; color: var(--w-color-text-label-menus); margin-bottom: 4px; }
-  @media (max-width: 700px) {
-    .cache-admin { padding: 0 12px 24px; }
+  .cache-subtle { color: var(--w-color-text-context, #666); }
+  .cache-preview {
+    margin-top: 14px;
+    padding: 14px;
+    background: var(--w-color-surface-field, #f5f5f5);
+    border: 1px solid var(--w-color-border-furniture, #d9d9d9);
+    border-radius: 6px;
+    font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .cache-two-col {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 20px;
+  }
+  .cache-stat-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+  }
+  .cache-stat strong { display: block; font-size: 20px; }
+  .cache-stat span { color: var(--w-color-text-context, #666); font-size: 12px; }
+  @media (max-width: 1000px) {
+    .cache-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cache-two-col { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 640px) {
+    .cache-grid, .cache-policy { grid-template-columns: 1fr; }
   }
 </style>
 
-<header class="w-header">
-  <div class="row">
-    <div class="left">
+<div class="nice-padding cache-page">
+  <header class="w-header__container" style="margin-bottom: 22px;">
+    <div>
       <h1 class="w-header__title">{% trans "Cache" %}</h1>
-      <p class="w-header__subtitle">
-        {% trans "Unified Redis administration for application and Messenger caches." %}
-      </p>
+      <p class="cache-subtle">{% trans "Monitor, tune, inspect, and invalidate application caches from one place." %}</p>
     </div>
-  </div>
-</header>
+  </header>
 
-<div class="cache-admin nice-padding">
-
-  {% if saved %}
-    <div class="messages cache-status">
-      <div class="success">{% trans "Cache policy saved." %}</div>
+  {% if flushed or saved or stats_reset or conversation_action or policy_error %}
+    <div class="cache-notice {% if policy_error %}cache-notice--error{% endif %}">
+      {% if policy_error %}
+        {% trans "One or more cache policy values could not be saved." %}
+      {% elif saved %}
+        {% trans "Cache policy saved successfully." %}
+      {% elif stats_reset %}
+        {% trans "Messenger cache statistics were reset." %}
+      {% elif conversation_action == "rebuilt" %}
+        {% trans "Conversation cache rebuilt." %}
+      {% elif conversation_action == "invalidated" %}
+        {% trans "Conversation cache invalidated." %}
+      {% elif flushed == "all" %}
+        {% blocktrans %}All application caches were flushed ({{ deleted }} keys).{% endblocktrans %}
+      {% elif flushed == "messenger" %}
+        {% blocktrans %}Messenger cache was flushed ({{ deleted }} keys).{% endblocktrans %}
+      {% else %}
+        {% blocktrans %}Cache namespace "{{ flushed }}" was flushed.{% endblocktrans %}
+      {% endif %}
     </div>
-  {% endif %}
-  {% if flushed %}
-    <div class="messages cache-status">
-      <div class="success">
-        {% blocktrans with ns=flushed count=deleted %}Cache namespace "{{ ns }}" cleared. {{ count }} keys removed.{% endblocktrans %}
-      </div>
-    </div>
-  {% endif %}
-  {% if stats_reset %}
-    <div class="messages cache-status"><div class="success">{% trans "Messenger cache counters reset." %}</div></div>
-  {% endif %}
-  {% if conversation_action %}
-    <div class="messages cache-status">
-      <div class="success">
-        {% if conversation_action == "rebuilt" %}
-          {% trans "Conversation cache rebuilt." %}
-        {% else %}
-          {% trans "Conversation cache invalidated." %}
-        {% endif %}
-      </div>
-    </div>
-  {% endif %}
-  {% if policy_error %}
-    <div class="messages cache-status"><div class="error">{% trans "One or more cache policy values could not be saved. Check the fields and try again." %}</div></div>
   {% endif %}
 
-  <div class="cache-grid" aria-label="{% trans 'Cache overview' %}">
-    <div class="cache-metric">
-      <span class="cache-metric__label">{% trans "Redis" %}</span>
-      <strong class="cache-metric__value">
+  <div class="cache-grid">
+    <div class="cache-card">
+      <p class="cache-card__label">{% trans "Redis" %}</p>
+      <div class="cache-card__value {% if overview.redis_ok %}cache-card__value--ok{% else %}cache-card__value--bad{% endif %}">
         {% if overview.redis_ok %}{% trans "Connected" %}{% else %}{% trans "Unavailable" %}{% endif %}
-      </strong>
-      <div class="cache-metric__meta">{{ overview.memory.used_memory_human|default:"—" }} used{% if overview.memory.maxmemory_human %} / {{ overview.memory.maxmemory_human }} max{% endif %}</div>
+      </div>
+      <div class="cache-card__meta">{% trans "Primary cache backend" %}</div>
     </div>
-    <div class="cache-metric">
-      <span class="cache-metric__label">{% trans "Application keys" %}</span>
-      <strong class="cache-metric__value">{{ overview.svc|add:overview.plan|add:overview.tkt|add:overview.usr }}</strong>
-      <div class="cache-metric__meta">services · plans · tickets · users</div>
+
+    <div class="cache-card">
+      <p class="cache-card__label">{% trans "Application cache" %}</p>
+      <div class="cache-card__value">{{ overview.svc|add:overview.plan|add:overview.tkt|add:overview.usr }}</div>
+      <div class="cache-card__meta">{% trans "Indexed service / plan / ticket / user keys" %}</div>
     </div>
-    <div class="cache-metric">
-      <span class="cache-metric__label">{% trans "Messenger keys" %}</span>
-      <strong class="cache-metric__value">{{ overview.msgcache }}</strong>
-      <div class="cache-metric__meta">{{ messenger.cached_conversations }} conversations cached</div>
+
+    <div class="cache-card">
+      <p class="cache-card__label">{% trans "Messenger cache" %}</p>
+      <div class="cache-card__value">{{ overview.msgcache }}</div>
+      <div class="cache-card__meta">{% trans "Redis keys owned by Messenger" %}</div>
     </div>
-    <div class="cache-metric">
-      <span class="cache-metric__label">{% trans "Messenger hit rate" %}</span>
-      <strong class="cache-metric__value">{{ msg_hit_rate }}%</strong>
-      <div class="cache-metric__meta">{{ messenger.msg_hit }} hits · {{ messenger.msg_miss }} misses</div>
+
+    <div class="cache-card">
+      <p class="cache-card__label">{% trans "Redis memory" %}</p>
+      <div class="cache-card__value" style="font-size: 18px;">{{ overview.memory.used_memory_human|default:"—" }}</div>
+      <div class="cache-card__meta">{% trans "Used memory" %}{% if overview.memory.maxmemory_human %} · {{ overview.memory.maxmemory_human }} max{% endif %}</div>
     </div>
   </div>
 
-  <section class="w-panel cache-section">
-    <div class="w-panel__header"><h2 class="w-panel__heading">{% trans "Cache policy" %}</h2></div>
-    <div class="w-panel__content">
-      <p class="cache-muted">
-        {% trans "These values are stored in the database and can be changed without editing environment files. TTL 0 means no expiry." %}
-      </p>
+  <section class="cache-section">
+    <div class="cache-section__header">
+      <h2>{% trans "Cache policy" %}</h2>
+      <p>{% trans "Tune TTLs and Messenger hot-cache capacity without editing environment variables or code." %}</p>
+    </div>
+    <div class="cache-section__body">
       <form method="post">
         {% csrf_token %}
         <input type="hidden" name="action" value="save_policy">
-        <div class="cache-form-grid">
-          <div class="field"><label class="w-field__label" for="service_user_ttl">{% trans "Service user TTL (s)" %}</label><input class="w-field__input" id="service_user_ttl" name="service_user_ttl" type="number" min="0" max="604800" value="{{ policy.service_user_ttl }}"></div>
-          <div class="field"><label class="w-field__label" for="service_admin_ttl">{% trans "Service admin TTL (s)" %}</label><input class="w-field__input" id="service_admin_ttl" name="service_admin_ttl" type="number" min="0" max="604800" value="{{ policy.service_admin_ttl }}"></div>
-          <div class="field"><label class="w-field__label" for="plan_ttl">{% trans "Plan TTL (s)" %}</label><input class="w-field__input" id="plan_ttl" name="plan_ttl" type="number" min="0" max="604800" value="{{ policy.plan_ttl }}"></div>
-          <div class="field"><label class="w-field__label" for="ticket_user_ttl">{% trans "Ticket user TTL (s)" %}</label><input class="w-field__input" id="ticket_user_ttl" name="ticket_user_ttl" type="number" min="0" max="604800" value="{{ policy.ticket_user_ttl }}"></div>
-          <div class="field"><label class="w-field__label" for="ticket_admin_ttl">{% trans "Ticket admin TTL (s)" %}</label><input class="w-field__input" id="ticket_admin_ttl" name="ticket_admin_ttl" type="number" min="0" max="604800" value="{{ policy.ticket_admin_ttl }}"></div>
-          <div class="field"><label class="w-field__label" for="user_admin_ttl">{% trans "User admin TTL (s)" %}</label><input class="w-field__input" id="user_admin_ttl" name="user_admin_ttl" type="number" min="0" max="604800" value="{{ policy.user_admin_ttl }}"></div>
-          <div class="field"><label class="w-field__label" for="message_size">{% trans "Messenger messages / conversation" %}</label><input class="w-field__input" id="message_size" name="message_size" type="number" min="100" max="10000" value="{{ policy.message_size }}"></div>
-          <div class="field"><label class="w-field__label" for="message_ttl">{% trans "Messenger message TTL (s)" %}</label><input class="w-field__input" id="message_ttl" name="message_ttl" type="number" min="0" max="604800" value="{{ policy.message_ttl }}"></div>
-          <div class="field"><label class="w-field__label" for="messenger_list_ttl">{% trans "Messenger list TTL (s)" %}</label><input class="w-field__input" id="messenger_list_ttl" name="messenger_list_ttl" type="number" min="0" max="86400" value="{{ policy.messenger_list_ttl }}"></div>
-          <div class="field"><label class="w-field__label" for="messenger_conv_ttl">{% trans "Messenger conversation TTL (s)" %}</label><input class="w-field__input" id="messenger_conv_ttl" name="messenger_conv_ttl" type="number" min="0" max="86400" value="{{ policy.messenger_conv_ttl }}"></div>
+        <div class="cache-policy">
+          {% for field_key, setting_key, label, default, minimum, maximum in policy_fields %}
+            <div class="cache-field">
+              <label for="{{ field_key }}">{{ label }}</label>
+              <input id="{{ field_key }}" type="number" name="{{ field_key }}" value="{{ policy|dictsort:"x" }}" min="{{ minimum }}" max="{{ maximum }}" required>
+              <div class="cache-field__help">0 means no expiry for TTL fields. Allowed range: {{ minimum }}–{{ maximum }}.</div>
+            </div>
+          {% endfor %}
         </div>
-        <div class="cache-actions" style="margin-top:16px">
-          <button class="button button-longrunning" type="submit">{% trans "Save cache policy" %}</button>
+        <div style="margin-top:18px;">
+          <button type="submit" class="button button-primary">{% trans "Save cache policy" %}</button>
         </div>
       </form>
     </div>
   </section>
 
-  <section class="w-panel cache-section">
-    <div class="w-panel__header cache-section__header">
-      <div>
-        <h2 class="w-panel__heading">{% trans "Namespaces" %}</h2>
-        <p class="cache-muted">Application cache ownership and targeted invalidation.</p>
+  <section class="cache-section">
+    <div class="cache-section__header">
+      <h2>{% trans "Namespace controls" %}</h2>
+      <p>{% trans "Flush only the cache family you need, or clear every application-owned key." %}</p>
+    </div>
+    <div class="cache-section__body">
+      <div class="cache-actions">
+        {% for ns, label in "svc,Service|plan,Plans|tkt,Tickets|usr,Users|messenger,Messenger"|split:"|" %}
+        {% endfor %}
+        <form method="post">{% csrf_token %}<input type="hidden" name="action" value="flush"><input type="hidden" name="ns" value="svc"><button type="submit" class="button button-secondary">{% trans "Flush services" %}</button></form>
+        <form method="post">{% csrf_token %}<input type="hidden" name="action" value="flush"><input type="hidden" name="ns" value="plan"><button type="submit" class="button button-secondary">{% trans "Flush plans" %}</button></form>
+        <form method="post">{% csrf_token %}<input type="hidden" name="action" value="flush"><input type="hidden" name="ns" value="tkt"><button type="submit" class="button button-secondary">{% trans "Flush tickets" %}</button></form>
+        <form method="post">{% csrf_token %}<input type="hidden" name="action" value="flush"><input type="hidden" name="ns" value="usr"><button type="submit" class="button button-secondary">{% trans "Flush users" %}</button></form>
+        <form method="post" onsubmit="return confirm('Clear Messenger cache?');">{% csrf_token %}<input type="hidden" name="action" value="flush"><input type="hidden" name="ns" value="messenger"><button type="submit" class="button button-secondary">{% trans "Flush Messenger" %}</button></form>
+        <form method="post" onsubmit="return confirm('Clear all application caches?');">{% csrf_token %}<input type="hidden" name="action" value="flush"><input type="hidden" name="ns" value="all"><button type="submit" class="button button-primary">{% trans "Flush all application caches" %}</button></form>
+        <form method="post">{% csrf_token %}<input type="hidden" name="action" value="reset_stats"><button type="submit" class="button button-secondary">{% trans "Reset Messenger stats" %}</button></form>
       </div>
     </div>
-    <div class="w-panel__content cache-actions">
-      <span class="cache-inline"><strong>Services:</strong> {{ overview.svc }}</span>
-      <form method="post">{% csrf_token %}<input type="hidden" name="action" value="flush"><input type="hidden" name="ns" value="svc"><button class="button button-secondary" type="submit">{% trans "Clear services" %}</button></form>
-      <span class="cache-inline"><strong>Plans:</strong> {{ overview.plan }}</span>
-      <form method="post">{% csrf_token %}<input type="hidden" name="action" value="flush"><input type="hidden" name="ns" value="plan"><button class="button button-secondary" type="submit">{% trans "Clear plans" %}</button></form>
-      <span class="cache-inline"><strong>Tickets:</strong> {{ overview.tkt }}</span>
-      <form method="post">{% csrf_token %}<input type="hidden" name="action" value="flush"><input type="hidden" name="ns" value="tkt"><button class="button button-secondary" type="submit">{% trans "Clear tickets" %}</button></form>
-      <span class="cache-inline"><strong>Users:</strong> {{ overview.usr }}</span>
-      <form method="post">{% csrf_token %}<input type="hidden" name="action" value="flush"><input type="hidden" name="ns" value="usr"><button class="button button-secondary" type="submit">{% trans "Clear users" %}</button></form>
-      <span class="cache-inline"><strong>Messenger:</strong> {{ overview.msgcache }}</span>
-      <form method="post" onsubmit="return confirm('Clear all Messenger cache entries?');">{% csrf_token %}<input type="hidden" name="action" value="flush"><input type="hidden" name="ns" value="messenger"><button class="button button-secondary" type="submit">{% trans "Clear Messenger" %}</button></form>
-      <form method="post" style="margin-left:auto" onsubmit="return confirm('Clear every application cache entry?');">{% csrf_token %}<input type="hidden" name="action" value="flush"><input type="hidden" name="ns" value="all"><button class="button serious" type="submit">{% trans "Clear all" %}</button></form>
-      <form method="post">{% csrf_token %}<input type="hidden" name="action" value="reset_stats"><button class="button button-secondary" type="submit">{% trans "Reset Messenger counters" %}</button></form>
-    </div>
   </section>
 
-  <section class="w-panel cache-section">
-    <div class="w-panel__header">
-      <h2 class="w-panel__heading">{% trans "Redis key explorer" %}</h2>
-    </div>
-    <div class="w-panel__content">
-      <p class="cache-muted">{% trans "Uses Redis SCAN. No blocking KEYS command is exposed." %}</p>
-      <form method="get" class="cache-form-grid">
-        <div class="field"><label class="w-field__label" for="pattern">{% trans "Pattern" %}</label><input class="w-field__input" id="pattern" name="pattern" value="{{ pattern }}" placeholder="svc:* or msgcache:*"></div>
-        <div class="field"><label class="w-field__label" for="limit">{% trans "Limit" %}</label><input class="w-field__input" id="limit" type="number" name="limit" value="{{ limit }}" min="1" max="500"></div>
-        <div class="field"><label class="w-field__label" aria-hidden="true">&nbsp;</label><button class="button button-longrunning" type="submit">{% trans "Search keys" %}</button></div>
-      </form>
-
-      {% if preview %}
-        <div class="w-panel" style="margin-top:16px">
-          <div class="w-panel__header"><h3 class="w-panel__heading">{% trans "Key preview" %}</h3></div>
-          <div class="w-panel__content">
-            <p><strong>Key:</strong> <code>{{ preview.key }}</code></p>
-            <p><strong>Type:</strong> {{ preview.type }} &nbsp; <strong>TTL:</strong>
-              {% if preview.ttl == -1 %}∞{% elif preview.ttl == -2 %}{% trans "gone" %}{% else %}{{ preview.ttl }}s{% endif %}
-              &nbsp; <strong>Exists:</strong> {{ preview.exists }}
-            </p>
-            <pre class="cache-code">{{ preview.value|default:"(no string value preview available)" }}</pre>
-            <form method="post" onsubmit="return confirm('Delete this Redis key?');" style="margin-top:12px">
-              {% csrf_token %}
-              <input type="hidden" name="action" value="delete_key">
-              <input type="hidden" name="key" value="{{ preview.key }}">
-              <input type="hidden" name="pattern" value="{{ pattern }}">
-              <input type="hidden" name="limit" value="{{ limit }}">
-              <button class="button serious" type="submit">{% trans "Delete key" %}</button>
-            </form>
+  <div class="cache-two-col">
+    <section class="cache-section">
+      <div class="cache-section__header">
+        <h2>{% trans "Cache key inspector" %}</h2>
+        <p>{% trans "Search with Redis SCAN, inspect values, or remove one key." %}</p>
+      </div>
+      <div class="cache-section__body">
+        <form method="get" class="cache-toolbar">
+          <div class="cache-toolbar__field">
+            <label for="pattern">{% trans "Pattern" %}</label>
+            <input id="pattern" name="pattern" value="{{ pattern }}" placeholder="svc:* or msgcache:*">
           </div>
-        </div>
-      {% endif %}
-
-      {% if keys %}
-        <div class="cache-table-wrap" style="margin-top:16px">
-          <table class="listing cache-table">
-            <thead><tr><th>{% trans "Key" %}</th><th>{% trans "Type" %}</th><th>{% trans "TTL" %}</th><th>{% trans "Actions" %}</th></tr></thead>
-            <tbody>
-              {% for k in keys %}
-                <tr>
-                  <td><code>{{ k.key }}</code></td>
-                  <td>{{ k.type }}</td>
-                  <td>{% if k.ttl == -1 %}∞{% elif k.ttl == -2 %}{% trans "gone" %}{% else %}{{ k.ttl }}s{% endif %}</td>
-                  <td>
-                    <a class="button button-small" href="?pattern={{ pattern|urlencode }}&amp;limit={{ limit }}&amp;preview={{ k.key|urlencode }}">{% trans "Preview" %}</a>
-                    <form method="post" style="display:inline" onsubmit="return confirm('Delete this Redis key?');">
-                      {% csrf_token %}
-                      <input type="hidden" name="action" value="delete_key">
-                      <input type="hidden" name="key" value="{{ k.key }}">
-                      <input type="hidden" name="pattern" value="{{ pattern }}">
-                      <input type="hidden" name="limit" value="{{ limit }}">
-                      <button class="button button-small serious" type="submit">{% trans "Delete" %}</button>
-                    </form>
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% elif pattern %}
-        <p class="cache-muted" style="margin-top:16px">{% trans "No keys matched." %}</p>
-      {% endif %}
-    </div>
-  </section>
-
-  <section class="w-panel cache-section">
-    <div class="w-panel__header">
-      <h2 class="w-panel__heading">{% trans "Messenger conversation cache" %}</h2>
-    </div>
-    <div class="w-panel__content">
-      <p class="cache-muted">{% trans "Inspect the hot message window for a conversation, then rebuild or invalidate it." %}</p>
-      <form method="get" class="cache-form-grid">
-        {% if pattern %}<input type="hidden" name="pattern" value="{{ pattern }}">{% endif %}
-        <div class="field"><label class="w-field__label" for="conversation_id">{% trans "Conversation ID" %}</label><input class="w-field__input" id="conversation_id" name="conversation_id" type="number" min="1" value="{{ conversation_id|default:'' }}"></div>
-        <div class="field"><label class="w-field__label" aria-hidden="true">&nbsp;</label><button class="button button-longrunning" type="submit">{% trans "Inspect conversation" %}</button></div>
-      </form>
-
-      {% if conversation %}
-        <div class="w-panel" style="margin-top:16px">
-          <div class="w-panel__header">
-            <h3 class="w-panel__heading">{% blocktrans with id=conversation.conversation_id %}Conversation {{ id }}{% endblocktrans %}</h3>
+          <div class="cache-toolbar__field cache-toolbar__field--small">
+            <label for="limit">{% trans "Limit" %}</label>
+            <input id="limit" type="number" name="limit" value="{{ limit }}" min="1" max="500">
           </div>
-          <div class="w-panel__content">
-            {% if conversation.meta %}
-              <p>{{ conversation.meta.count }} cached messages · IDs {{ conversation.meta.min_id }}–{{ conversation.meta.max_id }}</p>
-            {% else %}
-              <p class="cache-muted">{% trans "This conversation is not currently cached." %}</p>
-            {% endif %}
-            <div class="cache-actions" style="margin-bottom:16px">
-              <form method="post">{% csrf_token %}<input type="hidden" name="action" value="rebuild_conversation"><input type="hidden" name="conversation_id" value="{{ conversation.conversation_id }}"><button class="button" type="submit">{% trans "Rebuild" %}</button></form>
-              <form method="post" onsubmit="return confirm('Invalidate this conversation cache?');">{% csrf_token %}<input type="hidden" name="action" value="invalidate_conversation"><input type="hidden" name="conversation_id" value="{{ conversation.conversation_id }}"><button class="button button-secondary" type="submit">{% trans "Invalidate" %}</button></form>
-            </div>
-            {% if conversation.messages %}
-              <div class="cache-conversation-messages">
-                {% for message in conversation.messages %}
-                  <article class="cache-message">
-                    <div class="cache-message__meta">#{{ message.id }} · {{ message.sender.username|default:"system" }} · {{ message.created_at }}</div>
-                    <div>{{ message.body|default:"(empty)" }}</div>
-                  </article>
+          <button type="submit" class="button button-primary">{% trans "Search" %}</button>
+        </form>
+
+        {% if preview %}
+          <div class="cache-preview"><strong>{% trans "Key" %}:</strong> {{ preview.key }}
+<strong>{% trans "Type" %}:</strong> {{ preview.type }} · <strong>{% trans "TTL" %}:</strong> {% if preview.ttl == -1 %}∞{% elif preview.ttl == -2 %}{% trans "gone" %}{% else %}{{ preview.ttl }}s{% endif %}
+<strong>{% trans "Value" %}:</strong> {{ preview.value|default:"(empty / non-string)" }}</div>
+        {% endif %}
+
+        {% if keys %}
+          <div class="cache-table-wrap" style="margin-top:16px;">
+            <table class="listing cache-table">
+              <thead><tr><th>{% trans "Key" %}</th><th>{% trans "Type" %}</th><th>{% trans "TTL" %}</th><th>{% trans "Actions" %}</th></tr></thead>
+              <tbody>
+                {% for key in keys %}
+                  <tr>
+                    <td><code>{{ key.key }}</code></td>
+                    <td>{{ key.type }}</td>
+                    <td>{% if key.ttl == -1 %}∞{% elif key.ttl == -2 %}{% trans "gone" %}{% else %}{{ key.ttl }}s{% endif %}</td>
+                    <td>
+                      <div class="button-group">
+                        <a href="?pattern={{ pattern|urlencode }}&amp;limit={{ limit }}&amp;preview={{ key.key|urlencode }}" class="button button-small">{% trans "Inspect" %}</a>
+                        <form method="post" onsubmit="return confirm('Delete this cache key?');">{% csrf_token %}<input type="hidden" name="action" value="delete_key"><input type="hidden" name="key" value="{{ key.key }}"><input type="hidden" name="pattern" value="{{ pattern }}"><input type="hidden" name="limit" value="{{ limit }}"><button type="submit" class="button button-small">{% trans "Delete" %}</button></form>
+                      </div>
+                    </td>
+                  </tr>
                 {% endfor %}
-              </div>
-            {% endif %}
+              </tbody>
+            </table>
           </div>
-        </div>
-      {% endif %}
-    </div>
-  </section>
+        {% elif pattern %}
+          <p class="cache-subtle" style="margin-top:16px;">{% trans "No keys matched." %}</p>
+        {% endif %}
+      </div>
+    </section>
 
+    <section class="cache-section">
+      <div class="cache-section__header">
+        <h2>{% trans "Messenger hot cache" %}</h2>
+        <p>{% trans "Monitor hit rate and inspect an individual conversation window." %}</p>
+      </div>
+      <div class="cache-section__body">
+        <div class="cache-stat-row">
+          <div class="cache-stat"><strong>{{ messenger.msg_hit }} / {{ messenger.msg_miss }}</strong><span>{% trans "Message HIT / MISS" %} · {{ msg_hit_rate }}%</span></div>
+          <div class="cache-stat"><strong>{{ messenger.list_hit }} / {{ messenger.list_miss }}</strong><span>{% trans "List HIT / MISS" %} · {{ list_hit_rate }}%</span></div>
+          <div class="cache-stat"><strong>{{ messenger.cached_conversations }}</strong><span>{% trans "Cached conversations" %}</span></div>
+        </div>
+        <hr>
+        <form method="get" class="cache-toolbar">
+          <div class="cache-toolbar__field">
+            <label for="conversation_id">{% trans "Conversation ID" %}</label>
+            <input id="conversation_id" type="number" name="conversation_id" value="{{ conversation_id|default:'' }}" min="1">
+          </div>
+          <button type="submit" class="button button-primary">{% trans "Inspect conversation" %}</button>
+        </form>
+        {% if conversation %}
+          <div style="margin-top:16px;">
+            {% if conversation.meta %}
+              <p><strong>{% trans "Conversation" %} {{ conversation.conversation_id }}</strong> · {{ conversation.message_ids|length }} cached IDs · {{ conversation.meta.min_id }}–{{ conversation.meta.max_id }}</p>
+            {% else %}
+              <p class="cache-subtle">{% trans "This conversation is not currently cached." %}</p>
+            {% endif %}
+            <div class="cache-actions">
+              <form method="post">{% csrf_token %}<input type="hidden" name="action" value="rebuild_conversation"><input type="hidden" name="conversation_id" value="{{ conversation.conversation_id }}"><button type="submit" class="button button-primary">{% trans "Rebuild" %}</button></form>
+              <form method="post" onsubmit="return confirm('Clear this conversation cache?');">{% csrf_token %}<input type="hidden" name="action" value="invalidate_conversation"><input type="hidden" name="conversation_id" value="{{ conversation.conversation_id }}"><button type="submit" class="button button-secondary">{% trans "Invalidate" %}</button></form>
+            </div>
+          </div>
+        {% endif %}
+      </div>
+    </section>
+  </div>
 </div>
 {% endblock %}
