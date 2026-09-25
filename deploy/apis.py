@@ -56,6 +56,13 @@ from core.throttling import ScopedRateThrottle
 logger = logging.getLogger(__name__)
 
 
+def _shallow_request_data(data):
+    """Build a mutable mapping without deep-copying UploadedFile objects."""
+    if hasattr(data, "items"):
+        return {key: value for key, value in data.items()}
+    return dict(data)
+
+
 def _parse_deploy_config(raw) -> dict:
     """Normalize Deploy.config whether stored as dict or JSON string."""
     if isinstance(raw, dict):
@@ -314,10 +321,7 @@ class DeployViewSet(ModelViewSet):
                 status=status.HTTP_429_TOO_MANY_REQUESTS,
             )
 
-        # Preserve UploadedFile objects from multipart requests. A
-        # QueryDict.copy() retains the file object; dict(request.data) can turn
-        # a file field into a one-item list and break FileField persistence.
-        data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+        # Build a shallow mutable mapping. QueryDict.copy() deep-copies\n        # UploadedFile internals and can fail on BufferedRandom-backed files.\n        data = _shallow_request_data(request.data)
 
         service_id = data.get("service") or request.data.get("service")
         # Read config from the original request first (preserves nested dicts).
@@ -972,9 +976,7 @@ class DeployViewSet(ModelViewSet):
         # Defense in depth: if this is a DB platform and the request
         # includes a ``config`` dict, merge it with the existing config
         # and drop any empty password sentinels before saving.
-        # Preserve multipart UploadedFile objects. Never normalize a
-        # QueryDict with dict(data), because zip_file then becomes a list.
-        data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+        # Build a shallow mutable mapping so multipart UploadedFile objects\n        # remain intact and are never deep-copied.\n        data = _shallow_request_data(request.data)
 
         # A deployment belongs to its original service. Ignore service in
         # generic update requests so an edit cannot move it across services.
