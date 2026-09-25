@@ -978,7 +978,10 @@ class DeployViewSet(ModelViewSet):
 
         # A deployment belongs to its original service. Ignore service in
         # generic update requests so an edit cannot move it across services.
-        data.pop("service", None)
+        # QueryDict/MultiValueDict.pop() does not accept a default
+        # positional argument. Remove the field only when it is present.
+        if "service" in data:
+            data.pop("service")
 
         platform = _resolve_platform(deploy)
         if platform in DB_PLATFORMS and isinstance(data.get("config"), dict):
