@@ -124,7 +124,7 @@ services:
     # Only the web service performs control-plane startup tasks.
     # entrypoint.sh owns the main migration and setup_deployment_log_db, which
     # in turn owns the deployment-log DB migration.
-    entrypoint: ["/app/entrypoint.sh"]
+    # Invoke through sh so the bind-mounted source file does not depend on host execute bits.\n    entrypoint: ["/bin/sh", "/app/entrypoint.sh"]
     command:
       - daphne
       - -b
