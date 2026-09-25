@@ -47,6 +47,13 @@ class ServiceLogStream(models.Model):
             models.Index(fields=["service_id", "-started_at"]),
             models.Index(fields=["container_id", "status"]),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["service_id", "container_id"],
+                condition=models.Q(status="active"),
+                name="uniq_active_log_stream_service_container",
+            ),
+        ]
 
     def __str__(self):
         return f"Stream {self.id} service={self.service_id} container={self.container_name}"

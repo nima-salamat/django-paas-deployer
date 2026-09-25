@@ -101,30 +101,51 @@ def get_or_create_stream(
     deploy_id: UUID | str | None = None,
 ) -> ServiceLogStream:
     alias = _alias()
-    existing = (
-        ServiceLogStream.objects.using(alias)
-        .filter(container_id=container_id, status=ServiceLogStream.Status.ACTIVE)
-        .first()
-    )
+    filters = {
+        "service_id": str(service_id),
+        "container_id": container_id,
+        "status": ServiceLogStream.Status.ACTIVE,
+    }
+    existing = ServiceLogStream.objects.using(alias).filter(**filters).first()
     if existing:
         return existing
-    return ServiceLogStream.objects.using(alias).create(
-        service_id=str(service_id),
-        deploy_id=str(deploy_id) if deploy_id else None,
-        container_id=container_id,
-        container_name=container_name or "",
-        status=ServiceLogStream.Status.ACTIVE,
-        started_at=timezone.now(),
-    )
+
+    try:
+        with transaction.atomic(using=alias):
+            return ServiceLogStream.objects.using(alias).create(
+                service_id=str(service_id),
+                deploy_id=str(deploy_id) if deploy_id else None,
+                container_id=container_id,
+                container_name=container_name or "",
+                status=ServiceLogStream.Status.ACTIVE,
+                started_at=timezone.now(),
+            )
+    except IntegrityError:
+        # Another collector won the active-stream race.
+        existing = ServiceLogStream.objects.using(alias).filter(**filters).first()
+        if existing:
+            return existing
+        raise
 
 
-def close_stream(stream: ServiceLogStream, *, status: str = ServiceLogStream.Status.CLOSED) -> None:
+def close_stream(
+    stream: ServiceLogStream,
+    *,
+    status: str = ServiceLogStream.Status.CLOSED,
+    owner_id: str | None = None,
+) -> None:
     alias = _alias()
-    ServiceLogStream.objects.using(alias).filter(pk=stream.pk).update(
+    qs = ServiceLogStream.objects.using(alias).filter(pk=stream.pk)
+    if owner_id:
+        # A stale collector must never close a stream after its lease is lost.
+        qs = qs.filter(owner_id=owner_id)
+    qs.update(
         status=status,
         ended_at=timezone.now(),
         owner_id="",
         lease_until=None,
+        lease_token="",
+        heartbeat_at=None,
         updated_at=timezone.now(),
     )
 
@@ -158,6 +179,41 @@ def _trim_fifo(service_id: str, need_bytes: int, policy: EffectiveLoggingPolicy)
     return freed
 
 
+def _prepare_lines(lines: Iterable[dict], policy: EffectiveLoggingPolicy) -> list[dict]:
+    """Normalize, redact, truncate and classify lines before any delivery path."""
+    prepared: list[dict] = []
+    for raw in lines:
+        ts = raw.get("ts") or timezone.now()
+        if isinstance(ts, str):
+            ts = parse_datetime(ts) or timezone.now()
+        if timezone.is_naive(ts):
+            ts = timezone.make_aware(ts, timezone.utc)
+
+        stream_kind = (raw.get("stream") or "stdout").lower()
+        if stream_kind not in {"stdout", "stderr"}:
+            stream_kind = "stdout"
+
+        msg = _redact(str(raw.get("message") or ""))
+        truncated = False
+        if len(msg.encode("utf-8", "replace")) > policy.max_entry_size:
+            encoded = msg.encode("utf-8", "replace")[: policy.max_entry_size]
+            msg = encoded.decode("utf-8", "replace") + "…[truncated]"
+            truncated = True
+
+        prepared.append(
+            {
+                "ts": ts,
+                "stream": stream_kind,
+                "message": msg,
+                "fingerprint": fingerprint(ts, stream_kind, msg),
+                "byte_size": len(msg.encode("utf-8", "replace")),
+                "truncated": truncated,
+                "level": infer_level(msg),
+            }
+        )
+    return prepared
+
+
 def ingest_lines(
     stream: ServiceLogStream,
     lines: Iterable[dict],
@@ -171,8 +227,19 @@ def ingest_lines(
     """
     alias = _alias()
     policy = policy or resolve_for_service_id(stream.service_id)
+    prepared = _prepare_lines(lines, policy)
+
     if not policy.persistent_enabled or policy.quota_behavior == "realtime_only":
-        return {"inserted": 0, "duplicates": 0, "dropped": 0, "bytes": 0, "realtime_only": True}
+        return {
+            "inserted": 0,
+            "duplicates": 0,
+            "dropped": 0,
+            "bytes": 0,
+            "realtime_only": True,
+            "persisted": False,
+            "inserted_entries": [],
+            "realtime_lines": prepared,
+        }
 
     if owner_id and stream.owner_id and stream.owner_id != owner_id:
         if stream.lease_until and stream.lease_until > timezone.now():
@@ -182,50 +249,35 @@ def ingest_lines(
     duplicates = 0
     dropped = 0
     total_bytes = 0
+    inserted_entries = []
     last_ts = stream.last_persisted_ts
     last_fp = stream.last_persisted_fingerprint or ""
     next_seq = int(stream.last_seq or 0)
 
-    prepared = []
-    for raw in lines:
-        ts = raw.get("ts") or timezone.now()
-        if isinstance(ts, str):
-            ts = parse_datetime(ts) or timezone.now()
-        if timezone.is_naive(ts):
-            ts = timezone.make_aware(ts, timezone.utc)
-        stream_kind = (raw.get("stream") or "stdout").lower()
-        if stream_kind not in {"stdout", "stderr"}:
-            stream_kind = "stdout"
-        msg = _redact(str(raw.get("message") or ""))
-        truncated = False
-        if len(msg.encode("utf-8", "replace")) > policy.max_entry_size:
-            # Truncate by bytes approximately
-            encoded = msg.encode("utf-8", "replace")[: policy.max_entry_size]
-            msg = encoded.decode("utf-8", "replace") + "…[truncated]"
-            truncated = True
-        fp = fingerprint(ts, stream_kind, msg)
-        size = len(msg.encode("utf-8", "replace"))
-        prepared.append(
-            {
-                "ts": ts,
-                "stream": stream_kind,
-                "message": msg,
-                "fingerprint": fp,
-                "byte_size": size,
-                "truncated": truncated,
-                "level": infer_level(msg),
-            }
-        )
-
     if not prepared:
-        return {"inserted": 0, "duplicates": 0, "dropped": 0, "bytes": 0}
+        return {
+            "inserted": 0,
+            "duplicates": 0,
+            "dropped": 0,
+            "bytes": 0,
+            "persisted": True,
+            "inserted_entries": [],
+        }
 
     need = sum(p["byte_size"] for p in prepared)
     usage = get_usage(stream.service_id)
     if usage["current_storage_bytes"] + need > policy.storage_quota_bytes:
         if policy.quota_behavior == "drop_new":
             bump_drop(stream.service_id, entries=len(prepared), bytes_dropped=need)
-            return {"inserted": 0, "duplicates": 0, "dropped": len(prepared), "bytes": 0}
+            return {
+                "inserted": 0,
+                "duplicates": 0,
+                "dropped": len(prepared),
+                "bytes": 0,
+                "persisted": False,
+                "inserted_entries": [],
+                "realtime_lines": prepared,
+            }
         _trim_fifo(str(stream.service_id), need, policy)
 
     with transaction.atomic(using=alias):
@@ -236,12 +288,19 @@ def ingest_lines(
             .first()
         )
         if locked is None:
-            return {"inserted": 0, "duplicates": 0, "dropped": 0, "bytes": 0}
+            return {
+                "inserted": 0,
+                "duplicates": 0,
+                "dropped": 0,
+                "bytes": 0,
+                "persisted": False,
+                "inserted_entries": [],
+            }
         next_seq = int(locked.last_seq or 0)
         for p in prepared:
             next_seq += 1
             try:
-                ServiceLogEntry.objects.using(alias).create(
+                entry = ServiceLogEntry.objects.using(alias).create(
                     service_id=str(stream.service_id),
                     stream_id=stream.pk,
                     deploy_id=str(stream.deploy_id) if stream.deploy_id else None,
@@ -256,6 +315,19 @@ def ingest_lines(
                 )
                 inserted += 1
                 total_bytes += p["byte_size"]
+                inserted_entries.append(
+                    {
+                        "id": entry.id,
+                        "stream_id": entry.stream_id,
+                        "ts": entry.ts,
+                        "seq": entry.seq,
+                        "stream": entry.stream,
+                        "level": entry.level or "",
+                        "message": entry.message,
+                        "byte_size": entry.byte_size,
+                        "truncated": entry.truncated,
+                    }
+                )
                 last_ts = p["ts"]
                 last_fp = p["fingerprint"]
             except IntegrityError:
@@ -273,11 +345,17 @@ def ingest_lines(
         stream.last_persisted_fingerprint = last_fp
 
     if inserted:
-        bump_ingest(stream.service_id, bytes_added=total_bytes, entries=inserted)
+        try:
+            bump_ingest(stream.service_id, bytes_added=total_bytes, entries=inserted)
+        except Exception:
+            # The rows are already durable; reconciliation can repair counters.
+            logger.exception("usage accounting failed service=%s", stream.service_id)
 
     return {
         "inserted": inserted,
         "duplicates": duplicates,
         "dropped": dropped,
         "bytes": total_bytes,
+        "persisted": True,
+        "inserted_entries": inserted_entries,
     }

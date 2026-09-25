@@ -63,7 +63,6 @@ class BoundedBuffer:
     def push(self, service_id, stream_id, lines: list) -> None:
         with self._lock:
             for line in lines:
-                size = sum(len(str(line.get("message") or "").encode()) for _ in [0])
                 size = len(str(line.get("message") or "").encode("utf-8", "replace"))
                 while self._bytes + size > self.max_bytes and self._items:
                     old = self._items.pop(0)
@@ -91,6 +90,36 @@ class BoundedBuffer:
             return self._bytes
 
 
+class DockerLineAssembler:
+    """Reassembles Docker log chunks so line boundaries survive streaming."""
+    
+    def __init__(self):
+        self._buffers = {"stdout": "", "stderr": ""}
+
+    def feed(self, pairs):
+        complete = []
+        for kind, chunk in pairs:
+            if kind not in self._buffers:
+                kind = "stdout"
+            text = self._buffers[kind] + (chunk or "")
+            parts = text.split("\n")
+            self._buffers[kind] = parts.pop()
+            for line in parts:
+                line = line.rstrip("\r")
+                if line:
+                    complete.append((kind, line))
+        return complete
+
+    def flush(self):
+        complete = []
+        for kind, text in list(self._buffers.items()):
+            text = text.rstrip("\r")
+            if text:
+                complete.append((kind, text))
+            self._buffers[kind] = ""
+        return complete
+
+
 class Command(BaseCommand):
     help = "Host-level runtime log collector (catch-up + live follow)."
 
@@ -104,6 +133,8 @@ class Command(BaseCommand):
         self._stop = threading.Event()
         self._following: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
+        self._rate_windows: dict[str, RateWindow] = {}
+        self._rate_lock = threading.Lock()
         self._buffer = BoundedBuffer()
         self._executor = ThreadPoolExecutor(max_workers=MAX_FOLLOW_WORKERS, thread_name_prefix="log-follow")
         backoff = 1.0
@@ -128,6 +159,26 @@ class Command(BaseCommand):
             for ev in list(self._following.values()):
                 ev.set()
             self._executor.shutdown(wait=False, cancel_futures=True)
+
+    def _rate_for_service(self, service, max_bps: int) -> RateWindow:
+        """Return one rate window shared by all streams of a service in this collector."""
+        key = str(service.pk)
+        lock = getattr(self, "_rate_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._rate_lock = lock
+        with lock:
+            windows = getattr(self, "_rate_windows", None)
+            if windows is None:
+                windows = {}
+                self._rate_windows = windows
+            rate = windows.get(key)
+            if rate is None:
+                rate = RateWindow(max_bps)
+                windows[key] = rate
+            else:
+                rate.max_bps = max(1024, int(max_bps))
+            return rate
 
     def _heartbeat(self, instance: str, status: str, error: str):
         try:
@@ -157,21 +208,27 @@ class Command(BaseCommand):
 
     def _flush_buffer(self):
         from logs.models import ServiceLogStream
-        from logs.ingestion import ingest_lines
-        from logs.policy import resolve_for_service_id
+        from logs.ingestion import acquire_lease
+        from logs.policy import resolve
+        from services.models import Service
         from django.conf import settings
 
         items = self._buffer.drain()
         if not items:
             return
         alias = getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", "default")
+        instance = _instance_id()
         for service_id, stream_id, lines in items:
             try:
                 stream = ServiceLogStream.objects.using(alias).filter(pk=stream_id).first()
-                if not stream:
+                service = Service.objects.select_related("plan").filter(pk=service_id).first()
+                if not stream or not service:
                     continue
-                policy = resolve_for_service_id(service_id)
-                ingest_lines(stream, lines, policy=policy)
+                if not acquire_lease(stream, instance):
+                    # Preserve single-writer ownership; this collector is no longer owner.
+                    continue
+                policy = resolve(service)
+                self._persist_batch(instance, service, stream, policy, lines)
             except Exception:
                 logger.debug("buffer flush failed", exc_info=True)
                 self._buffer.push(service_id, stream_id, lines)
@@ -298,7 +355,7 @@ class Command(BaseCommand):
         from logs.ingestion import ingest_lines, heartbeat_lease, close_stream
         from logs.usage import bump_drop
 
-        rate = RateWindow(policy.max_bytes_per_second)
+        rate = self._rate_for_service(service, policy.max_bytes_per_second)
         try:
             self._catch_up(docker_service, stream, service, policy, instance, rate)
             log_stream = docker_service.logs(
@@ -310,16 +367,19 @@ class Command(BaseCommand):
                 tail=0,
             )
             batch = []
+            assembler = DockerLineAssembler()
             last_hb = time.monotonic()
             last_flush = time.monotonic()
             try:
                 for raw in log_stream:
                     if stop_ev.is_set() or self._stop.is_set():
                         break
-                    pairs = self._demux_docker_chunk(raw) if isinstance(raw, (bytes, bytearray)) else [("stdout", str(raw))]
-                    for stream_kind, line in pairs:
-                        if not line:
-                            continue
+                    pairs = (
+                        self._demux_docker_payloads(raw)
+                        if isinstance(raw, (bytes, bytearray))
+                        else [("stdout", str(raw))]
+                    )
+                    for stream_kind, line in assembler.feed(pairs):
                         ts, msg = self._parse_ts_line(line)
                         size = len(msg.encode("utf-8", "replace"))
                         if not rate.allow(size):
@@ -340,6 +400,17 @@ class Command(BaseCommand):
                             break
                         last_hb = now
             finally:
+                for stream_kind, line in assembler.flush():
+                    ts, msg = self._parse_ts_line(line)
+                    size = len(msg.encode("utf-8", "replace"))
+                    if rate.allow(size):
+                        batch.append({
+                            "ts": ts or timezone.now(),
+                            "stream": stream_kind,
+                            "message": msg,
+                        })
+                    else:
+                        bump_drop(service.pk, entries=1, bytes_dropped=size)
                 if batch:
                     self._persist_batch(instance, service, stream, policy, batch)
                 try:
@@ -356,7 +427,7 @@ class Command(BaseCommand):
             with self._lock:
                 self._following.pop(key, None)
             try:
-                close_stream(stream, status="closed")
+                close_stream(stream, status="closed", owner_id=instance)
             except Exception:
                 pass
 
@@ -474,7 +545,7 @@ class Command(BaseCommand):
         from logs.usage import bump_drop
         from logs.models import ServiceLogStream
 
-        rate = RateWindow(policy.max_bytes_per_second)
+        rate = self._rate_for_service(service, policy.max_bytes_per_second)
         cid = container.id
         try:
             # ---- Catch-up ----
@@ -495,21 +566,20 @@ class Command(BaseCommand):
                 return
 
             batch = []
+            assembler = DockerLineAssembler()
             last_hb = time.monotonic()
             last_flush = time.monotonic()
             try:
                 for raw in log_stream:
                     if stop_ev.is_set() or self._stop.is_set():
                         break
-                    if isinstance(raw, (bytes, bytearray)):
-                        pairs = self._demux_docker_chunk(raw)
-                    else:
-                        pairs = [("stdout", str(raw))]
-                    for stream_kind, line in pairs:
-                        if not line:
-                            continue
+                    pairs = (
+                        self._demux_docker_payloads(raw)
+                        if isinstance(raw, (bytes, bytearray))
+                        else [("stdout", str(raw))]
+                    )
+                    for stream_kind, line in assembler.feed(pairs):
                         ts, msg = self._parse_ts_line(line)
-                        # if parse already ate ts prefix, stream still from demux
                         size = len(msg.encode("utf-8", "replace"))
                         if not rate.allow(size):
                             bump_drop(service.pk, entries=1, bytes_dropped=size)
@@ -532,6 +602,17 @@ class Command(BaseCommand):
                             break
                         last_hb = now
             finally:
+                for stream_kind, line in assembler.flush():
+                    ts, msg = self._parse_ts_line(line)
+                    size = len(msg.encode("utf-8", "replace"))
+                    if rate.allow(size):
+                        batch.append({
+                            "ts": ts or timezone.now(),
+                            "stream": stream_kind,
+                            "message": msg,
+                        })
+                    else:
+                        bump_drop(service.pk, entries=1, bytes_dropped=size)
                 if batch:
                     self._persist_batch(instance, service, stream, policy, batch)
                 try:
@@ -547,11 +628,13 @@ class Command(BaseCommand):
                 # Only close if container is gone
                 container.reload()
                 if container.status not in {"running", "created"}:
-                    close_stream(stream, status=ServiceLogStream.Status.CLOSED)
+                    close_stream(stream, status=ServiceLogStream.Status.CLOSED, owner_id=instance)
             except Exception:
-                close_stream(stream, status=ServiceLogStream.Status.LOST)
+                close_stream(stream, status=ServiceLogStream.Status.LOST, owner_id=instance)
 
     def _catch_up(self, container, stream, service, policy, instance, rate: RateWindow):
+        from logs.usage import bump_drop
+
         try:
             raw = container.logs(
                 stdout=True, stderr=True, timestamps=True, tail=1000
@@ -559,17 +642,28 @@ class Command(BaseCommand):
         except Exception as exc:
             logger.warning("catch-up failed %s: %s", container.name, exc)
             return
-        text = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw or "")
+        pairs = (
+            self._demux_docker_chunk(raw)
+            if isinstance(raw, (bytes, bytearray))
+            else [("stdout", str(raw or ""))]
+        )
         lines = []
         skew = stream.last_persisted_ts - timedelta(seconds=5) if stream.last_persisted_ts else None
-        for line in text.splitlines():
+        for stream_kind, line in pairs:
+            if not line:
+                continue
             ts, msg = self._parse_ts_line(line)
             if skew and ts and ts < skew:
                 continue
             size = len(msg.encode("utf-8", "replace"))
             if not rate.allow(size):
+                bump_drop(service.pk, entries=1, bytes_dropped=size)
                 continue
-            lines.append({"ts": ts or timezone.now(), "stream": "stdout", "message": msg})
+            lines.append({
+                "ts": ts or timezone.now(),
+                "stream": stream_kind,
+                "message": msg,
+            })
         if lines:
             self._persist_batch(instance, service, stream, policy, lines)
 
@@ -577,6 +671,7 @@ class Command(BaseCommand):
         from logs.ingestion import ingest_lines
         from logs.realtime import publish_log_events
         from logs.query import encode_cursor
+        from django.utils import timezone
 
         try:
             result = ingest_lines(stream, lines, policy=policy, owner_id=instance)
@@ -584,64 +679,112 @@ class Command(BaseCommand):
             logger.warning("persist failed, buffering", exc_info=True)
             self._buffer.push(service.pk, stream.pk, lines)
             return
-        if not result.get("inserted") or not policy.realtime_enabled:
+
+        if not policy.realtime_enabled:
             return
-        n = int(result.get("inserted") or 0)
+
+        # If persistence is disabled, ingestion still sanitizes the lines before
+        # returning them. Never fan out raw Docker output.
+        # A stale collector must also stop publishing once its lease expires.
+        if result.get("persisted") is False:
+            owner = getattr(stream, "owner_id", instance)
+            lease_until = getattr(stream, "lease_until", None)
+            if owner and owner != instance:
+                return
+            if lease_until is not None and lease_until <= timezone.now():
+                return
+
         events = []
-        seq = int(stream.last_seq or 0) - n
-        for item in lines[-n:]:
-            seq += 1
-            ts = item["ts"]
-            events.append(
-                {
+        for item in result.get("inserted_entries") or []:
+            ts = item.get("ts")
+            entry_id = item.get("id")
+            seq = item.get("seq")
+            if ts is None or entry_id is None or seq is None:
+                continue
+            events.append({
+                "id": entry_id,
+                "stream_id": stream.pk,
+                "ts": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+                "seq": int(seq),
+                "stream": item.get("stream") or "stdout",
+                "level": item.get("level") or None,
+                "message": item.get("message") or "",
+                "byte_size": item.get("byte_size") or 0,
+                "truncated": bool(item.get("truncated")),
+                "cursor": encode_cursor(ts, int(seq), entry_id=int(entry_id)),
+                "persisted": True,
+            })
+
+        # Non-persistent modes have no durable cursor/sequence. Delivery remains
+        # realtime-only and the client is told explicitly that it is ephemeral.
+        if not events:
+            for item in result.get("realtime_lines") or []:
+                ts = item.get("ts")
+                events.append({
+                    "id": None,
+                    "stream_id": stream.pk,
                     "ts": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
-                    "seq": seq,
+                    "seq": None,
                     "stream": item.get("stream") or "stdout",
+                    "level": item.get("level") or None,
                     "message": item.get("message") or "",
-                    "cursor": encode_cursor(ts, seq) if hasattr(ts, "isoformat") else None,
-                }
-            )
-        publish_log_events(service.pk, events)
-        try:
-            from django.conf import settings
-            from logs.models import CollectorHeartbeat
+                    "byte_size": item.get("byte_size") or 0,
+                    "truncated": bool(item.get("truncated")),
+                    "cursor": None,
+                    "persisted": False,
+                    "ephemeral": True,
+                })
 
-            alias = getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", "default")
-            CollectorHeartbeat.objects.using(alias).filter(instance_id=instance).update(
-                last_successful_ingestion=timezone.now()
-            )
-        except Exception:
-            pass
+        if events:
+            publish_log_events(service.pk, events)
+
+        if result.get("inserted"):
+            try:
+                from django.conf import settings
+                from logs.models import CollectorHeartbeat
+
+                alias = getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", "default")
+                CollectorHeartbeat.objects.using(alias).filter(instance_id=instance).update(
+                    last_successful_ingestion=timezone.now()
+                )
+            except Exception:
+                pass
 
 
-    def _demux_docker_chunk(self, raw: bytes):
-        """Split Docker multiplexed stream into (stream_kind, text) lines.
-
-        Non-TTY: 8-byte header (stream 1=stdout 2=stderr) + payload.
-        TTY/raw: treat as stdout lines.
-        """
+    def _demux_docker_payloads(self, raw: bytes):
+        """Return decoded stdout/stderr payload chunks without line-splitting."""
         if not raw:
             return []
         out = []
-        # Heuristic: if looks multiplexed
-        if len(raw) >= 8 and raw[0] in (1, 2) and raw[1:4] == b"\x00\x00\x00":
+        if (
+            len(raw) >= 8
+            and raw[0] in (1, 2)
+            and raw[1:4] == b"\x00\x00\x00"
+        ):
             i = 0
             while i + 8 <= len(raw):
                 stream_type = raw[i]
                 size = int.from_bytes(raw[i + 4 : i + 8], "big")
                 i += 8
-                payload = raw[i : i + size]
-                i += size
+                if size < 0 or i + size > len(raw):
+                    # Defensive fallback for an incomplete/malformed frame.
+                    payload = raw[i:]
+                    i = len(raw)
+                else:
+                    payload = raw[i : i + size]
+                    i += size
                 kind = "stderr" if stream_type == 2 else "stdout"
-                text = payload.decode("utf-8", "replace")
-                for line in text.splitlines():
-                    if line:
-                        out.append((kind, line))
+                out.append((kind, payload.decode("utf-8", "replace")))
             return out
-        text = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
-        for line in text.splitlines():
-            if line:
-                out.append(("stdout", line))
+        return [("stdout", raw.decode("utf-8", "replace"))]
+
+    def _demux_docker_chunk(self, raw: bytes):
+        """Compatibility helper returning complete lines for catch-up/tests."""
+        out = []
+        for kind, payload in self._demux_docker_payloads(raw):
+            for line in payload.splitlines():
+                if line:
+                    out.append((kind, line))
         return out
 
     def _parse_ts_line(self, line: str):
