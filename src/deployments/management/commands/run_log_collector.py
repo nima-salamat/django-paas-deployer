@@ -163,12 +163,15 @@ class Command(BaseCommand):
     def _rate_for_service(self, service, max_bps: int) -> RateWindow:
         """Return one rate window shared by all streams of a service in this collector."""
         key = str(service.pk)
-        with getattr(self, "_rate_lock", threading.Lock()):
+        lock = getattr(self, "_rate_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._rate_lock = lock
+        with lock:
             windows = getattr(self, "_rate_windows", None)
             if windows is None:
                 windows = {}
                 self._rate_windows = windows
-                self._rate_lock = getattr(self, "_rate_lock", threading.Lock())
             rate = windows.get(key)
             if rate is None:
                 rate = RateWindow(max_bps)
