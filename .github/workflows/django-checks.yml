@@ -1,0 +1,60 @@
+name: Django checks
+
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+    branches: ["master"]
+
+jobs:
+  django-checks:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: paas_ci
+          POSTGRES_USER: paas_ci
+          POSTGRES_PASSWORD: paas_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U paas_ci -d paas_ci"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      SECRET_KEY: ci-only-secret
+      DEBUG: "True"
+      DOMAIN_NAME: localhost
+      API_DOMAIN_NAME: localhost
+      DB_NAME: paas_ci
+      DB_USER: paas_ci
+      DB_PASSWORD: paas_ci
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      DEPLOYMENT_LOG_DB_NAME: paas_ci
+      DEPLOYMENT_LOG_DB_USER: paas_ci
+      DEPLOYMENT_LOG_DB_PASSWORD: paas_ci
+      DEPLOYMENT_LOG_DB_HOST: 127.0.0.1
+      DEPLOYMENT_LOG_DB_PORT: "5432"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Django system checks
+        run: python manage.py check
+
+      - name: Migration drift check
+        run: python manage.py makemigrations --check --dry-run --verbosity 2
+
+      - name: Regression tests
+        run: pytest -q core/tests/test_wagtail_cache_admin.py deployments/tests/test_deploy_file_upload_regressions.py
