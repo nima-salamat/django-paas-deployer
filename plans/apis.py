@@ -82,7 +82,7 @@ class PlanAdminViewSet(ViewSet):
         return [auth() for auth in self.authentication_classes]
 
     def list(self, request):
-        from core.app_cache import cache_get, cache_set, plan_admin_list_key, get_cache_ttl("plan")
+        from core.app_cache import cache_get, cache_set, plan_admin_list_key, get_cache_ttl
         params = {k: (request.query_params.get(k) or "") for k in ("q", "q_search", "platform", "plan_type", "page", "page_size")}
         key = plan_admin_list_key(params)
         cached = cache_get(key)
