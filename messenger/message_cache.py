@@ -72,13 +72,34 @@ def _meta_key(conv_id: int) -> str:
     return f"{_PREFIX}:{conv_id}:meta"
 
 
+def _operator_int(key: str, fallback: int, minimum: int, maximum: int) -> int:
+    try:
+        from core.settings_service import get_int
+        value = get_int(key, fallback)
+    except Exception:
+        value = fallback
+    return max(minimum, min(int(value), maximum))
+
+
 def _cache_size() -> int:
-    return int(getattr(settings, "MESSAGE_CACHE_SIZE", 1000) or 1000)
+    fallback = int(getattr(settings, "MESSAGE_CACHE_SIZE", 1000) or 1000)
+    return _operator_int("cache.message_size", fallback, 100, 10000)
 
 
 def _cache_ttl() -> int:
     """0 means no expiry."""
-    return int(getattr(settings, "MESSAGE_CACHE_TTL", 6 * 3600) or 0)
+    fallback = int(getattr(settings, "MESSAGE_CACHE_TTL", 6 * 3600) or 0)
+    return max(0, _operator_int("cache.message_ttl", fallback, 0, 7 * 24 * 3600))
+
+
+def _list_ttl() -> int:
+    fallback = int(getattr(settings, "MESSENGER_LIST_CACHE_TTL", 300) or 300)
+    return _operator_int("cache.messenger_list_ttl", fallback, 0, 24 * 3600)
+
+
+def _conv_ttl() -> int:
+    fallback = int(getattr(settings, "MESSENGER_CONV_CACHE_TTL", 120) or 120)
+    return _operator_int("cache.messenger_conv_ttl", fallback, 0, 24 * 3600)
 
 
 # ---------------------------------------------------------------------------
