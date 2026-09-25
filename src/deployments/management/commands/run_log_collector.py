@@ -596,6 +596,7 @@ class Command(BaseCommand):
         from logs.ingestion import ingest_lines
         from logs.realtime import publish_log_events
         from logs.query import encode_cursor
+        from django.utils import timezone
 
         try:
             result = ingest_lines(stream, lines, policy=policy, owner_id=instance)
@@ -607,8 +608,17 @@ class Command(BaseCommand):
         if not policy.realtime_enabled:
             return
 
-        # Publish exactly what was inserted. This prevents duplicate overlap or
-        # interleaved stdout/stderr lines from being paired with the wrong seq.
+        # If persistence is disabled, ingestion still sanitizes the lines before
+        # returning them. Never fan out raw Docker output.
+        # A stale collector must also stop publishing once its lease expires.
+        if result.get("persisted") is False:
+            owner = getattr(stream, "owner_id", instance)
+            lease_until = getattr(stream, "lease_until", None)
+            if owner and owner != instance:
+                return
+            if lease_until is not None and lease_until <= timezone.now():
+                return
+
         events = []
         for item in result.get("inserted_entries") or []:
             ts = item.get("ts")
@@ -630,13 +640,10 @@ class Command(BaseCommand):
                 "persisted": True,
             })
 
-        # Non-persistent modes still need live streaming. They intentionally
-        # have no durable seq/cursor, so clients treat these events as ephemeral.
-        if not events and (
-            result.get("persisted") is False
-            or int(result.get("dropped") or 0) > 0
-        ):
-            for item in lines:
+        # Non-persistent modes have no durable cursor/sequence. Delivery remains
+        # realtime-only and the client is told explicitly that it is ephemeral.
+        if not events:
+            for item in result.get("realtime_lines") or []:
                 ts = item.get("ts")
                 events.append({
                     "id": None,
@@ -644,10 +651,10 @@ class Command(BaseCommand):
                     "ts": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
                     "seq": None,
                     "stream": item.get("stream") or "stdout",
-                    "level": None,
+                    "level": item.get("level") or None,
                     "message": item.get("message") or "",
-                    "byte_size": 0,
-                    "truncated": False,
+                    "byte_size": item.get("byte_size") or 0,
+                    "truncated": bool(item.get("truncated")),
                     "cursor": None,
                     "persisted": False,
                     "ephemeral": True,
