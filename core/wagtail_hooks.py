@@ -7,6 +7,12 @@ from wagtail import hooks
 from wagtail.admin.menu import MenuItem
 
 
+@hooks.register("register_admin_viewset")
+def register_universal_model_viewsets():
+    from core.wagtail_admin.universal_models import UniversalModelsGroup
+    return UniversalModelsGroup()
+
+
 
 @hooks.register("register_admin_urls")
 def register_core_admin_urls():
