@@ -40,7 +40,6 @@ class UniversalWagtailAdminTests(SimpleTestCase):
 class CachePolicyTests(TestCase):
     def test_cache_ttl_reads_operator_setting(self):
         cache.delete("syssetting:cache.plan_ttl")
-        cache.delete("syssetting:cache.plan_ttl")
         SystemSetting.objects.update_or_create(
             key="cache.plan_ttl",
             defaults={
@@ -54,6 +53,7 @@ class CachePolicyTests(TestCase):
         self.assertEqual(get_cache_ttl("plan"), 123)
 
     def test_cache_ttl_is_bounded(self):
+        cache.delete("syssetting:cache.plan_ttl")
         SystemSetting.objects.update_or_create(
             key="cache.plan_ttl",
             defaults={
