@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.core.exceptions import ValidationError
-from django.db import OperationalError, InterfaceError, ProgrammingError, transaction
+from django.db import IntegrityError, OperationalError, InterfaceError, ProgrammingError, transaction
 import logging
 
 from deployments.core.db_deployer import DB_PLATFORMS, SENSITIVE_CONFIG_KEYS
@@ -265,13 +265,25 @@ class DeploySerializer(serializers.ModelSerializer):
             except ValidationError as exc:
                 detail = getattr(exc, "message_dict", None) or getattr(exc, "messages", None) or str(exc)
                 raise serializers.ValidationError(detail)
-            except Exception as exc:
-                from django.db import IntegrityError
-                if isinstance(exc, IntegrityError):
-                    raise serializers.ValidationError(
-                        {"name": "A deploy with this name already exists."}
+            except IntegrityError as exc:
+                if "deploy_deploy_name_key" in str(exc):
+                    logger.error(
+                        "Legacy global deploy-name constraint is still present; "
+                        "deploy.0017_drop_legacy_deploy_name_unique must be applied: %s",
+                        exc,
                     )
-                raise
+                    raise serializers.ValidationError(
+                        {
+                            "name": (
+                                "Deployment database schema is outdated. "
+                                "Apply migration deploy.0017_drop_legacy_deploy_name_unique."
+                            ),
+                            "code": "deployment_schema_out_of_date",
+                        }
+                    )
+                raise serializers.ValidationError(
+                    {"name": "A deploy with this name already exists for this service."}
+                )
         return instance
 
     def update(self, instance, validated_data):
@@ -289,11 +301,23 @@ class DeploySerializer(serializers.ModelSerializer):
         except ValidationError as exc:
             detail = getattr(exc, "message_dict", None) or getattr(exc, "messages", None) or str(exc)
             raise serializers.ValidationError(detail)
-        except Exception as exc:
-            from django.db import IntegrityError
-            if isinstance(exc, IntegrityError):
-                raise serializers.ValidationError(
-                    {"name": "A deploy with this name already exists."}
+        except IntegrityError as exc:
+            if "deploy_deploy_name_key" in str(exc):
+                logger.error(
+                    "Legacy global deploy-name constraint is still present during update; "
+                    "deploy.0017_drop_legacy_deploy_name_unique must be applied: %s",
+                    exc,
                 )
-            raise
+                raise serializers.ValidationError(
+                    {
+                        "name": (
+                            "Deployment database schema is outdated. "
+                            "Apply migration deploy.0017_drop_legacy_deploy_name_unique."
+                        ),
+                        "code": "deployment_schema_out_of_date",
+                    }
+                )
+            raise serializers.ValidationError(
+                {"name": "A deploy with this name already exists for this service."}
+            )
         return instance
