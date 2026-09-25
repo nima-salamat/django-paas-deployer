@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from django.core.cache import cache
+from django.template.loader import get_template
 from django.test import SimpleTestCase, TestCase
 
 from core.app_cache import get_cache_ttl
@@ -37,6 +38,11 @@ class UniversalWagtailAdminTests(SimpleTestCase):
         }
         self.assertIn("logs.ServiceLogEntry", readonly_models)
         self.assertIn("logs.CollectorHeartbeat", readonly_models)
+
+
+class CacheTemplateTests(SimpleTestCase):
+    def test_cache_dashboard_template_compiles(self):
+        get_template("core/wagtail/cache_dashboard.html")
 
 
 class CachePolicyTests(TestCase):
