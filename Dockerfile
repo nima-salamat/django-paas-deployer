@@ -19,6 +19,10 @@ RUN set -eux; \
         *) mirror="http://$mirror" ;; \
     esac; \
     mirror="${mirror%/}"; \
+    case "$mirror" in \
+        */debian) ;; \
+        *) mirror="$mirror/debian" ;; \
+    esac; \
     codename="${VERSION_CODENAME}"; \
     rm -f /etc/apt/sources.list.d/*.sources; \
     rm -f /etc/apt/sources.list.d/*.list; \
