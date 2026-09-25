@@ -30,6 +30,7 @@ from ..serializers import (
     GroupInviteLinkSerializer, ProfilePhotoSerializer, ProfilePhotoPrivacySerializer,
     build_message_list_context, build_user_mini_context,
 )
+from ..call_state import transition_call
 from ..utils import validate_messenger_file, detect_kind, users_blocked, can_see_profile_photo
 from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger
 
@@ -126,7 +127,7 @@ def _finish_call(session, status: str, ended_by_user=None, display_status: str |
         return session
 
     now = _tz.now()
-    session.status = status
+    transition_call(session, status)
     session.ended_at = now
     if session.answered_at:
         session.duration_seconds = max(0, int((now - session.answered_at).total_seconds()))
@@ -349,7 +350,7 @@ class ConversationCallJoinAPIView(APIView):
                 return err("Call already ended", status.HTTP_409_CONFLICT)
 
             if session.status == CallSession.Status.RINGING:
-                session.status = CallSession.Status.ACTIVE
+                transition_call(session, CallSession.Status.ACTIVE)
                 session.answered_at = _tz.now()
                 session.save(update_fields=["status", "answered_at"])
 

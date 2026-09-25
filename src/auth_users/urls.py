@@ -1,5 +1,6 @@
 from django.urls import path
 from rest_framework_simplejwt import views as jwt_views
+from .token_views import SessionTokenRefreshView
 from .admin_login_settings import AdminLoginSettingsAPIView
 
 from .apis import (
@@ -71,8 +72,8 @@ urlpatterns = [
     path("api/validateToken/", ValidateToken.as_view(), name="validate_token"),
 
     # JWT — register BOTH with and without trailing slash to avoid POST redirect issues
-    path("api/login/token/refresh", jwt_views.TokenRefreshView.as_view(), name="token_refresh"),
-    path("api/login/token/refresh/", jwt_views.TokenRefreshView.as_view(), name="token_refresh_slash"),
+    path("api/login/token/refresh", SessionTokenRefreshView.as_view(), name="token_refresh"),
+    path("api/login/token/refresh/", SessionTokenRefreshView.as_view(), name="token_refresh_slash"),
     path("api/login/token/verify", jwt_views.TokenVerifyView.as_view(), name="token_verify"),
     path("api/login/token/verify/", jwt_views.TokenVerifyView.as_view(), name="token_verify_slash"),
 
