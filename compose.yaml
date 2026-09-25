@@ -16,6 +16,12 @@ services:
       - --providers.docker.network=proxy_net
       - --providers.docker.endpoint=unix:///var/run/docker.sock
 
+      # Docker Swarm services
+      - --providers.swarm=true
+      - --providers.swarm.exposedbydefault=false
+      - --providers.swarm.network=proxy_net
+      - --providers.swarm.endpoint=unix:///var/run/docker.sock
+
       # Traefik receives HTTP from the HOST Nginx.
       # SSL is terminated by HOST Nginx.
       - --entrypoints.web.address=:80
@@ -440,6 +446,9 @@ services:
   # ============================================================
   deployment-events:
     image: ${BACKEND_IMAGE:-passdeployer-backend:local}
+    # Legacy container-runtime event consumer. Swarm runtime uses the
+    # Service/Task reconciler instead and does not run this by default.
+    profiles: ["legacy-runtime"]
 
     container_name: deploy-events
     restart: unless-stopped
@@ -591,4 +600,5 @@ networks:
   # ------------------------------------------------------------
   proxy_net:
     name: proxy_net
-    driver: bridge
+    driver: overlay
+    attachable: true

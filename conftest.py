@@ -20,26 +20,29 @@ from pathlib import Path
 
 # Make sure the backend root is importable. ``backend.zip`` was extracted
 # to /home/z/my-project/work, so the work dir is the package root.
-_WORK = Path(__file__).resolve().parents[1]
-if str(_WORK) not in sys.path:
-    sys.path.insert(0, str(_WORK))
+_WORK = Path(__file__).resolve().parent
+_SRC = _WORK / "src"
+for _path in (_SRC, _WORK):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
+_FULL_DJANGO_TESTS = os.environ.get("DJANGO_FULL_TESTS", "").strip().lower() in {
+    "1", "true", "yes", "on",
+}
 
 # ---------------------------------------------------------------------------
-# Pre-install a minimal ``core.global_settings.config`` stub so test modules
-# that need PlanTypeChoices / MIRROR_DOCKER / Config can import them without
-# triggering the full project Django models (which need Wagtail, channels,
-# postgres, etc.). Test files may still overwrite this stub with their own
-# (see test_patch_regressions.load_dockerfile_module).
+# Pre-install a minimal ``core.global_settings.config`` stub for the fast
+# source/contract profile. Full Django tests must use the real module: model
+# defaults and Wagtail startup are part of what that profile verifies.
 # ---------------------------------------------------------------------------
 def _install_core_stubs():
     if "core" not in sys.modules:
         core_pkg = types.ModuleType("core")
-        core_pkg.__path__ = []
+        core_pkg.__path__ = [str(_SRC / "core")]
         sys.modules["core"] = core_pkg
     if "core.global_settings" not in sys.modules:
         gs_pkg = types.ModuleType("core.global_settings")
-        gs_pkg.__path__ = []
+        gs_pkg.__path__ = [str(_SRC / "core" / "global_settings")]
         sys.modules["core.global_settings"] = gs_pkg
     if "core.global_settings.config" not in sys.modules:
         cfg = types.ModuleType("core.global_settings.config")
@@ -51,7 +54,36 @@ def _install_core_stubs():
         cfg.default_ports = {}
         cfg.DEFAULT_EXPOSE_PORT = 80
         cfg.DEFAULT_RUNTIME_VERSIONS = {}
-        cfg.SERVICE_STATUS_CHOICES = []
+        class _PTC:
+            DB = "DB"
+            APP = "APP"
+            READY = "READY"
+            choices = ((DB, "Database"), (APP, "Application"), (READY, "Ready-made"))
+        class _Storage:
+            SSD = "SSD"
+            HDD = "HDD"
+            choices = ((SSD, "SSD"), (HDD, "HDD"))
+        class _Names:
+            BRONZE = "Bronze"
+            SILVER = "Silver"
+            GOLD = "Gold"
+            DIAMOND = "Diamond"
+            choices = ((BRONZE, "Bronze"), (SILVER, "Silver"), (GOLD, "Gold"), (DIAMOND, "Diamond"))
+        class _VolumeModes:
+            READ = "r"
+            WRITE = "w"
+            READ_WRITE = "rw"
+            choices = ((READ, "Read-only"), (WRITE, "Write-only"), (READ_WRITE, "Read & Write"))
+        class _Statuses:
+            STOPPED = "stopped"
+            QUEUED = "queued"
+            DEPLOYING = "deploying"
+            RUNNING = "running"
+            FAILED = "failed"
+            SUCCEEDED = "succeeded"
+            STOPPING = "stopping"
+            choices = tuple((value, value) for value in (STOPPED, QUEUED, DEPLOYING, RUNNING, FAILED, SUCCEEDED, STOPPING))
+        cfg.SERVICE_STATUS_CHOICES = _Statuses
         cfg.APPLICATIONS = []
         cfg.DBS = []
         cfg.COLORS = []
@@ -62,15 +94,16 @@ def _install_core_stubs():
         cfg.DEFAULT_SPA_BUILD_DIR = "dist"
         cfg.DEFAULT_EXPOSE_PORT = 80
         cfg.MAX_DEPLOY_TIME_MINUTE = 20
-        class _PTC:
-            DB = "DB"
-            APP = "APP"
-            READY = "READY"
         cfg.PlanTypeChoices = _PTC
-        cfg.StorageTypeChoices = _PTC
-        cfg.NameChoices = _PTC
-        cfg.VOLUME_MODE_CHOICES = _PTC
-        cfg.PaymentChoices = _PTC
+        cfg.StorageTypeChoices = _Storage
+        cfg.NameChoices = _Names
+        cfg.VOLUME_MODE_CHOICES = _VolumeModes
+        class _Payments:
+            PAYED = "PAYED"
+            NOT_PAYED = "NOT_PAYED"
+            CANCELED = "CANCELED"
+            choices = ((PAYED, PAYED), (NOT_PAYED, NOT_PAYED), (CANCELED, CANCELED))
+        cfg.PaymentChoices = _Payments
         class _Config:
             php = ""
             laravel = ""
@@ -92,7 +125,8 @@ def _install_core_stubs():
         sys.modules["core.global_settings.config"] = cfg
 
 
-_install_core_stubs()
+if not _FULL_DJANGO_TESTS:
+    _install_core_stubs()
 
 
 # ---------------------------------------------------------------------------
@@ -135,10 +169,13 @@ MEDIA_URL = "/media/"
 MEDIA_ROOT = "/tmp/patch-tests-media"
 """
 
-_settings_mod = types.ModuleType("patch_test_settings")
-exec(compile(_MIN_SETTINGS, "patch_test_settings.py", "exec"), _settings_mod.__dict__)
-sys.modules["patch_test_settings"] = _settings_mod
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "patch_test_settings")
+if _FULL_DJANGO_TESTS:
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+else:
+    _settings_mod = types.ModuleType("patch_test_settings")
+    exec(compile(_MIN_SETTINGS, "patch_test_settings.py", "exec"), _settings_mod.__dict__)
+    sys.modules["patch_test_settings"] = _settings_mod
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "patch_test_settings")
 
 import django  # noqa: E402
 
