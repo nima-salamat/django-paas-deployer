@@ -581,13 +581,6 @@ class Command(BaseCommand):
                             break
                         last_hb = now
             finally:
-                if batch:
-                    self._persist_batch(instance, service, stream, policy, batch)
-                try:
-                    log_stream.close()
-                except Exception:
-                    pass
-            finally:
                 for stream_kind, line in assembler.flush():
                     ts, msg = self._parse_ts_line(line)
                     size = len(msg.encode("utf-8", "replace"))
