@@ -82,7 +82,7 @@ class PlanAdminViewSet(ViewSet):
         return [auth() for auth in self.authentication_classes]
 
     def list(self, request):
-        from core.app_cache import cache_get, cache_set, plan_admin_list_key, PLAN_TTL
+        from core.app_cache import cache_get, cache_set, plan_admin_list_key, get_cache_ttl("plan")
         params = {k: (request.query_params.get(k) or "") for k in ("q", "q_search", "platform", "plan_type", "page", "page_size")}
         key = plan_admin_list_key(params)
         cached = cache_get(key)
@@ -102,7 +102,7 @@ class PlanAdminViewSet(ViewSet):
         page = paginator.paginate_queryset(qs, request)
         serializer = PlanSerializer(page, many=True)
         resp = paginator.get_paginated_response(serializer.data)
-        cache_set(key, resp.data, PLAN_TTL)
+        cache_set(key, resp.data, get_cache_ttl("plan"))
         return resp
 
     def retrieve(self, request, pk=None):
@@ -212,7 +212,7 @@ class PlansApiView(APIView):
         GET /plans/?id=1,2,3 
         GET /plans/?id=1   
         """
-        from core.app_cache import cache_get, cache_set, plan_list_key, plan_detail_key, PLAN_TTL
+        from core.app_cache import cache_get, cache_set, plan_list_key, plan_detail_key, get_cache_ttl("plan")
         ids = request.query_params.get("id", "")
         if not ids:
             key = plan_list_key({"page": request.query_params.get("page") or "1"})
@@ -252,8 +252,8 @@ class PlansApiView(APIView):
         serializer = PlanSerializer(paginated_plans, many=True)
         resp = paginator.get_paginated_response(serializer.data)
         try:
-            from core.app_cache import cache_set, plan_list_key, PLAN_TTL
-            cache_set(plan_list_key({"page": request.query_params.get("page") or "1"}), resp.data, PLAN_TTL)
+            from core.app_cache import cache_set, plan_list_key, get_cache_ttl("plan")
+            cache_set(plan_list_key({"page": request.query_params.get("page") or "1"}), resp.data, get_cache_ttl("plan"))
         except Exception:
             pass
         return resp
