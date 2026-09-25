@@ -89,8 +89,8 @@ class RuleViewSet(SnippetViewSet):
     list_display = ["user", "created_at", "updated_at"]
     search_fields = ["user__username"]
     panels = panels_for(
-        editable=["user"],
-        read_only=["rules", "created_at", "updated_at"],
+        editable=["user", "rules"],
+        read_only=["created_at", "updated_at"],
     )
 
 
