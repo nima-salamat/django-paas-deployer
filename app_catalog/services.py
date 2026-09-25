@@ -14,6 +14,7 @@ from django.utils.text import slugify
 from plans.models import Plan
 from services.models import PrivateNetwork, Service
 from deploy.models import Deploy
+from deploy.naming import allocate_deploy_name
 from core.global_settings.config import PlanTypeChoices
 from .catalog import ApplicationCatalog, CatalogValidationError, resolve_variant
 from .models import ApplicationInstance, ApplicationInstanceService, ApplicationStatus
@@ -45,21 +46,6 @@ def _unique_service_name(user, base: str) -> str:
         candidate = (base[: 30 - len(suffix)] + suffix).strip("-")
         i += 1
     return candidate
-
-
-def _unique_deploy_name(service: Service) -> str:
-    """Generate a deployment name unique within its service."""
-    base = str(service.name)[:50].strip("-") or "app"
-    from deploy.models import Deploy
-    if not Deploy.objects.filter(service=service, name=base).exists():
-        return base
-    i = 2
-    while True:
-        suffix = f"-{i}"
-        candidate = (base[: 50 - len(suffix)] + suffix).strip("-")
-        if not Deploy.objects.filter(service=service, name=candidate).exists():
-            return candidate
-        i += 1
 
 
 def _render_volume_size(value, *, config: dict, secrets: dict) -> int:
@@ -298,7 +284,7 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
             ],
         })
         deploy = Deploy.objects.create(
-            name=_unique_deploy_name(service),
+            name=allocate_deploy_name(service),
             service=service,
             created_by=created_by,
             version=1.0,

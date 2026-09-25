@@ -177,6 +177,51 @@ class DeploymentFileUploadRegressionTests(TestCase):
         created = Deploy.objects.exclude(pk=existing.pk).get(service=self.service)
         self.assertEqual(created.name, "same-service-name-2")
 
+    def test_api_deploy_name_scope_allows_same_name_on_another_service(self):
+        service_two = Service.objects.create(
+            name="deploy-file-service-api-two",
+            user=self.user,
+            plan=self.plan,
+        )
+        Deploy.objects.create(
+            name="production",
+            service=self.service,
+            version="1.0",
+            config={},
+        )
+
+        def create(service):
+            request = APIRequestFactory().post(
+                "/deploy/",
+                {
+                    "name": "production",
+                    "service": str(service.pk),
+                    "version": "1.0",
+                    "config": "{}",
+                },
+                format="json",
+            )
+            force_authenticate(request, user=self.user)
+            with patch(
+                "deploy.daily_limits.assert_daily_deploy_allowed",
+                return_value=(True, "", 0, 100),
+            ):
+                return DeployViewSet.as_view({"post": "create"})(request)
+
+        same_service = create(self.service)
+        other_service = create(service_two)
+
+        self.assertEqual(same_service.status_code, 201)
+        self.assertEqual(other_service.status_code, 201)
+        self.assertEqual(
+            Deploy.objects.get(service=self.service, name="production-2").service_id,
+            self.service.pk,
+        )
+        self.assertEqual(
+            Deploy.objects.get(service=service_two, name="production").service_id,
+            service_two.pk,
+        )
+
     def test_duplicate_model_deploy_name_is_still_rejected(self):
         Deploy.objects.create(
             name="same-service-name",

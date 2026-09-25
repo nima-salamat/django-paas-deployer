@@ -6,6 +6,7 @@ import logging
 from deployments.core.db_deployer import DB_PLATFORMS, SENSITIVE_CONFIG_KEYS
 from deployments.common.config import sanitize_tenant_config, validate_tenant_config
 from .models import Deploy, DeployLog
+from .naming import allocate_deploy_name, normalize_deploy_name
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +183,10 @@ class DeploySerializer(serializers.ModelSerializer):
         attrs = super().validate(attrs)
         request = self.context.get("request")
         service = attrs.get("service") or getattr(self.instance, "service", None)
-        name = str(attrs.get("name") or getattr(self.instance, "name", "")).strip()
+        name = normalize_deploy_name(
+            attrs.get("name") or getattr(self.instance, "name", ""),
+            fallback="deploy",
+        )
         if "name" in attrs:
             attrs["name"] = name
 
@@ -248,7 +252,7 @@ class DeploySerializer(serializers.ModelSerializer):
             if service is not None:
                 service = service.__class__.objects.select_for_update().get(pk=service.pk)
                 validated_data["service"] = service
-                validated_data["name"] = _unique_deploy_name(
+                validated_data["name"] = allocate_deploy_name(
                     service,
                     validated_data.get("name"),
                 )

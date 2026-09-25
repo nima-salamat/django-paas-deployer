@@ -480,7 +480,7 @@ class ServiceShare(BaseModel):
         ]
         constraints = [
             models.CheckConstraint(
-                check=(
+                condition=(
                     models.Q(group__isnull=False, target_user__isnull=True)
                     | models.Q(group__isnull=True, target_user__isnull=False)
                 ),
