@@ -208,6 +208,8 @@ class DeploySerializer(serializers.ModelSerializer):
         attrs = super().validate(attrs)
         service = attrs.get("service") or getattr(self.instance, "service", None)
         name = str(attrs.get("name") or getattr(self.instance, "name", "")).strip()
+        if "name" in attrs:
+            attrs["name"] = name
         if service is not None and name:
             qs = Deploy.objects.filter(service=service, name=name)
             if self.instance is not None:
