@@ -6,7 +6,7 @@ class DocsAssetSecurityContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         root = Path(__file__).parents[2]
-        cls.apis = (root / "docs" / "apis.py").read_text()
+        cls.apis = (root / "docs" / "apis.py").read_text(encoding="utf-8")
         cls.urls = (root / "docs" / "urls.py").read_text()
         cls.serializers = (root / "docs" / "serializers.py").read_text()
 

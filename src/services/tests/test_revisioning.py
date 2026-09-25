@@ -1,3 +1,11 @@
+import os
+
+import pytest
+
+if os.environ.get("DJANGO_FULL_TESTS", "").strip().lower() not in {"1", "true", "yes", "on"}:
+    pytest.skip("requires the full Django application registry", allow_module_level=True)
+pytestmark = pytest.mark.deployment_integration
+
 from types import SimpleNamespace
 from unittest.mock import patch
 

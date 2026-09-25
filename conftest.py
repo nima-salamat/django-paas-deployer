@@ -26,13 +26,14 @@ for _path in (_SRC, _WORK):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
+_FULL_DJANGO_TESTS = os.environ.get("DJANGO_FULL_TESTS", "").strip().lower() in {
+    "1", "true", "yes", "on",
+}
 
 # ---------------------------------------------------------------------------
-# Pre-install a minimal ``core.global_settings.config`` stub so test modules
-# that need PlanTypeChoices / MIRROR_DOCKER / Config can import them without
-# triggering the full project Django models (which need Wagtail, channels,
-# postgres, etc.). Test files may still overwrite this stub with their own
-# (see test_patch_regressions.load_dockerfile_module).
+# Pre-install a minimal ``core.global_settings.config`` stub for the fast
+# source/contract profile. Full Django tests must use the real module: model
+# defaults and Wagtail startup are part of what that profile verifies.
 # ---------------------------------------------------------------------------
 def _install_core_stubs():
     if "core" not in sys.modules:
@@ -124,7 +125,8 @@ def _install_core_stubs():
         sys.modules["core.global_settings.config"] = cfg
 
 
-_install_core_stubs()
+if not _FULL_DJANGO_TESTS:
+    _install_core_stubs()
 
 
 # ---------------------------------------------------------------------------
@@ -167,10 +169,13 @@ MEDIA_URL = "/media/"
 MEDIA_ROOT = "/tmp/patch-tests-media"
 """
 
-_settings_mod = types.ModuleType("patch_test_settings")
-exec(compile(_MIN_SETTINGS, "patch_test_settings.py", "exec"), _settings_mod.__dict__)
-sys.modules["patch_test_settings"] = _settings_mod
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "patch_test_settings")
+if _FULL_DJANGO_TESTS:
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+else:
+    _settings_mod = types.ModuleType("patch_test_settings")
+    exec(compile(_MIN_SETTINGS, "patch_test_settings.py", "exec"), _settings_mod.__dict__)
+    sys.modules["patch_test_settings"] = _settings_mod
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "patch_test_settings")
 
 import django  # noqa: E402
 

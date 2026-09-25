@@ -1,3 +1,11 @@
+import os
+
+import pytest
+
+if os.environ.get("DJANGO_FULL_TESTS", "").strip().lower() not in {"1", "true", "yes", "on"}:
+    pytest.skip("requires the full Django/PostgreSQL test profile", allow_module_level=True)
+pytestmark = pytest.mark.deployment_integration
+
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient

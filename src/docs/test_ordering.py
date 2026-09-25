@@ -14,6 +14,14 @@ These tests pin down the ordering APIs added on top of the models:
   * the Django admin exposes ▲/▼ move URLs and a renumber action.
 """
 
+import os
+
+import pytest
+
+if os.environ.get("DJANGO_FULL_TESTS", "").strip().lower() not in {"1", "true", "yes", "on"}:
+    pytest.skip("requires the full Django/PostgreSQL test profile", allow_module_level=True)
+pytestmark = pytest.mark.deployment_integration
+
 import uuid
 
 from django.contrib.auth import get_user_model

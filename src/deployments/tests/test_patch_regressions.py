@@ -139,7 +139,7 @@ class DocsPublicAuthTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from pathlib import Path
-        cls.source = Path(__file__).parents[2].joinpath("docs", "apis.py").read_text()
+        cls.source = Path(__file__).parents[2].joinpath("docs", "apis.py").read_text(encoding="utf-8")
 
     def test_public_views_disable_jwt_authentication(self):
         # Each public view class must set authentication_classes = [] (or

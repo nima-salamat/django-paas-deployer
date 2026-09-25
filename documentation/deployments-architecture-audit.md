@@ -722,6 +722,13 @@ Run the same contract suite against a fake runtime and the Swarm adapter:
 
 The existing focused lifecycle/security tests provide useful coverage, but they do not prove the runtime abstraction or the real API/database/Swarm path. Local verification has also shown that project checks can run while PostgreSQL and Docker are unavailable. Those environment constraints must be reported separately from repository failures; they must not be hidden by weakening tests.
 
+The test runner therefore has two explicit profiles. The default profile keeps
+the framework-neutral and source-contract tests fast and uses a small Django
+stub. Model-backed Wagtail, API, revision, and upload tests are marked
+`deployment_integration` and require `DJANGO_FULL_TESTS=1`; that profile loads
+the real application registry and production settings, so it must run with
+PostgreSQL rather than substituting SQLite for PostgreSQL-specific fields.
+
 ## 17. Migration risks
 
 1. Existing revision and active-deploy data. ServiceRevision, active_revision, and selected_deploy must continue to resolve the same historical intent.
@@ -872,4 +879,3 @@ This status is part of the design contract: new code must extend the seams
 above or explicitly document why an existing compatibility path remains. It
 must not introduce another direct Docker path or another independent
 deployment state machine.
-
