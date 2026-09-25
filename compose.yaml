@@ -116,7 +116,6 @@ services:
         DOCKERFILE_PYTHON_VERSION: ${DOCKERFILE_PYTHON_VERSION}
         DOCKERFILE_PYTHON_MIRROR: ${DOCKERFILE_PYTHON_MIRROR}
         DOCKERFILE_LINUX_MIRROR: ${DOCKERFILE_LINUX_MIRROR}
-        CODENAME: ${CODENAME}
 
     container_name: deploy-web
     restart: unless-stopped
@@ -124,7 +123,8 @@ services:
     # Only the web service performs control-plane startup tasks.
     # entrypoint.sh owns the main migration and setup_deployment_log_db, which
     # in turn owns the deployment-log DB migration.
-    # Invoke through sh so the bind-mounted source file does not depend on host execute bits.\n    entrypoint: ["/bin/sh", "/app/entrypoint.sh"]
+    # Invoke through sh so the bind-mounted source file does not depend on host execute bits.
+    entrypoint: ["/bin/sh", "/app/entrypoint.sh"]
     command:
       - daphne
       - -b
