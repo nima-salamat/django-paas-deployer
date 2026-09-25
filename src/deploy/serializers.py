@@ -10,20 +10,6 @@ from .naming import allocate_deploy_name, normalize_deploy_name
 
 logger = logging.getLogger(__name__)
 
-
-def _unique_deploy_name(service, requested_name):
-    """Allocate a deployment name unique within one service."""
-    base = str(requested_name or getattr(service, "name", "deploy") or "deploy").strip()[:50]
-    base = base or "deploy"
-    candidate = base
-    index = 2
-    while Deploy.objects.filter(service=service, name=candidate).exists():
-        suffix = f"-{index}"
-        candidate = f"{base[:50 - len(suffix)]}{suffix}"
-        index += 1
-    return candidate
-
-
 class MaskedDBConfigField(serializers.JSONField):
     """JSONField that strips sensitive DB credentials on read, but accepts full dict on write.
 
