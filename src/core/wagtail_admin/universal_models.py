@@ -43,6 +43,7 @@ BESPOKE = {
     "auth_users.AuthCode", "auth_users.LoginLog",
     "custom_emails.EmailTemplate", "custom_emails.EmailLog",
     "deploy.Deploy", "deploy.DeployLog", "deploy.BaseRuntimeImage",
+    "deploy.SwarmCluster", "deploy.SwarmNode",
     "messenger.UserBio", "messenger.Contact", "messenger.Block",
     "messenger.ProfilePhotoPrivacy", "messenger.ProfilePhotoAllowed",
     "messenger.Conversation", "messenger.ConversationParticipant",

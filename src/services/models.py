@@ -105,7 +105,14 @@ class Service(BaseModel):
         choices=(("stopped", _("Stopped")), ("running", _("Running")), ("deleted", _("Deleted"))),
         default="stopped",
     )
-    lifecycle_generation = models.PositiveBigIntegerField(default=0)
+    lifecycle_generation = models.PositiveIntegerField(
+        _("Lifecycle Generation"),
+        default=0,
+        help_text=(
+            "Monotonic fence for desired_state. Incremented on every lifecycle "
+            "intent (deploy/stop/delete). Stale workers must not overwrite a newer intent."
+        ),
+    )
 
     def clean(self):
         super().clean()
@@ -1127,4 +1134,3 @@ class ShellAuditEvent(BaseModel):
 
     def __str__(self):
         return f"ShellAudit {self.action} service={self.service_id}"
-

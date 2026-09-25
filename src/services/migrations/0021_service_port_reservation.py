@@ -46,7 +46,10 @@ class Migration(migrations.Migration):
                     )
                 ],
                 "indexes": [
-                    models.Index(fields=("host_port", "protocol", "state")),
+                    models.Index(
+                        fields=("host_port", "protocol", "state"),
+                        name="service_port_res_host_protocol_state",
+                    ),
                 ],
             },
         ),
