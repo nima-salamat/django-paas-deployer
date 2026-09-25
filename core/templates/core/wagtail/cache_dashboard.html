@@ -210,10 +210,10 @@
         {% csrf_token %}
         <input type="hidden" name="action" value="save_policy">
         <div class="cache-policy">
-          {% for field_key, setting_key, label, default, minimum, maximum in policy_fields %}
+          {% for field_key, setting_key, label, default, minimum, maximum, value in policy_fields %}
             <div class="cache-field">
               <label for="{{ field_key }}">{{ label }}</label>
-              <input id="{{ field_key }}" type="number" name="{{ field_key }}" value="{{ policy|dictsort:"x" }}" min="{{ minimum }}" max="{{ maximum }}" required>
+              <input id="{{ field_key }}" type="number" name="{{ field_key }}" value="{{ value }}" min="{{ minimum }}" max="{{ maximum }}" required>
               <div class="cache-field__help">0 means no expiry for TTL fields. Allowed range: {{ minimum }}–{{ maximum }}.</div>
             </div>
           {% endfor %}
