@@ -14,6 +14,8 @@ class UniversalWagtailAdminTests(SimpleTestCase):
         self.assertTrue(generic)
         self.assertIn("core.SystemSetting", generic)
         self.assertIn("app_catalog.ApplicationInstance", generic)
+        self.assertIn("messenger.CallSessionParticipant", BESPOKE)
+        self.assertNotIn("messenger.CallSessionParticipant", MODEL_LABELS)
         self.assertIn("logs.ServiceLogEntry", READ_ONLY_MODELS)
         self.assertEqual(
             len(UniversalModelsGroup.items),
