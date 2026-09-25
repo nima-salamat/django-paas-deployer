@@ -179,6 +179,41 @@ def _trim_fifo(service_id: str, need_bytes: int, policy: EffectiveLoggingPolicy)
     return freed
 
 
+def _prepare_lines(lines: Iterable[dict], policy: EffectiveLoggingPolicy) -> list[dict]:
+    """Normalize, redact, truncate and classify lines before any delivery path."""
+    prepared: list[dict] = []
+    for raw in lines:
+        ts = raw.get("ts") or timezone.now()
+        if isinstance(ts, str):
+            ts = parse_datetime(ts) or timezone.now()
+        if timezone.is_naive(ts):
+            ts = timezone.make_aware(ts, timezone.utc)
+
+        stream_kind = (raw.get("stream") or "stdout").lower()
+        if stream_kind not in {"stdout", "stderr"}:
+            stream_kind = "stdout"
+
+        msg = _redact(str(raw.get("message") or ""))
+        truncated = False
+        if len(msg.encode("utf-8", "replace")) > policy.max_entry_size:
+            encoded = msg.encode("utf-8", "replace")[: policy.max_entry_size]
+            msg = encoded.decode("utf-8", "replace") + "…[truncated]"
+            truncated = True
+
+        prepared.append(
+            {
+                "ts": ts,
+                "stream": stream_kind,
+                "message": msg,
+                "fingerprint": fingerprint(ts, stream_kind, msg),
+                "byte_size": len(msg.encode("utf-8", "replace")),
+                "truncated": truncated,
+                "level": infer_level(msg),
+            }
+        )
+    return prepared
+
+
 def ingest_lines(
     stream: ServiceLogStream,
     lines: Iterable[dict],
@@ -192,6 +227,8 @@ def ingest_lines(
     """
     alias = _alias()
     policy = policy or resolve_for_service_id(stream.service_id)
+    prepared = _prepare_lines(lines, policy)
+
     if not policy.persistent_enabled or policy.quota_behavior == "realtime_only":
         return {
             "inserted": 0,
@@ -201,6 +238,7 @@ def ingest_lines(
             "realtime_only": True,
             "persisted": False,
             "inserted_entries": [],
+            "realtime_lines": prepared,
         }
 
     if owner_id and stream.owner_id and stream.owner_id != owner_id:
@@ -215,37 +253,6 @@ def ingest_lines(
     last_ts = stream.last_persisted_ts
     last_fp = stream.last_persisted_fingerprint or ""
     next_seq = int(stream.last_seq or 0)
-
-    prepared = []
-    for raw in lines:
-        ts = raw.get("ts") or timezone.now()
-        if isinstance(ts, str):
-            ts = parse_datetime(ts) or timezone.now()
-        if timezone.is_naive(ts):
-            ts = timezone.make_aware(ts, timezone.utc)
-        stream_kind = (raw.get("stream") or "stdout").lower()
-        if stream_kind not in {"stdout", "stderr"}:
-            stream_kind = "stdout"
-        msg = _redact(str(raw.get("message") or ""))
-        truncated = False
-        if len(msg.encode("utf-8", "replace")) > policy.max_entry_size:
-            # Truncate by bytes approximately
-            encoded = msg.encode("utf-8", "replace")[: policy.max_entry_size]
-            msg = encoded.decode("utf-8", "replace") + "…[truncated]"
-            truncated = True
-        fp = fingerprint(ts, stream_kind, msg)
-        size = len(msg.encode("utf-8", "replace"))
-        prepared.append(
-            {
-                "ts": ts,
-                "stream": stream_kind,
-                "message": msg,
-                "fingerprint": fp,
-                "byte_size": size,
-                "truncated": truncated,
-                "level": infer_level(msg),
-            }
-        )
 
     if not prepared:
         return {
@@ -262,7 +269,15 @@ def ingest_lines(
     if usage["current_storage_bytes"] + need > policy.storage_quota_bytes:
         if policy.quota_behavior == "drop_new":
             bump_drop(stream.service_id, entries=len(prepared), bytes_dropped=need)
-            return {"inserted": 0, "duplicates": 0, "dropped": len(prepared), "bytes": 0}
+            return {
+                "inserted": 0,
+                "duplicates": 0,
+                "dropped": len(prepared),
+                "bytes": 0,
+                "persisted": False,
+                "inserted_entries": [],
+                "realtime_lines": prepared,
+            }
         _trim_fifo(str(stream.service_id), need, policy)
 
     with transaction.atomic(using=alias):
@@ -273,7 +288,14 @@ def ingest_lines(
             .first()
         )
         if locked is None:
-            return {"inserted": 0, "duplicates": 0, "dropped": 0, "bytes": 0}
+            return {
+                "inserted": 0,
+                "duplicates": 0,
+                "dropped": 0,
+                "bytes": 0,
+                "persisted": False,
+                "inserted_entries": [],
+            }
         next_seq = int(locked.last_seq or 0)
         for p in prepared:
             next_seq += 1
