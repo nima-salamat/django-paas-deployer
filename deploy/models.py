@@ -29,7 +29,7 @@ class RollbackStatusChoices(models.TextChoices):
 
 
 class Deploy(BaseModel):
-    name = models.CharField(verbose_name=_("Name"), max_length=50, unique=True)
+    name = models.CharField(verbose_name=_("Name"), max_length=50)
     service = models.ForeignKey(Service, verbose_name=_("Service"), on_delete=models.CASCADE)
     created_by = models.ForeignKey(
         "users.User",
@@ -88,6 +88,12 @@ class Deploy(BaseModel):
     class Meta:
         verbose_name = _("Deploy")
         verbose_name_plural = _("Deploy")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("service", "name"),
+                name="uniq_deploy_service_name",
+            ),
+        ]
     
     def clean(self):
         super().clean()
