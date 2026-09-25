@@ -157,21 +157,27 @@ class Command(BaseCommand):
 
     def _flush_buffer(self):
         from logs.models import ServiceLogStream
-        from logs.ingestion import ingest_lines
-        from logs.policy import resolve_for_service_id
+        from logs.ingestion import acquire_lease
+        from logs.policy import resolve
+        from services.models import Service
         from django.conf import settings
 
         items = self._buffer.drain()
         if not items:
             return
         alias = getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", "default")
+        instance = _instance_id()
         for service_id, stream_id, lines in items:
             try:
                 stream = ServiceLogStream.objects.using(alias).filter(pk=stream_id).first()
-                if not stream:
+                service = Service.objects.select_related("plan").filter(pk=service_id).first()
+                if not stream or not service:
                     continue
-                policy = resolve_for_service_id(service_id)
-                ingest_lines(stream, lines, policy=policy)
+                if not acquire_lease(stream, instance):
+                    # Preserve single-writer ownership; this collector is no longer owner.
+                    continue
+                policy = resolve(service)
+                self._persist_batch(instance, service, stream, policy, lines)
             except Exception:
                 logger.debug("buffer flush failed", exc_info=True)
                 self._buffer.push(service_id, stream_id, lines)
@@ -356,7 +362,7 @@ class Command(BaseCommand):
             with self._lock:
                 self._following.pop(key, None)
             try:
-                close_stream(stream, status="closed")
+                close_stream(stream, status="closed", owner_id=instance)
             except Exception:
                 pass
 
@@ -547,11 +553,13 @@ class Command(BaseCommand):
                 # Only close if container is gone
                 container.reload()
                 if container.status not in {"running", "created"}:
-                    close_stream(stream, status=ServiceLogStream.Status.CLOSED)
+                    close_stream(stream, status=ServiceLogStream.Status.CLOSED, owner_id=instance)
             except Exception:
-                close_stream(stream, status=ServiceLogStream.Status.LOST)
+                close_stream(stream, status=ServiceLogStream.Status.LOST, owner_id=instance)
 
     def _catch_up(self, container, stream, service, policy, instance, rate: RateWindow):
+        from logs.usage import bump_drop
+
         try:
             raw = container.logs(
                 stdout=True, stderr=True, timestamps=True, tail=1000
@@ -559,17 +567,28 @@ class Command(BaseCommand):
         except Exception as exc:
             logger.warning("catch-up failed %s: %s", container.name, exc)
             return
-        text = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw or "")
+        pairs = (
+            self._demux_docker_chunk(raw)
+            if isinstance(raw, (bytes, bytearray))
+            else [("stdout", str(raw or ""))]
+        )
         lines = []
         skew = stream.last_persisted_ts - timedelta(seconds=5) if stream.last_persisted_ts else None
-        for line in text.splitlines():
+        for stream_kind, line in pairs:
+            if not line:
+                continue
             ts, msg = self._parse_ts_line(line)
             if skew and ts and ts < skew:
                 continue
             size = len(msg.encode("utf-8", "replace"))
             if not rate.allow(size):
+                bump_drop(service.pk, entries=1, bytes_dropped=size)
                 continue
-            lines.append({"ts": ts or timezone.now(), "stream": "stdout", "message": msg})
+            lines.append({
+                "ts": ts or timezone.now(),
+                "stream": stream_kind,
+                "message": msg,
+            })
         if lines:
             self._persist_batch(instance, service, stream, policy, lines)
 
@@ -584,34 +603,70 @@ class Command(BaseCommand):
             logger.warning("persist failed, buffering", exc_info=True)
             self._buffer.push(service.pk, stream.pk, lines)
             return
-        if not result.get("inserted") or not policy.realtime_enabled:
-            return
-        n = int(result.get("inserted") or 0)
-        events = []
-        seq = int(stream.last_seq or 0) - n
-        for item in lines[-n:]:
-            seq += 1
-            ts = item["ts"]
-            events.append(
-                {
-                    "ts": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
-                    "seq": seq,
-                    "stream": item.get("stream") or "stdout",
-                    "message": item.get("message") or "",
-                    "cursor": encode_cursor(ts, seq) if hasattr(ts, "isoformat") else None,
-                }
-            )
-        publish_log_events(service.pk, events)
-        try:
-            from django.conf import settings
-            from logs.models import CollectorHeartbeat
 
-            alias = getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", "default")
-            CollectorHeartbeat.objects.using(alias).filter(instance_id=instance).update(
-                last_successful_ingestion=timezone.now()
-            )
-        except Exception:
-            pass
+        if not policy.realtime_enabled:
+            return
+
+        # Publish exactly what was inserted. This prevents duplicate overlap or
+        # interleaved stdout/stderr lines from being paired with the wrong seq.
+        events = []
+        for item in result.get("inserted_entries") or []:
+            ts = item.get("ts")
+            entry_id = item.get("id")
+            seq = item.get("seq")
+            if ts is None or entry_id is None or seq is None:
+                continue
+            events.append({
+                "id": entry_id,
+                "stream_id": stream.pk,
+                "ts": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+                "seq": int(seq),
+                "stream": item.get("stream") or "stdout",
+                "level": item.get("level") or None,
+                "message": item.get("message") or "",
+                "byte_size": item.get("byte_size") or 0,
+                "truncated": bool(item.get("truncated")),
+                "cursor": encode_cursor(ts, int(seq), entry_id=int(entry_id)),
+                "persisted": True,
+            })
+
+        # Non-persistent modes still need live streaming. They intentionally
+        # have no durable seq/cursor, so clients treat these events as ephemeral.
+        if not events and (
+            result.get("persisted") is False
+            or int(result.get("dropped") or 0) > 0
+        ):
+            for item in lines:
+                ts = item.get("ts")
+                events.append({
+                    "id": None,
+                    "stream_id": stream.pk,
+                    "ts": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+                    "seq": None,
+                    "stream": item.get("stream") or "stdout",
+                    "level": None,
+                    "message": item.get("message") or "",
+                    "byte_size": 0,
+                    "truncated": False,
+                    "cursor": None,
+                    "persisted": False,
+                    "ephemeral": True,
+                })
+
+        if events:
+            publish_log_events(service.pk, events)
+
+        if result.get("inserted"):
+            try:
+                from django.conf import settings
+                from logs.models import CollectorHeartbeat
+
+                alias = getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", "default")
+                CollectorHeartbeat.objects.using(alias).filter(instance_id=instance).update(
+                    last_successful_ingestion=timezone.now()
+                )
+            except Exception:
+                pass
 
 
     def _demux_docker_chunk(self, raw: bytes):
