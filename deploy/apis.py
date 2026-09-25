@@ -1136,6 +1136,7 @@ class DeployViewSet(ModelViewSet):
 @permission_classes([IsAuthenticated])
 def deploy_name_is_available(request):
     name = (request.query_params.get("name") or "").strip()
+    service_id = (request.query_params.get("service_id") or "").strip() or None
     exclude_id = (
         request.query_params.get("exclude_id")
         or request.query_params.get("exclude")
@@ -1149,12 +1150,14 @@ def deploy_name_is_available(request):
         )
 
     qs = Deploy.objects.filter(name=name)
+    if service_id:
+        qs = qs.filter(service_id=service_id)
     if exclude_id:
         qs = qs.exclude(pk=exclude_id)
 
     if qs.exists():
         return Response(
-            {"result": False, "detail": _("The name has been taken.")},
+            {"result": False, "detail": _("The name has been taken for this service.")},
             status=status.HTTP_200_OK,
         )
     return Response(
