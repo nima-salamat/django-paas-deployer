@@ -91,6 +91,36 @@ class BoundedBuffer:
             return self._bytes
 
 
+class DockerLineAssembler:
+    """Reassembles Docker log chunks so line boundaries survive streaming."""
+    
+    def __init__(self):
+        self._buffers = {"stdout": "", "stderr": ""}
+
+    def feed(self, pairs):
+        complete = []
+        for kind, chunk in pairs:
+            if kind not in self._buffers:
+                kind = "stdout"
+            text = self._buffers[kind] + (chunk or "")
+            parts = text.split("\n")
+            self._buffers[kind] = parts.pop()
+            for line in parts:
+                line = line.rstrip("\r")
+                if line:
+                    complete.append((kind, line))
+        return complete
+
+    def flush(self):
+        complete = []
+        for kind, text in list(self._buffers.items()):
+            text = text.rstrip("\r")
+            if text:
+                complete.append((kind, text))
+            self._buffers[kind] = ""
+        return complete
+
+
 class Command(BaseCommand):
     help = "Host-level runtime log collector (catch-up + live follow)."
 
@@ -316,16 +346,19 @@ class Command(BaseCommand):
                 tail=0,
             )
             batch = []
+            assembler = DockerLineAssembler()
             last_hb = time.monotonic()
             last_flush = time.monotonic()
             try:
                 for raw in log_stream:
                     if stop_ev.is_set() or self._stop.is_set():
                         break
-                    pairs = self._demux_docker_chunk(raw) if isinstance(raw, (bytes, bytearray)) else [("stdout", str(raw))]
-                    for stream_kind, line in pairs:
-                        if not line:
-                            continue
+                    pairs = (
+                        self._demux_docker_payloads(raw)
+                        if isinstance(raw, (bytes, bytearray))
+                        else [("stdout", str(raw))]
+                    )
+                    for stream_kind, line in assembler.feed(pairs):
                         ts, msg = self._parse_ts_line(line)
                         size = len(msg.encode("utf-8", "replace"))
                         if not rate.allow(size):
@@ -346,6 +379,17 @@ class Command(BaseCommand):
                             break
                         last_hb = now
             finally:
+                for stream_kind, line in assembler.flush():
+                    ts, msg = self._parse_ts_line(line)
+                    size = len(msg.encode("utf-8", "replace"))
+                    if rate.allow(size):
+                        batch.append({
+                            "ts": ts or timezone.now(),
+                            "stream": stream_kind,
+                            "message": msg,
+                        })
+                    else:
+                        bump_drop(service.pk, entries=1, bytes_dropped=size)
                 if batch:
                     self._persist_batch(instance, service, stream, policy, batch)
                 try:
@@ -501,21 +545,20 @@ class Command(BaseCommand):
                 return
 
             batch = []
+            assembler = DockerLineAssembler()
             last_hb = time.monotonic()
             last_flush = time.monotonic()
             try:
                 for raw in log_stream:
                     if stop_ev.is_set() or self._stop.is_set():
                         break
-                    if isinstance(raw, (bytes, bytearray)):
-                        pairs = self._demux_docker_chunk(raw)
-                    else:
-                        pairs = [("stdout", str(raw))]
-                    for stream_kind, line in pairs:
-                        if not line:
-                            continue
+                    pairs = (
+                        self._demux_docker_payloads(raw)
+                        if isinstance(raw, (bytes, bytearray))
+                        else [("stdout", str(raw))]
+                    )
+                    for stream_kind, line in assembler.feed(pairs):
                         ts, msg = self._parse_ts_line(line)
-                        # if parse already ate ts prefix, stream still from demux
                         size = len(msg.encode("utf-8", "replace"))
                         if not rate.allow(size):
                             bump_drop(service.pk, entries=1, bytes_dropped=size)
@@ -538,6 +581,24 @@ class Command(BaseCommand):
                             break
                         last_hb = now
             finally:
+                if batch:
+                    self._persist_batch(instance, service, stream, policy, batch)
+                try:
+                    log_stream.close()
+                except Exception:
+                    pass
+            finally:
+                for stream_kind, line in assembler.flush():
+                    ts, msg = self._parse_ts_line(line)
+                    size = len(msg.encode("utf-8", "replace"))
+                    if rate.allow(size):
+                        batch.append({
+                            "ts": ts or timezone.now(),
+                            "stream": stream_kind,
+                            "message": msg,
+                        })
+                    else:
+                        bump_drop(service.pk, entries=1, bytes_dropped=size)
                 if batch:
                     self._persist_batch(instance, service, stream, policy, batch)
                 try:
@@ -676,34 +737,40 @@ class Command(BaseCommand):
                 pass
 
 
-    def _demux_docker_chunk(self, raw: bytes):
-        """Split Docker multiplexed stream into (stream_kind, text) lines.
-
-        Non-TTY: 8-byte header (stream 1=stdout 2=stderr) + payload.
-        TTY/raw: treat as stdout lines.
-        """
+    def _demux_docker_payloads(self, raw: bytes):
+        """Return decoded stdout/stderr payload chunks without line-splitting."""
         if not raw:
             return []
         out = []
-        # Heuristic: if looks multiplexed
-        if len(raw) >= 8 and raw[0] in (1, 2) and raw[1:4] == b"\x00\x00\x00":
+        if (
+            len(raw) >= 8
+            and raw[0] in (1, 2)
+            and raw[1:4] == b"\x00\x00\x00"
+        ):
             i = 0
             while i + 8 <= len(raw):
                 stream_type = raw[i]
                 size = int.from_bytes(raw[i + 4 : i + 8], "big")
                 i += 8
-                payload = raw[i : i + size]
-                i += size
+                if size < 0 or i + size > len(raw):
+                    # Defensive fallback for an incomplete/malformed frame.
+                    payload = raw[i:]
+                    i = len(raw)
+                else:
+                    payload = raw[i : i + size]
+                    i += size
                 kind = "stderr" if stream_type == 2 else "stdout"
-                text = payload.decode("utf-8", "replace")
-                for line in text.splitlines():
-                    if line:
-                        out.append((kind, line))
+                out.append((kind, payload.decode("utf-8", "replace")))
             return out
-        text = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
-        for line in text.splitlines():
-            if line:
-                out.append(("stdout", line))
+        return [("stdout", raw.decode("utf-8", "replace"))]
+
+    def _demux_docker_chunk(self, raw: bytes):
+        """Compatibility helper returning complete lines for catch-up/tests."""
+        out = []
+        for kind, payload in self._demux_docker_payloads(raw):
+            for line in payload.splitlines():
+                if line:
+                    out.append((kind, line))
         return out
 
     def _parse_ts_line(self, line: str):
