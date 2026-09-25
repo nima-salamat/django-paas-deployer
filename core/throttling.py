@@ -175,8 +175,6 @@ class ScopedRateThrottle(BaseThrottle):
         self._limit = limit
         self._window = window
         allowed = check_scope(scope, limit, window)
-        if not allowed:
-            self.wait = window  # type: ignore[attr-defined]
         return allowed
 
     def wait(self):  # noqa: A003 — DRF API
