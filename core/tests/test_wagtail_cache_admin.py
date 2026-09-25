@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from django.core.cache import cache
 from django.template.loader import get_template
 from django.test import SimpleTestCase, TestCase
@@ -43,6 +45,18 @@ class UniversalWagtailAdminTests(SimpleTestCase):
 class CacheTemplateTests(SimpleTestCase):
     def test_cache_dashboard_template_compiles(self):
         get_template("core/wagtail/cache_dashboard.html")
+
+    def test_custom_wagtail_templates_use_theme_surface_tokens(self):
+        root = Path(__file__).resolve().parents[1] / "templates"
+        cache_template = (root / "core" / "wagtail" / "cache_dashboard.html").read_text()
+        gauges_template = (root / "wagtailadmin" / "home" / "system_gauges.html").read_text()
+
+        for source in (cache_template, gauges_template):
+            self.assertNotIn("w-color-surface-panel,", source)
+            self.assertNotIn("w-color-surface-panels,", source)
+            self.assertIn("w-color-surface-dashboard-panel", source)
+            self.assertIn("w-color-text-label", source)
+            self.assertIn("w-color-text-context", source)
 
 
 class CachePolicyTests(TestCase):
