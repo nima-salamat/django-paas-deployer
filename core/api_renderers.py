@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 from typing import Any
+import logging
 
 from rest_framework.renderers import JSONRenderer
 from rest_framework.views import exception_handler as drf_exception_handler
+
+logger = logging.getLogger(__name__)
 
 
 class ProductionJSONRenderer(JSONRenderer):
@@ -25,6 +28,18 @@ def production_exception_handler(exc, context):
     """Return API-safe error payloads without Python/framework internals."""
     response = drf_exception_handler(exc, context)
     if response is None:
+        # DRF intentionally gives us no response for unhandled exceptions.
+        # Keep the public response sanitized, but never lose the traceback:
+        # otherwise production only reports a useless generic 500.
+        request = context.get("request")
+        view = context.get("view")
+        logger.exception(
+            "Unhandled DRF exception: %s %s view=%s",
+            getattr(request, "method", "?"),
+            getattr(request, "path", "?"),
+            type(view).__name__ if view is not None else "?",
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
         from rest_framework.response import Response
         return Response(
             {"detail": "An internal server error occurred."},
