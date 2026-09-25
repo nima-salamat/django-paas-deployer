@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from django.core.cache import cache
 from django.test import SimpleTestCase, TestCase
 
 from core.app_cache import get_cache_ttl
@@ -24,12 +25,22 @@ class UniversalWagtailAdminTests(SimpleTestCase):
             viewset.model._meta.label
             for viewset in UniversalModelsGroup.items
         }
-        self.assertNotIn("logs.ServiceLogEntry", names)
-        self.assertNotIn("logs.CollectorHeartbeat", names)
+        self.assertIn("logs.ServiceLogEntry", names)
+        self.assertIn("logs.CollectorHeartbeat", names)
+        readonly_models = {
+            viewset.model._meta.label
+            for viewset in UniversalModelsGroup.items
+            if getattr(viewset, "permission_policy", None).__class__.__name__
+            == "ReadOnlyGeneratedPolicy"
+        }
+        self.assertIn("logs.ServiceLogEntry", readonly_models)
+        self.assertIn("logs.CollectorHeartbeat", readonly_models)
 
 
 class CachePolicyTests(TestCase):
     def test_cache_ttl_reads_operator_setting(self):
+        cache.delete("syssetting:cache.plan_ttl")
+        cache.delete("syssetting:cache.plan_ttl")
         SystemSetting.objects.update_or_create(
             key="cache.plan_ttl",
             defaults={
