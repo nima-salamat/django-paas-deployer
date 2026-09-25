@@ -6,6 +6,7 @@ from messenger.models import (
     AttachmentViewOnceOpen,
     Block,
     CallSession,
+    CallSessionParticipant,
     Contact,
     Conversation,
     ConversationParticipant,
@@ -306,6 +307,20 @@ class CallSessionViewSet(SnippetViewSet):
     )
 
 
+class CallSessionParticipantViewSet(SnippetViewSet):
+    model = CallSessionParticipant
+    icon = "group"
+    menu_label = "Call participants"
+    menu_order = 221
+    list_display = ["id", "call", "user", "joined_at", "left_at"]
+    search_fields = ["user__username", "call__public_id"]
+    list_filter = ["left_at"]
+    panels = panels_for(
+        editable=["call", "user", "left_at"],
+        read_only=["joined_at"],
+    )
+
+
 class MessengerGroup(SnippetViewSetGroup):
     items = (
         ConversationViewSet,
@@ -319,6 +334,7 @@ class MessengerGroup(SnippetViewSetGroup):
         GroupInviteLinkViewSet,
         JoinRequestViewSet,
         CallSessionViewSet,
+        CallSessionParticipantViewSet,
         ContactViewSet,
         BlockViewSet,
         UserBioViewSet,
