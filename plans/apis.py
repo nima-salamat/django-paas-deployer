@@ -252,7 +252,7 @@ class PlansApiView(APIView):
         serializer = PlanSerializer(paginated_plans, many=True)
         resp = paginator.get_paginated_response(serializer.data)
         try:
-            from core.app_cache import cache_set, plan_list_key, get_cache_ttl("plan")
+            from core.app_cache import cache_set, plan_list_key, get_cache_ttl
             cache_set(plan_list_key({"page": request.query_params.get("page") or "1"}), resp.data, get_cache_ttl("plan"))
         except Exception:
             pass
