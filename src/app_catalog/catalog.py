@@ -61,10 +61,21 @@ class ApplicationCatalog:
         result: dict[str, CatalogDefinition] = {}
         for path in sorted(CATALOG_ROOT.glob("*.toml")):
             data = tomllib.loads(path.read_text("utf-8"))
+            # Kept on disk for compatibility/history but never advertised as
+            # ready-to-deploy.  This is intentionally declarative rather
+            # than an application-id denylist.
+            if bool(data.get("deprecated")):
+                continue
             validate_definition(data, source=str(path))
             result[str(data["id"])] = CatalogDefinition(data=data, source=path)
-        # The active first-party catalog is deliberately curated. Experimental/legacy
-        # definitions live outside this directory and are not exposed as Ready-to-Deploy.
+        # Native definitions are the authoritative curated form where both a
+        # hand-maintained TOML definition and an imported Compose definition
+        # exist. Complementary variants are merged so a native operational
+        # variant can coexist with the imported default; conflicting variant
+        # ids remain an error rather than silently changing an application.
+        #
+        # Experimental/legacy definitions live outside this directory and are
+        # not exposed as Ready-to-Deploy.
         from .source_loader import load_yaml_definition, external_definitions
         first_party = CATALOG_ROOT / "first_party"
         if first_party.exists():
@@ -74,9 +85,25 @@ class ApplicationCatalog:
                     continue
                 validate_definition(definition.data, source=str(path))
                 if definition.id in result:
-                    raise CatalogValidationError(
-                        f"Duplicate catalog id {definition.id!r}: {result[definition.id].source} and {path}"
+                    existing = result[definition.id]
+                    existing_variants = existing.variants
+                    imported_variants = definition.variants
+                    overlap = sorted(set(existing_variants) & set(imported_variants))
+                    if overlap:
+                        raise CatalogValidationError(
+                            f"Duplicate catalog variants for {definition.id!r}: "
+                            f"{', '.join(overlap)} ({existing.source} and {path})"
+                        )
+                    merged_data = copy.deepcopy(existing.data)
+                    merged_data["variants"] = {
+                        **existing_variants,
+                        **imported_variants,
+                    }
+                    result[definition.id] = CatalogDefinition(
+                        data=merged_data,
+                        source=existing.source,
                     )
+                    continue
                 result[definition.id] = definition
         for definition in external_definitions():
             validate_definition(definition.data, source=str(definition.source))

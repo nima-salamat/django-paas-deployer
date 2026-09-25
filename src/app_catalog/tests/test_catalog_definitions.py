@@ -5,7 +5,10 @@ from app_catalog.catalog import ApplicationCatalog, CatalogValidationError, cata
 
 def test_all_curated_catalog_definitions_validate_and_are_versioned():
     definitions = ApplicationCatalog.definitions()
-    assert len(definitions) == 40
+    # Native TOML definitions may intentionally override imported Compose
+    # sources with the same id; the deprecated Synapse MySQL definition is
+    # retained on disk but not advertised.
+    assert len(definitions) == 41
     ids = {definition.id for definition in definitions}
     assert {"mattermost", "matrix-synapse-with-postgresql", "uptime-kuma", "wordpress-with-mariadb"}.issubset(ids)
     assert "synapse-mysql-mariadb" not in ids
@@ -24,6 +27,8 @@ def _resolve(catalog_id: str):
             continue
         if field.get("type") == "domain":
             values[fid] = "app.example.com"
+        elif field.get("required") and field.get("type") == "string":
+            values[fid] = "example.com"
         elif field.get("required") and field.get("type") == "choice":
             values[fid] = (field.get("options") or ["default"])[0]
         elif field.get("required") and field.get("type") == "integer":

@@ -241,7 +241,10 @@ def validate_compose_security(document: dict[str, Any]) -> None:
             raise ApplicationPlanError(f"Compose service {key!r} must be an object.")
         unsupported = sorted(UNSAFE_SERVICE_KEYS & set(raw))
         if unsupported:
-            raise ApplicationPlanError(f"Compose service {key!r} uses unsupported security/execution features: {', '.join(unsupported)}")
+                raise ApplicationPlanError(
+                    f"Compose service {key!r} uses unsupported execution features "
+                    f"or security controls: {', '.join(unsupported)}"
+                )
         raw_networks = raw.get("networks") or {}
         networks = set(raw_networks) if not isinstance(raw_networks, dict) else set(raw_networks)
         if networks and networks != {"default"}:

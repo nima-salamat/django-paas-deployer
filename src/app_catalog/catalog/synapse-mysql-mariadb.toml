@@ -1,4 +1,5 @@
 id = "synapse-mysql-mariadb"
+deprecated = true
 name = "Synapse + MySQL/MariaDB"
 version = "1.159.0"
 description = "Unavailable: upstream Synapse currently supports SQLite and PostgreSQL backends, not MySQL/MariaDB."

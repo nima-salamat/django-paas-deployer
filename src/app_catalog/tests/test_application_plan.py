@@ -1,4 +1,9 @@
-from app_catalog.catalog import ApplicationCatalog, resolve_variant, CatalogDefinition
+from app_catalog.catalog import (
+    ApplicationCatalog,
+    CatalogDefinition,
+    CatalogValidationError,
+    resolve_variant,
+)
 from app_catalog.compose import load_compose
 from app_catalog.plan import plan_from_resolved, ApplicationPlanError
 
@@ -74,7 +79,7 @@ services:
 """
     try:
         load_compose(compose, app_id="bad")
-    except ApplicationPlanError as exc:
+    except CatalogValidationError as exc:
         assert "unsupported execution features" in str(exc)
     else:
         raise AssertionError("unsupported Compose semantics were accepted")

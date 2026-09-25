@@ -61,45 +61,45 @@ def test_private_network_delete_requires_docker_ownership_label():
     assert 'Refusing to remove Docker network' in text
 
 def test_service_delete_requires_owned_container_labels():
-    source = Path('services/signals.py').read_text()
+    source = (ROOT / "services/signals.py").read_text(encoding="utf-8")
     assert 'Refusing to remove container' in source
     assert 'labels.get("service.id") == expected_service' in source
     assert 'owns_selected_deploy' in source
 
 def test_container_create_does_not_silently_drop_restart_or_tmpfs_semantics():
-    source = Path('deployments/core/manager/container_manager.py').read_text()
+    source = (ROOT / "deployments/core/manager/container_manager.py").read_text(encoding="utf-8")
     assert 'without restart_policy' not in source
     assert 'without tmpfs' not in source
     assert 'Runtime semantics such as restart policy, tmpfs' in source
 
 def test_network_create_rechecks_ownership_after_name_conflict():
-    source = Path('deployments/core/manager/network_manager.py').read_text()
+    source = (ROOT / "deployments/core/manager/network_manager.py").read_text(encoding="utf-8")
     assert 'network = self.client.networks.get(self.name)' in source
     assert 'exists but is not owned by PassDeployer' in source
 
 def test_volume_reuse_and_cleanup_require_managed_ownership():
-    manager = Path('deployments/core/manager/volume_manager.py').read_text()
-    signals = Path('services/signals.py').read_text()
+    manager = (ROOT / "deployments/core/manager/volume_manager.py").read_text(encoding="utf-8")
+    signals = (ROOT / "services/signals.py").read_text(encoding="utf-8")
     assert 'exists but is not owned by PassDeployer' in manager
     assert 'labels.get("managed-by") != "django-paas-deployer"' in signals
 
 def test_service_state_machine_allows_runtime_failure_after_activation():
-    source = Path('deployments/common/state_machine.py').read_text()
+    source = (ROOT / "deployments/common/state_machine.py").read_text(encoding="utf-8")
     assert '(SERVICE_RUNNING, SERVICE_FAILED)' in source
     assert '(SERVICE_SUCCEEDED, SERVICE_FAILED)' in source
 
 def test_deployment_state_finish_uses_owned_terminal_transition():
-    source = Path('deploy/deployment_state.py').read_text()
+    source = (ROOT / "deploy/deployment_state.py").read_text(encoding="utf-8")
     assert 'transition_deploy_terminal_if_owned' in source
     assert 'Ignoring stale/duplicate terminal result' in source
 
 def test_deploy_service_syncs_service_only_from_committed_terminal_state():
-    source = Path('deployments/celery/services/deploy_service.py').read_text()
+    source = (ROOT / "deployments/celery/services/deploy_service.py").read_text(encoding="utf-8")
     assert 'final_status = final.get("status")' in source
     assert 'final_status == "succeeded"' in source
     assert 'selected_id' in source
 
 def test_terminal_state_manager_rechecks_cancel_under_lock():
-    source = Path('deployments/core/state/manager.py').read_text()
+    source = (ROOT / "deployments/core/state/manager.py").read_text(encoding="utf-8")
     assert 'if target != sm.DEPLOY_CANCELLED and deploy.cancel_requested:' in source
-    assert 'target = sm.DEPLOY_CANCELLED' in source
+    assert 'effective_target = sm.DEPLOY_CANCELLED' in source
