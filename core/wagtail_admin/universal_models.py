@@ -16,69 +16,27 @@ from django.db import models as django_models
 from django.utils.translation import gettext_lazy as _
 from wagtail.admin.panels import FieldPanel
 from wagtail.permission_policies.base import ModelPermissionPolicy
+from wagtail.models import Page
+from wagtail.contrib.settings.models import BaseGenericSetting
 from wagtail.snippets.views.snippets import SnippetViewSet, SnippetViewSetGroup
 
 
-# Models already have bespoke Wagtail viewsets and must not be registered twice.
-MODEL_LABELS = (
-    "app_catalog.ApplicationInstance",
-    "app_catalog.ApplicationInstanceService",
-    "auth_users.LoginSettings",
-    "auth_users.InviteLink",
-    "auth_users.InviteUsage",
-    "auth_users.AuthCode",
-    "auth_users.LoginLog",
-    "custom_emails.EmailTemplate",
-    "custom_emails.EmailLog",
-    "deploy.Deploy",
-    "deploy.DeployLog",
-    "deploy.BaseRuntimeImage",
-    "deploy.BaseRuntimeImageLease",
-    "docs.DocumentCategory",
-    "docs.Document",
-    "docs.DocumentAsset",
-    "logs.ServiceLogStream",
-    "logs.ServiceLogEntry",
-    "logs.ServiceLogUsage",
-    "logs.LogUsageDaily",
-    "logs.CollectorHeartbeat",
-    "messenger.UserBio",
-    "messenger.Contact",
-    "messenger.Block",
-    "messenger.ProfilePhotoPrivacy",
-    "messenger.ProfilePhotoAllowed",
-    "messenger.Conversation",
-    "messenger.ConversationParticipant",
-    "messenger.GroupInviteLink",
-    "messenger.JoinRequest",
-    "messenger.Message",
-    "messenger.MessageReaction",
-    "messenger.MessageReadReceipt",
-    "messenger.MessageAttachment",
-    "messenger.AttachmentViewOnceOpen",
-    "messenger.PinnedMessage",
-    "messenger.CallSession",
-    "messenger.CallSessionParticipant",
-    "plans.Plan",
-    "services.PrivateNetwork",
-    "services.Service",
-    "services.Volume",
-    "services.ServiceShare",
-    "services.ServiceShareMember",
-    "services.ServiceShareEvent",
-    "services.ShellSession",
-    "services.ShellAuditEvent",
-    "tickets.Department",
-    "tickets.DepartmentMembership",
-    "tickets.Ticket",
-    "tickets.TicketMessage",
-    "tickets.TicketReadState",
-    "tickets.TicketAttachment",
-    "users.User",
-    "users.Receipt",
-    "users.Profile",
-    "users.Rule",
-)
+# App labels owned by this project. Discovery is automatic, so a newly added
+# concrete Django model is exposed in Wagtail without another registration file.
+PROJECT_APP_LABELS = {
+    "app_catalog",
+    "auth_users",
+    "core",
+    "custom_emails",
+    "deploy",
+    "docs",
+    "logs",
+    "messenger",
+    "plans",
+    "services",
+    "tickets",
+    "users",
+}
 
 BESPOKE = {
     "auth_users.LoginSettings", "auth_users.InviteLink", "auth_users.InviteUsage",
@@ -229,21 +187,36 @@ def _viewset_class(model, *, read_only=False):
     return type(f"Universal{model.__name__}ViewSet", (SnippetViewSet,), attrs)
 
 
-def _candidate_viewsets():
-    out = []
-    for label in MODEL_LABELS:
+def _project_models():
+    models = []
+    for model in apps.get_models():
+        if model._meta.app_label not in PROJECT_APP_LABELS:
+            continue
+        if model._meta.abstract or model._meta.proxy:
+            continue
+        if issubclass(model, Page) or issubclass(model, BaseGenericSetting):
+            continue
+        label = model._meta.label
         if label in BESPOKE:
             continue
-        model = apps.get_model(label)
-        if model is None:
-            continue
-        out.append(
-            _viewset_class(
-                model,
-                read_only=label in READ_ONLY_MODELS,
-            )
+        models.append(model)
+    return tuple(sorted(models, key=lambda model: (
+        model._meta.app_label,
+        str(model._meta.verbose_name_plural),
+    )))
+
+
+MODEL_LABELS = tuple(model._meta.label for model in _project_models())
+
+
+def _candidate_viewsets():
+    return tuple(
+        _viewset_class(
+            model,
+            read_only=model._meta.label in READ_ONLY_MODELS,
         )
-    return tuple(out)
+        for model in _project_models()
+    )
 
 
 class UniversalModelsGroup(SnippetViewSetGroup):
