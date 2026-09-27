@@ -53,6 +53,7 @@ from docker.errors import APIError, NotFound
 from core.global_settings.config import MIRROR_DOCKER
 from deployments.core.exceptions import DeploymentError
 from deployments.core.manager.client_manager import Client
+from deployments.core.manager.volume_manager import Volume as DockerVolume
 from deployments.core.swarm import SwarmRuntime, swarm_enabled
 from deployments.common.security import validate_bind_source, validate_docker_name
 
@@ -1165,6 +1166,68 @@ def _reconcile_mysql_credentials(
 # DB Deployer
 # ============================================================================
 
+def _registered_volume_for_service(source: str, service_id: str | None):
+    """Resolve a named Docker volume to the exclusive Django registry owner."""
+    if not service_id:
+        raise DeploymentError(
+            f"Persistent database volume '{source}' requires a service owner.",
+            stage="volume_creation",
+            code="VOLUME_OWNER_REQUIRED",
+        )
+    from services.models import Volume
+    for row in Volume.objects.filter(service_id=service_id):
+        if row.get_docker_volume_name() == source:
+            return row
+    raise DeploymentError(
+        f"Database volume '{source}' is not registered for service {service_id}; refusing unaccounted storage.",
+        stage="volume_creation",
+        code="VOLUME_REGISTRY_MISMATCH",
+        user_message="The database persistent volume is not registered with this service.",
+        details={"volume": source, "service_id": str(service_id), "capacity_mode": "LOGICAL_ONLY"},
+    )
+
+
+def _emit_volume_usage_warnings(log, volume_rows: dict[str, Any]):
+    """Emit one deployment warning/error per named persistent volume."""
+    from deployments.core.volume_storage import (
+        USAGE_WARNING,
+        USAGE_CRITICAL,
+        USAGE_UNKNOWN,
+        inspect_volume_usage,
+        usage_details,
+    )
+    try:
+        client = Client().client
+    except Exception as exc:
+        log.warning(
+            "volume_creation",
+            "Volume storage usage could not be measured; usage is unknown.",
+            progress=44,
+            details={"usage_state": USAGE_UNKNOWN, "capacity_mode": "UNKNOWN", "usage_available": False, "exception_type": type(exc).__name__, "error": str(exc)},
+        )
+        return
+    for source, row in volume_rows.items():
+        usage = inspect_volume_usage(client, source, int(row.size_mb))
+        details = usage_details(usage)
+        if usage.usage_state == USAGE_WARNING:
+            log.warning(
+                "volume_creation",
+                f"Volume '{source}' is {usage.usage_percent:.1f}% full ({details['used_mb']} MiB of {details['declared_mb']} MiB). The volume is approaching its configured capacity.",
+                progress=44, details=details,
+            )
+        elif usage.usage_state == USAGE_CRITICAL:
+            log.error(
+                "volume_creation",
+                f"Volume '{source}' is at or above its declared capacity ({usage.usage_percent:.1f}%). Physical enforcement is not active for storage mode {usage.capacity_mode}.",
+                progress=44, details=details,
+            )
+        elif usage.usage_state == USAGE_UNKNOWN:
+            log.warning(
+                "volume_creation",
+                f"Could not measure storage usage for volume '{source}'; usage is unknown.",
+                progress=44, details=details,
+            )
+
 class DBDeployer:
 
     def _deploy_swarm_database(
@@ -1202,20 +1265,30 @@ class DBDeployer:
                 if str(source).startswith("/"):
                     continue
                 try:
-                    volume = runtime.client.volumes.get(str(source))
-                    volume.remove(force=True)
-                    runtime.client.volumes.create(name=str(source))
+                    registry_row = registry_volume_rows[str(source)]
+                    DockerVolume(
+                        name=str(source),
+                        size_mb=int(registry_row.size_mb),
+                        driver="local",
+                        require_managed=True,
+                    ).remove()
+                    DockerVolume(
+                        name=str(source),
+                        size_mb=int(registry_row.size_mb),
+                        driver="local",
+                        require_managed=False,
+                    ).ensure()
                     log.info(
                         "volume_creation",
                         f"Recreated database volume '{source}' for force reinitialization.",
                         progress=28,
+                        details={
+                            "volume": str(source),
+                            "declared_mb": int(registry_row.size_mb),
+                            "capacity_mode": "LOGICAL_ONLY",
+                        },
                     )
-                except docker.errors.NotFound:
-                    try:
-                        runtime.client.volumes.create(name=str(source))
-                    except Exception:
-                        pass
-                except docker.errors.DockerException as exc:
+                except Exception as exc:
                     return DBDeployResult(
                         success=False,
                         message=f"Failed to reinitialize database volume '{source}': {exc}",
@@ -1848,70 +1921,32 @@ class DBDeployer:
         # ====================================================================
 
         volume_binds: dict[str, dict] = {}
+        registry_volume_rows: dict[str, Any] = {}
 
         for volume in cfg.get("volumes") or []:
-
             if not isinstance(volume, dict):
                 continue
-
-            source = (
-                volume.get("source")
-                or volume.get("name")
-            )
-
-            target = (
-                volume.get("target")
-                or volume.get("bind")
-            )
-
-            mode = volume.get(
-                "mode",
-                "rw",
-            )
-
+            source = str(volume.get("source") or volume.get("name") or "")
+            target = str(volume.get("target") or volume.get("bind") or "")
+            mode = volume.get("mode", "rw")
             if not source or not target:
                 continue
 
-            source = str(source)
-            target = str(target)
-
-            # Host bind mounts use the same allow-list as application deployments.
             if source.startswith("/"):
                 source = validate_bind_source(source)
+            else:
+                registry_row = _registered_volume_for_service(source, service_id)
+                registry_volume_rows[source] = registry_row
+                DockerVolume(
+                    name=source,
+                    size_mb=int(registry_row.size_mb),
+                    driver="local",
+                    require_managed=True,
+                ).ensure()
 
-            volume_binds[source] = {
-                "bind": target,
-                "mode": mode,
-            }
+            volume_binds[source] = {"bind": target, "mode": mode}
 
-            # Named volume
-            if not source.startswith("/"):
-
-                try:
-
-                    client.volumes.get(
-                        source
-                    )
-
-                except NotFound:
-
-                    try:
-
-                        client.volumes.create(
-                            name=source
-                        )
-
-                    except (
-                        APIError,
-                        docker.errors.DockerException,
-                    ) as exc:
-
-                        logger.warning(
-                            "Could not create volume '%s': %s",
-                            source,
-                            exc,
-                        )
-
+        _emit_volume_usage_warnings(log, registry_volume_rows)
         if swarm_enabled():
             return self._deploy_swarm_database(
                 service_id=str(service_id or ""),
