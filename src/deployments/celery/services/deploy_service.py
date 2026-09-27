@@ -409,7 +409,8 @@ class DeployService:
                 container_name,
             )
             result = self._execute_orchestrator(
-                deploy_item, container_name, platform, dockerfile_text, state_tracker, cfg=cfg,
+                deploy_item, container_name, platform, dockerfile_text, state_tracker,
+                cfg=cfg, activation_callback=activation_callback,
             )
 
         if not swarm_enabled() and getattr(result, "status", None) != "cancelled":
@@ -421,7 +422,7 @@ class DeployService:
     def _execute_orchestrator(
         self, deploy_item: Deploy, container_name: str, platform: str,
         dockerfile_text: str, state_tracker: DjangoDeploymentState,
-        *, cfg: dict,
+        *, cfg: dict, activation_callback=None,
     ):
         service = deploy_item.service
         # cfg is resolved by _process_deployment and explicitly handed to this
