@@ -450,6 +450,11 @@ def request_base_runtime_image_build(
             raise RuntimeError(
                 f"Base runtime image {row.logical_runtime}:{row.runtime_version}:{row.variant} is disabled."
             )
+        if str(row.logical_runtime).lower() == "php" and str(row.variant).lower() in {"apache-root", "apache-public"}:
+            raise RuntimeError(
+                f"Legacy PHP base-image identity {row.image_ref} is not a supported manual build target. "
+                "Use the canonical php/apache base image instead."
+            )
         spec = _spec_for_record(row)
         fingerprint = _spec_fingerprint(spec)
 
