@@ -982,14 +982,30 @@ class DeployService:
             try:
                 ok, msg = service.can_allocate_storage(size_mb)
                 if not ok:
-                    logger.warning(
-                        "Skip auto volume %s for service %s: %s",
-                        name, service.pk, msg,
+                    raise DeploymentValidationError(
+                        f"Persistent volume '{name}' cannot be allocated within the service storage quota.",
+                        stage="volume_creation",
+                        details={
+                            "service_id": str(service.pk),
+                            "volume": name,
+                            "requested_mb": size_mb,
+                            "quota_error": msg,
+                            "persistence_required": True,
+                        },
                     )
-                    continue
+            except DeploymentValidationError:
+                raise
             except Exception as exc:
-                logger.warning("quota check failed for auto volume: %s", exc)
-                continue
+                raise DeploymentValidationError(
+                    "Persistent volume quota could not be verified.",
+                    stage="volume_creation",
+                    details={
+                        "service_id": str(service.pk),
+                        "requested_mb": size_mb,
+                        "exception_type": type(exc).__name__,
+                        "technical_message": str(exc),
+                    },
+                ) from exc
             try:
                 vol = Volume.objects.create(
                     name=name,
@@ -1010,10 +1026,18 @@ class DeployService:
                     vol.name, bind, size_mb, service.pk,
                 )
             except Exception as exc:
-                logger.warning(
-                    "Failed to auto-create volume %s for service %s: %s",
-                    name, service.pk, exc,
-                )
+                raise DeploymentValidationError(
+                    f"Persistent volume '{name}' could not be registered.",
+                    stage="volume_creation",
+                    details={
+                        "service_id": str(service.pk),
+                        "volume": name,
+                        "requested_mb": size_mb,
+                        "exception_type": type(exc).__name__,
+                        "technical_message": str(exc),
+                        "persistence_required": True,
+                    },
+                ) from exc
 
     @staticmethod
     def _volume_specs(deploy_item: Deploy, platform: str | None = None) -> list:
@@ -1043,8 +1067,18 @@ class DeployService:
             DeployService._ensure_laravel_volumes(
                 service, plat, db_connection=cfg_db
             )
+        except DeploymentValidationError:
+            raise
         except Exception as exc:
-            logger.warning("ensure_laravel_volumes failed: %s", exc)
+            raise DeploymentValidationError(
+                "Persistent application storage could not be prepared.",
+                stage="volume_creation",
+                details={
+                    "service_id": str(service.id),
+                    "exception_type": type(exc).__name__,
+                    "technical_message": str(exc),
+                },
+            ) from exc
 
         specs = []
         for volume in DeployService._get_volumes_for_service(service):
