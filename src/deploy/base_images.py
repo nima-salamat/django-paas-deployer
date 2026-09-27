@@ -630,6 +630,19 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                         "last_error", "last_error_details", "updated_at",
                     ])
 
+            if not row.enabled:
+                raise RuntimeError(f"Base runtime image {key} is disabled by an administrator.")
+
+            local_exists = _docker_image_exists(row.image_ref)
+            local_compatible = False
+            if row.enabled and not row.rebuild_requested and local_exists:
+                try:
+                    local_image = get_docker_client().images.get(row.image_ref)
+                    labels = ((getattr(local_image, "attrs", {}) or {}).get("Config") or {}).get("Labels") or {}
+                    local_compatible = labels.get("io.passdeployer.base-definition") == fingerprint
+                except Exception:
+                    local_compatible = False
+
             if (
                 policy["auto_register_existing"]
                 and local_compatible
@@ -643,24 +656,15 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                         "base_image",
                         f"Registered compatible local base image {row.image_ref}.",
                         progress=17,
-                        details={"image": row.image_ref, "runtime": key, "cache": "adopted", "definition_fingerprint": fingerprint},
+                        details={
+                            "image": row.image_ref,
+                            "runtime": key,
+                            "cache": "adopted",
+                            "definition_fingerprint": fingerprint,
+                        },
                     )
                 continue
 
-
-                result[logical_key(spec)] = row.image_ref
-                if deployment_id:
-                    acquire_base_image_leases([row.image_ref], deployment_id)
-                if logger_sink:
-                    logger_sink.info(
-                        "base_image",
-                        f"Registered compatible local base image {row.image_ref}.",
-                        progress=17,
-                        details={"image": row.image_ref, "runtime": key, "cache": "adopted", "definition_fingerprint": fingerprint},
-                    )
-                continue
-
-            if not row.enabled:
                 raise RuntimeError(f"Base runtime image {key} is disabled by an administrator.")
 
             local_exists = _docker_image_exists(row.image_ref)
