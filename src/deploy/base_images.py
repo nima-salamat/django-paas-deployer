@@ -137,8 +137,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libicu-dev libonig-dev libxml2-dev curl ca-certificates \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && missing=""; for ext in mysqli pdo pdo_mysql opcache zip gd intl bcmath mbstring exif pcntl; do \
-         if php -m | grep -Eiq "^{ext}$"; then \
-             echo "PHP extension {ext} already enabled; skipping build"; \
+         if php -m | grep -Eiq "^${{ext}}$"; then \
+             echo "PHP extension ${{ext}} already enabled; skipping build"; \
          else \
              missing="$missing $ext"; \
          fi; \
@@ -243,7 +243,7 @@ def make_specs(config) -> list[BaseImageSpec]:
     specs: list[BaseImageSpec] = []
     if platform in {"php", "laravel", "lumen", "symfony", "codeigniter"}:
         version = _normalize_version(runtime, "8.4")
-        specs.append(_php(version, public_root=platform != "php"))
+        specs.append(_php(version))
         if platform == "laravel" and getattr(config, "frontend_root", None) is not None:
             specs.append(_node("20"))
     elif platform in {"python", "django", "flask", "fastapi"}:
@@ -345,7 +345,11 @@ def _spec_for_record(row: BaseRuntimeImage) -> BaseImageSpec:
     version = str(row.runtime_version or "")
     variant = str(row.variant or "default")
     if runtime == "php":
-        return _php(version, public_root=variant != "apache-root")
+        if variant == "apache":
+            return _php(version)
+        if variant in {"apache-root", "apache-public"}:
+            return _legacy_php(version, variant)
+        raise ValueError(f"Unsupported PHP base-image variant {variant!r}")
     if runtime == "python":
         return _python(version)
     if runtime == "node":
@@ -354,8 +358,7 @@ def _spec_for_record(row: BaseRuntimeImage) -> BaseImageSpec:
         return _nginx(version)
     if runtime == "go":
         return _go(version)
-    raise ValueError(f"Unsupported base runtime '{runtime}'")
-
+    raise ValueError(f"Unsupported base runtime {runtime!r}")
 
 def build_registered_base_image(
     base_image_id,
