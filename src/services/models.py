@@ -692,6 +692,16 @@ class Volume(BaseModel):
                 .values("size_mb")
                 .first()
             )
+            if previous is not None:
+                previous_service_id = previous.get("service_id")
+                current_service_id = str(self.service_id) if self.service_id else None
+                if previous_service_id and current_service_id and str(previous_service_id) != current_service_id:
+                    raise ValidationError({
+                        "service": (
+                            "A provisioned volume cannot be reassigned directly to another "
+                            "service. Release it first, then attach it to the new service."
+                        )
+                    })
             if previous is not None and int(previous["size_mb"]) != int(self.size_mb):
                 # Logical resize is only allowed before the backing Docker volume
                 # exists. Once provisioned, this installation has no verified
