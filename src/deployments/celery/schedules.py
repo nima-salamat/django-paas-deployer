@@ -597,7 +597,16 @@ def _reconcile_active_deploy(deploy: Deploy) -> None:
         # 1. Timeout check
         if locked.status == "running" and locked.started_at:
             minutes_elapsed = (now - locked.started_at).total_seconds() / 60.0
-            if minutes_elapsed >= int(policies["deploy_timeout_minutes"]):
+            timeout_minutes = int(policies["deploy_timeout_minutes"])
+            # A base-image build has its own operator-owned lifecycle budget;
+            # the deployment monitor uses the same absolute budget as the
+            # synchronous base-image waiter.
+            if (str(locked.stage or "").strip().lower() == "base_image"):
+                timeout_minutes = max(
+                    timeout_minutes,
+                    int(policies["base_image_timeout_minutes"]),
+                )
+            if minutes_elapsed >= timeout_minutes:
                 mark_deploy_timeout(
                     deploy=locked,
                     container_exists=exists,
@@ -1006,7 +1015,7 @@ def _reconcile_service_runtime_swarm(service: Service) -> None:
 
 def _reconcile_base_runtime_builds(policies: dict) -> None:
     """Recover base-image rows whose builder disappeared or exceeded the operator timeout."""
-    cutoff = timezone.now() - timedelta(minutes=int(policies["stale_base_build_minutes"]))
+    cutoff = timezone.now() - timedelta(minutes=int(policies["base_image_timeout_minutes"]))
     stale = BaseRuntimeImage.objects.filter(
         status=BaseRuntimeImage.Status.BUILDING,
         build_started_at__lt=cutoff,
@@ -1019,7 +1028,16 @@ def _reconcile_base_runtime_builds(policies: dict) -> None:
                 status=BaseRuntimeImage.Status.FAILED,
                 build_task_id="",
                 build_owner_deployment_id="",
-                last_error="Base image build marked stale by monitor.",
+                last_error="Base image build exceeded its operator-owned lifecycle timeout.",
+                last_error_details={
+                    "stage": "base_image",
+                    "exception_type": "BaseImageTimeout",
+                    "technical_message": "Base image build exceeded its operator-owned lifecycle timeout.",
+                    "retry_pending": False,
+                    "base_image_ref": row.image_ref,
+                    "resource_policy_source": "server_owned",
+                    "docker_api_reached": None,
+                },
                 build_completed_at=timezone.now(),
                 updated_at=timezone.now(),
             )
