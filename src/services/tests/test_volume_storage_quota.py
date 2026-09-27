@@ -144,3 +144,23 @@ def test_volume_usage_reconciliation_detects_docker_orphan_and_missing_registry_
         result = reconcile_managed_volumes(manager)
     assert [row["volume"] for row in result["docker_orphans"]] == ["vol-orphan-unregistered"]
     assert [row["volume"] for row in result["missing_docker"]] == ["vol-87654321-app-data"]
+
+
+def test_db_volume_resolution_requires_registry_identity():
+    from deployments.core.db_deployer import _registered_volume_for_service
+    from deployments.core.exceptions import DeploymentError
+    row = Mock(size_mb=1024)
+    row.get_docker_volume_name.return_value = "vol-db-canonical"
+    with patch("services.models.Volume.objects.filter", return_value=[row]):
+        assert _registered_volume_for_service("vol-db-canonical", "svc-1") is row
+    with patch("services.models.Volume.objects.filter", return_value=[]):
+        with __import__("pytest").raises(DeploymentError):
+            _registered_volume_for_service("vol-unregistered", "svc-1")
+
+
+def test_db_deployer_named_volume_path_is_registry_backed():
+    from deployments.core.db_deployer import DBDeployer
+    source = __import__("inspect").getsource(DBDeployer.deploy)
+    assert "_registered_volume_for_service" in source
+    assert "DockerVolume(" in source
+    assert "client.volumes.create(" not in source
