@@ -610,7 +610,13 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                     if getattr(row, field) != value:
                         setattr(row, field, value)
                         changed = True
-                if definition_changed or changed:
+                if row.status == BaseRuntimeImage.Status.BUILDING:
+                    if definition_changed:
+                        # Keep the active builder's ownership/fingerprint intact.
+                        # Mark a rebuild for the next claim instead of racing it.
+                        row.rebuild_requested = True
+                        row.save(update_fields=["rebuild_requested", "updated_at"])
+                elif definition_changed or changed:
                     row.status = BaseRuntimeImage.Status.PENDING
                     row.rebuild_requested = True if definition_changed else row.rebuild_requested
                     row.image_id = "" if definition_changed else row.image_id
@@ -626,10 +632,22 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
 
             if (
                 policy["auto_register_existing"]
-                and row.enabled
-                and not row.rebuild_requested
+                and local_compatible
                 and _mark_local_image_ready(row, expected_fingerprint=fingerprint)
             ):
+                result[logical_key(spec)] = row.image_ref
+                if deployment_id:
+                    acquire_base_image_leases([row.image_ref], deployment_id)
+                if logger_sink:
+                    logger_sink.info(
+                        "base_image",
+                        f"Registered compatible local base image {row.image_ref}.",
+                        progress=17,
+                        details={"image": row.image_ref, "runtime": key, "cache": "adopted", "definition_fingerprint": fingerprint},
+                    )
+                continue
+
+
                 result[logical_key(spec)] = row.image_ref
                 if deployment_id:
                     acquire_base_image_leases([row.image_ref], deployment_id)
@@ -646,6 +664,14 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                 raise RuntimeError(f"Base runtime image {key} is disabled by an administrator.")
 
             local_exists = _docker_image_exists(row.image_ref)
+            local_compatible = False
+            if row.enabled and not row.rebuild_requested and local_exists:
+                try:
+                    local_image = get_docker_client().images.get(row.image_ref)
+                    labels = ((getattr(local_image, "attrs", {}) or {}).get("Config") or {}).get("Labels") or {}
+                    local_compatible = labels.get("io.passdeployer.base-definition") == fingerprint
+                except Exception:
+                    local_compatible = False
             if logger_sink:
                 logger_sink.info(
                     "base_image",
@@ -660,7 +686,7 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                         "definition_fingerprint": fingerprint,
                     },
                 )
-            if row.status == BaseRuntimeImage.Status.READY and local_exists and not row.rebuild_requested and row.definition_fingerprint == fingerprint:
+            if row.status == BaseRuntimeImage.Status.READY and local_compatible and not row.rebuild_requested and row.definition_fingerprint == fingerprint:
                 result[logical_key(spec)] = row.image_ref
                 if deployment_id:
                     acquire_base_image_leases([row.image_ref], deployment_id)
@@ -708,16 +734,28 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
 
         if not owner:
             if _wait_for_existing_build(row_id, image_ref, timeout=_base_image_wait_timeout_seconds(deployment_id)):
-                result[logical_key(spec)] = image_ref
-                if deployment_id:
-                    acquire_base_image_leases([image_ref], deployment_id)
-                if logger_sink:
-                    logger_sink.info(
-                        "base_image",
-                        f"Waited for concurrent base image build {image_ref}; cache hit.",
-                        progress=18,
-                        details={"image": image_ref, "runtime": key, "cache": "waited"},
-                    )
+                current = BaseRuntimeImage.objects.filter(pk=row_id).values(
+                    "status", "definition_fingerprint", "rebuild_requested"
+                ).first()
+                if (
+                    current
+                    and current["status"] == BaseRuntimeImage.Status.READY
+                    and current["definition_fingerprint"] == fingerprint
+                    and not current["rebuild_requested"]
+                ):
+                    result[logical_key(spec)] = image_ref
+                    if deployment_id:
+                        acquire_base_image_leases([image_ref], deployment_id)
+                    if logger_sink:
+                        logger_sink.info(
+                            "base_image",
+                            f"Waited for concurrent base image build {image_ref}; cache hit.",
+                            progress=18,
+                            details={"image": image_ref, "runtime": key, "cache": "waited"},
+                        )
+                    continue
+                # Definition changed while the previous builder was active.
+                # Re-enter the claim path instead of consuming its old image.
                 continue
             current = BaseRuntimeImage.objects.filter(pk=row_id).values(
                 "status", "image_ref", "last_error", "last_error_details"
