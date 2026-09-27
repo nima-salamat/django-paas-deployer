@@ -202,9 +202,19 @@ def restart_service(self, service_id) -> None:
             raise self.retry(exc=exc)
         logger.exception("Restart exhausted retries for service=%s", service_id)
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=10)
 def _mark_base_image_retry_pending(base_image_id, task_id: str, exc: Exception) -> None:
-    BaseRuntimeImage.objects.filter(pk=base_image_id).update(
+    current = BaseRuntimeImage.objects.filter(pk=base_image_id).values_list("build_task_id", flat=True).first()
+    if str(current or "") != str(task_id):
+        logger.info(
+            "Ignoring retry-pending update from superseded base-image worker id=%s task=%s current=%s",
+            base_image_id, task_id, current,
+        )
+        return
+    BaseRuntimeImage.objects.filter(
+        pk=base_image_id,
+        status=BaseRuntimeImage.Status.BUILDING,
+        build_task_id=str(task_id),
+    ).update(
         status=BaseRuntimeImage.Status.BUILDING,
         build_task_id=str(task_id),
         build_completed_at=None,
@@ -214,12 +224,7 @@ def _mark_base_image_retry_pending(base_image_id, task_id: str, exc: Exception) 
             "exception_type": type(exc).__name__,
             "technical_message": str(exc) or type(exc).__name__,
             "retry_pending": True,
-            "base_image_ref": (
-                BaseRuntimeImage.objects.filter(pk=base_image_id)
-                .values_list("image_ref", flat=True)
-                .first()
-                or ""
-            ),
+            "base_image_ref": BaseRuntimeImage.objects.filter(pk=base_image_id).values_list("image_ref", flat=True).first() or "",
             "resource_policy_source": "server_owned",
         },
         updated_at=timezone.now(),
@@ -229,10 +234,16 @@ def _mark_base_image_retry_pending(base_image_id, task_id: str, exc: Exception) 
 def _mark_base_image_terminal_failure(base_image_id, task_id: str, exc: Exception) -> None:
     current = (
         BaseRuntimeImage.objects.filter(pk=base_image_id)
-        .values("image_ref", "last_error_details")
+        .values("image_ref", "last_error_details", "build_task_id", "status")
         .first()
         or {}
     )
+    if current.get("status") != BaseRuntimeImage.Status.BUILDING or str(current.get("build_task_id") or "") != str(task_id):
+        logger.info(
+            "Ignoring terminal failure from superseded base-image worker id=%s task=%s current_task=%s status=%s",
+            base_image_id, task_id, current.get("build_task_id"), current.get("status"),
+        )
+        return
     details = dict(current.get("last_error_details") or {})
     details.update({
         "stage": "base_image",
@@ -242,7 +253,11 @@ def _mark_base_image_terminal_failure(base_image_id, task_id: str, exc: Exceptio
         "base_image_ref": current.get("image_ref") or "",
         "resource_policy_source": "server_owned",
     })
-    BaseRuntimeImage.objects.filter(pk=base_image_id).update(
+    BaseRuntimeImage.objects.filter(
+        pk=base_image_id,
+        status=BaseRuntimeImage.Status.BUILDING,
+        build_task_id=str(task_id),
+    ).update(
         status=BaseRuntimeImage.Status.FAILED,
         build_task_id="",
         build_owner_deployment_id="",
