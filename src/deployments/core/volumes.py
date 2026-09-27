@@ -150,6 +150,8 @@ class VolumeMountManager:
             inspect_volume_usage,
             usage_details,
         )
+        if self.logger is None:
+            return
         client = Client().client
         seen: set[str] = set()
         threshold = None
@@ -188,11 +190,11 @@ class VolumeMountManager:
                 )
             elif usage.usage_state == USAGE_UNKNOWN:
                 # Unknown usage is an operator diagnostic, not zero usage.
-                self.logger.warning(
-                    "volume_creation",
-                    f"Could not measure storage usage for volume '{name}'; usage is unknown.",
-                    progress=44,
-                    details=details,
+                self.logger.logger.warning(
+                    "volume_usage_unavailable deploy=%s volume=%s details=%r",
+                    self.logger.deployment_id,
+                    name,
+                    details,
                 )
     def _docker_volume_exists(self, name: str) -> bool:
         try:
