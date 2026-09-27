@@ -173,6 +173,12 @@ class CoreSettings(BaseGenericSetting):
         verbose_name=_("Keep base images after deployment"),
         help_text=_("When disabled, an unused base image is removed after the deployment releases its lease. Shared images are kept until no active deployment uses them."),
     )
+    base_image_build_timeout_minutes = models.PositiveIntegerField(
+        default=10,
+        validators=[MinValueValidator(1), MaxValueValidator(1440)],
+        verbose_name=_("Base image build/wait timeout (minutes)"),
+        help_text=_("Dedicated lifecycle budget for a base-image build or shared wait. It is separate from the application deployment timeout."),
+    )
     base_images_auto_register_existing = models.BooleanField(
         default=True,
         verbose_name=_("Register existing Docker images"),
@@ -282,6 +288,7 @@ class CoreSettings(BaseGenericSetting):
                 FieldPanel("base_images_auto_build"),
                 FieldPanel("base_images_auto_register_existing"),
                 FieldPanel("base_images_retain_after_deploy"),
+                FieldPanel("base_image_build_timeout_minutes"),
                 FieldPanel("auto_public_url_handling"),
                 FieldPanel("default_public_url_prefix"),
             ],
@@ -328,7 +335,6 @@ class CoreSettings(BaseGenericSetting):
                 FieldPanel("monitor_batch_size"),
                 FieldPanel("monitor_recovery_enabled"),
                 FieldPanel("monitor_max_recovery_attempts"),
-                FieldPanel("monitor_stale_base_build_minutes"),
                 FieldPanel("monitor_stale_worker_seconds"),
                 FieldPanel("monitor_scheduler_lock_seconds"),
                 FieldPanel("shell_idle_timeout_minutes"),
