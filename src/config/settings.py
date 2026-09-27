@@ -417,6 +417,7 @@ CELERY_IMPORTS = (
     "core.tasks.email",
     "custom_emails.tasks",
     "messenger.tasks",
+    "logs.tasks",
 )
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
