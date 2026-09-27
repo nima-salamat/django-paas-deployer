@@ -55,8 +55,17 @@ class DeployViewSet(SnippetViewSet):
     )
 
 
+class BaseRuntimeImagePermissionPolicy(ModelPermissionPolicy):
+    """Base-image rows are registry-managed; operators mutate desired state only."""
+    def user_has_permission(self, user, action):
+        if action in {"add", "delete"}:
+            return False
+        return super().user_has_permission(user, action)
+
+
 class BaseRuntimeImageViewSet(SnippetViewSet):
     model = BaseRuntimeImage
+    permission_policy = BaseRuntimeImagePermissionPolicy(BaseRuntimeImage)
     icon = "cogs"
     menu_label = _("Base runtime images")
     menu_order = 106
