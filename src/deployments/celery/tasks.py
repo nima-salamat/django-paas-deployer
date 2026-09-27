@@ -253,6 +253,7 @@ def _mark_base_image_terminal_failure(base_image_id, task_id: str, exc: Exceptio
     )
 
 
+@shared_task(bind=True, max_retries=2, default_retry_delay=10)
 def build_base_runtime_image(self, base_image_id, force_rebuild=False, build_policy=None) -> None:
     """Build/rebuild one registered operator base runtime image.
 
