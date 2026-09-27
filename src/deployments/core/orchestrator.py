@@ -130,7 +130,7 @@ class DeploymentOrchestrator:
             # Existing images are reused; missing/invalid images are built once
             # and registered in BaseRuntimeImage.
             try:
-                from deploy.base_images import ensure_base_images
+                from deploy.base_images import ensure_base_images, mark_application_phase_started
                 resolved_bases = ensure_base_images(
                     config,
                     build_policy=config.build_resource_policy,
@@ -151,6 +151,10 @@ class DeploymentOrchestrator:
                 # A base-image build failure must fail the deployment with the
                 # real reason; silently falling back would destroy predictability.
                 raise
+
+            # Base-image resolution has completed. Start a fresh application-phase budget.
+            mark_application_phase_started(self.logger.deployment_id)
+            self._check_cancelled()
 
             # 5. Generate Dockerfile
             dockerfile_text = self.dockerfile_generator.render(
