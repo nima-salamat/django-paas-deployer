@@ -113,3 +113,11 @@ def test_build_registered_base_failure_does_not_become_terminal_before_celery_ex
         )
     assert FakeBase.objects.row.status == FakeBase.Status.BUILDING
     assert FakeBase.objects.row.last_error_details["retry_pending"] is None
+
+
+def test_stale_base_image_recovery_fences_previous_task():
+    source = (ROOT / "deploy" / "base_images.py").read_text(encoding="utf-8")
+    assert 'recovery_owner = f"base-recovery-{uuid.uuid4()}"' in source
+    assert '"superseded_task_id": previous_task_id' in source
+    assert 'row.build_task_id = recovery_owner' in source
+    assert 'row.build_task_id != task_id' in source
