@@ -22,9 +22,10 @@ app.conf.imports = tuple(dict.fromkeys((
     'core.tasks.email',
     'custom_emails.tasks',
     'messenger.tasks',
+    'logs.tasks',
 )))
 
-app.autodiscover_tasks(['deployments.celery', 'app_catalog', 'core.tasks.email', 'custom_emails.tasks', 'messenger.tasks'])
+app.autodiscover_tasks(['deployments.celery', 'app_catalog', 'logs', 'core.tasks.email', 'custom_emails.tasks', 'messenger.tasks'])
 
 
 @app.task(bind=True)
