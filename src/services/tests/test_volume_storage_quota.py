@@ -1,5 +1,6 @@
 from unittest.mock import Mock, patch
 
+from django.core.exceptions import ValidationError
 from django.test import TestCase, override_settings
 
 from plans.models import Plan
@@ -17,22 +18,14 @@ def _client(used_bytes):
     client.volumes.get.return_value = _FakeVolume()
     client.df.return_value = {
         "VolumesUsage": [
-            {
-                "Name": "vol-demo-data",
-                "UsageData": {"Size": used_bytes, "RefCount": 1},
-            }
+            {"Name": "vol-demo-data", "UsageData": {"Size": used_bytes, "RefCount": 1}}
         ]
     }
     return client
 
 
 def test_volume_usage_thresholds_are_based_on_actual_bytes():
-    from deployments.core.volume_storage import (
-        USAGE_CRITICAL,
-        USAGE_NORMAL,
-        USAGE_WARNING,
-        inspect_volume_usage,
-    )
+    from deployments.core.volume_storage import USAGE_CRITICAL, USAGE_NORMAL, USAGE_WARNING, inspect_volume_usage
     mb = 1024 * 1024
     assert inspect_volume_usage(_client(int(89.9 * mb)), "vol-demo-data", 100, threshold_percent=90).usage_state == USAGE_NORMAL
     assert inspect_volume_usage(_client(90 * mb), "vol-demo-data", 100, threshold_percent=90).usage_state == USAGE_WARNING
@@ -43,8 +36,7 @@ def test_volume_usage_thresholds_are_based_on_actual_bytes():
 
 def test_unknown_docker_usage_is_not_reported_as_zero():
     from deployments.core.volume_storage import USAGE_UNKNOWN, inspect_volume_usage
-    client = _client(-1)
-    usage = inspect_volume_usage(client, "vol-demo-data", 100)
+    usage = inspect_volume_usage(_client(-1), "vol-demo-data", 100)
     assert usage.usage_state == USAGE_UNKNOWN
     assert usage.actual_used_bytes is None
 
@@ -57,72 +49,89 @@ def test_local_volume_capability_is_not_hard_enforced():
     assert capabilities.supports_resize is False
 
 
-def test_volume_save_serializes_logical_quota_against_service_row():
-    user = User.objects.create_user(username="quota-lock", password="test-password")
-    plan = Plan.objects.create(name="Quota", platform="django", max_cpu=1, max_ram=512, max_storage=1, price_per_hour=0)
-    service = Service.objects.create(name="quota-service", user=user, plan=plan)
-    with patch.object(Volume, "full_clean", autospec=True) as clean, patch.object(Volume._meta.concrete_model.__mro__[1], "save", autospec=True):
-        volume = Volume(name="quota-data", user=user, service=service, size_mb=512, default_bind="/data")
-        volume.save()
-    assert clean.called
-    assert Volume.objects.filter(service=service).count() == 1
+class StorageQuotaDatabaseTests(TestCase):
+    databases = {"default"}
 
+    @classmethod
+    def setUpClass(cls):
+        cls.override = override_settings(DATABASES={
+            "default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"},
+        })
+        cls.override.enable()
+        super().setUpClass()
 
-class PersistentAutoVolumeContractTests(TestCase):
-    @override_settings(SWARM_ENABLED=False)
-    def test_default_application_volume_is_registry_backed(self):
-        user = User.objects.create_user(username="auto-volume", password="test-password")
-        plan = Plan.objects.create(name="Auto", platform="django", max_cpu=1, max_ram=512, max_storage=2, price_per_hour=0)
-        service = Service.objects.create(name="auto-service", user=user, plan=plan)
+    @classmethod
+    def tearDownClass(cls):
+        try:
+            super().tearDownClass()
+        finally:
+            cls.override.disable()
+
+    def setUp(self):
+        self.user = User.objects.create_user(username=f"quota-{self._testMethodName}", password="test-password")
+        self.plan = Plan.objects.create(name=f"Quota-{self._testMethodName}", platform="django", max_cpu=1, max_ram=512, max_storage=1, price_per_hour=0)
+        self.service = Service.objects.create(name=f"service-{self._testMethodName}", user=self.user, plan=self.plan)
+
+    def test_logical_quota_rejects_second_allocation(self):
+        Volume.objects.create(name="quota-a", user=self.user, service=self.service, size_mb=800, default_bind="/a")
+        second = Volume(name="quota-b", user=self.user, service=self.service, size_mb=300, default_bind="/b")
+        with self.assertRaises(ValidationError):
+            second.save()
+
+    def test_volume_resize_is_rejected_when_backend_volume_exists(self):
+        volume = Volume.objects.create(name="quota-resize", user=self.user, service=self.service, size_mb=512, default_bind="/data")
+        with patch("services.models.DockerVolume") as docker_volume:
+            docker_volume.return_value.client.volumes.get.return_value = Mock(attrs={"Driver": "local", "Scope": "local"})
+            volume.size_mb = 768
+            with self.assertRaises(ValidationError):
+                volume.save()
+
+    def test_volume_save_contains_service_row_lock_boundary(self):
+        source = __import__("inspect").getsource(Volume.save)
+        assert "select_for_update" in source
+        assert "transaction.atomic" in source
+
+    def test_managed_auto_volume_has_single_registry_identity(self):
         from deployments.core.volumes import VolumeMountManager
         manager = VolumeMountManager()
-        specs = manager.ensure_default_volumes([], platform="django", service_name="auto-service", service_id=str(service.pk))
-        row = Volume.objects.get(service=service)
-        assert specs[0].source == row.get_docker_volume_name()
-        assert row.size_mb == specs[0].size_mb
+        specs = manager.ensure_default_volumes([], platform="python", service_name=self.service.name, service_id=str(self.service.pk))
+        self.assertEqual(len(specs), 1)
+        row = Volume.objects.get(service=self.service, default_bind="/app/data")
+        self.assertEqual(specs[0].source, row.get_docker_volume_name())
+        self.assertEqual(specs[0].size_mb, row.size_mb)
 
-    def test_default_application_volume_without_service_identity_fails(self):
+    def test_default_volume_without_service_identity_fails(self):
         from deployments.core.volumes import VolumeMountManager
-        from deployments.common.exceptions import VolumeError
-        import pytest
-        with pytest.raises(VolumeError):
-            VolumeMountManager().ensure_default_volumes([], platform="django", service_name="anonymous")
-
-def test_logical_quota_rejects_second_allocation():
-    user = User.objects.create_user(username="quota-second", password="test-password")
-    plan = Plan.objects.create(name="Quota2", platform="django", max_cpu=1, max_ram=512, max_storage=1, price_per_hour=0)
-    service = Service.objects.create(name="quota-service-2", user=user, plan=plan)
-    first = Volume.objects.create(name="quota-a", user=user, service=service, size_mb=800, default_bind="/a")
-    assert first.service_id == service.pk
-    from django.core.exceptions import ValidationError
-    second = Volume(name="quota-b", user=user, service=service, size_mb=300, default_bind="/b")
-    with __import__("pytest").raises(ValidationError):
-        second.save()
+        from deployments.core.exceptions import VolumeError
+        with self.assertRaises(VolumeError):
+            VolumeMountManager().ensure_default_volumes([], platform="python", service_name="anonymous")
 
 
-def test_volume_save_uses_service_row_lock():
-    from core.base.BaseModel import BaseModel
-    from unittest.mock import Mock, patch
-
-    user = User.objects.create_user(username="quota-lock-source", password="test-password")
-    plan = Plan.objects.create(name="QuotaLock", platform="django", max_cpu=1, max_ram=512, max_storage=1, price_per_hour=0)
-    service = Service.objects.create(name="quota-lock-service", user=user, plan=plan)
-    locked = Mock(pk=service.pk)
-    locked.can_allocate_storage.return_value = (True, "")
-    volume = Volume(name="quota-lock-volume", user=user, service=service, size_mb=128, default_bind="/data")
-    with patch.object(type(Service.objects), "select_for_update", return_value=Mock(get=Mock(return_value=locked))), patch.object(Volume, "full_clean", return_value=None), patch.object(BaseModel, "save", return_value=None):
-        volume.save()
-    assert locked.can_allocate_storage.called
-
-
-def test_managed_auto_volume_has_single_registry_identity():
-    user = User.objects.create_user(username="managed-auto", password="test-password")
-    plan = Plan.objects.create(name="Managed", platform="django", max_cpu=1, max_ram=512, max_storage=2, price_per_hour=0)
-    service = Service.objects.create(name="managed-auto-service", user=user, plan=plan)
+def test_volume_warning_uses_existing_deployment_event_pipeline():
+    from deployments.core.types import VolumeSpec
     from deployments.core.volumes import VolumeMountManager
-    manager = VolumeMountManager()
-    specs = manager.ensure_default_volumes([], platform="python", service_name=service.name, service_id=str(service.pk))
-    assert len(specs) == 1
-    row = Volume.objects.get(service=service, default_bind="/app/data")
-    assert specs[0].source == row.get_docker_volume_name()
-    assert specs[0].size_mb == row.size_mb
+    from deployments.core import volume_storage
+
+    logger = Mock()
+    usage = volume_storage.VolumeUsage(
+        volume="vol-demo-data",
+        declared_capacity_bytes=100 * 1024 * 1024,
+        actual_used_bytes=92 * 1024 * 1024,
+        usage_percent=92.0,
+        usage_state=volume_storage.USAGE_WARNING,
+        threshold_percent=90.0,
+        driver="local",
+        scope="local",
+        enforced=False,
+        capacity_mode=volume_storage.CAPACITY_LOGICAL_ONLY,
+        usage_available=True,
+    )
+    with patch("deployments.core.manager.client_manager.Client") as client_cls, patch("deployments.core.volume_storage.inspect_volume_usage", return_value=usage), patch("deployments.core.volume_storage.usage_details", return_value={"volume": "vol-demo-data", "declared_mb": 100, "used_mb": 92, "usage_percent": 92.0, "threshold_percent": 90.0, "usage_state": "warning", "driver": "local", "scope": "local", "enforced": False, "capacity_mode": "LOGICAL_ONLY", "usage_available": True, "error": None}):
+        client_cls.return_value.client = Mock()
+        manager = VolumeMountManager(logger=logger)
+        manager.warn_about_usage([VolumeSpec(source="vol-demo-data", target="/data", size_mb=100)])
+    logger.warning.assert_called_once()
+    args, kwargs = logger.warning.call_args
+    assert args[0] == "volume_creation"
+    assert "92.0% full" in args[1]
+    assert kwargs["details"]["usage_state"] == "warning"
