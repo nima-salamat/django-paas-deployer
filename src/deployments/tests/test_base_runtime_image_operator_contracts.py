@@ -47,7 +47,7 @@ def test_supported_non_php_base_names_remain_stable():
 def test_php_registry_identity_includes_variant_and_host():
     fields = None
     for constraint in BaseRuntimeImage._meta.constraints:
-        if constraint.name == "uniq_base_runtime_image_identity":
+        if constraint.name == "uniq_base_runtime_image_host":
             fields = tuple(constraint.fields)
             break
     assert fields == ("logical_runtime", "runtime_version", "variant", "architecture", "docker_host")
