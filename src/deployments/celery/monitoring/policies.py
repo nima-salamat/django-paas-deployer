@@ -74,8 +74,9 @@ def runtime_policies() -> dict[str, int | bool]:
             "monitor_batch_size": svc.monitor_batch_size(),
             "recovery_enabled": svc.monitor_recovery_enabled(),
             "max_recovery_attempts": svc.monitor_max_recovery_attempts(),
-            "base_image_timeout_minutes": svc.base_image_timeout_minutes(),
-            "stale_base_build_minutes": svc.base_image_timeout_minutes(),
+            "base_image_build_timeout_minutes": svc.base_image_build_timeout_minutes(),
+            "base_image_timeout_minutes": svc.base_image_build_timeout_minutes(),
+            "stale_base_build_minutes": svc.base_image_build_timeout_minutes(),
             "stale_worker_seconds": svc.monitor_stale_worker_seconds(),
             "scheduler_lock_seconds": svc.monitor_scheduler_lock_seconds(),
         }
