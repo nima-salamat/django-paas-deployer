@@ -1248,6 +1248,7 @@ class DBDeployer:
         force_reinit: bool,
         deployment_id: str | None,
         log,
+        registry_volume_rows: dict[str, Any],
     ) -> DBDeployResult:
         runtime = SwarmRuntime()
         labels = {
@@ -1964,6 +1965,7 @@ class DBDeployer:
                 force_reinit=force_reinit,
                 deployment_id=deployment_id,
                 log=log,
+                registry_volume_rows=registry_volume_rows,
             )
 
         # ====================================================================
