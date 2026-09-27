@@ -263,7 +263,17 @@ def build_base_runtime_image(self, base_image_id, force_rebuild=False, build_pol
     from deploy.base_images import build_registered_base_image
     from deployments.common.resource_policy import resolve_build_policy
 
-    effective_policy = resolve_build_policy(build_policy)
+    try:
+        effective_policy = resolve_build_policy(build_policy)
+    except (TypeError, ValueError) as exc:
+        _mark_base_image_terminal_failure(base_image_id, str(self.request.id), exc)
+        logger.exception(
+            "Base image resource-policy construction failed id=%s: %s",
+            base_image_id,
+            exc,
+        )
+        raise
+
     try:
         build_registered_base_image(
             base_image_id,
