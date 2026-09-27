@@ -141,6 +141,16 @@ DEFAULTS: list[dict] = [
         "description": "Server-only build budget mode: static or plan. Tenant config cannot change it.",
     },
     {
+        "key": "storage.volume_usage_warning_percent",
+        "default": 90.0,
+        "value_type": "float",
+        "category": "storage",
+        "label": "Volume usage warning threshold (%)",
+        "description": "Warn users when actual Docker volume usage reaches this percentage of declared logical capacity.",
+        "is_secret": False,
+        "is_editable": True,
+    },
+    {
         "key": "build.max_cpu",
         "default": 1.0,
         "value_type": "float",
