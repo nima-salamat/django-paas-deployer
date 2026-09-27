@@ -8,7 +8,7 @@ def test_base_image_retry_keeps_record_in_building_state():
     source = (ROOT / "deployments" / "celery" / "tasks.py").read_text(encoding="utf-8")
 
     assert "BaseRuntimeImage.Status.BUILDING" in source
-    assert 'build_task_id=str(self.request.id)' in source
+    assert 'build_task_id=owner_task_id' in source
     assert "build_completed_at=None" in source
     assert "raise self.retry(exc=exc)" in source
 
@@ -18,8 +18,8 @@ def test_base_image_wait_surfaces_persisted_builder_failure_reason():
 
     assert 'current["status"] == BaseRuntimeImage.Status.FAILED' in source
     assert 'current.get("last_error")' in source
-    assert 'Base image build failed: {spec.image_ref}.' in source
-    assert 'Base image build timed out: {spec.image_ref}' in source
+    assert 'Base image build failed: {image_ref}.' in source
+    assert 'Base image wait timed out: {image_ref}.' in source
 
 
 def test_concurrent_base_image_wait_surfaces_failure_reason():
@@ -56,7 +56,7 @@ def test_retry_helper_persists_building_not_failed(monkeypatch):
         Status = FakeStatus
         objects = Objects()
     monkeypatch.setattr(tasks, "BaseRuntimeImage", FakeBase)
-    tasks._mark_base_image_retry_pending("1", "task-1", RuntimeError("docker failed"))
+    tasks._mark_base_image_retry_pending(base_image_id="1", task_id="task-1", exc=RuntimeError("docker failed"))
     assert events
     assert events[-1]["status"] == FakeStatus.BUILDING
     assert events[-1]["last_error_details"]["retry_pending"] is True
