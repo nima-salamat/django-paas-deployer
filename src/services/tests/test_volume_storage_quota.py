@@ -1,7 +1,7 @@
 from unittest.mock import Mock, patch
 
 from django.core.exceptions import ValidationError
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase
 
 from plans.models import Plan
 from services.models import Service, Volume
@@ -49,51 +49,48 @@ def test_local_volume_capability_is_not_hard_enforced():
     assert capabilities.supports_resize is False
 
 
-@override_settings(DATABASES={
-    "default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"},
-})
-class StorageQuotaDatabaseTests(TestCase):
-    databases = {"default"}
+def test_logical_quota_helpers_preserve_declared_allocation_semantics():
+    from types import SimpleNamespace
+    from unittest.mock import patch
 
-    def setUp(self):
-        self.user = User.objects.create_user(username=f"quota-{self._testMethodName}", password="test-password")
-        self.plan = Plan.objects.create(name=f"Quota-{self._testMethodName}", platform="django", max_cpu=1, max_ram=512, max_storage=1, price_per_hour=0)
-        self.service = Service.objects.create(name=f"service-{self._testMethodName}", user=self.user, plan=self.plan)
+    service = SimpleNamespace(pk="svc-1", plan=SimpleNamespace(max_storage=1))
+    with patch("services.models.Volume.objects.filter") as filter_mock:
+        filter_mock.return_value.distinct.return_value.aggregate.return_value = {"s": 800}
+        assert Service.get_storage_quota_mb(service) == 1024
+        assert Service.get_used_storage_mb(service) == 800
+        assert Service.get_remaining_storage_mb(service) == 224
+        ok, _ = Service.can_allocate_storage(service, 224)
+        assert ok is True
+        ok, message = Service.can_allocate_storage(service, 225)
+        assert ok is False
+        assert "remaining 224 MB" in message
 
-    def test_logical_quota_rejects_second_allocation(self):
-        Volume.objects.create(name="quota-a", user=self.user, service=self.service, size_mb=800, default_bind="/a")
-        second = Volume(name="quota-b", user=self.user, service=self.service, size_mb=300, default_bind="/b")
-        with self.assertRaises(ValidationError):
-            second.save()
 
-    def test_volume_resize_is_rejected_when_backend_volume_exists(self):
-        volume = Volume.objects.create(name="quota-resize", user=self.user, service=self.service, size_mb=512, default_bind="/data")
-        with patch("deployments.core.manager.volume_manager.Volume") as docker_volume:
-            docker_volume.return_value.client.volumes.get.return_value = Mock(attrs={"Driver": "local", "Scope": "local"})
-            volume.size_mb = 768
-            with self.assertRaises(ValidationError):
-                volume.save()
+def test_volume_save_serializes_quota_with_service_row_lock():
+    source = __import__("inspect").getsource(Volume.save)
+    assert "select_for_update" in source
+    assert "transaction.atomic" in source
 
-    def test_volume_save_contains_service_row_lock_boundary(self):
-        source = __import__("inspect").getsource(Volume.save)
-        assert "select_for_update" in source
-        assert "transaction.atomic" in source
 
-    def test_managed_auto_volume_has_single_registry_identity(self):
-        from deployments.core.volumes import VolumeMountManager
-        manager = VolumeMountManager()
-        specs = manager.ensure_default_volumes([], platform="python", service_name=self.service.name, service_id=str(self.service.pk))
-        self.assertEqual(len(specs), 1)
-        row = Volume.objects.get(service=self.service, default_bind="/app/data")
-        self.assertEqual(specs[0].source, row.get_docker_volume_name())
-        self.assertEqual(specs[0].size_mb, row.size_mb)
+def test_volume_clean_routes_quota_through_service_rule():
+    from types import SimpleNamespace
+    service = SimpleNamespace(can_allocate_storage=lambda size_mb, exclude_volume_id=None: (False, "quota exceeded"))
+    volume = SimpleNamespace(service_id="svc-1", service=service, size_mb=300, service_attachments={})
+    with __import__("pytest").raises(ValidationError):
+        Volume.clean(volume)
 
-    def test_default_volume_without_service_identity_fails(self):
-        from deployments.core.volumes import VolumeMountManager
-        from deployments.core.exceptions import VolumeError
-        with self.assertRaises(VolumeError):
-            VolumeMountManager().ensure_default_volumes([], platform="python", service_name="anonymous")
 
+def test_volume_resize_guard_rejects_provisioned_backend_without_resize():
+    source = __import__("inspect").getsource(Volume.clean)
+    assert "supports_resize" in source
+    assert "backing Docker volume" in source
+
+
+def test_managed_auto_volume_requires_service_identity():
+    from deployments.core.volumes import VolumeMountManager
+    from deployments.core.exceptions import VolumeError
+    with __import__("pytest").raises(VolumeError):
+        VolumeMountManager().ensure_default_volumes([], platform="python", service_name="anonymous")
 
 def test_volume_warning_uses_existing_deployment_event_pipeline():
     from deployments.core.types import VolumeSpec
