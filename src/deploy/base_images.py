@@ -290,6 +290,7 @@ def _build_spec(
     build_policy: dict[str, Any] | None = None,
     force_rebuild: bool = False,
     on_output=None,
+    ownership_check=None,
 ):
     from deployments.common.resource_policy import resolve_build_policy
 
@@ -307,7 +308,10 @@ def _build_spec(
         build_options={"pull": True, "no_cache": bool(force_rebuild)},
         deployment_id=f"base:{spec.image_ref}",
     )
-    return image.create(on_build_output=on_output)
+    return image.create(
+        on_build_output=on_output,
+        ownership_check=ownership_check,
+    )
 
 def _spec_for_record(row: BaseRuntimeImage) -> BaseImageSpec:
     runtime = str(row.logical_runtime or "").lower()
@@ -377,14 +381,33 @@ def build_registered_base_image(
         ])
 
     try:
+        def _assert_db_owner() -> None:
+            if not task_id:
+                return
+            current_task_id = (
+                BaseRuntimeImage.objects.filter(pk=base_image_id)
+                .values_list("build_task_id", flat=True)
+                .first()
+            )
+            if str(current_task_id or "") != str(task_id):
+                raise RuntimeError(
+                    "Base-image build ownership was superseded by another task or monitor recovery."
+                )
+
         _build_spec(
             spec,
             build_policy=effective_policy,
             force_rebuild=requested_force_rebuild,
+            ownership_check=_assert_db_owner,
         )
+        _assert_db_owner()
         client = get_docker_client()
         img = client.images.get(spec.image_ref)
-        row = BaseRuntimeImage.objects.get(pk=base_image_id)
+        row = BaseRuntimeImage.objects.select_for_update().get(pk=base_image_id)
+        if task_id and str(row.build_task_id or "") != str(task_id):
+            raise RuntimeError(
+                "Base-image build ownership changed before READY state could be committed."
+            )
         requested_by_deployment = str(row.build_owner_deployment_id or "")
         row.status = BaseRuntimeImage.Status.READY
         row.image_id = getattr(img, "id", "") or ""
