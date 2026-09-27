@@ -217,3 +217,104 @@ def test_bind_mount_is_not_reported_as_managed_volume_usage():
         VolumeMountManager(logger=logger).warn_about_usage([VolumeSpec(source="/srv/tenant", target="/data", mount_type="bind", size_mb=100)])
     inspect.assert_not_called()
     logger.warning.assert_not_called()
+
+def test_unknown_usage_is_emitted_through_deployment_event_sink():
+    from unittest.mock import Mock, patch
+    from deployments.core.deployment_logger import DeploymentLogger
+    from deployments.core.types import VolumeSpec
+    from deployments.core.volumes import VolumeMountManager
+    from deployments.core import volume_storage
+
+    sink = Mock()
+    logger = DeploymentLogger(deployment_id="deploy-volume-1", sink=sink)
+    usage = volume_storage.VolumeUsage(
+        volume="vol-unknown",
+        declared_capacity_bytes=100 * 1024 * 1024,
+        actual_used_bytes=None,
+        usage_percent=None,
+        usage_state=volume_storage.USAGE_UNKNOWN,
+        threshold_percent=90.0,
+        driver="local",
+        scope="local",
+        enforced=False,
+        capacity_mode=volume_storage.CAPACITY_LOGICAL_ONLY,
+        usage_available=False,
+        error="Docker did not provide a measurable usage value.",
+    )
+    details = {
+        "volume": "vol-unknown", "declared_mb": 100, "used_mb": None,
+        "used_bytes": None, "usage_percent": None, "threshold_percent": 90.0,
+        "usage_state": "usage_unavailable", "driver": "local", "scope": "local",
+        "enforced": False, "capacity_mode": "LOGICAL_ONLY",
+        "usage_available": False, "error": "Docker did not provide a measurable usage value.",
+    }
+    with patch("deployments.core.manager.client_manager.Client", return_value=Mock(client=Mock())), patch("deployments.core.volume_storage.inspect_volume_usage", return_value=usage), patch("deployments.core.volume_storage.usage_details", return_value=details):
+        VolumeMountManager(logger=logger).warn_about_usage([VolumeSpec(source="vol-unknown", target="/data", size_mb=100)])
+    sink.assert_called_once()
+    event = sink.call_args.args[0]
+    assert event.stage == "volume_creation"
+    assert event.level == "warning"
+    assert event.details["usage_state"] == "usage_unavailable"
+    assert event.details["usage_available"] is False
+    assert event.details["volume"] == "vol-unknown"
+
+
+def test_release_frees_logical_ownership_but_marks_physical_storage_retained():
+    from datetime import datetime
+    from django.utils import timezone
+    service = Mock(id="svc-1")
+    volume = Volume(service=service, service_id="svc-1", service_attachments={"svc-1": {"bind": "/data"}})
+    volume.save = Mock()
+    volume.release_from_service(service)
+    assert volume.service is None
+    assert volume.service_attachments == {}
+    assert isinstance(volume.released_at, datetime)
+    assert timezone.is_aware(volume.released_at)
+    volume.save.assert_called_once_with(update_fields=["service", "released_at", "service_attachments"])
+
+
+def test_attach_clears_released_storage_marker():
+    service = Mock(id="svc-1", user_id="user-1")
+    service.can_allocate_storage.return_value = (True, "")
+    from django.utils import timezone
+    volume = Volume(service=None, user_id="user-1", size_mb=512, released_at=timezone.now())
+    volume.save = Mock()
+    volume.attach_to_service(service, bind="/data", mode="rw")
+    assert volume.service is service
+    assert volume.released_at is None
+
+
+def test_reconciliation_classifies_released_retained_storage_separately():
+    from datetime import datetime, timezone
+    from deployments.core.volume_storage import reconcile_managed_volumes, VolumeUsage, CAPACITY_LOGICAL_ONLY, USAGE_NORMAL
+
+    class DockerRow:
+        def __init__(self, name):
+            self.name = name
+            self.attrs = {"Name": name, "Labels": {"managed-by": "django-paas-deployer"}}
+
+    released_id = "12345678-1234-1234-1234-123456789abc"
+    registry_rows = [{
+        "id": released_id, "name": "retained", "service_id": None,
+        "size_mb": 1024, "released_at": datetime(2026, 9, 27, 10, 0, tzinfo=timezone.utc),
+    }]
+    client = Mock()
+    client.volumes.list.return_value = [DockerRow("vol-12345678-retained")]
+    usage = VolumeUsage(
+        volume="vol-12345678-retained", declared_capacity_bytes=1024 * 1024 * 1024,
+        actual_used_bytes=512 * 1024 * 1024, usage_percent=50.0, usage_state=USAGE_NORMAL,
+        threshold_percent=90.0, driver="local", scope="local", enforced=False,
+        capacity_mode=CAPACITY_LOGICAL_ONLY, usage_available=True,
+    )
+    with patch("services.models.Volume.objects.values", return_value=registry_rows), patch("deployments.core.volume_storage.inspect_volume_usage", return_value=usage):
+        result = reconcile_managed_volumes(client)
+    assert result["released_retained_storage"][0]["classification"] == "released_retained_storage"
+    assert result["released_retained_storage"][0]["service_id"] is None
+    assert result["released_retained_storage"][0]["used_mb"] == 512.0
+
+
+def test_reclaim_failure_keeps_registry_row_for_truthful_retry():
+    source = __import__("inspect").getsource(__import__("services.signals", fromlist=["cleanup_volume_on_delete"]).cleanup_volume_on_delete)
+    assert "except Exception:" in source
+    assert "return" not in source.split("except Exception:", 1)[1].split("logger.", 1)[0]
+    assert "Refusing to remove Docker volume" in source
