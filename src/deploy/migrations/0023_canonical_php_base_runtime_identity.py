@@ -103,5 +103,5 @@ def backwards(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-    dependencies = [("deploy", "0021_base_runtime_definition_and_error_details")]
+    dependencies = [("deploy", "0022_deploy_base_image_phase_timestamps")]
     operations = [migrations.RunPython(forwards, backwards)]
