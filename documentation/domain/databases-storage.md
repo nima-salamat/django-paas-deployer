@@ -50,3 +50,40 @@ Automatic database and application persistent volumes are registry-backed. A sto
 ### Verification
 
 Use the Docker daemon on the node that owns the volume to inspect its driver and reported usage. `docker system df -v` exposes local-volume usage, while the Engine `GET /system/df` API is the programmatic source used by the platform. For Swarm, verify that the task node matches the local-volume owner before treating a usage reading as authoritative.
+## Operator verification
+
+Run these commands on the Docker daemon node that owns the local volume:
+
+```bash
+docker info --format '{{.DockerRootDir}} {{.Driver}}'
+docker volume inspect <docker-volume-name>
+docker system df -v
+docker volume ls --filter dangling=true
+```
+
+For the filesystem that contains Docker's volume data, verify type and mount options:
+
+```bash
+findmnt -no TARGET,FSTYPE,OPTIONS --target /var/lib/docker
+df -hT /var/lib/docker
+stat -f -c 'type=%T mount=%m' /var/lib/docker
+```
+
+When evaluating an XFS-backed hard-quota design, verify the host actually has project quota support and enforcement enabled:
+
+```bash
+findmnt -no TARGET,FSTYPE,OPTIONS --target /var/lib/docker
+xfs_info /var/lib/docker
+xfs_quota -x -c 'state' /var/lib/docker
+xfs_quota -x -c 'report -p' /var/lib/docker
+```
+
+On a multi-node Swarm, verify where the workload actually runs:
+
+```bash
+docker service ps <service-name> --no-trunc
+docker node inspect <node-id> --format '{{.Description.Hostname}}'
+docker volume inspect <docker-volume-name>
+```
+
+The last step matters for node-local volumes: a manager-side Docker inspection is not proof that a workload's volume on another node has the same physical storage state.
