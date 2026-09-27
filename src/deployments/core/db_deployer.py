@@ -2028,52 +2028,42 @@ class DBDeployer:
 
         # ====================================================================
         # 11. force_reinit (safe — no container holds the volume)
-        # ====================================================================
-
         if force_reinit:
-
-            for source in list(
-                volume_binds.keys()
-            ):
-
+            for source in list(volume_binds):
                 if source.startswith("/"):
                     continue
-
                 try:
-
-                    volume = client.volumes.get(
-                        source
-                    )
-
-                    volume.remove(
-                        force=True
-                    )
-
-                    client.volumes.create(
-                        name=source
-                    )
-
+                    registry_row = registry_volume_rows[str(source)]
+                    DockerVolume(
+                        name=str(source),
+                        size_mb=int(registry_row.size_mb),
+                        driver="local",
+                        require_managed=True,
+                    ).remove()
+                    DockerVolume(
+                        name=str(source),
+                        size_mb=int(registry_row.size_mb),
+                        driver="local",
+                        require_managed=False,
+                    ).ensure()
                     log.info(
                         "volume_creation",
-                        f"Recreated volume '{source}'.",
+                        f"Recreated volume '{source}' for force reinitialization.",
                         progress=30,
+                        details={
+                            "volume": str(source),
+                            "declared_mb": int(registry_row.size_mb),
+                            "capacity_mode": "LOGICAL_ONLY",
+                        },
                     )
-
-                except NotFound:
-                    pass
-
-                except (
-                    APIError,
-                    docker.errors.DockerException,
-                ) as exc:
-
-                    logger.warning(
-                        "Could not reset volume '%s': %s",
-                        source,
-                        exc,
+                except Exception as exc:
+                    return DBDeployResult(
+                        success=False,
+                        message=f"Failed to reinitialize database volume '{source}': {exc}",
+                        container_name=container_name,
+                        platform=platform,
+                        error=str(exc),
                     )
-
-        # ====================================================================
         # 12. tmpfs
         # ====================================================================
 
