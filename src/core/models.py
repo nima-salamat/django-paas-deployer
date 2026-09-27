@@ -216,6 +216,12 @@ class CoreSettings(BaseGenericSetting):
         default=1024, verbose_name=_("Maximum build RAM (MB)"),
         help_text=_("Operator-only Docker build memory ceiling."),
     )
+    volume_usage_warning_percent = models.FloatField(
+        default=90.0,
+        verbose_name=_("Volume usage warning threshold (%)"),
+        help_text=_("Warn users when actual Docker volume usage reaches this percentage of declared logical capacity."),
+    )
+
     build_slot_lease_seconds = models.PositiveIntegerField(
         default=900, verbose_name=_("Build slot lease (seconds)"),
         help_text=_("Lease duration used to recover abandoned build slots."),
@@ -299,6 +305,7 @@ class CoreSettings(BaseGenericSetting):
                 FieldPanel("build_wait_minutes"),
                 FieldPanel("build_max_cpu"),
                 FieldPanel("build_max_ram_mb"),
+                FieldPanel("volume_usage_warning_percent"),
                 FieldPanel("build_slot_lease_seconds"),
             ],
             heading=_("Docker build resources"),
