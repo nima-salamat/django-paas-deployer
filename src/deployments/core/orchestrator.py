@@ -199,33 +199,35 @@ class DeploymentOrchestrator:
 
             self._check_cancelled()
 
-            if swarm_enabled():
-                return self._deploy_swarm_runtime(config, image_ref=config.image_ref)
-
-            # 7. Networks + volumes
+            # 7. Networks + managed volumes
+            # Both classic and Swarm execution use the same registry-backed
+            # volume preparation. This prevents Swarm from creating a same-
+            # named local volume on a different node without quota accounting.
             self._ensure_networks(config)
             self.logger.info("volume_creation", "Preparing Docker volume mounts.", progress=40)
-
-            # Auto-allocate a default persistent volume when the platform
-            # needs one and the caller supplied none.  Pure Docker path —
-            # does not require Django Volume models.  On insufficient host
-            # space the volume is skipped (deploy continues with ephemeral
-            # storage) so the whole deploy is not aborted.
+            service_id = str((config.labels or {}).get("service.id") or "").strip() or None
             effective_volumes = self.volume_manager.ensure_default_volumes(
                 list(config.volumes or []),
-                platform=getattr(config, "platform", None)
-                or getattr(config, "platform_type", None),
+                platform=getattr(config, "platform", None) or getattr(config, "platform_type", None),
                 service_name=getattr(config, "name", None),
                 size_mb=None,
+                service_id=service_id,
             )
-            volume_binds = self.volume_manager.prepare(effective_volumes)
+            volume_binds = self.volume_manager.prepare(effective_volumes, service_id=service_id)
+            from dataclasses import replace as _replace
+            config = _replace(config, volumes=effective_volumes)
+            self.volume_manager.warn_about_usage(effective_volumes)
             self.logger.info(
-                "volume_creation", "Docker volume mounts are ready.",
-                progress=48, details={"volume_count": len(effective_volumes)},
+                "volume_creation",
+                "Docker volume mounts are ready.",
+                progress=48,
+                details={"volume_count": len(effective_volumes)},
             )
 
             self._check_cancelled()
 
+            if swarm_enabled():
+                return self._deploy_swarm_runtime(config, image_ref=config.image_ref)
             # 8. Container replacement — RENAME-OLD strategy
             # Rename the existing container out of the way BEFORE creating
             # the new one.  This:
