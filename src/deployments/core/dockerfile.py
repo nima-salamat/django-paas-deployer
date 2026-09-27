@@ -2153,37 +2153,80 @@ def _php_app_root_from_document_root(document_root_rel: str) -> str:
 
 
 def _strip_base_owned_php_runtime(dockerfile: str) -> str:
-    """Remove expensive PHP/Apache runtime setup when a cached PHP base is used."""
-    patterns = [
-        r"\nRUN apt-get update && apt-get install -y --no-install-recommends\s+"
-        r"git unzip libzip-dev libpng-dev libjpeg62-turbo-dev libfreetype6-dev\s+"
-        r"libicu-dev libonig-dev libxml2-dev(?: curl ca-certificates)?\s+"
-        r"&& docker-php-ext-configure gd --with-freetype --with-jpeg\s+"
-        r"&& docker-php-ext-install -j\$\(nproc\)[\s\S]*?"
-        r"&& rm -rf /var/lib/apt/lists/\*\s*",
-        r"\nRUN apt-get update && apt-get install -y --no-install-recommends[\s\S]*?"
-        r"docker-php-ext-install[\s\S]*?&& rm -rf /var/lib/apt/lists/\*\s*",
-    ]
-    out = dockerfile
-    for pattern in patterns:
-        candidate = re.sub(pattern, "\n", out, count=1, flags=re.IGNORECASE)
-        if candidate != out:
-            out = candidate
-            break
-    # The canonical renderer may inject a multiline fallback runtime block
-    # (docker-php-ext-install + Apache modules) when the user template does not
-    # already contain docker-php-ext-install. Once a prebuilt PHP base image is
-    # selected, that entire generated block is owned by the base and must not
-    # be repeated in the application image.
-    out = re.sub(
-        r"\nRUN docker-php-ext-install[\s\S]*?(?=\n(?:RUN|COPY|ADD|ENV|ARG|WORKDIR|EXPOSE|ENTRYPOINT|CMD|USER|FROM)\b|\Z)",
-        "\n",
-        out,
-        count=1,
-        flags=re.IGNORECASE,
-    )
-    return out
+    """Remove only known legacy PHP runtime setup from cached PHP stages.
 
+    The matcher is deliberately conservative. A RUN block containing
+    docker-php-ext-install is not removed unless it matches one of the legacy
+    platform-owned package/runtime signatures. Tenant-specific APT packages
+    or custom extension commands therefore remain intact.
+    """
+    canonical_packages = (
+        {"git", "unzip", "libzip-dev"},
+        {
+            "git", "unzip", "libzip-dev", "libpng-dev",
+            "libjpeg62-turbo-dev", "libfreetype6-dev",
+            "libicu-dev", "libonig-dev", "libxml2-dev",
+        },
+        {
+            "git", "unzip", "libzip-dev", "libpng-dev",
+            "libjpeg62-turbo-dev", "libfreetype6-dev",
+            "libicu-dev", "libonig-dev", "libxml2-dev",
+            "curl", "ca-certificates",
+        },
+    )
+
+    def is_cached_php_stage_from(block: str) -> bool:
+        return bool(re.match(
+            r"^FROM\\s+paas-base/php-apache(?:[:@]\\S+)?(?:\\s+AS\\s+\\S+)?\\s*$",
+            block.strip(),
+            flags=re.IGNORECASE,
+        ))
+
+    def is_legacy_runtime_run(block: str) -> bool:
+        normalized = " ".join(block.strip().split())
+        if not normalized.upper().startswith("RUN APT-GET UPDATE && APT-GET INSTALL -Y --NO-INSTALL-RECOMMENDS "):
+            return False
+        pkg_match = re.search(
+            r"apt-get install -y --no-install-recommends (.*?) && docker-php-ext-(?:configure|install)",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        if not pkg_match:
+            return False
+        packages = set(pkg_match.group(1).split())
+        if packages not in canonical_packages:
+            return False
+        required = (
+            "docker-php-ext-install",
+            "a2enmod rewrite headers",
+            "AllowOverride All",
+            "opcache.enable=1",
+            "/var/lib/apt/lists/*",
+        )
+        return all(token.lower() in normalized.lower() for token in required)
+
+    lines = dockerfile.splitlines(keepends=True)
+    blocks = []
+    current = []
+    for line in lines:
+        if current and not current[-1].rstrip().endswith("\\\\"):
+            blocks.append("".join(current))
+            current = []
+        current.append(line)
+    if current:
+        blocks.append("".join(current))
+
+    output = []
+    cached_php_stage = False
+    for block in blocks:
+        stripped = block.lstrip()
+        if re.match(r"^FROM\\s+", stripped, flags=re.IGNORECASE):
+            cached_php_stage = is_cached_php_stage_from(block)
+        if cached_php_stage and is_legacy_runtime_run(block):
+            output.append("\n")
+            continue
+        output.append(block)
+    return "".join(output)
 
 def _apply_resolved_base_images(dockerfile: str, config=None) -> str:
     """Replace upstream runtime FROM stages with prebuilt operator base images.
@@ -2200,7 +2243,7 @@ def _apply_resolved_base_images(dockerfile: str, config=None) -> str:
     replacements = []
     if bases.get("base_image"):
         replacements.extend([
-            (r"FROM\s+(?:[^\s/]+/)*php:[^\s]+", f"FROM {bases['base_image']}"),
+            (r"FROM\s+(?:[^\s/]+/)*php:[^\s]+-apache(?=\s|$)", f"FROM {bases['base_image']}"),
             (r"FROM\s+(?:[^\s/]+/)*python:[^\s]+", f"FROM {bases['base_image']}"),
             (r"FROM\s+(?:[^\s/]+/)*golang:[^\s]+", f"FROM {bases['base_image']}"),
         ])
