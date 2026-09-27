@@ -24,7 +24,7 @@ def test_process_deployment_passes_resolved_config_to_orchestrator():
     assert 'cfg["resolved_paths"] = dict(paths_cfg)' in source
     assert "def _execute_orchestrator(" in source
     assert "*, cfg: dict," in source
-    assert "state_tracker, cfg=cfg," in source
+    assert "state_tracker,\n                cfg=cfg," in source
     assert 'cfg.get("resolved_paths", {})' in source
 
 
