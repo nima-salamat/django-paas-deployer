@@ -55,4 +55,3 @@ def test_activation_callback_is_forwarded_through_the_service_orchestrator_bound
     assert "*, cfg: dict, activation_callback=None," in source
     assert "cfg=cfg, activation_callback=activation_callback," in source
     assert "activation_callback=activation_callback," in source
-\n
