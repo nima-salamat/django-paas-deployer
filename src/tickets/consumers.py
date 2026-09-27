@@ -24,9 +24,17 @@ async def authenticate_from_scope(scope):
 class TicketEventsConsumer(AsyncJsonWebsocketConsumer):
     """Staff-only live feed (legacy path /ws/tickets/)."""
 
+    @database_sync_to_async
+    def _user_flags(self, user):
+        return bool(user.is_staff), bool(user.is_superuser)
+
     async def connect(self):
         user = await authenticate_from_scope(self.scope)
-        if not user or not (user.is_staff or user.is_superuser):
+        if not user:
+            await self.close(code=4403)
+            return
+        is_staff, is_superuser = await self._user_flags(user)
+        if not (is_staff or is_superuser):
             await self.close(code=4403)
             return
         self.user = user
@@ -55,6 +63,10 @@ class TicketNotifyConsumer(AsyncJsonWebsocketConsumer):
     Path: /ws/tickets/notify/?token=<jwt>
     """
 
+    @database_sync_to_async
+    def _user_flags(self, user):
+        return bool(user.is_staff), bool(user.is_superuser)
+
     async def connect(self):
         user = await authenticate_from_scope(self.scope)
         if not user:
@@ -62,6 +74,7 @@ class TicketNotifyConsumer(AsyncJsonWebsocketConsumer):
             return
         self.user = user
         self.groups_joined = []
+        is_staff, is_superuser = await self._user_flags(user)
 
         # Personal inbox
         g = f"tickets_user_{user.id}"
@@ -69,7 +82,7 @@ class TicketNotifyConsumer(AsyncJsonWebsocketConsumer):
         self.groups_joined.append(g)
 
         # All staff get support-wide events
-        if user.is_staff or user.is_superuser:
+        if is_staff or is_superuser:
             await self.channel_layer.group_add("tickets_staff_all", self.channel_name)
             self.groups_joined.append("tickets_staff_all")
 
@@ -78,9 +91,9 @@ class TicketNotifyConsumer(AsyncJsonWebsocketConsumer):
             "type": "connected",
             "channel": "notify",
             "user_id": user.id,
-            "is_staff": bool(user.is_staff or user.is_superuser),
+            "is_staff": bool(is_staff or is_superuser),
         })
-        logger.info("tickets.ws notify connected user=%s staff=%s", user.id, user.is_staff)
+        logger.info("tickets.ws notify connected user=%s staff=%s", user.id, is_staff)
 
     async def disconnect(self, code):
         for g in getattr(self, "groups_joined", []):
