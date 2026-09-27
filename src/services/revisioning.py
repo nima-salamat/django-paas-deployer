@@ -717,6 +717,11 @@ def ensure_active_revision_for_service(service: Service) -> ServiceRevision | No
     if legacy_deploy is None:
         return None
 
+    # set_deploy only permits successful deployments. Keep the compatibility
+    # bridge defensive in case old database rows contain a stale pointer.
+    if str(getattr(legacy_deploy, "status", "")).lower() != "succeeded":
+        return None
+
     legacy_deploy = ensure_revision_for_deploy(legacy_deploy)
     legacy_deploy.refresh_from_db(fields=["revision"])
     revision_id = getattr(legacy_deploy, "revision_id", None)
