@@ -250,7 +250,7 @@ services:
       # optional dedicated deployment-worker service. These queues are also
       # consumed by the dedicated worker when that service is enabled.
       - -Q
-      - celery,deployments,operations,base-images
+      - celery,deployments,operations
 
     volumes:
       - .:/app
@@ -320,7 +320,7 @@ services:
       - --pool=prefork
       - --concurrency=${DEPLOYMENT_WORKER_CONCURRENCY:-2}
       - -Q
-      - deployments,operations,base-images
+      - deployments,operations
 
     volumes:
       - .:/app
@@ -349,6 +349,52 @@ services:
       API_DOMAIN_NAME: ${API_DOMAIN_NAME}
       DEPLOYMENT_DOMAIN: ${DEPLOYMENT_DOMAIN}
 
+    networks:
+      - app-network
+      - proxy_net
+
+
+  # ============================================================
+  # DEDICATED BASE-IMAGE WORKER
+  # Base-image builds are dispatched to a queue that deployment workers
+  # never consume, preventing synchronous waiter deadlocks at concurrency=1.
+  # ============================================================
+  base-image-worker:
+    image: ${BACKEND_IMAGE:-passdeployer-backend:local}
+    restart: unless-stopped
+    command:
+      - celery
+      - -A
+      - config
+      - worker
+      - --loglevel=info
+      - --pool=prefork
+      - --concurrency=${BASE_IMAGE_WORKER_CONCURRENCY:-1}
+      - -Q
+      - base-images
+    volumes:
+      - .:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      db:
+        condition: service_healthy
+      deployment-log-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DEPLOYMENT_LOG_DB_HOST: deployment-log-db
+      DEPLOYMENT_LOG_DB_PORT: 5432
+      REDIS_URL: redis://redis:6379
+      CELERY_BROKER_URL: redis://redis:6379
+      CELERY_RESULT_BACKEND: redis://redis:6379
+      CHANNEL_REDIS_URL: redis://redis:6379
+      API_DOMAIN_NAME: ${API_DOMAIN_NAME}
+      DEPLOYMENT_DOMAIN: ${DEPLOYMENT_DOMAIN}
     networks:
       - app-network
       - proxy_net
