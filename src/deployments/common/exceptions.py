@@ -316,5 +316,6 @@ __all__ = [
     "DeploymentCancelled",
     "StaleDeploymentWorkerError",
     "OrchestratorDeploymentError",
+    "BaseImageBuildError",
     "DeploymentSecurityError",
 ]
