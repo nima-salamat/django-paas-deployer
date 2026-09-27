@@ -128,3 +128,10 @@ def test_superseded_base_image_retry_cannot_reclaim_failed_row():
     assert 'BaseRuntimeImage.Status.FAILED,' in source
     assert 'if task_id and row.status in {' in source
     assert 'and not row.build_task_id:' in source
+
+
+def test_policy_construction_failure_path_is_terminal_not_retry():
+    source = (ROOT / "deployments" / "celery" / "tasks.py").read_text(encoding="utf-8")
+    assert "resource-policy construction failed" in source
+    assert "_mark_base_image_terminal_failure(base_image_id" in source
+    assert "except (TypeError, ValueError) as exc" in source
