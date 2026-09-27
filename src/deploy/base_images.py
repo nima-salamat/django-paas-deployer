@@ -624,8 +624,11 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                         "last_error", "last_error_details", "updated_at",
                     ])
 
-            if policy["auto_register_existing"] and row.enabled and _mark_local_image_ready(
-                row, expected_fingerprint=fingerprint
+            if (
+                policy["auto_register_existing"]
+                and row.enabled
+                and not row.rebuild_requested
+                and _mark_local_image_ready(row, expected_fingerprint=fingerprint)
             ):
                 result[logical_key(spec)] = row.image_ref
                 if deployment_id:
