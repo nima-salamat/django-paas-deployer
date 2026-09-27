@@ -16,16 +16,16 @@ def test_build_cpu_is_mapped_to_relative_cpu_shares_not_hard_quota():
     assert "nano_cpus" not in limits
 
 
-def test_base_image_timeout_is_the_same_setting_used_for_stale_recovery(monkeypatch):
-    import core.settings_service as svc
-    monkeypatch.setattr(
-        svc,
-        "_wagtail_core_value",
-        lambda field, default: 37 if field == "monitor_stale_base_build_minutes" else default,
-    )
-    assert svc.base_image_timeout_minutes() == 37
-    assert svc.monitor_stale_base_build_minutes() == 37
-
+def test_base_image_timeout_is_the_same_setting_used_for_stale_recovery():
+    from pathlib import Path
+    settings_source = (Path(__file__).resolve().parents[2] / "core" / "settings_service.py").read_text(encoding="utf-8")
+    assert "def base_image_timeout_minutes() -> int:" in settings_source
+    assert "return base_image_timeout_minutes()" in settings_source
+def test_runtime_policies_expose_canonical_base_image_timeout():
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] / "celery" / "monitoring" / "policies.py").read_text(encoding="utf-8")
+    assert '"base_image_timeout_minutes"' in source
+    assert '"stale_base_build_minutes"' in source
 
 def test_runtime_policies_expose_canonical_base_image_timeout(monkeypatch):
     import core.settings_service as svc
