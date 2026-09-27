@@ -513,11 +513,11 @@ def ensure_revision_for_deploy(deploy, *, force_new: bool = False):
     """Compile the mutable Service domain into an immutable executable revision."""
     from deploy.models import Deploy
 
-    deploy = (
-        Deploy.objects.select_for_update()
-        .select_related("service", "created_by")
-        .get(pk=deploy.pk)
-    )
+    # Lock only the Deploy row. revision and created_by are nullable
+    # relations on Deploy, so select_related() would turn this into an outer
+    # join that PostgreSQL rejects under FOR UPDATE.
+    deploy = Deploy.objects.select_for_update().get(pk=deploy.pk)
+
     if deploy.revision_id and not force_new:
         return deploy
 
