@@ -218,9 +218,15 @@ def build_max_ram_mb() -> int:
 
 
 def volume_usage_warning_percent() -> float:
+    import os
+    env_default = os.environ.get("VOLUME_USAGE_WARNING_PERCENT", "90.0")
+    try:
+        env_default_value = float(env_default)
+    except (TypeError, ValueError):
+        env_default_value = 90.0
     value = _wagtail_core_value(
         "volume_usage_warning_percent",
-        get_float("storage.volume_usage_warning_percent", 90.0),
+        get_float("storage.volume_usage_warning_percent", env_default_value),
     )
     try:
         value = float(value)
