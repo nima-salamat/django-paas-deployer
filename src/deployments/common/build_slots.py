@@ -151,15 +151,28 @@ class BuildSlot(AbstractContextManager):
                 )
             return False
         except Exception:
-            # A transient heartbeat failure must not silently give another
-            # builder ownership. Mark the lease uncertain and let the current
-            # build finish; the short TTL will recover the slot.
-            self._lease_lost = True
+            # A transient Redis error is retried by the heartbeat loop. Only a
+            # confirmed token mismatch is treated as lost ownership.
             if self.logger:
                 self.logger.warning(
-                    "build_slot_renew_failed: Redis heartbeat failed; ownership is uncertain"
+                    "build_slot_renew_failed: Redis heartbeat failed; retrying"
                 )
             return False
+
+    def assert_owned(self) -> None:
+        """Raise if this build has lost its Redis slot fencing token."""
+        if self._lease_lost:
+            raise DeploymentError(
+                "Build slot ownership was lost during the Docker build.",
+                stage="build_slot",
+                recoverable=True,
+                details={
+                    "deployment_id": self.deployment_id,
+                    "key": self.key,
+                    "lease_seconds": self.lease_seconds,
+                },
+            )
+
 
     def _heartbeat_loop(self) -> None:
         stop = self._heartbeat_stop
@@ -167,8 +180,8 @@ class BuildSlot(AbstractContextManager):
             return
         interval = max(1.0, min(30.0, self.lease_seconds / 3.0))
         while not stop.wait(interval):
-            if not self._renew_lease():
-                # Do not spin on a broken Redis lease.
+            renewed = self._renew_lease()
+            if not renewed and self._lease_lost:
                 return
 
     def __exit__(self, exc_type, exc, tb):
