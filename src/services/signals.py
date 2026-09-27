@@ -1,5 +1,7 @@
 import logging
 
+import docker.errors
+
 from django.db.models.signals import pre_delete
 from django.dispatch import receiver
 
@@ -115,45 +117,40 @@ def _cleanup_service_volumes(service: Service) -> None:
 
     for volume in volumes:
         # Remove Docker volume first
+        docker_name = volume.get_docker_volume_name()
         try:
-            docker_volume = DockerVolume(volume.get_docker_volume_name())
-            raw_volume = docker_volume.client.volumes.get(volume.get_docker_volume_name())
-            labels = dict(getattr(raw_volume, "attrs", {}).get("Labels") or {})
-            if labels.get("managed-by") != "django-paas-deployer":
-                logger.error(
-                    "Refusing to remove Docker volume '%s': ownership label is missing or unexpected.",
-                    volume.name,
-                )
-                continue
+            docker_volume = DockerVolume(docker_name)
             try:
+                raw_volume = docker_volume.client.volumes.get(docker_name)
+            except docker.errors.NotFound:
+                raw_volume = None
+            if raw_volume is not None:
+                labels = dict(getattr(raw_volume, "attrs", {}).get("Labels") or {})
+                if labels.get("managed-by") != "django-paas-deployer":
+                    raise RuntimeError(
+                        f"Refusing to remove Docker volume '{volume.name}': ownership label is missing or unexpected."
+                    )
                 docker_volume.remove()
                 logger.info(
                     "Removed Docker volume '%s' for deleted service '%s'.",
                     volume.name,
                     service.name,
                 )
-            except Exception:
-                logger.exception(
-                    "Failed removing Docker volume '%s' (will still delete DB record).",
-                    volume.name,
-                )
+        except docker.errors.NotFound:
+            pass
         except Exception:
             logger.exception(
-                "Could not resolve Docker volume for '%s'.", volume.name
-            )
-
-        # Delete DB record (avoids cascading surprises if CASCADE is not set)
-        try:
-            volume.delete()
-            logger.info(
-                "Deleted Volume record '%s' owned by service '%s'.",
+                "Failed removing Docker volume '%s'; DB record will be retained to prevent invisible storage drift.",
                 volume.name,
-                service.name,
             )
-        except Exception:
-            logger.exception(
-                "Failed deleting volume record '%s'.", volume.name
-            )
+            raise
+
+        volume.delete()
+        logger.info(
+            "Deleted Volume record '%s' owned by service '%s'.",
+            volume.name,
+            service.name,
+        )
 
 
 @receiver(pre_delete, sender=Volume)
@@ -164,21 +161,26 @@ def cleanup_volume_on_delete(sender, instance: Volume, **kwargs):
     )
     try:
         docker_volume = DockerVolume(instance.get_docker_volume_name())
-        raw_volume = docker_volume.client.volumes.get(instance.get_docker_volume_name())
+        try:
+            raw_volume = docker_volume.client.volumes.get(instance.get_docker_volume_name())
+        except docker.errors.NotFound:
+            logger.info("Docker volume '%s' is already absent.", instance.name)
+            return
         labels = dict(getattr(raw_volume, "attrs", {}).get("Labels") or {})
         if labels.get("managed-by") != "django-paas-deployer":
-            logger.error(
-                "Refusing to remove Docker volume '%s': ownership label is missing or unexpected.",
-                instance.name,
+            raise RuntimeError(
+                f"Refusing to remove Docker volume '{instance.name}': ownership label is missing or unexpected."
             )
-            return
         docker_volume.remove()
         logger.info("Docker volume '%s' removed successfully", instance.name)
+    except docker.errors.NotFound:
+        return
     except Exception:
         logger.exception(
-            "Failed to remove Docker volume '%s' during Volume pre_delete",
+            "Failed to remove Docker volume '%s' during Volume pre_delete; refusing to delete the DB row.",
             instance.name,
         )
+        raise
 
 
 @receiver(pre_delete, sender=PrivateNetwork)
