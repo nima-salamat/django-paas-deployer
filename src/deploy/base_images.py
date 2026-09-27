@@ -6,6 +6,7 @@ sources and tenant dependencies are intentionally never copied into them.
 from __future__ import annotations
 
 import hashlib
+from datetime import timedelta
 import io
 import logging
 import os
@@ -101,6 +102,65 @@ def _spec_fingerprint(spec: BaseImageSpec) -> str:
     ]).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
+
+def deployment_phase_remaining_seconds(deployment_or_id, *, now=None) -> int | None:
+    """Return the remaining budget for the deployment's current lifecycle phase."""
+    from core.settings_service import base_image_build_timeout_minutes, deploy_timeout_minutes
+    from .models import Deploy
+    deploy = deployment_or_id
+    if not hasattr(deploy, "lifecycle_phase_deadline"):
+        deploy = Deploy.objects.filter(pk=deployment_or_id).first()
+    if deploy is None:
+        return None
+    now = now or timezone.now()
+    deadline = deploy.lifecycle_phase_deadline(
+        base_timeout_minutes=base_image_build_timeout_minutes(),
+        application_timeout_minutes=deploy_timeout_minutes(),
+        now=now,
+    )
+    if deadline is None:
+        return None
+    return max(0, int((deadline - now).total_seconds()))
+
+
+def mark_base_image_phase_started(deployment_id: str | None):
+    """Start the deployment-owned base-image budget once, without resetting it."""
+    if not deployment_id:
+        return None
+    from .models import Deploy
+    now = timezone.now()
+    with transaction.atomic():
+        deploy = Deploy.objects.select_for_update().filter(pk=deployment_id).first()
+        if deploy is None:
+            return None
+        started = deploy.base_image_wait_started_at or now
+        deploy.stage = "base_image"
+        deploy.base_image_wait_started_at = started
+        deploy.base_image_ready_at = None
+        deploy.application_started_at = None
+        deploy.status_message = "Waiting for the required base runtime image."
+        deploy.save(update_fields=[
+            "stage", "base_image_wait_started_at", "base_image_ready_at",
+            "application_started_at", "status_message", "updated_at"
+        ])
+        return started
+
+
+def mark_application_phase_started(deployment_id: str | None):
+    """Begin a fresh application deployment budget after base-image resolution."""
+    if not deployment_id:
+        return None
+    from .models import Deploy
+    now = timezone.now()
+    with transaction.atomic():
+        deploy = Deploy.objects.select_for_update().filter(pk=deployment_id).first()
+        if deploy is None:
+            return None
+        if deploy.base_image_wait_started_at:
+            deploy.base_image_ready_at = now
+        deploy.application_started_at = now
+        deploy.save(update_fields=["base_image_ready_at", "application_started_at", "updated_at"])
+        return now
 
 def _dockerfile_with_fingerprint(spec: BaseImageSpec, fingerprint: str) -> str:
     """Add an inspectable content fingerprint without making it part of itself."""
