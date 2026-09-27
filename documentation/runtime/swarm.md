@@ -55,3 +55,13 @@ Application images may be built locally and published to `SWARM_IMAGE_REGISTRY` 
 ## Volumes
 
 Local volume workloads are pinned to their data node by default in multi-node installations.
+
+## Base runtime images
+
+Base runtime images are resolved on the Docker daemon connected to PassDeployer before the application image is built. On a single daemon, concurrent deployments requiring the same BaseRuntimeImage share one build and wait on its `BUILDING` state.
+
+For a multi-node Swarm, `docker_host` is part of the BaseRuntimeImage identity, so base-image sharing is **per Docker daemon**, not cluster-wide. The final application image is what must be published to `SWARM_IMAGE_REGISTRY` for multi-node scheduling. PassDeployer does not claim that a locally built base image is automatically present on every Swarm node.
+
+Wagtail operator actions **Build / Ensure available** and **Renew / Rebuild** enqueue the same base-image Celery task used by automatic deployment. A Renew requested while another build is active is coalesced into `rebuild_requested` and runs after the active owner finishes safely.
+
+The base-image phase has its own `base_image_build_timeout_minutes` budget (10 minutes by default). Once all required base images are READY and fingerprint-compatible, the deployment starts a fresh `deploy_timeout_minutes` application budget.
