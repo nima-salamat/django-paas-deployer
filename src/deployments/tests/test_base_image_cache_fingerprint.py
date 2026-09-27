@@ -21,7 +21,7 @@ def test_changed_definition_cannot_adopt_unlabelled_local_image(monkeypatch):
     import deploy.base_images as base_images
 
     class FakeRow:
-        image_ref = "paas-base/php-apache-root:8.4-r1"
+        image_ref = "paas-base/php-apache:8.4-r1"
         status = "pending"
         image_id = ""
         image_digest = ""
