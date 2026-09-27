@@ -137,11 +137,15 @@ def usage_details(usage: VolumeUsage) -> dict[str, Any]:
     }
 
 def reconcile_managed_volumes(client) -> dict[str, list[dict[str, Any]]]:
-    """Compare Docker volumes on the connected node with the Django registry."""
+    """Reconcile registry ownership with Docker storage on one connected daemon."""
     try:
         docker_rows = client.volumes.list()
     except Exception as exc:
         return {
+            "active_tenant_storage": [],
+            "released_retained_storage": [],
+            "orphan_storage": [],
+            "unknown_storage": [],
             "docker_orphans": [],
             "docker_unowned_conflicts": [],
             "missing_docker": [],
@@ -154,47 +158,95 @@ def reconcile_managed_volumes(client) -> dict[str, list[dict[str, Any]]]:
             docker_by_name[name] = row
     try:
         from services.models import Volume as RegistryVolume
-        registry_rows = list(RegistryVolume.objects.values("id", "name", "service_id", "size_mb"))
+        registry_rows = list(
+            RegistryVolume.objects.values(
+                "id", "name", "service_id", "size_mb", "released_at"
+            )
+        )
     except Exception as exc:
         return {
+            "active_tenant_storage": [],
+            "released_retained_storage": [],
+            "orphan_storage": [],
+            "unknown_storage": [],
             "docker_orphans": [],
             "docker_unowned_conflicts": [],
             "missing_docker": [],
             "error": [{"exception_type": type(exc).__name__, "error": str(exc)}],
         }
+
     expected = {}
     for row in registry_rows:
         volume_id = str(row["id"])
         expected_name = f"vol-{volume_id.replace('-', '')[:8]}-{row['name']}"
         expected[expected_name] = row
+
     managed_names = set()
     for name, row in docker_by_name.items():
         labels = dict(getattr(row, "attrs", {}).get("Labels") or {})
         if labels.get("managed-by") == "django-paas-deployer":
             managed_names.add(name)
-    return {
-        "docker_orphans": [
-            {"volume": name, "scope": "connected_node"}
-            for name in sorted(managed_names - set(expected))
-        ],
-        "docker_unowned_conflicts": [
-            {
-                "volume": name,
-                "scope": "connected_node",
-                "expected_service_id": str(expected[name]["service_id"]) if expected[name]["service_id"] else None,
-                "expected_declared_mb": expected[name]["size_mb"],
-            }
-            for name in sorted(set(expected) & set(docker_by_name) - managed_names)
-        ],
-        "missing_docker": [
-            {
+
+    result = {
+        "active_tenant_storage": [],
+        "released_retained_storage": [],
+        "orphan_storage": [],
+        "unknown_storage": [],
+        "docker_orphans": [],
+        "docker_unowned_conflicts": [],
+        "missing_docker": [],
+        "error": [],
+    }
+
+    def observed(name: str, declared_mb: int | None, classification: str, row=None):
+        usage = inspect_volume_usage(client, name, declared_mb)
+        details = usage_details(usage)
+        item = {
+            "volume": name,
+            "classification": classification,
+            "service_id": str(row["service_id"]) if row and row["service_id"] else None,
+            "declared_mb": declared_mb,
+            "released_at": row["released_at"].isoformat() if row and row.get("released_at") else None,
+            **details,
+        }
+        result[classification].append(item)
+        if not usage.usage_available:
+            result["unknown_storage"].append({**item, "classification": classification})
+        return item
+
+    for name, row in expected.items():
+        docker_row = docker_by_name.get(name)
+        if docker_row is None:
+            result["missing_docker"].append({
                 "volume": name,
                 "service_id": str(row["service_id"]) if row["service_id"] else None,
                 "declared_mb": row["size_mb"],
+                "released_at": row["released_at"].isoformat() if row["released_at"] else None,
                 "scope": "connected_node",
-            }
-            for name, row in sorted(expected.items())
-            if name not in docker_by_name
-        ],
-        "error": [],
-    }
+            })
+            continue
+        labels = dict(getattr(docker_row, "attrs", {}).get("Labels") or {})
+        if labels.get("managed-by") != "django-paas-deployer":
+            result["docker_unowned_conflicts"].append({
+                "volume": name,
+                "scope": "connected_node",
+                "expected_service_id": str(row["service_id"]) if row["service_id"] else None,
+                "expected_declared_mb": row["size_mb"],
+            })
+            continue
+        if row["service_id"]:
+            observed(name, int(row["size_mb"]), "active_tenant_storage", row)
+        elif row["released_at"]:
+            observed(name, int(row["size_mb"]), "released_retained_storage", row)
+        else:
+            observed(name, int(row["size_mb"]), "orphan_storage", row)
+
+    for name in sorted(managed_names - set(expected)):
+        item = observed(name, None, "orphan_storage", None)
+        result["docker_orphans"].append({
+            "volume": name,
+            "scope": "connected_node",
+            "usage_available": item["usage_available"],
+            "used_bytes": item["used_bytes"],
+        })
+    return result
