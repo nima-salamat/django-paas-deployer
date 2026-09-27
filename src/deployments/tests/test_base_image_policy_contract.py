@@ -73,3 +73,22 @@ def test_force_rebuild_is_not_forwarded_as_a_resource_field():
     import deployments.common.resource_policy as policy
     resolved = policy.resolve_build_policy({})
     assert "force_rebuild" not in resolved
+
+
+def test_legacy_force_rebuild_only_policy_is_resolved_before_image_build():
+    import deployments.common.resource_policy as policy
+    canonical = {
+        "cpu": 1.0,
+        "memory_mb": 1024,
+        "pids_limit": 2048,
+        "shm_size_mb": 64,
+        "mode": "static",
+    }
+    original = policy.build_limits
+    try:
+        policy.build_limits = lambda plan=None: dict(canonical)
+        import pytest
+        with pytest.raises(ValueError, match="force_rebuild"):
+            policy.resolve_build_policy({"force_rebuild": False})
+    finally:
+        policy.build_limits = original
