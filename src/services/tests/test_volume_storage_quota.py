@@ -87,3 +87,42 @@ class PersistentAutoVolumeContractTests(TestCase):
         import pytest
         with pytest.raises(VolumeError):
             VolumeMountManager().ensure_default_volumes([], platform="django", service_name="anonymous")
+
+def test_logical_quota_rejects_second_allocation():
+    user = User.objects.create_user(username="quota-second", password="test-password")
+    plan = Plan.objects.create(name="Quota2", platform="django", max_cpu=1, max_ram=512, max_storage=1, price_per_hour=0)
+    service = Service.objects.create(name="quota-service-2", user=user, plan=plan)
+    first = Volume.objects.create(name="quota-a", user=user, service=service, size_mb=800, default_bind="/a")
+    assert first.service_id == service.pk
+    from django.core.exceptions import ValidationError
+    second = Volume(name="quota-b", user=user, service=service, size_mb=300, default_bind="/b")
+    with __import__("pytest").raises(ValidationError):
+        second.save()
+
+
+def test_volume_save_uses_service_row_lock():
+    from core.base.BaseModel import BaseModel
+    from unittest.mock import Mock, patch
+
+    user = User.objects.create_user(username="quota-lock-source", password="test-password")
+    plan = Plan.objects.create(name="QuotaLock", platform="django", max_cpu=1, max_ram=512, max_storage=1, price_per_hour=0)
+    service = Service.objects.create(name="quota-lock-service", user=user, plan=plan)
+    locked = Mock(pk=service.pk)
+    locked.can_allocate_storage.return_value = (True, "")
+    volume = Volume(name="quota-lock-volume", user=user, service=service, size_mb=128, default_bind="/data")
+    with patch.object(type(Service.objects), "select_for_update", return_value=Mock(get=Mock(return_value=locked))), patch.object(Volume, "full_clean", return_value=None), patch.object(BaseModel, "save", return_value=None):
+        volume.save()
+    assert locked.can_allocate_storage.called
+
+
+def test_managed_auto_volume_has_single_registry_identity():
+    user = User.objects.create_user(username="managed-auto", password="test-password")
+    plan = Plan.objects.create(name="Managed", platform="django", max_cpu=1, max_ram=512, max_storage=2, price_per_hour=0)
+    service = Service.objects.create(name="managed-auto-service", user=user, plan=plan)
+    from deployments.core.volumes import VolumeMountManager
+    manager = VolumeMountManager()
+    specs = manager.ensure_default_volumes([], platform="python", service_name=service.name, service_id=str(service.pk))
+    assert len(specs) == 1
+    row = Volume.objects.get(service=service, default_bind="/app/data")
+    assert specs[0].source == row.get_docker_volume_name()
+    assert specs[0].size_mb == row.size_mb
