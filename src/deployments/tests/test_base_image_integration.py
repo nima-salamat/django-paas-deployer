@@ -1,6 +1,4 @@
-import io
 import os
-import shutil
 import tempfile
 import zipfile
 
@@ -29,6 +27,7 @@ def test_php84_missing_base_auto_build_reaches_final_container():
     if client is None:
         pytest.skip("Docker daemon is unavailable")
     from deploy.base_images import _php
+    from deploy.models import BaseRuntimeImage
     from deployments.common.resource_policy import build_limits
     from deployments.core.orchestrator import DeploymentOrchestrator
     from deployments.core.types import DeploymentConfig
@@ -71,4 +70,9 @@ def test_php84_missing_base_auto_build_reaches_final_container():
                     container.remove(force=True)
                 except Exception:
                     pass
-        assert "FROM paas-base/php-apache-root:8.4-r1" in cfg.dockerfile_template or source.startswith("docker")
+        row = BaseRuntimeImage.objects.filter(
+            image_ref="paas-base/php-apache-root:8.4-r1"
+        ).first()
+        assert row is not None
+        assert row.status == BaseRuntimeImage.Status.READY
+        assert row.definition_fingerprint
