@@ -163,7 +163,22 @@ class VolumeMountManager:
         )
         if self.logger is None:
             return
-        client = Client().client
+        try:
+            client = Client().client
+        except Exception as exc:
+            self.logger.warning(
+                "volume_creation",
+                "Volume storage usage could not be measured; usage is unknown.",
+                progress=44,
+                details={
+                    "usage_state": "usage_unavailable",
+                    "capacity_mode": "UNKNOWN",
+                    "usage_available": False,
+                    "exception_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            )
+            return
         seen: set[str] = set()
         threshold = None
         for volume in volumes:
