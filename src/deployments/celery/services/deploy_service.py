@@ -205,13 +205,11 @@ class DeployService:
                 logger.warning("Deploy %s disappeared before final service sync.", deploy_id)
                 return
             final_status = final.get("status")
-            selected_id = None
             active_revision_id = final.get("service__active_revision_id")
             if final_status == "cancelled":
                 ServiceStateManager.sync_legacy_stopped(service_id)
             elif (
                 final_status == "succeeded"
-                and str(selected_id or "") == str(deploy_item.pk)
                 and str(active_revision_id or "") == str(deploy_item.revision_id)
             ):
                 # If rollback itself failed, surface that — don't claim success.

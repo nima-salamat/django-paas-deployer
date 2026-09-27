@@ -217,8 +217,24 @@ def start_service_apiview(request):
 
             deploy_item = get_active_deploy(service_item)
             if deploy_item is None:
+                # Compatibility bridge for services created before the
+                # ServiceRevision migration. The selected legacy deployment
+                # is materialized into an immutable revision on first start.
+                from services.revisioning import ensure_active_revision_for_service
+
+                ensure_active_revision_for_service(service_item)
+                service_item.refresh_from_db(fields=["active_revision"])
+                deploy_item = get_active_deploy(service_item)
+
+            if deploy_item is None:
                 return Response(
-                    {"result": "error", "detail": _("This service has no active revision/deployment.")},
+                    {
+                        "result": "error",
+                        "detail": _(
+                            "This service has no deployable revision. "
+                            "Create or select a deployment first."
+                        ),
+                    },
                     status=status.HTTP_409_CONFLICT,
                 )
 
