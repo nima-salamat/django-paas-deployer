@@ -462,6 +462,16 @@ class VolumeViewSet(ModelViewSet):
                 )
 
             service_obj = serializer.validated_data.get("service")
+            if service_obj is None:
+                return Response(
+                    {
+                        "error": _(
+                            "A new tenant volume must be attached to a Service so its "
+                            "storage allocation can be checked against the Service plan."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
             # Volume user: service owner when acting via share; else request.user
             volume_user = _force_owner or owner
