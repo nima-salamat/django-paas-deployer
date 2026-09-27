@@ -46,6 +46,18 @@ SWARM_IMAGE_NAMESPACE = os.environ.get("SWARM_IMAGE_NAMESPACE", "passdeployer").
 SWARM_LOCAL_VOLUME_PIN = env_bool("SWARM_LOCAL_VOLUME_PIN", True)
 
 
+def _bounded_percent_env(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(1.0, min(99.0, value))
+
+
+# Operator-only. Tenant deployment configuration cannot change this threshold.
+VOLUME_USAGE_WARNING_PERCENT = _bounded_percent_env("VOLUME_USAGE_WARNING_PERCENT", 90.0)
+
+
 def _admin_path(value: str, default: str) -> str:
     """Normalize and validate an admin URL path segment from the environment."""
     value = (value or default).strip().strip("/")
