@@ -15,6 +15,7 @@ from typing import Any, Iterable, Mapping
 import docker
 import yaml
 from django.conf import settings
+from django.utils import timezone
 
 from deployments.common.exceptions import DeploymentError
 from deployments.core.manager.client_manager import get_docker_client
@@ -1060,7 +1061,7 @@ def sync_swarm_nodes(*, cluster_name: str | None = None) -> dict[str, Any]:
     except Exception as exc:
         SwarmCluster.objects.filter(pk=cluster.pk).update(
             last_error=str(exc),
-            updated_at=__import__("django.utils.timezone", fromlist=["timezone"]).timezone.now(),
+            updated_at=timezone.now(),
         )
         raise
 
