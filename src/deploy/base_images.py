@@ -419,6 +419,66 @@ def _spec_for_record(row: BaseRuntimeImage) -> BaseImageSpec:
         return _go(version)
     raise ValueError(f"Unsupported base runtime {runtime!r}")
 
+
+def _wait_for_legacy_php_tag_collision(
+    spec: BaseImageSpec,
+    *,
+    host: str,
+    deployment_id: str | None,
+    logger_sink=None,
+) -> bool:
+    """Wait for a legacy PHP public variant that still owns the canonical tag."""
+    if spec.logical_runtime != "php" or spec.variant != "apache":
+        return False
+    legacy = (
+        BaseRuntimeImage.objects
+        .filter(
+            logical_runtime="php",
+            runtime_version=spec.version,
+            variant="apache-public",
+            architecture="",
+            docker_host=host,
+            status=BaseRuntimeImage.Status.BUILDING,
+        )
+        .order_by("build_started_at")
+        .first()
+    )
+    if legacy is None:
+        return False
+    legacy_ref = legacy.image_ref
+    if legacy_ref != spec.image_ref:
+        return False
+    if logger_sink:
+        logger_sink.info(
+            "base_image",
+            (
+                f"Legacy PHP base image {legacy_ref} is still being built by another worker. "
+                "Waiting before claiming the canonical tag to avoid two definitions writing the same image reference."
+            ),
+            progress=17,
+            details={
+                "image": spec.image_ref,
+                "legacy_variant": "apache-public",
+                "owner_task_id": str(legacy.build_task_id or ""),
+                "build_started_at": legacy.build_started_at.isoformat() if legacy.build_started_at else None,
+                "waiting_for_existing_build": True,
+                "tag_collision_guard": True,
+            },
+        )
+    timeout = _base_image_wait_timeout_seconds(deployment_id)
+    if timeout <= 0:
+        raise BaseImageBuildError(
+            f"Base image wait timed out: {spec.image_ref} while an existing legacy PHP build still owned the tag.",
+            stage="base_image",
+            details={
+                "base_image_ref": spec.image_ref,
+                "legacy_variant": "apache-public",
+                "timeout_phase": "base_image",
+            },
+        )
+    _wait_for_existing_build(legacy.pk, legacy_ref, timeout=timeout)
+    return True
+
 def _local_image_matches_fingerprint(image_ref: str, fingerprint: str) -> bool:
     if not _docker_image_exists(image_ref):
         return False
@@ -985,6 +1045,14 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                 # Start this deployment's independent base-image budget only
                 # after a compatible cache hit has been ruled out.
                 mark_base_image_phase_started(deployment_id)
+
+            if _wait_for_legacy_php_tag_collision(
+                spec,
+                host=host,
+                deployment_id=deployment_id,
+                logger_sink=logger_sink,
+            ):
+                continue
 
             effective_auto_build = bool(row.auto_build and policy["auto_build"])
             if not effective_auto_build and not local_exists:
