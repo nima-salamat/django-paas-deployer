@@ -308,8 +308,9 @@ class BaseRuntimeImageAdmin(admin.ModelAdmin):
     list_filter = ("logical_runtime", "variant", "status", "enabled", "auto_build", "docker_host")
     search_fields = ("logical_runtime", "runtime_version", "image_ref", "source_image", "docker_host", "last_error")
     ordering = ("logical_runtime", "runtime_version", "variant")
-    actions = ("rebuild_selected", "enable_selected", "disable_selected", "delete_docker_images")
+    actions = ("ensure_selected", "rebuild_selected", "enable_selected", "disable_selected", "delete_docker_images")
     readonly_fields = (
+        "logical_runtime", "runtime_version", "variant", "architecture", "image_repository", "image_tag",
         "image_ref", "image_id", "image_digest", "source_image", "docker_host", "status",
         "rebuild_requested", "rebuild_requested_at", "build_started_at", "build_completed_at",
         "build_count", "build_task_id", "build_owner_deployment_id", "last_error", "created_at", "updated_at",
@@ -333,21 +334,50 @@ class BaseRuntimeImageAdmin(admin.ModelAdmin):
         color = colors.get(obj.status, "#6b7280")
         return format_html('<span class="badge" style="background:{};">{}</span>', color, obj.get_status_display())
 
-    @admin.action(description="Rebuild selected base images")
-    def rebuild_selected(self, request, queryset):
-        from django.utils import timezone
-        from deployments.celery.tasks import build_base_runtime_image
-        count = 0
+    @admin.action(description="Build / ensure selected base images")
+    def ensure_selected(self, request, queryset):
+        from deploy.base_images import request_base_runtime_image_build
+        queued = cache_hits = coalesced = 0
         for obj in queryset:
-            obj.status = BaseRuntimeImage.Status.PENDING
-            obj.enabled = True
-            obj.rebuild_requested = True
-            obj.rebuild_requested_at = timezone.now()
-            obj.save(update_fields=["status", "enabled", "rebuild_requested", "rebuild_requested_at", "updated_at"])
-            build_base_runtime_image.apply_async(args=[str(obj.pk)])
-            count += 1
-        self.message_user(request, f"Queued rebuild for {count} base image(s).")
+            try:
+                result = request_base_runtime_image_build(obj.pk, force_rebuild=False)
+            except Exception as exc:
+                self.message_user(
+                    request,
+                    f"Could not queue {obj.image_ref}: {exc}",
+                    level=messages.ERROR,
+                )
+                continue
+            queued += int(bool(result.get("queued")))
+            cache_hits += int(bool(result.get("cache_hit")))
+            coalesced += int(bool(result.get("coalesced")))
+        self.message_user(
+            request,
+            f"Base-image ensure: {queued} queued, {coalesced} already building, {cache_hits} already ready.",
+        )
 
+    @admin.action(description="Renew / rebuild selected base images")
+    def rebuild_selected(self, request, queryset):
+        from deploy.base_images import request_base_runtime_image_build
+        queued = coalesced = 0
+        for obj in queryset:
+            try:
+                result = request_base_runtime_image_build(obj.pk, force_rebuild=True)
+            except Exception as exc:
+                self.message_user(
+                    request,
+                    f"Could not renew {obj.image_ref}: {exc}",
+                    level=messages.ERROR,
+                )
+                continue
+            if result.get("queued"):
+                queued += 1
+            elif result.get("coalesced"):
+                coalesced += 1
+        self.message_user(
+            request,
+            f"Base-image renew: {queued} queued, {coalesced} active build(s) coalesced.",
+        )
     @admin.action(description="Enable selected base images")
     def enable_selected(self, request, queryset):
         count = queryset.update(enabled=True, status=BaseRuntimeImage.Status.PENDING)
