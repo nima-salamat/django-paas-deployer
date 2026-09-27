@@ -1,10 +1,15 @@
 from types import SimpleNamespace
 
-from deployments.common.resource_policy import build_limits, runtime_limits, worker_count
+from deployments.common.resource_policy import build_limits, resolve_build_policy, runtime_limits, worker_count
 
 
 def test_static_build_policy_uses_operator_defaults(monkeypatch, settings):
-    monkeypatch.setattr("deployments.common.resource_policy._operator", lambda key, default: default)
+    import core.settings_service as svc
+    monkeypatch.setattr(svc, "build_resource_mode", lambda: "static")
+    monkeypatch.setattr(svc, "build_max_cpu", lambda: 1.0)
+    monkeypatch.setattr(svc, "build_max_ram_mb", lambda: 1024)
+    monkeypatch.setattr(svc, "build_pids_limit", lambda: 2048)
+    monkeypatch.setattr(svc, "build_shm_mb", lambda: 64)
     out = build_limits(SimpleNamespace(max_cpu=4, max_ram=4096))
     assert out["mode"] == "static"
     assert out["cpu"] == 1.0
@@ -12,11 +17,12 @@ def test_static_build_policy_uses_operator_defaults(monkeypatch, settings):
 
 
 def test_plan_build_policy_can_be_enabled_server_side(monkeypatch, settings):
-    def op(key, default):
-        if key == "build.resource_mode":
-            return "plan"
-        return default
-    monkeypatch.setattr("deployments.common.resource_policy._operator", op)
+    import core.settings_service as svc
+    monkeypatch.setattr(svc, "build_resource_mode", lambda: "plan")
+    monkeypatch.setattr(svc, "build_max_cpu", lambda: 8.0)
+    monkeypatch.setattr(svc, "build_max_ram_mb", lambda: 8192)
+    monkeypatch.setattr(svc, "build_pids_limit", lambda: 2048)
+    monkeypatch.setattr(svc, "build_shm_mb", lambda: 64)
     out = build_limits(SimpleNamespace(max_cpu=2.5, max_ram=2048))
     assert out["mode"] == "plan"
     assert out["cpu"] == 2.5
@@ -24,12 +30,12 @@ def test_plan_build_policy_can_be_enabled_server_side(monkeypatch, settings):
 
 
 def test_plan_build_policy_still_has_operator_ceiling(monkeypatch, settings):
-    def op(key, default):
-        if key == "build.resource_mode": return "plan"
-        if key == "build.max_cpu": return 2.0
-        if key == "build.max_ram_mb": return 1024
-        return default
-    monkeypatch.setattr("deployments.common.resource_policy._operator", op)
+    import core.settings_service as svc
+    monkeypatch.setattr(svc, "build_resource_mode", lambda: "plan")
+    monkeypatch.setattr(svc, "build_max_cpu", lambda: 2.0)
+    monkeypatch.setattr(svc, "build_max_ram_mb", lambda: 1024)
+    monkeypatch.setattr(svc, "build_pids_limit", lambda: 2048)
+    monkeypatch.setattr(svc, "build_shm_mb", lambda: 64)
     out = build_limits(SimpleNamespace(max_cpu=8, max_ram=8192))
     assert out["cpu"] == 2.0
     assert out["memory_mb"] == 1024
