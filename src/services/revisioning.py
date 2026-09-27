@@ -680,9 +680,13 @@ def mark_revision_failed(revision_id) -> None:
 @transaction.atomic
 def get_active_revision(service: Service, *, for_update: bool = False) -> ServiceRevision | None:
     """Return the runtime-authoritative revision for a Service."""
-    qs = ServiceRevision.objects.select_related("source_deploy")
+    qs = ServiceRevision.objects.all()
     if for_update:
+        # Do not select_related() nullable source_deploy while applying
+        # PostgreSQL FOR UPDATE; that produces a forbidden outer join.
         qs = qs.select_for_update()
+    else:
+        qs = qs.select_related("source_deploy")
     revision = qs.filter(service_id=service.pk, pk=getattr(service, "active_revision_id", None)).first()
     if revision is not None:
         return revision

@@ -60,3 +60,20 @@ def test_ticket_websocket_reads_user_flags_inside_sync_bridge():
 
     assert "is_staff, is_superuser = await self._user_flags(user)" in source
     assert "bool(user.is_staff), bool(user.is_superuser)" in source
+
+
+def test_locked_revision_queries_do_not_join_nullable_source_deploy():
+    revisioning = (ROOT / "src" / "services" / "revisioning.py").read_text(encoding="utf-8")
+    authority = (ROOT / "src" / "services" / "lifecycle" / "authority.py").read_text(encoding="utf-8")
+
+    expected = '''    qs = ServiceRevision.objects.all()
+    if for_update:
+        # Do not select_related() nullable source_deploy while applying
+        # PostgreSQL FOR UPDATE; that produces a forbidden outer join.
+        qs = qs.select_for_update()
+    else:
+        qs = qs.select_related("source_deploy")
+'''
+
+    assert expected in revisioning
+    assert expected in authority
