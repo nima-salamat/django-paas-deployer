@@ -590,18 +590,22 @@ def build_registered_base_image(
         owner_task_id = task_id or row.build_task_id or str(uuid.uuid4())
         owner_deployment_id = str(row.build_owner_deployment_id or "")
         requested_force_rebuild = bool(force_rebuild or row.rebuild_requested)
+        # A retry of the same Celery task shares one build lifecycle budget.
+        # Do not restart build_started_at on every retry.
+        build_started_at = row.build_started_at or timezone.now()
         row.status = BaseRuntimeImage.Status.BUILDING
         row.build_task_id = owner_task_id
         row.build_owner_deployment_id = owner_deployment_id
         row.definition_fingerprint = fingerprint
         row.rebuild_requested = False
-        row.build_started_at = timezone.now()
+        row.rebuild_requested_at = None
+        row.build_started_at = build_started_at
         row.build_completed_at = None
         row.last_error = ""
         row.last_error_details = {}
         row.save(update_fields=[
             "status", "build_task_id", "build_owner_deployment_id",
-            "definition_fingerprint", "rebuild_requested",
+            "definition_fingerprint", "rebuild_requested", "rebuild_requested_at",
             "build_started_at", "build_completed_at",
             "last_error", "last_error_details", "updated_at",
         ])
@@ -635,6 +639,7 @@ def build_registered_base_image(
                 "Base-image build ownership changed before READY state could be committed."
             )
         requested_by_deployment = str(row.build_owner_deployment_id or "")
+        rebuild_after_success = bool(row.rebuild_requested)
         row.status = BaseRuntimeImage.Status.READY
         row.image_id = getattr(img, "id", "") or ""
         attrs = getattr(img, "attrs", {}) or {}
@@ -651,8 +656,23 @@ def build_registered_base_image(
             "status", "image_id", "image_digest", "definition_fingerprint",
             "build_completed_at", "build_count", "build_task_id",
             "build_owner_deployment_id", "last_error", "last_error_details",
+            "rebuild_requested", "rebuild_requested_at",
             "updated_at",
         ])
+        if rebuild_after_success:
+            # An operator requested Renew while this build was already active.
+            # Queue exactly one follow-up build through the same ownership path.
+            try:
+                request_base_runtime_image_build(
+                    row.pk,
+                    force_rebuild=True,
+                    deployment_id=None,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to queue requested post-build renewal for base image %s.",
+                    row.image_ref,
+                )
         if requested_by_deployment:
             try:
                 settings = base_image_settings()
