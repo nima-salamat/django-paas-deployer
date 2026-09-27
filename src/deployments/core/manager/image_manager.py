@@ -385,6 +385,7 @@ class Image(Client):
         response,
         on_build_output: Optional[Callable] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
+        lease_check: Optional[Callable[[], None]] = None,
     ) -> Optional[str]:
         """Consume build stream and actively close it when cancellation is requested."""
         import threading
@@ -426,6 +427,8 @@ class Image(Client):
 
         try:
             for chunk in self._iter_build_stream(response):
+                if lease_check is not None:
+                    lease_check()
                 if cancelled.is_set():
                     from deployments.common.exceptions import DeploymentCancelled
                     raise DeploymentCancelled(
@@ -545,7 +548,7 @@ class Image(Client):
                 buildargs[key] = str(value)
 
         try:
-            with BuildSlot(deployment_id=self.deployment_id or target_ref, logger=logger):
+            with BuildSlot(deployment_id=self.deployment_id or target_ref, logger=logger) as build_slot:
                 with tempfile.TemporaryDirectory() as tmpdir:
                     tar_stream = (
                         io.BytesIO(self.tarfile)
@@ -604,6 +607,7 @@ class Image(Client):
                     last_err = None
                     for i, kwargs in enumerate(attempt_kwargs):
                         try:
+                            build_slot.assert_owned()
                             logger.info("api.build attempt %d kwargs=%s", i + 1, sorted(k for k in kwargs if k != "path"))
                             response = self.client.api.build(**kwargs)
                             docker_api_reached = True
@@ -641,7 +645,10 @@ class Image(Client):
                         ) from last_err
 
                     image_id = self._handle_build_stream_collect_id(
-                        response, on_build_output=on_build_output, cancel_check=cancel_check
+                        response,
+                        on_build_output=on_build_output,
+                        cancel_check=cancel_check,
+                        lease_check=build_slot.assert_owned,
                     )
                     if not image_id:
                         raise ImageBuildError(
