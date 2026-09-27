@@ -264,6 +264,19 @@ class StaleDeploymentWorkerError(DeploymentError):
     recoverable = False
 
 
+class BaseImageBuildError(DeploymentError):
+    """A required operator-owned base runtime image could not be prepared."""
+
+    default_stage = "base_image"
+    default_code = "BASE_IMAGE_BUILD_ERROR"
+    default_category = "base_image_error"
+    default_user_message = (
+        "The required base runtime image could not be prepared. "
+        "Review the base-image diagnostics for the underlying cause."
+    )
+    recoverable = False
+
+
 class OrchestratorDeploymentError(DeploymentError):
     """The orchestrator returned a failed DeploymentResult."""
     default_stage = "orchestrator"
