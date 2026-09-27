@@ -31,12 +31,14 @@ class Volume(Client):
         size_mb: int = None,
         driver: str = "local",
         driver_opts: dict = None,
+        require_managed: bool = False,
     ):
         super().__init__()
         self.name = name
         self.driver = (driver or "local").strip() or "local"
         self.size_mb = size_mb
         self.driver_opts = dict(driver_opts or {})
+        self.require_managed = bool(require_managed)
 
     def _options(self) -> dict:
         """
@@ -180,7 +182,15 @@ class Volume(Client):
 
     def ensure(self):
         try:
-            return self.client.volumes.get(self.name)
+            volume = self.client.volumes.get(self.name)
+            if self.require_managed:
+                labels = dict(getattr(volume, "attrs", {}).get("Labels") or {})
+                if labels.get("managed-by") != "django-paas-deployer":
+                    raise VolumeError(
+                        f"Docker volume '{self.name}' exists but is not owned by PassDeployer.",
+                        details={"volume": self.name, "labels": labels},
+                    )
+            return volume
         except docker.errors.NotFound:
             return self.create()
         except docker.errors.DockerException as exc:
