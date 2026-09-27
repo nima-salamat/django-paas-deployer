@@ -189,7 +189,7 @@ class VolumeMountManager:
                     details=details,
                 )
             elif usage.usage_state == USAGE_CRITICAL:
-                self.logger.warning(
+                self.logger.error(
                     "volume_creation",
                     (
                         f"Volume '{name}' is at or above its declared capacity "
