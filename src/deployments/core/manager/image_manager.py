@@ -616,6 +616,8 @@ class Image(Client):
                     for i, kwargs in enumerate(attempt_kwargs):
                         try:
                             build_slot.assert_owned()
+                            if ownership_check is not None:
+                                ownership_check()
                             logger.info("api.build attempt %d kwargs=%s", i + 1, sorted(k for k in kwargs if k != "path"))
                             response = self.client.api.build(**kwargs)
                             docker_api_reached = True
