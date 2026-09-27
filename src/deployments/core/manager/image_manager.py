@@ -77,8 +77,15 @@ def _build_container_limits(
     represented as a relative cpu-shares weight because the build API does not
     accept NanoCpus/CpuQuota in ``container_limits``.
     """
-    from deployments.common.resource_policy import resolve_build_policy
-    policy = resolve_build_policy(policy)
+    if not policy:
+        raise ValueError("A complete resolved build resource policy is required.")
+    required = ("cpu", "memory_mb", "pids_limit", "shm_size_mb", "mode")
+    missing = [key for key in required if key not in policy]
+    if missing:
+        raise ValueError(
+            "Build resource policy is incomplete: missing "
+            + ", ".join(missing)
+        )
     cpu = max(0.1, float(policy["cpu"]))
     ram = max(64, int(policy["memory_mb"]))
     # Docker's documented build-time container_limits supports cpushares.
