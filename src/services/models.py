@@ -681,6 +681,10 @@ class Volume(BaseModel):
         blank=True,
     )
     size_mb = models.PositiveIntegerField()
+    released_at = models.DateTimeField(
+        _("Released At"), null=True, blank=True, db_index=True,
+        help_text=_("When logical Service ownership was released while the Docker volume remained physically retained."),
+    )
 
     class Meta:
         verbose_name = _("Volume")
@@ -820,6 +824,7 @@ class Volume(BaseModel):
             mode = self.default_mode or "rw"
 
         self.service = service
+        self.released_at = None
         self.service_attachments = {
             str(service.id): {
                 "bind": bind,
@@ -857,8 +862,9 @@ class Volume(BaseModel):
         if service is not None and self.service_id and str(self.service_id) != str(service.id):
             return
         self.service = None
+        self.released_at = timezone.now()
         self.service_attachments = {}
-        self.save(update_fields=["service", "service_attachments"])
+        self.save(update_fields=["service", "released_at", "service_attachments"])
 
     def get_attached_services(self):
         """Return list of Service objects (0 or 1)."""
