@@ -475,6 +475,20 @@ class SwarmRuntime:
             if str(getattr(volume, "mount_type", "volume") or "volume").lower() == "volume"
             and str(getattr(volume, "driver", "local") or "local").lower() == "local"
         ]
+        if local_managed and len(self.client.nodes.list()) > 1 and not node_id:
+            raise DeploymentError(
+                "Cannot determine the Docker node that owns the local volume.",
+                stage="swarm_validation",
+                code="SWARM_LOCAL_VOLUME_NODE_UNKNOWN",
+                user_message=(
+                    "PassDeployer cannot safely place this service because the "
+                    "node-local volume owner could not be determined."
+                ),
+                details={
+                    "volume_scope": "local",
+                    "requested_constraints": explicit_ids,
+                },
+            )
         if local_managed and explicit_ids:
             expected = f"node.id == {node_id}" if node_id else ""
             if expected and any(item != expected for item in explicit_ids):
