@@ -63,18 +63,15 @@ def cleanup_user_resources(sender, instance: User, **kwargs):
     )
 
 
-    # Exclusive volumes: every volume for this user is removed
-    volumes = list(Volume.objects.filter(user=instance))
-    for volume in volumes:
-        try:
-            docker_vol = DockerVolume(volume.get_docker_volume_name())
-            docker_vol.remove()
-            logger.info("Removed Docker volume '%s'", volume.name)
-        except Exception:
-            logger.exception(
-                "Failed to remove Docker volume '%s'", volume.name
-            )
-
+    # Volume pre_delete performs the authoritative Docker cleanup for every
+    # cascaded Volume row. Do not remove Docker volumes here: swallowing a
+    # removal failure before the DB row is cascaded would create invisible
+    # physical storage that no longer has a Django owner.
+    logger.info(
+        "User %s volume cleanup is delegated to Volume.pre_delete so DB rows "
+        "are retained if Docker storage cannot be removed.",
+        user_id,
+    )
     networks = list(PrivateNetwork.objects.filter(user=instance))
     for net in networks:
         try:
