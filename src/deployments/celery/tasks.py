@@ -203,31 +203,76 @@ def restart_service(self, service_id) -> None:
         logger.exception("Restart exhausted retries for service=%s", service_id)
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=10)
-def build_base_runtime_image(self, base_image_id, force_rebuild=False) -> None:
+def _mark_base_image_retry_pending(base_image_id, task_id: str, exc: Exception) -> None:
+    BaseRuntimeImage.objects.filter(pk=base_image_id).update(
+        status=BaseRuntimeImage.Status.BUILDING,
+        build_task_id=str(task_id),
+        build_completed_at=None,
+        last_error=str(exc),
+        last_error_details={
+            "stage": "base_image",
+            "exception_type": type(exc).__name__,
+            "technical_message": str(exc) or type(exc).__name__,
+            "retry_pending": True,
+            "base_image_ref": (
+                BaseRuntimeImage.objects.filter(pk=base_image_id)
+                .values_list("image_ref", flat=True)
+                .first()
+                or ""
+            ),
+            "resource_policy_source": "server_owned",
+        },
+        updated_at=timezone.now(),
+    )
+
+
+def _mark_base_image_terminal_failure(base_image_id, task_id: str, exc: Exception) -> None:
+    current = (
+        BaseRuntimeImage.objects.filter(pk=base_image_id)
+        .values("image_ref", "last_error_details")
+        .first()
+        or {}
+    )
+    details = dict(current.get("last_error_details") or {})
+    details.update({
+        "stage": "base_image",
+        "exception_type": type(exc).__name__,
+        "technical_message": str(exc) or type(exc).__name__,
+        "retry_pending": False,
+        "base_image_ref": current.get("image_ref") or "",
+        "resource_policy_source": "server_owned",
+    })
+    BaseRuntimeImage.objects.filter(pk=base_image_id).update(
+        status=BaseRuntimeImage.Status.FAILED,
+        build_task_id="",
+        build_owner_deployment_id="",
+        last_error=str(exc),
+        last_error_details=details,
+        build_completed_at=timezone.now(),
+        updated_at=timezone.now(),
+    )
+
+
+def build_base_runtime_image(self, base_image_id, force_rebuild=False, build_policy=None) -> None:
     """Build/rebuild one registered operator base runtime image.
 
-    This runs independently from an application's deployment task so a user
-    force-cancelling that deployment cannot terminate a shared base build.
+    Resource limits use the same server-owned policy contract as application
+    image builds. force_rebuild is a build option, never a resource-policy field.
     """
     from deploy.base_images import build_registered_base_image
+    from deployments.common.resource_policy import resolve_build_policy
+
+    effective_policy = resolve_build_policy(build_policy)
     try:
         build_registered_base_image(
             base_image_id,
             task_id=str(self.request.id),
             force_rebuild=bool(force_rebuild),
+            build_policy=effective_policy,
         )
     except Exception as exc:
-        # The helper marks the current attempt FAILED before Celery gets
-        # control back. That state is too strong while retries are pending:
-        # deployment waiters would abort even though the builder will retry.
         if self.request.retries < self.max_retries:
-            BaseRuntimeImage.objects.filter(pk=base_image_id).update(
-                status=BaseRuntimeImage.Status.BUILDING,
-                build_task_id=str(self.request.id),
-                build_completed_at=None,
-                last_error=str(exc),
-                updated_at=timezone.now(),
-            )
+            _mark_base_image_retry_pending(base_image_id, str(self.request.id), exc)
             logger.warning(
                 "Base image build failed; retrying id=%s attempt=%d/%d: %s",
                 base_image_id,
@@ -236,15 +281,14 @@ def build_base_runtime_image(self, base_image_id, force_rebuild=False) -> None:
                 exc,
             )
             raise self.retry(exc=exc)
-        # On the final attempt the helper has already persisted the terminal
-        # FAILED state and last_error for deployment waiters.
+
+        _mark_base_image_terminal_failure(base_image_id, str(self.request.id), exc)
         logger.exception(
             "Base image build exhausted retries id=%s: %s",
             base_image_id,
             exc,
         )
-
-
+        raise
 
 # ===========================================================================
 # DB deploy helpers
