@@ -28,9 +28,13 @@ def get_authoritative_revision(service: "Service", *, for_update: bool = False) 
     """
     from services.models import ServiceRevision
 
-    qs = ServiceRevision.objects.select_related("source_deploy")
+    qs = ServiceRevision.objects.all()
     if for_update:
+        # Do not select_related() nullable source_deploy while applying
+        # PostgreSQL FOR UPDATE; that produces a forbidden outer join.
         qs = qs.select_for_update()
+    else:
+        qs = qs.select_related("source_deploy")
     revision_id = getattr(service, "active_revision_id", None)
     if not revision_id:
         return None
