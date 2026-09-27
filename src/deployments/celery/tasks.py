@@ -412,184 +412,90 @@ _DB_DEFAULT_DATA_PATHS: dict[str, tuple[str, int]] = {
 
 
 def _ensure_default_db_volume(platform: str, service: Service) -> dict | None:
-    """
-    Guarantee a DB service has a named Volume in the Django registry for
-    its platform-specific data directory.  Returns a volume-bind dict
-    ``{"source": name, "target": bind, "mode": "rw"}`` suitable for
-    ``cfg["volumes"]``, or ``None`` if creation failed (non-fatal — the
-    deploy will still proceed with an anonymous Docker volume).
+    """Create/reuse registry-backed persistent DB storage or fail deployment.
 
-    Idempotent: if the service already owns a Volume, returns that one.
-    Respects the service plan's max_storage quota — if the default size
-    would exceed the remaining quota, shrinks to fit; if even 128 MB
-    won't fit, skips creation and logs a warning.
+    Database data is persistent by contract. A quota or provisioning failure
+    must never fall back to an anonymous Docker volume.
     """
     p = str(platform or "").lower().strip()
     if p not in _DB_DEFAULT_DATA_PATHS:
         return None
     default_bind, default_size_mb = _DB_DEFAULT_DATA_PATHS[p]
 
-    # ------------------------------------------------------------------
-    # 1. If the service already owns a Volume, reuse it.
-    # ------------------------------------------------------------------
-    try:
-        from services.models import Volume  # type: ignore
-    except Exception:
-        logger.debug(
-            "services.models.Volume unavailable; cannot auto-create volume "
-            "for service %s", service.pk, exc_info=True,
-        )
-        return None
+    from services.models import Volume
 
-    existing = None
-    rel = getattr(service, "volumes", None)
-    if rel is not None and hasattr(rel, "all"):
-        try:
-            existing = rel.all().first()
-        except Exception:
-            logger.exception(
-                "service.volumes.all() lookup failed for service %s", service.pk
-            )
-    if existing is None:
-        try:
-            from django.db.models import Q
-            existing = (
-                Volume.objects
-                .filter(Q(service_id=service.pk))
-                .order_by("created_at")
-                .first()
-            )
-        except Exception:
-            logger.debug(
-                "Volume registry query failed for service %s; skipping",
-                service.pk, exc_info=True,
-            )
-
+    existing = Volume.objects.filter(service_id=service.pk).order_by("created_at").first()
     if existing is not None:
-        # Reuse — prefer the attachment bind, fall back to default_bind.
-        atts = getattr(existing, "service_attachments", None) or {}
-        att = atts.get(str(service.pk), {}) if isinstance(atts, dict) else {}
-        bind = att.get("bind") or getattr(existing, "default_bind", "") or default_bind
         return {
-            "source": (
-                existing.get_docker_volume_name()
-                if hasattr(existing, "get_docker_volume_name")
-                else existing.name
+            "source": existing.get_docker_volume_name(),
+            "target": (
+                (existing.service_attachments or {}).get(str(service.pk), {}).get("bind")
+                or existing.default_bind
+                or default_bind
             ),
-            "target": bind,
-            "mode": att.get("mode") or getattr(existing, "default_mode", "") or "rw",
+            "mode": (existing.service_attachments or {}).get(str(service.pk), {}).get("mode")
+            or existing.default_mode or "rw",
         }
 
-    # ------------------------------------------------------------------
-    # 2. No existing Volume — create one.  First check the plan quota.
-    # ------------------------------------------------------------------
+    ok, msg = service.can_allocate_storage(default_size_mb)
     size_mb = default_size_mb
-    plan = getattr(service, "plan", None)
-    if plan is not None and hasattr(plan, "can_allocate_storage"):
-        try:
-            # Try the requested size first, then shrink to fit.
-            ok, _ = plan.can_allocate_storage(size_mb)
-            if not ok:
-                # Shrink to the remaining quota, but not below 128 MB.
-                remaining = getattr(plan, "get_remaining_storage_mb", lambda: 0)()
-                try:
-                    remaining = int(remaining)
-                except (TypeError, ValueError):
-                    remaining = 0
-                if remaining >= 128:
-                    size_mb = remaining
-                    logger.info(
-                        "Plan quota for service %s is tight; auto-volume "
-                        "shrunk to %d MB (default was %d MB).",
-                        service.pk, size_mb, default_size_mb,
-                    )
-                else:
-                    logger.warning(
-                        "Service %s plan has only %d MB remaining; cannot "
-                        "auto-create a default DB volume. The deploy will "
-                        "use an anonymous Docker volume and data will NOT "
-                        "persist across container removals.",
-                        service.pk, remaining,
-                    )
-                    return None
-        except Exception:
-            logger.exception(
-                "Plan quota check failed for service %s; attempting "
-                "auto-volume creation anyway with default size.",
-                service.pk,
+    if not ok:
+        remaining = max(0, int(service.get_remaining_storage_mb()))
+        if remaining >= 128:
+            size_mb = remaining
+            logger.info(
+                "DB default volume for service %s reduced from %d MB to %d MB to fit logical quota.",
+                service.pk, default_size_mb, size_mb,
             )
-
-    # ------------------------------------------------------------------
-    # 3. Derive a unique Docker volume name (≤32 chars per model).
-    # ------------------------------------------------------------------
-    base = getattr(service, "get_docker_service_name", lambda: "")() or f"svc-{service.pk}"
-    # Strip non-alphanumerics (Docker volume names allow [A-Za-z0-9_.-]
-    # but the Django Volume.name field is CharField(32, unique=True)).
-    base_clean = "".join(c if c.isalnum() else "-" for c in str(base)).strip("-")
-    if not base_clean:
-        base_clean = f"svc-{service.pk}"
-    suffix = "-data"
-    max_base_len = 32 - len(suffix)
-    vol_name = (base_clean[:max_base_len] + suffix)[:32]
-
-    # Ensure uniqueness without truncating past 32 chars.
-    try:
-        existing_by_name = Volume.objects.filter(name=vol_name).first()
-    except Exception:
-        existing_by_name = None
-    if existing_by_name is not None:
-        # Append a short pk suffix to disambiguate.
-        suffix2 = f"-{str(service.pk)[-6:]}"
-        max_base_len2 = 32 - len(suffix2)
-        vol_name = (base_clean[:max_base_len2] + suffix2)[:32]
-
-    # ------------------------------------------------------------------
-    # 4. Create the Volume record in the Django registry (PostgreSQL).
-    # ------------------------------------------------------------------
-    user = getattr(service, "user", None)
-    if user is None:
-        logger.warning(
-            "Service %s has no owner user; cannot auto-create Volume.", service.pk
-        )
-        return None
-
-    try:
-        with transaction.atomic():
-            vol = Volume.objects.create(
-                name=vol_name,
-                user=user,
-                service=service,
-                service_attachments={
-                    str(service.pk): {"bind": default_bind, "mode": "rw"}
+        else:
+            from deployments.common.exceptions import DeploymentValidationError
+            raise DeploymentValidationError(
+                f"Persistent database storage requires {default_size_mb} MB but service {service.pk} has only {remaining} MB remaining.",
+                stage="volume_creation",
+                details={
+                    "service_id": str(service.pk),
+                    "requested_mb": default_size_mb,
+                    "remaining_mb": remaining,
+                    "quota_error": msg,
+                    "persistence_required": True,
                 },
-                default_bind=default_bind,
-                default_mode="rw",
-                size_mb=size_mb,
             )
-        logger.info(
-            "Auto-created Volume '%s' (%d MB, bind=%s) for service %s "
-            "platform=%s — DB data will now persist across rebuilds.",
-            vol_name, size_mb, default_bind, service.pk, p,
+
+    base = getattr(service, "get_docker_service_name", lambda: "")() or f"svc-{service.pk}"
+    base_clean = "".join(c if c.isalnum() else "-" for c in str(base)).strip("-") or f"svc-{service.pk}"
+    name = (base_clean[:24] + "-data")[:32]
+    try:
+        volume = Volume.objects.create(
+            name=name,
+            user=service.user,
+            service=service,
+            service_attachments={str(service.pk): {"bind": default_bind, "mode": "rw"}},
+            default_bind=default_bind,
+            default_mode="rw",
+            size_mb=size_mb,
         )
     except Exception as exc:
-        logger.warning(
-            "Could not auto-create Volume '%s' for service %s: %s. "
-            "Deploy will proceed with an anonymous Docker volume; data "
-            "will NOT persist across container removals.",
-            vol_name, service.pk, exc,
-        )
-        return None
+        raise DeploymentValidationError(
+            "Persistent database storage could not be registered for this service.",
+            stage="volume_creation",
+            details={
+                "service_id": str(service.pk),
+                "requested_mb": size_mb,
+                "exception_type": type(exc).__name__,
+                "technical_message": str(exc),
+                "persistence_required": True,
+            },
+        ) from exc
 
+    logger.info(
+        "Auto-created managed DB volume '%s' (%d MB) for service %s platform=%s.",
+        volume.name, size_mb, service.pk, p,
+    )
     return {
-        "source": (
-            vol.get_docker_volume_name()
-            if hasattr(vol, "get_docker_volume_name")
-            else vol.name
-        ),
+        "source": volume.get_docker_volume_name(),
         "target": default_bind,
         "mode": "rw",
     }
-
 
 def _build_db_cfg(deploy: Deploy, service: Service) -> dict[str, Any]:
     """Build DB runtime config from the immutable ServiceRevision."""
