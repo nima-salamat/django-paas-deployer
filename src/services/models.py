@@ -685,50 +685,54 @@ class Volume(BaseModel):
 
     def clean(self):
         super().clean()
-        # Enforce exclusive ownership: attachments may only contain the owning service
         attachments = self.service_attachments or {}
         if self.service_id:
             sid = str(self.service_id)
-            # Drop any foreign service keys; allow empty att = soft-detached
             if attachments:
                 if sid in attachments:
                     self.service_attachments = {sid: attachments[sid]}
                 else:
                     self.service_attachments = {}
-            # Quota check when assigned to a service (mounted or soft-detached)
+            # The caller that persists a volume holds the service-row lock.
+            # Keeping the logical quota check here makes this the central
+            # invariant used by create/attach/resize paths.
             ok, msg = self.service.can_allocate_storage(
                 self.size_mb, exclude_volume_id=self.pk
             )
             if not ok:
                 raise ValidationError({"size_mb": msg})
         else:
-            # Unused volume: no attachments allowed
             if attachments:
                 self.service_attachments = {}
 
     def save(self, *args, **kwargs):
+        # Logical quota is a service-wide allocation invariant. Serialize all
+        # writes that can increase a service's allocation behind the Service row
+        # lock so read-then-write races cannot exceed plan.max_storage.
+        if self.service_id:
+            from django.db import transaction
+            with transaction.atomic():
+                from .models import Service
+                locked_service = Service.objects.select_for_update().get(pk=self.service_id)
+                self.service = locked_service
+                self.full_clean()
+                self._normalize_service_attachments()
+                return super().save(*args, **kwargs)
+
         self.full_clean()
-        # Keep attachments consistent with exclusive ownership.
-        #
-        # IMPORTANT: empty service_attachments + service_id set means
-        # soft-detached (owned, counts toward quota, NOT mounted).
-        # Do NOT auto-recreate attachment metadata on every save — that
-        # made detach appear to succeed then immediately re-attach.
+        self._normalize_service_attachments()
+        return super().save(*args, **kwargs)
+
+    def _normalize_service_attachments(self):
         if self.service_id:
             sid = str(self.service_id)
             att = dict(self.service_attachments or {})
-            if att:
-                # Keep only the owning service key; drop foreign keys
-                if sid in att:
-                    self.service_attachments = {sid: att[sid]}
-                else:
-                    # Stale keys only → treat as soft-detached
-                    self.service_attachments = {}
+            if att and sid in att:
+                self.service_attachments = {sid: att[sid]}
             else:
                 self.service_attachments = {}
         else:
             self.service_attachments = {}
-        super().save(*args, **kwargs)
 
     def attach_to_service(self, service: Service, bind: str = None, mode: str = None):
         """
