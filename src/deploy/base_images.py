@@ -786,6 +786,7 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
             if deployment_id:
                 acquire_base_image_leases([spec.image_ref], deployment_id)
             task_id = f"base-image-{row.pk}-{uuid.uuid4()}"
+            task_dispatched = False
             BaseRuntimeImage.objects.filter(pk=row.pk, status=BaseRuntimeImage.Status.BUILDING).update(
                 build_task_id=task_id,
                 build_owner_deployment_id=str(deployment_id or "")[:255],
@@ -797,6 +798,7 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                 kwargs={"build_policy": effective_build_policy},
                 task_id=task_id,
             )
+            task_dispatched = True
 
             wait_timeout = _base_image_wait_timeout_seconds(deployment_id)
             if not _wait_for_existing_build(row.pk, spec.image_ref, timeout=wait_timeout):
@@ -827,7 +829,7 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
             # A task-dispatch failure is the only failure this synchronous
             # owner path is responsible for making terminal; a running task
             # owns its own retry/final-failure state.
-            if current and current.get("build_task_id"):
+            if task_dispatched:
                 raise
             details = {
                 "stage": "base_image_dispatch",
