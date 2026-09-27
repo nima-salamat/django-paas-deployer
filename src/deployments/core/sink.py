@@ -216,7 +216,7 @@ class DBAndChannelEventSink:
             if terminal_transition:
                 from deployments.core.state.manager import StateManager
                 StateManager.transition_deploy(
-                    int(self.deployment_id), terminal_transition[0],
+                    self.deployment_id, terminal_transition[0],
                     update_fields=terminal_transition[1],
                 )
                 update_fields = {k: v for k, v in update_fields.items() if k not in {"status", "completed_at"}}
