@@ -49,23 +49,11 @@ def test_local_volume_capability_is_not_hard_enforced():
     assert capabilities.supports_resize is False
 
 
+@override_settings(DATABASES={
+    "default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"},
+})
 class StorageQuotaDatabaseTests(TestCase):
     databases = {"default"}
-
-    @classmethod
-    def setUpClass(cls):
-        cls.override = override_settings(DATABASES={
-            "default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"},
-        })
-        cls.override.enable()
-        super().setUpClass()
-
-    @classmethod
-    def tearDownClass(cls):
-        try:
-            super().tearDownClass()
-        finally:
-            cls.override.disable()
 
     def setUp(self):
         self.user = User.objects.create_user(username=f"quota-{self._testMethodName}", password="test-password")
