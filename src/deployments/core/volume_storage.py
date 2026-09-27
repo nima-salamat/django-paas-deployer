@@ -62,12 +62,13 @@ def storage_capabilities(driver: str, scope: str | None = None) -> StorageCapabi
     normalized_scope = str(scope or "").strip().lower()
     if not normalized_scope:
         normalized_scope = "local" if normalized == "local" else "unknown"
+    known_local = normalized == "local"
     return StorageCapabilities(
-        supports_usage_reporting=True,
+        supports_usage_reporting=known_local,
         supports_hard_capacity=False,
         supports_resize=False,
         scope="local" if normalized_scope == "local" else normalized_scope,
-        capacity_mode=CAPACITY_LOGICAL_ONLY if normalized == "local" else CAPACITY_UNKNOWN,
+        capacity_mode=CAPACITY_LOGICAL_ONLY if known_local else CAPACITY_UNKNOWN,
     )
 
 def _records(raw: Any) -> list[Mapping[str, Any]]:

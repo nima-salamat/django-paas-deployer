@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from django.core.cache import cache
 from django.db import models
+from django.core.validators import MinValueValidator, MaxValueValidator
 from django.utils.translation import gettext_lazy as _
 
 
@@ -218,6 +219,7 @@ class CoreSettings(BaseGenericSetting):
     )
     volume_usage_warning_percent = models.FloatField(
         default=90.0,
+        validators=[MinValueValidator(1.0), MaxValueValidator(99.0)],
         verbose_name=_("Volume usage warning threshold (%)"),
         help_text=_("Warn users when actual Docker volume usage reaches this percentage of declared logical capacity."),
     )

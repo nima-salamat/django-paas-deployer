@@ -431,30 +431,36 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
             if not bind:
                 continue
             size_mb = _render_volume_size(volume_spec.get("size_mb"), config=resolved_config, secrets={})
-            ok, msg = service.can_allocate_storage(size_mb)
-            if not ok:
-                raise CatalogValidationError(
-                    f"Persistent volume {bind!r} for service {key!r} exceeds the service plan storage quota: {msg}"
-                )
             vol_name = f"cat-{service.id.hex[:8]}-{safe_slug(str(volume_spec.get('source') or bind))}"[:32]
-            volume, _ = Volume.objects.get_or_create(
+            mode = str(volume_spec.get("mode") or "rw")
+            volume, created = Volume.objects.get_or_create(
                 name=vol_name,
                 defaults={
                     "user": user,
                     "service": service,
-                    "service_attachments": {
-                        str(service.id): {
-                            "bind": bind,
-                            "mode": str(volume_spec.get("mode") or "rw"),
-                        }
-                    },
+                    "service_attachments": {str(service.id): {"bind": bind, "mode": mode}},
                     "default_bind": bind,
-                    "default_mode": str(volume_spec.get("mode") or "rw"),
+                    "default_mode": mode,
                     "size_mb": size_mb,
                 },
             )
-            if volume.service_id is None:
-                volume.attach_to_service(service, bind=bind, mode=str(volume_spec.get("mode") or "rw"))
+            if not created:
+                # Catalog volume names are deterministic per installed service.
+                # Reusing a row owned by another service/user would bypass the
+                # exclusive ownership contract, while changing size would become
+                # a DB-only resize once the Docker volume is provisioned.
+                if str(volume.user_id) != str(user.id) or (
+                    volume.service_id is not None and str(volume.service_id) != str(service.id)
+                ):
+                    raise CatalogValidationError(
+                        f"Persistent volume {bind!r} is already owned by another service and cannot be reused."
+                    )
+                if int(volume.size_mb) != int(size_mb):
+                    raise CatalogValidationError(
+                        f"Persistent volume {bind!r} already has a declared size of {volume.size_mb} MB; catalog resize to {size_mb} MB is not supported."
+                    )
+                if volume.service_id is None:
+                    volume.attach_to_service(service, bind=bind, mode=mode)
 
         deploy = Deploy.objects.create(
             name=allocate_deploy_name(service),

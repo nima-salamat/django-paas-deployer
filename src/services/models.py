@@ -762,22 +762,22 @@ class Volume(BaseModel):
                 self.service_attachments = {}
 
     def save(self, *args, **kwargs):
-        # Logical quota is a service-wide allocation invariant. Serialize all
-        # writes that can increase a service's allocation behind the Service row
-        # lock so read-then-write races cannot exceed plan.max_storage.
-        if self.service_id:
-            from django.db import transaction
-            with transaction.atomic():
+        # Serialize both dimensions of storage mutation:
+        #   1) the Volume row, so concurrent attach/reassign/resize writes
+        #      cannot validate against the same stale state;
+        #   2) the owning Service row, so logical quota allocation is a
+        #      read/modify/write critical section.
+        from django.db import transaction
+        with transaction.atomic():
+            if self.pk:
+                Volume.objects.select_for_update().filter(pk=self.pk).first()
+            if self.service_id:
                 from .models import Service
                 locked_service = Service.objects.select_for_update().get(pk=self.service_id)
                 self.service = locked_service
-                self.full_clean()
-                self._normalize_service_attachments()
-                return super().save(*args, **kwargs)
-
-        self.full_clean()
-        self._normalize_service_attachments()
-        return super().save(*args, **kwargs)
+            self.full_clean()
+            self._normalize_service_attachments()
+            return super().save(*args, **kwargs)
 
     def _normalize_service_attachments(self):
         if self.service_id:

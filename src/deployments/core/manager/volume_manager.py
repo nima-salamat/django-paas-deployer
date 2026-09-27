@@ -42,12 +42,12 @@ class Volume(Client):
 
     def _options(self) -> dict:
         """
-        Build driver_opts for volumes.create().
+        Build operator/catalog-controlled driver options for volumes.create().
 
-        Application quota (size_mb) must NOT be injected into the default
-        local driver — Docker rejects unknown options and the whole deploy
-        fails. Only forward size when the driver is known to support it, or
-        when the caller already put a size key into driver_opts explicitly.
+        ``size_mb`` is application-level logical capacity metadata. It is never
+        inferred into a driver option from a driver name. Explicit backend
+        options remain trusted configuration and are not treated as proof of
+        physical quota enforcement.
         """
         opts = dict(self.driver_opts)
 
