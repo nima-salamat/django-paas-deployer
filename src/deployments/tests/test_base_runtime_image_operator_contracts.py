@@ -107,7 +107,7 @@ def test_phase_remaining_contract_is_shared_by_base_wait_helper():
     source = (ROOT / "deploy" / "base_images.py").read_text(encoding="utf-8")
     assert "deployment_phase_remaining_seconds(deployment_id)" in source
     assert "base_image_build_timeout_minutes" in source
-    assert "started_at") ==" not in source
+    assert "values_list(\"started_at\"" not in source
 
 
 def test_base_wait_event_explains_shared_builder_and_records_owner():
