@@ -164,3 +164,58 @@ def test_db_deployer_named_volume_path_is_registry_backed():
     assert "_registered_volume_for_service" in source
     assert "DockerVolume(" in source
     assert "client.volumes.create(" not in source
+
+def test_volume_usage_handles_missing_volume_and_docker_api_failure():
+    from deployments.core.volume_storage import USAGE_UNKNOWN, inspect_volume_usage
+    missing = Mock()
+    missing.volumes.get.side_effect = RuntimeError("volume missing")
+    usage = inspect_volume_usage(missing, "vol-missing", 100)
+    assert usage.usage_state == USAGE_UNKNOWN
+    assert usage.usage_available is False
+
+    api_failure = Mock()
+    api_failure.volumes.get.return_value = _FakeVolume()
+    api_failure.df.side_effect = RuntimeError("docker api failed")
+    usage = inspect_volume_usage(api_failure, "vol-api", 100)
+    assert usage.usage_state == USAGE_UNKNOWN
+    assert usage.actual_used_bytes is None
+
+
+def test_volume_warning_at_100_uses_error_level_and_truthful_details():
+    from deployments.core.types import VolumeSpec
+    from deployments.core.volumes import VolumeMountManager
+    from deployments.core import volume_storage
+    logger = Mock()
+    usage = volume_storage.VolumeUsage(
+        volume="vol-full",
+        declared_capacity_bytes=100 * 1024 * 1024,
+        actual_used_bytes=101 * 1024 * 1024,
+        usage_percent=101.0,
+        usage_state=volume_storage.USAGE_CRITICAL,
+        threshold_percent=90.0,
+        driver="local",
+        scope="local",
+        enforced=False,
+        capacity_mode=volume_storage.CAPACITY_LOGICAL_ONLY,
+        usage_available=True,
+    )
+    with patch("deployments.core.volume_storage.inspect_volume_usage", return_value=usage), patch("deployments.core.volume_storage.usage_details", return_value={"volume": "vol-full", "declared_mb": 100, "used_mb": 101, "usage_percent": 101.0, "usage_state": "critical", "threshold_percent": 90.0, "driver": "local", "scope": "local", "enforced": False, "capacity_mode": "LOGICAL_ONLY", "usage_available": True, "error": None}), patch("deployments.core.manager.client_manager.Client") as client_cls:
+        client_cls.return_value.client = Mock()
+        VolumeMountManager(logger=logger).warn_about_usage([VolumeSpec(source="vol-full", target="/data", size_mb=100)])
+    logger.error.assert_called_once()
+    args, kwargs = logger.error.call_args
+    assert args[0] == "volume_creation"
+    assert "101.0%" in args[1]
+    assert kwargs["details"]["capacity_mode"] == "LOGICAL_ONLY"
+    assert kwargs["details"]["enforced"] is False
+
+
+def test_bind_mount_is_not_reported_as_managed_volume_usage():
+    from deployments.core.types import VolumeSpec
+    from deployments.core.volumes import VolumeMountManager
+    logger = Mock()
+    with patch("deployments.core.manager.client_manager.Client") as client_cls, patch("deployments.core.volume_storage.inspect_volume_usage") as inspect:
+        client_cls.return_value.client = Mock()
+        VolumeMountManager(logger=logger).warn_about_usage([VolumeSpec(source="/srv/tenant", target="/data", mount_type="bind", size_mb=100)])
+    inspect.assert_not_called()
+    logger.warning.assert_not_called()
