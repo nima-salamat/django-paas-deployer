@@ -2153,36 +2153,104 @@ def _php_app_root_from_document_root(document_root_rel: str) -> str:
 
 
 def _strip_base_owned_php_runtime(dockerfile: str) -> str:
-    """Remove expensive PHP/Apache runtime setup when a cached PHP base is used."""
-    patterns = [
-        r"\nRUN apt-get update && apt-get install -y --no-install-recommends\s+"
-        r"git unzip libzip-dev libpng-dev libjpeg62-turbo-dev libfreetype6-dev\s+"
-        r"libicu-dev libonig-dev libxml2-dev(?: curl ca-certificates)?\s+"
-        r"&& docker-php-ext-configure gd --with-freetype --with-jpeg\s+"
-        r"&& docker-php-ext-install -j\$\(nproc\)[\s\S]*?"
-        r"&& rm -rf /var/lib/apt/lists/\*\s*",
-        r"\nRUN apt-get update && apt-get install -y --no-install-recommends[\s\S]*?"
-        r"docker-php-ext-install[\s\S]*?&& rm -rf /var/lib/apt/lists/\*\s*",
-    ]
-    out = dockerfile
-    for pattern in patterns:
-        candidate = re.sub(pattern, "\n", out, count=1, flags=re.IGNORECASE)
-        if candidate != out:
-            out = candidate
-            break
-    # The canonical renderer may inject a multiline fallback runtime block
-    # (docker-php-ext-install + Apache modules) when the user template does not
-    # already contain docker-php-ext-install. Once a prebuilt PHP base image is
-    # selected, that entire generated block is owned by the base and must not
-    # be repeated in the application image.
-    out = re.sub(
-        r"\nRUN docker-php-ext-install[\s\S]*?(?=\n(?:RUN|COPY|ADD|ENV|ARG|WORKDIR|EXPOSE|ENTRYPOINT|CMD|USER|FROM)\b|\Z)",
-        "\n",
-        out,
-        count=1,
-        flags=re.IGNORECASE,
+    """Strip only operator-owned PHP runtime setup from the cached PHP stage."""
+    canonical_packages = (
+        {"git", "unzip", "libzip-dev"},
+        {
+            "git", "unzip", "libzip-dev", "libpng-dev",
+            "libjpeg62-turbo-dev", "libfreetype6-dev",
+            "libicu-dev", "libonig-dev", "libxml2-dev",
+        },
+        {
+            "git", "unzip", "libzip-dev", "libpng-dev",
+            "libjpeg62-turbo-dev", "libfreetype6-dev",
+            "libicu-dev", "libonig-dev", "libxml2-dev",
+            "curl", "ca-certificates",
+        },
     )
-    return out
+    allowed_extensions = {
+        "mysqli", "pdo", "pdo_mysql", "opcache", "zip", "gd",
+        "intl", "bcmath", "mbstring", "exif", "pcntl",
+    }
+
+    def is_cached_php_stage_from(block: str) -> bool:
+        return bool(re.match(
+            r"^FROM\s+paas-base/php-apache(?:[:@]\S+)?(?:\s+AS\s+\S+)?\s*$",
+            block.strip(),
+            flags=re.IGNORECASE,
+        ))
+
+    def is_legacy_runtime_run(block: str) -> bool:
+        normalized = " ".join(block.strip().split())
+        lowered = normalized.lower()
+        if "apt-get update" not in lowered:
+            return False
+        pkg_match = re.search(
+            r"apt-get install -y --no-install-recommends (.*?) && docker-php-ext-(?:configure|install)",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        if not pkg_match:
+            return False
+        package_tokens = [
+            token.strip("\\").strip()
+            for token in pkg_match.group(1).split()
+            if token.strip("\\").strip()
+        ]
+        packages = set(package_tokens)
+        if packages not in canonical_packages:
+            return False
+        required = (
+            "docker-php-ext-install",
+            "a2enmod rewrite headers",
+            "AllowOverride All",
+            "opcache.enable=1",
+            "/var/lib/apt/lists/*",
+        )
+        return all(token.lower() in lowered for token in required)
+
+    def is_legacy_extension_run(block: str) -> bool:
+        normalized = " ".join(block.strip().split())
+        lowered = normalized.lower()
+        if "apt-get" in lowered or "a2enmod" not in lowered:
+            return False
+        match = re.search(
+            r"docker-php-ext-install(?:\s+-j[^\s]+)?\s+(.+?)(?:\s+&&|$)",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return False
+        extensions = {
+            token.strip(",;").strip("\\")
+            for token in match.group(1).split()
+            if token.strip(",;").strip("\\")
+        }
+        extensions.discard("")
+        return bool(extensions) and extensions.issubset(allowed_extensions) and "a2enmod rewrite headers" in lowered
+
+    lines = dockerfile.splitlines(keepends=True)
+    blocks = []
+    current = []
+    for line in lines:
+        current.append(line)
+        if not line.rstrip("\n").rstrip().endswith("\\"):
+            blocks.append("".join(current))
+            current = []
+    if current:
+        blocks.append("".join(current))
+
+    output = []
+    cached_php_stage = False
+    for block in blocks:
+        stripped = block.lstrip()
+        if re.match(r"^FROM\s+", stripped, flags=re.IGNORECASE):
+            cached_php_stage = is_cached_php_stage_from(block)
+        if cached_php_stage and (is_legacy_runtime_run(block) or is_legacy_extension_run(block)):
+            output.append("\n")
+            continue
+        output.append(block)
+    return "".join(output)
 
 
 def _apply_resolved_base_images(dockerfile: str, config=None) -> str:
@@ -2197,17 +2265,30 @@ def _apply_resolved_base_images(dockerfile: str, config=None) -> str:
     if not bases:
         return dockerfile
 
+    platform = str(getattr(config, "platform", "") or "").strip().lower()
     replacements = []
     if bases.get("base_image"):
-        replacements.extend([
-            (r"FROM\s+(?:[^\s/]+/)*php:[^\s]+", f"FROM {bases['base_image']}"),
-            (r"FROM\s+(?:[^\s/]+/)*python:[^\s]+", f"FROM {bases['base_image']}"),
-            (r"FROM\s+(?:[^\s/]+/)*golang:[^\s]+", f"FROM {bases['base_image']}"),
-        ])
+        if platform in {"php", "laravel", "lumen", "symfony", "codeigniter"}:
+            replacements.append(
+                (r"FROM\s+(?:[^\s/]+/)*php:[^\s]+-apache(?=\s|$)", f"FROM {bases['base_image']}")
+            )
+        elif platform in {"python", "django", "flask", "fastapi"}:
+            replacements.append(
+                (r"FROM\s+(?:[^\s/]+/)*python:[^\s]+", f"FROM {bases['base_image']}")
+            )
+        elif platform == "go":
+            replacements.append(
+                (r"FROM\s+(?:[^\s/]+/)*golang:[^\s]+", f"FROM {bases['base_image']}")
+            )
+
     if bases.get("node_base_image"):
-        replacements.append((r"FROM\s+(?:[^\s/]+/)*node:[^\s]+", f"FROM {bases['node_base_image']}"))
+        replacements.append(
+            (r"FROM\s+(?:[^\s/]+/)*node:[^\s]+", f"FROM {bases['node_base_image']}")
+        )
     if bases.get("nginx_base_image"):
-        replacements.append((r"FROM\s+(?:[^\s/]+/)*nginx:[^\s]+", f"FROM {bases['nginx_base_image']}"))
+        replacements.append(
+            (r"FROM\s+(?:[^\s/]+/)*nginx:[^\s/]+", f"FROM {bases['nginx_base_image']}")
+        )
 
     out = dockerfile
     for pattern, replacement in replacements:

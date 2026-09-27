@@ -26,6 +26,7 @@ from deployments.common.exceptions import (  # noqa: F401
     DeploymentLockError,
     DeploymentCancelled,
     OrchestratorDeploymentError,
+    BaseImageBuildError,
     DeploymentSecurityError,
 )
 
@@ -47,5 +48,6 @@ __all__ = [
     "DeploymentLockError",
     "DeploymentCancelled",
     "OrchestratorDeploymentError",
+    "BaseImageBuildError",
     "DeploymentSecurityError",
 ]

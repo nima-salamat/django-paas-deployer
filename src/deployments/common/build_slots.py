@@ -6,6 +6,7 @@ Docker builds globally bounded across all workers.
 from __future__ import annotations
 
 import os
+import threading
 import time
 import uuid
 from contextlib import AbstractContextManager
@@ -19,6 +20,15 @@ if redis.call('get', KEYS[1]) == ARGV[1] then
 end
 return 0
 """
+
+_RENEW_SCRIPT = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  return redis.call('expire', KEYS[1], tonumber(ARGV[2]))
+end
+return 0
+"""
+
+
 
 
 def _parallelism() -> int:
@@ -65,6 +75,10 @@ class BuildSlot(AbstractContextManager):
         self.redis = None
         self.key = None
         self.token = uuid.uuid4().hex
+        self.lease_seconds = 0
+        self._heartbeat_stop = None
+        self._heartbeat_thread = None
+        self._lease_lost = False
 
     def __enter__(self):
         count = _parallelism()
@@ -79,6 +93,14 @@ class BuildSlot(AbstractContextManager):
                 try:
                     if self.redis.set(key, self.token, nx=True, ex=lease_seconds):
                         self.key = key
+                        self.lease_seconds = lease_seconds
+                        self._heartbeat_stop = threading.Event()
+                        self._heartbeat_thread = threading.Thread(
+                            target=self._heartbeat_loop,
+                            name=f"build-slot-heartbeat-{self.deployment_id}",
+                            daemon=True,
+                        )
+                        self._heartbeat_thread.start()
                         if self.logger:
                             try:
                                 self.logger.info(
@@ -109,7 +131,64 @@ class BuildSlot(AbstractContextManager):
                 )
             time.sleep(0.5)
 
+    def _renew_lease(self) -> bool:
+        if self.redis is None or self.key is None:
+            return False
+        try:
+            renewed = self.redis.eval(
+                _RENEW_SCRIPT,
+                1,
+                self.key,
+                self.token,
+                str(self.lease_seconds),
+            )
+            if int(renewed or 0) == 1:
+                return True
+            self._lease_lost = True
+            if self.logger:
+                self.logger.error(
+                    "build_slot_lease_lost: Redis lease token no longer owns slot"
+                )
+            return False
+        except Exception:
+            # A transient Redis error is retried by the heartbeat loop. Only a
+            # confirmed token mismatch is treated as lost ownership.
+            if self.logger:
+                self.logger.warning(
+                    "build_slot_renew_failed: Redis heartbeat failed; retrying"
+                )
+            return False
+
+    def assert_owned(self) -> None:
+        """Raise if this build has lost its Redis slot fencing token."""
+        if self._lease_lost:
+            raise DeploymentError(
+                "Build slot ownership was lost during the Docker build.",
+                stage="build_slot",
+                recoverable=True,
+                details={
+                    "deployment_id": self.deployment_id,
+                    "key": self.key,
+                    "lease_seconds": self.lease_seconds,
+                },
+            )
+
+
+    def _heartbeat_loop(self) -> None:
+        stop = self._heartbeat_stop
+        if stop is None:
+            return
+        interval = max(1.0, min(30.0, self.lease_seconds / 3.0))
+        while not stop.wait(interval):
+            renewed = self._renew_lease()
+            if not renewed and self._lease_lost:
+                return
+
     def __exit__(self, exc_type, exc, tb):
+        if self._heartbeat_stop is not None:
+            self._heartbeat_stop.set()
+        if self._heartbeat_thread is not None:
+            self._heartbeat_thread.join(timeout=max(1.0, min(5.0, self.lease_seconds / 2.0)))
         if self.redis is not None and self.key is not None:
             try:
                 self.redis.eval(_RELEASE_SCRIPT, 1, self.key, self.token)

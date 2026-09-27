@@ -209,8 +209,8 @@ class CoreSettings(BaseGenericSetting):
         help_text=_("Maximum time a deployment waits for a Docker build slot."),
     )
     build_max_cpu = models.FloatField(
-        default=1.0, verbose_name=_("Maximum build CPU"),
-        help_text=_("Operator-only Docker build CPU ceiling."),
+        default=1.0, verbose_name=_("Build CPU shares weight"),
+        help_text=_("Operator-only relative Docker CPU scheduling weight. This is not a hard CPU quota."),
     )
     build_max_ram_mb = models.PositiveIntegerField(
         default=1024, verbose_name=_("Maximum build RAM (MB)"),
@@ -254,7 +254,8 @@ class CoreSettings(BaseGenericSetting):
         default=3, verbose_name=_("Maximum recovery attempts"),
     )
     monitor_stale_base_build_minutes = models.PositiveIntegerField(
-        default=30, verbose_name=_("Stale base build timeout (minutes)"),
+        default=30, verbose_name=_("Base-image build lifecycle timeout (minutes)"),
+        help_text=_("Shared timeout for deployment waiting and monitor recovery of base-image builds."),
     )
     monitor_stale_worker_seconds = models.PositiveIntegerField(
         default=90, verbose_name=_("Stale worker heartbeat (seconds)"),

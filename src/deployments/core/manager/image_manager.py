@@ -77,8 +77,15 @@ def _build_container_limits(
     represented as a relative cpu-shares weight because the build API does not
     accept NanoCpus/CpuQuota in ``container_limits``.
     """
-    from deployments.common.resource_policy import build_limits
-    policy = dict(policy or build_limits())
+    if not policy:
+        raise ValueError("A complete resolved build resource policy is required.")
+    required = ("cpu", "memory_mb", "pids_limit", "shm_size_mb", "mode")
+    missing = [key for key in required if key not in policy]
+    if missing:
+        raise ValueError(
+            "Build resource policy is incomplete: missing "
+            + ", ".join(missing)
+        )
     cpu = max(0.1, float(policy["cpu"]))
     ram = max(64, int(policy["memory_mb"]))
     # Docker's documented build-time container_limits supports cpushares.
@@ -265,6 +272,8 @@ class Image(Client):
         build_options: dict[str, Any] | None = None,
         build_resource_policy: dict[str, Any] | None = None,
         deployment_id: Any | None = None,
+        build_resource_policy_source: str | None = None,
+        build_scope: str = "application",
     ):
         super().__init__()
         self.name = _validate_image_name(name)
@@ -278,7 +287,14 @@ class Image(Client):
         self.max_cpu = max_cpu
         self.max_ram = max_ram
         self.build_options = dict(build_options or {})
-        self.build_resource_policy = dict(build_resource_policy or {})
+        raw_build_policy = None if build_resource_policy is None else dict(build_resource_policy)
+        from deployments.common.resource_policy import resolve_build_policy
+        self.build_resource_policy = resolve_build_policy(raw_build_policy)
+        self.build_resource_policy_source = (
+            build_resource_policy_source
+            or ("server_owned_explicit" if raw_build_policy else "server_owned_build_limits")
+        )
+        self.build_scope = str(build_scope or "application")
         self.deployment_id = deployment_id
         if not self.name:
             raise ValueError("Image name must not be empty")
@@ -376,6 +392,8 @@ class Image(Client):
         response,
         on_build_output: Optional[Callable] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
+        lease_check: Optional[Callable[[], None]] = None,
+        ownership_check: Optional[Callable[[], None]] = None,
     ) -> Optional[str]:
         """Consume build stream and actively close it when cancellation is requested."""
         import threading
@@ -417,6 +435,10 @@ class Image(Client):
 
         try:
             for chunk in self._iter_build_stream(response):
+                if lease_check is not None:
+                    lease_check()
+                if ownership_check is not None:
+                    ownership_check()
                 if cancelled.is_set():
                     from deployments.common.exceptions import DeploymentCancelled
                     raise DeploymentCancelled(
@@ -474,7 +496,12 @@ class Image(Client):
                 watcher.join(timeout=0.5)
 
 
-    def create(self, on_build_output: Optional[Callable] = None, cancel_check: Optional[Callable[[], bool]] = None):
+    def create(
+        self,
+        on_build_output: Optional[Callable] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
+        ownership_check: Optional[Callable[[], None]] = None,
+    ):
         """Build the exact model-derived image and apply its tag after build.
 
         The low-level docker-py ``api.build`` path is used with the exact
@@ -487,15 +514,42 @@ class Image(Client):
         if not self.dockerfile_text or not self.tarfile:
             raise ValueError("dockerfile_text and tarfile are required")
 
-        build_policy = dict(self.build_resource_policy or {})
-        if not build_policy:
-            from deployments.common.resource_policy import build_limits
-            build_policy = dict(build_limits())
+        try:
+            from deployments.common.resource_policy import resolve_build_policy
+            build_policy = resolve_build_policy(self.build_resource_policy)
+        except ValueError as exc:
+            raise InternalPlatformError(
+                "Invalid server-owned build resource policy.",
+                stage="resource_policy",
+                technical_message=str(exc),
+                details={
+                    "image": self.image_ref,
+                    "build_scope": self.build_scope,
+                    "resource_policy_source": self.build_resource_policy_source,
+                    "policy_keys": sorted(self.build_resource_policy.keys()),
+                    "docker_api_reached": False,
+                },
+            ) from exc
         effective_cpu = max(0.1, float(build_policy["cpu"]))
         effective_ram = max(64, int(build_policy["memory_mb"]))
         limits = _build_container_limits(policy=build_policy)
         build_shm_size = max(1, int(build_policy.get("shm_size_mb", 64))) * 1024 * 1024
         target_ref = self.image_ref
+        docker_api_reached: bool | None = False
+
+        def _build_diagnostics(details: dict[str, Any]) -> dict[str, Any]:
+            merged = dict(details)
+            merged.update({
+                "image": target_ref,
+                "build_scope": self.build_scope,
+                "resource_policy_source": self.build_resource_policy_source,
+                "resource_policy_complete": all(
+                    key in build_policy
+                    for key in ("cpu", "memory_mb", "pids_limit", "shm_size_mb", "mode")
+                ),
+                "docker_api_reached": docker_api_reached,
+            })
+            return merged
 
         logger.info(
             "Building image repository=%r tag=%r cpu=%.2f ram=%d MB",
@@ -509,7 +563,7 @@ class Image(Client):
                 buildargs[key] = str(value)
 
         try:
-            with BuildSlot(deployment_id=self.deployment_id or target_ref, logger=logger):
+            with BuildSlot(deployment_id=self.deployment_id or target_ref, logger=logger) as build_slot:
                 with tempfile.TemporaryDirectory() as tmpdir:
                     tar_stream = (
                         io.BytesIO(self.tarfile)
@@ -568,8 +622,12 @@ class Image(Client):
                     last_err = None
                     for i, kwargs in enumerate(attempt_kwargs):
                         try:
+                            build_slot.assert_owned()
+                            if ownership_check is not None:
+                                ownership_check()
                             logger.info("api.build attempt %d kwargs=%s", i + 1, sorted(k for k in kwargs if k != "path"))
                             response = self.client.api.build(**kwargs)
+                            docker_api_reached = True
                             last_err = None
                             break
                         except TypeError as exc:
@@ -604,7 +662,11 @@ class Image(Client):
                         ) from last_err
 
                     image_id = self._handle_build_stream_collect_id(
-                        response, on_build_output=on_build_output, cancel_check=cancel_check
+                        response,
+                        on_build_output=on_build_output,
+                        cancel_check=cancel_check,
+                        lease_check=build_slot.assert_owned,
+                        ownership_check=ownership_check,
                     )
                     if not image_id:
                         raise ImageBuildError(
@@ -621,23 +683,25 @@ class Image(Client):
                         return self.client.images.get(image_id)
 
         except BuildError as exc:
-            details = {"image": target_ref, "error": str(exc), "error_type": type(exc).__name__}
+            docker_api_reached = True
+            details = _build_diagnostics({"error": str(exc), "error_type": type(exc).__name__})
             if getattr(exc, "build_log", None):
                 details["build_log"] = exc.build_log[-20:]
             raise ImageBuildError(
                 "Docker image build failed.",
                 details=details,
             ) from exc
-        except ImageBuildError:
+        except ImageBuildError as exc:
+            exc.details.update(_build_diagnostics({}))
             raise
         except docker.errors.DockerException as exc:
+            docker_api_reached = None
             raise DockerClientError(
                 "Docker could not complete the image build.",
-                details={
-                    "image": target_ref,
+                details=_build_diagnostics({
                     "error": str(exc),
                     "error_type": type(exc).__name__,
-                },
+                }),
             ) from exc
         except Exception as exc:
             logger.exception(
@@ -647,10 +711,9 @@ class Image(Client):
             raise InternalPlatformError(
                 stage="image_build",
                 technical_message=str(exc) or type(exc).__name__,
-                details={
-                    "image": target_ref,
+                details=_build_diagnostics({
                     "exception_type": type(exc).__name__,
-                },
+                }),
             ) from exc
 
 

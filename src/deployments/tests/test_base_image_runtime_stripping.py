@@ -22,3 +22,96 @@ RUN echo \"app\" > /tmp/app\n"""
     assert "docker-php-ext-install" not in out
     assert "a2enmod" not in out
     assert "RUN echo" in out
+
+
+def test_tenant_apt_package_is_preserved_with_custom_php_extension():
+    dockerfile = """FROM paas-base/php-apache:8.4-r1
+RUN apt-get update && apt-get install -y --no-install-recommends git unzip libzip-dev tenant-extra-package \
+    && docker-php-ext-install sockets
+RUN echo "keep"
+"""
+    out = _strip_base_owned_php_runtime(dockerfile)
+    assert "tenant-extra-package" in out
+    assert "docker-php-ext-install sockets" in out
+
+
+def test_multiple_php_stages_only_replace_apache_runtime_stage():
+    from types import SimpleNamespace
+    from deployments.core.dockerfile import _apply_resolved_base_images
+
+    dockerfile = """FROM php:8.4-apache AS runtime
+RUN echo runtime
+FROM php:8.4-cli AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends tenant-package \
+    && docker-php-ext-install sockets
+"""
+    config = SimpleNamespace(
+        base_images={"base_image": "paas-base/php-apache:8.4-r1"},
+        platform="php",
+    )
+    out = _apply_resolved_base_images(dockerfile, config)
+    assert "FROM paas-base/php-apache:8.4-r1 AS runtime" in out
+    assert "FROM php:8.4-cli AS builder" in out
+    assert "tenant-package" in out
+    assert "docker-php-ext-install sockets" in out
+
+
+def test_php_laravel_runtime_uses_cached_base_without_duplicate_base_runtime_setup():
+    from types import SimpleNamespace
+    from deployments.core.dockerfile import _apply_resolved_base_images
+
+    dockerfile = """FROM php:8.4-apache
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git unzip libzip-dev libpng-dev libjpeg62-turbo-dev libfreetype6-dev \
+        libicu-dev libonig-dev libxml2-dev \
+    && docker-php-ext-install -j$(nproc) mysqli pdo pdo_mysql opcache zip gd intl bcmath mbstring exif pcntl \
+    && a2enmod rewrite headers \
+    && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \
+    && echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache-laravel.ini \
+    && rm -rf /var/lib/apt/lists/*
+COPY . /var/www/html/
+"""
+    config = SimpleNamespace(
+        base_images={"base_image": "paas-base/php-apache:8.4-r1"},
+        platform="laravel",
+    )
+    out = _apply_resolved_base_images(dockerfile, config)
+    assert out.count("FROM paas-base/php-apache:8.4-r1") == 1
+    assert "docker-php-ext-install" not in out
+    assert "COPY . /var/www/html/" in out
+
+
+def test_custom_php_extension_injected_after_base_substitution_is_not_stripped():
+    from types import SimpleNamespace
+    from deployments.core.dockerfile import _apply_resolved_base_images
+
+    dockerfile = """FROM php:8.4-apache
+COPY . /var/www/html/
+RUN apt-get update && apt-get install -y --no-install-recommends libssl-dev \
+    && docker-php-ext-install redis
+"""
+    config = SimpleNamespace(
+        base_images={"base_image": "paas-base/php-apache:8.4-r1"},
+        platform="php",
+    )
+    out = _apply_resolved_base_images(dockerfile, config)
+    assert "libssl-dev" in out
+    assert "docker-php-ext-install redis" in out
+
+
+def test_php_base_substitution_does_not_rewrite_independent_python_stage():
+    from types import SimpleNamespace
+    from deployments.core.dockerfile import _apply_resolved_base_images
+
+    dockerfile = """FROM php:8.4-apache AS runtime
+RUN echo php
+FROM python:3.11-slim AS worker
+RUN echo python
+"""
+    config = SimpleNamespace(
+        base_images={"base_image": "paas-base/php-apache-root:8.4-r1"},
+        platform="php",
+    )
+    out = _apply_resolved_base_images(dockerfile, config)
+    assert "FROM paas-base/php-apache-root:8.4-r1 AS runtime" in out
+    assert "FROM python:3.11-slim AS worker" in out

@@ -20,7 +20,10 @@ def test_renderer_has_cached_runtime_base_replacement():
 def test_rebuild_uses_no_cache_and_pull():
     text = (Path(__file__).resolve().parents[2] / "deploy" / "base_images.py").read_text()
     assert '"pull": True' in text
-    assert '"no_cache": bool((build_policy or {}).get("force_rebuild", False))' in text
+    assert (
+        '"no_cache": bool(force_rebuild)' in text
+        or '"no_cache": bool(requested_force_rebuild)' in text
+    )
 
 
 def test_docker_repository_names_allow_namespace_paths():

@@ -265,8 +265,18 @@ def monitor_max_recovery_attempts() -> int:
     return max(0, min(int(_wagtail_core_value("monitor_max_recovery_attempts", 3)), 10))
 
 
-def monitor_stale_base_build_minutes() -> int:
+def base_image_timeout_minutes() -> int:
+    """Canonical maximum lifecycle for a base-image build/wait operation.
+
+    The legacy Wagtail field name is retained for compatibility, but this
+    value is shared by deployment waiting and monitor stale-build recovery.
+    """
     return max(5, min(int(_wagtail_core_value("monitor_stale_base_build_minutes", 30)), 1440))
+
+
+def monitor_stale_base_build_minutes() -> int:
+    # Backward-compatible alias for older callers/settings.
+    return base_image_timeout_minutes()
 
 
 def monitor_stale_worker_seconds() -> int:
