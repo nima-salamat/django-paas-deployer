@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 def test_build_cpu_is_mapped_to_relative_cpu_shares_not_hard_quota():
     import deployments.core.manager.image_manager as image_manager
-    limits = image_manager._build_container_limits({
+    limits = image_manager._build_container_limits(policy={
         "cpu": 2.0,
         "memory_mb": 1024,
         "pids_limit": 2048,
