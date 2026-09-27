@@ -644,7 +644,8 @@ def build_registered_base_image(
                 "Base-image build ownership changed before READY state could be committed."
             )
         requested_by_deployment = str(row.build_owner_deployment_id or "")
-        rebuild_after_success = bool(row.rebuild_requested)
+        rebuild_pending_definition = bool((row.last_error_details or {}).get("rebuild_pending"))
+        rebuild_after_success = bool(row.rebuild_requested and not rebuild_pending_definition)
         row.status = BaseRuntimeImage.Status.READY
         row.image_id = getattr(img, "id", "") or ""
         attrs = getattr(img, "attrs", {}) or {}
