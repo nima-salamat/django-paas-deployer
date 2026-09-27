@@ -79,7 +79,11 @@ Interactive shell can only exec into a task on the Docker Engine node connected 
 
 ## Volumes
 
-Local volumes are node-local. With `SWARM_LOCAL_VOLUME_PIN=1`, services using them are pinned to the volume owner unless an explicit node-id placement rule already exists.
+Tenant volume capacity is accounted logically through the Service/Plan quota. The standard Docker `local` volume driver does not provide a hard per-volume filesystem quota in this installation. Deployment logs warn when measurable actual usage reaches 90% of the declared logical capacity by default.
+
+For multi-node Swarm, local persistent volumes are provisioned through the Django volume registry and pinned to the provisioning node. A conflicting explicit `node.id` placement rule is rejected for managed local volumes so the workload cannot silently acquire a same-named volume on another node.
+
+The operator-only `VOLUME_USAGE_WARNING_PERCENT` setting controls the warning threshold. See documentation/domain/databases-storage.md for storage capability semantics, hard-quota limitations, usage verification, and node requirements.
 
 ## Legacy mode
 
