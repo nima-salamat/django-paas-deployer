@@ -75,7 +75,7 @@ def test_build_registered_base_failure_does_not_become_terminal_before_celery_ex
         rebuild_requested = False
         logical_runtime = "php"
         runtime_version = "8.4"
-        variant = "apache-root"
+        variant = "apache"
         definition_fingerprint = ""
         build_started_at = None
         build_completed_at = None
@@ -103,7 +103,7 @@ def test_build_registered_base_failure_does_not_become_terminal_before_celery_ex
             FAILED = "failed"
         objects = Query(Row())
 
-    spec = base_images._php("8.4", public_root=False)
+    spec = base_images._php("8.4")
     monkeypatch.setattr(base_images, "BaseRuntimeImage", FakeBase)
     monkeypatch.setattr(base_images, "_spec_for_record", lambda row: spec)
     monkeypatch.setattr(base_images, "_spec_fingerprint", lambda spec: "fingerprint")
