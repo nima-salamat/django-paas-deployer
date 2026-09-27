@@ -1066,7 +1066,7 @@ def sync_swarm_nodes(*, cluster_name: str | None = None) -> dict[str, Any]:
         raise
 
     observed_ids = set()
-    now = __import__("django.utils.timezone", fromlist=["timezone"]).timezone.now()
+    now = timezone.now()
     for node in docker_nodes:
         attrs = node.attrs or {}
         spec = attrs.get("Spec") or {}
