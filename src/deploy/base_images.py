@@ -175,16 +175,19 @@ def _dockerfile_with_fingerprint(spec: BaseImageSpec, fingerprint: str) -> str:
 
 
 def _php(version: str) -> BaseImageSpec:
+    """Return the single canonical PHP Apache runtime base definition.
+
+    DocumentRoot is deliberately configured by the application Dockerfile;
+    it is application-specific and therefore must not create separate
+    base-image identities such as ``apache-root`` or ``apache-public``.
+    """
     src = f"{_docker_mirror()}/php:{version}-apache"
-    variant = "apache"
     repository = "paas-base/php-apache"
-    doc_root = "/var/www/html"
     return BaseImageSpec(
-        "php", version, variant, src, repository, f"{_tag_token(version)}-r1",
+        "php", version, "apache", src, repository, f"{_tag_token(version)}-r1",
         f'''FROM {src}
 
-ENV APACHE_DOCUMENT_ROOT={doc_root}\\
-    COMPOSER_ALLOW_SUPERUSER=1\\
+ENV COMPOSER_ALLOW_SUPERUSER=1 \
     COMPOSER_MEMORY_LIMIT=-1
 
 WORKDIR /var/www/html
@@ -194,8 +197,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libicu-dev libonig-dev libxml2-dev curl ca-certificates \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && missing=""; for ext in mysqli pdo pdo_mysql opcache zip gd intl bcmath mbstring exif pcntl; do \
-         if php -m | grep -Eiq "^${{ext}}$"; then \
-             echo "PHP extension ${{ext}} already enabled; skipping build"; \
+         if php -m | grep -Eiq "^${ext}$"; then \
+             echo "PHP extension ${ext} already enabled; skipping build"; \
          else \
              missing="$missing $ext"; \
          fi; \
@@ -208,26 +211,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
        fi \
     && a2enmod rewrite headers mime dir expires alias \
     && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \
-    && printf '%s\\n' 'ServerName localhost' > /etc/apache2/conf-available/deployer-server-name.conf \
+    && printf '%s\n' 'ServerName localhost' > /etc/apache2/conf-available/deployer-server-name.conf \
     && a2enconf deployer-server-name \
-    && printf '%s\\n' \
-       '<VirtualHost *:80>' \
-       '    ServerName localhost' \
-       '    DocumentRoot {doc_root}' \
-       '    <Directory {doc_root}>' \
-       '        AllowOverride All' \
-       '        Require all granted' \
-       '        Options FollowSymLinks' \
-       '    </Directory>' \
-       '    RewriteEngine On' \
-       '    RewriteCond %{{REQUEST_FILENAME}} -f [OR]' \
-       '    RewriteCond %{{REQUEST_FILENAME}} -d' \
-       '    RewriteRule ^ - [END]' \
-       '    RewriteCond %{{REQUEST_FILENAME}} !-f' \
-       '    RewriteCond %{{REQUEST_FILENAME}} !-d' \
-       '    RewriteRule ^ index.php [L]' \
-       '</VirtualHost>' \
-       > /etc/apache2/sites-available/000-default.conf \
     && echo 'opcache.enable=1' >> /usr/local/etc/php/conf.d/opcache-laravel.ini \
     && rm -rf /var/lib/apt/lists/*
 
@@ -237,32 +222,6 @@ CMD ["apache2-foreground"]
 '''
     )
 
-
-
-
-def _legacy_php(version: str, variant: str) -> BaseImageSpec:
-    """Reconstruct a pre-canonical PHP definition only for safe legacy rows."""
-    src = f"{_docker_mirror()}/php:{version}-apache"
-    if variant not in {"apache-root", "apache-public"}:
-        raise ValueError(f"Unsupported legacy PHP variant {variant!r}")
-    canonical = _php(version)
-    if variant == "apache-root":
-        repository = "paas-base/php-apache-root"
-        doc_root = "/var/www/html"
-    else:
-        repository = "paas-base/php-apache"
-        doc_root = "/var/www/html/public"
-    dockerfile = canonical.dockerfile
-    dockerfile = dockerfile.replace(
-        "ENV APACHE_DOCUMENT_ROOT=/var/www/html\\",
-        f"ENV APACHE_DOCUMENT_ROOT={doc_root}\\",
-        1,
-    )
-    dockerfile = dockerfile.replace("DocumentRoot /var/www/html", f"DocumentRoot {doc_root}", 1)
-    dockerfile = dockerfile.replace("    <Directory /var/www/html>", f"    <Directory {doc_root}>", 1)
-    return BaseImageSpec(
-        "php", version, variant, src, repository, f"{_tag_token(version)}-r1", dockerfile
-    )
 
 def _python(version: str) -> BaseImageSpec:
     src = f"{_docker_mirror()}/python:{version}-slim"
