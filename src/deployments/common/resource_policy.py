@@ -78,46 +78,73 @@ def build_limits(plan: Any = None) -> dict[str, int | float]:
 _RESOURCE_POLICY_KEYS = frozenset({"cpu", "memory_mb", "pids_limit", "shm_size_mb", "mode"})
 
 
-def resolve_build_policy(policy: dict[str, Any] | None = None, *, plan: Any = None) -> dict[str, int | float | str]:
-    """Resolve a complete policy from the authoritative server-owned policy.
+def resolve_build_policy(
+    policy: dict[str, Any] | None = None,
+    *,
+    plan: Any = None,
+) -> dict[str, int | float | str]:
+    """Resolve a complete server-owned build resource policy.
 
-    policy is a server-side snapshot only. Missing fields come from
-    build_limits(plan); force_rebuild is a build option, never a resource-policy
-    field.
+    Empty input is expanded from ``build_limits(plan)``. A supplied snapshot
+    is normalized against operator ceilings only; it never increases the
+    server-owned CPU/RAM/PID/shm budget. ``force_rebuild`` is an operation
+    flag and is never interpreted as a resource field.
     """
-    resolved = dict(build_limits(plan))
+    defaults = dict(build_limits(plan))
     if policy in (None, {}):
-        return resolved
+        return defaults
+
     candidate = dict(policy)
     if "force_rebuild" in candidate:
-        raise ValueError("force_rebuild is a build option, not part of the resource policy.")
+        raise ValueError(
+            "force_rebuild is a build option, not part of the resource policy."
+        )
     unknown = set(candidate) - _RESOURCE_POLICY_KEYS
     if unknown:
-        raise ValueError("Unsupported build resource policy keys: " + ", ".join(sorted(str(k) for k in unknown)))
-    if "mode" in candidate and str(candidate["mode"]).strip().lower() != resolved["mode"]:
+        raise ValueError(
+            "Unsupported build resource policy keys: "
+            + ", ".join(sorted(str(k) for k in unknown))
+        )
+
+    operator_mode = str(
+        _operator("build.resource_mode", _get("DEPLOY_BUILD_RESOURCE_MODE", "static"))
+    ).strip().lower()
+    if operator_mode not in {"static", "plan"}:
+        operator_mode = "static"
+    requested_mode = str(candidate.get("mode", operator_mode)).strip().lower()
+    if requested_mode != operator_mode:
         raise ValueError("build resource mode is operator-owned and cannot be overridden.")
-    # Explicit snapshots may only preserve or reduce the already-resolved
-    # server-owned budget; they can never raise an operator ceiling.
+
+    configured_cpu = _operator("build.max_cpu", _get("DEPLOY_BUILD_MAX_CPU", None))
+    configured_ram = _operator("build.max_ram_mb", _get("DEPLOY_BUILD_MAX_RAM_MB", None))
+    hard_cpu = (
+        max(0.25, min(float(configured_cpu), 8.0))
+        if configured_cpu not in (None, "")
+        else 8.0
+    )
+    hard_ram = (
+        max(256, min(int(configured_ram), 8192))
+        if configured_ram not in (None, "")
+        else 8192
+    )
+
     try:
-        resolved["cpu"] = max(
-            0.25,
-            min(float(resolved["cpu"]), float(candidate.get("cpu", resolved["cpu"]))),
-        )
-        resolved["memory_mb"] = max(
-            256,
-            min(int(resolved["memory_mb"]), int(candidate.get("memory_mb", resolved["memory_mb"]))),
-        )
-        resolved["pids_limit"] = max(
-            128,
-            min(int(resolved["pids_limit"]), int(candidate.get("pids_limit", resolved["pids_limit"]))),
-        )
-        resolved["shm_size_mb"] = max(
-            16,
-            min(int(resolved["shm_size_mb"]), int(candidate.get("shm_size_mb", resolved["shm_size_mb"]))),
-        )
+        cpu = min(float(candidate.get("cpu", defaults["cpu"])), hard_cpu)
+        ram = min(int(candidate.get("memory_mb", defaults["memory_mb"])), hard_ram)
+        pids = min(int(candidate.get("pids_limit", defaults["pids_limit"])), int(defaults["pids_limit"]))
+        shm = min(int(candidate.get("shm_size_mb", defaults["shm_size_mb"])), int(defaults["shm_size_mb"]))
     except (TypeError, ValueError) as exc:
         raise ValueError("Build resource policy contains invalid numeric limits.") from exc
-    return resolved
+
+    if cpu < 0.25 or ram < 256 or pids < 128 or shm < 16:
+        raise ValueError("Build resource policy contains values below the supported minimum.")
+    return {
+        "cpu": float(cpu),
+        "memory_mb": int(ram),
+        "pids_limit": int(pids),
+        "shm_size_mb": int(shm),
+        "mode": requested_mode,
+    }
 
 def runtime_limits(plan: Any) -> dict[str, int | float]:
     """Return immutable runtime limits from the Service Plan only."""
