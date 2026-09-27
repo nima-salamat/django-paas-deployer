@@ -645,6 +645,7 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
 
             if (
                 policy["auto_register_existing"]
+                and row.status != BaseRuntimeImage.Status.BUILDING
                 and local_compatible
                 and _mark_local_image_ready(row, expected_fingerprint=fingerprint)
             ):
@@ -704,14 +705,28 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                 if row.build_started_at:
                     age_seconds = max(0, (timezone.now() - row.build_started_at).total_seconds())
                 if age_seconds > _base_image_wait_timeout_seconds(None) and not local_exists:
+                    # Fence the abandoned Celery attempt before another owner
+                    # is allowed to claim this row. The old task will see a
+                    # different build_task_id and return without mutating state.
+                    previous_task_id = str(row.build_task_id or "")
+                    recovery_owner = f"base-recovery-{uuid.uuid4()}"
                     owner = True
                     row.status = BaseRuntimeImage.Status.BUILDING
                     row.build_started_at = timezone.now()
-                    row.build_task_id = ""
+                    row.build_task_id = recovery_owner
                     row.build_owner_deployment_id = ""
                     row.last_error = "Recovered stale base-image build."
-                    row.last_error_details = {"stage": "base_image", "retry_pending": False, "recovered_stale": True}
-                    row.save(update_fields=["status", "build_started_at", "build_task_id", "build_owner_deployment_id", "last_error", "last_error_details", "updated_at"])
+                    row.last_error_details = {
+                        "stage": "base_image",
+                        "retry_pending": False,
+                        "recovered_stale": True,
+                        "superseded_task_id": previous_task_id,
+                    }
+                    row.save(update_fields=[
+                        "status", "build_started_at", "build_task_id",
+                        "build_owner_deployment_id", "last_error",
+                        "last_error_details", "updated_at",
+                    ])
                 else:
                     row_id = row.pk
                     image_ref = row.image_ref
