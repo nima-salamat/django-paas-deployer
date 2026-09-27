@@ -36,7 +36,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from core.global_settings.config import SERVICE_STATUS_CHOICES  # type: ignore
-from deploy.models import Deploy, DeployLog, DeploymentStatusChoices  # type: ignore
+from deploy.models import BaseRuntimeImage, Deploy, DeployLog, DeploymentStatusChoices  # type: ignore
 from deployments.core.db_deployer import (
     DB_PLATFORMS,
     DBDeployer,
@@ -217,10 +217,32 @@ def build_base_runtime_image(self, base_image_id, force_rebuild=False) -> None:
             force_rebuild=bool(force_rebuild),
         )
     except Exception as exc:
+        # The helper marks the current attempt FAILED before Celery gets
+        # control back. That state is too strong while retries are pending:
+        # deployment waiters would abort even though the builder will retry.
         if self.request.retries < self.max_retries:
-            logger.warning("Base image build failed; retrying id=%s: %s", base_image_id, exc)
+            BaseRuntimeImage.objects.filter(pk=base_image_id).update(
+                status=BaseRuntimeImage.Status.BUILDING,
+                build_task_id=str(self.request.id),
+                build_completed_at=None,
+                last_error=str(exc),
+                updated_at=timezone.now(),
+            )
+            logger.warning(
+                "Base image build failed; retrying id=%s attempt=%d/%d: %s",
+                base_image_id,
+                self.request.retries + 1,
+                self.max_retries + 1,
+                exc,
+            )
             raise self.retry(exc=exc)
-        logger.exception("Base image build exhausted retries id=%s", base_image_id)
+        # On the final attempt the helper has already persisted the terminal
+        # FAILED state and last_error for deployment waiters.
+        logger.exception(
+            "Base image build exhausted retries id=%s: %s",
+            base_image_id,
+            exc,
+        )
 
 
 
