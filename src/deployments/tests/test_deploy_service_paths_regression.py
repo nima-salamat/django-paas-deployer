@@ -49,3 +49,10 @@ def test_orchestrator_failures_preserve_structured_error_metadata_for_terminal_e
     assert '"error_code": exc.code' in source
     assert '"error_category": exc.category' in source
     assert '"technical_message": exc.technical_message' in source
+
+def test_activation_callback_is_forwarded_through_the_service_orchestrator_boundary():
+    source = _source("deployments/celery/services/deploy_service.py")
+    assert "*, cfg: dict, activation_callback=None," in source
+    assert "cfg=cfg, activation_callback=activation_callback," in source
+    assert "activation_callback=activation_callback," in source
+\n
