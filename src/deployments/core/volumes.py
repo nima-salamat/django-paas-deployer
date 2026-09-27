@@ -118,6 +118,7 @@ class VolumeMountManager:
                         size_mb=effective_size,
                         driver=volume.driver or "local",
                         driver_opts=dict(volume.driver_opts or {}),
+                        require_managed=bool(service_id),
                     ).ensure()
                 binds[volume.source] = {"bind": target, "mode": mode}
 
