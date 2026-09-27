@@ -48,8 +48,8 @@ def test_resolve_build_policy_fills_missing_fields_from_authoritative_policy(mon
     monkeypatch.setattr(policy, "build_limits", lambda plan=None: dict(canonical))
     assert policy.resolve_build_policy() == canonical
     assert policy.resolve_build_policy({}) == canonical
-    partial = policy.resolve_build_policy({"cpu": 2})
-    assert partial["cpu"] == 2.0
+    partial = policy.resolve_build_policy({"cpu": 2, "memory_mb": 8192})
+    assert partial["cpu"] == 1.0
     assert partial["memory_mb"] == 1024
     assert partial["pids_limit"] == 2048
     assert partial["shm_size_mb"] == 64
