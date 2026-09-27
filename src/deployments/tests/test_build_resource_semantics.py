@@ -24,7 +24,7 @@ def test_base_image_timeout_is_the_same_setting_used_for_stale_recovery():
 
 def test_runtime_policies_expose_canonical_base_image_timeout(monkeypatch):
     import core.settings_service as svc
-    monkeypatch.setattr(svc, "base_image_timeout_minutes", lambda: 41)
+    monkeypatch.setattr(svc, "base_image_build_timeout_minutes", lambda: 41)
     monkeypatch.setattr(svc, "deploy_timeout_minutes", lambda: 10)
     import deployments.celery.monitoring.policies as policies
     out = policies.runtime_policies()
