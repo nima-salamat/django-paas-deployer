@@ -689,7 +689,7 @@ class Volume(BaseModel):
         if self.pk:
             previous = (
                 Volume.objects.filter(pk=self.pk)
-                .values("size_mb")
+                .values("size_mb", "service_id")
                 .first()
             )
             if previous is not None:
