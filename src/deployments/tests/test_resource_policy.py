@@ -33,3 +33,42 @@ def test_plan_build_policy_still_has_operator_ceiling(monkeypatch, settings):
     out = build_limits(SimpleNamespace(max_cpu=8, max_ram=8192))
     assert out["cpu"] == 2.0
     assert out["memory_mb"] == 1024
+
+
+def test_resolve_build_policy_fills_missing_fields_from_authoritative_policy(monkeypatch):
+    import deployments.common.resource_policy as policy
+
+    canonical = {
+        "cpu": 1.0,
+        "memory_mb": 1024,
+        "pids_limit": 2048,
+        "shm_size_mb": 64,
+        "mode": "static",
+    }
+    monkeypatch.setattr(policy, "build_limits", lambda plan=None: dict(canonical))
+    assert policy.resolve_build_policy() == canonical
+    assert policy.resolve_build_policy({}) == canonical
+    partial = policy.resolve_build_policy({"cpu": 2})
+    assert partial["cpu"] == 2.0
+    assert partial["memory_mb"] == 1024
+    assert partial["pids_limit"] == 2048
+    assert partial["shm_size_mb"] == 64
+
+
+def test_force_rebuild_is_not_a_resource_policy(monkeypatch):
+    import deployments.common.resource_policy as policy
+
+    monkeypatch.setattr(
+        policy,
+        "build_limits",
+        lambda plan=None: {
+            "cpu": 1.0,
+            "memory_mb": 1024,
+            "pids_limit": 2048,
+            "shm_size_mb": 64,
+            "mode": "static",
+        },
+    )
+    import pytest
+    with pytest.raises(ValueError, match="force_rebuild"):
+        policy.resolve_build_policy({"force_rebuild": True})
