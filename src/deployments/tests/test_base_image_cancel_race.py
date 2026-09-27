@@ -42,7 +42,7 @@ def test_wait_for_base_build_uses_ready_db_state_before_docker_tag():
 
 
 def test_base_image_queue_has_dedicated_worker_and_no_deployment_worker_consumption():
-    compose = (ROOT.parent.parent / "compose.yaml").read_text(encoding="utf-8")
+    compose = (ROOT.parent / "compose.yaml").read_text(encoding="utf-8")
     assert "base-image-worker:" in compose
     assert "- base-images" in compose
     deployment_block = compose.split("deployment-worker:", 1)[1].split("base-image-worker:", 1)[0]
