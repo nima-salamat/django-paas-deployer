@@ -757,18 +757,15 @@ def _mark_local_image_ready(
         return False
 
 def _base_image_wait_timeout_seconds(deployment_id: str | None) -> int:
-    from core.settings_service import base_image_timeout_minutes, deploy_timeout_minutes
-    lifecycle_seconds = max(base_image_timeout_minutes(), deploy_timeout_minutes()) * 60
+    """Return only the base-phase budget; never subtract application time."""
+    from core.settings_service import base_image_build_timeout_minutes
+
     if not deployment_id:
-        return lifecycle_seconds
-    try:
-        from deploy.models import Deploy
-        started = Deploy.objects.filter(pk=deployment_id).values_list("started_at", flat=True).first()
-        if started:
-            return max(0, int(lifecycle_seconds - (timezone.now() - started).total_seconds()))
-    except Exception:
-        logger.debug("Unable to calculate deployment-aware base-image deadline", exc_info=True)
-    return lifecycle_seconds
+        return base_image_build_timeout_minutes() * 60
+    remaining = deployment_phase_remaining_seconds(deployment_id)
+    if remaining is None:
+        return base_image_build_timeout_minutes() * 60
+    return remaining
 
 
 def _raise_base_image_failure(
@@ -943,6 +940,11 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                     )
                 continue
 
+            if deployment_id:
+                # Start this deployment's independent base-image budget only
+                # after a compatible cache hit has been ruled out.
+                mark_base_image_phase_started(deployment_id)
+
             effective_auto_build = bool(row.auto_build and policy["auto_build"])
             if not effective_auto_build and not local_exists:
                 raise RuntimeError(
@@ -951,6 +953,27 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                 )
 
             if row.status == BaseRuntimeImage.Status.BUILDING:
+                if logger_sink:
+                    logger_sink.info(
+                        "base_image",
+                        (
+                            f"Base runtime image {row.image_ref} is currently being built "
+                            "by another worker. Waiting for the shared build to complete."
+                        ),
+                        progress=17,
+                        details={
+                            "image": row.image_ref,
+                            "runtime": key,
+                            "cache": "waiting",
+                            "waiting_for_existing_build": True,
+                            "owner_task_id": str(row.build_task_id or ""),
+                            "build_started_at": (
+                                row.build_started_at.isoformat()
+                                if row.build_started_at else None
+                            ),
+                            "rebuild_requested": bool(row.rebuild_requested),
+                        },
+                    )
                 age_seconds = 0
                 if row.build_started_at:
                     age_seconds = max(0, (timezone.now() - row.build_started_at).total_seconds())
