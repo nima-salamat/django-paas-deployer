@@ -420,6 +420,132 @@ def _spec_for_record(row: BaseRuntimeImage) -> BaseImageSpec:
         return _go(version)
     raise ValueError(f"Unsupported base runtime {runtime!r}")
 
+def _local_image_matches_fingerprint(image_ref: str, fingerprint: str) -> bool:
+    if not _docker_image_exists(image_ref):
+        return False
+    try:
+        image = get_docker_client().images.get(image_ref)
+        labels = ((getattr(image, "attrs", {}) or {}).get("Config") or {}).get("Labels") or {}
+        return labels.get("io.passdeployer.base-definition") == fingerprint
+    except Exception:
+        return False
+
+
+def request_base_runtime_image_build(
+    base_image_id,
+    *,
+    force_rebuild: bool = False,
+    deployment_id: str | None = None,
+) -> dict[str, Any]:
+    """Queue a base-image build through the canonical Celery lifecycle.
+
+    This is the single request path used by operator actions. It never calls
+    Docker build from HTTP and never replaces an active owner.
+    """
+    from deployments.celery.tasks import build_base_runtime_image
+    from deployments.common.resource_policy import resolve_build_policy
+
+    with transaction.atomic():
+        row = BaseRuntimeImage.objects.select_for_update().get(pk=base_image_id)
+        if not row.enabled:
+            raise RuntimeError(
+                f"Base runtime image {row.logical_runtime}:{row.runtime_version}:{row.variant} is disabled."
+            )
+        spec = _spec_for_record(row)
+        fingerprint = _spec_fingerprint(spec)
+
+        if row.status == BaseRuntimeImage.Status.BUILDING:
+            if force_rebuild and not row.rebuild_requested:
+                row.rebuild_requested = True
+                row.rebuild_requested_at = timezone.now()
+                row.save(update_fields=["rebuild_requested", "rebuild_requested_at", "updated_at"])
+                requested = True
+            else:
+                requested = bool(row.rebuild_requested)
+            return {
+                "queued": False,
+                "coalesced": True,
+                "waiting": True,
+                "task_id": row.build_task_id,
+                "rebuild_requested": requested,
+                "image_ref": row.image_ref,
+            }
+
+        if (
+            not force_rebuild
+            and not row.rebuild_requested
+            and row.status == BaseRuntimeImage.Status.READY
+            and row.definition_fingerprint == fingerprint
+            and _local_image_matches_fingerprint(row.image_ref, fingerprint)
+        ):
+            return {
+                "queued": False,
+                "cache_hit": True,
+                "waiting": False,
+                "task_id": "",
+                "image_ref": row.image_ref,
+            }
+
+        task_id = f"base-image-{row.pk}-{uuid.uuid4()}"
+        requested_force = bool(force_rebuild or row.rebuild_requested)
+        now = timezone.now()
+        row.status = BaseRuntimeImage.Status.BUILDING
+        row.build_task_id = task_id
+        row.build_owner_deployment_id = str(deployment_id or "")[:255]
+        row.definition_fingerprint = fingerprint
+        row.rebuild_requested = False
+        row.build_started_at = now
+        row.build_completed_at = None
+        row.last_error = ""
+        row.last_error_details = {}
+        row.save(update_fields=[
+            "status", "build_task_id", "build_owner_deployment_id",
+            "definition_fingerprint", "rebuild_requested", "rebuild_requested_at",
+            "build_started_at", "build_completed_at", "last_error",
+            "last_error_details", "updated_at",
+        ])
+
+    try:
+        # Validate server-owned policy before publishing the task, but do not
+        # accept policy input from the admin request.
+        effective_policy = resolve_build_policy(None)
+        build_base_runtime_image.apply_async(
+            args=[str(row.pk)],
+            kwargs={
+                "force_rebuild": requested_force,
+                "build_policy": effective_policy,
+            },
+            task_id=task_id,
+        )
+    except Exception as exc:
+        BaseRuntimeImage.objects.filter(
+            pk=row.pk, status=BaseRuntimeImage.Status.BUILDING, build_task_id=task_id
+        ).update(
+            status=BaseRuntimeImage.Status.PENDING,
+            build_task_id="",
+            build_owner_deployment_id="",
+            build_completed_at=timezone.now(),
+            last_error=str(exc),
+            last_error_details={
+                "stage": "base_image_dispatch",
+                "base_image_ref": spec.image_ref,
+                "resource_policy_source": "server_owned",
+                "retry_pending": False,
+                "docker_api_reached": False,
+                "exception_type": type(exc).__name__,
+                "technical_message": str(exc) or type(exc).__name__,
+            },
+            updated_at=timezone.now(),
+        )
+        raise
+    return {
+        "queued": True,
+        "cache_hit": False,
+        "waiting": False,
+        "task_id": task_id,
+        "rebuild_requested": False,
+        "image_ref": spec.image_ref,
+    }
 def build_registered_base_image(
     base_image_id,
     *,
