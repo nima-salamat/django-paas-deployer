@@ -10,17 +10,14 @@ from deployments.core.exceptions import VolumeError
 logger = logging.getLogger(__name__)
 
 
-# Drivers known to honour a size-like option. The stock "local" driver does
-# NOT support "size" — passing it causes APIError and aborts the deploy.
-# size_mb on the Django Volume model is only for application-level quota.
-_SIZE_CAPABLE_DRIVERS = frozenset({
-    "local-persist",
-    "rexray",
-    "rexray/ebs",
-    "netapp",
-    "portworx",
-    "flocker",
-})
+# Docker driver capabilities are intentionally conservative.
+#
+# Volume.size_mb is logical allocation metadata. It is never converted
+# into a Docker driver option merely because a driver name appears on an
+# allow-list: accepting a size option does not prove that a backend
+# physically enforces a persistent capacity. Trusted operator/catalog
+# definitions may still provide explicitly validated driver_opts.
+
 
 # Minimum free space (MB) that must remain on the Docker root filesystem
 # after allocating a new volume. Prevents the host from filling up.
@@ -52,31 +49,13 @@ class Volume(Client):
         """
         opts = dict(self.driver_opts)
 
-        # Caller already set a size-related option → respect it.
+        # Explicit driver options are trusted operator/catalog configuration
+        # only. size_mb itself is never translated into a driver option.
+        # Accepting an option does not prove physical enforcement.
         if any(k.lower() in ("size", "size_mb", "capacity") for k in opts):
-            return opts
-
-        if self.size_mb is None:
-            return opts
-
-        try:
-            size_val = int(self.size_mb)
-        except (TypeError, ValueError):
-            return opts
-        if size_val <= 0:
-            return opts
-
-        driver_key = self.driver.lower().split(":")[0]
-        if driver_key in _SIZE_CAPABLE_DRIVERS or driver_key.startswith("rexray"):
-            # Common convention for size-aware plugins
-            opts.setdefault("size", f"{size_val}Mb")
-        else:
-            # local (and most other stock drivers): ignore size_mb so create()
-            # succeeds. Quota is enforced in the Django Volume model only.
             logger.debug(
-                "Ignoring size_mb=%s for volume '%s' (driver=%s does not "
-                "support size option).",
-                size_val,
+                "Using explicit storage capacity option for volume '%s' "
+                "(driver=%s); physical enforcement remains backend-specific.",
                 self.name,
                 self.driver,
             )
@@ -108,14 +87,27 @@ class Volume(Client):
             return free_mb >= needed, free_mb
         except Exception as exc:
             logger.warning("Host disk-space check failed: %s", exc)
-            # Fail open — better to attempt create than block all deploys
-            return True, -1
+            # Storage safety cannot be proven when the Docker root filesystem
+            # cannot be inspected. Do not silently proceed with a persistent
+            # volume whose host capacity is unknown.
+            return False, -1
 
     def create(self):
         opts = self._options()
         # Pre-flight space check (non-fatal when size_mb is unknown)
         ok, free_mb = self.check_host_space(self.size_mb)
         if not ok:
+            if free_mb < 0:
+                raise VolumeError(
+                    f"Cannot verify host disk space before creating volume '{self.name}'.",
+                    details={
+                        "volume": self.name,
+                        "free_mb": None,
+                        "requested_mb": self.size_mb,
+                        "min_reserve_mb": _MIN_FREE_AFTER_MB,
+                        "check": "unavailable",
+                    },
+                )
             raise VolumeError(
                 f"Insufficient host disk space to create volume '{self.name}'. "
                 f"Free={free_mb} MB, requested={self.size_mb or '?'} MB "
@@ -125,6 +117,7 @@ class Volume(Client):
                     "free_mb": free_mb,
                     "requested_mb": self.size_mb,
                     "min_reserve_mb": _MIN_FREE_AFTER_MB,
+                    "check": "best_effort_preflight",
                 },
             )
         try:
