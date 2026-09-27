@@ -216,7 +216,11 @@ def _retry_orphaned_queued_deploys() -> None:
     candidates = (
         Deploy.objects
         .select_related("service", "service__plan")
-        .filter(status=DeploymentStatusChoices.PENDING, created_at__lt=cutoff)
+        .filter(
+            status=DeploymentStatusChoices.PENDING,
+            cancel_requested=False,
+            updated_at__lt=cutoff,
+        )
         .order_by("created_at")[: int(runtime_policies()["monitor_batch_size"])]
     )
     for deploy in candidates:
@@ -249,6 +253,7 @@ def _retry_orphaned_queued_deploys() -> None:
                 status_message="Deployment re-queued after temporary broker unavailability.",
                 execution_task_id=lock_id,
                 worker_heartbeat_at=None,
+                updated_at=timezone.now(),
             )
             service.__class__.objects.filter(
                 pk=service.pk, status=SERVICE_STATUS_CHOICES.QUEUED
@@ -551,7 +556,7 @@ def _reconcile_active_deploy(deploy: Deploy) -> None:
         service = locked.service
 
         # 1. Timeout check
-        if locked.status in ("pending", "running") and locked.started_at:
+        if locked.status == "running" and locked.started_at:
             minutes_elapsed = (now - locked.started_at).total_seconds() / 60.0
             if minutes_elapsed >= int(policies["deploy_timeout_minutes"]):
                 mark_deploy_timeout(
