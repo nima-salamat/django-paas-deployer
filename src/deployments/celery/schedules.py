@@ -703,7 +703,13 @@ def _reconcile_active_deploy_swarm(deploy: Deploy) -> None:
         current_policies = runtime_policies()
         if locked.started_at:
             minutes_elapsed = (now - locked.started_at).total_seconds() / 60.0
-            if minutes_elapsed >= int(current_policies["deploy_timeout_minutes"]):
+            timeout_minutes = int(current_policies["deploy_timeout_minutes"])
+            if str(locked.stage or "").strip().lower() == "base_image":
+                timeout_minutes = max(
+                    timeout_minutes,
+                    int(current_policies["base_image_timeout_minutes"]),
+                )
+            if minutes_elapsed >= timeout_minutes:
                 mark_deploy_timeout(
                     deploy=locked,
                     container_exists=bool(state),
