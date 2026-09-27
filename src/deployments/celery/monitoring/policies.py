@@ -74,7 +74,8 @@ def runtime_policies() -> dict[str, int | bool]:
             "monitor_batch_size": svc.monitor_batch_size(),
             "recovery_enabled": svc.monitor_recovery_enabled(),
             "max_recovery_attempts": svc.monitor_max_recovery_attempts(),
-            "stale_base_build_minutes": svc.monitor_stale_base_build_minutes(),
+            "base_image_timeout_minutes": svc.base_image_timeout_minutes(),
+            "stale_base_build_minutes": svc.base_image_timeout_minutes(),
             "stale_worker_seconds": svc.monitor_stale_worker_seconds(),
             "scheduler_lock_seconds": svc.monitor_scheduler_lock_seconds(),
         }
@@ -84,6 +85,6 @@ def runtime_policies() -> dict[str, int | bool]:
             "stop_timeout_minutes": 5, "unexpected_death_grace_seconds": 15,
             "monitor_enabled": True, "monitor_interval_seconds": 30,
             "monitor_batch_size": 100, "recovery_enabled": True,
-            "max_recovery_attempts": 3, "stale_base_build_minutes": 30,
+            "max_recovery_attempts": 3, "base_image_timeout_minutes": 30, "stale_base_build_minutes": 30,
             "stale_worker_seconds": 90, "scheduler_lock_seconds": 20,
         }
