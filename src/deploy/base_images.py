@@ -665,17 +665,6 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                     )
                 continue
 
-                raise RuntimeError(f"Base runtime image {key} is disabled by an administrator.")
-
-            local_exists = _docker_image_exists(row.image_ref)
-            local_compatible = False
-            if row.enabled and not row.rebuild_requested and local_exists:
-                try:
-                    local_image = get_docker_client().images.get(row.image_ref)
-                    labels = ((getattr(local_image, "attrs", {}) or {}).get("Config") or {}).get("Labels") or {}
-                    local_compatible = labels.get("io.passdeployer.base-definition") == fingerprint
-                except Exception:
-                    local_compatible = False
             if logger_sink:
                 logger_sink.info(
                     "base_image",
