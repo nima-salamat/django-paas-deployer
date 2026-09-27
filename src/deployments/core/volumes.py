@@ -78,6 +78,17 @@ class VolumeMountManager:
                             details={"volume": volume.source, "service_id": str(service_id), "capacity_mode": "LOGICAL_ONLY"},
                         )
                     effective_size = int(registry_volume.size_mb)
+                    if not volume.create and not self._docker_volume_exists(volume.source):
+                        raise VolumeError(
+                            f"Docker volume '{volume.source}' is not present on the connected node; "
+                            "refusing to let Swarm create an unprovisioned same-named local volume.",
+                            details={
+                                "volume": volume.source,
+                                "service_id": str(service_id),
+                                "scope": "local",
+                                "capacity_mode": "LOGICAL_ONLY",
+                            },
+                        )
                     if volume.size_mb is not None and int(volume.size_mb) != effective_size:
                         raise VolumeError(
                             f"Declared volume capacity for '{volume.source}' does not match the registry allocation.",
