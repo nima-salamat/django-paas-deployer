@@ -68,14 +68,15 @@ def forwards(apps, schema_editor):
 
         legacy_variant = row.variant
         old_ref = row.image_ref
+        was_disabled = bool(not row.enabled or row.status == "disabled")
         row.variant = "apache"
         row.source_image = f"docker.io/php:{row.runtime_version}-apache"
         row.image_repository = "paas-base/php-apache"
         row.image_tag = row.image_tag or f"{row.runtime_version}-r1"
         row.image_ref = f"paas-base/php-apache:{row.image_tag}"
-        row.status = "pending"
-        row.enabled = True
-        row.rebuild_requested = True
+        row.status = "disabled" if was_disabled else "pending"
+        row.enabled = False if was_disabled else True
+        row.rebuild_requested = False if was_disabled else True
         row.rebuild_requested_at = now
         row.image_id = ""
         row.image_digest = ""
@@ -89,7 +90,7 @@ def forwards(apps, schema_editor):
             "stage": "base_image_migration",
             "migrated_from": old_ref,
             "legacy_variant": legacy_variant,
-            "rebuild_required": True,
+            "rebuild_required": not was_disabled,
             "safe_to_remove": True,
         }
         row.save()
