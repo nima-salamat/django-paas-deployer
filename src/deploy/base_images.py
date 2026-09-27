@@ -352,6 +352,7 @@ def build_registered_base_image(
         elif (
             row.status == BaseRuntimeImage.Status.READY
             and not row.rebuild_requested
+            and not force_rebuild
             and row.definition_fingerprint == fingerprint
         ):
             return
