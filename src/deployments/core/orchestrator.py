@@ -206,6 +206,17 @@ class DeploymentOrchestrator:
             self._ensure_networks(config)
             self.logger.info("volume_creation", "Preparing Docker volume mounts.", progress=40)
             service_id = str((config.labels or {}).get("service.id") or "").strip() or None
+            if any(
+                str(getattr(volume, "mount_type", "volume") or "volume").lower() == "volume"
+                for volume in (config.volumes or [])
+            ) and not service_id:
+                raise DeploymentError(
+                    "Persistent volume mounts require an owning Service.",
+                    stage="volume_creation",
+                    code="VOLUME_OWNER_REQUIRED",
+                    user_message="This deployment cannot use unregistered persistent storage.",
+                    details={"capacity_mode": "LOGICAL_ONLY"},
+                )
             effective_volumes = self.volume_manager.ensure_default_volumes(
                 list(config.volumes or []),
                 platform=getattr(config, "platform", None) or getattr(config, "platform_type", None),
