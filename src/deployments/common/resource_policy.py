@@ -96,14 +96,25 @@ def resolve_build_policy(policy: dict[str, Any] | None = None, *, plan: Any = No
         raise ValueError("Unsupported build resource policy keys: " + ", ".join(sorted(str(k) for k in unknown)))
     if "mode" in candidate and str(candidate["mode"]).strip().lower() != resolved["mode"]:
         raise ValueError("build resource mode is operator-owned and cannot be overridden.")
-    for key in ("cpu", "memory_mb", "pids_limit", "shm_size_mb"):
-        if key in candidate:
-            resolved[key] = candidate[key]
+    # Explicit snapshots may only preserve or reduce the already-resolved
+    # server-owned budget; they can never raise an operator ceiling.
     try:
-        resolved["cpu"] = max(0.25, min(float(resolved["cpu"]), 8.0))
-        resolved["memory_mb"] = max(256, min(int(resolved["memory_mb"]), 8192))
-        resolved["pids_limit"] = max(128, min(int(resolved["pids_limit"]), 8192))
-        resolved["shm_size_mb"] = max(16, min(int(resolved["shm_size_mb"]), 512))
+        resolved["cpu"] = max(
+            0.25,
+            min(float(resolved["cpu"]), float(candidate.get("cpu", resolved["cpu"]))),
+        )
+        resolved["memory_mb"] = max(
+            256,
+            min(int(resolved["memory_mb"]), int(candidate.get("memory_mb", resolved["memory_mb"]))),
+        )
+        resolved["pids_limit"] = max(
+            128,
+            min(int(resolved["pids_limit"]), int(candidate.get("pids_limit", resolved["pids_limit"]))),
+        )
+        resolved["shm_size_mb"] = max(
+            16,
+            min(int(resolved["shm_size_mb"]), int(candidate.get("shm_size_mb", resolved["shm_size_mb"]))),
+        )
     except (TypeError, ValueError) as exc:
         raise ValueError("Build resource policy contains invalid numeric limits.") from exc
     return resolved
