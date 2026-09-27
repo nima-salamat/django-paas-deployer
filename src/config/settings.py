@@ -434,7 +434,7 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 15.0,
     },
     "application_catalog_reconciliation": {
-        "task": "app_catalog.tasks.reconcile_application_installations",
+        "task": "app_catalog.reconcile_application_installations",
         "schedule": 10.0,
     },
     "expire_idle_shell_sessions": {
