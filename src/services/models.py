@@ -219,6 +219,9 @@ class Service(BaseModel):
             "quota_mb": quota,
             "used_mb": used,
             "remaining_mb": remaining,
+            # This summary is logical allocation, not physical disk usage.
+            "quota_mode": "LOGICAL_ONLY",
+            "physical_enforcement": False,
             "quota_gb": round(quota / 1024, 2) if quota else 0,
             "used_gb": round(used / 1024, 2) if used else 0,
             "remaining_gb": round(remaining / 1024, 2) if remaining else 0,
