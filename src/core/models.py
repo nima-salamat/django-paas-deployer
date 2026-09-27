@@ -268,8 +268,8 @@ class CoreSettings(BaseGenericSetting):
         default=3, verbose_name=_("Maximum recovery attempts"),
     )
     monitor_stale_base_build_minutes = models.PositiveIntegerField(
-        default=30, verbose_name=_("Base-image build lifecycle timeout (minutes)"),
-        help_text=_("Shared timeout for deployment waiting and monitor recovery of base-image builds."),
+        default=30, verbose_name=_("Legacy base-image timeout setting"),
+        help_text=_("Deprecated compatibility field. Base-image lifecycle timing is controlled by base_image_build_timeout_minutes."),
     )
     monitor_stale_worker_seconds = models.PositiveIntegerField(
         default=90, verbose_name=_("Stale worker heartbeat (seconds)"),
