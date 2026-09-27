@@ -872,36 +872,51 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
             else:
                 changed = False
                 definition_changed = row.definition_fingerprint != fingerprint
-                for field, value in {
-                    "source_image": spec.source_image,
-                    "image_repository": spec.repository,
-                    "image_tag": spec.tag,
-                    "image_ref": spec.image_ref,
-                    "definition_fingerprint": fingerprint,
-                }.items():
-                    if getattr(row, field) != value:
-                        setattr(row, field, value)
-                        changed = True
-                if row.status == BaseRuntimeImage.Status.BUILDING:
-                    if definition_changed:
-                        # Keep the active builder's ownership/fingerprint intact.
-                        # Mark a rebuild for the next claim instead of racing it.
-                        row.rebuild_requested = True
-                        row.save(update_fields=["rebuild_requested", "updated_at"])
-                elif definition_changed or changed:
-                    row.status = BaseRuntimeImage.Status.PENDING
-                    row.rebuild_requested = True if definition_changed else row.rebuild_requested
-                    row.image_id = "" if definition_changed else row.image_id
-                    row.image_digest = "" if definition_changed else row.image_digest
-                    row.last_error = ""
-                    row.last_error_details = {}
+                if row.status == BaseRuntimeImage.Status.BUILDING and definition_changed:
+                    # Never mutate the identity/fingerprint/ref of an active
+                    # build. Record the desired definition as pending state and
+                    # let the current owner finish or be fenced first.
+                    details = dict(row.last_error_details or {})
+                    details.update({
+                        "stage": "base_image",
+                        "rebuild_pending": True,
+                        "pending_definition_fingerprint": fingerprint,
+                        "pending_image_ref": spec.image_ref,
+                        "pending_source_image": spec.source_image,
+                        "pending_image_repository": spec.repository,
+                        "pending_image_tag": spec.tag,
+                    })
+                    row.rebuild_requested = True
+                    row.rebuild_requested_at = row.rebuild_requested_at or timezone.now()
+                    row.last_error_details = details
                     row.save(update_fields=[
-                        "source_image", "image_repository", "image_tag",
-                        "image_ref", "definition_fingerprint", "status",
-                        "rebuild_requested", "image_id", "image_digest",
-                        "last_error", "last_error_details", "updated_at",
+                        "rebuild_requested", "rebuild_requested_at",
+                        "last_error_details", "updated_at",
                     ])
-
+                elif row.status != BaseRuntimeImage.Status.BUILDING:
+                    for field, value in {
+                        "source_image": spec.source_image,
+                        "image_repository": spec.repository,
+                        "image_tag": spec.tag,
+                        "image_ref": spec.image_ref,
+                        "definition_fingerprint": fingerprint,
+                    }.items():
+                        if getattr(row, field) != value:
+                            setattr(row, field, value)
+                            changed = True
+                    if definition_changed or changed:
+                        row.status = BaseRuntimeImage.Status.PENDING
+                        row.rebuild_requested = True if definition_changed else row.rebuild_requested
+                        row.image_id = "" if definition_changed else row.image_id
+                        row.image_digest = "" if definition_changed else row.image_digest
+                        row.last_error = ""
+                        row.last_error_details = {}
+                        row.save(update_fields=[
+                            "source_image", "image_repository", "image_tag",
+                            "image_ref", "definition_fingerprint", "status",
+                            "rebuild_requested", "image_id", "image_digest",
+                            "last_error", "last_error_details", "updated_at",
+                        ])
             if not row.enabled:
                 raise RuntimeError(f"Base runtime image {key} is disabled by an administrator.")
 
