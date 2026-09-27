@@ -350,6 +350,17 @@ def build_registered_base_image(
         row = BaseRuntimeImage.objects.select_for_update().get(pk=base_image_id)
         spec = _spec_for_record(row)
         fingerprint = _spec_fingerprint(spec)
+        if task_id and row.status in {
+            BaseRuntimeImage.Status.BUILDING,
+            BaseRuntimeImage.Status.READY,
+            BaseRuntimeImage.Status.FAILED,
+        } and row.build_task_id and row.build_task_id != task_id:
+            return
+        if task_id and row.status in {
+            BaseRuntimeImage.Status.READY,
+            BaseRuntimeImage.Status.FAILED,
+        } and not row.build_task_id:
+            return
         if row.status == BaseRuntimeImage.Status.BUILDING and row.build_task_id:
             if task_id and row.build_task_id != task_id:
                 return
