@@ -121,3 +121,10 @@ def test_stale_base_image_recovery_fences_previous_task():
     assert '"superseded_task_id": previous_task_id' in source
     assert 'row.build_task_id = recovery_owner' in source
     assert 'row.build_task_id != task_id' in source
+
+
+def test_superseded_base_image_retry_cannot_reclaim_failed_row():
+    source = (ROOT / "deploy" / "base_images.py").read_text(encoding="utf-8")
+    assert 'BaseRuntimeImage.Status.FAILED,' in source
+    assert 'if task_id and row.status in {' in source
+    assert 'and not row.build_task_id:' in source
