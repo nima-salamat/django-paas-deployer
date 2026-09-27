@@ -152,6 +152,10 @@ def monitor_services(self):
         r = None
         token = None
 
+    # Finalize cancellations that never reached a worker. This is especially
+    # important for timeout requests raised while a deployment is still pending.
+    _finalize_pending_cancellations()
+
     # ------------------------------------------------------------------
     # 1. Active deployments (pipeline progress / timeout)
     # ------------------------------------------------------------------
@@ -198,6 +202,41 @@ def monitor_services(self):
             logger.warning("Unable to release monitor scheduler lock")
     return {"status": "ok", "deployments": len(deployments), "services": len(services)}
 
+
+
+def _finalize_pending_cancellations() -> None:
+    """Terminalize pending deployments cancelled before their worker started."""
+    candidates = (
+        Deploy.objects
+        .select_related("service")
+        .filter(
+            status=DeploymentStatusChoices.PENDING,
+            cancel_requested=True,
+        )
+        .order_by("updated_at")[: int(runtime_policies()["monitor_batch_size"])]
+    )
+    for deploy in candidates:
+        try:
+            StateManager.transition_deploy(
+                deploy.pk,
+                DeploymentStatusChoices.CANCELLED,
+                update_fields={
+                    "stage": "cancelled",
+                    "progress": 100,
+                    "status_message": "Deployment cancelled before worker execution.",
+                    "error_message": deploy.error_message or "Deployment was cancelled before execution.",
+                },
+            )
+            service = deploy.service
+            if service and service.status == SERVICE_STATUS_CHOICES.QUEUED:
+                StateManager.transition_service(
+                    service.pk,
+                    SERVICE_STATUS_CHOICES.STOPPED,
+                    update_fields={"desired_state": "stopped"},
+                )
+            logger.info("Finalized pre-start cancellation for deployment %s", deploy.pk)
+        except Exception:
+            logger.exception("Failed to finalize pending cancellation for deployment %s", deploy.pk)
 
 def _retry_orphaned_queued_deploys() -> None:
     """Re-enqueue deployments whose DB transaction committed but Celery did not.
