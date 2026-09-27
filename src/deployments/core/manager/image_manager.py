@@ -489,7 +489,12 @@ class Image(Client):
                 watcher.join(timeout=0.5)
 
 
-    def create(self, on_build_output: Optional[Callable] = None, cancel_check: Optional[Callable[[], bool]] = None):
+    def create(
+        self,
+        on_build_output: Optional[Callable] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
+        ownership_check: Optional[Callable[[], None]] = None,
+    ):
         """Build the exact model-derived image and apply its tag after build.
 
         The low-level docker-py ``api.build`` path is used with the exact
