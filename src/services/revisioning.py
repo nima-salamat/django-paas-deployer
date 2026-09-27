@@ -705,6 +705,27 @@ def get_active_deploy(service: Service, *, for_update: bool = False):
     return revision.source_deploy or revision.deployments.order_by("-created_at").first()
 
 
+@transaction.atomic
+def ensure_active_revision_for_service(service: Service) -> ServiceRevision | None:
+    """Bridge a legacy selected deployment into active_revision once."""
+    locked_service = Service.objects.select_for_update().get(pk=service.pk)
+    active = get_active_revision(locked_service, for_update=True)
+    if active is not None:
+        return active
+
+    legacy_deploy = getattr(locked_service, "selected_deploy", None)
+    if legacy_deploy is None:
+        return None
+
+    legacy_deploy = ensure_revision_for_deploy(legacy_deploy)
+    legacy_deploy.refresh_from_db(fields=["revision"])
+    revision_id = getattr(legacy_deploy, "revision_id", None)
+    if revision_id is None:
+        return None
+
+    return activate_revision_locked(locked_service, revision_id)
+
+
 def activate_revision_locked(service: Service, revision_id) -> ServiceRevision:
     revision = (
         ServiceRevision.objects.select_for_update()
@@ -723,6 +744,14 @@ def activate_revision_locked(service: Service, revision_id) -> ServiceRevision:
     revision.activated_at = timezone.now()
     revision.save(update_fields=["state", "activated_at", "updated_at"])
 
-    Service.objects.filter(pk=service.pk).update(active_revision=revision)
+    # selected_deploy is a compatibility projection; active_revision
+    # remains the runtime authority.
+    selected_deploy_id = getattr(revision.source_deploy, "pk", None)
+    Service.objects.filter(pk=service.pk).update(
+        active_revision=revision,
+        selected_deploy=selected_deploy_id,
+        selected_deploy_at=timezone.now() if selected_deploy_id else None,
+    )
     service.active_revision = revision
+    service.selected_deploy_id = selected_deploy_id
     return revision
