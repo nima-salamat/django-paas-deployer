@@ -43,8 +43,12 @@ class VolumeUsage:
 
 def volume_usage_warning_percent() -> float:
     try:
-        from django.conf import settings
-        value = getattr(settings, "VOLUME_USAGE_WARNING_PERCENT", 90)
+        try:
+            from core.settings_service import volume_usage_warning_percent
+            value = volume_usage_warning_percent()
+        except Exception:
+            from django.conf import settings
+            value = getattr(settings, "VOLUME_USAGE_WARNING_PERCENT", 90)
     except Exception:
         value = 90
     try:
