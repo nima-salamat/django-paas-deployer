@@ -124,8 +124,9 @@ def test_volume_warning_uses_existing_deployment_event_pipeline():
     assert "92.0% full" in args[1]
     assert kwargs["details"]["usage_state"] == "warning"
 
-def test_volume_usage_reconciliation_detects_docker_orphan_and_missing_registry_volume(monkeypatch):
+def test_volume_usage_reconciliation_detects_docker_orphan_and_missing_registry_volume():
     from deployments.core.volume_storage import reconcile_managed_volumes
+    from unittest.mock import patch
 
     class DockerRow:
         def __init__(self, name):
@@ -138,14 +139,11 @@ def test_volume_usage_reconciliation_detects_docker_orphan_and_missing_registry_
         DockerRow("vol-12345678-db-data"),
         DockerRow("vol-orphan-unregistered"),
     ]
-
-    fake_qs = Mock()
-    fake_qs.values.return_value = [
+    registry_rows = [
         {"id": db_id, "name": "db-data", "service_id": "svc-1", "size_mb": 1024},
         {"id": "87654321-1234-1234-1234-123456789abc", "name": "app-data", "service_id": "svc-2", "size_mb": 512},
     ]
-    import services.models
-    monkeypatch.setattr(services.models.Volume, "objects", fake_qs)
-    result = reconcile_managed_volumes(manager)
+    with patch("services.models.Volume.objects.values", return_value=registry_rows):
+        result = reconcile_managed_volumes(manager)
     assert [row["volume"] for row in result["docker_orphans"]] == ["vol-orphan-unregistered"]
     assert [row["volume"] for row in result["missing_docker"]] == ["vol-87654321-app-data"]
