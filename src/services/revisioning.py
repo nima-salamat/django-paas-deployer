@@ -651,7 +651,13 @@ def ensure_revision_for_deploy(deploy, *, force_new: bool = False):
                 deploy.zip_file.close()
             except Exception:
                 pass
-        revision.save(update_fields=["artifact_file", "updated_at"])
+        # The revision is immutable after creation. The artifact was attached
+        # with save=False, so persist only the initial FileField value through
+        # the queryset API instead of invoking the immutable model save hook.
+        ServiceRevision.objects.filter(pk=revision.pk).update(
+            artifact_file=revision.artifact_file.name,
+            updated_at=timezone.now(),
+        )
 
     Deploy.objects.filter(
         pk=deploy.pk
