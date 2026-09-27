@@ -1007,8 +1007,9 @@ def _reconcile_service_runtime_swarm(service: Service) -> None:
 
 
 def _reconcile_base_runtime_builds(policies: dict) -> None:
-    """Recover base-image rows whose builder disappeared or exceeded the operator timeout."""
-    cutoff = timezone.now() - timedelta(minutes=int(policies["base_image_timeout_minutes"]))
+    """Fail base-image builds that exceed the single shared base-phase budget."""
+    timeout_minutes = int(policies["base_image_build_timeout_minutes"])
+    cutoff = timezone.now() - timedelta(minutes=timeout_minutes)
     stale = BaseRuntimeImage.objects.filter(
         status=BaseRuntimeImage.Status.BUILDING,
         build_started_at__lt=cutoff,
@@ -1016,20 +1017,32 @@ def _reconcile_base_runtime_builds(policies: dict) -> None:
     for row in stale:
         try:
             updated = BaseRuntimeImage.objects.filter(
-                pk=row.pk, status=BaseRuntimeImage.Status.BUILDING, build_started_at__lt=cutoff
+                pk=row.pk,
+                status=BaseRuntimeImage.Status.BUILDING,
+                build_started_at__lt=cutoff,
             ).update(
                 status=BaseRuntimeImage.Status.FAILED,
                 build_task_id="",
                 build_owner_deployment_id="",
-                last_error="Base image build exceeded its operator-owned lifecycle timeout.",
+                last_error=(
+                    "Base image build exceeded the configured "
+                    f"{timeout_minutes}-minute base-image lifecycle budget."
+                ),
                 last_error_details={
                     "stage": "base_image",
                     "exception_type": "BaseImageTimeout",
-                    "technical_message": "Base image build exceeded its operator-owned lifecycle timeout.",
-                    "retry_pending": False,
+                    "technical_message": (
+                        "Base image build exceeded the configured "
+                        f"{timeout_minutes}-minute base-image lifecycle budget."
+                    ),
+                    "retry_pending": bool(
+                        (row.last_error_details or {}).get("retry_pending")
+                    ),
                     "base_image_ref": row.image_ref,
                     "resource_policy_source": "server_owned",
                     "docker_api_reached": None,
+                    "timeout_phase": "base_image",
+                    "timeout_minutes": timeout_minutes,
                 },
                 build_completed_at=timezone.now(),
                 updated_at=timezone.now(),
