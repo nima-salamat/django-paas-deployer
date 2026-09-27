@@ -652,6 +652,7 @@ class Image(Client):
                         on_build_output=on_build_output,
                         cancel_check=cancel_check,
                         lease_check=build_slot.assert_owned,
+                        ownership_check=ownership_check,
                     )
                     if not image_id:
                         raise ImageBuildError(
