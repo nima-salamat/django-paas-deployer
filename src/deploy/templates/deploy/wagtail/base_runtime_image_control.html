@@ -1,0 +1,47 @@
+{% extends "wagtailadmin/base.html" %}
+{% load i18n %}
+
+{% block titletag %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="nice-padding">
+  <h1>{{ title }}</h1>
+  <p>
+    {% if operation == "renew" %}
+      {% trans "A renewal forces a fresh build of the current operator-owned definition. If another worker is already building this image, the renewal is queued as a single follow-up request instead of starting a duplicate build." %}
+    {% else %}
+      {% trans "Ensures that the current definition has a compatible READY image. Existing compatible images are reused without an unnecessary rebuild." %}
+    {% endif %}
+  </p>
+
+  <table class="listing" style="max-width: 900px">
+    <tbody>
+      <tr><th>{% trans "Image" %}</th><td><code>{{ row.image_ref }}</code></td></tr>
+      <tr><th>{% trans "Runtime" %}</th><td>{{ row.logical_runtime }} {{ row.runtime_version }}</td></tr>
+      <tr><th>{% trans "Variant" %}</th><td>{{ row.variant }}</td></tr>
+      <tr><th>{% trans "Status" %}</th><td>{{ row.get_status_display }}</td></tr>
+      <tr><th>{% trans "Docker host" %}</th><td>{{ row.docker_host|default:"—" }}</td></tr>
+      <tr><th>{% trans "Build task" %}</th><td><code>{{ row.build_task_id|default:"—" }}</code></td></tr>
+      <tr><th>{% trans "Owner deployment" %}</th><td><code>{{ row.build_owner_deployment_id|default:"—" }}</code></td></tr>
+      <tr><th>{% trans "Build count" %}</th><td>{{ row.build_count }}</td></tr>
+      <tr><th>{% trans "Definition fingerprint" %}</th><td><code>{{ row.definition_fingerprint|default:"—" }}</code></td></tr>
+      <tr><th>{% trans "Build started" %}</th><td>{{ row.build_started_at|default:"—" }}</td></tr>
+      <tr><th>{% trans "Build completed" %}</th><td>{{ row.build_completed_at|default:"—" }}</td></tr>
+      <tr><th>{% trans "Last error" %}</th><td>{{ row.last_error|default:"—" }}</td></tr>
+    </tbody>
+  </table>
+
+  {% if row.status == "building" and operation == "renew" %}
+    <div class="help-block help-warning" style="margin-top: 1rem">
+      {% trans "This image is already BUILDING. Confirming Renew will request exactly one follow-up rebuild; the active owner is never replaced." %}
+    </div>
+  {% endif %}
+
+  <form method="post" style="margin-top: 1.5rem">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ next_url }}">
+    <button type="submit" class="button button-primary">{{ title }}</button>
+    <a href="{{ next_url }}" class="button button-secondary">{% trans "Cancel" %}</a>
+  </form>
+</div>
+{% endblock %}
