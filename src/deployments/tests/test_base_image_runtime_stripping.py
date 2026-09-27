@@ -109,9 +109,9 @@ FROM python:3.11-slim AS worker
 RUN echo python
 """
     config = SimpleNamespace(
-        base_images={"base_image": "paas-base/php-apache-root:8.4-r1"},
+        base_images={"base_image": "paas-base/php-apache:8.4-r1"},
         platform="php",
     )
     out = _apply_resolved_base_images(dockerfile, config)
-    assert "FROM paas-base/php-apache-root:8.4-r1 AS runtime" in out
+    assert "FROM paas-base/php-apache:8.4-r1 AS runtime" in out
     assert "FROM python:3.11-slim AS worker" in out
