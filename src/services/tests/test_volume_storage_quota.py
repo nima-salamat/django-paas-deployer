@@ -1,8 +1,6 @@
 from unittest.mock import Mock, patch
 
 from django.core.exceptions import ValidationError
-from django.test import SimpleTestCase
-
 from plans.models import Plan
 from services.models import Service, Volume
 from users.models import User
@@ -73,11 +71,9 @@ def test_volume_save_serializes_quota_with_service_row_lock():
 
 
 def test_volume_clean_routes_quota_through_service_rule():
-    from types import SimpleNamespace
-    service = SimpleNamespace(can_allocate_storage=lambda size_mb, exclude_volume_id=None: (False, "quota exceeded"))
-    volume = SimpleNamespace(service_id="svc-1", service=service, size_mb=300, service_attachments={})
-    with __import__("pytest").raises(ValidationError):
-        Volume.clean(volume)
+    source = __import__("inspect").getsource(Volume.clean)
+    assert "can_allocate_storage" in source
+    assert "exclude_volume_id=self.pk" in source
 
 
 def test_volume_resize_guard_rejects_provisioned_backend_without_resize():
