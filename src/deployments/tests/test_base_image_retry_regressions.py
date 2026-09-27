@@ -25,8 +25,9 @@ def test_base_image_wait_surfaces_persisted_builder_failure_reason():
 def test_concurrent_base_image_wait_surfaces_failure_reason():
     source = (ROOT / "deploy" / "base_images.py").read_text(encoding="utf-8")
 
-    assert 'Concurrent base image build failed: {image_ref}.' in source
-    assert 'Concurrent base image build timed out: {image_ref}' in source
+    assert '"waiting_for_concurrent": waiting_for_concurrent' in source
+    assert 'Base image build failed: {image_ref}.' in source
+    assert 'Base image wait timed out: {image_ref}.' in source
 
 
 def test_retry_helper_persists_building_not_failed(monkeypatch):
