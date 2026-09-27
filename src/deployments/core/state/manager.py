@@ -167,6 +167,9 @@ class StateManager:
                 updates.setdefault("started_at", None)
                 updates.setdefault("completed_at", None)
                 updates.setdefault("worker_heartbeat_at", None)
+                updates.setdefault("base_image_wait_started_at", None)
+                updates.setdefault("base_image_ready_at", None)
+                updates.setdefault("application_started_at", None)
             elif target == sm.DEPLOY_RUNNING:
                 updates.setdefault("started_at", now)
             elif target in (
@@ -259,11 +262,15 @@ class StateManager:
             deploy.started_at = now
             deploy.worker_heartbeat_at = now
             deploy.execution_task_id = task_id or deploy.execution_task_id or ""
+            deploy.base_image_wait_started_at = None
+            deploy.base_image_ready_at = None
+            deploy.application_started_at = None
             deploy.stage = "starting"
             deploy.progress = 0
             deploy.save(update_fields=[
                 "status", "started_at", "worker_heartbeat_at",
-                "execution_task_id", "stage", "progress",
+                "execution_task_id", "base_image_wait_started_at", "base_image_ready_at",
+                "application_started_at", "stage", "progress",
             ])
 
             logger.info(
