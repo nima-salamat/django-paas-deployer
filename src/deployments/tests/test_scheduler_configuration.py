@@ -136,3 +136,19 @@ def test_pending_cancelled_deployments_have_a_terminal_recovery_path():
     assert "cancel_requested=True," in schedules
     assert 'DeploymentStatusChoices.CANCELLED' in schedules
     assert "(SERVICE_QUEUED, SERVICE_STOPPED)" in state_machine
+
+
+def test_force_cancel_runtime_imports_deployment_state_and_uses_state_manager():
+    source = (ROOT / "src" / "services" / "api" / "runtime.py").read_text(encoding="utf-8")
+
+    assert "from deploy.models import Deploy, DeploymentStatusChoices" in source
+    assert "StateManager.transition_deploy(" in source
+    assert "DeploymentStatusChoices.CANCELLED" in source
+    assert 'active_states = {"pending", "queued", "running", "deploying", "stopping"}' not in source
+
+
+def test_compose_workers_consume_routed_deployment_queues():
+    compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+
+    assert "celery,deployments,operations,base-images" in compose
+    assert "deployments,operations,base-images" in compose

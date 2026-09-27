@@ -7,7 +7,7 @@ from django.db import transaction
 from django.conf import settings
 from django.http import FileResponse
 from ..models import Service, PrivateNetwork, Volume
-from deploy.models import Deploy
+from deploy.models import Deploy, DeploymentStatusChoices
 from django.shortcuts import get_object_or_404
 from ..serializers import (
     PrivateNetworkSerializer,
@@ -588,24 +588,69 @@ def force_cancel_deploy_apiview(request):
     except (Deploy.DoesNotExist, Service.DoesNotExist):
         return Response({"result": "error", "detail": _("Deployment or service not found.")}, status=status.HTTP_404_NOT_FOUND)
 
-    active_states = {"pending", "queued", "running", "deploying", "stopping"}
-    current = str(getattr(selected, "status", "") or "").lower()
-    if current == "cancelled":
-        return Response({"result": "success", "detail": _("Deployment is already cancelled."), "deploy_id": str(selected.pk)}, status=status.HTTP_200_OK)
-    if current not in active_states:
-        return Response({"result": "error", "detail": _("Only an active deployment can be force-cancelled."), "status": current}, status=status.HTTP_409_CONFLICT)
+    # Deploy.status has a smaller, explicit state machine than the legacy
+    # Service.status values. Only deployments that can still execute are
+    # force-cancellable; queued is a Service state, not a Deploy state.
+    active_states = {
+        DeploymentStatusChoices.PENDING,
+        DeploymentStatusChoices.RUNNING,
+    }
 
-    now = timezone.now()
-    task_id = getattr(service_item, "task_id", None)
     with transaction.atomic():
-        locked = Deploy.objects.select_for_update().get(pk=selected.pk)
-        if str(locked.status).lower() not in active_states and str(locked.status).lower() != "cancelled":
-            return Response({"result": "error", "detail": _("Deployment state changed while cancelling."), "status": locked.status}, status=status.HTTP_409_CONFLICT)
-        Deploy.objects.filter(pk=locked.pk).update(
-            cancel_requested=True, status=DeploymentStatusChoices.CANCELLED, stage="cancelled",
-            status_message="Deployment force-cancelled by user.", completed_at=now, progress=100,
-            error_message="Force cancelled by user.",
+        # Re-lock the Service and Deploy together so a concurrent rebuild/start
+        # cannot make us revoke or mutate a newer execution.
+        service_item = Service.objects.select_for_update().get(pk=service_item.pk)
+        target_deploy_id = selected.pk if deploy_id else service_item.selected_deploy_id
+        if not target_deploy_id:
+            return Response(
+                {"result": "error", "detail": _("This service has no selected deployment to cancel.")},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        locked = Deploy.objects.select_for_update().get(
+            pk=target_deploy_id,
+            service_id=service_item.pk,
         )
+        current = str(locked.status or "").lower()
+        if current == DeploymentStatusChoices.CANCELLED:
+            return Response(
+                {
+                    "result": "success",
+                    "detail": _("Deployment is already cancelled."),
+                    "deploy_id": str(locked.pk),
+                },
+                status=status.HTTP_200_OK,
+            )
+        if current not in active_states:
+            return Response(
+                {
+                    "result": "error",
+                    "detail": _("Only an active deployment can be force-cancelled."),
+                    "status": current,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        # Prefer the deployment's authoritative execution owner. The Service
+        # task id is retained as a compatibility fallback for older rows.
+        task_id = (
+            str(locked.execution_task_id or "").strip()
+            or str(getattr(service_item, "task_id", "") or "").strip()
+            or None
+        )
+        from deployments.core.state.manager import StateManager
+        StateManager.transition_deploy(
+            locked.pk,
+            DeploymentStatusChoices.CANCELLED,
+            update_fields={
+                "cancel_requested": True,
+                "stage": "cancelled",
+                "progress": 100,
+                "status_message": "Deployment force-cancelled by user.",
+                "error_message": "Force cancelled by user.",
+            },
+        )
+        selected = locked
 
     revoke_result = "not_requested"
     if task_id:
@@ -631,7 +676,12 @@ def force_cancel_deploy_apiview(request):
     except Exception:
         running = False
     fallback_status = SERVICE_STATUS_CHOICES.RUNNING if running else SERVICE_STATUS_CHOICES.STOPPED
-    Service.objects.filter(pk=service_item.pk, task_id=task_id).update(
+    service_qs = Service.objects.filter(pk=service_item.pk)
+    if task_id:
+        service_qs = service_qs.filter(task_id=task_id)
+    else:
+        service_qs = service_qs.filter(task_id__in=("", None))
+    service_qs.update(
         task_id=None, deploy_started=None, status=fallback_status
     )
 

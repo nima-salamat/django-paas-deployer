@@ -246,6 +246,11 @@ services:
       - config
       - worker
       - --loglevel=info
+      # Keep the default worker usable in installations that do not start the
+      # optional dedicated deployment-worker service. These queues are also
+      # consumed by the dedicated worker when that service is enabled.
+      - -Q
+      - celery,deployments,operations,base-images
 
     volumes:
       - .:/app
@@ -315,7 +320,7 @@ services:
       - --pool=prefork
       - --concurrency=${DEPLOYMENT_WORKER_CONCURRENCY:-2}
       - -Q
-      - deployments,operations
+      - deployments,operations,base-images
 
     volumes:
       - .:/app
