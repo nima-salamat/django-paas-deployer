@@ -48,10 +48,9 @@ def test_local_volume_capability_is_not_hard_enforced():
 
 
 def test_logical_quota_helpers_preserve_declared_allocation_semantics():
-    from types import SimpleNamespace
     from unittest.mock import patch
 
-    service = SimpleNamespace(pk="svc-1", plan=SimpleNamespace(max_storage=1))
+    service = Service(plan=Plan(max_storage=1))
     with patch("services.models.Volume.objects.filter") as filter_mock:
         filter_mock.return_value.distinct.return_value.aggregate.return_value = {"s": 800}
         assert Service.get_storage_quota_mb(service) == 1024
@@ -124,7 +123,10 @@ def test_volume_usage_reconciliation_detects_docker_orphan_and_missing_registry_
     class DockerRow:
         def __init__(self, name):
             self.name = name
-            self.attrs = {"Name": name}
+            self.attrs = {
+                "Name": name,
+                "Labels": {"managed-by": "django-paas-deployer"},
+            }
 
     db_id = "12345678-1234-1234-1234-123456789abc"
     manager = Mock()
