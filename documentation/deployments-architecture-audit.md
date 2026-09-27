@@ -886,3 +886,14 @@ This status is part of the design contract: new code must extend the seams
 above or explicitly document why an existing compatibility path remains. It
 must not introduce another direct Docker path or another independent
 deployment state machine.
+
+### Base Runtime Image lifecycle contract
+
+The BaseRuntimeImage registry is keyed by runtime, version, variant, architecture and `docker_host`. The `docker_host` component is deliberate: locally built images are only shared by deployments attached to the same Docker daemon. In a multi-node Swarm, application image distribution is handled separately by `SWARM_IMAGE_REGISTRY`; the base image itself is not assumed to be cluster-shared.
+
+PHP has one canonical active runtime identity, `variant=apache`, with repository `paas-base/php-apache`. Older `apache-root` and `apache-public` identities are treated as legacy definitions. Migration 0023 preserves active builds/leases, converts safe rows to the canonical identity, and never deletes an old Docker image blindly.
+
+A compatible READY base image is reused only when its definition fingerprint matches the current operator-owned definition. A missing or incompatible image has a single DB owner. Other deployments emit a `base_image` wait event and wait on the same registry row rather than dispatching duplicate builds. A Renew operation while BUILDING sets `rebuild_requested`; it does not replace the active task owner.
+
+Deployment timing is phase-based. `base_image_wait_started_at` owns the dedicated base-image budget, while `application_started_at` starts a fresh application budget after base-image resolution completes. The monitor and synchronous worker use the same phase-deadline helper.
+
