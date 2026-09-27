@@ -2240,17 +2240,22 @@ def _apply_resolved_base_images(dockerfile: str, config=None) -> str:
     if not bases:
         return dockerfile
 
+    platform = str(getattr(config, "platform", "") or "").strip().lower()
     replacements = []
     if bases.get("base_image"):
-        replacements.extend([
-            (r"FROM\s+(?:[^\s/]+/)*php:[^\s]+-apache(?=\s|$)", f"FROM {bases['base_image']}"),
-            (r"FROM\s+(?:[^\s/]+/)*python:[^\s]+", f"FROM {bases['base_image']}"),
-            (r"FROM\s+(?:[^\s/]+/)*golang:[^\s]+", f"FROM {bases['base_image']}"),
-        ])
-    if bases.get("node_base_image"):
-        replacements.append((r"FROM\s+(?:[^\s/]+/)*node:[^\s]+", f"FROM {bases['node_base_image']}"))
-    if bases.get("nginx_base_image"):
-        replacements.append((r"FROM\s+(?:[^\s/]+/)*nginx:[^\s]+", f"FROM {bases['nginx_base_image']}"))
+        if platform in {"php", "laravel", "lumen", "symfony", "codeigniter"}:
+            replacements.append(
+                (r"FROM\s+(?:[^\s/]+/)*php:[^\s]+-apache(?=\s|$)", f"FROM {bases['base_image']}")
+            )
+        elif platform in {"python", "django", "flask", "fastapi"}:
+            replacements.append(
+                (r"FROM\s+(?:[^\s/]+/)*python:[^\s]+", f"FROM {bases['base_image']}")
+            )
+        elif platform == "go":
+            replacements.append(
+                (r"FROM\s+(?:[^\s/]+/)*golang:[^\s]+", f"FROM {bases['base_image']}")
+            )
+
 
     out = dockerfile
     for pattern, replacement in replacements:
