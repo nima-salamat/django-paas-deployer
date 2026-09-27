@@ -140,6 +140,7 @@ DEPLOY_TRANSITIONS: FrozenSet[tuple[str | None, str]] = frozenset({
     # Recovery from terminal states (operator re-triggers)
     (DEPLOY_FAILED, DEPLOY_PENDING),
     (DEPLOY_CANCELLED, DEPLOY_PENDING),
+    (DEPLOY_SUCCEEDED, DEPLOY_PENDING),     # explicit rebuild/re-execution
     (DEPLOY_ROLLED_BACK, DEPLOY_PENDING),
 })
 
