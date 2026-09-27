@@ -178,3 +178,24 @@ def test_base_runtime_timeout_setting_is_dedicated_and_legacy_name_is_alias_only
     assert 'base_image_build_timeout_minutes' in source
     assert 'def monitor_stale_base_build_minutes()' in source
     assert 'return base_image_build_timeout_minutes()' in source
+
+def test_legacy_php_public_build_cannot_race_the_canonical_same_tag():
+    source = (ROOT / "deploy" / "base_images.py").read_text(encoding="utf-8")
+    assert "_wait_for_legacy_php_tag_collision" in source
+    assert 'variant="apache-public"' in source or 'variant="apache-public"' in source
+    assert "tag_collision_guard" in source
+    assert "two definitions writing the same image reference" in source
+
+
+def test_legacy_php_identity_migration_is_ordered_after_phase_timestamp_migration():
+    migration = (ROOT / "deploy" / "migrations" / "0023_canonical_php_base_runtime_identity.py").read_text(encoding="utf-8")
+    assert '"0022_deploy_base_image_phase_timestamps"' in migration
+    assert '"apache-root", "apache-public"' in migration
+    assert "safe_to_remove" in migration
+
+
+def test_noncanonical_php_rows_are_not_manual_build_targets():
+    source = (ROOT / "deploy" / "base_images.py").read_text(encoding="utf-8")
+    block = source.split("def request_base_runtime_image_build", 1)[1].split("def build_registered_base_image", 1)[0]
+    assert '"apache-root", "apache-public"' in block
+    assert "not a supported manual build target" in block
