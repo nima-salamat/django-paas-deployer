@@ -62,17 +62,21 @@ class BaseRuntimeImageViewSet(SnippetViewSet):
     menu_order = 106
     list_display = [
         "logical_runtime", "runtime_version", "variant", "status", "enabled",
-        "auto_build", "image_ref", "docker_host", "build_count", "build_completed_at",
+        "auto_build", "image_ref", "docker_host", "build_count",
+        "build_started_at", "build_completed_at", "rebuild_requested",
+        "definition_fingerprint", "last_error",
     ]
     list_filter = ["logical_runtime", "status", "enabled", "auto_build", "docker_host"]
     search_fields = ["logical_runtime", "runtime_version", "image_ref", "source_image", "docker_host"]
     ordering = ["logical_runtime", "runtime_version", "variant"]
     panels = panels_for(
-        editable=["logical_runtime", "runtime_version", "variant", "architecture", "enabled", "auto_build"],
+        editable=["enabled", "auto_build"],
         read_only=[
-            "id", "source_image", "image_repository", "image_tag", "image_ref", "image_id",
+            "id", "logical_runtime", "runtime_version", "variant", "architecture",
+            "source_image", "image_repository", "image_tag", "image_ref", "image_id",
             "image_digest", "docker_host", "status", "rebuild_requested", "rebuild_requested_at",
-            "build_started_at", "build_completed_at", "build_count", "last_error", "created_at", "updated_at",
+            "build_started_at", "build_completed_at", "build_count", "definition_fingerprint",
+            "last_error", "last_error_details", "created_at", "updated_at",
         ],
     )
 
