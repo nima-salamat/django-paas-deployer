@@ -595,18 +595,10 @@ def _reconcile_active_deploy(deploy: Deploy) -> None:
         service = locked.service
 
         # 1. Timeout check
-        if locked.status == "running" and locked.started_at:
-            minutes_elapsed = (now - locked.started_at).total_seconds() / 60.0
-            timeout_minutes = int(policies["deploy_timeout_minutes"])
-            # A base-image build has its own operator-owned lifecycle budget;
-            # the deployment monitor uses the same absolute budget as the
-            # synchronous base-image waiter.
-            if (str(locked.stage or "").strip().lower() == "base_image"):
-                timeout_minutes = max(
-                    timeout_minutes,
-                    int(policies["base_image_timeout_minutes"]),
-                )
-            if minutes_elapsed >= timeout_minutes:
+        if locked.status == "running":
+            from deploy.base_images import deployment_phase_remaining_seconds
+            remaining = deployment_phase_remaining_seconds(locked, now=now)
+            if remaining is not None and remaining <= 0:
                 mark_deploy_timeout(
                     deploy=locked,
                     container_exists=exists,
