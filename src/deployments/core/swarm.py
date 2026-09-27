@@ -465,8 +465,35 @@ class SwarmRuntime:
             return constraints
         if len(self.client.nodes.list()) <= 1:
             return constraints
+
         node_id = self._local_manager_node_id()
-        if node_id and not any(item.startswith("node.id ==") for item in constraints):
+        explicit_ids = [
+            item for item in constraints if item.startswith("node.id ")
+        ]
+        local_managed = [
+            volume for volume in (config.volumes or ())
+            if str(getattr(volume, "mount_type", "volume") or "volume").lower() == "volume"
+            and str(getattr(volume, "driver", "local") or "local").lower() == "local"
+        ]
+        if local_managed and explicit_ids:
+            expected = f"node.id == {node_id}" if node_id else ""
+            if expected and any(item != expected for item in explicit_ids):
+                raise DeploymentError(
+                    "A local managed volume is provisioned on the Docker manager node, "
+                    "but the deployment requests a different Swarm node.",
+                    stage="swarm_validation",
+                    code="SWARM_LOCAL_VOLUME_NODE_MISMATCH",
+                    user_message=(
+                        "This service uses node-local persistent storage. "
+                        "Its Swarm placement must stay on the volume's node."
+                    ),
+                    details={
+                        "volume_scope": "local",
+                        "volume_node_id": node_id,
+                        "requested_constraints": explicit_ids,
+                    },
+                )
+        if node_id and not explicit_ids:
             constraints.append(f"node.id == {node_id}")
         return constraints
 
