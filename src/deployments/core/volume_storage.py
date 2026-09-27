@@ -136,49 +136,54 @@ def usage_details(usage: VolumeUsage) -> dict[str, Any]:
     }
 
 def reconcile_managed_volumes(client) -> dict[str, list[dict[str, Any]]]:
-    """Compare managed Docker volumes on the connected node with the Django registry.
-
-    This is deliberately read-only. For node-local Docker storage, the result
-    describes only the connected Docker daemon; remote Swarm workers require
-    the same check through a Docker client connected to those nodes.
-    """
+    """Compare Docker volumes on the connected node with the Django registry."""
     try:
-        docker_rows = client.volumes.list(filters={"label": "managed-by=django-paas-deployer"})
+        docker_rows = client.volumes.list()
     except Exception as exc:
         return {
             "docker_orphans": [],
+            "docker_unowned_conflicts": [],
             "missing_docker": [],
-            "error": [
-                {"exception_type": type(exc).__name__, "error": str(exc)}
-            ],
+            "error": [{"exception_type": type(exc).__name__, "error": str(exc)}],
         }
-    docker_names = {
-        str(getattr(row, "name", "") or getattr(row, "attrs", {}).get("Name") or "").strip()
-        for row in docker_rows
-    }
-    docker_names.discard("")
+    docker_by_name = {}
+    for row in docker_rows:
+        name = str(getattr(row, "name", "") or getattr(row, "attrs", {}).get("Name") or "").strip()
+        if name:
+            docker_by_name[name] = row
     try:
         from services.models import Volume as RegistryVolume
-        registry_rows = list(
-            RegistryVolume.objects.values("id", "name", "service_id", "size_mb")
-        )
+        registry_rows = list(RegistryVolume.objects.values("id", "name", "service_id", "size_mb"))
     except Exception as exc:
         return {
             "docker_orphans": [],
+            "docker_unowned_conflicts": [],
             "missing_docker": [],
-            "error": [
-                {"exception_type": type(exc).__name__, "error": str(exc)}
-            ],
+            "error": [{"exception_type": type(exc).__name__, "error": str(exc)}],
         }
     expected = {}
     for row in registry_rows:
         volume_id = str(row["id"])
         expected_name = f"vol-{volume_id.replace('-', '')[:8]}-{row['name']}"
         expected[expected_name] = row
+    managed_names = set()
+    for name, row in docker_by_name.items():
+        labels = dict(getattr(row, "attrs", {}).get("Labels") or {})
+        if labels.get("managed-by") == "django-paas-deployer":
+            managed_names.add(name)
     return {
         "docker_orphans": [
             {"volume": name, "scope": "connected_node"}
-            for name in sorted(docker_names - set(expected))
+            for name in sorted(managed_names - set(expected))
+        ],
+        "docker_unowned_conflicts": [
+            {
+                "volume": name,
+                "scope": "connected_node",
+                "expected_service_id": str(expected[name]["service_id"]) if expected[name]["service_id"] else None,
+                "expected_declared_mb": expected[name]["size_mb"],
+            }
+            for name in sorted(set(expected) & set(docker_by_name) - managed_names)
         ],
         "missing_docker": [
             {
@@ -188,7 +193,7 @@ def reconcile_managed_volumes(client) -> dict[str, list[dict[str, Any]]]:
                 "scope": "connected_node",
             }
             for name, row in sorted(expected.items())
-            if name not in docker_names
+            if name not in docker_by_name
         ],
         "error": [],
     }
