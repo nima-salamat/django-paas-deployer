@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from django.core.cache import cache
 from django.db import models
+from django.core.validators import MinValueValidator, MaxValueValidator
 from django.utils.translation import gettext_lazy as _
 
 
