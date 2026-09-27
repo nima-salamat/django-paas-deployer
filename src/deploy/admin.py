@@ -304,6 +304,7 @@ class BaseRuntimeImageAdmin(admin.ModelAdmin):
     list_display = (
         "runtime_label", "variant", "status_badge", "enabled", "auto_build",
         "image_ref", "docker_host", "build_count", "build_completed_at",
+        "definition_fingerprint", "last_error",
     )
     list_filter = ("logical_runtime", "variant", "status", "enabled", "auto_build", "docker_host")
     search_fields = ("logical_runtime", "runtime_version", "image_ref", "source_image", "docker_host", "last_error")
@@ -313,14 +314,16 @@ class BaseRuntimeImageAdmin(admin.ModelAdmin):
         "logical_runtime", "runtime_version", "variant", "architecture", "image_repository", "image_tag",
         "image_ref", "image_id", "image_digest", "source_image", "docker_host", "status",
         "rebuild_requested", "rebuild_requested_at", "build_started_at", "build_completed_at",
-        "build_count", "build_task_id", "build_owner_deployment_id", "last_error", "created_at", "updated_at",
+        "build_count", "build_task_id", "build_owner_deployment_id",
+        "definition_fingerprint", "last_error", "last_error_details",
+        "created_at", "updated_at",
     )
 
     fieldsets = (
         ("Runtime", {"fields": ("logical_runtime", "runtime_version", "variant", "architecture")}),
         ("Docker image", {"fields": ("source_image", "image_repository", "image_tag", "image_ref", "image_id", "image_digest", "docker_host")}),
         ("Policy", {"fields": ("enabled", "auto_build", "rebuild_requested")}),
-        ("Build state", {"fields": ("status", "rebuild_requested_at", "build_started_at", "build_completed_at", "build_count", "build_task_id", "build_owner_deployment_id", "last_error")}),
+        ("Build state", {"fields": ("status", "rebuild_requested_at", "build_started_at", "build_completed_at", "build_count", "build_task_id", "build_owner_deployment_id", "definition_fingerprint", "last_error", "last_error_details")}),
         ("Timestamps", {"fields": ("created_at", "updated_at")}),
     )
 
