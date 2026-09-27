@@ -125,3 +125,14 @@ def test_pending_transition_resets_previous_execution_timestamps():
     assert 'if target == sm.DEPLOY_PENDING:' in source
     assert 'updates.setdefault("started_at", None)' in source
     assert 'updates.setdefault("completed_at", None)' in source
+
+
+def test_pending_cancelled_deployments_have_a_terminal_recovery_path():
+    schedules = (ROOT / "src" / "deployments" / "celery" / "schedules.py").read_text(encoding="utf-8")
+    state_machine = (ROOT / "src" / "deployments" / "common" / "state_machine.py").read_text(encoding="utf-8")
+
+    assert "def _finalize_pending_cancellations() -> None:" in schedules
+    assert "status=DeploymentStatusChoices.PENDING," in schedules
+    assert "cancel_requested=True," in schedules
+    assert 'DeploymentStatusChoices.CANCELLED' in schedules
+    assert "(SERVICE_QUEUED, SERVICE_STOPPED)" in state_machine
