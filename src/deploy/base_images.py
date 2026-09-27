@@ -768,6 +768,7 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                 },
             )
 
+        task_dispatched = False
         if logger_sink:
             logger_sink.info(
                 "base_image",
@@ -785,8 +786,7 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
         try:
             if deployment_id:
                 acquire_base_image_leases([spec.image_ref], deployment_id)
-            task_id = f"base-image-{row.pk}-{uuid.uuid4()}"
-            task_dispatched = False
+            task_id = f"base-image-{row.pk}-{uuid.uuid4()}
             BaseRuntimeImage.objects.filter(pk=row.pk, status=BaseRuntimeImage.Status.BUILDING).update(
                 build_task_id=task_id,
                 build_owner_deployment_id=str(deployment_id or "")[:255],
