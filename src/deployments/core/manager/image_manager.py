@@ -386,6 +386,7 @@ class Image(Client):
         on_build_output: Optional[Callable] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
         lease_check: Optional[Callable[[], None]] = None,
+        ownership_check: Optional[Callable[[], None]] = None,
     ) -> Optional[str]:
         """Consume build stream and actively close it when cancellation is requested."""
         import threading
@@ -429,6 +430,8 @@ class Image(Client):
             for chunk in self._iter_build_stream(response):
                 if lease_check is not None:
                     lease_check()
+                if ownership_check is not None:
+                    ownership_check()
                 if cancelled.is_set():
                     from deployments.common.exceptions import DeploymentCancelled
                     raise DeploymentCancelled(
