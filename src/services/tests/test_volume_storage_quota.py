@@ -68,7 +68,7 @@ class StorageQuotaDatabaseTests(TestCase):
 
     def test_volume_resize_is_rejected_when_backend_volume_exists(self):
         volume = Volume.objects.create(name="quota-resize", user=self.user, service=self.service, size_mb=512, default_bind="/data")
-        with patch("services.models.DockerVolume") as docker_volume:
+        with patch("deployments.core.manager.volume_manager.Volume") as docker_volume:
             docker_volume.return_value.client.volumes.get.return_value = Mock(attrs={"Driver": "local", "Scope": "local"})
             volume.size_mb = 768
             with self.assertRaises(ValidationError):
