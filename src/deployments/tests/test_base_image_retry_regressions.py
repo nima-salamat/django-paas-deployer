@@ -8,7 +8,8 @@ def test_base_image_retry_keeps_record_in_building_state():
     source = (ROOT / "deployments" / "celery" / "tasks.py").read_text(encoding="utf-8")
 
     assert "BaseRuntimeImage.Status.BUILDING" in source
-    assert 'build_task_id=owner_task_id' in source
+    assert 'build_task_id=str(task_id)' in source
+    assert 'row.build_task_id = owner_task_id' in (ROOT / "deploy" / "base_images.py").read_text(encoding="utf-8")
     assert "build_completed_at=None" in source
     assert "raise self.retry(exc=exc)" in source
 
