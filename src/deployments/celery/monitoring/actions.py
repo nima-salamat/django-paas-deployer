@@ -304,12 +304,28 @@ def mark_deploy_timeout(
     if locked.status in terminal or locked.cancel_requested:
         return False
 
+    stage = str(locked.stage or "").strip().lower()
     try:
-        from core.settings_service import deploy_timeout_minutes
-        max_minutes = deploy_timeout_minutes()
+        if stage == "base_image":
+            from core.settings_service import base_image_build_timeout_minutes
+            max_minutes = base_image_build_timeout_minutes()
+            message = (
+                f"The required base runtime image could not become ready within "
+                f"the {max_minutes}-minute base-image build/wait limit."
+            )
+        else:
+            from core.settings_service import deploy_timeout_minutes
+            max_minutes = deploy_timeout_minutes()
+            message = (
+                f"The deployment exceeded the {max_minutes}-minute application "
+                "deployment limit after the required base runtime image became ready."
+            )
     except Exception:
         max_minutes = 10
-    message = f"Deployment exceeded the maximum allowed time of {max_minutes} minutes."
+        message = (
+            "The deployment exceeded the 10-minute application deployment limit "
+            "after the required base runtime image became ready."
+        )
 
     Deploy.objects.filter(pk=deploy.pk).update(
         cancel_requested=True,
@@ -332,6 +348,7 @@ def mark_deploy_timeout(
             "container_exists": container_exists,
             "container_running": container_running,
             "max_deploy_time_minutes": max_minutes,
+            "timeout_phase": "base_image" if stage == "base_image" else "application",
         },
     )
 
