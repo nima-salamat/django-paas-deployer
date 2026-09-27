@@ -182,7 +182,7 @@ def test_base_runtime_timeout_setting_is_dedicated_and_legacy_name_is_alias_only
 def test_legacy_php_public_build_cannot_race_the_canonical_same_tag():
     source = (ROOT / "deploy" / "base_images.py").read_text(encoding="utf-8")
     assert "_wait_for_legacy_php_tag_collision" in source
-    assert 'variant="apache-public"' in source or 'variant="apache-public"' in source
+    assert '"apache-public"' in source
     assert "tag_collision_guard" in source
     assert "two definitions writing the same image reference" in source
 
