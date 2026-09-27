@@ -93,3 +93,35 @@ def test_rebuild_handles_stopped_service_and_reexecutes_succeeded_deploy():
 
     assert 'if service.status != SERVICE_STATUS_CHOICES.STOPPED:' in apis
     assert "(DEPLOY_SUCCEEDED, DEPLOY_PENDING)" in state_machine
+
+
+def test_revision_artifact_initial_write_bypasses_immutable_model_save():
+    source = (ROOT / "src" / "services" / "revisioning.py").read_text(encoding="utf-8")
+
+    assert "ServiceRevision.objects.filter(pk=revision.pk).update(" in source
+    assert 'artifact_file=revision.artifact_file.name' in source
+    assert 'revision.save(update_fields=["artifact_file", "updated_at"])' not in source
+
+
+def test_pending_deploys_are_not_timed_out_from_stale_started_at():
+    source = (ROOT / "src" / "deployments" / "celery" / "schedules.py").read_text(encoding="utf-8")
+
+    assert 'if locked.status == "running" and locked.started_at:' in source
+    assert 'status=DeploymentStatusChoices.PENDING,' in source
+    assert 'cancel_requested=False,' in source
+    assert 'updated_at__lt=cutoff' in source
+
+
+def test_deploy_terminal_sink_preserves_uuid_deployment_ids():
+    source = (ROOT / "src" / "deployments" / "core" / "sink.py").read_text(encoding="utf-8")
+
+    assert "self.deployment_id, terminal_transition[0]," in source
+    assert "int(self.deployment_id)" not in source
+
+
+def test_pending_transition_resets_previous_execution_timestamps():
+    source = (ROOT / "src" / "deployments" / "core" / "state" / "manager.py").read_text(encoding="utf-8")
+
+    assert 'if target == sm.DEPLOY_PENDING:' in source
+    assert 'updates.setdefault("started_at", None)' in source
+    assert 'updates.setdefault("completed_at", None)' in source
