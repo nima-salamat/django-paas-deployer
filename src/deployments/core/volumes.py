@@ -140,6 +140,60 @@ class VolumeMountManager:
         "nextjs": ("/app/data", 256),
     }
 
+    def warn_about_usage(self, volumes: list[VolumeSpec]) -> None:
+        """Emit at most one user-visible warning per volume per deployment."""
+        from .manager.client_manager import Client
+        from .volume_storage import (
+            USAGE_WARNING,
+            USAGE_CRITICAL,
+            USAGE_UNKNOWN,
+            inspect_volume_usage,
+            usage_details,
+        )
+        client = Client().client
+        seen: set[str] = set()
+        threshold = None
+        for volume in volumes:
+            if (volume.mount_type or "volume").lower() != "volume":
+                continue
+            name = str(volume.source or "").strip()
+            if not name or name in seen or volume.size_mb is None:
+                continue
+            seen.add(name)
+            usage = inspect_volume_usage(
+                client, name, int(volume.size_mb), threshold_percent=threshold
+            )
+            details = usage_details(usage)
+            if usage.usage_state == USAGE_WARNING:
+                self.logger.warning(
+                    "volume_creation",
+                    (
+                        f"Volume '{name}' is {usage.usage_percent:.1f}% full "
+                        f"({details['used_mb']} MiB of {details['declared_mb']} MiB). "
+                        "The volume is approaching its configured capacity."
+                    ),
+                    progress=44,
+                    details=details,
+                )
+            elif usage.usage_state == USAGE_CRITICAL:
+                self.logger.warning(
+                    "volume_creation",
+                    (
+                        f"Volume '{name}' is at or above its declared capacity "
+                        f"({usage.usage_percent:.1f}%). Physical enforcement is not "
+                        f"active for storage mode {usage.capacity_mode}."
+                    ),
+                    progress=44,
+                    details=details,
+                )
+            elif usage.usage_state == USAGE_UNKNOWN:
+                # Unknown usage is an operator diagnostic, not zero usage.
+                self.logger.warning(
+                    "volume_creation",
+                    f"Could not measure storage usage for volume '{name}'; usage is unknown.",
+                    progress=44,
+                    details=details,
+                )
     def _docker_volume_exists(self, name: str) -> bool:
         try:
             Volume(name=name).client.volumes.get(name)
