@@ -686,6 +686,49 @@ class Volume(BaseModel):
     def clean(self):
         super().clean()
         attachments = self.service_attachments or {}
+        if self.pk:
+            previous = (
+                Volume.objects.filter(pk=self.pk)
+                .values("size_mb")
+                .first()
+            )
+            if previous is not None and int(previous["size_mb"]) != int(self.size_mb):
+                # Logical resize is only allowed before the backing Docker volume
+                # exists. Once provisioned, this installation has no verified
+                # backend resize operation, so a DB-only size change would create
+                # a false capacity claim.
+                try:
+                    from deployments.core.manager.volume_manager import Volume as DockerVolume
+                    import docker.errors
+                    docker_name = self.get_docker_volume_name()
+                    try:
+                        raw_volume = DockerVolume(docker_name).client.volumes.get(docker_name)
+                    except docker.errors.NotFound:
+                        raw_volume = None
+                    if raw_volume is not None:
+                        attrs = getattr(raw_volume, "attrs", {}) or {}
+                        driver = str(attrs.get("Driver") or "local")
+                        scope = str(attrs.get("Scope") or "").strip().lower() or None
+                        from deployments.core.volume_storage import storage_capabilities
+                        capabilities = storage_capabilities(driver, scope)
+                        if not capabilities.supports_resize:
+                            raise ValidationError({
+                                "size_mb": (
+                                    "Volume size cannot be changed after the backing Docker "
+                                    "volume has been provisioned because the configured storage "
+                                    "backend does not support verified online resize."
+                                )
+                            })
+                except ValidationError:
+                    raise
+                except Exception as exc:
+                    raise ValidationError({
+                        "size_mb": (
+                            "Cannot safely change volume size while the backing Docker "
+                            "volume state cannot be verified."
+                        )
+                    }) from exc
+
         if self.service_id:
             sid = str(self.service_id)
             if attachments:
