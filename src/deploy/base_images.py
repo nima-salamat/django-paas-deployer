@@ -546,7 +546,16 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                 continue
             # The other builder failed. A deployment should surface that failure,
             # rather than starting a second uncontrolled build.
-            raise RuntimeError(f"Concurrent base image build failed or timed out: {image_ref}")
+            current = BaseRuntimeImage.objects.filter(
+                pk=row_id
+            ).values("status", "image_ref", "last_error").first()
+            if current and current["status"] == BaseRuntimeImage.Status.FAILED:
+                reason = (current.get("last_error") or "").strip()
+                raise RuntimeError(
+                    f"Concurrent base image build failed: {image_ref}. "
+                    f"{reason or 'builder reported a failure without a reason'}"
+                )
+            raise RuntimeError(f"Concurrent base image build timed out: {image_ref}")
 
         try:
             if logger_sink:
@@ -571,8 +580,19 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
             build_base_runtime_image.apply_async(args=[str(row.pk)], task_id=task_id)
 
             if not _wait_for_existing_build(row.pk, spec.image_ref, timeout=1800):
-                raise RuntimeError(f"Base image build failed or timed out: {spec.image_ref}")
-            current = BaseRuntimeImage.objects.filter(pk=row.pk).values("status", "image_ref", "last_error").first()
+                current = BaseRuntimeImage.objects.filter(
+                    pk=row.pk
+                ).values("status", "image_ref", "last_error").first()
+                if current and current["status"] == BaseRuntimeImage.Status.FAILED:
+                    reason = (current.get("last_error") or "").strip()
+                    raise RuntimeError(
+                        f"Base image build failed: {spec.image_ref}. "
+                        f"{reason or 'builder reported a failure without a reason'}"
+                    )
+                raise RuntimeError(f"Base image build timed out: {spec.image_ref}")
+            current = BaseRuntimeImage.objects.filter(
+                pk=row.pk
+            ).values("status", "image_ref", "last_error").first()
             if not current or current["status"] != BaseRuntimeImage.Status.READY:
                 raise RuntimeError(
                     f"Base image builder did not become ready: {spec.image_ref}. "
