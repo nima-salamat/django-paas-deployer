@@ -145,8 +145,8 @@ DEFAULTS: list[dict] = [
         "default": 1.0,
         "value_type": "float",
         "category": "build",
-        "label": "Build max CPU (cores)",
-        "description": "NanoCpus limit for docker build containers (DEPLOY_BUILD_MAX_CPU).",
+        "label": "Build CPU shares weight",
+        "description": "Relative Docker CPU scheduling weight (cpushares); this is not a hard CPU quota.",
     },
     {
         "key": "build.max_ram_mb",
