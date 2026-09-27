@@ -49,7 +49,9 @@ def test_retry_helper_persists_building_not_failed(monkeypatch):
             return self
     class Objects:
         def filter(self, **kwargs):
-            return Query(first_value="paas-base/php-apache-root:8.4-r1")
+            if "build_task_id" in kwargs:
+                return Query(first_value="task-1")
+            return Query(first_value="task-1")
     class FakeStatus:
         BUILDING = "building"
         FAILED = "failed"
@@ -79,9 +81,10 @@ def test_build_registered_base_failure_does_not_become_terminal_before_celery_ex
         definition_fingerprint = ""
         build_started_at = None
         build_completed_at = None
+        rebuild_requested_at = None
         last_error = ""
         last_error_details = {}
-        image_ref = "paas-base/php-apache-root:8.4-r1"
+        image_ref = "paas-base/php-apache:8.4-r1"
         image_id = ""
         image_digest = ""
         build_count = 0
