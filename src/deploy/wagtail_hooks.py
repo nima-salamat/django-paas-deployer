@@ -34,6 +34,8 @@ def base_runtime_image_listing_buttons(snippet, user, next_url=None):
         return
     if not (getattr(user, "is_superuser", False) or user.has_perm("deploy.change_baseruntimeimage")):
         return
+    if str(getattr(snippet, "logical_runtime", "")).lower() == "php" and str(getattr(snippet, "variant", "")).lower() in {"apache-root", "apache-public"}:
+        return
 
     query = urlencode({"next": next_url}) if next_url else ""
     suffix = f"?{query}" if query else ""
