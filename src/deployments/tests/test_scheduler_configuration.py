@@ -161,8 +161,12 @@ def test_force_cancel_runtime_imports_deployment_state_and_uses_state_manager():
     assert 'active_states = {"pending", "queued", "running", "deploying", "stopping"}' not in source
 
 
-def test_compose_workers_consume_routed_deployment_queues():
+def test_compose_workers_isolate_base_image_queue_from_deployment_workers():
     compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
 
-    assert "celery,deployments,operations,base-images" in compose
-    assert "deployments,operations,base-images" in compose
+    assert "base-image-worker:" in compose
+    base_worker = compose.split("base-image-worker:", 1)[1]
+    deployment_worker = compose.split("deployment-worker:", 1)[1].split("base-image-worker:", 1)[0]
+    assert "-Q" in base_worker
+    assert "base-images" in base_worker
+    assert "base-images" not in deployment_worker
