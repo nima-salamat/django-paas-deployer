@@ -771,16 +771,29 @@ def build_registered_base_image(
             "exception_type": type(exc).__name__,
             "technical_message": str(exc) or type(exc).__name__,
         })
-        BaseRuntimeImage.objects.filter(pk=base_image_id).update(
+        filters = {
+            "pk": base_image_id,
+            "status": BaseRuntimeImage.Status.BUILDING,
+        }
+        if task_id:
+            filters["build_task_id"] = str(task_id)
+        updated = BaseRuntimeImage.objects.filter(**filters).update(
             last_error=str(exc),
             last_error_details=details,
             build_completed_at=None,
             updated_at=timezone.now(),
         )
-        logger.exception(
-            "Base-image build attempt failed ref=%s exception=%s; Celery decides terminal state.",
-            spec.image_ref, type(exc).__name__,
-        )
+        if not updated:
+            logger.info(
+                "Ignoring diagnostics from superseded base-image worker ref=%s task=%s.",
+                spec.image_ref,
+                task_id or "",
+            )
+        else:
+            logger.exception(
+                "Base-image build attempt failed ref=%s exception=%s; Celery decides terminal state.",
+                spec.image_ref, type(exc).__name__,
+            )
         raise
 
 def _wait_for_existing_build(row_id, image_ref: str, timeout: int | None = None) -> bool:
