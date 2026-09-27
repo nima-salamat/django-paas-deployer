@@ -693,15 +693,10 @@ def _reconcile_active_deploy_swarm(deploy: Deploy) -> None:
         if not locked or locked.status not in ACTIVE_DEPLOY_STATUSES or locked.cancel_requested:
             return
         current_policies = runtime_policies()
-        if locked.started_at:
-            minutes_elapsed = (now - locked.started_at).total_seconds() / 60.0
-            timeout_minutes = int(current_policies["deploy_timeout_minutes"])
-            if str(locked.stage or "").strip().lower() == "base_image":
-                timeout_minutes = max(
-                    timeout_minutes,
-                    int(current_policies["base_image_timeout_minutes"]),
-                )
-            if minutes_elapsed >= timeout_minutes:
+        if locked.status == DeploymentStatusChoices.RUNNING:
+            from deploy.base_images import deployment_phase_remaining_seconds
+            remaining = deployment_phase_remaining_seconds(locked, now=now)
+            if remaining is not None and remaining <= 0:
                 mark_deploy_timeout(
                     deploy=locked,
                     container_exists=bool(state),
