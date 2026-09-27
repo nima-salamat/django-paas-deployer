@@ -128,9 +128,11 @@ def resolve_build_policy(
         else 8192
     )
 
+    cpu_ceiling = defaults["cpu"] if operator_mode == "static" else hard_cpu
+    ram_ceiling = defaults["memory_mb"] if operator_mode == "static" else hard_ram
     try:
-        cpu = min(float(candidate.get("cpu", defaults["cpu"])), hard_cpu)
-        ram = min(int(candidate.get("memory_mb", defaults["memory_mb"])), hard_ram)
+        cpu = min(float(candidate.get("cpu", defaults["cpu"])), float(cpu_ceiling))
+        ram = min(int(candidate.get("memory_mb", defaults["memory_mb"])), int(ram_ceiling))
         pids = min(int(candidate.get("pids_limit", defaults["pids_limit"])), int(defaults["pids_limit"]))
         shm = min(int(candidate.get("shm_size_mb", defaults["shm_size_mb"])), int(defaults["shm_size_mb"]))
     except (TypeError, ValueError) as exc:
