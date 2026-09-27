@@ -262,7 +262,12 @@ class BaseRuntimeImage(BaseModel):
     build_count = models.PositiveIntegerField(default=0)
     build_task_id = models.CharField(max_length=255, blank=True, default="")
     build_owner_deployment_id = models.CharField(max_length=255, blank=True, default="")
+    # Fingerprint of the operator-owned BaseImageSpec definition that produced
+    # the cached tag. This prevents changed Dockerfile contents from reusing an
+    # incompatible READY image under the same human-readable tag.
+    definition_fingerprint = models.CharField(max_length=64, blank=True, default="")
     last_error = models.TextField(blank=True, default="")
+    last_error_details = models.JSONField(default=dict, blank=True)
 
     class Meta:
         verbose_name = _("Base runtime image")
