@@ -217,6 +217,24 @@ def build_max_ram_mb() -> int:
     return max(256, min(int(_wagtail_core_value("build_max_ram_mb", get_int("build.max_ram_mb", 1024))), 8192))
 
 
+def volume_usage_warning_percent() -> float:
+    import os
+    env_default = os.environ.get("VOLUME_USAGE_WARNING_PERCENT", "90.0")
+    try:
+        env_default_value = float(env_default)
+    except (TypeError, ValueError):
+        env_default_value = 90.0
+    value = _wagtail_core_value(
+        "volume_usage_warning_percent",
+        get_float("storage.volume_usage_warning_percent", env_default_value),
+    )
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        value = 90.0
+    return max(1.0, min(99.0, value))
+
+
 def build_parallelism() -> int:
     return max(1, min(int(_wagtail_core_value("build_parallelism", get_int("build.parallelism", 1))), 16))
 
