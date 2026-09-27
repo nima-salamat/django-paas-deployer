@@ -39,3 +39,13 @@ def test_wait_for_base_build_uses_ready_db_state_before_docker_tag():
     assert 'return _docker_image_exists(image_ref)' in source
     # A Docker tag appearing while BUILDING must not itself release waiters.
     assert 'if _docker_image_exists(image_ref):\n            return True' not in source
+
+
+def test_base_image_queue_has_dedicated_worker_and_no_deployment_worker_consumption():
+    compose = (ROOT.parent.parent / "compose.yaml").read_text(encoding="utf-8")
+    assert "base-image-worker:" in compose
+    assert "- base-images" in compose
+    deployment_block = compose.split("deployment-worker:", 1)[1].split("base-image-worker:", 1)[0]
+    generic_block = compose.split("celery:", 1)[1].split("deployment-worker:", 1)[0]
+    assert "base-images" not in deployment_block
+    assert "base-images" not in generic_block
