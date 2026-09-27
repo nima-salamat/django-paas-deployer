@@ -97,3 +97,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends libssl-dev \
     out = _apply_resolved_base_images(dockerfile, config)
     assert "libssl-dev" in out
     assert "docker-php-ext-install redis" in out
+
+
+def test_php_base_substitution_does_not_rewrite_independent_python_stage():
+    from types import SimpleNamespace
+    from deployments.core.dockerfile import _apply_resolved_base_images
+
+    dockerfile = """FROM php:8.4-apache AS runtime
+RUN echo php
+FROM python:3.11-slim AS worker
+RUN echo python
+"""
+    config = SimpleNamespace(
+        base_images={"base_image": "paas-base/php-apache-root:8.4-r1"},
+        platform="php",
+    )
+    out = _apply_resolved_base_images(dockerfile, config)
+    assert "FROM paas-base/php-apache-root:8.4-r1 AS runtime" in out
+    assert "FROM python:3.11-slim AS worker" in out
