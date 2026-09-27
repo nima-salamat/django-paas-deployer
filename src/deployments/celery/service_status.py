@@ -51,8 +51,17 @@ class ServiceStateManager:
     # ------------------------------------------------------------------
 
     @classmethod
-    def lock_and_get_deployment(cls, deploy_id: int) -> Deploy:
-        return StateManager.lock_and_get_deployment(deploy_id)
+    def lock_and_get_deployment(
+        cls,
+        deploy_id: int,
+        *,
+        task_id: str | None = None,
+    ) -> Deploy:
+        """Delegate deployment acquisition without dropping the execution owner."""
+        return StateManager.lock_and_get_deployment(
+            deploy_id,
+            task_id=task_id,
+        )
 
     @classmethod
     @transaction.atomic

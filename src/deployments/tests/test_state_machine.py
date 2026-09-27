@@ -18,7 +18,11 @@ from deployments.common.state_machine import (
 
 class TestServiceTransitions(unittest.TestCase):
 
-    def test_queued_to_deploying(self):
+    def test_queued_to_failed(self):
+    check_service_transition(SERVICE_QUEUED, SERVICE_FAILED)
+
+
+def test_queued_to_deploying(self):
         # Should not raise
         check_service_transition(SERVICE_QUEUED, SERVICE_DEPLOYING)
 

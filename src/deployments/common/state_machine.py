@@ -109,6 +109,7 @@ SERVICE_TRANSITIONS: FrozenSet[tuple[str | None, str]] = frozenset({
     (SERVICE_STOPPED, SERVICE_QUEUED),     # redeploy
     (SERVICE_FAILED, SERVICE_QUEUED),      # retry after fixing
     (SERVICE_QUEUED, SERVICE_STOPPED),     # queued operation cancelled before worker start
+    (SERVICE_QUEUED, SERVICE_FAILED),      # queued execution failed before deployment started
     (SERVICE_STOPPED, SERVICE_DEPLOYING),  # redeploy directly
     (SERVICE_FAILED, SERVICE_DEPLOYING),   # operator forced redeploy
     (SERVICE_RUNNING, SERVICE_DEPLOYING),  # new deploy over a running one

@@ -112,6 +112,20 @@ def test_pending_deploys_are_not_timed_out_from_stale_started_at():
     assert 'updated_at__lt=cutoff' in source
 
 
+def test_service_state_facade_forwards_deployment_task_owner():
+    source = (ROOT / "src" / "deployments" / "celery" / "service_status.py").read_text(encoding="utf-8")
+
+    assert "task_id: str | None = None" in source
+    assert "StateManager.lock_and_get_deployment(" in source
+    assert "task_id=task_id" in source
+
+
+def test_monitor_can_terminalize_a_failed_queued_service():
+    source = (ROOT / "src" / "deployments" / "common" / "state_machine.py").read_text(encoding="utf-8")
+
+    assert "(SERVICE_QUEUED, SERVICE_FAILED)" in source
+
+
 def test_deploy_terminal_sink_preserves_uuid_deployment_ids():
     source = (ROOT / "src" / "deployments" / "core" / "sink.py").read_text(encoding="utf-8")
 
