@@ -77,3 +77,19 @@ def test_locked_revision_queries_do_not_join_nullable_source_deploy():
 
     assert expected in revisioning
     assert expected in authority
+
+
+def test_locked_deploy_revision_compilation_does_not_join_nullable_relations():
+    source = (ROOT / "src" / "services" / "revisioning.py").read_text(encoding="utf-8")
+
+    locked_section = source.split("def ensure_revision_for_deploy", 1)[1].split("def ", 1)[0]
+    assert "Deploy.objects.select_for_update().get(pk=deploy.pk)" in locked_section
+    assert '.select_related("service", "created_by")' not in locked_section
+
+
+def test_rebuild_handles_stopped_service_and_reexecutes_succeeded_deploy():
+    apis = (ROOT / "src" / "deploy" / "apis.py").read_text(encoding="utf-8")
+    state_machine = (ROOT / "src" / "deployments" / "common" / "state_machine.py").read_text(encoding="utf-8")
+
+    assert 'if service.status != SERVICE_STATUS_CHOICES.STOPPED:' in apis
+    assert "(DEPLOY_SUCCEEDED, DEPLOY_PENDING)" in state_machine
