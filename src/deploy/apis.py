@@ -706,10 +706,14 @@ class DeployViewSet(ModelViewSet):
                 )
 
             from deployments.core.state.manager import StateManager
-            StateManager.transition_service(
-                service.pk, SERVICE_STATUS_CHOICES.STOPPING,
-                update_fields={"task_id": task_id, "deploy_started": timezone.now()},
-            )
+            # A stopped service has no active runtime to tear down. Start the
+            # rebuild directly from QUEUED; active/failed services still enter
+            # STOPPING so Docker teardown is fenced by the lifecycle state.
+            if service.status != SERVICE_STATUS_CHOICES.STOPPED:
+                StateManager.transition_service(
+                    service.pk, SERVICE_STATUS_CHOICES.STOPPING,
+                    update_fields={"task_id": task_id, "deploy_started": timezone.now()},
+                )
             StateManager.transition_deploy(
                 deploy.pk, "pending",
                 update_fields={
