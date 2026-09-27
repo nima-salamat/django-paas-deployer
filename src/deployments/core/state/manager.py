@@ -160,7 +160,14 @@ class StateManager:
                 updates.update(update_fields)
 
             now = timezone.now()
-            if target == sm.DEPLOY_RUNNING:
+            updates["updated_at"] = now
+            if target == sm.DEPLOY_PENDING:
+                # A queued execution has not started yet. Clear timestamps
+                # from any previous execution of a reused Deploy row.
+                updates.setdefault("started_at", None)
+                updates.setdefault("completed_at", None)
+                updates.setdefault("worker_heartbeat_at", None)
+            elif target == sm.DEPLOY_RUNNING:
                 updates.setdefault("started_at", now)
             elif target in (
                 sm.DEPLOY_SUCCEEDED, sm.DEPLOY_FAILED,
