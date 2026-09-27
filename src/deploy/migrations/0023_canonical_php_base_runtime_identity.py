@@ -66,6 +66,7 @@ def forwards(apps, schema_editor):
             ])
             continue
 
+        legacy_variant = row.variant
         old_ref = row.image_ref
         row.variant = "apache"
         row.source_image = f"docker.io/php:{row.runtime_version}-apache"
@@ -87,7 +88,7 @@ def forwards(apps, schema_editor):
         row.last_error_details = {
             "stage": "base_image_migration",
             "migrated_from": old_ref,
-            "legacy_variant": row.variant if row.variant != "apache" else None,
+            "legacy_variant": legacy_variant,
             "rebuild_required": True,
             "safe_to_remove": True,
         }
