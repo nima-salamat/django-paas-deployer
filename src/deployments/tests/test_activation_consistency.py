@@ -40,6 +40,24 @@ class DeploymentActivationConsistencyContractTests(unittest.TestCase):
         self.assertIn("get_authoritative_deploy(service)", self.service)
         self.assertNotIn("get_active_deploy(service)", self.service.split("def _activate_deployment", 1)[1].split("result = self._process_deployment", 1)[0])
 
+
+    def test_activation_is_fenced_by_service_lifecycle_generation(self):
+        self.assertIn("expected_lifecycle_generation", self.service)
+        self.assertIn("actual_lifecycle_generation != expected_lifecycle_generation", self.service)
+        self.assertIn("Service lifecycle changed while this deployment was preparing to activate.", self.service)
+
+    def test_swarm_recovery_uses_revision_activation_boundary(self):
+        self.assertIn("activate_revision_locked", self.scheduler)
+        self.assertNotIn(
+            "active_revision_id=revision.revision_id",
+            self.scheduler,
+        )
+
+    def test_swarm_recovery_uses_authoritative_deployment_pointer(self):
+        self.assertIn("get_authoritative_deploy", self.scheduler)
+        recovery = self.scheduler.split("def _recover_stale_running_deploys_swarm", 1)[1]
+        self.assertNotIn("get_active_deploy(", recovery)
+
     def test_each_replacement_router_has_deployment_identity(self):
         self.assertIn('router_name=f"{config.name}-deploy-', self.orchestrator)
         self.assertIn('"deployment.id": str(config.labels.get("deployment.id")', self.orchestrator)
