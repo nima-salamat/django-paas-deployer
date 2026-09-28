@@ -440,11 +440,21 @@ def stop_service_apiview(request):
 
             custom_task_id = make_uuid4()
 
+            # Fence the stop intent before the Celery worker runs. The stop worker
+            # may wait behind an in-flight deployment's advisory lock.
+            from services.lifecycle import bump_lifecycle
+            lifecycle_generation = bump_lifecycle(service_item.pk, desired_state="stopped")
+            service_item.desired_state = "stopped"
+            service_item.lifecycle_generation = lifecycle_generation
+
             service_item.status = SERVICE_STATUS_CHOICES.STOPPING
             service_item.task_id = custom_task_id
             service_item.deploy_started = timezone.now()
             service_item.save(
-                update_fields=["status", "task_id", "deploy_started"]
+                update_fields=[
+                    "status", "task_id", "deploy_started",
+                    "desired_state", "lifecycle_generation",
+                ]
             )
 
             transaction.on_commit(
