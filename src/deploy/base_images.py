@@ -643,6 +643,7 @@ def build_registered_base_image(
             key: pending_details[key]
             for key in (
                 "rebuild_pending",
+                "rebuild_after_current",
                 "pending_definition_fingerprint",
                 "pending_image_ref",
                 "pending_source_image",
@@ -651,6 +652,8 @@ def build_registered_base_image(
             )
             if key in pending_details
         }
+        if row.rebuild_requested:
+            preserved_pending["rebuild_after_current"] = True
         row.status = BaseRuntimeImage.Status.BUILDING
         row.build_task_id = owner_task_id
         row.build_owner_deployment_id = owner_deployment_id
@@ -706,8 +709,12 @@ def build_registered_base_image(
                     "Base-image build ownership changed before READY state could be committed."
                 )
             requested_by_deployment = str(row.build_owner_deployment_id or "")
-            rebuild_after_success = bool(row.rebuild_requested)
             pending_details = dict(row.last_error_details or {})
+            rebuild_after_success = bool(
+                row.rebuild_requested
+                or pending_details.get("rebuild_pending")
+                or pending_details.get("rebuild_after_current")
+            )
             row.status = BaseRuntimeImage.Status.READY
             row.image_id = getattr(img, "id", "") or ""
             attrs = getattr(img, "attrs", {}) or {}
