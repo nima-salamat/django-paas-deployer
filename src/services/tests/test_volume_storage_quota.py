@@ -217,3 +217,13 @@ def test_bind_mount_is_not_reported_as_managed_volume_usage():
         VolumeMountManager(logger=logger).warn_about_usage([VolumeSpec(source="/srv/tenant", target="/data", mount_type="bind", size_mb=100)])
     inspect.assert_not_called()
     logger.warning.assert_not_called()
+def test_release_transition_is_centralized_and_reclaimable():
+    source = __import__("inspect").getsource(Volume.save)
+    assert "previous_service_id" in source
+    assert "self.released_at = self.released_at or timezone.now()" in source
+    assert "reclaim_attempted_at" in source
+    tasks = __import__("pathlib").Path(
+        __file__).resolve().parents[2] / "deployments" / "celery" / "tasks.py"
+    ).read_text(encoding="utf-8")
+    assert "reclaim_released_volumes" in tasks
+    assert "released_at__lte=cutoff" in tasks
