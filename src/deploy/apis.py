@@ -521,12 +521,19 @@ class DeployViewSet(ModelViewSet):
             previous_deploy_id = previous_active.pk if previous_active else None
             if previous_deploy_id == deploy.pk:
                 previous_deploy_id = None
+            from services.lifecycle import bump_lifecycle
+            lifecycle_generation = bump_lifecycle(service.pk, desired_state="running")
+            service.desired_state = "running"
+            service.lifecycle_generation = lifecycle_generation
+
             from deployments.core.state.manager import StateManager
             StateManager.transition_service(
                 service.pk, SERVICE_STATUS_CHOICES.QUEUED,
                 update_fields={
                     "deploy_started": timezone.now(),
                     "task_id": task_id,
+                    "desired_state": "running",
+                    "lifecycle_generation": lifecycle_generation,
                 },
             )
             StateManager.transition_deploy(
