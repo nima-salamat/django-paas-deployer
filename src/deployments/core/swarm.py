@@ -1003,12 +1003,13 @@ class SwarmRuntime:
                 if self._last_apply_operation:
                     recovery_operations.append(dict(self._last_apply_operation))
                 self._last_apply_recovery = build_recovery()
-            except DeploymentError as exc:
+            except Exception as exc:
                 if self._last_apply_operation:
                     recovery_operations.append(dict(self._last_apply_operation))
                 recovery = build_recovery()
                 self._last_apply_recovery = recovery
-                exc.details = {**exc.details, "swarm_recovery": recovery}
+                if isinstance(exc, DeploymentError):
+                    exc.details = {**exc.details, "swarm_recovery": recovery}
                 raise
 
         if not results:
@@ -1025,33 +1026,64 @@ class SwarmRuntime:
         stale_service_names = sorted(
             set(self.service_names_for_service(service_id)) - desired_service_names
         ) if service_id else []
-        for stale_name in stale_service_names:
-            try:
-                self.remove(stale_name)
-            except docker.errors.DockerException as exc:
-                recovery = build_recovery()
-                self._last_apply_recovery = recovery
-                raise DeploymentError(
-                    f"Unable to remove stale Swarm process service {stale_name!r}: {exc}",
-                    stage="swarm_cleanup",
-                    code="SWARM_STALE_PROCESS_CLEANUP_FAILED",
-                    recoverable=True,
-                    details={"swarm_recovery": recovery},
-                ) from exc
 
+        # Stale-process deletion is intentionally deferred until after the new
+        # revision is activated. Removing an old process before activation would
+        # make a later deployment failure unable to restore the previous runtime
+        # graph. Cleanup is therefore best-effort and non-fatal after activation.
         recovery = build_recovery()
         recovery["stale_service_names"] = stale_service_names
         self._last_apply_recovery = recovery
 
         if stale_service_names:
             logger.info(
-                "Removed stale Swarm process services for service=%s: %s",
+                "Deferring stale Swarm process cleanup until after activation "
+                "for service=%s: %s",
                 service_id,
                 stale_service_names,
             )
 
         return results
 
+
+
+    def cleanup_stale_process_services(
+        self,
+        *,
+        service_id: str,
+        desired_service_names: Iterable[str],
+    ) -> tuple[list[str], list[dict[str, str]]]:
+        """Best-effort removal of process services no longer in the active graph."""
+        service_id = str(service_id or "").strip()
+        if not service_id:
+            return [], []
+
+        desired = {str(name) for name in desired_service_names}
+        existing = set(self.service_names_for_service(service_id))
+        stale = sorted(existing - desired)
+        removed: list[str] = []
+        failures: list[dict[str, str]] = []
+
+        for name in stale:
+            try:
+                self.remove(name)
+                removed.append(name)
+            except Exception as exc:
+                failures.append({"service": name, "error": str(exc)})
+
+        if removed:
+            logger.info(
+                "Removed stale active-graph Swarm process services for service=%s: %s",
+                service_id,
+                removed,
+            )
+        if failures:
+            logger.warning(
+                "Some stale Swarm process services could not be removed for service=%s: %s",
+                service_id,
+                failures,
+            )
+        return removed, failures
 
     def cleanup_legacy_containers(self, *, service_id: str) -> int:
         """Remove old container-based runtime resources after Swarm activation."""
