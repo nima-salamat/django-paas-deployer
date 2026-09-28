@@ -33,7 +33,7 @@ from deployments.core.manager.container_manager import Container
 from deployments.core.state.locks import acquire_service_deployment_lock
 from deployments.core.state.manager import StateManager
 from services.models import Volume  # type: ignore
-from services.revisioning import ensure_revision_for_deploy, activate_revision_locked, materialize_revision_config, mark_revision_failed, get_active_deploy
+from services.revisioning import ensure_revision_for_deploy, activate_revision_locked, materialize_revision_config, mark_revision_failed
 
 from deployments.common import parse_config, as_bool, as_int
 from deployments.common.deployment_profile import normalize_profile
@@ -169,21 +169,51 @@ class DeployService:
             previous_deploy_id = getattr(deploy_item, "previous_deploy_id", None)
             def _activate_deployment() -> None:
                 from django.db import transaction
+                from services.lifecycle.authority import get_authoritative_deploy
                 from django.utils import timezone
                 from services.models import Service
+
                 with transaction.atomic():
                     service = Service.objects.select_for_update().get(pk=service_id)
-                    active_deploy = get_active_deploy(service)
+
+                    # Activation is idempotent for the same immutable revision.
+                    # A duplicate delivery or a recovery path may have already
+                    # committed this exact revision. That is not a conflicting
+                    # deployment and must not turn a successful Swarm rollout
+                    # into a false failure.
+                    if str(service.active_revision_id or "") == str(deploy_item.revision_id):
+                        Service.objects.filter(pk=service_id).update(
+                            desired_state="running",
+                        )
+                        logger.info(
+                            "Activation already committed for deploy=%s revision=%s service=%s.",
+                            deploy_item.pk, deploy_item.revision_id, service_id,
+                        )
+                        return
+
+                    # Use the authoritative active_revision pointer only.
+                    # Do not call the legacy get_active_deploy() bridge here:
+                    # it can mutate active_revision while merely resolving
+                    # selected_deploy, which makes the concurrency fence report
+                    # a change that was not an actual competing activation.
+                    active_deploy = get_authoritative_deploy(service)
                     current = active_deploy.pk if active_deploy else None
                     if current != previous_deploy_id:
                         raise InvalidServiceStateError(
                             "Active revision changed while this deployment was preparing to activate.",
-                            details={"expected_previous_deploy": previous_deploy_id, "actual_active_deploy": current},
+                            details={
+                                "expected_previous_deploy": previous_deploy_id,
+                                "actual_active_deploy": current,
+                                "actual_active_revision": str(service.active_revision_id or ""),
+                                "deploy_revision": str(deploy_item.revision_id or ""),
+                            },
                         )
+
                     activate_revision_locked(service, deploy_item.revision_id)
                     Service.objects.filter(pk=service_id).update(
                         desired_state="running",
                     )
+
                 logger.info(
                     "Activated deploy=%s revision=%s for service=%s",
                     deploy_item.pk, deploy_item.revision_id, service_id,
