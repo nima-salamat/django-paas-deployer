@@ -22,6 +22,7 @@ from deploy.models import (
 )
 from services.models import Service
 from services.lifecycle.authority import get_authoritative_deploy
+from services.revisioning import activate_revision_locked
 from services.revisioning import ensure_revision_for_deploy, get_active_deploy
 
 from .monitoring.policies import ACTIVE_DEPLOY_STATUSES, ACTIVE_SERVICE_STATUSES, runtime_policies
@@ -372,11 +373,7 @@ def _recover_stale_running_deploys(policies) -> None:
                                 locked.pk, expected_previous, current_selected,
                             )
                             continue
-                        Service.objects.filter(pk=service.pk).update(
-                            active_revision_id=locked.revision_id,
-                            selected_deploy_id=locked.pk,
-                            selected_deploy_at=timezone.now(),
-                        )
+                        activate_revision_locked(service, locked.revision_id)
 
                     StateManager.transition_deploy(
                         locked.pk, DeploymentStatusChoices.SUCCEEDED,
@@ -518,15 +515,11 @@ def _recover_stale_running_deploys_swarm(policies) -> None:
                 if not locked or locked.status != DeploymentStatusChoices.RUNNING:
                     continue
                 revision = ensure_revision_for_deploy(locked)
-                current = get_active_deploy(locked.service)
+                current = get_authoritative_deploy(locked.service)
                 if current is not None and current.pk != locked.pk:
                     logger.warning("Refusing stale Swarm recovery for deploy=%s; active deploy=%s", locked.pk, current.pk)
                     continue
-                Service.objects.filter(pk=locked.service_id).update(
-                    active_revision_id=revision.revision_id,
-                    selected_deploy_id=locked.pk,
-                    selected_deploy_at=timezone.now(),
-                )
+                activate_revision_locked(locked.service, revision.revision_id)
                 StateManager.transition_deploy(
                     locked.pk, DeploymentStatusChoices.SUCCEEDED,
                     update_fields={
