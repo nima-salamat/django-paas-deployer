@@ -1,10 +1,11 @@
-"""Wagtail admin integration for the tickets app."""
-from __future__ import annotations
+"""Wagtail integration intentionally disabled for the tickets app.
 
-from .models import TicketsGroup
+Ticket administration remains in Django Admin/API because the existing staff
+workflow enforces department membership and CanManageTicket checks that generic
+Wagtail snippets cannot reproduce safely.
+"""
+from __future__ import annotations
 
 
 def register():
-    from wagtail.snippets.models import register_snippet
-
-    register_snippet(TicketsGroup)
+    return None

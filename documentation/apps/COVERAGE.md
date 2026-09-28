@@ -555,3 +555,8 @@ Django migration modules, test modules, package `__init__.py` files, generated c
 ## Maintenance rule
 
 A source change that adds a production surface must update its owning documentation or add a justified explicit exclusion. CI is source-derived so a hand-written checklist cannot silently drift from the repository.
+
+
+## Wagtail administration coverage
+
+The complete source-derived Wagtail ownership and coverage audit is maintained at [reference/wagtail-admin-audit.md](../reference/wagtail-admin-audit.md). It documents the intentional exposure decision for every concrete first-party model, editable versus read-only surfaces, domain actions, secrets handling, permissions, cross-app operator workflows and remaining dashboard candidates.

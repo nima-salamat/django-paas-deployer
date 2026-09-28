@@ -1,0 +1,23 @@
+{% extends "wagtailadmin/base.html" %}
+{% load i18n %}
+{% block titletag %}{% trans "Cancel application installation" %}{% endblock %}
+{% block content %}
+<div class="nice-padding">
+  <h1>{% trans "Cancel application installation" %}</h1>
+  <p>{% trans "This uses the existing application coordinator cancellation path. No Service or Deploy rows are edited directly here." %}</p>
+  <table class="listing" style="max-width:980px"><tbody>
+    <tr><th>{% trans "Application" %}</th><td>{{ instance.name }}</td></tr>
+    <tr><th>{% trans "ID" %}</th><td><code>{{ instance.pk }}</code></td></tr>
+    <tr><th>{% trans "Catalog" %}</th><td>{{ instance.catalog_id }}</td></tr>
+    <tr><th>{% trans "Variant" %}</th><td>{{ instance.variant_id }}</td></tr>
+    <tr><th>{% trans "Status" %}</th><td>{{ instance.get_status_display }}</td></tr>
+    <tr><th>{% trans "Stage" %}</th><td>{{ instance.stage|default:"—" }}</td></tr>
+    <tr><th>{% trans "Error" %}</th><td>{{ instance.error_message|default:"—" }}</td></tr>
+  </tbody></table>
+  <form method="post" style="margin-top:1.5rem">{% csrf_token %}
+    <input type="hidden" name="next" value="{{ next_url }}">
+    <button type="submit" class="button button-primary">{% trans "Cancel installation" %}</button>
+    <a href="{{ next_url }}" class="button button-secondary">{% trans "Back" %}</a>
+  </form>
+</div>
+{% endblock %}

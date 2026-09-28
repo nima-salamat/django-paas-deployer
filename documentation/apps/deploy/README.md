@@ -38,3 +38,8 @@ See background.md and the deep deployment docs. A PENDING/BUILDING base-image ro
 6. operator desired node state and observed Docker state are distinct.
 
 For execution semantics always continue to ../deployments/README.md.
+
+
+## Wagtail administration
+
+`Deploy` is read-only in Wagtail because its lifecycle is owned by the deployment control plane. Operators use **Cancel deployment**, which requires `deploy.change_deploy` and calls the existing `CancelDeploymentUseCase(DjangoDeploymentCancellationGateway())`. `DeployLog` is read-only and continues to read from `DEPLOYMENT_LOG_DB_ALIAS`. `BaseRuntimeImageLease` is exposed read-only. Base-image build/renew controls remain guarded by `deploy.change_baseruntimeimage` and the existing `request_base_runtime_image_build` helper. Swarm node identity/cluster is read-only; desired availability and labels remain operator-controlled.

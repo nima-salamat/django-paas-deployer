@@ -51,3 +51,8 @@ catalog source
 ## Reading order
 
 Read models.md -> api.md -> serializers.md -> background.md. For child runtime behavior also read ../services/README.md and ../deployments/README.md, then ../../deployments/execution/02-request-to-plan.md.
+
+
+## Wagtail administration
+
+Installed catalog applications are exposed in Wagtail under **Applications** as read-only coordinator records. `ApplicationInstance` shows safe identity/config/status/error metadata; `secret_config` is not exposed. `ApplicationInstanceService` is read-only coordinator provenance. **Cancel installation** requires `app_catalog.change_applicationinstance` and delegates to the existing `cancel_application_installation` task, with its established synchronous executor fallback.

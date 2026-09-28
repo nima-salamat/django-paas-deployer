@@ -40,3 +40,8 @@ IsTicketOwnerOrStaff permits an active superuser, ticket owner, assigned staff o
 ## Reading order
 
 models.md -> api.md -> serializers.md -> state-contracts.md -> background.md -> tests.md.
+
+
+## Wagtail administration
+
+Ticket models are intentionally **not registered in Wagtail**. The existing staff API scopes non-superuser operators by `DepartmentMembership` and uses `CanManageTicket` for status, priority and assignment mutations. Django Admin/API remain the canonical support workflow rather than duplicating ticket content and bypassing those checks.

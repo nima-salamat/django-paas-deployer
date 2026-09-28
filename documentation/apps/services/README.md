@@ -54,3 +54,8 @@ Owner access and effective ServiceShare rules are rechecked server-side. Secret 
 ## Reading order
 
 models.md -> serializers.md -> api.md -> background.md -> tests.md. Then ../deployments/execution/02-request-to-plan.md and 03-execution-lifecycle.md for execution crossings.
+
+
+## Wagtail administration
+
+The Wagtail Services surface keeps `Service`, `PrivateNetwork` and `Volume` as the configuration entry points and adds a read-only **Service inspection** view. It consolidates process definitions, endpoint/network/database bindings, volumes, revision/deployment history, sharing metadata, logical storage allocation and redacted security metadata. Secret values, encrypted secret ciphertext, database credential material and shell command/output are not displayed. The inspection view requires staff access plus `services.view_service`.

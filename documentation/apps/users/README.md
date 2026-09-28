@@ -39,3 +39,8 @@ Resource-owning apps enforce ownership; users supplies the identity/role facts. 
 ## Reading order
 
 models.md -> serializers.md -> api.md -> background.md -> tests.md. Read ../auth_users/README.md for credential/session flows.
+
+
+## Wagtail administration
+
+The canonical user editor is Wagtail's built-in **Settings → Users** surface using the project's custom user forms. `Profile` remains editable. `Receipt` is read-only in Wagtail; payment mutation remains in Django Admin. `Rule` is now read-only in Wagtail because its values are used as staff capability grants by other applications.

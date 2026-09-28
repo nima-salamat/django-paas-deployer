@@ -1,0 +1,23 @@
+{% extends "wagtailadmin/base.html" %}
+{% load i18n %}
+{% block titletag %}{% trans "Cancel deployment" %}{% endblock %}
+{% block content %}
+<div class="nice-padding">
+  <h1>{% trans "Cancel deployment" %}</h1>
+  <p>{% trans "Cancellation uses the deployment control-plane operation; Wagtail does not mutate deployment state directly." %}</p>
+  <table class="listing" style="max-width:980px"><tbody>
+    <tr><th>{% trans "Deployment" %}</th><td>{{ deploy.name }}</td></tr>
+    <tr><th>ID</th><td><code>{{ deploy.pk }}</code></td></tr>
+    <tr><th>{% trans "Service" %}</th><td>{{ deploy.service }}</td></tr>
+    <tr><th>{% trans "Status" %}</th><td>{{ deploy.get_status_display }}</td></tr>
+    <tr><th>{% trans "Stage" %}</th><td>{{ deploy.stage|default:"—" }}</td></tr>
+    <tr><th>{% trans "Progress" %}</th><td>{{ deploy.progress }}%</td></tr>
+  </tbody></table>
+  <form method="post" style="margin-top:1.5rem">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ next_url }}">
+    <button type="submit" class="button button-primary">{% trans "Cancel deployment" %}</button>
+    <a href="{{ next_url }}" class="button button-secondary">{% trans "Back" %}</a>
+  </form>
+</div>
+{% endblock %}

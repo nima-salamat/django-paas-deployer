@@ -39,3 +39,8 @@ Session-bound JWTs with sid are validated against UserSession on every authentic
 ## Reading order
 
 models.md -> api.md -> serializers.md -> background.md -> tests.md. Read ../users/README.md for identity ownership.
+
+
+## Wagtail administration
+
+Wagtail exposes login policy, invite-link metadata, invite usage and login audit metadata. `LoginSettings` remains a singleton: change is allowed but add/delete are blocked. Invite bearer tokens and OTP/auth codes are not exposed in Wagtail. Device/session/contact-change security workflows remain in Django Admin where existing revoke and verification semantics are implemented.

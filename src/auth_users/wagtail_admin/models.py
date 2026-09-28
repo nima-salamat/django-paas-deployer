@@ -12,6 +12,7 @@ from django.utils.translation import gettext_lazy as _
 from auth_users.models import InviteLink, InviteUsage, LoginSettings, LoginLog
 from cms.wagtail_admin.utils import ReadOnlyModelPermissionPolicy, panels_for
 from wagtail.admin.panels import FieldPanel, MultiFieldPanel
+from wagtail.permission_policies.base import ModelPermissionPolicy
 from wagtail.snippets.views.snippets import SnippetViewSet, SnippetViewSetGroup
 
 
