@@ -280,5 +280,9 @@ def test_legacy_php_identity_migration_is_ordered_after_phase_timestamp_migratio
     assert '"0022_deploy_base_image_phase_timestamps"' in migration
     assert '"apache-root", "apache-public"' in migration
     assert "safe_to_remove" in migration
-
-
+def test_base_monitor_does_not_exempt_retry_pending_from_phase_timeout():
+    source = (ROOT / "deployments" / "celery" / "schedules.py").read_text(encoding="utf-8")
+    block = source.split("def _reconcile_base_runtime_builds", 1)[1].split("def ", 1)[0]
+    assert "retry_pending" in block
+    assert "Skipping stale timeout for retry-pending" not in block
+    assert 'policies["base_image_build_timeout_minutes"]' in block
