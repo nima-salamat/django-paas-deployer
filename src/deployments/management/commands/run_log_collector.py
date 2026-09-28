@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 MAX_FOLLOW_WORKERS = int(os.environ.get("LOG_COLLECTOR_WORKERS", "8"))
 BUFFER_MAX_BYTES = int(os.environ.get("LOG_COLLECTOR_BUFFER_BYTES", str(8 * 1024 * 1024)))
 GENERATOR_LOG_ARTIFACT_RE = re.compile(
-    r"^<generator object APIClient\\._multiplexed_response_stream_helper at 0x[0-9a-fA-F]+>$"
+    r"^<generator object APIClient\._multiplexed_response_stream_helper at 0x[0-9a-fA-F]+>$"
 )
 
 
