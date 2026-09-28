@@ -206,6 +206,9 @@ class VolumeSerializer(serializers.ModelSerializer):
             "attached_services",
             "attached_services_count",
             "service_attachments",
+            "released_at",
+            "reclaim_attempted_at",
+            "reclaim_error",
         ]
         extra_kwargs = {
             "name": {"required": True, "allow_blank": False},

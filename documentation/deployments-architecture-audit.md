@@ -895,3 +895,10 @@ After all required base images are verified READY, the deployment records `appli
 Example: 6 minutes of shared PHP base build + 7 minutes of application build is 6 minutes of base phase followed by 7 minutes of application phase, so both individual 10-minute budgets remain within their limits. A base phase exceeding 10 minutes fails in the base-image stage; an application phase exceeding 10 minutes fails in the application stage.
 
 BaseRuntimeImage ownership and waiting are keyed by Docker host. Two deployments on the same Docker daemon share one build. Different Docker daemons have separate ownership rows/builds unless an external image distribution mechanism makes the resulting application image available elsewhere.
+### Volume storage lifecycle and accounting
+
+Managed tenant volumes currently use Docker `local` only. The backend is operator-controlled and tenant configuration cannot inject arbitrary Docker driver options. `Volume.size_mb` is logical quota metadata; the local backend does not prove hard filesystem enforcement.
+
+DETACH keeps Service ownership and quota. RELEASE clears logical ownership and quota while retaining the physical Docker volume. DELETE/RECLAIM removes physical storage before the registry row is deleted. Released volumes have a bounded operator-configured retention period and an hourly reclaim worker; reclaim failures keep the registry row and expose the error for retry/reconciliation.
+
+The connected Docker daemon reconciliation distinguishes active tenant storage, released retained storage, orphan storage and unknown storage, and includes measured usage where Docker permits it. The platform exposes deployment-time usage warnings through DeploymentLogger and does not claim continuous usage monitoring.

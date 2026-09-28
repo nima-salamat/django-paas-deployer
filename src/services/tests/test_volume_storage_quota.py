@@ -135,8 +135,8 @@ def test_volume_usage_reconciliation_detects_docker_orphan_and_missing_registry_
         DockerRow("vol-orphan-unregistered"),
     ]
     registry_rows = [
-        {"id": db_id, "name": "db-data", "service_id": "svc-1", "size_mb": 1024},
-        {"id": "87654321-1234-1234-1234-123456789abc", "name": "app-data", "service_id": "svc-2", "size_mb": 512},
+        {"id": db_id, "name": "db-data", "service_id": "svc-1", "size_mb": 1024, "released_at": None},
+        {"id": "87654321-1234-1234-1234-123456789abc", "name": "app-data", "service_id": "svc-2", "size_mb": 512, "released_at": None},
     ]
     with patch("services.models.Volume.objects.values", return_value=registry_rows):
         result = reconcile_managed_volumes(manager)
@@ -217,3 +217,59 @@ def test_bind_mount_is_not_reported_as_managed_volume_usage():
         VolumeMountManager(logger=logger).warn_about_usage([VolumeSpec(source="/srv/tenant", target="/data", mount_type="bind", size_mb=100)])
     inspect.assert_not_called()
     logger.warning.assert_not_called()
+def test_release_transition_is_centralized_and_reclaimable():
+    source = __import__("inspect").getsource(Volume.save)
+    assert "previous_service_id" in source
+    assert "self.released_at = self.released_at or timezone.now()" in source
+    assert "reclaim_attempted_at" in source
+    tasks = __import__("pathlib").Path(
+        __file__).resolve().parents[2] / "deployments" / "celery" / "tasks.py"
+    ).read_text(encoding="utf-8")
+    assert "reclaim_released_volumes" in tasks
+    assert "released_at__lte=cutoff" in tasks
+def test_unknown_usage_reaches_deployment_event_sink():
+    from deployments.core.deployment_logger import DeploymentLogger
+    from deployments.core.types import VolumeSpec
+    from deployments.core.volumes import VolumeMountManager
+    from deployments.core import volume_storage
+
+    sink = Mock()
+    logger = DeploymentLogger(deployment_id="deploy-volume-unknown", sink=sink)
+    usage = volume_storage.VolumeUsage(
+        volume="vol-unknown",
+        declared_capacity_bytes=100 * 1024 * 1024,
+        actual_used_bytes=None,
+        usage_percent=None,
+        usage_state=volume_storage.USAGE_UNKNOWN,
+        threshold_percent=90.0,
+        driver="local",
+        scope="local",
+        enforced=False,
+        capacity_mode=volume_storage.CAPACITY_LOGICAL_ONLY,
+        usage_available=False,
+        error="Docker did not provide a measurable usage value.",
+    )
+    with patch("deployments.core.manager.client_manager.Client", return_value=Mock(client=Mock())),          patch("deployments.core.volume_storage.inspect_volume_usage", return_value=usage),          patch("deployments.core.volume_storage.usage_details", return_value={
+             "volume": "vol-unknown",
+             "declared_mb": 100,
+             "used_mb": None,
+             "usage_percent": None,
+             "threshold_percent": 90.0,
+             "usage_state": "usage_unavailable",
+             "driver": "local",
+             "scope": "local",
+             "enforced": False,
+             "capacity_mode": "LOGICAL_ONLY",
+             "usage_available": False,
+             "error": "Docker did not provide a measurable usage value.",
+         }):
+        VolumeMountManager(logger=logger).warn_about_usage([
+            VolumeSpec(source="vol-unknown", target="/data", size_mb=100)
+        ])
+
+    sink.assert_called_once()
+    event = sink.call_args.args[0]
+    assert event.stage == "volume_creation"
+    assert event.level == "warning"
+    assert event.details["usage_state"] == "usage_unavailable"
+    assert event.details["usage_available"] is False

@@ -47,11 +47,11 @@ def test_pending_renewal_is_preserved_across_retry():
     assert "details = dict" in retry
 
 
-def test_retry_pending_is_not_terminalized_by_monitor():
+def test_retry_pending_still_obeys_the_dedicated_base_timeout():
     source = (ROOT / "deployments" / "celery" / "schedules.py").read_text(encoding="utf-8")
     block = source.split("def _reconcile_base_runtime_builds", 1)[1].split("def ", 1)[0]
-    assert '"retry_pending"' in block
-    assert "continue" in block
+    assert '"retry_pending"' not in block or "continue" not in block
+    assert 'policies["base_image_build_timeout_minutes"]' in block
 
 
 def test_phase_deadline_uses_dedicated_timestamps():

@@ -1019,10 +1019,9 @@ def _reconcile_base_runtime_builds(policies: dict) -> None:
     ).order_by("build_started_at")[: int(policies["monitor_batch_size"])]
     for row in stale:
         try:
-            if bool((row.last_error_details or {}).get("retry_pending")):
-                # Celery retry state is non-terminal. Do not let the monitor
-                # convert an intermediate retry into FAILED.
-                continue
+            # retry_pending is still part of the same bounded base-image phase.
+            # Once the deadline is exceeded, the build owner must be fenced
+            # and waiters must be released rather than waiting indefinitely.
             updated = BaseRuntimeImage.objects.filter(
                 pk=row.pk,
                 status=BaseRuntimeImage.Status.BUILDING,

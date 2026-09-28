@@ -681,6 +681,19 @@ class Volume(BaseModel):
         blank=True,
     )
     size_mb = models.PositiveIntegerField()
+    released_at = models.DateTimeField(
+        _("Released At"),
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text=_("When logical Service ownership was released while the Docker volume remained physically retained."),
+    )
+    reclaim_attempted_at = models.DateTimeField(
+        _("Reclaim Attempted At"), null=True, blank=True, editable=False,
+    )
+    reclaim_error = models.TextField(
+        _("Reclaim Error"), blank=True, default="", editable=False,
+    )
 
     class Meta:
         verbose_name = _("Volume")
@@ -769,12 +782,43 @@ class Volume(BaseModel):
         #      read/modify/write critical section.
         from django.db import transaction
         with transaction.atomic():
+            previous_service_id = None
             if self.pk:
-                Volume.objects.select_for_update().filter(pk=self.pk).first()
+                previous = (
+                    Volume.objects.select_for_update()
+                    .filter(pk=self.pk)
+                    .values("service_id")
+                    .first()
+                )
+                previous_service_id = previous.get("service_id") if previous else None
+
+            # A service ownership transition to NULL is a logical RELEASE.
+            # Record retained-storage state centrally so API/Wagtail/model
+            # callers cannot free quota without leaving the physical state visible.
+            release_transition = bool(previous_service_id and self.service_id is None)
+            if release_transition and self.released_at is None:
+                self.released_at = timezone.now()
+                self.reclaim_attempted_at = None
+                self.reclaim_error = ""
+
             if self.service_id:
                 from .models import Service
                 locked_service = Service.objects.select_for_update().get(pk=self.service_id)
                 self.service = locked_service
+                if self.released_at is not None:
+                    self.released_at = None
+                    self.reclaim_attempted_at = None
+                    self.reclaim_error = ""
+
+            update_fields = kwargs.get("update_fields")
+            if release_transition or (self.service_id and self.released_at is None):
+                if update_fields is not None:
+                    update_fields = set(update_fields)
+                    update_fields.update({
+                        "released_at", "reclaim_attempted_at", "reclaim_error",
+                    })
+                    kwargs["update_fields"] = update_fields
+
             self.full_clean()
             self._normalize_service_attachments()
             return super().save(*args, **kwargs)
@@ -858,7 +902,13 @@ class Volume(BaseModel):
             return
         self.service = None
         self.service_attachments = {}
-        self.save(update_fields=["service", "service_attachments"])
+        self.released_at = timezone.now()
+        self.reclaim_attempted_at = None
+        self.reclaim_error = ""
+        self.save(update_fields=[
+            "service", "service_attachments", "released_at",
+            "reclaim_attempted_at", "reclaim_error",
+        ])
 
     def get_attached_services(self):
         """Return list of Service objects (0 or 1)."""

@@ -42,7 +42,10 @@ class PrivateNetworkAdmin(admin.ModelAdmin):
         (
             "Timestamps",
             {
-                "fields": ("created_at", "updated_at"),
+                "fields": (
+                    "released_at", "reclaim_attempted_at", "reclaim_error",
+                    "created_at", "updated_at",
+                ),
                 "classes": ("collapse",),
             },
         ),
@@ -228,6 +231,9 @@ class VolumeAdmin(admin.ModelAdmin):
         "size_mb_display",
         "attachment_count",
         "docker_volume_name",
+        "released_at",
+        "reclaim_attempted_at",
+        "reclaim_error",
         "created_at",
     )
     list_display_links = ("id", "name")

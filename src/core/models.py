@@ -229,6 +229,15 @@ class CoreSettings(BaseGenericSetting):
         verbose_name=_("Volume usage warning threshold (%)"),
         help_text=_("Warn users when actual Docker volume usage reaches this percentage of declared logical capacity."),
     )
+    volume_release_retention_days = models.PositiveIntegerField(
+        default=30,
+        validators=[MinValueValidator(1), MaxValueValidator(3650)],
+        verbose_name=_("Released volume retention (days)"),
+        help_text=_(
+            "How long released volume data remains physically retained after logical "
+            "Service quota is freed. Expired released volumes are reclaimed automatically."
+        ),
+    )
 
     build_slot_lease_seconds = models.PositiveIntegerField(
         default=900, verbose_name=_("Build slot lease (seconds)"),
@@ -268,8 +277,12 @@ class CoreSettings(BaseGenericSetting):
         default=3, verbose_name=_("Maximum recovery attempts"),
     )
     monitor_stale_base_build_minutes = models.PositiveIntegerField(
-        default=30, verbose_name=_("Base-image build lifecycle timeout (minutes)"),
-        help_text=_("Shared timeout for deployment waiting and monitor recovery of base-image builds."),
+        default=30,
+        verbose_name=_("Legacy base-image timeout setting"),
+        help_text=_(
+            "Deprecated compatibility field. Base-image lifecycle timing is controlled "
+            "by base_image_build_timeout_minutes and this field no longer provides an independent timeout."
+        ),
     )
     monitor_stale_worker_seconds = models.PositiveIntegerField(
         default=90, verbose_name=_("Stale worker heartbeat (seconds)"),
@@ -315,6 +328,7 @@ class CoreSettings(BaseGenericSetting):
                 FieldPanel("build_max_cpu"),
                 FieldPanel("build_max_ram_mb"),
                 FieldPanel("volume_usage_warning_percent"),
+                FieldPanel("volume_release_retention_days"),
                 FieldPanel("build_slot_lease_seconds"),
             ],
             heading=_("Docker build resources"),
