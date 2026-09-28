@@ -1,14 +1,45 @@
-# 08 — Base images
+# 08 — Base runtime images
 
 ## Purpose
 
-Base runtime images have a separate operator-owned lifecycle. Application deployments consume them; they do not own ordinary renewal policy.
+A BaseRuntimeImage is **operator-owned reusable runtime infrastructure**.
 
-This distinction is essential when diagnosing “Base image resolution…” messages or unexpected base-image waiting/building.
+An application image is **a deployment-specific artifact built from application source**.
 
-## Base image definition
+They are different lifecycles with different ownership, queues, cache rules and failure semantics.
 
-BaseImageSpec contains:
+~~~text
+BaseRuntimeImage
+  operator definition + runtime/tooling
+          |
+          +----------------+
+                           |
+Application source + build |
+                           v
+                 Application image
+                           |
+                           v
+                        Runtime
+~~~
+
+## Why base images have their own lifecycle
+
+Shared runtime layers are expensive to build and useful across deployments.
+
+Treating a base image like an ordinary application artifact would:
+
+- duplicate builds across services;
+- mix tenant source with operator runtime policy;
+- make runtime-version changes harder to reason about;
+- make application deployment timeouts depend on unrelated renewal work.
+
+The registry therefore tracks shared base state independently.
+
+## BaseImageSpec
+
+**Path:** \`deploy/base_images.py\`
+
+Contains:
 
 - logical_runtime;
 - version;
@@ -16,209 +47,257 @@ BaseImageSpec contains:
 - source_image;
 - repository;
 - tag;
-- Dockerfile definition.
+- Dockerfile.
 
-Its definition fingerprint is a SHA-256 digest over the operator-owned definition inputs.
+The definition fingerprint is a SHA-256 digest of these operator-owned definition inputs.
 
-Built images carry:
+Built images carry the fingerprint as \`io.passdeployer.base-definition\`.
 
-- io.passdeployer.base-definition;
-- io.passdeployer.base-runtime.
+## Registry model
 
-These labels let the resolver verify that a local artifact matches the current definition.
+**Path:** \`deploy/models.py::BaseRuntimeImage\`
 
-## Current runtime families
-
-deploy/base_images.py::make_specs() currently defines:
-
-- PHP/Laravel-family -> paas-base/php-apache, variant apache;
-- Python-family -> paas-base/python-slim;
-- Node-family -> paas-base/node-alpine;
-- static/frontend families may also require paas-base/nginx;
-- static -> paas-base/nginx;
-- Go -> paas-base/go-alpine.
-
-Legacy PHP variants apache-root and apache-public can still be reconstructed for old in-flight rows. They are compatibility data; the canonical PHP identity is the apache variant.
-
-## Registry state
-
-BaseRuntimeImage states are:
+Identity is host-scoped:
 
 ~~~text
-PENDING
-BUILDING
-READY
-FAILED
-DISABLED
+logical_runtime
++ runtime_version
++ variant
++ architecture
++ docker_host
 ~~~
 
-The model also tracks:
+State:
 
-- source/image reference;
-- image id/digest;
-- build start/completion;
-- build count;
-- build task id;
-- build owner deployment id;
-- definition fingerprint;
-- rebuild_requested;
-- last error and structured details.
+| State | Meaning | Who may cause it |
+|---|---|---|
+| PENDING | definition exists but no usable build is currently committed | resolver/operator |
+| BUILDING | a build owner is active | base-image worker |
+| READY | registry points at a usable artifact | successful builder/local adoption |
+| FAILED | last build attempt failed/expired | builder/monitor |
+| DISABLED | operator disabled the base | operator |
 
-Identity includes logical runtime, version, variant, architecture and docker_host.
+A failed state does not automatically mean no usable local artifact exists.
 
-BaseRuntimeImageLease records which deployments currently rely on the shared artifact.
+## Definition compatibility
+
+A local image is “exactly compatible” when:
+
+1. image reference exists locally;
+2. its \`io.passdeployer.base-definition\` label matches the expected fingerprint.
+
+This protects against reusing an old Docker image under the same human-readable tag after the operator changes the base Dockerfile.
+
+## Last-known-good behavior
+
+During a PENDING/BUILDING/FAILED renewal, the registry may retain:
+
+- image_id;
+- image_digest;
+- exact reference;
+- runtime label.
+
+A deployment may use this artifact where the compatibility helper explicitly permits it.
+
+### Why failed renewal preserves old artifact
+
+Suppose:
+
+~~~text
+READY old image
+       |
+operator starts renewal
+       |
+BUILDING
+       |
+build fails
+~~~
+
+If the old artifact were discarded at the start, every application deployment would become unavailable because of an unrelated base renewal failure.
+
+Keeping the last usable artifact decouples application availability from renewal success.
 
 ## Resolution algorithm
 
-For every required BaseImageSpec, ensure_base_images():
+**Path:** \`ensure_base_images()\`
 
-1. computes the expected definition fingerprint;
-2. finds or creates the host-specific BaseRuntimeImage row;
-3. detects definition/reference changes;
-4. inspects the local Docker image;
-5. accepts a compatible local image when policy permits;
-6. may use a last-known-good local artifact while a renewal row is pending/building/failed;
-7. if no usable artifact exists, acquires BUILDING ownership;
-8. queues build_base_runtime_image on base-images;
-9. waits for READY or failure/timeout;
-10. returns the image reference and acquires a deployment lease.
+For each required spec:
 
-## The cache rule
+1. compute definition fingerprint;
+2. find/create host-specific registry row;
+3. update changed source/reference metadata;
+4. inspect the local Docker artifact;
+5. prefer exact compatible local reuse;
+6. consider permitted last-known-good reuse;
+7. if no reusable artifact exists, claim BUILDING;
+8. queue dedicated build task;
+9. wait for READY/failure/timeout;
+10. return image reference;
+11. acquire a deployment lease while using it.
 
-Registry status alone does not decide usability.
-
-A compatible local image is reusable when:
-
-- the image exists locally;
-- its io.passdeployer.base-definition label matches the expected fingerprint.
-
-Such an image can be used even while the row is BUILDING because a background renewal may be in progress.
-
-There is also a last-known-good path for certain PENDING/BUILDING/FAILED rows. It prefers the recorded image id, then the expected runtime label, then an explicit exact-reference fallback for older operator-owned images.
-
-Therefore:
+## Application deployment versus renewal
 
 ~~~text
 application deployment
-    !=
+    asks: “Can I obtain a usable base artifact?”
+
 base-image renewal
+    asks: “Should the operator-defined shared artifact be rebuilt?”
 ~~~
 
-## When an application deployment can trigger a build
+The first may depend on the second, but they are not the same operation.
 
-A deployment queues a base-image build only when no acceptable local artifact is available and the row is not already owned by another build.
+### BUILDING + compatible local image
 
-A definition fingerprint change can request a renewal.
+Continue deployment.
 
-This is a prerequisite relationship, not ownership transfer: the application deployment needs a base artifact but does not become the policy owner of its definition.
+The background renewal can continue.
 
-## Concurrent builds
+### BUILDING + incompatible/missing local image
 
-When a row is already BUILDING:
+Wait for the shared build.
 
-- a second worker does not create a duplicate build for the same base identity;
-- an exact compatible local artifact may bypass the wait;
-- otherwise the deployment waits for the shared build result;
-- the wait is bounded by the deployment's base-image phase deadline.
+Do not start a second build for the same identity.
 
-If the worker that owns the build disappears and no reusable local image exists, stale BUILDING state can be recovered after the operator timeout.
+### FAILED + compatible/last-known-good local image
 
-## Dedicated base-image worker
+Deployment may continue through the explicitly permitted fallback.
 
-build_base_runtime_image is routed to base-images.
+### FAILED + no usable local image
 
-Compose runs base-image-worker with concurrency 1 by default.
-
-Deployment workers do not consume that queue. This prevents synchronous waiter deadlocks at low deployment-worker concurrency.
+Deployment fails with a base-image error.
 
 ## Build ownership
 
-The registry row stores:
+The row stores:
 
 - build_task_id;
 - build_owner_deployment_id;
-- build_started_at.
+- build_started_at;
+- build_completed_at;
+- last_error/last_error_details.
 
-The builder uses ownership checks while building/streaming.
+The task updates are matched against the current task id.
 
-The monitor can mark an expired BUILDING row FAILED so waiters are released and a later build can safely claim it.
+### Why task-id matching matters
 
-## Application/base phase clocks
-
-A Deploy has separate time fields:
+Without fencing:
 
 ~~~text
-base_image_wait_started_at
-        |
-        v
-base_image_ready_at
-        |
-        v
-application_started_at
+old worker times out
+new worker starts
+old worker reports failure
+       -> new build incorrectly becomes FAILED
 ~~~
 
-mark_base_image_phase_started() starts the base-image budget.
+Task-id matching prevents this.
 
-mark_application_phase_started() records base readiness and starts a fresh application budget.
+## Queue ownership
 
-A slow shared base-image build therefore does not consume the entire application deployment timeout.
+\`build_base_runtime_image\` is routed to \`base-images\`.
+
+Compose's base-image worker consumes only this queue and defaults to concurrency 1.
+
+### Why a dedicated queue
+
+Application deployments may synchronously wait for a base build. If the same low-concurrency worker pool consumed the child build task, the parent could wait forever for work it is preventing from running.
+
+## Base-image phase clock
+
+Deploy has:
+
+- \`base_image_wait_started_at\`;
+- \`base_image_ready_at\`;
+- \`application_started_at\`.
+
+The intended timeline is:
+
+~~~text
+base-image wait budget
+       |
+       v
+base image ready
+       |
+       v
+fresh application deployment budget
+~~~
+
+A base wait must not silently consume the complete application timeout.
 
 ## Operator rebuild path
 
-request_base_runtime_image_build() is the manual/operator request path.
+\`request_base_runtime_image_build()\` is the explicit operator/manual request path.
 
-It changes registry/build state and queues build_base_runtime_image. It does not perform a synchronous Docker build from HTTP.
+It:
 
-## Cleanup and leases
+1. locks the BaseRuntimeImage row;
+2. records the requested lifecycle change;
+3. queues \`build_base_runtime_image\`;
+4. preserves ownership of the currently active artifact.
 
-The orchestrator releases deployment base-image leases in its finally path.
+It does not run a Docker build synchronously from an HTTP handler.
 
-release_stale_base_image_leases() can release old leases when the owning Deploy is already terminal.
+## Lease semantics
 
-If operator policy does not retain base images after deployment, lease-aware cleanup may remove an image only when no active deployment still references it.
+\`BaseRuntimeImageLease\` protects a shared base artifact from cleanup while a deployment is using it.
+
+The application deployment acquires a lease before/while consuming the image and releases it in the lifecycle cleanup path.
+
+Stale leases can be released after their owning Deploy is terminal.
+
+## Timeout/recovery
+
+The monitor can detect a BUILDING row older than the operator base-image build timeout.
+
+It marks it FAILED and clears build ownership.
+
+A subsequent deployment can then either:
+
+- use a local last-known-good artifact;
+- or claim a fresh build.
 
 ## Failure semantics
 
-When a required base image cannot become ready:
+If no usable base artifact exists:
 
-- application Dockerfile/image build does not start;
-- the deployment receives a base-image failure or timeout;
-- structured Docker/build diagnostics remain on the base-image row;
-- retry classification belongs to the dedicated base-image task.
+- application Dockerfile/image build does not begin;
+- the deployment remains in the base-image phase;
+- diagnostics remain on BaseRuntimeImage/Deploy;
+- retry behavior follows the base-image task's own classification.
 
-A failed renewal does not justify falling back to an incompatible image.
+A failed renewal must not force incompatible fallback.
 
-## Debugging checklist
+## Debugging a base-image rebuild/wait
 
-When logs show “Base image resolution…” inspect:
+Read in this order:
 
-1. BaseRuntimeImage.status;
-2. image_ref;
-3. definition_fingerprint;
-4. local Docker image existence;
-5. io.passdeployer.base-definition label;
-6. rebuild_requested;
-7. build_task_id;
-8. build_owner_deployment_id;
-9. last_error_details.
+1. \`BaseRuntimeImage.status\`
+2. \`image_ref\`
+3. \`definition_fingerprint\`
+4. local image existence
+5. local \`io.passdeployer.base-definition\`
+6. \`rebuild_requested\`
+7. \`build_task_id\`
+8. \`build_owner_deployment_id\`
+9. \`last_error_details\`
 
-This separates cache/registry state from application image-build behavior.
+Then inspect application Deploy timing to see whether the base phase or application phase timed out.
 
 ## What this subsystem must NOT do
 
-Base image code must not:
+Do not:
 
-- copy tenant application source or dependency trees into shared base images;
-- silently rebuild a compatible local base merely because a renewal flag exists;
-- allow tenant resource settings to become the base-image build resource policy;
-- remove a base artifact still protected by an active deployment lease;
-- treat the application Dockerfile as the base-image definition.
+- put tenant source/dependencies into the shared base;
+- rebuild an exact-compatible local artifact just because a renewal row is BUILDING;
+- use tenant resource limits for base-image builds;
+- release a base artifact while an active lease exists;
+- mutate application deployment state as if a renewal were an application deploy.
 
 ## Related code
 
-- src/deploy/base_images.py
-- src/deploy/models.py
-- src/deployments/celery/tasks.py
-- src/deployments/celery/schedules.py
-- src/deployments/core/orchestrator.py
-- src/deployments/common/resource_policy.py
+- \`src/deploy/base_images.py\`
+- \`src/deploy/models.py\`
+- \`src/deployments/celery/tasks.py\`
+- \`src/deployments/celery/schedules.py\`
+- \`src/deployments/common/resource_policy.py\`
+- \`src/deployments/core/orchestrator.py\`

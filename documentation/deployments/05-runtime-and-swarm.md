@@ -2,153 +2,350 @@
 
 ## Purpose
 
-Separate runtime-neutral concepts from Docker/Swarm implementation so future changes do not leak infrastructure concerns into domain or planning code.
+Separate the semantic runtime contract from the current concrete Docker Swarm implementation.
 
-## Runtime-neutral contract
+The key rule is:
 
-The runtime package contains:
+> Planning describes what should run. Runtime makes infrastructure do it. Observation reports what actually happened.
 
-- RuntimeIdentity: stable resource identity;
-- RuntimeSelection: backend/cluster/capability/availability choice;
-- RuntimeCapabilities: features a backend supports;
-- RuntimeAvailability: whether it can execute now;
-- RuntimeObservation: normalized observed status/task information;
-- RuntimeContract: operations available to lifecycle code;
-- RuntimeRegistry: backend selection/composition.
-
-Capabilities and availability are deliberately separate:
+## Runtime layers
 
 ~~~text
-capabilities = what the backend can do
-availability = whether it can do it now
+DeploymentPlan
+      |
+      v
+RuntimeSelection
+      |
+      v
+RuntimeContract
+      |
+      v
+SwarmRuntimeAdapter
+      |
+      v
+core.swarm.SwarmRuntime
+      |
+      v
+Docker Engine / Swarm
 ~~~
 
-## Runtime selection
+## RuntimeSelection
 
-RuntimeRegistry._resolve_backend() reads infrastructure policy only.
+**Path:** \`runtime/registry.py\`, \`runtime/contract.py\`
 
-Selection sources are operator policy, cluster policy, explicit bootstrap backend setting, legacy SWARM_ENABLED, then the Swarm default.
+### Called by
 
-Service/Revision/Deploy tenant fields must not choose host infrastructure.
+Current compatibility plan construction and the newer application lifecycle seam.
 
-## Current Swarm implementation
+### Inputs
 
-The concrete implementation remains deployments.core.swarm.SwarmRuntime.
+Operator policy, cluster metadata, optional capability requirements.
 
-The newer deployments.runtime.swarm.adapter.SwarmRuntimeAdapter wraps that implementation to expose RuntimeContract operations. It is a migration seam, not a second runtime.
+### Output
 
-The current main orchestrator directly invokes SwarmRuntime.apply_processes() when Swarm is enabled.
+RuntimeSelection.
 
-## Runtime invariants
+### Why backend selection is separate
 
-The current Swarm runtime supports replicated services, exactly one running replica per enabled process, process graph execution, overlay networks, persistent volume mounts, node placement constraints, rolling-update/rollback configuration, healthchecks, service logs and managed labels.
+A Service request may specify application behavior, but it must not select arbitrary host infrastructure.
 
-A requested replica count other than 0/1 fails runtime validation.
+The registry intentionally ignores \`backend\` fields on Service/Revision/Deploy tenant data.
 
-The data model also constrains ServiceProcess.replicas to one.
+### Availability
 
-## Process-to-service mapping
+With \`probe=False\`, selection can remain UNKNOWN availability.
 
-SwarmRuntime.apply_processes() turns each enabled ServiceProcess into an independent Swarm Service.
+With \`probe=True\`, the adapter checks whether the runtime is active, reachable and manager-capable.
 
-Naming rule:
+Do not interpret UNKNOWN as ACTIVE.
 
-- web uses the canonical Service runtime name;
-- other processes use a suffix based on process name.
+## RuntimeCapabilities
 
-If no process list is supplied, the runtime synthesizes a default web process from the top-level start command/entrypoint.
+**Path:** \`runtime/capabilities.py\`
 
-Each process receives merged environment and resource settings. Process-specific health and placement metadata are applied.
+Capabilities describe what a backend supports:
 
-## Networking
+- service scheduling;
+- replicas;
+- rolling update;
+- rollback;
+- node constraints;
+- overlay networks;
+- persistent volumes;
+- service logs;
+- health checks;
+- process graph.
 
-Runtime endpoints are represented with EndpointSpec.
+### Why capabilities exist
 
-Public HTTP/HTTPS/WebSocket endpoints can produce Traefik-facing labels on managed services.
+The plan compiler can reject impossible requests before making runtime changes.
 
-Network compilation remains a runtime concern because Docker network existence/attachment is infrastructure state.
+## RuntimeAvailability
 
-## Volumes
+Availability describes:
 
-Managed persistent volumes are prepared before runtime application.
+- enabled/disabled;
+- reachable/unreachable;
+- manager-capable/degraded;
+- reason code.
 
-When Swarm uses node-local volumes, SWARM_LOCAL_VOLUME_PIN can enforce node placement on the node that owns the local volume.
+### Why separate it from capabilities
 
-The runtime rejects unsafe local-volume/node mismatches rather than silently creating a same-named local volume on another node.
+“Backend cannot do this” and “backend could do this but Docker is currently unavailable” have different recovery behavior.
 
-The higher-level volume manager also requires an owning Service for persistent volume accounting.
+## RuntimeContract
 
-Do not turn this into arbitrary tenant host bind support.
+**Path:** \`runtime/contract.py\`
 
-## Resources
+This is the semantic interface for a runtime backend.
 
-Runtime CPU/RAM limits come from resolved server policy and Service Plan values.
+### \`apply(plan, operation_key)\`
 
-The Swarm runtime translates them to Docker Engine resource structures.
+**Preconditions**
 
-Tenant build/runtime config does not directly control cgroup limits.
+- caller has a resolved plan;
+- plan capabilities are supported;
+- caller has execution ownership;
+- runtime is available.
+
+**Semantics**
+
+Make the external runtime represent the plan and return a RuntimeHandle.
+
+**Postcondition**
+
+A handle is returned if the operation succeeded.
+
+### \`inspect(identity)\`
+
+Returns observed runtime state for the requested identity.
+
+It is observational and must not silently mutate desired state.
+
+### \`wait_ready(handle, timeout, cancel_check)\`
+
+Waits until backend-specific readiness is satisfied.
+
+The caller must not treat a handle returned by apply as automatically ready.
+
+### \`stop(handle)\` / \`remove(handle)\`
+
+Perform explicit lifecycle actions against the identified runtime resource.
+
+### \`rollback(plan, target_plan)\`
+
+Restore a known-good target plan. A runtime backend should reject rollback when no explicit target is available.
+
+### \`logs(identity)\`
+
+Returns runtime logs/diagnostics; it is observational.
+
+### Idempotency and operation keys
+
+Runtime results expose \`changed\` and \`idempotent\`.
+
+The fake runtime contract tests require repeating the same application operation to be recognized as idempotent rather than creating a duplicate logical resource.
+
+The operation key is a stable correlation/idempotency input. A backend may use it to make repeated calls safe.
+
+## RuntimeHandle
+
+A handle carries:
+
+- backend;
+- RuntimeIdentity;
+- runtime id;
+- resource name;
+- metadata.
+
+### Why a handle exists
+
+Later lifecycle operations must act on the resource returned by apply rather than rediscovering an arbitrary same-name resource.
+
+## RuntimeObservation
+
+**Path:** \`runtime/observations.py\`
+
+### Status semantics
+
+- MISSING: no managed runtime found;
+- PROVISIONING: exists but not ready;
+- READY: backend-level ready;
+- STOPPED: intentionally not running;
+- DEGRADED: exists but not fully healthy/ready;
+- FAILED: runtime reports failure;
+- UNKNOWN: insufficient observation.
+
+### Ownership warning
+
+An observation can tell you what exists, but identity fields determine whether it is yours.
+
+## SwarmRuntimeAdapter
+
+**Path:** \`runtime/swarm/adapter.py\`
+
+### Why it exists
+
+It is the migration seam that presents the old Swarm implementation through the RuntimeContract.
+
+### Called by
+
+RuntimeRegistry and runtime contract tests.
+
+### Preconditions
+
+SwarmRuntime must be available; plan must carry DeploymentConfig compatibility data and image ref for the current implementation.
+
+### Output
+
+RuntimeOperationResult + normalized RuntimeObservation/RuntimeHandle.
+
+### Important behavior
+
+Inspection does **not** automatically invent a revision id. If a managed revision label is absent, the observation retains unknown revision identity so reconciliation can fail closed.
+
+### Must not do
+
+Do not make this adapter a second independent Swarm implementation.
+
+## Current concrete implementation: core/swarm.py
+
+**Path:** \`core/swarm.py\`
+
+The current production application path calls this class directly.
+
+### It owns
+
+- Docker Engine API interactions;
+- Swarm service create/update/remove/stop;
+- task inspection;
+- image publication;
+- network attachment;
+- volume placement validation;
+- healthcheck conversion;
+- process-to-service mapping;
+- service labels;
+- runtime readiness.
+
+### It consumes
+
+A resolved DeploymentConfig/compiled process specifications.
+
+It should not derive tenant security policy from raw request data.
+
+## Process-to-Swarm-Service mapping
+
+\`SwarmRuntime.apply_processes()\` maps each enabled process to an independent Swarm Service.
+
+- \`web\` uses the canonical service runtime name;
+- other process names receive service-name suffixes.
+
+If the graph has no process list, a default web process is synthesized.
+
+### Replica invariant
+
+Every enabled process currently requires one replica. The runtime explicitly rejects anything other than 1.
+
+## Network behavior
+
+Runtime network semantics are based on EndpointSpec/NetworkSpec.
+
+Public HTTP/HTTPS/WebSocket endpoints can produce Traefik labels and require proxy network integration.
+
+The runtime, not the platform plugin, owns actual Docker network creation/attachment.
+
+## Volume behavior
+
+Persistent volumes are registry-backed.
+
+\`VolumeMountManager\`:
+
+- validates names and bind sources;
+- rejects unregistered managed volumes;
+- preserves size/accounting metadata;
+- prevents accidental same-name local-volume creation when a required volume is missing on the connected node.
+
+Swarm local-volume pinning can add a node.id constraint matching the local volume owner.
+
+### Why
+
+Docker local volumes are node-local. Allowing Swarm to recreate a same-named local volume on another node can silently create an empty data store.
 
 ## Placement
 
-Supported placement constraints are intentionally narrow and validated against fields such as node id, hostname, role, platform OS/arch and node labels.
+Placement constraints are intentionally validated.
 
-Arbitrary Swarm constraint expressions are not a supported tenant contract.
+Supported expressions cover node id/hostname/role/platform and labels. Arbitrary Docker constraint expressions are not a tenant contract.
 
-## Images
+## Images and distribution
 
-Application deployment builds an application image first.
+The application image is built before runtime application.
 
-Swarm receives that image reference. When a registry is configured, the Swarm runtime may publish the image to the configured registry/namespace before creating/updating the service so other nodes can pull it.
+When a Swarm image registry is configured, the runtime may publish the image to the configured registry namespace for multi-node pulls.
 
-The runtime itself does not rebuild the application image.
+Runtime does not rebuild the application image.
 
 ## Readiness
 
-The Swarm runtime considers a service ready when replicas_desired == 1 and replicas_running == 1.
+Current Swarm-level readiness is:
 
-If a task enters failed/rejected state, readiness fails with task diagnostics.
+~~~text
+replicas_desired == 1
+AND
+replicas_running == 1
+~~~
 
-Runtime-level readiness is distinct from application HTTP health semantics.
+If a desired-running task fails/rejects, wait_ready raises a runtime error with task diagnostics.
 
-## Service lifecycle operations
+This is backend readiness, not necessarily application HTTP readiness.
 
-Current runtime operations include create/update, inspect, wait for readiness, stop, remove, rollback through re-apply of a known plan/config, service logs and legacy-container cleanup after Swarm activation.
+## Health and application readiness
 
-When Swarm is enabled, restart/rollout semantics belong to the Swarm Service/Task layer rather than manually stopping and starting an individual container.
+In legacy container mode, \`DockerHealthChecker\` provides application-level checks.
+
+In Swarm mode, the concrete runtime applies Docker HEALTHCHECK semantics and service/task state; public application readiness may additionally be represented by runtime health policy depending on the generated configuration.
+
+Do not use “resource exists” as the readiness criterion.
 
 ## Labels and identity
 
-Managed Swarm services carry labels including managed-by, PassDeployer service/deployment/process identity, allowed deployment labels and endpoint/router labels where public routing exists.
+Managed runtime labels carry service/deployment/process identity and routing information.
 
-Reconciliation relies on identity labels when proving that an observed resource belongs to a particular deployment.
+Reconciliation and stale-worker recovery use these labels as positive evidence of ownership.
 
-A recovery routine must never treat an unowned same-name service as authoritative merely because it is running.
+A same-name resource without the expected identity is ambiguous.
 
 ## Legacy runtime
 
-RuntimeBackend.LEGACY_DOCKER remains as a compatibility option.
+\`RuntimeBackend.LEGACY_DOCKER\` remains for \`SWARM_ENABLED=false\`.
 
-It is used when SWARM_ENABLED=false. The legacy path is based on Docker containers and snapshot/rename/replace/restore behavior.
+It uses Docker container operations and snapshot/rename/restore patterns.
 
-The Docker event consumer is also legacy-only in Compose: its service is under profile legacy-runtime.
+The event consumer is also legacy-only in Compose under the \`legacy-runtime\` profile.
 
-Do not introduce new Swarm functionality into the legacy container manager or vice versa.
+### Why it remains
 
-## Runtime boundary rule
+Compatibility, not architectural preference.
 
-**Runtime code owns Docker calls.**
+Do not add new Swarm semantics to the legacy container manager or assume legacy snapshot behavior exists in Swarm.
 
-**Reconciliation decides; runtime executes.**
+## How to use this layer
 
-Planning, domain models, configuration resolution and reconciliation decisions must not call Docker directly.
+Use the runtime contract when implementing backend-neutral lifecycle behavior.
+
+Use \`core/swarm.py\` when fixing the actual current Swarm Docker behavior.
+
+Use the adapter when changing the migration seam.
+
+Do not introduce a Docker call in planning simply because the runtime object is not convenient to reach.
 
 ## Related code
 
-- src/deployments/runtime/contract.py
-- src/deployments/runtime/registry.py
-- src/deployments/runtime/capabilities.py
-- src/deployments/runtime/observations.py
-- src/deployments/runtime/swarm/adapter.py
-- src/deployments/core/swarm.py
-- src/deployments/core/orchestrator.py
-- src/deployments/core/manager/
+- \`src/deployments/runtime/contract.py\`
+- \`src/deployments/runtime/capabilities.py\`
+- \`src/deployments/runtime/observations.py\`
+- \`src/deployments/runtime/registry.py\`
+- \`src/deployments/runtime/swarm/adapter.py\`
+- \`src/deployments/core/swarm.py\`
+- \`src/deployments/core/volumes.py\`
+- \`src/deployments/core/manager/\`

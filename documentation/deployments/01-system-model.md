@@ -1,159 +1,330 @@
-# 01 — System model
+# 01 — System model and ownership
 
 ## Purpose
 
-Define the nouns that deployment code moves between. When changing a deployment class, first identify which model or value object owns the fact being changed.
+This document defines the semantic types used by the deployment engine. Read it before changing models, revisioning, plans or runtime identity.
 
-## Core entities
-
-### Service
-
-services.models.Service is the durable workload identity and declarative owner.
-
-It carries user/service intent such as source kind/configuration, build/runtime configuration, network association, lifecycle status, desired runtime state, and pointers to the active revision.
-
-A Service is **not** the Docker runtime object. Deployment code may derive a Docker name with Service.get_docker_service_name(), but the Docker object remains infrastructure state.
-
-Important compatibility field:
-
-- selected_deploy is a legacy projection.
-- Runtime authority is Service.active_revision.
-- services.revisioning.get_active_revision() can perform a one-way compatibility bridge from a successful selected deployment when active_revision is absent.
-
-### ServiceProcess
-
-services.models.ServiceProcess is part of declarative process intent.
-
-It represents a named process such as web or a custom worker, with command/entrypoint, health check, environment and metadata. The current model constrains replicas to one per process.
-
-The deployment runtime compiles each enabled process into a runtime process specification. In Swarm mode each process becomes an independent Swarm Service.
-
-### ServiceRevision
-
-services.models.ServiceRevision is an immutable executable snapshot.
-
-A revision captures the effective source/configuration needed to reproduce a deployment without depending on mutable Service fields or the original Deploy row. The revision contains snapshots for configuration, processes, secrets, source/build/runtime/environment/endpoints/volumes/networks and a runtime graph snapshot.
-
-The revision owns the copied deployment artifact where applicable; the historical source_deploy relationship is provenance, not the reproducibility source.
-
-### Deploy
-
-deploy.models.Deploy is one execution/provenance record.
-
-It records the target Service, the revision being executed, historical input/version/upload, lifecycle status/stage/progress, base-image and application timing, execution task ownership and heartbeat, previous deployment, health/image/container/volume/network diagnostics, cancellation, rollback and recovery metadata.
-
-A Deploy is not desired state. It is the record of one execution attempt.
-
-### DeploymentPlan
-
-deployments.planning.plan.DeploymentPlan is an immutable in-memory normalized execution description.
-
-It combines RuntimeIdentity, RuntimeSelection, ServiceRuntimeGraph, image identity, environment and secret references, network/volume/endpoint specs, resources, placement, health/rollout/retry/logging policy, configuration provenance and an optional rollback plan.
-
-The plan is an execution description, not a database model.
-
-### ServiceRuntimeGraph
-
-deployments.core.runtime_graph.ServiceRuntimeGraph is the compiled process/runtime graph.
-
-It captures source/build/runtime metadata plus process, endpoint, volume and network relationships. ServiceRuntimeGraph.from_revision() reconstructs the graph from revision snapshots and keeps the revision id/number attached for correlation.
-
-### Runtime identity and selection
-
-deployments.runtime.identity.RuntimeIdentity provides stable identifiers for a runtime resource: service id, deployment id, revision id, process name and optional runtime resource name.
-
-deployments.runtime.contract.RuntimeSelection describes the chosen backend, cluster, required capabilities and current availability.
-
-Runtime backend choice is operator/infrastructure policy. Tenant configuration must not be allowed to select host infrastructure.
-
-### Runtime backend
-
-The runtime backend is represented by RuntimeContract. It exposes operations such as apply, inspect, wait_ready, stop, remove, rollback and logs.
-
-The current concrete backend is Docker Swarm. The legacy Docker-container runtime survives only as a compatibility execution path when Swarm is disabled.
-
-### Swarm Service and Task
-
-A Docker Swarm Service is the actual long-lived runtime resource. A Swarm Task is a scheduled instance of that service.
-
-The current implementation supports replicated mode, exactly 0 or 1 replica at runtime, one running replica as the readiness invariant, and process-to-service mapping.
-
-For an application with no explicit process graph, the runtime synthesizes a web process.
-
-### Database deployment entities
-
-Database resources are represented in the service/domain layer by DatabaseResource and ServiceDatabaseBinding. Database workloads still enter the deployment subsystem but use a specialized DBDeployer path.
-
-The database runtime is therefore part of the common deployment architecture, while image/init/credential/readiness details are intentionally specialized.
-
-### BaseRuntimeImage
-
-deploy.models.BaseRuntimeImage is operator-owned reusable runtime infrastructure.
-
-Identity includes logical runtime + runtime version + variant + architecture + docker host.
-
-The row tracks the image reference, image id/digest, definition fingerprint, lifecycle status, build owner/task, rebuild request and failure diagnostics.
-
-A BaseRuntimeImageLease protects a shared image from cleanup while a deployment is using it.
-
-## Desired, immutable, execution and observed state
+## State categories
 
 ~~~text
-Mutable user intent
-    Service / ServiceProcess
-          |
-          v
-Immutable executable intent
-    ServiceRevision
-          |
-          v
-Execution/provenance
-    Deploy
-          |
-          v
-Compiled execution
-    DeploymentPlan / RuntimeGraph / DeploymentConfig bridge
-          |
-          v
-Observed infrastructure
-    Swarm Service / Task / runtime observations
+DESIRED / DECLARATIVE
+  Service
+  ServiceProcess
+
+IMMUTABLE EXECUTABLE
+  ServiceRevision
+
+EXECUTION / PROVENANCE
+  Deploy
+
+COMPILED EXECUTION
+  ServiceRuntimeGraph
+  DeploymentPlan
+  DeploymentConfig compatibility DTO
+
+OBSERVED INFRASTRUCTURE
+  RuntimeObservation
+  Swarm Service / Swarm Task
 ~~~
 
-Do not reverse these ownership relationships.
+The categories are intentionally different. Bugs often come from treating one as another.
 
-A bug fix that changes user intent belongs in the service/domain layer; a bug in Docker behavior belongs in runtime/orchestrator code; a bug in lifecycle persistence belongs in state management.
+## Service
 
-## Activation and compatibility projection
+**Path:** \`src/services/models.py\`
 
-Activation is not “set any successful Deploy as current”.
+### Owns
 
-DeployService captures previous_deploy_id. Its activation callback locks the Service and verifies that the active deploy still matches the expected previous deployment before calling activate_revision_locked().
+- durable service identity;
+- mutable source/build/runtime intent;
+- process definitions;
+- desired state;
+- active revision pointer;
+- network/volume/database associations.
 
-activate_revision_locked():
+### Entered from
 
-1. marks the prior active revision superseded;
-2. marks the new revision active;
-3. updates Service.active_revision;
-4. updates selected_deploy as a legacy compatibility projection.
+Service APIs and service-domain operations.
 
-A stale worker must not activate over a newer deployment.
+### Consumed by
 
-## What each entity must not do
+Revisioning and deployment composition.
 
-- Service must not perform Docker operations.
-- ServiceRevision must not become a mutable configuration bucket.
-- Deploy must not be treated as authoritative desired service configuration.
-- DeploymentPlan must not perform Docker calls.
-- RuntimeObservation must not mutate desired state by itself.
-- BaseRuntimeImage must not contain tenant application source or dependencies.
+### Why it exists
 
-## Related code
+A Service represents what the user wants over time. It must remain mutable without changing a deployment that is already executing a frozen revision.
 
-- src/services/models.py
-- src/services/revisioning.py
-- src/deploy/models.py
-- src/deployments/core/runtime_graph.py
-- src/deployments/planning/plan.py
-- src/deployments/runtime/identity.py
-- src/deployments/runtime/contract.py
-- src/deploy/base_images.py
+### Must not do
+
+Service domain code must not directly perform Docker/Swarm operations.
+
+## ServiceProcess
+
+**Path:** \`src/services/models.py\`
+
+### Owns
+
+One logical process definition: name, process type, command/entrypoint, environment, healthcheck, resources and metadata.
+
+### Preconditions
+
+Belongs to a Service and has an allowed replica count.
+
+### Output
+
+Revisioning snapshots it and the runtime graph later turns each enabled process into a runtime process.
+
+### Current invariant
+
+The model/runtime currently supports one replica per process. Swarm execution rejects values other than one.
+
+### Why it exists
+
+A Service can have multiple independently executable processes without making the top-level Service model itself a Docker service specification.
+
+## ServiceRevision
+
+**Path:** \`src/services/revisioning.py\`
+
+### Owns
+
+An immutable snapshot of executable configuration/provenance: source, build, runtime, process, endpoint, volume, network, environment and secret references.
+
+### Called by
+
+\`DeployService._execute_locked()\` through \`ensure_revision_for_deploy()\`.
+
+### Preconditions
+
+Deploy and Service exist; the Deploy row is locked by the revisioning transaction.
+
+### Output
+
+A revision id and revision snapshots that can reconstruct the deployment independently of later mutable Service edits.
+
+### Why immutability exists
+
+Deployment work takes longer than an ordinary database transaction. If runtime generation reread mutable Service state after the build started, the image, runtime resource and activation could represent different configurations.
+
+Immutability also makes rollback meaningful: a previous revision can be targeted without mutating history.
+
+### What changes after creation
+
+Service intent may change. Secrets may gain newer versions. A new Deploy may be created. The old revision must not change.
+
+### Consumption boundary
+
+\`materialize_revision_config()\` resolves the revision into the legacy DeploymentConfig-shaped mapping; \`ServiceRuntimeGraph.from_revision()\` reconstructs runtime-neutral process/endpoints/volumes/networks.
+
+### Compatibility
+
+\`selected_deploy\` is a legacy Service projection. \`active_revision\` is the authoritative active revision. The compatibility fallback exists so older successful deployment rows do not disappear from legacy readers.
+
+### Must not do
+
+Do not mutate a revision to “fix” a currently executing deployment. Create/execute a new revision instead.
+
+## Deploy
+
+**Path:** \`src/deploy/models.py\`
+
+### Owns
+
+One execution attempt:
+
+- target Service;
+- revision link;
+- lifecycle status/stage/progress;
+- execution task id and heartbeat;
+- previous deploy;
+- cancellation;
+- health/image/container/network/volume diagnostics;
+- phase timing;
+- rollback metadata.
+
+### Called by
+
+Service/API code creates it; Celery tasks execute it; monitor/reconciliation observes it.
+
+### Preconditions for normal execution
+
+Deploy must be eligible for execution and its Service must pass the queue/state gate. The worker must acquire the Service advisory lock and task ownership.
+
+### Output
+
+A terminal result plus durable provenance/state.
+
+### Why Deploy is not desired state
+
+An execution attempt is ephemeral compared with Service intent. Multiple Deploy rows can exist for one Service.
+
+## DeploymentPlan
+
+**Path:** \`src/deployments/planning/plan.py\`
+
+### Contract
+
+Frozen normalized execution data consumed by a runtime boundary.
+
+It contains RuntimeIdentity, RuntimeSelection, ServiceRuntimeGraph, image reference, environment, secret refs, networks, volumes, endpoints, resources, placement and policy.
+
+### Preconditions
+
+Compiler receives:
+
+- runtime identity;
+- graph;
+- runtime selection;
+- resolved configuration;
+- non-empty image ref;
+- valid strategy kind.
+
+### Postcondition
+
+The returned plan is immutable and its required capabilities are checked against the selected runtime.
+
+### Why it exists
+
+A runtime adapter should not need to reconstruct policy from several mutable sources. The plan is the handoff artifact.
+
+### Must not do
+
+A plan is data, not a service object. It must not call Docker or mutate Django state.
+
+## ServiceRuntimeGraph
+
+**Path:** \`src/deployments/core/runtime_graph.py\`
+
+### Contract
+
+Runtime-neutral compiled topology.
+
+It contains processes, endpoints, volumes, networks and runtime/build metadata without Docker SDK objects.
+
+### Called by
+
+Current DeployService after revision materialization.
+
+### Produces
+
+A graph used to derive DeploymentPlan input and to populate legacy DeploymentConfig/runtime options.
+
+### Why it exists
+
+The same runtime semantics should be representable without baking Docker object types into every upstream layer.
+
+## RuntimeIdentity
+
+**Path:** \`src/deployments/runtime/identity.py\`
+
+Identity is the correlation key for external runtime state: Service, Deploy, Revision, process and runtime resource name.
+
+### Why it exists
+
+The runtime needs stable identity to inspect the right resource and reconciliation needs identity to prove ownership. Resource name alone is insufficient.
+
+## RuntimeSelection
+
+**Path:** \`src/deployments/runtime/contract.py\`
+
+It records:
+
+- backend;
+- cluster;
+- required capabilities;
+- actual capabilities;
+- availability;
+- selection reason.
+
+### Important distinction
+
+Capabilities answer **“can this backend support the request?”**
+
+Availability answers **“can it execute now?”**
+
+Do not collapse unsupported, disabled, unreachable and temporarily degraded into one state.
+
+## RuntimeObservation
+
+**Path:** \`src/deployments/runtime/observations.py\`
+
+It reports what infrastructure observed:
+
+- MISSING;
+- PROVISIONING;
+- READY;
+- STOPPED;
+- DEGRADED;
+- FAILED;
+- UNKNOWN.
+
+It includes runtime/task ids, replica counts, revision identity if known and detailed observations.
+
+### Must not do
+
+An observation is read-only evidence. It must not become desired state merely because it is convenient.
+
+## BaseRuntimeImage
+
+**Path:** \`src/deploy/models.py\` + \`src/deploy/base_images.py\`
+
+Operator-owned reusable runtime artifact keyed by runtime/version/variant/architecture/Docker host.
+
+It is deliberately outside the ServiceRevision model because it is shared infrastructure, not tenant executable history.
+
+## Swarm Service / Task
+
+Swarm Service is the long-lived runtime resource; Task is an individual scheduled instance.
+
+The current runtime supports one running replica per enabled process.
+
+Runtime labels carry deployment/revision identity used by activation recovery and reconciliation.
+
+## Activation semantics
+
+Activation means changing the durable Service pointer to the new revision after runtime readiness.
+
+Current callback in \`DeployService._execute_locked()\`:
+
+1. locks Service;
+2. gets current active Deploy;
+3. checks it still equals \`previous_deploy_id\`;
+4. calls \`activate_revision_locked()\`;
+5. sets desired_state=running.
+
+This prevents a worker that started earlier from overwriting a newer deployment's authority.
+
+## Entity relationship summary
+
+~~~text
+Service
+  ├── ServiceProcess*
+  ├── ServiceRevision*
+  ├── active_revision -> ServiceRevision
+  └── Deploy*
+
+Deploy
+  ├── Service
+  ├── revision -> ServiceRevision
+  └── previous_deploy -> previous execution
+
+ServiceRevision
+  └── immutable snapshots
+
+DeploymentPlan
+  └── derived from revision graph + resolved policy
+
+RuntimeObservation
+  └── derived from Docker/Swarm reality
+~~~
+
+## Modification navigation
+
+| Desired change | Change here | Not here |
+|---|---|---|
+| Service user intent | \`src/services/\` | Docker runtime |
+| Freeze/rollback executable config | revisioning | runtime adapter |
+| Process topology | ServiceProcess/revisioning/runtime graph | Swarm service code |
+| Runtime backend identity | runtime contracts/selection | tenant config |
+| Actual Docker resource behavior | runtime/core | Service model |
+| Lifecycle state transition | state machine/StateManager | arbitrary model.save() |

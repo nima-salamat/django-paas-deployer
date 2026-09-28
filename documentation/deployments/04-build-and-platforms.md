@@ -2,172 +2,306 @@
 
 ## Purpose
 
-Document how PassDeployer turns an uploaded project into an application image without mixing source inspection, policy, Docker execution and runtime lifecycle.
+This document explains how source code is interpreted and turned into an application image. It deliberately separates project interpretation, policy resolution, image construction and runtime.
 
-## Platform pipeline
+## Information flow
 
 ~~~text
-uploaded ZIP
-  -> ProjectInspector
-  -> PlatformRegistry
-  -> DetectionResult
-  -> platform-specific ProjectConfig
-  -> deployment config enrichment
-  -> DockerfileGenerator
-  -> application image
+ZIP
+ |
+ v
+safe extraction
+ |
+ v
+ProjectInspector
+ |
+ v
+DetectionResult candidates
+ |
+ v
+selected platform plugin
+ |
+ v
+ProjectConfig
+ |
+ v
+DeployService / planning normalization
+ |
+ v
+DockerfileGenerator inputs
+ |
+ +---- BaseRuntimeImage
+ |
+ v
+application image
+ |
+ v
+runtime configuration
 ~~~
 
-## Project inspection
+## ProjectInspector
 
-deployments.core.platforms.inspector.ProjectInspector walks a bounded project tree and creates:
+**Path:** \`core/platforms/inspector.py\`
 
-- file_index: relative path -> absolute path;
-- dir_index: known directories;
-- markers: known platform/build marker files.
+### Called by
 
-It deliberately skips source-control, dependency/cache and generated-output directories such as .git, node_modules, virtual environments, vendor and build/dist trees.
+\`PlatformRegistry.detect()\`.
 
-The inspector does not build or mutate Docker resources.
+### Input
 
-## Platform registry
+Extracted project root.
 
-PlatformRegistry.detect():
+### Output
 
-1. creates a ProjectInspector;
-2. runs every registered platform plugin's detect();
-3. collects candidate confidence scores;
-4. honors an explicit preferred platform when one matches;
-5. otherwise selects highest confidence, then plugin priority;
-6. resolves the selected plugin into ProjectConfig.
+Bounded file/directory indexes and marker information.
 
-A generic platform is the final fallback when registered.
+### Why bounded
 
-## Supported platform/plugin families
+The archive is untrusted input. Detection should inspect enough structure to classify the project without recursively indexing dependency/cache trees unnecessarily.
+
+### Must not
+
+- call Docker;
+- build images;
+- mutate deployment state.
+
+## PlatformRegistry
+
+**Path:** \`core/platforms/registry.py\`
+
+### Called by
+
+\`core/platform_bridge.py::enrich_config_from_project()\`.
+
+### Preconditions
+
+Plugins loaded, project root extracted.
+
+### Output
+
+\`(plugin, DetectionResult, ProjectConfig)\`.
+
+### Decision algorithm
+
+1. scan source tree;
+2. run every registered detector;
+3. if an explicit preferred platform matches, use it;
+4. otherwise sort by confidence and plugin priority;
+5. generic fallback if needed;
+6. resolve the selected plugin's configuration.
+
+### Why confidence and priority are separate
+
+Confidence expresses evidence from the source tree. Priority is a deterministic tie-breaker between equally confident plugins.
+
+## BasePlatform contract
+
+**Path:** \`core/platforms/base/platform.py\`
+
+A plugin supplies source interpretation.
+
+### \`detect(file_index)\`
+
+**Input:** inspector file index.
+
+**Output:** DetectionResult or None.
+
+**Must not:** mutate state or perform infrastructure calls.
+
+### \`defaults()\`
+
+Lowest-priority platform defaults.
+
+### \`inspect(file_index)\`
+
+Extracts concrete project facts such as runtime version, entrypoint or build directory.
+
+### \`resolve()\`
+
+Combines:
+
+~~~text
+platform defaults
+    < auto-detected values
+    < user_config
+~~~
+
+and produces ProjectConfig plus source provenance.
+
+### \`validate()\`
+
+Validates the resolved ProjectConfig against the platform schema.
+
+### Why plugins own this
+
+A framework detector should know how Django, Laravel, React, etc. reveal themselves. It should not know which Swarm node to use or which DB row is authoritative.
+
+## Current registered plugin families
 
 The current loader registers:
 
-### Node
+- Node: Node, React, Next, Vite, Vue, Angular, Express;
+- Python: Python, Django, Flask, FastAPI;
+- PHP: PHP, Laravel;
+- Other: Go, Static, Generic.
 
-NodePlatform, ReactPlatform, NextPlatform, VitePlatform, VuePlatform, AngularPlatform, ExpressPlatform.
+Use \`core/platforms/loader.py\` as the exact registry source before documenting a new framework.
 
-### Python
+## Platform bridge
 
-PythonPlatform, DjangoPlatform, FlaskPlatform, FastAPIPlatform.
+**Path:** \`core/platform_bridge.py\`
 
-### PHP
+### Called by
 
-PHPPlatform, LaravelPlatform.
+\`DeploymentOrchestrator.deploy()\` during source extraction/build preparation.
 
-### Other
+### Input
 
-GoPlatform, StaticPlatform, GenericPlatform.
+DeploymentConfig + extracted project root.
 
-These are actual registered classes in core/platforms/loader.py. Do not document a framework as supported merely because a config key exists; verify the plugin registry.
+### Output
 
-## Plugin contract
+Same DeploymentConfig enriched with empty fields from platform detection.
 
-BasePlatform defines:
+### Important precedence
 
-- detect(file_index): identify whether the project matches;
-- defaults(): platform defaults;
-- inspect(file_index): concrete values inferred from the source tree;
-- validate(config): framework/platform validation;
-- resolve(): merge defaults, detection and user config into ProjectConfig.
+Existing caller values remain higher priority than auto-detection. Detection is used to fill missing values.
 
-The plugin may own framework-specific interpretation of source files.
+### Important special case
 
-It must not:
+The bridge intentionally does not promote certain detected start commands into entry_point for SPA/Nginx and PHP-family images, because doing so can suppress renderer-owned commands such as Apache startup or frontend build injection.
 
-- call the Docker daemon;
-- mutate Deploy/Service lifecycle state;
-- choose host runtime infrastructure;
-- bypass the build resource policy;
-- silently broaden tenant permissions.
+### Why this guard exists
 
-## Platform merge order
+The Dockerfile renderer owns the final image startup semantics for these families. Treating an auto-detected runtime command as a user ENTRYPOINT would change the meaning of the generated image.
 
-The concrete plugin resolver uses:
+## DockerfileGenerator
+
+**Path:** \`core/dockerfile.py\`
+
+### Called by
+
+DeploymentOrchestrator after configuration/platform information is resolved.
+
+### Input
+
+DeploymentConfig-derived build/platform/runtime settings.
+
+### Output
+
+Dockerfile/build instructions used by the application image build.
+
+### It may express
+
+- runtime base;
+- dependency installation;
+- frontend build stages;
+- document/static/media paths;
+- process entrypoint/start command;
+- healthcheck instructions.
+
+### It must not decide
+
+- tenant security policy;
+- worker ownership;
+- lifecycle state;
+- arbitrary runtime backend selection.
+
+## Runtime version
+
+Runtime version can arrive from explicit config or platform detection, but the final base-image identity is operator-owned through BaseImageSpec.
+
+This prevents “runtime version string” from becoming arbitrary Docker-image selection.
+
+## Frontend builds
+
+Laravel/full-stack PHP projects may also require Node tooling.
+
+The build pipeline can detect/receive frontend settings such as:
+
+- package manager;
+- build/install command;
+- frontend kind;
+- npm registry.
+
+The important distinction is:
 
 ~~~text
-platform defaults < auto-detected values < user config
+frontend build tooling
+      !=
+runtime backend
 ~~~
 
-The newer planning resolver separately enforces operator policy ceilings. These are related boundaries, not duplicate sources of host policy.
+A Node build stage can be part of an application image without changing the application's runtime family from PHP.
 
-## Framework refinement
+## Document root
 
-The current application path allows the service plan to establish the execution family while configuration/detection refines a framework inside that family.
+PHP/Laravel document root is an application configuration concern.
 
-Examples include PHP + Laravel and Python + Django.
+The base PHP runtime is generic; application-specific document root is applied later by Dockerfile generation.
 
-Framework identity can change Dockerfile generation and runtime paths without letting the tenant select arbitrary infrastructure.
+### Architectural reason
 
-## Dockerfile generation
-
-deployments.core.dockerfile.DockerfileGenerator consumes the resolved platform/configuration.
-
-The generated image may include runtime base, application dependencies, frontend build stages where required, static/document/media paths, process entrypoint/start command and runtime healthcheck data.
-
-For PHP/Laravel, frontend settings can add a Node/Vite/React-style build step while keeping the base runtime image operator-owned.
-
-For Django/Python, entrypoint discovery may inspect settings/module structure before generation.
+Putting application document-root semantics into the shared PHP base image would fragment the reusable base identity and force base-image rebuilds for tenant-level path differences.
 
 ## Base image versus application image
 
 ~~~text
-operator-owned base image
-    + source/build instructions
-    = application image
+operator-owned runtime/tooling layers
+        +
+application source + dependency/build instructions
+        =
+deployment-specific application image
 ~~~
 
-A base runtime image contains runtime/tooling layers only. Tenant application source and tenant dependencies do not become part of the shared base registry artifact.
+Shared base images must never absorb tenant source or tenant dependency trees.
 
-See 08-base-images.md for base-image lifecycle.
+## Build resource ownership
 
-## Build options
+\`common/resource_policy.py\` determines build resource limits from operator-owned configuration, optionally constrained by operator plan build mode.
 
-Public build options are intentionally narrow. normalize_profile() maps compatibility aliases, but tenant build options ultimately honor an allow-list such as target, no-cache and pull where supported.
+Tenant JSON is not the authority for CPU/RAM/PIDs/shm.
 
-Build resource limits are derived from operator settings, not tenant JSON.
+### Why
 
-## Application image identity
+Build containers share the host with other deployments and therefore require server-side isolation and accounting.
 
-The application image is produced by the image manager after Dockerfile generation and source tar preparation.
+## Application image lifecycle
 
-The current orchestrator passes the deployment correlation id to the image builder for diagnostics and ownership-aware cancellation.
+The image manager receives the generated build context and Dockerfile.
 
-A successful image build produces the image reference later consumed by the runtime.
+A successful build yields the image reference used by runtime.
 
-## What belongs where
+### Postcondition
 
-**Platform plugin:** what kind of project is this and what defaults does that imply?
+Image existence is necessary but not sufficient for deployment success. Runtime apply and readiness still have to succeed.
 
-**Planning:** which normalized, policy-compliant values should execution use?
+## Failure navigation
 
-**Dockerfile generator:** how do those values become image build instructions?
+| Symptom | Start | Reason |
+|---|---|---|
+| wrong detected framework | PlatformRegistry + plugin | evidence/priority problem |
+| correct detection, wrong command | ProjectConfig sources + platform bridge | enrichment/precedence problem |
+| correct config, wrong Dockerfile | DockerfileGenerator | rendering problem |
+| correct Dockerfile, build fails | image manager + build diagnostics | Docker/build problem |
+| image builds, container fails | runtime/health docs | runtime problem |
 
-**Image manager:** how does Docker build the application image?
+## What this layer must NOT do
 
-**Runtime:** how do we run that image?
-
-Do not move runtime Docker calls into platform plugins because a plugin already knows the framework.
-
-## Failure behavior
-
-- no detector -> generic fallback or hard failure if none registered;
-- invalid detected/user configuration -> validation/security error;
-- unsafe command/path -> validation/security error;
-- Docker build failure -> application image build error;
-- internal programming error -> non-recoverable platform error at the worker boundary.
+- platform plugins must not call Docker;
+- detection must not mutate deployment state;
+- Dockerfile generation must not choose host infrastructure;
+- application image build must not rebuild shared base policy;
+- a frontend build must not silently change runtime backend policy.
 
 ## Related code
 
-- src/deployments/core/platforms/inspector.py
-- src/deployments/core/platforms/registry.py
-- src/deployments/core/platforms/base/platform.py
-- src/deployments/core/platforms/loader.py
-- src/deployments/core/platform_bridge.py
-- src/deployments/core/dockerfile.py
-- src/deployments/core/manager/image_manager.py
-- src/deployments/common/resource_policy.py
-- src/deployments/common/security.py
+- \`src/deployments/core/platforms/inspector.py\`
+- \`src/deployments/core/platforms/registry.py\`
+- \`src/deployments/core/platforms/base/platform.py\`
+- \`src/deployments/core/platforms/base/schema.py\`
+- \`src/deployments/core/platforms/loader.py\`
+- \`src/deployments/core/platform_bridge.py\`
+- \`src/deployments/core/dockerfile.py\`
+- \`src/deployments/core/manager/image_manager.py\`
+- \`src/deployments/common/resource_policy.py\`

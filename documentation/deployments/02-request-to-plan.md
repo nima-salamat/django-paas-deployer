@@ -2,169 +2,385 @@
 
 ## Purpose
 
-Explain how mutable configuration becomes the normalized input used by deployment execution. The invariant is that tenant intent is resolved and snapshotted before infrastructure work relies on it.
+Explain how a deployment request becomes a normalized execution description.
 
-## Current transformation
+The central reasoning boundary is:
 
 ~~~text
-API/service request
-    -> Deploy row
-    -> ensure_revision_for_deploy()
-    -> revision snapshots
-    -> materialize_revision_config()
-    -> normalize_profile()/parse_config()
-    -> platform detection + project enrichment
-    -> runtime/resource policy
-    -> runtime graph
-    -> DeploymentPlan
-    -> transitional bridge
-    -> DeploymentConfig
+mutable request
+   ->
+immutable revision
+   ->
+resolved configuration
+   ->
+platform interpretation
+   ->
+runtime graph
+   ->
+DeploymentPlan
+   ->
+current compatibility DTO
 ~~~
 
-The last two steps are transitional on current master: the application path still executes through the legacy-shaped DeploymentConfig consumed by DeploymentOrchestrator.
+## Current production path
 
-## 1. Request and Deploy creation
+\`DeployService._process_deployment()\` is the key composition point in the current master path.
 
-The API/service layer creates a Deploy and queues the appropriate Celery operation. A queued Deploy is execution intent, not yet the immutable source of truth.
+It:
 
-Deployment tasks must not assume that Deploy.config remains the final runtime configuration.
+1. materializes the revision;
+2. normalizes the legacy/public profile;
+3. determines the execution family from the Service Plan;
+4. refines PHP/Python framework aliases;
+5. prepares platform/detection values;
+6. validates tenant customizations;
+7. obtains Dockerfile text;
+8. validates the deployment;
+9. calls the orchestrator composition path.
 
-## 2. Revision materialization
+## How revisioning is used
 
-services.revisioning.ensure_revision_for_deploy() runs under a transaction and locks the Deploy and Service.
+**Called by:** \`DeployService._execute_locked()\`.
 
-It merges the relevant legacy Deploy input with Service-owned source/build/runtime state, normalizes environment/process/endpoint/volume/network snapshots, versions secrets, and creates an immutable ServiceRevision.
+**Preconditions:** Deploy and Service are locked appropriately; execution ownership exists.
 
-The deployment artifact is copied into revision-owned storage where applicable so a later rollback does not depend on the mutable Deploy upload.
+**Input:** mutable Service state plus legacy Deploy input when needed.
 
-After this point the normal application deployment path treats the revision as executable source of truth. Deploy.config remains for compatibility and migration.
+**Output:** immutable ServiceRevision.
 
-## 3. Configuration parsing and normalization
+**Next:** \`materialize_revision_config()\` and \`ServiceRuntimeGraph.from_revision()\`.
 
-deployments.common.config.parse_config() is the shared parser for old/new representations of Deploy.config.
+**Why:** no long-running Docker build should depend on mutable Service rows.
 
-deployments.common.deployment_profile.normalize_profile() converts legacy flat keys and nested build/runtime profiles into normalized build_options and runtime_options.
+## Configuration parsing
 
-It also removes tenant-controlled resource fields from the public deployment profile. Runtime resources are derived from the Service Plan and build resources from operator-owned policy.
+**Module:** \`deployments.common.config\`
 
-This is a critical security boundary:
+### Contract
 
-- tenant configuration can refine allowed application behavior;
-- tenant configuration cannot choose arbitrary Docker host settings, resource limits, devices, network mode, host binds, privileged mode, or worker count.
+\`parse_config()\` normalizes:
 
-## 4. Configuration precedence
+- dict;
+- JSON string;
+- double-encoded JSON string;
 
-The newer ConfigurationResolver in deployments/planning/configuration.py makes precedence explicit:
+into a dictionary. Invalid/empty input becomes an empty dict.
+
+### Use
+
+It is a compatibility parser, not the policy resolver.
+
+### Must not
+
+Do not add resource/security policy to \`parse_config()\` merely because the raw key is available there.
+
+## Profile normalization
+
+**Module:** \`deployments.common.deployment_profile\`
+
+### Called by
+
+Current \`DeployService._process_deployment()\`.
+
+### Input
+
+The revision-materialized config or legacy Deploy.config.
+
+### Output
+
+Normalized public/deployment profile with:
+
+- build_options;
+- runtime_options;
+- frontend options;
+- safe aliases.
+
+Tenant resource-limit and worker-count overrides are deliberately removed/ignored.
+
+### Why
+
+The public config format should be ergonomic without becoming an authority for host resource allocation.
+
+## ConfigurationResolver
+
+**Module:** \`deployments/planning/configuration.py\`
+
+### What it owns
+
+Layer precedence and provenance.
+
+The resolver contract is:
+
+~~~text
+platform_defaults
+   < platform_policy
+   < cluster_policy
+   < service_intent
+   < revision_snapshot
+   < permitted deployment overrides
+~~~
+
+The resolver records the effective source for each path and rejects deployment override paths outside its allow-list.
+
+It also checks policy ceilings such as replica limits.
+
+### Current production usage
+
+Do not overstate this contract.
+
+The current DeployService uses \`ConfigurationResolver\` inside \`_compile_compatibility_plan()\`, where it supplies a **subset** of the possible layers: platform-policy resource limits and a revision-snapshot-like set of environment/runtime/network/volume/endpoint/health values.
+
+The main path still performs additional concrete normalization in \`_process_deployment()\`.
+
+### How it is used
+
+**Called by:** current plan compatibility compiler.
+
+**Preconditions:** inputs are already normalized enough to be represented as configuration layers.
+
+**Output:** \`ResolvedConfiguration\` + \`ConfigurationProvenance\`.
+
+**Consumer:** \`DeploymentPlanCompiler\`.
+
+**Failure:** \`ConfigurationResolutionError\` for forbidden overrides/invalid policy values.
+
+### Why
+
+Without a dedicated resolver, precedence appears as scattered “if value else default” expressions and cannot be explained or tested independently.
+
+### Anti-pattern
+
+Do not make runtime code re-resolve the same setting from the database. Once the plan boundary is adopted, runtime should consume the resolved value.
+
+## Platform detection
+
+**Modules:** \`core/platforms/inspector.py\`, \`registry.py\`, \`base/platform.py\`.
+
+The actual flow:
+
+~~~text
+project archive
+   ->
+safe extraction
+   ->
+ProjectInspector.scan()
+   ->
+every registered plugin detect()
+   ->
+DetectionResult candidates
+   ->
+preferred platform if explicitly requested
+   OR highest confidence / priority
+   ->
+selected plugin.resolve()
+   ->
+ProjectConfig
+~~~
+
+### Inspector contract
+
+**Input:** project root.
+
+**Output:** bounded file index, directory index and marker information.
+
+**Must not:** Docker calls or lifecycle mutations.
+
+### PlatformRegistry contract
+
+**Preconditions:** plugins are registered.
+
+**Output:** selected plugin, DetectionResult, ProjectConfig.
+
+**Decision rule:** explicit preferred platform wins when a matching plugin exists; otherwise confidence then plugin priority.
+
+**Fallback:** generic plugin if no detector matches.
+
+### BasePlatform contract
+
+Each plugin supplies:
+
+- \`detect()\`;
+- \`defaults()\`;
+- \`inspect()\`;
+
+and inherits:
+
+- \`resolve()\`;
+- schema validation;
+- safe file helpers.
+
+The merge inside a plugin is:
 
 ~~~text
 platform defaults
-    < platform policy
-    < cluster policy
-    < service intent
-    < revision snapshot
-    < permitted deployment overrides
+   < auto-detection
+   < user_config
 ~~~
 
-Deployment-request overrides are restricted to an allow-list. Attempts to override operator-owned policy are rejected with ConfigurationResolutionError.
+This is **source interpretation**, not host infrastructure policy.
 
-The resolver records provenance in ConfigurationProvenance, and public values are redacted for sensitive keys.
+### Why detection and policy are separate
 
-The current DeployService path still performs some compatibility normalization directly. Do not claim that every current deployment goes exclusively through ConfigurationResolver; it is the explicit planning boundary being adopted.
+Detection answers “what does this project look like?”
 
-## 5. Platform and framework detection
+Configuration policy answers “what values are allowed/effective?”
 
-The current detector pipeline is:
+Mixing them makes a framework plugin an accidental security/runtime-policy owner.
+
+## Framework refinement
+
+The current \`DeployService\` path takes the Service Plan as the execution-family authority and allows compatible framework refinement.
+
+For example:
 
 ~~~text
-ZIP/project tree
- -> ProjectInspector
- -> PlatformRegistry.detect()
- -> candidate DetectionResult values
- -> highest confidence / plugin priority
- -> ProjectConfig
- -> deployment config enrichment
+plan.platform = php
+config/framework = laravel
+        ->
+effective platform = laravel
 ~~~
 
-ProjectInspector builds a bounded file/directory index and known marker list.
+This is intentionally narrower than “tenant may choose any runtime”.
 
-PlatformRegistry runs every registered plugin, honors an explicit preferred platform when present, otherwise picks by confidence then plugin priority, and falls back to the generic plugin.
+## Runtime selection
 
-User/framework configuration may refine the detected result, but the plan/platform family remains the architectural control boundary.
+**Module:** \`deployments/runtime/registry.py\`
 
-## 6. Runtime selection
+### Inputs
 
-deployments.runtime.RuntimeRegistry resolves the backend from operator or cluster policy.
+Policy/cluster context and optional capability requirements.
 
-The registry intentionally does not consult Service/Revision/Deploy tenant fields to choose host infrastructure.
+### It deliberately ignores
 
-Selection sources are operator policy, cluster policy, DEPLOYMENT_RUNTIME_BACKEND, SWARM_ENABLED as legacy compatibility input, then the Swarm default.
+Service/Revision/Deploy backend fields.
 
-Capabilities and availability are separate concepts.
+### Why
 
-## 7. Resource policy
+Host infrastructure must remain operator-controlled.
 
-Runtime resources are taken from the selected Service Plan through runtime_limits().
+### Selection sources
 
-Build resources are resolved by resource_policy.build_limits()/resolve_build_policy() from operator settings, optionally constrained by operator plan build mode.
+1. deployment/cluster policy;
+2. \`DEPLOYMENT_RUNTIME_BACKEND\`;
+3. \`SWARM_ENABLED\` as compatibility input;
+4. Swarm default.
 
-A future model must not add tenant resource knobs merely because an old config field exists.
+### Output
 
-## 8. Runtime graph and plan
+\`RuntimeSelection\`.
 
-ServiceRuntimeGraph compiles process, endpoint, network, volume and runtime metadata.
+If \`probe=True\`, availability is checked by the adapter; otherwise availability may remain UNKNOWN.
 
-DeploymentPlanCompiler requires an image reference, validates strategy kind, derives required runtime capabilities, and produces an immutable plan.
+## ServiceRuntimeGraph
 
-Required capabilities include process scheduling; graph-dependent capabilities include replicas, persistent volumes, overlay networks, health checks and node constraints.
+**Module:** \`core/runtime_graph.py\`.
 
-## 9. Current compatibility bridge
+### Called by
 
-DeploymentPlanCompatibilityCompiler converts a DeploymentPlan into the existing DeploymentConfig DTO.
+DeployService after revision materialization.
 
-It translates placement, selected Docker healthcheck fields, labels, environment, network/volume/endpoint lists and resource limits.
+### Input
 
-This class is deliberately a compatibility boundary. It does not mean callers should bypass planning.
+ServiceRevision.
 
-## 10. Decision ownership
+### Output
+
+Processes, endpoints, network and volume semantics plus runtime/build metadata.
+
+### Why
+
+This is the compact runtime-semantic model that prevents Docker SDK objects from leaking upward.
+
+### Consumer
+
+DeploymentPlanCompiler and current compatibility DTO composition.
+
+## DeploymentPlanCompiler
+
+**Module:** \`planning/plan.py\`.
+
+### Inputs
+
+- RuntimeIdentity;
+- ServiceRuntimeGraph;
+- RuntimeSelection;
+- ResolvedConfiguration;
+- image reference;
+- strategy kind.
+
+### Preconditions
+
+- image ref is non-empty;
+- strategy kind is application/database/specialized;
+- selected runtime can satisfy required capabilities.
+
+### Output
+
+Frozen \`DeploymentPlan\`.
+
+### Capability derivation
+
+The compiler always requires service scheduling and process graph support. It adds capabilities for replicas, persistent volumes, overlay networks, health checks and placement when the graph/config needs them.
+
+### Why
+
+A plan should fail before runtime work if the selected backend cannot represent the requested topology.
+
+## Compatibility bridge
+
+**Module:** \`planning/bridge.py\`.
+
+### Called by
+
+Current \`core/deploy.py::Deploy._config()\`.
+
+### Input
+
+DeploymentPlan + existing DeploymentConfig.
+
+### Output
+
+DeploymentConfig with plan-derived environment/networks/volumes/endpoints/resources/labels/placement and supported Docker healthcheck fields.
+
+### Why
+
+It lets the new plan boundary feed the old orchestrator without pretending the old orchestrator has already disappeared.
+
+### Anti-pattern
+
+Do not use the bridge as a reason to bypass plan compilation.
+
+## Decision ownership
 
 ~~~text
-API/service layer
-  owns: user intent and request validation
+Service/domain
+  -> what user wants
 
-revisioning
-  owns: immutable executable snapshot
+Revisioning
+  -> what this execution freezes
 
-planning
-  owns: normalization, policy resolution, capabilities, provenance
+ConfigurationResolver
+  -> what layered policy makes effective
 
-platform plugins
-  own: source inspection and framework-specific defaults/detection
+Platform layer
+  -> what the source tree means
 
-orchestrator/runtime
-  owns: Docker/Swarm execution
+DeploymentPlanCompiler
+  -> whether effective runtime semantics are representable
 
-state manager
-  owns: persisted lifecycle transitions
+Orchestrator/runtime
+  -> how to make infrastructure match the effective plan
+
+StateManager
+  -> whether lifecycle state may advance
 ~~~
 
-A layer must not move decisions down simply because the information is available there.
+## Modification guidance
 
-## Failure behavior
+- Change tenant config vocabulary -> \`common/config.py\` + profile/config tests.
+- Change precedence/provenance -> \`planning/configuration.py\`.
+- Change framework detection -> plugin/registry.
+- Change process/topology semantics -> revisioning/runtime graph.
+- Change runtime capability validation -> DeploymentPlanCompiler.
+- Change Docker behavior -> runtime/orchestrator, not planning.
 
-- Invalid request/configuration: fail before infrastructure mutation.
-- Forbidden configuration override: reject.
-- Revision materialization failure: no executable snapshot is accepted.
-- Missing runtime capability: runtime selection/plan compilation fails.
-- Internal implementation exceptions: converted to non-recoverable deployment errors at the task boundary.
-
-## Related code
-
-- src/services/revisioning.py
-- src/deployments/common/config.py
-- src/deployments/common/deployment_profile.py
-- src/deployments/planning/configuration.py
-- src/deployments/planning/plan.py
-- src/deployments/planning/bridge.py
-- src/deployments/core/platforms/registry.py
-- src/deployments/runtime/registry.py
-- src/deployments/core/runtime_graph.py

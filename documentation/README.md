@@ -1,12 +1,12 @@
 # PassDeployer Documentation
 
-This directory is the canonical repository documentation. The Django package at src/docs/ is product code and is intentionally separate.
+This directory is the canonical repository documentation. The Django package at \`src/docs/\` is product code and is intentionally separate.
 
-## Start here for deployment work
+## Deployment architecture entry point
 
-**Before reading implementation under src/deployments/, read [Deployments architecture manual](deployments/README.md).**
+**For any deployment bug, feature or architectural change, read [documentation/deployments/README.md](deployments/README.md) before opening \`src/deployments/\`.**
 
-The deployments manual is the subsystem's architectural memory. It is ordered by execution responsibility and links to the contracts, state ownership, concurrency rules, runtime behavior, recovery model and tests that should be understood before editing source.
+The deployments subtree is the living architectural memory of the deployment engine. It records current production paths, migration seams, ownership, contracts, state, concurrency, recovery and test invariants.
 
 ## Guides
 
@@ -47,8 +47,10 @@ The deployments manual is the subsystem's architectural memory. It is ordered by
 
 ## Components
 
-Component-level responsibilities outside the deployment architecture manual remain under [components/](components/).
+Component documentation outside the deployment architecture manual remains under [components/](components/).
 
 ### Documentation maintenance rule
 
-When changing a deployment implementation, update the relevant canonical deployments document only after verifying the behavior against current master code. Historical audit/design notes are not architectural sources of truth.
+One architectural fact should have one canonical home. Other documents should link to it rather than silently defining a second lifecycle or state model.
+
+When behavior changes, verify the implementation first and update the canonical deployments document that owns the behavior. Historical audit documents are not sources of truth.

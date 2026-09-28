@@ -2,11 +2,88 @@
 
 ## Purpose
 
-Database workloads share the deployment domain but intentionally diverge from the application ZIP/build pipeline.
+Database deployment is a specialized execution branch inside the common deployment architecture.
 
-## Database platforms
+It shares lifecycle concepts such as Deploy ownership, Service locking, revision/provenance, event logging and terminal state, but deliberately does not use the application source-to-Dockerfile build pipeline.
 
-The current DBDeployer supports:
+## Branch point
+
+~~~text
+common request / Deploy
+       |
+       v
+Celery task
+       |
+       +--------------------+
+       |                    |
+application              database
+       |                    |
+platform/build          DBDeployer
+       |                    |
+       v                    v
+application image       engine image/init
+       |                    |
+       +---------+----------+
+                 |
+              runtime/readiness
+                 |
+             terminal state
+~~~
+
+The branch exists because a database server is not an application source artifact.
+
+## How routing works
+
+**Entry:** \`deployments.celery.tasks.deploy()\`
+
+The task inspects the requested/planned platform.
+
+If it belongs to \`DB_PLATFORMS\`, the task redirects to \`run_db_deploy\`.
+
+**Database task:** \`deployments.celery.tasks.run_db_deploy()\`
+
+It acquires the Service deployment lock and calls \`DBDeployer.deploy()\`.
+
+## Common lifecycle before specialization
+
+### Preconditions
+
+- Deploy exists;
+- Service exists;
+- database platform is supported;
+- Service deployment ownership is acquired.
+
+### Shared state
+
+The database task participates in the same Deploy lifecycle and revision/provenance model.
+
+### Specialized boundary
+
+After ownership/revision validation, database-specific code owns engine configuration, initialization and readiness.
+
+## DBDeployer
+
+**Path:** \`deployments/core/db_deployer.py\`
+
+### Owns
+
+- fixed database engine image selection;
+- engine-specific environment;
+- initialization behavior;
+- persistent-volume use;
+- credentials/database reconciliation;
+- database-specific readiness;
+- database runtime error classification.
+
+### Does not own
+
+- application platform detection;
+- application Dockerfile generation;
+- arbitrary tenant Docker infrastructure policy.
+
+## Supported engines
+
+Current \`DB_PLATFORMS\`:
 
 - mysql;
 - mariadb;
@@ -15,156 +92,160 @@ The current DBDeployer supports:
 - redis;
 - oracle.
 
-## Routing
-
-deployments.celery.tasks.deploy determines whether the workload is a database platform and routes it to run_db_deploy.
-
-run_db_deploy performs the database-specific execution through deployments.core.db_deployer.DBDeployer.
-
-This prevents database workloads from being sent through the application Dockerfile/build path.
-
-## Shared lifecycle, specialized execution
-
-The shared model remains:
-
-~~~text
-Deploy
-  -> ownership
-  -> revision/provenance
-  -> validation
-  -> runtime operation
-  -> readiness
-  -> terminal state
-~~~
-
-The intentional difference is the execution core between validation and readiness.
-
-Application deployments inspect source and build an application image.
-
-Database deployments use engine-specific images and initialization/credential reconciliation.
+Fixed images are defined in \`core/db_deployer.py\`.
 
 ## Validation
 
-validate_db_config() enforces engine-specific rules.
+\`validate_db_config()\` checks engine-specific rules before Docker mutation.
 
 Examples:
 
-- MySQL/MariaDB require a root password;
-- PostgreSQL requires a password;
-- MongoDB requires username and password;
-- Oracle requires a password;
-- ports must be between 1 and 65535;
-- MySQL/MariaDB do not allow root as the application username.
+- MySQL/MariaDB require root password;
+- PostgreSQL requires password;
+- MongoDB requires username/password;
+- Oracle requires password;
+- port must be 1..65535;
+- application username must not be root for MySQL/MariaDB.
 
-Sensitive values are excluded from ordinary diagnostics.
+Sensitive values are not intentionally exposed in ordinary logs.
 
-## Database images
+## Why database readiness is specialized
 
-The current fixed engine images in core/db_deployer.py are:
+Official database images may start a temporary initialization server.
 
-| Engine | Image |
-| --- | --- |
-| MySQL | mysql:8.0.36 |
-| MariaDB | mariadb:11 |
-| PostgreSQL | postgres:16-alpine |
-| MongoDB | mongo:7 |
-| Redis | redis:7-alpine |
-| Oracle | gvenzl/oracle-xe:21-slim |
+Therefore:
 
-These are implementation policy for the database deployment path. They are not the tenant-controlled application image contract.
+~~~text
+container running
+       |
+       !=
+database accepting real credentials
+~~~
 
-## Initialization versus readiness
+For MySQL/MariaDB the readiness path requires:
 
-Database containers often have an initialization period during which the container is running but the service is not ready.
-
-MySQL/MariaDB therefore use an explicit readiness sequence:
-
-1. official entrypoint initialization completes;
-2. temporary initialization server stops;
-3. final mysqld remains running;
+1. official initialization completed;
+2. temporary server stopped;
+3. final mysqld running;
 4. authenticated mysqladmin ping succeeds.
 
-The database deployer then performs credential/database reconciliation.
+Only then does credential/database reconciliation run.
 
-Do not replace this with a generic “container is running” check.
+## Persistent volumes
 
-## Persistent-volume behavior
+Database state is durable infrastructure.
 
-Database data is stored in persistent volumes.
+Normal redeployment should reuse the existing volume.
 
-Changing initialization environment variables does not retroactively modify an already initialized data directory.
+Changing initialization environment variables does not rewrite an already initialized database directory.
 
-This is why normal redeployment against an existing MySQL/MariaDB volume performs explicit SQL credential/database reconciliation after readiness.
-
-## MySQL/MariaDB credential reconciliation
-
-The deployer:
-
-1. starts the database;
-2. waits for the final server to be ready;
-3. connects through the local Unix socket;
-4. reconciles root credentials;
-5. creates or updates the application user;
-6. creates the requested database;
-7. grants database access;
-8. verifies the credentials.
-
-Passwords are not logged.
+Therefore normal MySQL/MariaDB redeployment performs explicit credential reconciliation after readiness.
 
 ## force_reinit
 
-force_reinit=True is explicit destructive behavior.
+\`run_db_deploy(force_reinit=True)\` is explicit destructive behavior.
 
-The task can wipe attached database volumes so the official image initializes from scratch.
+It can wipe named DB volumes so the official engine image initializes from scratch.
 
-A normal deployment must not infer or enable this flag.
+### Preconditions
 
-## Locking and retries
+Operator/client explicitly requested reinitialization.
 
-run_db_deploy uses the same per-Service PostgreSQL advisory lock as application deployment.
+### Effect
 
-It also has a strict state/queue gate so duplicate deliveries do not start overlapping database mutations.
+All data in affected DB volumes may be lost.
 
-Database retries are bounded and depend on the unified retryability classification.
+### Must not
 
-Deterministic validation/configuration failures are not blindly retried.
+Never infer \`force_reinit\` from a normal deployment retry or failure.
+
+## Locking and duplicate delivery
+
+Database deployment uses the same Service advisory lock as application deployment.
+
+This protects against:
+
+- duplicate Celery delivery;
+- overlapping API/admin actions;
+- monitor/retry races.
+
+A duplicate task should exit or be prevented by the state gate rather than mutating the same database concurrently.
+
+## Retry semantics
+
+DB task retries are bounded.
+
+The retryability predicate distinguishes transient Docker/API/network/timeouts from deterministic validation/programming failures.
+
+### Why
+
+Repeating SQL initialization against a persistent database is not equivalent to repeating a stateless image build.
+
+Retry behavior must preserve data safety.
 
 ## Runtime integration
 
-Database resources may be executed through the common Swarm runtime for managed service lifecycle, networking, volumes, placement and observations.
+The DB deployer can use the common Swarm runtime for:
 
-DBDeployer itself owns the database-specific:
+- managed service lifecycle;
+- network;
+- volume placement;
+- runtime observation.
 
-- engine image;
-- environment;
-- initialization;
-- credential reconciliation;
-- readiness logic.
+The database-specific layer still owns engine semantics.
 
-It should not duplicate application platform detection or Dockerfile generation.
+This is a specialization, not a copy of the whole deployment engine.
 
-## Revision relationship
+## Revision/provenance
 
-Database Deploy rows still participate in the revision/provenance architecture through ensure_revision_for_deploy().
+Database Deploy rows still participate in revision creation.
 
-That preserves execution history and immutable service snapshots even though the database image is not generated from application source.
+That preserves a stable history of what database configuration/access binding was deployed even though the image itself comes from a fixed engine image.
+
+## Error flow
+
+~~~text
+validation error
+   -> terminal failure
+
+runtime/init transient
+   -> bounded retry where classified recoverable
+
+persistent/credential error
+   -> deployment failure with DB diagnostics
+
+force-reinit failure
+   -> failure with explicit destructive-operation context
+~~~
+
+## How to change database behavior
+
+| Desired change | Start here | Avoid changing |
+|---|---|---|
+| engine image/version | \`core/db_deployer.py\` | application Dockerfile |
+| DB readiness | \`core/db_deployer.py\` | generic app health assumptions |
+| database password reconciliation | DB-specific SQL helpers | global config parser |
+| DB routing | \`celery/tasks.py\` | platform plugin detection |
+| DB runtime placement | Swarm runtime | engine credential logic |
+| DB state transition | StateManager/task failure path | direct status assignment |
 
 ## What database deployment must NOT do
 
 Do not:
 
-- call the application Dockerfile generator for database engines;
-- treat initialized persistent databases as fresh containers;
+- send database workloads through application Dockerfile generation;
 - silently wipe persistent volumes;
-- expose root/application passwords in logs;
-- bypass Service deployment locking;
-- bypass the lifecycle state machine.
+- treat “container running” as database readiness;
+- expose passwords in logs;
+- bypass Service locking;
+- bypass the shared lifecycle state contract.
 
 ## Related code
 
-- src/deployments/celery/tasks.py::run_db_deploy
-- src/deployments/core/db_deployer.py
-- src/deployments/core/swarm.py
-- src/services/revisioning.py
-- src/deployments/core/state/locks.py
-- documentation/domain/databases-storage.md
+- \`src/deployments/celery/tasks.py::run_db_deploy\`
+- \`src/deployments/core/db_deployer.py\`
+- \`src/deployments/core/swarm.py\`
+- \`src/services/revisioning.py\`
+- \`src/deployments/core/state/locks.py\`
+- \`src/deployments/common/state_machine.py\`
+- \`documentation/domain/databases-storage.md\`

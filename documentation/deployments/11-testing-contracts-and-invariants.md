@@ -2,278 +2,378 @@
 
 ## Purpose
 
-Treat tests as executable architecture. Before changing deployment code, read the tests that enforce the relevant boundary.
+Tests are the executable memory of deployment architecture.
 
-## Test map
+When changing behavior, find the test that proves the existing contract before deciding that the source is merely an implementation detail.
 
-### Planning and configuration
+## Invariant-oriented test map
 
-- test_config.py
-- test_config_contract.py
-- test_deployment_profile.py
-- test_planning_boundaries.py
-- test_strategy_resolution.py
-- test_customization_contract.py
+### Ownership and activation
 
-These protect configuration normalization, tenant boundaries, plan/runtime decisions and planning seams.
+**\`test_deployment_ownership.py\`**
 
-### Lifecycle, state and ownership
+Protects:
 
-- test_state_machine.py
-- test_state_manager_fencing_contract.py
-- test_lifecycle_executor.py
-- test_integrated_lifecycle_contracts.py
-- test_activation_consistency.py
-- test_deployment_ownership.py
+- one execution owner per Service concept;
+- normal PENDING -> RUNNING -> SUCCEEDED flow;
+- terminal states are not arbitrarily overwritten;
+- replacement of a running service is an explicit allowed state path.
 
-These are the first tests to read for state, activation or concurrency changes.
+**\`test_activation_consistency.py\`**
 
-### Runtime and Swarm
+Protects:
 
-- test_runtime_contract.py
-- test_runtime_characterization.py
-- test_swarm_runtime.py
-- test_readiness_and_cancellation.py
+- activation happens after readiness;
+- replacement resources carry deployment identity;
+- stale recovery requires positive ownership;
+- stale workers cannot infer success from the old container.
 
-Use these for runtime semantics, service/task mapping, readiness or cancellation.
+**\`test_state_manager_fencing_contract.py\`**
 
-### Build and platform
+Protects:
 
-- test_multiplatform_build.py
-- test_build_resource_semantics.py
-- test_deployer_regressions.py
-- test_frontend_build_regressions.py
-- test_php_document_root_override.py
-- test_container_error_surfacing.py
-- test_image_name_validation_static.py
-- test_converter.py
+- task ownership checks;
+- cancellation fencing;
+- terminal transition ownership.
 
-### Base images
+### State machine
 
-The base-image cache, fingerprint, queue, lease, retry and cancellation contracts are covered by:
+**\`test_state_machine.py\`**
 
-- test_base_image_cache_behavior_v14.py
-- test_base_image_cache_fingerprint.py
-- test_base_image_cancel_race.py
-- test_base_image_integration.py
-- test_base_image_policy_contract.py
-- test_base_image_queue_and_lease.py
-- test_base_image_retry_regressions.py
-- test_base_image_runtime_stripping.py
-- test_base_images_regressions.py
-- test_base_runtime_image_operator_contracts.py
+Protects the legal Service/Deploy transition tables.
 
-These are the authoritative starting point for unexpected base-image rebuilds or waits.
+Read it before adding a new lifecycle state or transition.
 
-### Reconciliation and recovery
+### Lifecycle contract
 
-- test_reconciliation_planner.py
-- test_recovery_operation_journal.py
-- test_patch_regressions.py
-- test_force_cancel_cleanup.py
+**\`test_lifecycle_executor.py\`**
 
-### Retry, cancellation and failure
+Protects the framework-neutral lifecycle seam:
 
-- test_retry.py
-- test_cancellation_policy.py
-- test_readiness_and_cancellation.py
-- test_rollback.py
-- test_force_cancel_cleanup.py
-- test_exceptions.py
+- planning -> apply -> readiness -> activate -> success;
+- cancellation before side effects;
+- retryable runtime failure classification;
+- stale worker cannot cleanup;
+- cancellation wins completion race;
+- runtime unavailable/disabled/unsupported are blocked before activation.
 
-### Integration/database
+This is a migration contract, not proof that the main DeployService has fully migrated.
 
-- test_control_plane_migrations.py
-- database-related app-catalog/deployment integration tests
-- compose.yaml integration profile for deployment integration tests
+**\`test_integrated_lifecycle_contracts.py\`**
 
-## Architectural invariants
+Use for integrated contracts crossing state, lifecycle and runtime abstractions.
 
-### 1. State transitions are explicit
+## Planning/configuration contracts
 
-Source:
+**\`test_config.py\` / \`test_config_contract.py\`**
 
-- deployments/common/state_machine.py
-- deployments/core/state/manager.py
+Protect parsing and tenant-facing configuration semantics.
 
-Invariant:
+**\`test_deployment_profile.py\`**
 
-> Normal Service/Deploy lifecycle mutations go through the authoritative StateManager and legal transition table.
+Protects profile normalization and backward-compatible aliases.
 
-### 2. One deployment owner per Service
+**\`test_planning_boundaries.py\`**
 
-Source:
+Protects configuration precedence, provenance, policy boundaries, plan compilation and the transitional bridge.
 
-- deployments/core/state/locks.py
-- test_deployment_ownership.py
+**\`test_customization_contract.py\`**
 
-Invariant:
+Protects allowed scoped customizations rather than allowing one override to disable unrelated automation.
 
-> Two deployment workers cannot safely mutate one Service concurrently.
+**\`test_strategy_resolution.py\`**
 
-### 3. Stale workers are fenced
+Protects application/database strategy classification.
 
-Source:
+### Build/platform contracts
 
-- StateManager.transition_deploy_if_owned()
-- DeployService activation callback
-- test_state_manager_fencing_contract.py
+**\`test_multiplatform_build.py\`**
 
-Invariant:
+Protects platform-specific build behavior.
 
-> A worker that lost ownership cannot activate, terminalize or clean resources for a deployment it no longer owns.
+**\`test_frontend_build_regressions.py\`**
 
-### 4. Revision is the executable snapshot
+Protects Laravel/full-stack frontend build injection and related regression behavior.
 
-Source:
+**\`test_php_document_root_override.py\`**
 
-- services/revisioning.py
-- test_activation_consistency.py
-- planning boundary tests
+Protects application-level PHP document-root customization from leaking into shared base identity.
 
-Invariant:
+**\`test_build_resource_semantics.py\`**
 
-> After revision materialization, runtime execution should use the immutable revision snapshot rather than mutable Service/Deploy configuration.
+Protects server-owned build resources.
 
-### 5. Activation is fenced
+**\`test_deployer_regressions.py\`**
 
-Source:
+Broad deployment regression contracts.
 
-- deployments/celery/services/deploy_service.py
-- services/revisioning.py
+**\`test_container_error_surfacing.py\`**
 
-Invariant:
+Protects propagation of underlying container/Docker diagnostics.
 
-> A deployment becomes active only after readiness and only while the expected previous deployment is still current.
+### Runtime/Swarm contracts
 
-### 6. Runtime infrastructure is operator-owned
+**\`test_runtime_contract.py\`**
 
-Source:
+Defines runtime-neutral semantics through a fake runtime and the Swarm adapter.
 
-- deployments/planning/configuration.py
-- deployments/runtime/registry.py
-- deployments/common/config.py
-- test_planning_boundaries.py
-- test_security.py
+Important examples:
 
-Invariant:
+- repeated apply can be idempotent;
+- disabled/unreachable/unsupported states remain distinct;
+- rollback restores the previous observation;
+- Swarm adapter hides Docker SDK-specific types;
+- unlabelled external service does not become the desired revision.
 
-> Tenant configuration cannot select arbitrary host infrastructure or bypass resource/security policy.
+**\`test_runtime_characterization.py\`**
 
-### 7. Base-image reuse is fingerprint-aware
+Use to understand current concrete runtime behavior before changing it.
 
-Source:
+**\`test_swarm_runtime.py\`**
 
-- deploy/base_images.py
-- base-image cache/fingerprint tests
+Protects actual Swarm service/task configuration and lifecycle behavior.
 
-Invariant:
+**\`test_readiness_and_cancellation.py\`**
 
-> A local base image is reused only when its definition is compatible with the expected operator definition or an explicitly permitted last-known-good fallback.
+Protects readiness and mid-deployment cancellation behavior.
 
-### 8. Application and base-image lifecycles are separate
+### Base-image contracts
 
-Source:
+**\`test_base_image_cache_behavior_v14.py\`**
 
-- deploy/base_images.py
-- base-image queue/cache tests
+Protects local cache/reuse semantics.
 
-Invariant:
+**\`test_base_image_cache_fingerprint.py\`**
 
-> An application deployment must not rebuild a reusable base image merely because its registry row has an active renewal/build state.
+Protects definition-fingerprint compatibility and stable PHP base identity.
 
-### 9. One running Swarm replica per process
+**\`test_base_image_cancel_race.py\`**
 
-Source:
+Protects build task ownership, cancellation races, queue routing and deployment/base-lease interactions.
 
-- deployments/core/swarm.py
-- services.models.ServiceProcess
-- test_swarm_runtime.py
+**\`test_base_image_queue_and_lease.py\`**
 
-Invariant:
+Protects dedicated queue and lease lifecycle.
 
-> Current Swarm execution rejects a process replica count other than one.
+**\`test_base_image_policy_contract.py\`**
 
-### 10. Unknown runtime identity fails closed
+Protects operator-owned policy.
 
-Source:
+**\`test_base_image_retry_regressions.py\`**
 
-- deployments/reconciliation/planner.py
-- deployments/runtime/observations.py
-- reconciliation tests
+Protects retry behavior and terminal failure handling.
 
-Invariant:
+**\`test_base_runtime_image_operator_contracts.py\`**
 
-> A runtime resource with unknown managed revision identity is not silently adopted as converged.
+Protects operator-visible base lifecycle contracts.
 
-### 11. Cleanup is ownership-safe
+**\`test_base_image_runtime_stripping.py\`**
 
-Source:
+Protects the distinction between shared base contents and deployment-specific runtime behavior.
 
-- deployments/core/cleanup.py
-- deployments/core/orchestrator.py
+**\`test_base_images_regressions.py\`**
 
-Invariant:
+Broad regression coverage for resolver/build behavior.
 
-> A deployment does not globally prune or remove Docker resources it cannot prove it owns.
+### Reconciliation/recovery contracts
 
-### 12. Observability failure does not invent deployment failure
+**\`test_reconciliation_planner.py\`**
 
-Source:
+Protects pure decision semantics:
 
-- deployments/core/deployment_logger.py
-- deployments/core/sink.py
+- missing runtime -> CREATE;
+- wrong desired state -> STOP;
+- revision drift -> UPDATE;
+- unhealthy runtime -> REPAIR;
+- unavailable runtime -> BLOCKED;
+- unknown identity -> manual intervention.
 
-Invariant:
+**\`test_recovery_operation_journal.py\`**
 
-> Failure to persist or broadcast an event must not, by itself, change a successful deployment into a failed one.
+Use for persistent recovery/operation journal semantics.
 
-## Pre-change checklist
+**\`test_patch_regressions.py\`**
 
-Before modifying deployments, answer:
+Broad safety regressions around patched behavior.
 
-1. Which persistent state owner does this change affect?
-2. Is the change in planning, build, runtime, state, reconciliation, or presentation?
-3. Which task/worker owns the operation?
-4. Can another worker execute the same operation concurrently?
-5. Does the change introduce Docker calls outside the runtime/orchestrator boundary?
-6. Does retry classification happen at the correct boundary?
-7. Can cancellation race completion?
-8. Can a stale worker reach this code?
-9. How is the external runtime resource identified as belonging to this Deploy?
-10. What diagnostics must survive failure?
-11. Does the change alter a state-machine transition?
-12. Which existing test proves the invariant?
+**\`test_force_cancel_cleanup.py\`**
 
-## Transitional architecture tests
+Protects cancellation cleanup and preservation of existing running state.
 
-test_lifecycle_executor.py protects the newer framework-neutral lifecycle executor. It does **not** mean that DeploymentLifecycleExecutor is the only production execution path today.
+### Failure/cancellation/rollback
 
-test_runtime_contract.py protects the runtime abstraction while core/swarm.py remains the concrete production implementation behind the adapter seam.
+**\`test_retry.py\`**
 
-When changing a migration seam, read both contract tests and current-path regression tests.
+Protects retry classification helpers.
 
-## Module-to-test guide
+**\`test_cancellation_policy.py\`**
 
-| Modification | First tests |
-| --- | --- |
-| state or transition | test_state_machine.py, test_state_manager_fencing_contract.py |
-| service deployment lock | test_deployment_ownership.py |
-| activation | test_activation_consistency.py |
-| cancellation | test_cancellation_policy.py, test_readiness_and_cancellation.py |
-| runtime contract/Swarm | test_runtime_contract.py, test_swarm_runtime.py |
-| platform/build | test_multiplatform_build.py, test_deployer_regressions.py |
-| base-image cache/build | base-image cache/fingerprint/queue tests |
-| reconciliation | test_reconciliation_planner.py, test_recovery_operation_journal.py |
-| rollback/cleanup | test_rollback.py, test_force_cancel_cleanup.py |
+Protects pure cancellation decisions.
 
-## Related source map
+**\`test_rollback.py\`**
 
-- lifecycle contracts: src/deployments/application/
-- Celery: src/deployments/celery/
-- shared policy/safety: src/deployments/common/
-- execution/orchestration: src/deployments/core/
-- planning: src/deployments/planning/
-- reconciliation: src/deployments/reconciliation/
-- runtime contracts: src/deployments/runtime/
-- Django persistence adapters: src/deployments/infrastructure/
+Protects rollback snapshot/restore semantics.
+
+**\`test_exceptions.py\`**
+
+Protects the unified exception hierarchy and recoverability semantics.
+
+## Contract: RuntimeContract
+
+A compatible runtime implementation should preserve these tested semantics:
+
+1. \`apply()\` turns a plan into a runtime resource and returns a handle.
+2. Repeating an equivalent operation should be safe/idempotent where the backend supports it.
+3. \`inspect()\` reports observed reality, not desired state.
+4. \`wait_ready()\` proves backend readiness; apply success alone is insufficient.
+5. \`stop()\` / \`remove()\` target the identified resource.
+6. \`rollback()\` needs an explicit known-good target.
+7. logs are observational.
+8. capability and availability failures remain distinguishable.
+
+## Contract: DeploymentExecutionContext
+
+**Path:** \`application/context.py\`
+
+It carries:
+
+- deployment/service/revision identity;
+- worker task id;
+- operation key;
+- RuntimeSelection;
+- ownership callback;
+- cancellation callback;
+- event publisher.
+
+### Semantic guarantee
+
+\`assert_can_continue()\` means:
+
+> this worker still owns the execution and cancellation has not been requested at this safe boundary.
+
+A strategy/runtime implementation should not replace this with an ad-hoc database query.
+
+## Contract: DeploymentStrategy
+
+**Path:** \`application/lifecycle.py\`, \`application/strategies.py\`
+
+A strategy owns:
+
+- how a workload-specific plan is built;
+- how successful readiness becomes domain activation.
+
+It does not own:
+
+- common lifecycle state machine;
+- Celery retry;
+- runtime Docker API calls.
+
+## Contract: ConfigurationResolver
+
+Tests and implementation establish:
+
+- bounded layered input;
+- deterministic precedence;
+- rejected deployment overrides outside the allow-list;
+- provenance of effective values;
+- policy-ceiling enforcement.
+
+A caller should pass layers rather than reconstruct precedence through hidden conditionals.
+
+## Contract: ReconciliationPlanner
+
+Given the same DesiredRuntimeState + RuntimeObservation + RuntimeSelection, the decision should be deterministic.
+
+It should not mutate infrastructure or database state.
+
+## Contract: StateManager
+
+The semantic contract is:
+
+~~~text
+read current state
+ + verify ownership/cancellation
+ + validate transition
+ + commit state
+ = one serialized lifecycle decision
+~~~
+
+A direct status assignment is not equivalent.
+
+## Contract: Base image resolver
+
+The resolver must preserve:
+
+- definition-fingerprint compatibility;
+- last-known-good availability where permitted;
+- single build ownership per base identity;
+- lease-protected cleanup;
+- separate base/application timeout phases.
+
+## Pre-change contract checklist
+
+Before modifying deployments:
+
+1. Which invariant am I changing?
+2. Which test encodes the current behavior?
+3. Is this a migration seam or production path?
+4. What object is the input contract?
+5. What is the postcondition?
+6. What state/ownership fence is required?
+7. What happens if cancellation occurs at the boundary?
+8. What happens if the worker becomes stale?
+9. Which external resource identity proves ownership?
+10. Which diagnostic evidence must survive failure?
+
+## Testing by problem
+
+| Problem | First tests |
+|---|---|
+| state transition | test_state_machine.py + state-manager fencing |
+| two deploys race | test_deployment_ownership.py |
+| activation race | test_activation_consistency.py |
+| cancellation | test_cancellation_policy.py + readiness/cancellation |
+| stale worker recovery | activation consistency + recovery journal |
+| platform detection/build | multiplatform + deployer regressions |
+| Docker/Swarm runtime | runtime contract + Swarm runtime |
+| base rebuild/cache | fingerprint + cache + queue/lease tests |
+| reconciliation | reconciliation planner |
+| rollback | rollback + force-cancel cleanup |
+| retry | retry + exceptions |
+| config policy/security | config contract + planning boundaries + security |
+
+## Source/test ownership map
+
+| Source change | Read first |
+|---|---|
+| \`celery/tasks.py\` | retry + deployment ownership + lifecycle tests |
+| \`celery/services/deploy_service.py\` | activation + ownership + deploy-service regression tests |
+| \`application/lifecycle.py\` | lifecycle executor contract |
+| \`planning/configuration.py\` | planning boundaries |
+| \`planning/plan.py\` | planning boundaries + runtime contract |
+| \`core/state/manager.py\` | state machine + fencing |
+| \`core/swarm.py\` | Swarm runtime + runtime characterization |
+| \`core/platforms/\` | multiplatform build tests |
+| \`deploy/base_images.py\` | base cache/fingerprint/queue/lease tests |
+| \`reconciliation/planner.py\` | reconciliation planner tests |
+
+## What tests do NOT mean
+
+A contract test for a migration seam is not evidence that the seam is already the only production implementation.
+
+Always distinguish:
+
+- pure contract tests;
+- current production path regression tests;
+- integration tests against Docker/Swarm.
+
+## Related source
+
+- \`src/deployments/application/\`
+- \`src/deployments/celery/\`
+- \`src/deployments/common/\`
+- \`src/deployments/core/\`
+- \`src/deployments/planning/\`
+- \`src/deployments/reconciliation/\`
+- \`src/deployments/runtime/\`
+- \`src/deployments/infrastructure/\`

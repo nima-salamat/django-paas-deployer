@@ -6,33 +6,45 @@
 HTTP / WebSocket
  -> Django / DRF / Channels
  -> Service / Deploy domain
- -> Celery operation
+ -> Celery
  -> deployments
- -> Docker Engine
+ -> Docker Engine / Swarm
 ~~~
 
-Django owns authentication, authorization, desired state and durable records. Celery owns asynchronous work. Docker Swarm owns task placement and restart mechanics.
+Django owns authorization, durable records and desired service state. Celery owns asynchronous execution. Docker/Swarm owns runtime scheduling.
 
 ## Deployment architecture
 
-Deployment work is described in the canonical [deployments architecture manual](deployments/README.md). Read its worker/state chapter before changing queue routing, locks, retries or cancellation.
+For deployment work, use the canonical [deployment architecture manual](deployments/README.md).
 
-## Celery queues
-
-Deployment-heavy tasks use the dedicated queues deployments, operations and base-images. Redis is the broker/result/cache infrastructure.
-
-Current task-to-queue ownership and worker topology are documented in [deployments/06-workers-concurrency-and-state.md](deployments/06-workers-concurrency-and-state.md).
+The [workers/concurrency/state guide](deployments/06-workers-concurrency-and-state.md) is the source for queue topology, locks, task ownership, retries and cancellation.
 
 ## Beat
 
-Beat schedules service reconciliation, Swarm node synchronization, catalog reconciliation, shell expiry, scheduled messaging and log retention.
+Current deployment-related schedules include:
 
-Beat is a repair mechanism, not the primary runtime scheduler. Deployment monitor behavior is documented in [deployments/07-reconciliation-and-recovery.md](deployments/07-reconciliation-and-recovery.md).
+- service/deployment reconciliation pulse;
+- Swarm infrastructure synchronization;
+- retained-volume reclamation.
+
+Beat triggers repair work. It is not the authority for desired state or runtime lifecycle.
 
 ## Databases
 
-The main PostgreSQL database stores control-plane state. Deployment logs can use the separate deployment_logs database through DeploymentLogRouter. Deployment event flow is documented in [deployments/09-logs-health-rollback-cleanup.md](deployments/09-logs-health-rollback-cleanup.md).
+The main PostgreSQL database stores control-plane state.
+
+Deployment logs can use a separate PostgreSQL database. See [deployments/09-logs-health-rollback-cleanup.md](deployments/09-logs-health-rollback-cleanup.md).
+
+## Redis
+
+Redis is used for Celery transport/results and selected coordination/caching.
+
+Redis coordination keys do not replace Deploy/Service state or lifecycle transitions.
 
 ## Channels
 
-Channels transports realtime events and shell/messaging traffic. WebSockets are delivery paths, never the authoritative state store.
+Channels delivers deployment events and other WebSocket traffic. The deployment state remains authoritative in the database.
+
+## Worker separation
+
+Long-running deployment queues are separated from the dedicated base-image queue. See [deployments/06-workers-concurrency-and-state.md](deployments/06-workers-concurrency-and-state.md).

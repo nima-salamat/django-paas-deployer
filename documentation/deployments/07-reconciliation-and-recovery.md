@@ -2,213 +2,295 @@
 
 ## Purpose
 
-Deployment execution is not the only source of truth. The system continuously compares desired database state with observed runtime state so worker crashes, missed events and infrastructure restarts can be repaired.
+Reconciliation handles the gap between what the database says should exist and what Docker/Swarm actually reports.
 
-## Two reconciliation layers
+The architectural split is:
 
-The repository contains both:
+~~~text
+desired state
+    +
+runtime observation
+    ->
+reconciliation decision
+    ->
+runtime action
+~~~
 
-1. a runtime-neutral decision model in deployments.reconciliation.planner;
-2. concrete production monitoring and repair logic in deployments.celery.schedules.
+**Decision and execution are intentionally separate.**
 
-They are related, but the scheduled monitor still contains the concrete Docker/Swarm actions on current master.
+## Current implementation status
 
-Do not describe the pure planner as if every production reconciliation action already flows through it.
+Two layers coexist:
 
-## Desired state
+- \`ReconciliationPlanner\` is a pure, runtime-neutral decision model.
+- \`deployments.celery.schedules\` is the current production monitor and still contains concrete Docker/Swarm repair logic.
 
-The runtime-neutral model is DesiredRuntimeState:
+The planner is an architectural contract and test target, not yet the only production reconciliation engine.
 
-- service_id;
-- revision_id;
-- desired_state;
-- runtime_name;
-- required_capabilities;
+## DesiredRuntimeState
+
+**Path:** \`reconciliation/planner.py\`
+
+Contains:
+
+- service id;
+- desired revision id;
+- desired running/stopped state;
+- runtime name;
+- required capabilities;
 - metadata.
 
-The production domain contributes this primarily through Service.desired_state and Service.active_revision.
+### Why
 
-For a running service, the desired revision is the currently authoritative active revision.
+A repair decision must use a stable representation of intent rather than rereading many mutable model fields inside each rule.
 
-## Observed state
+## RuntimeObservation
 
-Runtime adapters return RuntimeObservation containing:
+**Path:** \`runtime/observations.py\`
 
-- RuntimeIdentity;
-- observed runtime status;
-- runtime resource id;
-- desired and ready replica counts;
-- observed revision id when known;
-- per-task observations;
-- timestamp and details.
+An observation contains:
 
-Observed state describes infrastructure reality. It does not rewrite desired state merely because it is different.
+- identity;
+- status;
+- runtime id;
+- desired/ready replicas;
+- observed revision id;
+- task observations;
+- timestamp/details.
 
-## Pure reconciliation planner
+### Why identity is part of observation
 
-ReconciliationPlanner.decide() can return:
+Runtime state without identity is unsafe for destructive repair.
 
-- CONVERGED;
-- CREATE;
-- UPDATE;
-- STOP;
-- REPAIR;
-- BLOCKED;
-- MANUAL_INTERVENTION.
+## ReconciliationPlanner
 
-It checks runtime capabilities and availability before choosing an action.
+**Path:** \`reconciliation/planner.py\`
 
-Important fail-closed rule: when a runtime resource exists but its managed revision identity is unknown, the planner returns MANUAL_INTERVENTION instead of silently adopting it.
+### Called by
+
+Pure contract tests and future runtime-neutral reconciliation composition.
+
+### Input
+
+DesiredRuntimeState + RuntimeObservation + RuntimeSelection.
+
+### Output
+
+ReconciliationDecision.
+
+### Decision meanings
+
+- CONVERGED: observed state already matches desired state.
+- CREATE: desired running resource is missing.
+- UPDATE: observed revision differs from desired revision.
+- STOP: runtime exists but desired state is stopped.
+- REPAIR: resource exists but is unhealthy/not ready.
+- BLOCKED: backend capability/availability prevents safe execution.
+- MANUAL_INTERVENTION: identity/policy is too ambiguous to repair automatically.
+
+### Preconditions
+
+Runtime capabilities and availability are checked first.
+
+### Fail-closed rule
+
+If desired revision is known but observed runtime revision is unknown, the planner does **not** assume the same-name resource is the desired resource.
+
+It returns MANUAL_INTERVENTION.
+
+## Why reconciliation must not “helpfully adopt” resources
+
+Consider:
+
+~~~text
+desired revision = B
+runtime service name exists
+revision label = missing
+~~~
+
+Possible explanations include:
+
+- unmanaged external service;
+- old resource;
+- partially updated resource;
+- label drift.
+
+Automatically adopting it would turn ambiguity into state corruption.
+
+The architecture therefore prefers manual intervention over unsafe convergence.
 
 ## Scheduled monitor
 
-deployments.celery.schedules.monitor_services() performs two broad scans.
+**Path:** \`celery/schedules.py::monitor_services\`
 
-### Active deployments
+### Entry
 
-It watches pending, running and rolling-back Deploy rows for:
+Celery Beat pulses the task every 5 seconds in current settings.
 
-- phase timeout;
-- cancellation;
+The task applies an operator-configured interval through a Redis scheduler gate so frequent Beat pulses do not imply full reconciliation every 5 seconds.
+
+### Two scans
+
+#### Active Deployments
+
+Checks:
+
+- PENDING/RUNNING/ROLLING_BACK Deploy rows;
+- timeout budgets;
+- cancellation state;
 - runtime progress;
-- stale worker recovery;
-- rollback completion/failure.
+- stale worker recovery.
 
-### Active services
+#### Active Services
 
-It checks queued, deploying, running, stopping and legacy-succeeded Service rows against runtime state.
+Checks:
 
-It can:
+- QUEUED;
+- DEPLOYING;
+- RUNNING;
+- STOPPING;
+- legacy SUCCEEDED
 
-- queue desired-state stop operations;
-- requeue orphaned PENDING deployments;
-- mark dead runtimes failed;
-- promote legacy SUCCEEDED rows to RUNNING;
-- finalize stopping;
-- recover stale deployments where ownership is provable;
-- reconcile stale base-image builds.
+against runtime reality.
 
-## Monitor scheduler gate
+## Scheduler gate versus lifecycle state
 
-Beat can pulse the monitor frequently. monitor_services uses Redis to record last_run and a lightweight lock.
+Redis stores:
 
-The effective monitor interval and batch size come from operator settings.
+- last monitor run;
+- monitor lock;
+- bounded recovery attempt counters.
 
-Redis here is coordination only. The database remains authoritative for Service/Deploy state.
+These keys coordinate work.
 
-If the scheduler gate cannot be used, the monitor does not reinterpret that as a deployment-state failure.
+They do not replace Service/Deploy lifecycle state.
 
-## Orphaned queued deployment recovery
+## Orphaned queued deployment
 
-A deployment may commit its DB transaction while the broker is temporarily unavailable before the task is delivered.
+### Failure scenario
 
-_monitor recovery detects PENDING Deploy + QUEUED Service rows older than the stale threshold and can re-enqueue them.
+~~~text
+DB transaction commits Deploy=PENDING
+        |
+Celery publish is interrupted
+        |
+no worker receives task
+~~~
 
-The recovery path:
+The DB state remains valid.
 
-1. increments a per-deployment Redis attempt counter;
-2. stops after max_recovery_attempts;
-3. chooses application vs database task from the platform;
-4. submits a new task id;
-5. updates Deploy execution_task_id and Service.task_id only while the rows remain pending/queued.
+The monitor can later detect an old PENDING/QUEUED pair and requeue it with bounded attempts.
 
-This makes broker interruption recoverable without an unbounded duplicate-task loop.
+### Why
+
+Broker interruption should not force the API transaction to roll back durable deployment intent.
 
 ## Stale worker recovery
 
 ### Swarm mode
 
-The monitor can recover a stale RUNNING deployment only when it can prove:
+A stale RUNNING deploy can be recovered as successful only when:
 
-- the managed Swarm service exists;
-- the expected single running task exists;
-- deployment identity labels match the stale Deploy;
-- the Deploy is still RUNNING;
-- no newer active Deploy has taken ownership.
+1. Swarm service exists;
+2. one expected task is running;
+3. service deployment label matches the Deploy;
+4. Deploy is still RUNNING;
+5. no newer active deployment has superseded it.
 
-Only then can it materialize/activate the revision and mark the deployment succeeded.
+Only then does recovery materialize/activate the revision and mark success.
 
-### Legacy container mode
+### Legacy mode
 
-The canonical container name may still refer to the previous release while a replacement image is being built.
+A canonical container name can refer to the previous release during build.
 
-Therefore “container is running” is not proof that the stale deployment succeeded.
+Therefore:
 
-For replacement/container-start/health stages, the monitor requires deployment ownership labels before removing a stale replacement and attempting previous-resource restoration.
+~~~text
+running container
+   !=
+proof that stale Deploy succeeded
+~~~
 
-For pre-container or ambiguous worker loss, recovery fails closed rather than guessing.
+For container creation/start/health phases, recovery first proves the resource belongs to the stale deployment through the deployment identity label before removing/restoring it.
+
+Ambiguous pre-container worker loss is failed closed.
 
 ## Desired-state repair
 
-When desired_state=stopped and runtime is still running, reconciliation can queue the stop task.
+### Desired stopped
 
-When desired_state=running and no runtime exists, reconciliation may reuse the active Deploy/revision where the current eligibility checks permit it.
+If runtime is still running, reconciliation queues the stop operation.
 
-Reconciliation does not invent a new revision.
+### Desired running
 
-## Runtime drift
+If no runtime exists and an eligible active Deploy/revision exists, reconciliation can queue deployment.
 
-Current monitor logic handles:
+It does not invent a new desired revision.
 
-- Swarm service/task loss;
-- Docker container loss in the legacy mode;
-- runtime not running after a deployment;
-- stopped services that should be running;
-- running resources that should be stopped.
+## Timeout ownership
 
-The runtime-neutral planner additionally models UPDATE when observed revision differs from desired revision.
+When a deployment times out, the monitor marks \`cancel_requested\`.
 
-## Timeouts
+It does **not** become the ordinary runtime cleanup owner.
 
-A deployment timeout marks cancel_requested and leaves external cleanup to the owning worker.
+The worker that still owns execution performs cancellation cleanup.
 
-This prevents a monitor race in which the monitor deletes resources while the original deployment worker is still cleaning them.
+### Why
 
-Base-image BUILDING rows also have a separate operator-owned lifecycle timeout. An expired base build can be marked FAILED so waiters are released.
+A monitor and deployment worker running simultaneously must not both delete/restore the same resource.
 
-## Swarm infrastructure sync
+## Base-image recovery
 
-sync_swarm_infrastructure calls the concrete Swarm node synchronizer when Swarm is enabled.
+The monitor detects BUILDING BaseRuntimeImage rows that exceed the operator timeout.
 
-It updates operator-visible SwarmCluster and SwarmNode records independently from application runtime services.
+It changes the row to FAILED with diagnostics, clears build ownership, and releases waiters.
 
-## External failures
+A later rebuild can safely claim the resource again.
 
-The recovery model explicitly covers:
+## Swarm infrastructure synchronization
 
-- worker crash;
-- Docker daemon restart/unavailability;
-- Redis/Celery interruption;
-- missed deployment/event messages;
-- externally removed or modified managed Swarm resources;
-- stale DB execution state.
+\`sync_swarm_infrastructure\` synchronizes operator-visible SwarmCluster/SwarmNode metadata when Swarm is enabled.
 
-Recovery is always constrained by resource identity and lifecycle ownership.
+This is separate from application runtime reconciliation.
 
-## Idempotence and repair safety
+## Recovery invariants
 
-A reconciliation repair must be safe to repeat.
+1. No stale worker can activate over a newer active deployment.
+2. No unmanaged same-name resource is silently adopted.
+3. No ambiguous external resource is deleted without ownership proof.
+4. Desired state is not overwritten by observed state.
+5. Reconciliation actions are safe to repeat.
+6. Runtime unavailability blocks destructive action rather than pretending convergence.
 
-It must not:
+## Problem navigation
 
-- activate a stale revision;
-- silently adopt an unmanaged same-name runtime;
-- overwrite a newer active deployment;
-- turn observed image/runtime data into desired configuration;
-- mutate tenant policy to make infrastructure converge.
+| Symptom | Start | Then | Why |
+|---|---|---|---|
+| resource missing | planner + monitor | runtime inspect/apply | distinguish repair from new deploy |
+| wrong revision running | planner | identity labels + active revision | revision drift is not just process liveness |
+| stale worker | monitor recovery | state manager + runtime labels | ownership must be proved |
+| monitor falsely marks failure | monitor policy/actions | Deploy state + runtime stage | pre-container grace rules matter |
+| external service adopted | planner | runtime identity/labels | unknown identity must fail closed |
+| monitor requeues repeatedly | orphan recovery | recovery Redis key + task state | bounded recovery prevents loops |
 
-## What reconciliation must NOT own
+## What reconciliation must NOT do
 
-Reconciliation decides whether reality converges. The runtime adapter/backend owns Docker calls.
+Do not:
 
-Reconciliation must not become a second implementation of platform detection, application image building or tenant configuration resolution.
+- call platform detectors to rebuild application policy;
+- change tenant configuration to make runtime converge;
+- treat same-name as ownership;
+- delete resources without identity proof;
+- make observed state authoritative over desired state;
+- become a second implementation of application deployment planning.
 
 ## Related code
 
-- src/deployments/reconciliation/planner.py
-- src/deployments/celery/schedules.py
-- src/deployments/celery/monitoring/actions.py
-- src/deployments/celery/monitoring/policies.py
-- src/deployments/runtime/observations.py
-- src/deployments/runtime/swarm/adapter.py
-- src/deployments/core/swarm.py
+- \`src/deployments/reconciliation/planner.py\`
+- \`src/deployments/celery/schedules.py\`
+- \`src/deployments/celery/monitoring/actions.py\`
+- \`src/deployments/celery/monitoring/policies.py\`
+- \`src/deployments/runtime/observations.py\`
+- \`src/deployments/runtime/registry.py\`
+- \`src/deployments/runtime/swarm/adapter.py\`
+- \`src/deployments/core/swarm.py\`

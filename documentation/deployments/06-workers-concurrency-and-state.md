@@ -2,254 +2,361 @@
 
 ## Purpose
 
-This is the concurrency contract for deployments. Read it before changing Celery tasks, state transitions, leases, cancellation or retry behavior.
+This is the concurrency contract. Read it before changing Celery tasks, locks, lifecycle state, cancellation, retry, leases or monitor recovery.
 
-## Celery queue topology
+The key principle is:
 
-The current task routing in src/config/settings.py is:
+> A database row records lifecycle state; a lock/fence grants permission to mutate it; a worker owns the external side effect only while that ownership remains valid.
 
-| Task | Queue |
-| --- | --- |
-| deployments.celery.tasks.deploy | deployments |
-| deployments.celery.tasks.run_db_deploy | deployments |
-| deployments.celery.tasks.stop | operations |
-| deployments.celery.tasks.build_base_runtime_image | base-images |
-| deployments.celery.tasks.reclaim_released_volumes | operations |
+## Worker topology
 
-Other application/catalog tasks may share deployment or operations queues where configured.
+Current Celery routing in \`src/config/settings.py\`:
 
-## Compose worker roles
+| Task | Queue | Role |
+|---|---|---|
+| \`deployments.celery.tasks.deploy\` | \`deployments\` | application deployment |
+| \`deployments.celery.tasks.run_db_deploy\` | \`deployments\` | database deployment |
+| \`deployments.celery.tasks.stop\` | \`operations\` | service stop |
+| \`deployments.celery.tasks.build_base_runtime_image\` | \`base-images\` | shared operator base-image build |
+| \`deployments.celery.tasks.reclaim_released_volumes\` | \`operations\` | retained-volume reclamation |
 
-### Default Celery worker
+Scheduled monitor/sync work is defined in Celery Beat.
 
-The compose service celery consumes:
+### Compose consumers
 
-~~~text
-celery, deployments, operations
-~~~
+- \`celery\`: \`celery,deployments,operations\`
+- \`deployment-worker\`: \`deployments,operations\`, prefork, default concurrency 2
+- \`base-image-worker\`: \`base-images\`, prefork, default concurrency 1
+- \`celery-beat\`: emits scheduled tasks
 
-It exists so an installation can operate without the dedicated deployment worker.
+Base-image isolation is intentional: deployment workers synchronously waiting on a base-image task must not also consume the queue that task requires.
 
-### Dedicated deployment worker
+## Celery delivery semantics
 
-The deployment-worker service consumes:
+Current settings include:
 
-~~~text
-deployments, operations
-~~~
+- prefetch multiplier 1;
+- late acknowledgements;
+- broker publish retry;
+- broker startup retry.
 
-It uses prefork and defaults to DEPLOYMENT_WORKER_CONCURRENCY=2.
+These improve behavior around long-running infrastructure tasks, but they do **not** make deployment idempotent by themselves.
 
-### Dedicated base-image worker
+State/ownership mechanisms are still required.
 
-The base-image-worker service consumes only:
+## How application deployment is acquired
 
-~~~text
-base-images
-~~~
+### Entry
 
-It uses prefork and defaults to BASE_IMAGE_WORKER_CONCURRENCY=1.
+\`deployments.celery.tasks.deploy()\`
 
-This queue separation is deliberate. A deployment worker must not consume the base-image queue while synchronously waiting for a base-image build.
+### Preconditions
 
-### Beat
+- Deploy exists;
+- it is not already cancelled;
+- database-platform guard has not redirected it to \`run_db_deploy\`.
 
-celery-beat uses the Django Celery Beat DatabaseScheduler. The deployment monitor is scheduled frequently, then applies its own Redis gate and operator-configured cadence.
+### Handoff
 
-## Acknowledgement and prefetch
+\`\`\`text
+Celery task id
+    -> DeployService.execute(task_id=...)
+    -> acquire_service_deployment_lock(service_id)
+    -> StateManager.lock_and_get_deployment(deploy_id, task_id=...)
+\`\`\`
 
-Current Celery settings use:
+The task id becomes the execution fence.
 
-- CELERY_WORKER_PREFETCH_MULTIPLIER=1;
-- CELERY_TASK_ACKS_LATE=True.
+## Service advisory lock
 
-This is important for long-running Docker/build tasks.
+**Path:** \`core/state/locks.py\`
 
-## Deployment ownership
+### Called by
 
-A deployment has two ownership layers:
+\`DeployService.execute()\`, \`StopService.execute()\`, and database deployment.
 
-1. a PostgreSQL advisory lock keyed by Service id;
-2. task-id ownership persisted on Deploy/Service.
+### Preconditions
 
-The advisory lock is held across the full deployment task.
+Service id exists.
 
-StateManager.transition_deploy_if_owned() performs task ownership checks, cancellation fencing, legal transition validation and the final write under one Deploy row lock.
+### Contract
 
-A separate read-then-write ownership check is unsafe.
+\`acquire_service_deployment_lock()\` acquires a PostgreSQL advisory lock keyed by Service id.
 
-## Per-Service advisory lock
+By default it is non-blocking and raises \`DeploymentLockError\` immediately if another operation owns the Service.
 
-deployments.core.state.locks.acquire_service_deployment_lock():
+### Why a database row lock is insufficient
 
-- keys the lock to the Service PK;
-- is non-blocking by default;
-- is held across Docker/build operations;
-- releases on context exit;
-- prevents two deployments of one Service from racing.
+A row lock from \`select_for_update()\` lasts only for a transaction. Docker build/runtime work can last minutes.
 
-A lock observation is not a durable state fact. Do not use “lock is currently free” as permission to mutate without reacquiring it.
-
-## Authoritative state machine
-
-The legal transitions live in deployments.common.state_machine.py.
-
-### Service
-
-The current lifecycle includes:
+Without a transaction-independent lock:
 
 ~~~text
-queued
-deploying
-running
-stopping
-stopped
-failed
-succeeded (legacy compatibility)
+A locks row
+A commits
+A builds image
+B locks same row
+B starts conflicting Docker work
 ~~~
 
-The exact allowed source -> target pairs are defined by the state-machine table.
+The advisory lock spans the external work.
+
+### Must not
+
+Do not use \`is_service_locked()\` as authorization to mutate. It is diagnostic and inherently racy. Acquire the lock yourself.
+
+## StateManager
+
+**Path:** \`core/state/manager.py\`
+
+### Contract
+
+StateManager is the authoritative persistence port for lifecycle transitions.
+
+\`transition_deploy_if_owned()\` is the critical fencing primitive.
+
+Under one Deploy row lock it:
+
+1. checks task ownership;
+2. checks terminal status where requested;
+3. applies the cancellation fence;
+4. checks legal state transition;
+5. writes status/bookkeeping;
+6. clears execution ownership on terminal state.
+
+### Why
+
+Ownership, cancellation and transition legality are one atomic decision. Splitting them into separate reads/writes creates race windows.
+
+## State machine
+
+**Path:** \`common/state_machine.py\`
+
+The actual legal transition table is code. This document explains its meaning.
 
 ### Deploy
 
-~~~text
-pending
-running
-succeeded
-failed
-cancelled
-rolling_back
-rolled_back
-~~~
+| State | Meaning | Normal entrants | Normal exits | Forbidden assumption |
+|---|---|---|---|---|
+| PENDING | queued/not yet executing | creation/re-execution | RUNNING, CANCELLED, FAILED | runtime already changed |
+| RUNNING | worker owns execution | task start | SUCCEEDED, FAILED, CANCELLED, ROLLING_BACK | container must already exist |
+| ROLLING_BACK | failure recovery is restoring previous runtime | failure path | ROLLED_BACK, FAILED | rollback already succeeded |
+| SUCCEEDED | execution completed and activation was committed | lifecycle completion | PENDING only via explicit re-execution | can be changed by an old worker |
+| FAILED | execution failed | error path | PENDING via explicit retry/re-execution | automatically recoverable |
+| CANCELLED | cancellation won | cancellation path | PENDING via explicit re-execution | Celery retry may resurrect it |
+| ROLLED_BACK | previous release restored | rollback path | PENDING via explicit re-execution | equivalent to a successful new deploy |
 
-Terminal Deploy states can return to pending only through explicit re-execution/recovery paths.
+### Service
 
-Do not introduce a transition by assigning Deploy.status or Service.status directly.
+| State | Meaning |
+|---|---|
+| QUEUED | service expects deployment work |
+| DEPLOYING | deployment work is executing |
+| RUNNING | service is considered active |
+| STOPPING | stop operation owns the shutdown |
+| STOPPED | desired/runtime state is stopped |
+| FAILED | runtime/deployment failure is authoritative |
+| SUCCEEDED | legacy compatibility alias treated as a pre-existing success/running state |
 
-## StateManager contract
+Service and Deploy machines are independent. Lifecycle code aligns them; do not assume changing one row automatically makes the other correct.
 
-deployments.core.state.manager.StateManager is the authoritative lifecycle mutation entry point.
+## State versus runtime versus desired state
 
-For a normal transition it:
-
-1. opens a short DB transaction;
-2. locks the row;
-3. verifies the legal transition;
-4. writes bookkeeping fields;
-5. records the state transition.
-
-The transaction is intentionally short. It does not hold a database row lock while Docker performs a long build.
-
-## Task-start fence
-
-StateManager.lock_and_get_deployment():
-
-- locks Deploy and Service;
-- verifies task ownership;
-- requires Service.QUEUED;
-- transitions Service -> DEPLOYING;
-- transitions Deploy PENDING -> RUNNING;
-- stores execution_task_id and heartbeat.
-
-This is the authoritative handoff from queued intent to executing work.
-
-## Heartbeats and stale workers
-
-StateManager.heartbeat_deploy() updates worker_heartbeat_at only while task ownership still matches.
-
-On terminal transition, execution_task_id is cleared.
-
-The monitor uses a stale-heartbeat threshold to identify workers that may have disappeared. Recovery must prove ownership from external resource identity before mutating runtime resources.
-
-## Fencing rules
-
-A stale worker must not:
-
-- activate its old revision after a newer deployment won;
-- mark the Service RUNNING after a newer deployment became authoritative;
-- remove a runtime resource now owned by a newer deployment;
-- clean a same-name resource merely because it exists.
-
-The system uses task-id ownership, previous_deploy_id checks, deployment labels and row locks together to prevent these cases.
-
-## Cancellation races
-
-The pure cancellation policy in deployments.application.cancellation.py defines:
+These are separate axes:
 
 ~~~text
-PENDING
-  -> immediate CANCELLED
+Service.desired_state
+    = what should exist
 
-RUNNING / ROLLING_BACK
-  -> cancel_requested token
-  -> owning worker stops work and cleans safely
-  -> CANCELLED
+Deploy.status
+    = lifecycle result of one execution attempt
+
+worker ownership
+    = who is allowed to mutate that attempt
+
+RuntimeObservation
+    = what Docker/Swarm currently reports
 ~~~
 
-The final owned state transition re-checks cancellation under the Deploy lock. A cancellation committed first therefore prevents a later success transition.
+Examples:
 
-A pending deployment cancelled before the worker starts can be finalized by the monitor if the Celery task never arrives.
+- desired running + runtime missing -> repair/redeploy may be needed;
+- desired stopped + runtime running -> queue stop;
+- Deploy succeeded + runtime later failed -> reconciliation may mark Service failed;
+- runtime healthy + old revision -> runtime is not necessarily the active desired revision.
 
-## Retry behavior
+## Task-start preconditions/postconditions
 
-The application deploy task has max_retries=3 with a 15-second default delay. It retries only exceptions classified as recoverable.
+### Before
 
-The database deploy task has max_retries=2 with a 20-second default delay and uses the retryability predicate for transient conditions.
+- Service must be eligible/queued;
+- Deploy must be eligible/pending;
+- task id must be current.
 
-The unified exceptions contract intentionally marks deterministic build/configuration/programming failures as non-recoverable by default.
+### After success
 
-Unknown Python exceptions are converted to internal platform failures rather than blindly retried.
+- Service -> DEPLOYING;
+- Deploy -> RUNNING;
+- task id and heartbeat are stored;
+- desired_state is set to running by the execution path.
 
-## Database duplicate delivery
+### After failure
 
-run_db_deploy uses the same Service advisory lock and state gate.
+The state tracker commits a terminal state through the ownership boundary. A stale worker cannot overwrite it.
 
-A duplicate delivery that reaches a Service already being deployed is intentionally prevented from starting a second database mutation.
+### If cancellation is already set
 
-## Base-image concurrency
+A pending deployment can become CANCELLED before runtime work starts.
 
-Base images have their own row lifecycle and task ownership.
+### If ownership is lost
 
-If another deployment already owns BUILDING:
+The worker must stop attempting state/runtime mutation.
 
-- a compatible local image may be used immediately;
-- otherwise the second deployment waits on the shared registry row;
-- it does not create a duplicate build for the same base identity;
-- the wait uses the deployment's dedicated base-image phase budget.
+## Heartbeats
 
-BaseRuntimeImageLease protects a shared artifact from cleanup while a deployment is using it.
+\`heartbeat_deploy()\` refreshes \`worker_heartbeat_at\` only while the stored execution_task_id matches.
 
-## Redis is coordination, not authoritative state
+It is liveness evidence, not ownership itself.
 
-Redis is used for:
+A stale heartbeat does not prove that no worker is still alive; recovery requires external resource identity and a re-check under lock.
 
-- Celery transport/results;
-- monitor scheduler gating;
-- bounded orphan-recovery attempts.
+## Race scenario: deployment A versus deployment B
 
-Redis keys do not replace Deploy/Service state or the state machine.
+1. A acquires Service advisory lock.
+2. B attempts the same lock and is rejected/skipped.
+3. A builds/applies runtime.
+4. If A loses the worker, lock release alone does not grant A future authority.
+5. B can later acquire the Service.
+6. B becomes active.
+7. A's stale completion cannot pass the task-id/active-deploy fence.
+8. Reconciliation may recover or fail A based on proven runtime ownership.
+
+### Critical invariant
+
+A worker that started first does not automatically own the right to activate last.
+
+## Race scenario: cancellation versus completion
+
+If cancellation is committed before final completion:
+
+~~~text
+worker -> terminal transition
+             ^
+             |
+     cancellation row lock
+~~~
+
+The StateManager sees \`cancel_requested\` and redirects the terminal transition to CANCELLED.
+
+The later worker result cannot override it.
+
+## Race scenario: monitor versus worker
+
+The monitor may observe a stale heartbeat.
+
+It must not immediately delete the runtime resource.
+
+For recovery it verifies:
+
+- Deploy still has stale lifecycle state;
+- no newer owner has taken the Deploy/Service;
+- external resource identity proves association with this deployment.
+
+In legacy mode, “container with canonical name exists” is deliberately insufficient.
+
+## Race scenario: application deployment versus base-image renewal
+
+Case:
+
+~~~text
+BaseRuntimeImage = BUILDING
+local image = compatible
+~~~
+
+Application deployment continues using the local image. The renewal owner can continue rebuilding in parallel.
+
+Case:
+
+~~~text
+BaseRuntimeImage = BUILDING
+local image = incompatible/missing
+~~~
+
+Application deployment waits for the shared build rather than creating a duplicate.
+
+The wait is bounded by the base-image phase deadline.
+
+## Base-image worker ownership
+
+The base-image row stores task/owner metadata.
+
+A builder may retry, fail terminally, or be superseded.
+
+Every state update is matched against its task id so an old retry cannot mark a new owner's build as failed.
+
+## Retry boundaries
+
+### Application deploy
+
+The Celery task retries only \`DeploymentError.recoverable == True\`.
+
+Deterministic validation and build errors remain terminal for that attempt.
+
+### Database deploy
+
+Uses bounded retries and \`is_retryable_exception()\` to identify transient infrastructure conditions.
+
+### Base image
+
+Has its own task retry policy and lifecycle/ownership metadata.
+
+### Why not “retry everything”
+
+A bad Dockerfile, invalid state transition, unsupported runtime or programming bug is not made safer by repeating it.
+
+## Cancellation contract
+
+**Policy:** \`application/cancellation.py\`
+
+**Persistence:** \`infrastructure/django_cancellation.py\`
+
+- pending -> immediate terminal cancellation;
+- running/rolling back -> set cancellation token and let owner stop/clean;
+- terminal/other state -> preserve idempotent historical behavior.
+
+The runtime cleanup is conditional on ownership.
 
 ## What this layer must NOT do
 
 Do not:
 
-- hold DB row locks across long Docker operations;
-- use Redis lock presence as authoritative deployment ownership;
-- retry every DeploymentError;
-- bypass StateManager for normal lifecycle writes;
-- let a stale worker perform cleanup after ownership is lost;
-- make tenant configuration select queues or worker concurrency;
-- add a second independent lifecycle state machine.
+- hold a DB row lock over Docker build/runtime;
+- use Redis lock state as authoritative ownership;
+- create a second state machine;
+- make the monitor the owner of ordinary deployment cleanup;
+- retry based only on “exception happened”;
+- clear task ownership before terminal cleanup semantics are safe;
+- let tenant configuration choose worker queue/concurrency.
+
+## How to modify this layer
+
+- changing transition legality -> state_machine + state tests;
+- changing ownership -> locks + fencing tests;
+- changing retry semantics -> task code + common retry/exception tests;
+- changing cancellation -> pure policy first, then Django gateway, then runtime cleanup;
+- changing queue topology -> settings + Compose + queue contract tests.
 
 ## Related code
 
-- src/config/settings.py
-- compose.yaml
-- src/deployments/celery/tasks.py
-- src/deployments/celery/schedules.py
-- src/deployments/celery/services/deploy_service.py
-- src/deployments/core/state/locks.py
-- src/deployments/core/state/manager.py
-- src/deployments/common/state_machine.py
-- src/deployments/common/retry.py
-- src/deployments/application/cancellation.py
+- \`src/config/settings.py\`
+- \`compose.yaml\`
+- \`src/deployments/celery/tasks.py\`
+- \`src/deployments/celery/schedules.py\`
+- \`src/deployments/celery/services/deploy_service.py\`
+- \`src/deployments/celery/services/stop_service.py\`
+- \`src/deployments/core/state/locks.py\`
+- \`src/deployments/core/state/manager.py\`
+- \`src/deployments/common/state_machine.py\`
+- \`src/deployments/common/retry.py\`
+- \`src/deployments/application/cancellation.py\`
+- \`src/deployments/application/context.py\`

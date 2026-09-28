@@ -2,184 +2,276 @@
 
 ## Purpose
 
-Keep execution diagnostics and safety-sensitive cleanup in one place so a failure can be traced from worker log to Deploy state to runtime resource.
+These concerns cross the main lifecycle but have different responsibilities. The architecture keeps evidence production, readiness, rollback and destructive cleanup separate so a failure can be diagnosed without destroying the last known-good state.
 
-## Event pipeline
+## Event path
 
 ~~~text
-DeploymentOrchestrator / DBDeployer
-          |
-          v
+orchestrator / DBDeployer
+       |
+       v
 DeploymentLogger
-          |
-          v
-DBAndChannelEventSink
-      |        |
-      v        v
- DeployLog   Deploy row/progress
-      |
-      v
-Channels group deploy_<id>
-      |
-      v
-DeploymentConsumer / UI
+       |
+       v
+DjangoDeploymentState / DBAndChannelEventSink
+       |
+       +--> DeployLog database
+       +--> Deploy progress/stage/status
+       +--> Channels group deploy_<id>
 ~~~
 
 ## DeploymentLogger
 
-deployments.core.deployment_logger.DeploymentLogger emits DeploymentEvent values containing:
+**Path:** \`core/deployment_logger.py\`
 
-- stage;
-- message;
-- level;
-- progress;
-- structured details.
+### Called by
 
-It writes to the Python logger and optionally calls an EventSink.
+Orchestrator, runtime/build components and database deployer via an EventSink.
 
-Because the default Celery formatter may render only message text, DeploymentLogger renders high-signal diagnostic fields into the worker log message too.
+### Contract
 
-## Event sink
+Create a DeploymentEvent containing stage/message/level/progress/details and:
 
-DBAndChannelEventSink in core/sink.py:
+- write a Python log entry;
+- forward to an optional sink.
 
-1. writes DeployLog;
-2. synchronizes Deploy progress, stage and status message;
-3. broadcasts to the Channels group for the deployment UI.
+### Why diagnostics are rendered into log text
 
-The sink is best-effort. A sink/database/channel failure must not become a false deployment failure.
+The Celery worker formatter may display only \`message\`. High-signal Docker fields are therefore rendered in the message as well as structured sink details.
 
-Terminal state transitions from the sink still pass through StateManager.
+### Failure behavior
 
-Low-value Docker build stream noise is filtered/throttled for persistence and WebSocket delivery while warnings/errors and terminal events are preserved.
+Sink exceptions are swallowed/sampled. Observability failure must not become a runtime failure.
 
-## Deployment log database
+## DBAndChannelEventSink
 
-DeployLog is designed for the separate deployment-log database.
+**Path:** \`core/sink.py\`
 
-It stores deployment/service ids as scalar fields so cross-database foreign-key constraints are not required.
+### Responsibilities
 
-compose.yaml defines deployment-log-db as a separate PostgreSQL service.
+1. persist DeployLog;
+2. update Deploy stage/progress/status message;
+3. broadcast to the Channels deployment group.
 
-## Health versus readiness
+### Preconditions
 
-These concepts must stay distinct.
+Deployment id is known.
 
-**Runtime readiness** means the runtime resource satisfies the backend's ready invariant.
+### Postcondition
 
-**Application health** means the application/container health policy reports healthy.
+Best-effort evidence delivery. It is not the authority for external runtime success.
 
-In Swarm mode, runtime readiness currently requires a running task for each enabled process. The legacy container runtime can additionally use DockerHealthChecker HTTP/path checks.
+Terminal status changes use StateManager.
 
-“Container exists” is not equivalent to “deployment is ready”.
+### What it must not do
 
-## Health failure
+It must not make “the UI received the event” a prerequisite for deployment completion.
 
-A readiness or health timeout should preserve:
+## DeployLog storage boundary
 
-- deployment stage;
-- runtime resource identity;
-- latest task/container status;
-- health path/expected status when configured;
-- underlying Docker/application error when available.
+DeployLog uses scalar Deploy/Service ids because logs may live in a separate PostgreSQL database.
 
-A health failure after image build is not evidence that the image build itself failed.
+The Compose stack contains \`deployment-log-db\`.
 
-## Rollback ownership
+Do not introduce cross-database Django foreign keys into the log store.
 
-Rollback differs by runtime mode.
+## Health and readiness
 
-### Legacy container runtime
+### Runtime readiness
 
-DeploymentOrchestrator can capture a ContainerSnapshot before replacing the previous resource.
+Backend-specific statement that infrastructure has become usable.
 
-The replacement sequence retains the old container long enough to restore it if the new release cannot become ready.
+### Application readiness
 
-On rollback:
+Application-level condition, such as:
 
-1. stop/remove the replacement as needed;
-2. restore the previous owned resource;
-3. explicitly record rollback success/failure.
+- Docker HEALTHCHECK;
+- HTTP endpoint returning an expected status.
 
-Rollback failure is not treated as successful deployment cleanup.
+### Legacy container health
 
-### Runtime-contract seam
+\`DockerHealthChecker.wait_until_healthy()\`:
 
-The framework-neutral lifecycle executor can invoke RuntimeContract.rollback() using an explicit rollback_plan.
+- repeatedly checks container state;
+- may require a Docker health status;
+- can require an application HTTP path;
+- requires at least three consecutive running polls by default when no healthcheck/path is available.
 
-This is a migration seam. The current main application path still uses concrete DeploymentOrchestrator rollback mechanics.
+### Important non-equivalence
 
-## Activation is before destructive cleanup
+~~~text
+container exists
+   !=
+container ready
+   !=
+application ready
+   !=
+revision active
+~~~
 
-The safety boundary is:
+Do not use existence as success.
+
+## How readiness is used
+
+**Caller:** orchestrator.
+
+**Precondition:** runtime resource has been applied.
+
+**Output:** readiness evidence or HealthCheckError/RuntimeOperationError.
+
+**Next:** activation.
+
+**Modification rule:** change readiness semantics in health/runtime code and update readiness contract tests; do not weaken activation to compensate.
+
+## Swarm readiness
+
+Current Swarm runtime reports ready when desired and running replica counts satisfy the backend invariant.
+
+A task failure/rejection produces a runtime error with task details.
+
+Application-level HTTP semantics are separate.
+
+## Rollback
+
+### Legacy container path
+
+**Path:** \`core/rollback.py\`
+
+Before replacing an active container, the orchestrator can capture \`ContainerSnapshot\`.
+
+The snapshot preserves enough information to restore the previous runtime resource:
+
+- image;
+- environment;
+- networks;
+- volumes;
+- read-only state;
+- command/entrypoint;
+- runtime metadata/labels;
+- resource settings.
+
+### Failure flow
+
+~~~text
+previous resource
+    -> snapshot
+    -> replacement
+    -> start
+    -> readiness fails
+    -> rollback restore
+~~~
+
+Rollback errors are surfaced as \`RollbackError\`.
+
+### New lifecycle contract path
+
+\`DeploymentLifecycleExecutor\` can call \`RuntimeContract.rollback()\` with an explicit rollback_plan.
+
+This is a migration seam, not the only current production rollback path.
+
+## Why rollback is before terminal success
+
+A runtime that failed readiness is not a new active release.
+
+When rollback succeeds, the system can report failure plus rollback performed.
+
+When rollback fails, it reports failure plus rollback_failed and preserves diagnostics for operator intervention.
+
+## Cleanup
+
+**Path:** \`core/cleanup.py\`
+
+### Owns
+
+Explicitly owned deployment resource cleanup.
+
+### Does not own
+
+Host-wide Docker garbage collection.
+
+\`prune_dangling_images()\` intentionally returns without global prune.
+
+### Why
+
+The deployment worker shares the Docker daemon with unrelated services. It cannot prove ownership of arbitrary dangling images.
+
+## Cleanup ordering
+
+Safe sequence:
 
 ~~~text
 build
-  -> apply runtime
-  -> readiness
-  -> activate revision
-  -> remove old resources
+ -> apply
+ -> readiness
+ -> activate
+ -> remove old owned release
+ -> release leases
 ~~~
 
-Before activation, cleanup must not destroy the only known-good release.
+Before activation, preserve the previous known-good release.
 
-After activation, old managed resources can be removed.
+## Persistent volume cleanup
 
-## Cleanup manager
+A failed application container is not sufficient reason to delete persistent data.
 
-CleanupManager can remove explicitly owned failed containers/images.
+Volume release/reclamation is separately scheduled through \`reclaim_released_volumes\`.
 
-Its prune_dangling_images() intentionally does not perform host-wide Docker pruning. A deployment worker shares the daemon with unrelated workloads, so global garbage collection is not ownership-safe.
+Database \`force_reinit\` is explicit destructive behavior and is handled by the database deployment path.
 
-Host-wide Docker GC belongs to an operator-managed maintenance action.
+## Cancellation cleanup
 
-## Persistent volume safety
+For the newer lifecycle executor:
 
-Persistent volumes are separate resources with ownership/accounting.
+- cancellation checks ownership;
+- if a runtime handle exists and ownership remains current, runtime stop/remove may run;
+- if ownership is lost, cleanup is skipped to avoid deleting a newer owner's resource.
 
-A failed application deploy does not automatically imply that its persistent volume may be deleted.
+The current concrete orchestrator also checks cancellation between stages.
 
-Released-volume reclamation is a separate operations-queue task.
+## Failure evidence contract
 
-Database force-reinit is a distinct explicit destructive operation and is documented in 10-database-deployments.md.
+At terminal failure, preserve enough data to identify:
 
-## Failure artifact preservation
+- Deploy/revision;
+- lifecycle stage;
+- application/base image reference;
+- runtime resource identity;
+- underlying error/code/category;
+- rollback status;
+- relevant container/task state.
 
-A failed deployment should retain enough evidence to answer:
+### Why evidence precedes broad cleanup
 
-- which deployment/revision failed;
-- which phase failed;
-- which base/application image was selected;
-- what runtime resource was affected;
-- whether rollback happened;
-- whether rollback succeeded;
-- what the first meaningful Docker/application error was.
+A clean filesystem with no diagnostic log is not operationally recoverable.
 
-Do not design failure cleanup in a way that destroys the only diagnostic artifact before the event/state is recorded.
+## Problem navigation
 
-## WebSocket behavior
-
-The event sink throttles duplicate/non-critical build events but sends errors and terminal events immediately.
-
-Channel/database delivery errors are logged and ignored by the deployment execution path.
+| Symptom | Start | Why |
+|---|---|---|
+| UI has no deploy logs | sink + log DB routing | event delivery/storage |
+| worker log is generic | DeploymentLogger | diagnostic rendering |
+| container running but deploy fails health | health checker | readiness, not image |
+| new resource fails and old disappeared | rollback/orchestrator | cleanup ordering |
+| volume vanished after failure | volumes + cleanup | persistence is separately owned |
+| stale worker cleanup is dangerous | lifecycle + monitor | ownership fence |
 
 ## What this layer must NOT do
 
 Do not:
 
-- use UI logging success as proof of deployment success;
-- globally prune the Docker daemon from a deployment worker;
-- delete persistent volumes solely because a container failed;
-- treat a healthy old resource as proof that the new revision was activated;
-- make event delivery a prerequisite for lifecycle completion.
+- equate event delivery with execution success;
+- globally prune Docker from a deployment;
+- delete persistent data because a release failed;
+- declare activation before readiness;
+- silently swallow rollback failure.
 
 ## Related code
 
-- src/deployments/core/deployment_logger.py
-- src/deployments/core/sink.py
-- src/deployments/core/health.py
-- src/deployments/core/rollback.py
-- src/deployments/core/cleanup.py
-- src/deployments/core/volumes.py
-- src/deployments/core/volume_storage.py
-- src/deployments/celery/tasks.py
+- \`src/deployments/core/deployment_logger.py\`
+- \`src/deployments/core/sink.py\`
+- \`src/deployments/core/health.py\`
+- \`src/deployments/core/rollback.py\`
+- \`src/deployments/core/cleanup.py\`
+- \`src/deployments/core/volumes.py\`
+- \`src/deployments/core/volume_storage.py\`
+- \`src/deploy/deployment_state.py\`
