@@ -382,32 +382,48 @@ class BaseRuntimeImageAdmin(admin.ModelAdmin):
         count = queryset.update(enabled=False, status=BaseRuntimeImage.Status.DISABLED)
         self.message_user(request, f"Disabled {count} base image(s).")
 
+    @staticmethod
+    def _delete_safe(obj) -> tuple[bool, str]:
+        if obj.status == BaseRuntimeImage.Status.BUILDING or obj.build_task_id:
+            return False, "An active base-image build is using this registry row."
+        if obj.leases.filter(released_at__isnull=True).exists():
+            return False, "An active deployment lease still references this base image."
+        return True, ""
+
     @admin.action(description="Remove Docker image for selected rows")
     def delete_docker_images(self, request, queryset):
         from deployments.core.manager.image_manager import Image
         count = 0
         for obj in queryset:
+            safe, reason = self._delete_safe(obj)
+            if not safe:
+                self.message_user(request, f"{obj.image_ref}: {reason}", level=messages.WARNING)
+                continue
             try:
                 Image.remove_by_name(obj.image_ref)
-            except Exception:
-                self.message_user(request, f"Failed to remove {obj.image_ref}.", level=messages.ERROR)
+                BaseRuntimeImage.objects.filter(pk=obj.pk).update(
+                    status=BaseRuntimeImage.Status.PENDING,
+                    image_id="", image_digest="", updated_at=timezone.now(),
+                )
+            except Exception as exc:
+                self.message_user(request, f"Failed to remove {obj.image_ref}: {exc}", level=messages.ERROR)
                 continue
             count += 1
         self.message_user(request, f"Removed Docker image for {count} row(s).")
 
     def delete_model(self, request, obj):
+        safe, reason = self._delete_safe(obj)
+        if not safe:
+            self.message_user(request, f"Cannot delete {obj.image_ref}: {reason}", level=messages.ERROR)
+            return
         try:
             from deployments.core.manager.image_manager import Image
             Image.remove_by_name(obj.image_ref)
-        except Exception:
-            self.message_user(request, f"Could not remove Docker image {obj.image_ref}; removing registry record anyway.", level=messages.WARNING)
+        except Exception as exc:
+            self.message_user(request, f"Could not remove Docker image {obj.image_ref}: {exc}", level=messages.ERROR)
+            return
         super().delete_model(request, obj)
 
     def delete_queryset(self, request, queryset):
-        from deployments.core.manager.image_manager import Image
         for obj in queryset:
-            try:
-                Image.remove_by_name(obj.image_ref)
-            except Exception:
-                self.message_user(request, f"Could not remove Docker image {obj.image_ref}.", level=messages.WARNING)
-        super().delete_queryset(request, queryset)
+            self.delete_model(request, obj)
