@@ -135,3 +135,45 @@ def test_definition_change_preserves_last_known_good_image_identity():
     text = (ROOT / "deploy/base_images.py").read_text(encoding="utf-8")
     section = text.split("def ensure_base_images", 1)[1]
     assert "Keep image_id/image_digest as the last-known-good local" in section
+def test_unlabelled_local_base_image_is_usable_as_operator_fallback_when_not_ready():
+    from types import SimpleNamespace
+
+    from deploy.base_images import _can_use_last_known_good_local_base_image
+
+    row = SimpleNamespace(
+        image_id="",
+        logical_runtime="php",
+        runtime_version="8.4",
+        variant="apache",
+        status="failed",
+        rebuild_requested=True,
+    )
+    local_image = SimpleNamespace(id="sha256:old", attrs={"Config": {"Labels": {}}})
+
+    assert _can_use_last_known_good_local_base_image(
+        row,
+        local_image=local_image,
+        expected_runtime="php:8.4:apache",
+    )
+
+
+def test_ready_row_does_not_accept_unverified_local_base_image():
+    from types import SimpleNamespace
+
+    from deploy.base_images import _can_use_last_known_good_local_base_image
+
+    row = SimpleNamespace(
+        image_id="",
+        logical_runtime="php",
+        runtime_version="8.4",
+        variant="apache",
+        status="ready",
+        rebuild_requested=False,
+    )
+    local_image = SimpleNamespace(id="sha256:old", attrs={"Config": {"Labels": {}}})
+
+    assert not _can_use_last_known_good_local_base_image(
+        row,
+        local_image=local_image,
+        expected_runtime="php:8.4:apache",
+    )
