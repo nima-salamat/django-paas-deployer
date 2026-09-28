@@ -874,7 +874,9 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
     if not policy["enabled"]:
         return {}
 
+    from django.db import IntegrityError
     from deployments.common.resource_policy import resolve_build_policy
+
     effective_build_policy = resolve_build_policy(build_policy)
     try:
         release_stale_base_image_leases()
@@ -900,60 +902,88 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                 ).first()
             )
             if row is None:
-                row = BaseRuntimeImage.objects.create(
-                    logical_runtime=spec.logical_runtime,
-                    runtime_version=spec.version,
-                    variant=spec.variant,
-                    architecture="",
-                    docker_host=host,
-                    source_image=spec.source_image,
-                    image_repository=spec.repository,
-                    image_tag=spec.tag,
-                    image_ref=spec.image_ref,
-                    definition_fingerprint=fingerprint,
-                    status=BaseRuntimeImage.Status.PENDING,
-                    enabled=True,
-                    auto_build=True,
-                )
-            else:
-                changed = False
-                definition_changed = row.definition_fingerprint != fingerprint
+                try:
+                    with transaction.atomic():
+                        row = BaseRuntimeImage.objects.create(
+                            logical_runtime=spec.logical_runtime,
+                            runtime_version=spec.version,
+                            variant=spec.variant,
+                            architecture="",
+                            docker_host=host,
+                            source_image=spec.source_image,
+                            image_repository=spec.repository,
+                            image_tag=spec.tag,
+                            image_ref=spec.image_ref,
+                            definition_fingerprint=fingerprint,
+                            status=BaseRuntimeImage.Status.PENDING,
+                            enabled=True,
+                            auto_build=True,
+                        )
+                except IntegrityError:
+                    # Another deployment won the unique identity race. The
+                    # outer transaction remains usable because the create was
+                    # isolated inside a savepoint.
+                    row = BaseRuntimeImage.objects.select_for_update().get(
+                        logical_runtime=spec.logical_runtime,
+                        runtime_version=spec.version,
+                        variant=spec.variant,
+                        architecture="",
+                        docker_host=host,
+                    )
+            if not row.enabled:
+                raise RuntimeError(f"Base runtime image {key} is disabled by an administrator.")
+
+            definition_changed = row.definition_fingerprint != fingerprint
+            if row.status == BaseRuntimeImage.Status.BUILDING:
+                if definition_changed:
+                    pending = dict(row.last_error_details or {})
+                    pending.update({
+                        "rebuild_pending": True,
+                        "pending_definition_fingerprint": fingerprint,
+                        "pending_image_ref": spec.image_ref,
+                        "pending_source_image": spec.source_image,
+                        "pending_image_repository": spec.repository,
+                        "pending_image_tag": spec.tag,
+                    })
+                    row.rebuild_requested = True
+                    row.rebuild_requested_at = timezone.now()
+                    row.last_error_details = pending
+                    row.save(update_fields=[
+                        "rebuild_requested", "rebuild_requested_at",
+                        "last_error_details", "updated_at",
+                    ])
+            elif definition_changed or any(
+                getattr(row, field) != value
                 for field, value in {
                     "source_image": spec.source_image,
                     "image_repository": spec.repository,
                     "image_tag": spec.tag,
                     "image_ref": spec.image_ref,
-                    "definition_fingerprint": fingerprint,
-                }.items():
-                    if getattr(row, field) != value:
-                        setattr(row, field, value)
-                        changed = True
-                if row.status == BaseRuntimeImage.Status.BUILDING:
-                    if definition_changed:
-                        # Keep the active builder's ownership/fingerprint intact.
-                        # Mark a rebuild for the next claim instead of racing it.
-                        row.rebuild_requested = True
-                        row.save(update_fields=["rebuild_requested", "updated_at"])
-                elif definition_changed or changed:
-                    row.status = BaseRuntimeImage.Status.PENDING
-                    row.rebuild_requested = True if definition_changed else row.rebuild_requested
-                    row.image_id = "" if definition_changed else row.image_id
-                    row.image_digest = "" if definition_changed else row.image_digest
+                }.items()
+            ):
+                row.source_image = spec.source_image
+                row.image_repository = spec.repository
+                row.image_tag = spec.tag
+                row.image_ref = spec.image_ref
+                row.definition_fingerprint = fingerprint
+                row.status = BaseRuntimeImage.Status.PENDING
+                row.rebuild_requested = bool(definition_changed)
+                row.rebuild_requested_at = timezone.now() if definition_changed else row.rebuild_requested_at
+                if definition_changed:
+                    row.image_id = ""
+                    row.image_digest = ""
                     row.last_error = ""
                     row.last_error_details = {}
-                    row.save(update_fields=[
-                        "source_image", "image_repository", "image_tag",
-                        "image_ref", "definition_fingerprint", "status",
-                        "rebuild_requested", "image_id", "image_digest",
-                        "last_error", "last_error_details", "updated_at",
-                    ])
-
-            if not row.enabled:
-                raise RuntimeError(f"Base runtime image {key} is disabled by an administrator.")
+                row.save(update_fields=[
+                    "source_image", "image_repository", "image_tag", "image_ref",
+                    "definition_fingerprint", "status", "rebuild_requested",
+                    "rebuild_requested_at", "image_id", "image_digest",
+                    "last_error", "last_error_details", "updated_at",
+                ])
 
             local_exists = _docker_image_exists(row.image_ref)
             local_compatible = False
-            if row.enabled and not row.rebuild_requested and local_exists:
+            if not row.rebuild_requested and local_exists:
                 try:
                     local_image = get_docker_client().images.get(row.image_ref)
                     labels = ((getattr(local_image, "attrs", {}) or {}).get("Config") or {}).get("Labels") or {}
@@ -965,6 +995,7 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                 policy["auto_register_existing"]
                 and row.status != BaseRuntimeImage.Status.BUILDING
                 and local_compatible
+                and row.definition_fingerprint == fingerprint
                 and _mark_local_image_ready(row, expected_fingerprint=fingerprint)
             ):
                 result[logical_key(spec)] = row.image_ref
@@ -976,9 +1007,7 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                         f"Registered compatible local base image {row.image_ref}.",
                         progress=17,
                         details={
-                            "image": row.image_ref,
-                            "runtime": key,
-                            "cache": "adopted",
+                            "image": row.image_ref, "runtime": key, "cache": "adopted",
                             "definition_fingerprint": fingerprint,
                         },
                     )
@@ -990,11 +1019,8 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                     f"Base image resolution: runtime={key}, image={row.image_ref}, status={row.status}, docker_local={local_exists}, rebuild_requested={row.rebuild_requested}.",
                     progress=17,
                     details={
-                        "image": row.image_ref,
-                        "runtime": key,
-                        "status": row.status,
-                        "docker_local": local_exists,
-                        "rebuild_requested": bool(row.rebuild_requested),
+                        "image": row.image_ref, "runtime": key, "status": row.status,
+                        "docker_local": local_exists, "rebuild_requested": bool(row.rebuild_requested),
                         "definition_fingerprint": fingerprint,
                     },
                 )
@@ -1011,6 +1037,9 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                     )
                 continue
 
+            if deployment_id:
+                mark_base_image_phase_started(deployment_id)
+
             effective_auto_build = bool(row.auto_build and policy["auto_build"])
             if not effective_auto_build and not local_exists:
                 raise RuntimeError(
@@ -1023,9 +1052,6 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                 if row.build_started_at:
                     age_seconds = max(0, (timezone.now() - row.build_started_at).total_seconds())
                 if age_seconds > _base_image_wait_timeout_seconds(None) and not local_exists:
-                    # Fence the abandoned Celery attempt before another owner
-                    # is allowed to claim this row. The old task will see a
-                    # different build_task_id and return without mutating state.
                     previous_task_id = str(row.build_task_id or "")
                     recovery_owner = f"base-recovery-{uuid.uuid4()}"
                     owner = True
@@ -1035,10 +1061,8 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                     row.build_owner_deployment_id = ""
                     row.last_error = "Recovered stale base-image build."
                     row.last_error_details = {
-                        "stage": "base_image",
-                        "retry_pending": False,
-                        "recovered_stale": True,
-                        "superseded_task_id": previous_task_id,
+                        "stage": "base_image", "retry_pending": False,
+                        "recovered_stale": True, "superseded_task_id": previous_task_id,
                     }
                     row.save(update_fields=[
                         "status", "build_started_at", "build_task_id",
@@ -1055,11 +1079,24 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                 row.build_started_at = timezone.now()
                 row.build_completed_at = None
                 row.last_error = ""
-                row.last_error_details = {}
+                row.last_error_details = dict(row.last_error_details or {})
                 row.save(update_fields=["status", "build_started_at", "build_completed_at", "last_error", "last_error_details", "updated_at"])
 
         if not owner:
-            if _wait_for_existing_build(row_id, image_ref, timeout=_base_image_wait_timeout_seconds(deployment_id)):
+            if logger_sink:
+                logger_sink.info(
+                    "base_image",
+                    f"Base runtime image {image_ref} is currently being built by another worker. Waiting for the shared build to complete.",
+                    progress=17,
+                    details={
+                        "image": image_ref, "runtime": key, "cache": "waiting",
+                        "waiting_for_existing_build": True,
+                        "owner_task_id": str(row.build_task_id or ""),
+                        "build_started_at": row.build_started_at.isoformat() if row.build_started_at else None,
+                    },
+                )
+            timeout = _base_image_wait_timeout_seconds(deployment_id)
+            if _wait_for_existing_build(row_id, image_ref, timeout=timeout):
                 current = BaseRuntimeImage.objects.filter(pk=row_id).values(
                     "status", "definition_fingerprint", "rebuild_requested"
                 ).first()
@@ -1076,12 +1113,9 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                         logger_sink.info(
                             "base_image",
                             f"Waited for concurrent base image build {image_ref}; cache hit.",
-                            progress=18,
-                            details={"image": image_ref, "runtime": key, "cache": "waited"},
+                            progress=18, details={"image": image_ref, "runtime": key, "cache": "waited"},
                         )
                     continue
-                # Definition changed while the previous builder was active.
-                # Re-enter the claim path instead of consuming its old image.
                 continue
             current = BaseRuntimeImage.objects.filter(pk=row_id).values(
                 "status", "image_ref", "last_error", "last_error_details"
@@ -1089,12 +1123,13 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
             if current and current["status"] == BaseRuntimeImage.Status.FAILED:
                 _raise_base_image_failure(image_ref, current, waiting_for_concurrent=True)
             raise BaseImageBuildError(
-                f"Base image wait timed out: {image_ref}.",
+                f"The required base runtime image {image_ref} could not become ready within the base-image build/wait limit.",
                 stage="base_image",
                 details={
-                    "stage": "base_image",
-                    "base_image_ref": image_ref,
+                    "stage": "base_image", "base_image_ref": image_ref,
                     "resource_policy_source": "server_owned",
+                    "timeout_phase": "base_image",
+                    "timeout_minutes": round(timeout / 60, 2),
                     "retry_pending": bool((current or {}).get("last_error_details", {}).get("retry_pending")),
                     "builder_state": (current or {}).get("status"),
                     "docker_api_reached": (current or {}).get("last_error_details", {}).get("docker_api_reached"),
@@ -1108,11 +1143,8 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                 f"Queueing dedicated base-image build {spec.image_ref}.",
                 progress=17,
                 details={
-                    "image": spec.image_ref,
-                    "runtime": key,
-                    "cache": "miss",
-                    "source_image": spec.source_image,
-                    "resource_policy_source": "server_owned",
+                    "image": spec.image_ref, "runtime": key, "cache": "miss",
+                    "source_image": spec.source_image, "resource_policy_source": "server_owned",
                     "resource_policy_complete": True,
                 },
             )
@@ -1132,152 +1164,40 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                 task_id=task_id,
             )
             task_dispatched = True
-
-            wait_timeout = _base_image_wait_timeout_seconds(deployment_id)
-            if not _wait_for_existing_build(row.pk, spec.image_ref, timeout=wait_timeout):
+            timeout = _base_image_wait_timeout_seconds(deployment_id)
+            if not _wait_for_existing_build(row.pk, spec.image_ref, timeout=timeout):
                 current = BaseRuntimeImage.objects.filter(pk=row.pk).values(
                     "status", "image_ref", "last_error", "last_error_details"
                 ).first()
                 if current and current["status"] == BaseRuntimeImage.Status.FAILED:
                     _raise_base_image_failure(spec.image_ref, current)
                 raise BaseImageBuildError(
-                    f"Base image wait timed out: {spec.image_ref}.",
+                    f"The required base runtime image {spec.image_ref} could not become ready within the base-image build/wait limit.",
                     stage="base_image",
                     details={
-                        "stage": "base_image",
-                        "base_image_ref": spec.image_ref,
+                        "stage": "base_image", "base_image_ref": spec.image_ref,
                         "resource_policy_source": "server_owned",
+                        "timeout_phase": "base_image",
+                        "timeout_minutes": round(timeout / 60, 2),
                         "retry_pending": bool((current or {}).get("last_error_details", {}).get("retry_pending")),
-                        "builder_state": (current or {}).get("status"),
-                        "docker_api_reached": (current or {}).get("last_error_details", {}).get("docker_api_reached"),
                     },
                 )
             result[logical_key(spec)] = spec.image_ref
         except BaseImageBuildError:
             raise
         except Exception as exc:
-            current = BaseRuntimeImage.objects.filter(pk=row.pk).values(
-                "status", "image_ref", "last_error", "last_error_details"
-            ).first()
-            # A task-dispatch failure is the only failure this synchronous
-            # owner path is responsible for making terminal; a running task
-            # owns its own retry/final-failure state.
             if task_dispatched:
                 raise
             details = {
-                "stage": "base_image_dispatch",
-                "base_image_ref": spec.image_ref,
-                "resource_policy_source": "server_owned",
-                "retry_pending": False,
-                "docker_api_reached": False,
-                "exception_type": type(exc).__name__,
+                "stage": "base_image_dispatch", "base_image_ref": spec.image_ref,
+                "resource_policy_source": "server_owned", "retry_pending": False,
+                "docker_api_reached": False, "exception_type": type(exc).__name__,
                 "technical_message": str(exc) or type(exc).__name__,
             }
-            BaseRuntimeImage.objects.filter(pk=row.pk).update(
-                status=BaseRuntimeImage.Status.FAILED,
-                build_task_id="",
-                build_owner_deployment_id="",
-                last_error=str(exc),
-                last_error_details=details,
-                build_completed_at=timezone.now(),
-                updated_at=timezone.now(),
+            BaseRuntimeImage.objects.filter(pk=row.pk, status=BaseRuntimeImage.Status.BUILDING, build_task_id=task_id).update(
+                status=BaseRuntimeImage.Status.PENDING, build_task_id="", build_owner_deployment_id="",
+                last_error=str(exc), last_error_details=details,
+                build_completed_at=timezone.now(), updated_at=timezone.now(),
             )
-            raise BaseImageBuildError(
-                f"Base image task could not be queued: {spec.image_ref}. {exc}",
-                stage="base_image_dispatch",
-                technical_message=str(exc) or type(exc).__name__,
-                details=details,
-            )
+            raise
     return result
-
-def release_stale_base_image_leases(max_age_hours: int = 24) -> int:
-    """Release leases left behind by workers that died without running finally."""
-    from deploy.models import Deploy, DeploymentStatusChoices
-
-    cutoff = timezone.now() - __import__("datetime").timedelta(hours=max(1, max_age_hours))
-    terminal = {
-        DeploymentStatusChoices.SUCCEEDED,
-        DeploymentStatusChoices.FAILED,
-        DeploymentStatusChoices.ROLLED_BACK,
-        DeploymentStatusChoices.CANCELLED,
-    }
-    count = 0
-    stale = BaseRuntimeImageLease.objects.filter(
-        released_at__isnull=True,
-        acquired_at__lt=cutoff,
-    ).only("id", "deployment_id")
-    for lease in stale.iterator():
-        deploy = Deploy.objects.filter(pk=lease.deployment_id).only("status").first()
-        if deploy is not None and deploy.status not in terminal:
-            continue
-        updated = BaseRuntimeImageLease.objects.filter(
-            pk=lease.pk, released_at__isnull=True
-        ).update(released_at=timezone.now(), updated_at=timezone.now())
-        count += updated
-    if count:
-        logger.warning("Released %d stale base image lease(s).", count)
-    return count
-
-
-def acquire_base_image_leases(image_refs: list[str] | tuple[str, ...], deployment_id: str | None) -> None:
-    if not deployment_id or not image_refs:
-        return
-    refs = sorted({str(ref) for ref in image_refs if ref})
-    if not refs:
-        return
-    for ref in refs:
-        row = BaseRuntimeImage.objects.filter(image_ref=ref).order_by("-updated_at").first()
-        if row is None:
-            continue
-        BaseRuntimeImageLease.objects.get_or_create(
-            base_image=row,
-            deployment_id=str(deployment_id)[:255],
-            defaults={"released_at": None},
-        )
-
-
-def release_base_image_leases(deployment_id: str | None, *, remove_if_unretained: bool = False) -> None:
-    if not deployment_id:
-        return
-    leases = list(BaseRuntimeImageLease.objects.select_related("base_image").filter(
-        deployment_id=str(deployment_id)[:255], released_at__isnull=True
-    ))
-    now = timezone.now()
-    client = None
-    for lease in leases:
-        lease.released_at = now
-        lease.save(update_fields=["released_at", "updated_at"])
-        if not remove_if_unretained:
-            continue
-        try:
-            with transaction.atomic():
-                locked = BaseRuntimeImage.objects.select_for_update().get(pk=lease.base_image.pk)
-                active = BaseRuntimeImageLease.objects.filter(
-                    base_image=locked, released_at__isnull=True
-                ).exists()
-                if active:
-                    continue
-                if client is None:
-                    client = get_docker_client()
-                client.images.remove(locked.image_ref, force=False)
-                locked.status = BaseRuntimeImage.Status.PENDING
-                locked.image_id = ""
-                locked.image_digest = ""
-                locked.save(update_fields=["status", "image_id", "image_digest", "updated_at"])
-                logger.info("Removed unretained base runtime image %s after deployment %s", locked.image_ref, deployment_id)
-        except Exception as exc:
-            logger.warning("Unable to remove unretained base image %s: %s", lease.base_image.image_ref, exc)
-
-
-def logical_key(spec: BaseImageSpec) -> str:
-    if spec.logical_runtime == "php":
-        return "base_image"
-    if spec.logical_runtime == "node":
-        return "node_base_image"
-    if spec.logical_runtime == "nginx":
-        return "nginx_base_image"
-    if spec.logical_runtime == "python":
-        return "base_image"
-    if spec.logical_runtime == "go":
-        return "base_image"
-    return "base_image"
