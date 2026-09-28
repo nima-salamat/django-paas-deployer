@@ -780,9 +780,16 @@ def _reconcile_active_deploy_swarm(deploy: Deploy) -> None:
     try:
         state = runtime.inspect_service(service_name)
     except Exception as exc:
+        # An unavailable Docker API is an observation failure, not evidence
+        # that the application runtime is gone. Never mark the deployment
+        # terminal solely because this monitor tick could not inspect Swarm.
         logger.warning("Failed to inspect Swarm service '%s': %s", service_name, exc)
-        state = None
-    running = bool(state and state.replicas_running == 1)
+        return
+    if state is None:
+        # The service can legitimately be missing during a user-driven stop or
+        # an in-flight replacement. The lifecycle worker owns such mutations.
+        return
+    running = bool(state.replicas_running == 1)
     now = timezone.now()
     with transaction.atomic():
         locked = Deploy.objects.select_for_update().select_related("service").filter(pk=deploy.pk).first()
