@@ -1469,13 +1469,9 @@ def set_deploy_apiview(request):
 
             # Revision is runtime authority; selected_deploy is compatibility state.
             deploy_item = ensure_revision_for_deploy(deploy_item)
-            Service.objects.filter(pk=service_item.pk).update(
-                active_revision_id=deploy_item.revision_id,
-                selected_deploy_id=deploy_item.pk,
-                selected_deploy_at=timezone.now(),
-            )
-            service_item.active_revision_id = deploy_item.revision_id
-            service_item.selected_deploy_id = deploy_item.pk
+            from services.revisioning import activate_revision_locked
+            activate_revision_locked(service_item, deploy_item.revision_id)
+            service_item.refresh_from_db(fields=["active_revision", "selected_deploy"])
 
     except Service.DoesNotExist:
         return Response(
