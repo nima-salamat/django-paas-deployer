@@ -1,56 +1,59 @@
 # PassDeployer Documentation
 
-This directory is the canonical repository documentation. The Django package at \`src/docs/\` is product code and is intentionally separate.
+This directory is the canonical engineering documentation for the repository. The product documentation application at src/docs/ is separate application data.
 
-## Deployment architecture entry point
+## Start here
 
-**For any deployment bug, feature or architectural change, read [documentation/deployments/README.md](deployments/README.md) before opening \`src/deployments/\`.**
+- [System architecture](architecture.md) — cross-app and control-plane overview.
+- [Application architecture map](apps/README.md) — canonical Django app boundaries and problem navigation.
+- [Control plane](control-plane.md) — HTTP/Celery/runtime flow.
+- [Installation](installation.md), [Development](development.md), [Configuration](configuration.md).
 
-The deployments subtree is the living architectural memory of the deployment engine. It records current production paths, migration seams, ownership, contracts, state, concurrency, recovery and test invariants.
+## Django applications
 
-## Guides
+Every first-party Django application has a canonical architectural entry point under [apps/](apps/):
 
-- [Architecture](architecture.md)
-- [Installation](installation.md)
-- [Development](development.md)
-- [Configuration](configuration.md)
-- [Control plane](control-plane.md)
+- [users](apps/users/README.md)
+- [auth_users](apps/auth_users/README.md)
+- [services](apps/services/README.md)
+- [plans](apps/plans/README.md)
+- [deploy](apps/deploy/README.md)
+- [deployments](apps/deployments/README.md)
+- [logs](apps/logs/README.md)
+- [app_catalog](apps/app_catalog/README.md)
+- [messenger](apps/messenger/README.md)
+- [tickets](apps/tickets/README.md)
+- [custom_emails](apps/custom_emails/README.md)
+- [docs](apps/docs/README.md)
+- [core](apps/core/README.md)
+- [cms](apps/cms/README.md)
 
-## Deployments
+Read the app README before changing that app. Follow its models/api/serializers/background/tests links according to the task.
 
-- [Deployments architecture manual](deployments/README.md)
-- [System model](deployments/01-system-model.md)
-- [Request to plan](deployments/02-request-to-plan.md)
-- [Execution lifecycle](deployments/03-execution-lifecycle.md)
-- [Build and platforms](deployments/04-build-and-platforms.md)
-- [Runtime and Swarm](deployments/05-runtime-and-swarm.md)
-- [Workers, concurrency and state](deployments/06-workers-concurrency-and-state.md)
-- [Reconciliation and recovery](deployments/07-reconciliation-and-recovery.md)
-- [Base images](deployments/08-base-images.md)
-- [Logs, health, rollback and cleanup](deployments/09-logs-health-rollback-cleanup.md)
-- [Database deployments](deployments/10-database-deployments.md)
-- [Testing, contracts and invariants](deployments/11-testing-contracts-and-invariants.md)
+## Deep deployments architecture
 
-## Domain
+[deployments/README.md](deployments/README.md) remains the canonical execution manual for the deployment engine. It covers planning, build/platform detection, runtime/Swarm, concurrency/state, recovery, base images, logs/health/rollback/cleanup, databases and architectural tests.
 
-- [Service domain](domain/services.md)
-- [Revisions, environment and secrets](domain/revisions.md)
-- [Databases and storage](domain/databases-storage.md)
-- [Application catalog](domain/catalog.md)
+The per-app deployments README points here rather than duplicating that manual.
 
-## Operations
+## Cross-system operations
 
 - [Observability](observability.md)
-- [Wagtail administration](subsystems/wagtail.md)
 - [Testing and security](testing-and-security.md)
 - [Project layout](reference/project-layout.md)
 
-## Components
+## Documentation authority
 
-Component documentation outside the deployment architecture manual remains under [components/](components/).
+One architectural fact has one canonical home:
 
-### Documentation maintenance rule
+- system architecture: architecture.md
+- cross-app architecture: apps/README.md
+- app architecture: apps/<app>/README.md
+- app model semantics: apps/<app>/models.md
+- app HTTP API: apps/<app>/api.md
+- app serializer contracts: apps/<app>/serializers.md
+- app background/realtime behavior: apps/<app>/background.md when present
+- app contract tests: apps/<app>/tests.md when present
+- deep deployment execution: deployments/
 
-One architectural fact should have one canonical home. Other documents should link to it rather than silently defining a second lifecycle or state model.
-
-When behavior changes, verify the implementation first and update the canonical deployments document that owns the behavior. Historical audit documents are not sources of truth.
+When implementation changes, update the owning canonical document and then repair dependent links/claims. Do not restore deleted historical audits as competing sources of truth.

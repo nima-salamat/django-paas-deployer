@@ -1,108 +1,13 @@
 # Installation
 
-## Requirements
+This guide describes deployment of the PassDeployer control plane and Docker runtime dependencies.
 
-- Docker Engine with an active Swarm manager.
-- PostgreSQL.
-- Redis.
-- Docker access for the control-plane workers.
-- An image registry for multi-node application workloads.
+For multi-node Swarm, local persistent volumes are provisioned through the Django volume registry and pinned to the provisioning node. A conflicting explicit node.id placement rule is rejected for managed local volumes.
 
-Swarm nodes normally require TCP 2377, TCP/UDP 7946 and UDP 4789 between trusted nodes.
+Tenant storage quota is a logical Service policy; standard Docker local volumes do not provide a hard per-volume filesystem quota. Runtime usage is measured when the Docker backend can report it and warnings follow operator settings.
 
-## Single-node
-
-Initialize the manager once:
-
-```bash
-docker swarm init --advertise-addr <MANAGER_IP>
-docker node ls
-```
-
-A single host is still a Swarm. Applications share this cluster.
-
-## Multi-node
-
-On the manager:
-
-```bash
-docker swarm init --advertise-addr <MANAGER_IP>
-docker swarm join-token worker
-docker swarm join-token manager
-```
-
-Run the generated join commands on the other machines and verify them with `docker node ls`.
-
-## Control plane
-
-```bash
-cp .env.example .env
-# configure SECRET_KEY, database, Redis, domains and Swarm settings
-docker compose up -d --build
-docker compose exec web python manage.py migrate
-docker compose exec web python manage.py createsuperuser
-```
-
-## Swarm environment
-
-Single node can omit a registry:
-
-```dotenv
-SWARM_ENABLED=1
-SWARM_CLUSTER_NAME=default
-SWARM_IMAGE_REGISTRY=
-SWARM_IMAGE_NAMESPACE=passdeployer
-SWARM_LOCAL_VOLUME_PIN=1
-```
-
-Multi-node requires a registry reachable by all workers:
-
-```dotenv
-SWARM_ENABLED=1
-SWARM_CLUSTER_NAME=default
-SWARM_IMAGE_REGISTRY=registry.example.com
-SWARM_IMAGE_NAMESPACE=passdeployer
-SWARM_LOCAL_VOLUME_PIN=1
-```
-
-## Proxy network and Traefik
-
-`proxy_net` must be an attachable overlay network. Application services with public HTTP-family endpoints join this network and receive Traefik Swarm-provider labels.
-
-## Wagtail
-
-Swarm clusters and nodes are exposed in Wagtail. Desired availability can be active, pause or drain. Desired labels are also managed there. Manager/worker promotion is kept as an explicit infrastructure operation.
-
-## Shell
-
-Interactive shell can only exec into a task on the Docker Engine node connected to PassDeployer. A remote-node shell transport is intentionally not faked.
-
-## Volumes
-
-Tenant volume capacity is accounted logically through the Service/Plan quota. The standard Docker `local` volume driver does not provide a hard per-volume filesystem quota in this installation. Deployment logs warn when measurable actual usage reaches 90% of the declared logical capacity by default.
-
-For multi-node Swarm, local persistent volumes are provisioned through the Django volume registry and pinned to the provisioning node. A conflicting explicit `node.id` placement rule is rejected for managed local volumes so the workload cannot silently acquire a same-named volume on another node.
-
-The operator-only `VOLUME_USAGE_WARNING_PERCENT` setting controls the warning threshold. See documentation/domain/databases-storage.md for storage capability semantics, hard-quota limitations, usage verification, and node requirements.
+Canonical storage/domain semantics are now under [apps/services/models.md](apps/services/models.md) and the deep runtime discussion in [deployments/05-runtime-and-swarm.md](deployments/05-runtime-and-swarm.md).
 
 ## Legacy mode
 
-`SWARM_ENABLED=0` enables the explicit compatibility runtime. Its container-event consumer is profile-gated:
-
-```bash
-docker compose --profile legacy-runtime up -d deployment-events
-```
-
-## Verification
-
-```bash
-docker info
-docker node ls
-docker network ls
-docker service ls
-docker service ps <service> --no-trunc
-docker service inspect <service>
-docker service logs <service> --tail 200
-```
-
-Database `force_reinit` can remove managed data volumes and is destructive.
+SWARM_ENABLED=0 remains an explicit compatibility mode. The normal architecture is Swarm-first.

@@ -1,69 +1,71 @@
 # Architecture
 
-PassDeployer is a service-centric Django PaaS whose application runtime is Docker Swarm.
+PassDeployer is a service-centric Django PaaS whose customer workload execution uses Docker Swarm in the normal runtime path.
 
-> **Deployment architecture entry point:** read [deployments/README.md](deployments/README.md) before opening files under \`src/deployments/\`.
+## Cross-app architecture
 
-## Ownership
+Start with [apps/README.md](apps/README.md) for the canonical Django application graph. The main ownership split is:
 
 ~~~text
-Service
-  -> ServiceRevision
-  -> ServiceRuntimeGraph
-  -> application image / external image
-  -> Docker Swarm Service
-  -> Docker Task
+users             -> canonical identity
+auth_users        -> credential/session/authentication state
+plans             -> customer resource/logging policy
+services          -> durable Service intent + immutable revisions
+deploy            -> Deploy provenance + deployment/base-image/operator records
+deployments       -> build/planning/runtime/lifecycle/reconciliation execution
+logs              -> runtime/service log persistence and ingestion
+app_catalog       -> catalog interpretation + multi-Service installation coordinator
+messenger         -> messaging/realtime domain
+tickets           -> support workflow
+custom_emails     -> email template/delivery domain
+docs              -> product documentation content
+core              -> shared infrastructure/settings/cache/media
+cms               -> Wagtail integration
 ~~~
 
-- Service owns durable user intent and desired runtime state.
-- ServiceProcess represents an executable process.
-- ServiceRevision freezes executable configuration.
-- Deploy records one execution attempt/provenance.
-- Swarm Service/Task is observed runtime infrastructure.
-
-\`selected_deploy\` remains a compatibility projection. Active revision plus desired state is the current authority.
-
-## Process model
-
-One Service may contain multiple ServiceProcess rows. Enabled processes map to separate Swarm Services.
-
-Current runtime execution supports one replica per process.
-
-## Control plane
+## Control-plane path
 
 ~~~text
 HTTP / WebSocket
-    -> Django / DRF / Channels
-    -> Celery
-    -> deployment engine
-    -> Docker Engine / Swarm
-    -> Service / Task
+ -> Django / DRF / Channels
+ -> owning application domain
+ -> Celery for asynchronous work
+ -> deployments for runtime work
+ -> Docker Engine / Swarm
+ -> observations/events
+ -> durable domain state / realtime notification
 ~~~
 
-## Reconciliation
+Domain APIs retain authorization and durable state. They do not become alternate runtime engines.
 
-Desired state lives in the database. Runtime observation comes from Docker/Swarm. Reconciliation compares them and chooses repair.
+## Service/deployment ownership
 
-See [deployments/07-reconciliation-and-recovery.md](deployments/07-reconciliation-and-recovery.md).
+~~~text
+Service desired state
+ -> ServiceRevision (immutable)
+ -> Deploy (execution/provenance)
+ -> deployments planning/build/runtime
+ -> Docker/Swarm observation
+~~~
+
+Service.active_revision is the current executable release. selected_deploy remains compatibility projection. See apps/services and apps/deploy plus deployments/01-system-model.md and 03-execution-lifecycle.md.
+
+## Runtime truth versus desired state
+
+The database stores desired state/provenance. Docker/Swarm observations describe what actually exists. Reconciliation compares the two and fails closed when runtime identity is unknown rather than silently adopting it.
 
 ## Storage
 
-Docker local volumes are node-local. The current runtime may pin local managed volumes to the owning node.
+Docker local volumes are node-local. Managed local-volume workloads may be pinned to the volume owner node; this does not provide shared-storage HA.
 
-This is a correctness rule, not shared-storage high availability.
+## Logging split
 
-## Images
+Runtime service logs are owned by logs. Deployment lifecycle events are DeployLog records in the separate deployment-log database.
 
-Application images are deployment artifacts. Base runtime images are operator-owned shared artifacts.
+## Wagtail
 
-See [deployments/04-build-and-platforms.md](deployments/04-build-and-platforms.md) and [deployments/08-base-images.md](deployments/08-base-images.md).
+Wagtail is an administration/presentation layer. Domain apps retain ownership and permission rules. Runtime-authoritative fields should remain controlled by domain workflows.
 
-## Databases
+## Transitional compatibility
 
-Managed database workloads use the common runtime architecture with specialized engine initialization/readiness.
-
-See [deployments/10-database-deployments.md](deployments/10-database-deployments.md).
-
-## Transitional mode
-
-\`SWARM_ENABLED=0\` remains an explicit legacy compatibility mode. The normal runtime path is Swarm-first.
+SWARM_ENABLED=0 remains a legacy compatibility runtime mode. Core deployment execution is documented in deployments/.
