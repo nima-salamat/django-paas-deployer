@@ -297,6 +297,18 @@ def build_base_runtime_image(self, base_image_id, force_rebuild=False, build_pol
             build_policy=effective_policy,
         )
     except Exception as exc:
+        # The shared lifecycle budget is authoritative across retries. Once it
+        # has elapsed, another Celery retry cannot legitimately extend the
+        # base-image phase.
+        if isinstance(exc, TimeoutError):
+            _mark_base_image_terminal_failure(base_image_id, str(self.request.id), exc)
+            logger.exception(
+                "Base image build reached its lifecycle deadline id=%s: %s",
+                base_image_id,
+                exc,
+            )
+            raise
+
         if self.request.retries < self.max_retries:
             _mark_base_image_retry_pending(base_image_id, str(self.request.id), exc)
             logger.warning(
