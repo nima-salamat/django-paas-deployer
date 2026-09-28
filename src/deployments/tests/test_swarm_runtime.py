@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
+from django.test import override_settings
 
 from deployments.common.exceptions import DeploymentError
 from deployments.core.swarm import (
@@ -209,6 +210,15 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
     def test_rejects_more_than_one_replica(self):
         with self.assertRaises(Exception):
             _validate_replicas(2)
+
+    @override_settings(DEPLOYMENT_DOMAIN="deploy.echonode.website")
+    def test_public_endpoint_without_hostname_uses_canonical_service_host(self):
+        config = _config(public_host=None, endpoints=[EndpointSpec(
+            name="http", target_port=8000, exposure="public", protocol="http", hostname=""
+        )])
+        spec = compile_compose_service(config, image_ref="demo:r1")
+        labels = spec["services"]["demo"]["deploy"]["labels"]
+        self.assertEqual(labels["traefik.http.routers.demo-http.rule"], "Host(`demo.deploy.echonode.website`)")
 
     def test_compiles_multiple_public_http_endpoints(self):
         config = _config(
