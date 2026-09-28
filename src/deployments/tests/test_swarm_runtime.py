@@ -1,8 +1,9 @@
 from dataclasses import replace
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
-from deployments.core.swarm import compile_compose_service, _validate_replicas
+from deployments.core.swarm import SwarmRuntime, compile_compose_service, _validate_replicas
 from deployments.core.types import DeploymentConfig, NetworkSpec, EndpointSpec, VolumeSpec
 
 
@@ -92,6 +93,25 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             service["deploy"]["placement"]["constraints"],
             ["node.labels.region == eu"],
         )
+
+    def test_create_kwargs_map_compose_entrypoint_to_swarm_command_and_args(self):
+        config = _config(
+            entry_point=["/bin/sh", "-c"],
+            start_command="python app.py",
+        )
+        spec = compile_compose_service(config, image_ref="demo:r1")
+
+        runtime = SwarmRuntime.__new__(SwarmRuntime)
+        with patch.object(runtime, "_apply_local_volume_pin", return_value=["node.labels.region == eu"]):
+            kwargs = runtime._create_kwargs(
+                config,
+                image_ref="demo:r1",
+                compose_spec=spec,
+            )
+
+        self.assertNotIn("entrypoint", kwargs)
+        self.assertEqual(kwargs["command"], ["/bin/sh", "-c"])
+        self.assertEqual(kwargs["args"], ["/bin/sh", "-lc", "python app.py"])
 
     def test_rejects_more_than_one_replica(self):
         with self.assertRaises(Exception):
