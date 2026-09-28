@@ -229,6 +229,7 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         self.assertEqual(labels["traefik.http.routers.demo-ep-0-http.entrypoints"], "web")
         self.assertNotIn("traefik.http.routers.demo-ep-0-http.tls", labels)
 
+    @override_settings(DEPLOYMENT_DOMAIN="deploy.echonode.website")
     def test_public_endpoint_without_hostname_uses_canonical_service_host(self):
         config = _config(public_host=None, endpoints=[EndpointSpec(
             name="http", target_port=8000, exposure="public", protocol="http", hostname=""
