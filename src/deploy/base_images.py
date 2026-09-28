@@ -1161,9 +1161,9 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                             "rebuild_requested": bool(row.rebuild_requested),
                             "background_build_task_id": str(row.build_task_id or ""),
                             "last_known_good_image_id": row.image_id,
-"local_verification": ("
-    "image_id" if row.image_id else "runtime_label_or_exact_ref_fallback"
-),
+                            "local_verification": (
+                                "image_id" if row.image_id else "runtime_label_or_exact_ref_fallback"
+                            ),
                         },
                     )
                 continue
