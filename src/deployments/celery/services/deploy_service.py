@@ -128,9 +128,9 @@ class DeployService:
             logger.info("Skipped deploy execution for ID %s: %s", deploy_id, str(exc))
             return
 
-        deploy_item.service.__class__.objects.filter(pk=deploy_item.service_id).update(desired_state="running")
-        deploy_item.service.desired_state = "running"
-        # Capture the service lifecycle generation at execution start. Stop/delete
+        # Preserve the lifecycle intent recorded by the caller. A Stop request
+        # may have advanced lifecycle_generation while this worker was waiting.
+        # Capture the service lifecycle generation at execution start.
         # intents bump this generation and invalidate an in-flight deployment.
         expected_lifecycle_generation = int(
             getattr(deploy_item.service, "lifecycle_generation", 0) or 0
