@@ -106,6 +106,15 @@ def test_application_phase_gets_a_fresh_budget_after_base_readiness():
 
 
 
+
+def test_exhausted_base_phase_timeout_is_not_retried():
+    source = (ROOT / "deployments" / "celery" / "tasks.py").read_text(encoding="utf-8")
+    block = source.split("@shared_task(bind=True, max_retries=2, default_retry_delay=10)", 1)[1].split("# ===========================================================================", 1)[0]
+    assert "isinstance(exc, TimeoutError)" in block
+    assert "raise self.retry(exc=exc)" in block
+    timeout_pos = block.index("isinstance(exc, TimeoutError)")
+    retry_pos = block.index("raise self.retry(exc=exc)")
+    assert timeout_pos < retry_pos
 def test_base_builder_checks_the_same_ten_minute_budget_during_execution():
     source = (ROOT / "deploy" / "base_images.py").read_text(encoding="utf-8")
     assert "base_image_build_timeout_minutes() * 60" in source
