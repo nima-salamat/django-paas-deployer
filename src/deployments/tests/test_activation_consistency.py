@@ -60,6 +60,13 @@ class DeploymentActivationConsistencyContractTests(unittest.TestCase):
         )[0]
         self.assertNotIn("get_active_deploy(", recovery)
 
+    def test_swarm_recovery_respects_current_desired_state(self):
+        recovery = self.scheduler.split("def _recover_stale_running_deploys_swarm", 1)[1].split(
+            "def _reconcile_active_deploy", 1
+        )[0]
+        self.assertIn('desired_state", "stopped")', recovery)
+        self.assertIn("Skipping stale Swarm recovery", recovery)
+
     def test_each_replacement_router_has_deployment_identity(self):
         self.assertIn('router_name=f"{config.name}-deploy-', self.orchestrator)
         self.assertIn('"deployment.id": str(config.labels.get("deployment.id")', self.orchestrator)
