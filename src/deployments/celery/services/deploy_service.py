@@ -180,6 +180,14 @@ class DeployService:
 
                 with transaction.atomic():
                     service = Service.objects.select_for_update().get(pk=service_id)
+                    current_deploy = Deploy.objects.select_for_update().get(pk=deploy_item.pk)
+                    if current_deploy.cancel_requested or str(current_deploy.status).lower() == "cancelled":
+                        raise DeploymentCancelled(
+                            "Deployment cancellation was requested before activation.",
+                            stage="cancelled",
+                            user_message="Deployment was cancelled before activation.",
+                            details={"deploy_id": deploy_item.pk, "service_id": service_id},
+                        )
 
                     actual_lifecycle_generation = int(
                         getattr(service, "lifecycle_generation", 0) or 0
