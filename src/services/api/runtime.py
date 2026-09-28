@@ -763,6 +763,10 @@ def service_status_apiview(request):
         running = False
         cpu = None
         ram = None
+        stats = {
+            "metrics_available": False,
+            "metrics_reason": f"service_stats_failed: {e}",
+        }
         detail = _("Failed to get service stats.")
 
     return Response(
