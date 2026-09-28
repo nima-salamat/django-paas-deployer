@@ -778,6 +778,14 @@ class SwarmRuntime:
                     code="SWARM_REPLICA_COUNT_UNSUPPORTED",
                 )
             results[process_name] = self.apply(process_config, image_ref=image_ref)
+
+        if not results:
+            raise DeploymentError(
+                "No enabled runtime processes were available for the Swarm deployment.",
+                stage="swarm_validation",
+                code="SWARM_NO_ENABLED_PROCESSES",
+                user_message="The deployment has no enabled runtime process to start.",
+            )
         return results
 
     def cleanup_legacy_containers(self, *, service_id: str) -> int:
