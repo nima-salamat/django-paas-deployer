@@ -55,3 +55,8 @@ Application images may be built locally and published to `SWARM_IMAGE_REGISTRY` 
 ## Volumes
 
 Local volume workloads are pinned to their data node by default in multi-node installations.
+## Base runtime images
+
+Base Runtime Image registry identity includes `docker_host`, so automatic/admin base-image builds are shared per Docker daemon. The completed application image can be published to `SWARM_IMAGE_REGISTRY` for multi-node scheduling; this does not turn the base-image build lock into a cluster-wide build lock.
+
+PHP uses the stable `paas-base/php-apache:<version>-r1` base. DocumentRoot remains an application-image concern and is applied after base resolution.
