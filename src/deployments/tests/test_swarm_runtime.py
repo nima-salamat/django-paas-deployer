@@ -2,8 +2,9 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from deployments.common.exceptions import DeploymentError
 from deployments.core.swarm import (
     SwarmRuntime,
     compile_compose_service,
@@ -11,6 +12,72 @@ from deployments.core.swarm import (
     _validate_replicas,
 )
 from deployments.core.types import DeploymentConfig, NetworkSpec, EndpointSpec, VolumeSpec
+
+
+class _FakeService:
+    def __init__(self, *, image, tasks, update_state=None, update_message=None, version=7):
+        self.id = "service-id"
+        self.name = "demo"
+        self.version = version
+        self.attrs = {
+            "Version": {"Index": version},
+            "Spec": {
+                "Mode": {"Replicated": {"Replicas": 1}},
+                "TaskTemplate": {
+                    "ContainerSpec": {"Image": image},
+                },
+            },
+        }
+        if update_state:
+            self.attrs["UpdateStatus"] = {
+                "State": update_state,
+                "Message": update_message or "",
+            }
+        self._tasks = list(tasks)
+        self._logs = [b"application traceback\n"]
+        self.removed = False
+
+    def reload(self):
+        return self
+
+    def tasks(self, filters=None):
+        return list(self._tasks)
+
+    def logs(self, **kwargs):
+        return iter(self._logs)
+
+    def remove(self):
+        self.removed = True
+
+
+class _FakeServices:
+    def __init__(self, service):
+        self.service = service
+
+    def get(self, name):
+        return self.service
+
+
+class _FakeAPI:
+    def __init__(self):
+        self.calls = []
+
+    def _url(self, path, resource):
+        return path.format(resource)
+
+    def _post_json(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return object()
+
+    def _result(self, response, json=False):
+        return {"Warnings": []}
+
+
+class _FakeClient:
+    def __init__(self, service):
+        self.services = _FakeServices(service)
+        self.api = _FakeAPI()
+
 
 
 def _config(**overrides):
@@ -145,6 +212,187 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         text = Path(module.__file__).read_text(encoding="utf-8")
         self.assertIn('"service_logs": service_logs[-12000:]', text)
         self.assertIn("task_detail = task.error or task.message or task.state", text)
+
+    def test_wait_ready_reports_task_exit_and_service_logs(self):
+        image = "demo:r1@sha256:new"
+        service = _FakeService(
+            image=image,
+            tasks=[{
+                "ID": "task-1",
+                "DesiredState": "running",
+                "Status": {
+                    "State": "failed",
+                    "Err": "task: non-zero exit (1)",
+                    "Message": "task: non-zero exit (1)",
+                },
+                "Spec": {"ContainerSpec": {"Image": image}},
+            }],
+            update_state="updating",
+            update_message="update in progress",
+        )
+        runtime = SwarmRuntime(_FakeClient(service))
+        with self.assertRaises(DeploymentError) as ctx:
+            runtime.wait_ready("demo", timeout=1, expected_image=image)
+
+        exc = ctx.exception
+        self.assertEqual(exc.code, "SWARM_TASK_FAILED")
+        self.assertEqual(exc.stage, "swarm_startup")
+        self.assertEqual(exc.details["task_id"], "task-1")
+        self.assertIn("application traceback", exc.details["service_logs"])
+        self.assertIn("non-zero exit (1)", exc.technical_message)
+        self.assertIn("expected_image", exc.technical_message)
+
+    def test_wait_ready_rejects_success_from_old_image_after_rollback(self):
+        old_image = "demo:r0@sha256:old"
+        new_image = "demo:r1@sha256:new"
+        service = _FakeService(
+            image=old_image,
+            tasks=[{
+                "ID": "old-task",
+                "DesiredState": "running",
+                "Status": {"State": "running", "Message": "started"},
+                "Spec": {"ContainerSpec": {"Image": old_image}},
+            }],
+            update_state="rollback_completed",
+            update_message="update rolled back because the task failed",
+        )
+        runtime = SwarmRuntime(_FakeClient(service))
+        with self.assertRaises(DeploymentError) as ctx:
+            runtime.wait_ready("demo", timeout=1, expected_image=new_image)
+
+        self.assertEqual(ctx.exception.code, "SWARM_UPDATE_ROLLED_BACK")
+        self.assertEqual(ctx.exception.details["expected_image"], new_image)
+        self.assertIn("application traceback", ctx.exception.details["service_logs"])
+
+    def test_wait_ready_accepts_only_the_expected_running_image(self):
+        image = "demo:r1@sha256:new"
+        service = _FakeService(
+            image=image,
+            tasks=[{
+                "ID": "task-1",
+                "DesiredState": "running",
+                "Status": {"State": "running", "Message": "started"},
+                "Spec": {"ContainerSpec": {"Image": image}},
+            }],
+        )
+        runtime = SwarmRuntime(_FakeClient(service))
+        state = runtime.wait_ready("demo", timeout=1, expected_image=image)
+        self.assertEqual(state.replicas_running, 1)
+        self.assertEqual(state.service_image, image)
+        self.assertEqual(state.tasks[0].image, image)
+
+    def test_rollback_service_uses_engine_api_previous_spec(self):
+        image = "demo:r1@sha256:new"
+        service = _FakeService(
+            image=image,
+            tasks=[],
+            update_state="updating",
+            version=42,
+        )
+        client = _FakeClient(service)
+        runtime = SwarmRuntime(client)
+
+        self.assertTrue(runtime.rollback_service("demo"))
+
+        self.assertEqual(len(client.api.calls), 1)
+        url, kwargs = client.api.calls[0]
+        self.assertEqual(url, "/services/service-id/update")
+        self.assertEqual(kwargs["params"], {"version": 42, "rollback": "previous"})
+        self.assertEqual(kwargs["data"], {})
+
+    def test_rollback_service_does_not_issue_duplicate_rollback(self):
+        service = _FakeService(
+            image="demo:r0@sha256:old",
+            tasks=[],
+            update_state="rollback_started",
+            version=42,
+        )
+        client = _FakeClient(service)
+        runtime = SwarmRuntime(client)
+
+        self.assertFalse(runtime.rollback_service("demo"))
+        self.assertEqual(client.api.calls, [])
+
+    def test_apply_processes_records_all_mutated_services_for_recovery(self):
+        config = _config(
+            runtime_options={
+                "processes": [
+                    {"name": "web", "process_type": "web", "command": "python app.py", "enabled": True},
+                    {"name": "worker", "process_type": "worker", "command": "python worker.py", "enabled": True},
+                ]
+            }
+        )
+        runtime = SwarmRuntime.__new__(SwarmRuntime)
+        runtime._last_apply_operation = None
+        runtime.assert_active = MagicMock()
+        runtime.service_names_for_service = MagicMock(return_value=["demo", "demo-worker"])
+
+        def fake_apply(process_config, *, image_ref):
+            runtime._last_apply_operation = {
+                "name": process_config.name,
+                "preexisting": True,
+                "mutation_started": True,
+                "mutation_succeeded": True,
+            }
+            if process_config.name == "demo-worker":
+                raise DeploymentError("worker failed", stage="swarm_startup", code="SWARM_TASK_FAILED")
+            return _FakeService(
+                image=image_ref,
+                tasks=[],
+            )
+
+        runtime.apply = fake_apply
+
+        with self.assertRaises(DeploymentError) as ctx:
+            runtime.apply_processes(config, image_ref="demo:r1@sha256:new")
+
+        recovery = ctx.exception.details["swarm_recovery"]
+        self.assertEqual(
+            recovery["rollback_services"],
+            ["demo", "demo-worker"],
+        )
+        self.assertEqual(recovery["remove_services"], [])
+        self.assertEqual(
+            [item["name"] for item in recovery["operations"]],
+            ["demo", "demo-worker"],
+        )
+
+    def test_first_deploy_process_failure_marks_new_services_for_removal(self):
+        config = _config(
+            runtime_options={
+                "processes": [
+                    {"name": "web", "process_type": "web", "command": "python app.py", "enabled": True},
+                    {"name": "worker", "process_type": "worker", "command": "python worker.py", "enabled": True},
+                ]
+            }
+        )
+        runtime = SwarmRuntime.__new__(SwarmRuntime)
+        runtime._last_apply_operation = None
+        runtime.assert_active = MagicMock()
+        runtime.service_names_for_service = MagicMock(return_value=[])
+
+        def fake_apply(process_config, *, image_ref):
+            runtime._last_apply_operation = {
+                "name": process_config.name,
+                "preexisting": False,
+                "mutation_started": True,
+                "mutation_succeeded": True,
+            }
+            if process_config.name == "demo-worker":
+                raise DeploymentError("worker failed", stage="swarm_startup", code="SWARM_TASK_FAILED")
+            return _FakeService(image=image_ref, tasks=[])
+
+        runtime.apply = fake_apply
+
+        with self.assertRaises(DeploymentError) as ctx:
+            runtime.apply_processes(config, image_ref="demo:r1@sha256:new")
+
+        recovery = ctx.exception.details["swarm_recovery"]
+        self.assertEqual(recovery["rollback_services"], [])
+        self.assertEqual(
+            recovery["remove_services"],
+            ["demo", "demo-worker"],
+        )
 
     def test_rejects_more_than_one_replica(self):
         with self.assertRaises(Exception):
