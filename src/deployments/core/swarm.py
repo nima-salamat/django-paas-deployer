@@ -671,10 +671,22 @@ class SwarmRuntime:
         )
 
         labels = dict(deploy_doc.get("labels") or {})
+
+        # Docker SDK service APIs model the Swarm ContainerSpec using
+        # command (ENTRYPOINT) + args (CMD). "entrypoint" is a Compose
+        # concept and is NOT a valid top-level keyword for Service.create()
+        # or Service.update(). Passing it through directly causes:
+        #   create() got an unexpected keyword argument 'entrypoint'
+        # Preserve Compose semantics by mapping entrypoint -> command and
+        # Compose command -> args when an entrypoint is present.
+        swarm_entrypoint = _command(service_doc.get("entrypoint"))
+        swarm_args = _command(service_doc.get("command")) if swarm_entrypoint else None
+        swarm_command = swarm_entrypoint or _command(service_doc.get("command"))
+
         return {
             "name": name,
-            "command": service_doc.get("command"),
-            "entrypoint": service_doc.get("entrypoint"),
+            "command": swarm_command,
+            "args": swarm_args,
             "workdir": service_doc.get("working_dir"),
             "read_only": bool(service_doc.get("read_only")),
             "healthcheck": healthcheck,
