@@ -469,6 +469,7 @@ def request_base_runtime_image_build(
         row.build_owner_deployment_id = str(deployment_id or "")[:255]
         row.definition_fingerprint = fingerprint
         row.rebuild_requested = False
+        row.rebuild_requested_at = None
         row.build_started_at = now
         row.build_completed_at = None
         row.last_error = ""
