@@ -204,7 +204,11 @@ def restart_service(self, service_id) -> None:
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=10)
 def _mark_base_image_retry_pending(base_image_id, task_id: str, exc: Exception) -> None:
-    BaseRuntimeImage.objects.filter(pk=base_image_id).update(
+    updated = BaseRuntimeImage.objects.filter(
+        pk=base_image_id,
+        status=BaseRuntimeImage.Status.BUILDING,
+        build_task_id=str(task_id),
+    ).update(
         status=BaseRuntimeImage.Status.BUILDING,
         build_task_id=str(task_id),
         build_completed_at=None,
@@ -242,7 +246,11 @@ def _mark_base_image_terminal_failure(base_image_id, task_id: str, exc: Exceptio
         "base_image_ref": current.get("image_ref") or "",
         "resource_policy_source": "server_owned",
     })
-    BaseRuntimeImage.objects.filter(pk=base_image_id).update(
+    updated = BaseRuntimeImage.objects.filter(
+        pk=base_image_id,
+        status=BaseRuntimeImage.Status.BUILDING,
+        build_task_id=str(task_id),
+    ).update(
         status=BaseRuntimeImage.Status.FAILED,
         build_task_id="",
         build_owner_deployment_id="",
@@ -251,7 +259,12 @@ def _mark_base_image_terminal_failure(base_image_id, task_id: str, exc: Exceptio
         build_completed_at=timezone.now(),
         updated_at=timezone.now(),
     )
-
+    if not updated:
+        logger.info(
+            "Ignoring terminal base-image failure from superseded task id=%s base=%s",
+            task_id,
+            base_image_id,
+        )
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=10)
 def build_base_runtime_image(self, base_image_id, force_rebuild=False, build_policy=None) -> None:
@@ -282,6 +295,14 @@ def build_base_runtime_image(self, base_image_id, force_rebuild=False, build_pol
             build_policy=effective_policy,
         )
     except Exception as exc:
+        if isinstance(exc, TimeoutError):
+            _mark_base_image_terminal_failure(base_image_id, str(self.request.id), exc)
+            logger.exception(
+                "Base image build reached its dedicated lifecycle deadline id=%s: %s",
+                base_image_id,
+                exc,
+            )
+            raise
         if self.request.retries < self.max_retries:
             _mark_base_image_retry_pending(base_image_id, str(self.request.id), exc)
             logger.warning(
