@@ -428,19 +428,68 @@ class BaseRuntimeImageAdmin(admin.ModelAdmin):
             count += 1
         self.message_user(request, f"Removed {count} unused base image(s); skipped {skipped}.")
     def delete_model(self, request, obj):
+        if obj.status == BaseRuntimeImage.Status.BUILDING or obj.build_task_id:
+            self.message_user(
+                request,
+                f"Refused to delete {obj.image_ref}: a base-image build is active.",
+                level=messages.WARNING,
+            )
+            return
+        if obj.leases.filter(released_at__isnull=True).exists():
+            self.message_user(
+                request,
+                f"Refused to delete {obj.image_ref}: an active deployment lease still references it.",
+                level=messages.WARNING,
+            )
+            return
         try:
             from deployments.core.manager.image_manager import Image
             Image.remove_by_name(obj.image_ref)
         except Exception:
-            self.message_user(request, f"Could not remove Docker image {obj.image_ref}; removing registry record anyway.", level=messages.WARNING)
+            self.message_user(
+                request,
+                f"Could not remove Docker image {obj.image_ref}; registry record was preserved.",
+                level=messages.WARNING,
+            )
+            return
         super().delete_model(request, obj)
+
 
     def delete_queryset(self, request, queryset):
         from deployments.core.manager.image_manager import Image
+        deleted = skipped = 0
         for obj in queryset:
+            if obj.status == BaseRuntimeImage.Status.BUILDING or obj.build_task_id:
+                self.message_user(
+                    request,
+                    f"Refused to delete {obj.image_ref}: a base-image build is active.",
+                    level=messages.WARNING,
+                )
+                skipped += 1
+                continue
+            if obj.leases.filter(released_at__isnull=True).exists():
+                self.message_user(
+                    request,
+                    f"Refused to delete {obj.image_ref}: an active deployment lease still references it.",
+                    level=messages.WARNING,
+                )
+                skipped += 1
+                continue
             try:
                 Image.remove_by_name(obj.image_ref)
             except Exception:
-                self.message_user(request, f"Could not remove Docker image {obj.image_ref}.", level=messages.WARNING)
-        super().delete_queryset(request, queryset)
+                self.message_user(
+                    request,
+                    f"Could not remove Docker image {obj.image_ref}; registry record was preserved.",
+                    level=messages.WARNING,
+                )
+                skipped += 1
+                continue
+            super().delete_model(request, obj)
+            deleted += 1
+        self.message_user(
+            request,
+            f"Deleted {deleted} unused base-image row(s); skipped {skipped}.",
+        )
+
 
