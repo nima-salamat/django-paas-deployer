@@ -606,7 +606,17 @@ class DeploymentOrchestrator:
         if not rollback_services and not remove_services:
             return False, False
 
-        runtime = SwarmRuntime()
+        try:
+            runtime = SwarmRuntime()
+        except Exception as exc:
+            self.logger.error(
+                "rollback",
+                f"Unable to initialize Swarm runtime for recovery: {exc}",
+                progress=99,
+                details={"error": str(exc)},
+            )
+            return False, True
+
         rollback_performed = False
         rollback_failed = False
 
