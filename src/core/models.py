@@ -173,6 +173,12 @@ class CoreSettings(BaseGenericSetting):
         verbose_name=_("Keep base images after deployment"),
         help_text=_("When disabled, an unused base image is removed after the deployment releases its lease. Shared images are kept until no active deployment uses them."),
     )
+    base_image_build_timeout_minutes = models.PositiveIntegerField(
+        default=10,
+        validators=[MinValueValidator(1), MaxValueValidator(1440)],
+        verbose_name=_("Base image build/wait timeout (minutes)"),
+        help_text=_("Dedicated lifecycle budget for a base-image build or shared wait. This is separate from the application deployment timeout."),
+    )
     base_images_auto_register_existing = models.BooleanField(
         default=True,
         verbose_name=_("Register existing Docker images"),
