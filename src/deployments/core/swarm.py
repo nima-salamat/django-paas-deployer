@@ -1574,7 +1574,12 @@ class SwarmRuntime:
             first = self._container_stats_sample(container)
             time.sleep(0.25)
             second = self._container_stats_sample(container)
-            host_config = (getattr(container, "attrs", {}) or {}).get("HostConfig", {}) or {}
+            container_attrs = getattr(container, "attrs", {}) or {}
+            if not isinstance(container_attrs, dict):
+                container_attrs = {}
+            host_config = container_attrs.get("HostConfig", {}) or {}
+            if not isinstance(host_config, dict):
+                host_config = {}
             cpu_limit_cores = None
             try:
                 nano_cpus = float(host_config.get("NanoCpus") or 0)
