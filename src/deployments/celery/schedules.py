@@ -1016,13 +1016,11 @@ def _reconcile_base_runtime_builds(policies: dict) -> None:
     ).order_by("build_started_at")[: int(policies["monitor_batch_size"])]
     for row in stale:
         try:
-            if bool((row.last_error_details or {}).get("retry_pending")):
-                logger.info(
-                    "Skipping stale timeout for retry-pending base-image row %s (%s).",
-                    row.pk,
-                    row.image_ref,
-                )
-                continue
+            # retry_pending is still part of the same base-image lifecycle.
+            # It must not extend the dedicated budget indefinitely. The task
+            # and monitor both fence on build_task_id, so terminalizing a
+            # genuinely expired retry-pending row cannot let the old worker
+            # publish READY later.
             updated = BaseRuntimeImage.objects.filter(
                 pk=row.pk,
                 status=BaseRuntimeImage.Status.BUILDING,
