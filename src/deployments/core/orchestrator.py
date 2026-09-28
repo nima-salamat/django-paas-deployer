@@ -745,33 +745,27 @@ class DeploymentOrchestrator:
                 runtime = SwarmRuntime()
                 service_name = config.name
                 service = runtime.client.services.get(service_name)
-                if snapshot.image_ref:
+                self.logger.warning(
+                    "rollback",
+                    "Swarm deployment failed; requesting Swarm service rollback.",
+                    progress=96,
+                    details={"service": service_name},
+                )
+                try:
+                    service.rollback()
+                    rollback_performed = True
+                except Exception as rollback_exc:
+                    # First-deploy services have no previous Swarm spec to
+                    # roll back to. Remove the failed service so restart_policy
+                    # cannot keep restarting a known-bad task.
                     self.logger.warning(
                         "rollback",
-                        "Swarm deployment failed; requesting Swarm service rollback.",
-                        progress=96,
-                        details={"service": service_name},
-                    )
-                    try:
-                        service.rollback()
-                        rollback_performed = True
-                    except Exception as rollback_exc:
-                        rollback_failed = True
-                        self.logger.error(
-                            "rollback",
-                            f"Swarm service rollback failed: {rollback_exc}",
-                            progress=99,
-                            details={
-                                "service": service_name,
-                                "error": str(rollback_exc),
-                            },
-                        )
-                else:
-                    self.logger.warning(
-                        "rollback",
-                        "Removing failed first-deploy Swarm service.",
-                        progress=96,
-                        details={"service": service_name},
+                        "Swarm service rollback was unavailable; removing failed service.",
+                        progress=97,
+                        details={
+                            "service": service_name,
+                            "rollback_error": str(rollback_exc),
+                        },
                     )
                     service.remove()
                     rollback_performed = True
