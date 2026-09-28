@@ -57,7 +57,9 @@ def public_http_endpoints(config: Any) -> list[Any]:
     except (TypeError, ValueError):
         port = 0
     platform_type = str(getattr(config, "platform_type", "") or "").lower()
-    if port > 0 and platform_type in {"app", "application"}:
+    labels = getattr(config, "labels", {}) or {}
+    process_name = str(labels.get("process.name") or "web").strip().lower()
+    if port > 0 and process_name == "web" and platform_type in {"app", "application"}:
         return [SimpleNamespace(
             name="http",
             target_port=port,
