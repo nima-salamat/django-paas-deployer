@@ -188,6 +188,34 @@ class Deploy(BaseModel):
                     old_zip_name,
                 )
     
+    def lifecycle_phase_started_at(self):
+        """Return the authoritative timestamp for the current lifecycle phase."""
+        stage = str(self.stage or "").strip().lower()
+        if stage == "base_image":
+            return self.base_image_wait_started_at or self.started_at
+        return self.application_started_at or self.started_at
+
+    def lifecycle_phase_deadline(
+        self,
+        *,
+        base_timeout_minutes: int,
+        application_timeout_minutes: int,
+        now=None,
+    ):
+        """Return the current phase deadline without mixing base/app budgets."""
+        now = now or timezone.now()
+        started = self.lifecycle_phase_started_at()
+        if not started:
+            return None
+        stage = str(self.stage or "").strip().lower()
+        timeout_minutes = (
+            base_timeout_minutes
+            if stage == "base_image"
+            else application_timeout_minutes
+        )
+        from datetime import timedelta
+        return started + timedelta(minutes=max(0, int(timeout_minutes)))
+
     def __str__(self):
         return f"{self.name} (v{self.version})"
 
