@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 from django.test import override_settings
 
 from deployments.common.exceptions import DeploymentError
+from deployments.core.orchestrator import DeploymentOrchestrator
 from deployments.core.swarm import (
     SwarmRuntime,
     compile_compose_service,
@@ -212,6 +213,22 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             _validate_replicas(2)
 
     @override_settings(DEPLOYMENT_DOMAIN="deploy.echonode.website")
+    def test_legacy_public_endpoint_uses_same_host_and_web_entrypoint(self):
+        config = _config(
+            public_host=None,
+            endpoints=[EndpointSpec(
+                name="http", target_port=8000, exposure="public", protocol="https", hostname="", tls=True
+            )],
+        )
+        orchestrator = DeploymentOrchestrator.__new__(DeploymentOrchestrator)
+        labels = orchestrator._endpoint_labels(config)
+        self.assertEqual(
+            labels["traefik.http.routers.demo-ep-0-http.rule"],
+            "Host(`demo.deploy.echonode.website`)",
+        )
+        self.assertEqual(labels["traefik.http.routers.demo-ep-0-http.entrypoints"], "web")
+        self.assertNotIn("traefik.http.routers.demo-ep-0-http.tls", labels)
+
     def test_public_endpoint_without_hostname_uses_canonical_service_host(self):
         config = _config(public_host=None, endpoints=[EndpointSpec(
             name="http", target_port=8000, exposure="public", protocol="http", hostname=""
