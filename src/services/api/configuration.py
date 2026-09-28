@@ -170,10 +170,13 @@ class ServiceConfigurationAPIView(ServiceConfigBaseAPIView):
                 desired = str(data["desired_state"]).strip()
                 if desired not in {"running", "stopped"}:
                     return Response({"error": "desired_state must be running or stopped."}, status=400)
+                from services.lifecycle import bump_lifecycle
+                lifecycle_generation = bump_lifecycle(service.pk, desired_state=desired)
                 service.desired_state = desired
+                service.lifecycle_generation = lifecycle_generation
             service.save(update_fields=[
                 "source_kind", "source_config", "build_config",
-                "runtime_config", "desired_state", "updated_at",
+                "runtime_config", "desired_state", "lifecycle_generation", "updated_at",
             ])
 
         return Response({"status": "updated", "service": str(service.pk), "requires_deploy": True})
