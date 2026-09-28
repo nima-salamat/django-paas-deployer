@@ -87,8 +87,12 @@ class StopService:
                 if state and state.replicas_running:
                     logger.info("Stopping Swarm service group for service: %s", service_id)
                     runtime.stop_service_group(str(service_id))
+                    stopped = runtime.wait_service_group_stopped(str(service_id), timeout=30.0)
+                    if not stopped:
+                        logger.warning("Swarm service group for %s is still draining after stop timeout.", service_id)
                 else:
                     logger.info("Swarm service group for %s is already stopped.", service_id)
+                    stopped = True
             else:
                 if Container.container_is_running(container_name):
                     logger.info("Dispatching stop request for container: %s", container_name)
@@ -116,7 +120,8 @@ class StopService:
                 )
                 state_tracker.finish(stop_result)
 
-            ServiceStateManager.sync_legacy_stopped(service_id)
+            if not swarm_enabled() or stopped:
+                ServiceStateManager.sync_legacy_stopped(service_id)
 
         except Exception as exc:
             logger.error(
