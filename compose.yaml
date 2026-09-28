@@ -255,6 +255,11 @@ services:
     volumes:
       - .:/app
       - /var/run/docker.sock:/var/run/docker.sock
+      # The deployment preflight runs inside this container but the Docker
+      # daemon owns the host filesystem. Expose its storage root read-only so
+      # disk-space checks inspect the host filesystem rather than the worker
+      # container's overlay filesystem.
+      - /var/lib/docker:/host-docker-root:ro
 
     depends_on:
       db:
@@ -274,6 +279,7 @@ services:
       # Main PostgreSQL
       # ----------------------------------------------------------
       DB_HOST: db
+      DOCKER_HOST_STORAGE_PATH: /host-docker-root
       DB_PORT: 5432
 
       # ----------------------------------------------------------
@@ -325,6 +331,11 @@ services:
     volumes:
       - .:/app
       - /var/run/docker.sock:/var/run/docker.sock
+      # The deployment preflight runs inside this container but the Docker
+      # daemon owns the host filesystem. Expose its storage root read-only so
+      # disk-space checks inspect the host filesystem rather than the worker
+      # container's overlay filesystem.
+      - /var/lib/docker:/host-docker-root:ro
 
     depends_on:
       db:
@@ -339,6 +350,7 @@ services:
 
     environment:
       DB_HOST: db
+      DOCKER_HOST_STORAGE_PATH: /host-docker-root
       DB_PORT: 5432
       DEPLOYMENT_LOG_DB_HOST: deployment-log-db
       DEPLOYMENT_LOG_DB_PORT: 5432
