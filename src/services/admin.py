@@ -245,6 +245,9 @@ class VolumeAdmin(admin.ModelAdmin):
     readonly_fields = (
         "service_attachments_pretty",
         "docker_volume_name",
+        "released_at",
+        "reclaim_attempted_at",
+        "reclaim_error",
         "created_at",
         "updated_at",
     )
