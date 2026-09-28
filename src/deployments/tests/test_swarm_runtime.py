@@ -1,4 +1,5 @@
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -137,6 +138,13 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         self.assertNotIn("entrypoint", kwargs)
         self.assertEqual(kwargs["command"], ["/bin/sh", "-lc", "python app.py --port 8000"])
         self.assertNotIn("args", kwargs)
+
+    def test_wait_ready_failure_carries_task_and_service_logs(self):
+        source = (SwarmRuntime.wait_ready).__doc__ or ""
+        module = __import__("deployments.core.swarm", fromlist=["wait_ready"])
+        text = Path(module.__file__).read_text(encoding="utf-8")
+        self.assertIn('"service_logs": service_logs[-12000:]', text)
+        self.assertIn("task_detail = task.error or task.message or task.state", text)
 
     def test_rejects_more_than_one_replica(self):
         with self.assertRaises(Exception):
