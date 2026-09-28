@@ -13,6 +13,8 @@ def forwards(apps, schema_editor):
     ).order_by("created_at", "pk")
 
     for legacy in legacy_rows:
+        legacy_variant = legacy.variant
+        legacy_image_ref = legacy.image_ref
         canonical = BaseRuntimeImage.objects.filter(
             logical_runtime="php",
             runtime_version=legacy.runtime_version,
@@ -43,7 +45,7 @@ def forwards(apps, schema_editor):
             legacy.last_error = "Legacy PHP base identity normalized to canonical apache variant; rebuild required."
             legacy.last_error_details = {
                 "stage": "base_image",
-                "legacy_variant": legacy.variant,
+                "legacy_variant": legacy_variant,
                 "migration": "0023_canonical_php_base_runtime_identity",
                 "docker_image_preserved": True,
             }
@@ -91,7 +93,7 @@ def forwards(apps, schema_editor):
             legacy.last_error_details = {
                 "stage": "base_image",
                 "superseded_by": canonical.image_ref,
-                "legacy_image_ref": legacy.image_ref,
+                "legacy_image_ref": legacy_image_ref,
                 "safe_to_remove_after_release": True,
                 "migration": "0023_canonical_php_base_runtime_identity",
             }
