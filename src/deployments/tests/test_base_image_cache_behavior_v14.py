@@ -11,10 +11,10 @@ def test_base_image_auto_build_uses_docker_cache_unless_forced():
     )
 
 
-def test_base_image_cache_hit_requires_ready_local_and_no_rebuild_request():
+def test_base_image_cache_hit_requires_compatible_local_image_and_definition():
     text = (ROOT / "deploy/base_images.py").read_text(encoding="utf-8")
-    assert 'BaseRuntimeImage.Status.READY' in text
-    assert '"local_compatible"' in text or 'local_compatible' in text
+    assert "_can_use_compatible_local_base_image(" in text
+    assert "row.definition_fingerprint == fingerprint" in text
 
 
 def test_php_base_skips_extensions_already_enabled():
@@ -23,17 +23,55 @@ def test_php_base_skips_extensions_already_enabled():
     # intentionally represented by `${{ext}}` in source.
     assert 'PHP extension ${{ext}} already enabled; skipping build' in text
     assert 'docker-php-ext-install -j$(nproc) $missing' in text
-def test_compatible_local_base_image_is_usable_while_registry_build_is_in_progress():
-    text = (ROOT / "deploy/base_images.py").read_text(encoding="utf-8")
-    start = text.index("def _can_use_compatible_local_base_image")
-    end = text.index("def request_base_runtime_image_build", start)
-    block = text[start:end]
 
-    assert "and row.status != BaseRuntimeImage.Status.BUILDING" not in block
-    assert "and not row.rebuild_requested" not in block
-    assert "local_exists" in block
-    assert "local_compatible" in block
-    assert "row.definition_fingerprint == fingerprint" in block
+def test_compatible_local_base_image_is_usable_while_registry_build_is_in_progress():
+    from types import SimpleNamespace
+
+    from deploy.base_images import _can_use_compatible_local_base_image
+
+    row = SimpleNamespace(
+        definition_fingerprint="fp",
+        status="building",
+        rebuild_requested=True,
+    )
+
+    assert _can_use_compatible_local_base_image(
+        row,
+        "fp",
+        local_exists=True,
+        local_compatible=True,
+    )
+
+
+def test_incompatible_or_missing_local_base_image_is_not_usable():
+    from types import SimpleNamespace
+
+    from deploy.base_images import _can_use_compatible_local_base_image
+
+    row = SimpleNamespace(
+        definition_fingerprint="fp",
+        status="building",
+        rebuild_requested=True,
+    )
+
+    assert not _can_use_compatible_local_base_image(
+        row,
+        "different",
+        local_exists=True,
+        local_compatible=True,
+    )
+    assert not _can_use_compatible_local_base_image(
+        row,
+        "fp",
+        local_exists=False,
+        local_compatible=True,
+    )
+    assert not _can_use_compatible_local_base_image(
+        row,
+        "fp",
+        local_exists=True,
+        local_compatible=False,
+    )
 
 
 def test_local_base_image_resolution_checks_docker_fingerprint_even_when_rebuild_requested():
