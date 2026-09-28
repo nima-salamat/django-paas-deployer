@@ -130,6 +130,11 @@ class DeployService:
 
         deploy_item.service.__class__.objects.filter(pk=deploy_item.service_id).update(desired_state="running")
         deploy_item.service.desired_state = "running"
+        # Capture the service lifecycle generation at execution start. Stop/delete
+        # intents bump this generation and invalidate an in-flight deployment.
+        expected_lifecycle_generation = int(
+            getattr(deploy_item.service, "lifecycle_generation", 0) or 0
+        )
         container_name = deploy_item.service.get_docker_service_name()
         state_tracker = DjangoDeploymentState(deploy_item)
         StateManager.heartbeat_deploy(deploy_item.pk, task_id=task_id, stage="starting")
@@ -175,6 +180,19 @@ class DeployService:
 
                 with transaction.atomic():
                     service = Service.objects.select_for_update().get(pk=service_id)
+
+                    actual_lifecycle_generation = int(
+                        getattr(service, "lifecycle_generation", 0) or 0
+                    )
+                    if actual_lifecycle_generation != expected_lifecycle_generation:
+                        raise InvalidServiceStateError(
+                            "Service lifecycle changed while this deployment was preparing to activate.",
+                            details={
+                                "expected_lifecycle_generation": expected_lifecycle_generation,
+                                "actual_lifecycle_generation": actual_lifecycle_generation,
+                                "service_id": service_id,
+                            },
+                        )
 
                     # Activation is idempotent for the same immutable revision.
                     # A duplicate delivery or a recovery path may have already
