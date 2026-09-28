@@ -536,8 +536,8 @@ def request_base_runtime_image_build(
         row.build_task_id = task_id
         row.build_owner_deployment_id = str(deployment_id or "")[:255]
         row.definition_fingerprint = fingerprint
-        row.rebuild_requested = rebuild_after_success
-        row.rebuild_requested_at = timezone.now() if rebuild_after_success else None
+        row.rebuild_requested = False
+        row.rebuild_requested_at = None
         row.build_started_at = row.build_started_at or timezone.now()
         row.build_completed_at = None
         row.last_error = ""
@@ -626,7 +626,7 @@ def build_registered_base_image(
         row.build_owner_deployment_id = owner_deployment_id
         row.definition_fingerprint = fingerprint
         row.rebuild_requested = False
-        row.build_started_at = timezone.now()
+        row.build_started_at = row.build_started_at or timezone.now()
         row.build_completed_at = None
         row.last_error = ""
         row.last_error_details = {}
@@ -699,6 +699,35 @@ def build_registered_base_image(
             try:
                 request_base_runtime_image_build(
                     row.pk, force_rebuild=True, deployment_id=None
+                )
+            except Exception:
+                logger.exception("Failed to queue requested post-build base-image renewal for %s.", row.image_ref)
+        if rebuild_after_success:
+            try:
+                pending_fp = pending_details.get("pending_definition_fingerprint")
+                pending_ref = pending_details.get("pending_image_ref")
+                if pending_fp and pending_ref:
+                    row.variant = "apache" if row.logical_runtime == "php" else row.variant
+                    row.source_image = pending_details.get("pending_source_image") or row.source_image
+                    row.image_repository = pending_details.get("pending_image_repository") or row.image_repository
+                    row.image_tag = pending_details.get("pending_image_tag") or row.image_tag
+                    row.image_ref = pending_ref
+                    row.definition_fingerprint = pending_fp
+                    row.status = BaseRuntimeImage.Status.PENDING
+                    row.image_id = ""
+                    row.image_digest = ""
+                row.rebuild_requested = False
+                row.rebuild_requested_at = None
+                row.save(update_fields=[
+                    "variant", "source_image", "image_repository", "image_tag",
+                    "image_ref", "definition_fingerprint", "status", "image_id",
+                    "image_digest", "rebuild_requested", "rebuild_requested_at",
+                    "last_error_details", "updated_at",
+                ])
+                request_base_runtime_image_build(
+                    row.pk,
+                    force_rebuild=not bool(pending_fp),
+                    deployment_id=None,
                 )
             except Exception:
                 logger.exception("Failed to queue requested post-build base-image renewal for %s.", row.image_ref)
@@ -806,19 +835,15 @@ def _mark_local_image_ready(
         return False
 
 def _base_image_wait_timeout_seconds(deployment_id: str | None) -> int:
-    from core.settings_service import base_image_timeout_minutes, deploy_timeout_minutes
-    lifecycle_seconds = max(base_image_timeout_minutes(), deploy_timeout_minutes()) * 60
-    if not deployment_id:
-        return lifecycle_seconds
-    try:
-        from deploy.models import Deploy
-        started = Deploy.objects.filter(pk=deployment_id).values_list("started_at", flat=True).first()
-        if started:
-            return max(0, int(lifecycle_seconds - (timezone.now() - started).total_seconds()))
-    except Exception:
-        logger.debug("Unable to calculate deployment-aware base-image deadline", exc_info=True)
-    return lifecycle_seconds
+    """Return only the deployment's dedicated base-image phase budget."""
+    from core.settings_service import base_image_build_timeout_minutes
 
+    if not deployment_id:
+        return base_image_build_timeout_minutes() * 60
+    remaining = deployment_phase_remaining_seconds(deployment_id)
+    if remaining is None:
+        return base_image_build_timeout_minutes() * 60
+    return remaining
 
 def _raise_base_image_failure(
     image_ref: str,
