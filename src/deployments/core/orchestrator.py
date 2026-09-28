@@ -152,6 +152,12 @@ class DeploymentOrchestrator:
                 # real reason; silently falling back would destroy predictability.
                 raise
 
+            # Base-image resolution has its own clock. Once all required base
+            # images are available, start a fresh full application budget.
+            from deploy.base_images import mark_application_phase_started
+            mark_application_phase_started(self.logger.deployment_id)
+            self._check_cancelled()
+
             # 5. Generate Dockerfile
             dockerfile_text = self.dockerfile_generator.render(
                 platform=config.platform,
