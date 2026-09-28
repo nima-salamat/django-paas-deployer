@@ -514,6 +514,13 @@ def _recover_stale_running_deploys_swarm(policies) -> None:
                 locked = Deploy.objects.select_for_update().select_related("service").filter(pk=deploy.pk).first()
                 if not locked or locked.status != DeploymentStatusChoices.RUNNING:
                     continue
+                if str(getattr(locked.service, "desired_state", "stopped") or "stopped").lower() != "running":
+                    logger.info(
+                        "Skipping stale Swarm recovery for deploy=%s because service desired_state is %s.",
+                        locked.pk,
+                        locked.service.desired_state,
+                    )
+                    continue
                 revision = ensure_revision_for_deploy(locked)
                 current = get_authoritative_deploy(locked.service)
                 if current is not None and current.pk != locked.pk:
@@ -950,7 +957,7 @@ def _reconcile_service_runtime_swarm(service: Service) -> None:
         return
     running = bool(state and state.replicas_running == 1)
     now = timezone.now()
-    deploy = get_active_deploy(service)
+    deploy = get_authoritative_deploy(service)
     current_policies = runtime_policies()
     with transaction.atomic():
         locked = Service.objects.select_for_update().filter(pk=service.pk).first()
