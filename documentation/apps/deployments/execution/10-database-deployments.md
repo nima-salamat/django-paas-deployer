@@ -4,7 +4,7 @@ Managed database services share the common Service -> ServiceRevision -> Deploy 
 
 ## Database domain
 
-Database resources/bindings/credentials are owned by [apps/services/](../apps/services/README.md). Deploy records and database API controls are owned by [apps/deploy/](../apps/deploy/README.md).
+Database resources/bindings/credentials are owned by [apps/services/](../../services/README.md). Deploy records and database API controls are owned by [apps/deploy/](../../deploy/README.md).
 
 ## Execution
 

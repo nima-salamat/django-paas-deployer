@@ -359,12 +359,12 @@ Deployment state changes happen at concurrency boundaries. A state write is ther
 4. [03-execution-lifecycle.md](execution/03-execution-lifecycle.md) — actual production call path.
 5. [04-build-and-platforms.md](execution/04-build-and-platforms.md) — source/build semantics.
 6. [05-runtime-and-swarm.md](execution/05-runtime-and-swarm.md) — runtime contract and concrete Swarm.
-7. [06-workers-concurrency-and-state.md](06-workers-concurrency-and-state.md) — locks, state, queues, races.
-8. [07-reconciliation-and-recovery.md](07-reconciliation-and-recovery.md) — drift and crash recovery.
-9. [08-base-images.md](08-base-images.md) — shared runtime image lifecycle.
-10. [09-logs-health-rollback-cleanup.md](09-logs-health-rollback-cleanup.md) — diagnostics and destructive boundaries.
-11. [10-database-deployments.md](10-database-deployments.md) — specialized branch.
-12. [11-testing-contracts-and-invariants.md](11-testing-contracts-and-invariants.md) — executable architecture.
+7. [06-workers-concurrency-and-state.md](execution/06-workers-concurrency-and-state.md) — locks, state, queues, races.
+8. [07-reconciliation-and-recovery.md](execution/07-reconciliation-and-recovery.md) — drift and crash recovery.
+9. [08-base-images.md](execution/08-base-images.md) — shared runtime image lifecycle.
+10. [09-logs-health-rollback-cleanup.md](execution/09-logs-health-rollback-cleanup.md) — diagnostics and destructive boundaries.
+11. [10-database-deployments.md](execution/10-database-deployments.md) — specialized branch.
+12. [11-testing-contracts-and-invariants.md](execution/11-testing-contracts-and-invariants.md) — executable architecture.
 13. Only then open the specific source module.
 
 ## Problem-oriented navigation
