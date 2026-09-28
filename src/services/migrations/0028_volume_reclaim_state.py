@@ -2,7 +2,7 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    dependencies = [("services", "0027_volume_released_at")]
+    dependencies = [\n        ("services", "0027_rename_service_port_res_host_protocol_state_services_se_host_po_f50e1a_idx_and_more"),\n        ("services", "0027_volume_released_at"),\n    ]
 
     operations = [
         migrations.AddField(
