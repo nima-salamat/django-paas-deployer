@@ -363,11 +363,9 @@ def _spec_for_record(row: BaseRuntimeImage) -> BaseImageSpec:
     version = str(row.runtime_version or "")
     variant = str(row.variant or "default")
     if runtime == "php":
-        if variant == "apache":
-            return _php(version)
-        if variant in {"apache-root", "apache-public"}:
-            return _legacy_php(version, variant)
-        raise ValueError(f"Unsupported PHP base-image variant {variant!r}")
+        if variant not in {"apache", "apache-root", "apache-public"}:
+            raise ValueError(f"Unsupported PHP base-image variant {variant!r}")
+        return _php(version)
     if runtime == "python":
         return _python(version)
     if runtime == "node":
@@ -377,66 +375,6 @@ def _spec_for_record(row: BaseRuntimeImage) -> BaseImageSpec:
     if runtime == "go":
         return _go(version)
     raise ValueError(f"Unsupported base runtime {runtime!r}")
-
-
-def _wait_for_legacy_php_tag_collision(
-    spec: BaseImageSpec,
-    *,
-    host: str,
-    deployment_id: str | None,
-    logger_sink=None,
-) -> bool:
-    """Wait for a legacy PHP public variant that still owns the canonical tag."""
-    if spec.logical_runtime != "php" or spec.variant != "apache":
-        return False
-    legacy = (
-        BaseRuntimeImage.objects
-        .filter(
-            logical_runtime="php",
-            runtime_version=spec.version,
-            variant="apache-public",
-            architecture="",
-            docker_host=host,
-            status=BaseRuntimeImage.Status.BUILDING,
-        )
-        .order_by("build_started_at")
-        .first()
-    )
-    if legacy is None:
-        return False
-    legacy_ref = legacy.image_ref
-    if legacy_ref != spec.image_ref:
-        return False
-    if logger_sink:
-        logger_sink.info(
-            "base_image",
-            (
-                f"Legacy PHP base image {legacy_ref} is still being built by another worker. "
-                "Waiting before claiming the canonical tag to avoid two definitions writing the same image reference."
-            ),
-            progress=17,
-            details={
-                "image": spec.image_ref,
-                "legacy_variant": "apache-public",
-                "owner_task_id": str(legacy.build_task_id or ""),
-                "build_started_at": legacy.build_started_at.isoformat() if legacy.build_started_at else None,
-                "waiting_for_existing_build": True,
-                "tag_collision_guard": True,
-            },
-        )
-    timeout = _base_image_wait_timeout_seconds(deployment_id)
-    if timeout <= 0:
-        raise BaseImageBuildError(
-            f"Base image wait timed out: {spec.image_ref} while an existing legacy PHP build still owned the tag.",
-            stage="base_image",
-            details={
-                "base_image_ref": spec.image_ref,
-                "legacy_variant": "apache-public",
-                "timeout_phase": "base_image",
-            },
-        )
-    _wait_for_existing_build(legacy.pk, legacy_ref, timeout=timeout)
-    return True
 
 def _local_image_matches_fingerprint(image_ref: str, fingerprint: str) -> bool:
     if not _docker_image_exists(image_ref):
@@ -470,11 +408,25 @@ def request_base_runtime_image_build(
                 f"Base runtime image {row.logical_runtime}:{row.runtime_version}:{row.variant} is disabled."
             )
         if str(row.logical_runtime).lower() == "php" and str(row.variant).lower() in {"apache-root", "apache-public"}:
-            raise RuntimeError(
-                f"Legacy PHP base-image identity {row.image_ref} is not a supported manual build target. "
-                "Use the canonical php/apache base image instead."
-            )
+            # Transitional database rows are safely converged before an operator
+            # build. Do not preserve duplicate PHP identities.
+            row.variant = "apache"
+            row.source_image = _php(str(row.runtime_version)).source_image
+            row.image_repository = _php(str(row.runtime_version)).repository
+            row.image_tag = _php(str(row.runtime_version)).tag
+            row.image_ref = _php(str(row.runtime_version)).image_ref
+            row.definition_fingerprint = ""
+            row.save(update_fields=[
+                "variant", "source_image", "image_repository", "image_tag",
+                "image_ref", "definition_fingerprint", "updated_at",
+            ])
         spec = _spec_for_record(row)
+        if str(row.logical_runtime).lower() == "php" and str(row.variant).lower() in {"apache-root", "apache-public"}:
+            row.variant = "apache"
+            row.source_image = spec.source_image
+            row.image_repository = spec.repository
+            row.image_tag = spec.tag
+            row.image_ref = spec.image_ref
         fingerprint = _spec_fingerprint(spec)
 
         if row.status == BaseRuntimeImage.Status.BUILDING:
@@ -886,6 +838,38 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                     docker_host=host,
                 ).first()
             )
+            if row is None and spec.logical_runtime == "php":
+                legacy = (
+                    BaseRuntimeImage.objects.select_for_update()
+                    .filter(
+                        logical_runtime="php",
+                        runtime_version=spec.version,
+                        variant__in=("apache-root", "apache-public"),
+                        architecture="",
+                        docker_host=host,
+                    )
+                    .order_by("build_started_at", "created_at")
+                    .first()
+                )
+                if legacy is not None:
+                    # Converge the legacy identity to the canonical row while
+                    # preserving an active owner/build task. The current code's
+                    # _spec_for_record() always resolves PHP to the canonical
+                    # definition, so an in-flight builder can finish at the
+                    # canonical image reference after the registry rename.
+                    row = legacy
+                    row.variant = "apache"
+                    row.source_image = spec.source_image
+                    row.image_repository = spec.repository
+                    row.image_tag = spec.tag
+                    row.image_ref = spec.image_ref
+                    if row.status != BaseRuntimeImage.Status.BUILDING:
+                        row.definition_fingerprint = fingerprint
+                    row.save(update_fields=[
+                        "variant", "source_image", "image_repository",
+                        "image_tag", "image_ref", "definition_fingerprint",
+                        "updated_at",
+                    ])
             if row is None:
                 row = BaseRuntimeImage.objects.create(
                     logical_runtime=spec.logical_runtime,
@@ -1017,14 +1001,6 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                 # Start this deployment's independent base-image budget only
                 # after a compatible cache hit has been ruled out.
                 mark_base_image_phase_started(deployment_id)
-
-            if _wait_for_legacy_php_tag_collision(
-                spec,
-                host=host,
-                deployment_id=deployment_id,
-                logger_sink=logger_sink,
-            ):
-                continue
 
             effective_auto_build = bool(row.auto_build and policy["auto_build"])
             if not effective_auto_build and not local_exists:
