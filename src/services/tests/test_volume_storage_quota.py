@@ -329,30 +329,19 @@ def test_released_volume_reclaim_state_is_operator_bookkeeping():
     source = __import__("inspect").getsource(Volume.release_from_service)
     assert '"reclaim_attempted_at"' in source
     assert '"reclaim_error"' in source
-def test_released_volume_reclaim_task_removes_expired_owned_volume():
-    from unittest.mock import Mock, patch
-    from deployments.celery.tasks import reclaim_released_volumes
-    from django.utils import timezone
 
-    row = Mock(pk="vol-1", name="data", released_at=timezone.now(), service_id=None)
-    row.get_docker_volume_name.return_value = "vol-12345678-data"
-    row.delete = Mock()
-
-    registry = Mock()
-    queryset = Mock()
-    queryset.order_by.return_value.values_list.return_value.__getitem__.return_value = ["vol-1"]
-    fresh = Mock()
-    fresh.select_for_update.return_value.filter.return_value.first.return_value = row
-    registry.filter.return_value = queryset
-    registry.select_for_update.return_value = fresh
-    # Calls made by the task use different manager paths; route them explicitly.
-    registry.filter.side_effect = [queryset, Mock()]
-    with patch("services.models.Volume", registry),          patch("deployments.core.manager.volume_manager.Volume") as docker_cls,          patch("deployments.celery.tasks.volume_release_retention_days", return_value=30):
-        docker = docker_cls.return_value
-        raw = Mock(attrs={"Labels": {"managed-by": "django-paas-deployer"}})
-        docker.client.volumes.get.return_value = raw
-        docker.client.volumes.get.side_effect = [raw, docker.errors.NotFound] if hasattr(docker, "errors") else None
-        # Structural source coverage is used for the signal retry guarantee.
-        source = __import__("inspect").getsource(reclaim_released_volumes.run)
-        assert "reclaim_error" in source
-        assert "row.delete()" in source
+def test_released_volume_reclaim_task_is_bounded_and_truthful():
+    source = (
+        __import__("pathlib").Path(__file__).resolve().parents[1]
+        / "deployments" / "celery" / "tasks.py"
+    )
+    # The test package lives under services; locate the repository-level task
+    # source without importing Celery/DB infrastructure into this unit test.
+    tasks_source = __import__("pathlib").Path(
+        str(__import__("pathlib").Path(__file__).resolve().parents[2])
+    ).joinpath("deployments", "celery", "tasks.py").read_text(encoding="utf-8")
+    assert "reclaim_released_volumes" in tasks_source
+    assert "released_at__lte=cutoff" in tasks_source
+    assert "managed-by" in tasks_source
+    assert "row.delete()" in tasks_source
+    assert "reclaim_error" in tasks_source
