@@ -33,7 +33,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest pytest-django
-      - name: Validate documentation source coverage\n        run: |\n          python scripts/validate_documentation.py\n      - name: Run unit and regression tests
+      - name: Validate documentation source coverage
+        run: |
+          python scripts/validate_documentation.py
+      - name: Run unit and regression tests
         env:
           DJANGO_SETTINGS_MODULE: config.settings
           SECRET_KEY: test-secret-key-for-ci
