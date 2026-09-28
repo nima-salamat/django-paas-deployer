@@ -248,7 +248,10 @@ def build_slot_lease_seconds() -> int:
 
 
 def deploy_timeout_minutes() -> int:
-    return max(1, min(int(_wagtail_core_value("deploy_timeout_minutes", get_int("deploy.max_time_minute", 10))), 1440))
+    value = _wagtail_core_value("deploy_timeout_minutes", None)
+    if value is None:
+        value = get_int("deploy.max_time_minute", 10)
+    return max(1, min(int(value), 1440))
 
 
 def queued_timeout_minutes() -> int:
@@ -283,14 +286,20 @@ def monitor_max_recovery_attempts() -> int:
     return max(0, min(int(_wagtail_core_value("monitor_max_recovery_attempts", 3)), 10))
 
 
+def base_image_build_timeout_minutes() -> int:
+    """Dedicated operator-owned base-image build/wait lifecycle budget."""
+    return max(
+        1,
+        min(
+            int(_wagtail_core_value("base_image_build_timeout_minutes", 10)),
+            1440,
+        ),
+    )
+
+
 def base_image_timeout_minutes() -> int:
-    """Canonical maximum lifecycle for a base-image build/wait operation.
-
-    The legacy Wagtail field name is retained for compatibility, but this
-    value is shared by deployment waiting and monitor stale-build recovery.
-    """
-    return max(5, min(int(_wagtail_core_value("monitor_stale_base_build_minutes", 30)), 1440))
-
+    """Backward-compatible alias for the dedicated base-image budget."""
+    return base_image_build_timeout_minutes()
 
 def monitor_stale_base_build_minutes() -> int:
     # Backward-compatible alias for older callers/settings.

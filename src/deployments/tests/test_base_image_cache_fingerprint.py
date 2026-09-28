@@ -4,7 +4,7 @@ from types import SimpleNamespace
 def test_base_image_definition_fingerprint_changes_with_operator_content():
     from deploy.base_images import _php, _spec_fingerprint
 
-    first = _php("8.4", public_root=False)
+    first = _php("8.4")
     second = type(first)(
         first.logical_runtime,
         first.version,
@@ -21,7 +21,7 @@ def test_changed_definition_cannot_adopt_unlabelled_local_image(monkeypatch):
     import deploy.base_images as base_images
 
     class FakeRow:
-        image_ref = "paas-base/php-apache-root:8.4-r1"
+        image_ref = "paas-base/php-apache:8.4-r1"
         status = "pending"
         image_id = ""
         image_digest = ""
@@ -48,4 +48,4 @@ def test_changed_definition_cannot_adopt_unlabelled_local_image(monkeypatch):
 
 def test_base_php_cache_tag_remains_stable():
     from deploy.base_images import _php
-    assert _php("8.4", public_root=False).image_ref == "paas-base/php-apache-root:8.4-r1"
+    assert _php("8.4").image_ref == "paas-base/php-apache:8.4-r1"

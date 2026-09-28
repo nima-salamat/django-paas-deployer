@@ -886,3 +886,12 @@ This status is part of the design contract: new code must extend the seams
 above or explicitly document why an existing compatibility path remains. It
 must not introduce another direct Docker path or another independent
 deployment state machine.
+## Base runtime image lifecycle contract
+
+The base runtime lifecycle is a separate phase of deployment. When a required base image is missing, incompatible, or already being built, the deployment enters the `base_image` phase and receives the dedicated `base_image_build_timeout_minutes` budget (10 minutes by default). This clock starts at the deployment's own base-image wait boundary.
+
+After all required base images are verified READY, the deployment records `application_started_at` and receives the full `deploy_timeout_minutes` budget (10 minutes by default). Base-image time is not subtracted from that application budget.
+
+Example: 6 minutes of shared PHP base build + 7 minutes of application build is 6 minutes of base phase followed by 7 minutes of application phase, so both individual 10-minute budgets remain within their limits. A base phase exceeding 10 minutes fails in the base-image stage; an application phase exceeding 10 minutes fails in the application stage.
+
+BaseRuntimeImage ownership and waiting are keyed by Docker host. Two deployments on the same Docker daemon share one build. Different Docker daemons have separate ownership rows/builds unless an external image distribution mechanism makes the resulting application image available elsewhere.

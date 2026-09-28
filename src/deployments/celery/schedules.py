@@ -594,19 +594,13 @@ def _reconcile_active_deploy(deploy: Deploy) -> None:
 
         service = locked.service
 
-        # 1. Timeout check
-        if locked.status == "running" and locked.started_at:
-            minutes_elapsed = (now - locked.started_at).total_seconds() / 60.0
-            timeout_minutes = int(policies["deploy_timeout_minutes"])
-            # A base-image build has its own operator-owned lifecycle budget;
-            # the deployment monitor uses the same absolute budget as the
-            # synchronous base-image waiter.
-            if (str(locked.stage or "").strip().lower() == "base_image"):
-                timeout_minutes = max(
-                    timeout_minutes,
-                    int(policies["base_image_timeout_minutes"]),
-                )
-            if minutes_elapsed >= timeout_minutes:
+        # 1. Timeout check. The phase deadline is authoritative:
+        # base-image wait has its own budget; application work gets a fresh
+        # deployment budget after base readiness.
+        if locked.status == "running":
+            from deploy.base_images import deployment_phase_remaining_seconds
+            remaining = deployment_phase_remaining_seconds(locked, now=now)
+            if remaining is not None and remaining <= 0:
                 mark_deploy_timeout(
                     deploy=locked,
                     container_exists=exists,
@@ -701,15 +695,10 @@ def _reconcile_active_deploy_swarm(deploy: Deploy) -> None:
         if not locked or locked.status not in ACTIVE_DEPLOY_STATUSES or locked.cancel_requested:
             return
         current_policies = runtime_policies()
-        if locked.started_at:
-            minutes_elapsed = (now - locked.started_at).total_seconds() / 60.0
-            timeout_minutes = int(current_policies["deploy_timeout_minutes"])
-            if str(locked.stage or "").strip().lower() == "base_image":
-                timeout_minutes = max(
-                    timeout_minutes,
-                    int(current_policies["base_image_timeout_minutes"]),
-                )
-            if minutes_elapsed >= timeout_minutes:
+        if locked.status == "running":
+            from deploy.base_images import deployment_phase_remaining_seconds
+            remaining = deployment_phase_remaining_seconds(locked, now=now)
+            if remaining is not None and remaining <= 0:
                 mark_deploy_timeout(
                     deploy=locked,
                     container_exists=bool(state),
@@ -1021,15 +1010,24 @@ def _reconcile_service_runtime_swarm(service: Service) -> None:
 
 def _reconcile_base_runtime_builds(policies: dict) -> None:
     """Recover base-image rows whose builder disappeared or exceeded the operator timeout."""
-    cutoff = timezone.now() - timedelta(minutes=int(policies["base_image_timeout_minutes"]))
+    cutoff = timezone.now() - timedelta(
+        minutes=int(policies["base_image_build_timeout_minutes"])
+    )
     stale = BaseRuntimeImage.objects.filter(
         status=BaseRuntimeImage.Status.BUILDING,
         build_started_at__lt=cutoff,
     ).order_by("build_started_at")[: int(policies["monitor_batch_size"])]
     for row in stale:
         try:
+            if bool((row.last_error_details or {}).get("retry_pending")):
+                # Celery retry state is non-terminal. Do not let the monitor
+                # convert an intermediate retry into FAILED.
+                continue
             updated = BaseRuntimeImage.objects.filter(
-                pk=row.pk, status=BaseRuntimeImage.Status.BUILDING, build_started_at__lt=cutoff
+                pk=row.pk,
+                status=BaseRuntimeImage.Status.BUILDING,
+                build_started_at__lt=cutoff,
+                build_task_id=row.build_task_id,
             ).update(
                 status=BaseRuntimeImage.Status.FAILED,
                 build_task_id="",

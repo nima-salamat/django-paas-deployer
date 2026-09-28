@@ -68,15 +68,16 @@ class BaseRuntimeImageViewSet(SnippetViewSet):
     search_fields = ["logical_runtime", "runtime_version", "image_ref", "source_image", "docker_host"]
     ordering = ["logical_runtime", "runtime_version", "variant"]
     panels = panels_for(
-        editable=["logical_runtime", "runtime_version", "variant", "architecture", "enabled", "auto_build"],
+        editable=["enabled", "auto_build"],
         read_only=[
-            "id", "source_image", "image_repository", "image_tag", "image_ref", "image_id",
-            "image_digest", "docker_host", "status", "rebuild_requested", "rebuild_requested_at",
-            "build_started_at", "build_completed_at", "build_count", "last_error", "created_at", "updated_at",
+            "id", "logical_runtime", "runtime_version", "variant", "architecture",
+            "source_image", "image_repository", "image_tag", "image_ref", "image_id",
+            "image_digest", "docker_host", "status", "rebuild_requested",
+            "rebuild_requested_at", "build_started_at", "build_completed_at",
+            "build_count", "build_task_id", "build_owner_deployment_id",
+            "definition_fingerprint", "last_error", "created_at", "updated_at",
         ],
     )
-
-
 
 class SwarmInfrastructurePermissionPolicy(ModelPermissionPolicy):
     """Infrastructure records are discovered from Docker; operators edit desired state only."""

@@ -16,8 +16,12 @@ COPY . /var/www/html/
 
 def test_multiline_php_runtime_fallback_is_stripped():
     from deployments.core.dockerfile import _strip_base_owned_php_runtime
-    dockerfile = """\nFROM paas-base/php-apache:8.4-r1\nRUN docker-php-ext-install mysqli pdo pdo_mysql \\n    && a2enmod rewrite headers mime\
-RUN echo \"app\" > /tmp/app\n"""
+    dockerfile = """
+FROM paas-base/php-apache:8.4-r1
+RUN docker-php-ext-install mysqli pdo pdo_mysql \
+    && a2enmod rewrite headers mime
+RUN echo "app" > /tmp/app
+"""
     out = _strip_base_owned_php_runtime(dockerfile)
     assert "docker-php-ext-install" not in out
     assert "a2enmod" not in out
@@ -109,9 +113,9 @@ FROM python:3.11-slim AS worker
 RUN echo python
 """
     config = SimpleNamespace(
-        base_images={"base_image": "paas-base/php-apache-root:8.4-r1"},
+        base_images={"base_image": "paas-base/php-apache:8.4-r1"},
         platform="php",
     )
     out = _apply_resolved_base_images(dockerfile, config)
-    assert "FROM paas-base/php-apache-root:8.4-r1 AS runtime" in out
+    assert "FROM paas-base/php-apache:8.4-r1 AS runtime" in out
     assert "FROM python:3.11-slim AS worker" in out

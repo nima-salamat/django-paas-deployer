@@ -33,7 +33,7 @@ def test_php84_missing_base_auto_build_reaches_final_container():
     from deployments.core.types import DeploymentConfig
     from deployments.core.manager import image_manager
 
-    source = _php("8.4", public_root=False).source_image
+    source = _php("8.4").source_image
     # The test exercises the real base-image path but avoids leaving a
     # persistent application container behind.
     with tempfile.TemporaryDirectory(prefix="paas-base-e2e-") as td:
@@ -71,7 +71,7 @@ def test_php84_missing_base_auto_build_reaches_final_container():
                 except Exception:
                     pass
         row = BaseRuntimeImage.objects.filter(
-            image_ref="paas-base/php-apache-root:8.4-r1"
+            image_ref="paas-base/php-apache:8.4-r1"
         ).first()
         assert row is not None
         assert row.status == BaseRuntimeImage.Status.READY

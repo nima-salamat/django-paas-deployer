@@ -62,6 +62,18 @@ class Deploy(BaseModel):
         default=DeploymentStatusChoices.PENDING,
     )
     stage = models.CharField(_("Deployment Stage"), max_length=64, blank=True, default="idle")
+    base_image_wait_started_at = models.DateTimeField(
+        _("Base Image Wait Started"), blank=True, null=True, editable=False,
+        help_text=_("Start of this deployment's dedicated base-image build/wait phase."),
+    )
+    base_image_ready_at = models.DateTimeField(
+        _("Base Image Ready"), blank=True, null=True, editable=False,
+        help_text=_("Timestamp when all required base runtime images became available."),
+    )
+    application_started_at = models.DateTimeField(
+        _("Application Phase Started"), blank=True, null=True, editable=False,
+        help_text=_("Start of the normal application deployment budget after base images are ready."),
+    )
     progress = models.PositiveSmallIntegerField(_("Deployment Progress"), default=0)
     status_message = models.TextField(_("Status Message"), blank=True, default="")
     error_message = models.TextField(_("Error Message"), blank=True, default="")
@@ -176,6 +188,34 @@ class Deploy(BaseModel):
                     old_zip_name,
                 )
     
+    def lifecycle_phase_started_at(self):
+        """Return the authoritative timestamp for the current lifecycle phase."""
+        stage = str(self.stage or "").strip().lower()
+        if stage == "base_image":
+            return self.base_image_wait_started_at or self.started_at
+        return self.application_started_at or self.started_at
+
+    def lifecycle_phase_deadline(
+        self,
+        *,
+        base_timeout_minutes: int,
+        application_timeout_minutes: int,
+        now=None,
+    ):
+        """Return the current phase deadline without mixing base/app budgets."""
+        now = now or timezone.now()
+        started = self.lifecycle_phase_started_at()
+        if not started:
+            return None
+        stage = str(self.stage or "").strip().lower()
+        timeout_minutes = (
+            base_timeout_minutes
+            if stage == "base_image"
+            else application_timeout_minutes
+        )
+        from datetime import timedelta
+        return started + timedelta(minutes=max(0, int(timeout_minutes)))
+
     def __str__(self):
         return f"{self.name} (v{self.version})"
 
