@@ -104,6 +104,57 @@ def test_application_phase_gets_a_fresh_budget_after_base_readiness():
     assert deadline > now + timedelta(minutes=2)
 
 
+
+def test_phase_timeout_examples_match_10_plus_10_contract():
+    now = timezone.now()
+
+    base = Deploy(
+        name="base-6m-app-7m",
+        version=1.0,
+        stage="base_image",
+        started_at=now - timedelta(minutes=13),
+        base_image_wait_started_at=now - timedelta(minutes=6),
+    )
+    assert deployment_phase_remaining_seconds(base, now=now) == 4 * 60
+
+    application = Deploy(
+        name="base-ready-app-7m",
+        version=1.0,
+        stage="image_build",
+        started_at=now - timedelta(minutes=13),
+        base_image_wait_started_at=now - timedelta(minutes=6),
+        base_image_ready_at=now - timedelta(minutes=7),
+        application_started_at=now - timedelta(minutes=7),
+    )
+    assert deployment_phase_remaining_seconds(application, now=now) == 3 * 60
+
+
+def test_base_phase_times_out_after_10_minutes_independent_of_old_deploy_start():
+    now = timezone.now()
+    deployment = Deploy(
+        name="base-11m",
+        version=1.0,
+        stage="base_image",
+        started_at=now - timedelta(minutes=20),
+        base_image_wait_started_at=now - timedelta(minutes=11),
+    )
+    assert deployment_phase_remaining_seconds(deployment, now=now) == 0
+
+
+def test_application_phase_times_out_after_10_minutes_from_application_start():
+    now = timezone.now()
+    deployment = Deploy(
+        name="app-11m",
+        version=1.0,
+        stage="image_build",
+        started_at=now - timedelta(minutes=20),
+        base_image_wait_started_at=now - timedelta(minutes=5),
+        base_image_ready_at=now - timedelta(minutes=11),
+        application_started_at=now - timedelta(minutes=11),
+    )
+    assert deployment_phase_remaining_seconds(deployment, now=now) == 0
+
+
 def test_phase_remaining_contract_is_shared_by_base_wait_helper():
     source = (ROOT / "deploy" / "base_images.py").read_text(encoding="utf-8")
     assert "deployment_phase_remaining_seconds(deployment_id)" in source
