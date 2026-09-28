@@ -396,6 +396,24 @@ class SwarmFailureRecoveryTests(unittest.TestCase):
         self.assertEqual(removed, ["demo-old"])
         self.assertEqual(failures, [])
 
+    def test_stale_process_cleanup_failure_is_non_fatal(self):
+        runtime = SwarmRuntime.__new__(SwarmRuntime)
+        runtime.service_names_for_service = MagicMock(
+            return_value=["demo", "demo-old"]
+        )
+        runtime.remove = MagicMock(side_effect=RuntimeError("service busy"))
+
+        removed, failures = runtime.cleanup_stale_process_services(
+            service_id="svc-1",
+            desired_service_names=["demo"],
+        )
+
+        self.assertEqual(removed, [])
+        self.assertEqual(
+            failures,
+            [{"service": "demo-old", "error": "service busy"}],
+        )
+
     def test_unexpected_swarm_process_exception_keeps_recovery_context(self):
         orchestrator = DeploymentOrchestrator.__new__(DeploymentOrchestrator)
         orchestrator.logger = MagicMock()
