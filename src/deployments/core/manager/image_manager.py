@@ -394,13 +394,37 @@ class Image(Client):
         cancel_check: Optional[Callable[[], bool]] = None,
         lease_check: Optional[Callable[[], None]] = None,
         ownership_check: Optional[Callable[[], None]] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> Optional[str]:
         """Consume build stream and actively close it when cancellation is requested."""
         import threading
 
         image_id: Optional[str] = None
         cancelled = threading.Event()
+        timed_out = threading.Event()
         watcher = None
+        timeout_watcher = None
+
+        if timeout_seconds is not None:
+            try:
+                timeout_value = max(0.1, float(timeout_seconds))
+            except (TypeError, ValueError):
+                timeout_value = None
+            if timeout_value is not None:
+                def _watch_timeout():
+                    if not cancelled.wait(timeout_value):
+                        timed_out.set()
+                        try:
+                            response.close()
+                        except Exception:
+                            pass
+
+                timeout_watcher = threading.Thread(
+                    target=_watch_timeout,
+                    name="deploy-build-timeout",
+                    daemon=True,
+                )
+                timeout_watcher.start()
 
         if cancel_check is not None:
             if cancel_check():
@@ -435,6 +459,8 @@ class Image(Client):
 
         try:
             for chunk in self._iter_build_stream(response):
+                if timed_out.is_set():
+                    raise TimeoutError("Docker image build exceeded the configured build timeout.")
                 if lease_check is not None:
                     lease_check()
                 if ownership_check is not None:
@@ -482,6 +508,8 @@ class Image(Client):
                 else:
                     logger.debug("Build chunk: %s", chunk)
 
+            if timed_out.is_set():
+                raise TimeoutError("Docker image build exceeded the configured build timeout.")
             if cancelled.is_set():
                 from deployments.common.exceptions import DeploymentCancelled
                 raise DeploymentCancelled(
@@ -494,6 +522,8 @@ class Image(Client):
             cancelled.set()
             if watcher is not None:
                 watcher.join(timeout=0.5)
+            if timeout_watcher is not None:
+                timeout_watcher.join(timeout=0.5)
 
 
     def create(
@@ -501,6 +531,7 @@ class Image(Client):
         on_build_output: Optional[Callable] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
         ownership_check: Optional[Callable[[], None]] = None,
+        timeout_seconds: Optional[float] = None,
     ):
         """Build the exact model-derived image and apply its tag after build.
 
@@ -667,6 +698,7 @@ class Image(Client):
                         cancel_check=cancel_check,
                         lease_check=build_slot.assert_owned,
                         ownership_check=ownership_check,
+                        timeout_seconds=timeout_seconds,
                     )
                     if not image_id:
                         raise ImageBuildError(
