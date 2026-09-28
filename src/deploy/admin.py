@@ -384,13 +384,32 @@ class BaseRuntimeImageAdmin(admin.ModelAdmin):
         )
     @admin.action(description="Enable selected base images")
     def enable_selected(self, request, queryset):
-        count = queryset.update(enabled=True, status=BaseRuntimeImage.Status.PENDING)
-        self.message_user(request, f"Enabled {count} base image(s).")
+        updated = 0
+        for obj in queryset:
+            if obj.status == BaseRuntimeImage.Status.BUILDING or obj.build_task_id:
+                obj.enabled = True
+                obj.save(update_fields=["enabled", "updated_at"])
+            else:
+                obj.enabled = True
+                obj.status = BaseRuntimeImage.Status.PENDING
+                obj.save(update_fields=["enabled", "status", "updated_at"])
+            updated += 1
+        self.message_user(request, f"Enabled {updated} base image(s).")
 
     @admin.action(description="Disable selected base images")
     def disable_selected(self, request, queryset):
-        count = queryset.update(enabled=False, status=BaseRuntimeImage.Status.DISABLED)
-        self.message_user(request, f"Disabled {count} base image(s).")
+        updated = 0
+        skipped = 0
+        for obj in queryset:
+            if obj.status == BaseRuntimeImage.Status.BUILDING or obj.build_task_id:
+                obj.enabled = False
+                obj.save(update_fields=["enabled", "updated_at"])
+            else:
+                obj.enabled = False
+                obj.status = BaseRuntimeImage.Status.DISABLED
+                obj.save(update_fields=["enabled", "status", "updated_at"])
+            updated += 1
+        self.message_user(request, f"Disabled {updated} base image(s) without interrupting active builders.")
 
     @admin.action(description="Remove unused Docker images for selected rows")
     def delete_docker_images(self, request, queryset):
