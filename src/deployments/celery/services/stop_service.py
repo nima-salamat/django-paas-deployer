@@ -79,6 +79,7 @@ class StopService:
 
         active_deploy = get_active_deploy(service)
         state_tracker = DjangoDeploymentState(active_deploy) if active_deploy else None
+        stopped = False
 
         try:
             if swarm_enabled():
