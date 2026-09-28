@@ -1096,17 +1096,8 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                         },
                     )
                 continue
+
             if logger_sink:
-                    logger_sink.info(
-                        "base_image",
-                        f"Registered compatible local base image {row.image_ref}.",
-                        progress=17,
-                        details={
-                            "image": row.image_ref, "runtime": key, "cache": "adopted",
-                            "definition_fingerprint": fingerprint,
-                        },
-                    )
-                continue
 
             if logger_sink:
                 logger_sink.info(
