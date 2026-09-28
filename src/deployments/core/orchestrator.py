@@ -472,9 +472,9 @@ class DeploymentOrchestrator:
         try:
             states = runtime.apply_processes(config, image_ref=image_ref)
             self._swarm_recovery_context = dict(runtime._last_apply_recovery or {})
-        except DeploymentError as exc:
+        except Exception as exc:
             self._swarm_recovery_context = dict(
-                (exc.details or {}).get("swarm_recovery")
+                (getattr(exc, "details", {}) or {}).get("swarm_recovery")
                 or getattr(runtime, "_last_apply_recovery", {})
                 or {}
             )
@@ -506,6 +506,26 @@ class DeploymentOrchestrator:
                 details={"service": config.name, "deployment_id": self.logger.deployment_id},
             )
             self._activation_callback()
+
+        service_id = str(config.labels.get("service.id") or "").strip()
+        desired_service_names = [state.name for state in states.values()]
+        stale_names = list(
+            (self._swarm_recovery_context or {}).get("stale_service_names") or []
+        )
+        if service_id and stale_names:
+            stale_removed, stale_failures = runtime.cleanup_stale_process_services(
+                service_id=service_id,
+                desired_service_names=desired_service_names,
+            )
+            self.logger.info(
+                "cleanup",
+                "Stale Swarm process cleanup completed after activation.",
+                progress=98,
+                details={
+                    "removed_stale_services": stale_removed,
+                    "stale_cleanup_failures": stale_failures,
+                },
+            )
 
         removed = runtime.cleanup_legacy_containers(
             service_id=str(config.labels.get("service.id") or "")
