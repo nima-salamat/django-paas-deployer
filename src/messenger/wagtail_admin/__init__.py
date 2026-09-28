@@ -1,10 +1,6 @@
-"""Wagtail admin integration for the messenger app."""
+"""No model snippets are registered for messenger."""
 from __future__ import annotations
-
-from .models import MessengerGroup
 
 
 def register():
-    from wagtail.snippets.models import register_snippet
-
-    register_snippet(MessengerGroup)
+    return None
