@@ -230,6 +230,16 @@ class CoreSettings(BaseGenericSetting):
         help_text=_("Warn users when actual Docker volume usage reaches this percentage of declared logical capacity."),
     )
 
+    volume_release_retention_days = models.PositiveIntegerField(
+        default=30,
+        validators=[MinValueValidator(1), MaxValueValidator(3650)],
+        verbose_name=_("Released volume retention (days)"),
+        help_text=_(
+            "How long a released volume's Docker data remains physically retained "
+            "after logical Service quota is freed. Expired released volumes are reclaimed automatically."
+        ),
+    )
+
     build_slot_lease_seconds = models.PositiveIntegerField(
         default=900, verbose_name=_("Build slot lease (seconds)"),
         help_text=_("Lease duration used to recover abandoned build slots."),
@@ -315,6 +325,7 @@ class CoreSettings(BaseGenericSetting):
                 FieldPanel("build_max_cpu"),
                 FieldPanel("build_max_ram_mb"),
                 FieldPanel("volume_usage_warning_percent"),
+                FieldPanel("volume_release_retention_days"),
                 FieldPanel("build_slot_lease_seconds"),
             ],
             heading=_("Docker build resources"),
