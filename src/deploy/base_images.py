@@ -540,7 +540,17 @@ def build_registered_base_image(
     effective_policy = resolve_build_policy(build_policy)
     with transaction.atomic():
         row = BaseRuntimeImage.objects.select_for_update().get(pk=base_image_id)
+        legacy_php_identity = (
+            str(row.logical_runtime).lower() == "php"
+            and str(row.variant).lower() in {"apache-root", "apache-public"}
+        )
         spec = _spec_for_record(row)
+        if legacy_php_identity:
+            row.variant = "apache"
+            row.source_image = spec.source_image
+            row.image_repository = spec.repository
+            row.image_tag = spec.tag
+            row.image_ref = spec.image_ref
         fingerprint = _spec_fingerprint(spec)
         if task_id and row.status in {
             BaseRuntimeImage.Status.BUILDING,
@@ -580,12 +590,17 @@ def build_registered_base_image(
         row.build_completed_at = None
         row.last_error = ""
         row.last_error_details = {}
-        row.save(update_fields=[
+        build_state_fields = [
             "status", "build_task_id", "build_owner_deployment_id",
             "definition_fingerprint", "rebuild_requested", "rebuild_requested_at",
             "build_started_at", "build_completed_at",
             "last_error", "last_error_details", "updated_at",
-        ])
+        ]
+        if legacy_php_identity:
+            build_state_fields.extend([
+                "variant", "source_image", "image_repository", "image_tag", "image_ref",
+            ])
+        row.save(update_fields=build_state_fields)
 
     try:
         def _assert_db_owner() -> None:
