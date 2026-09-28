@@ -718,8 +718,8 @@ def service_status_apiview(request):
             {
                 "result": "error",
                 "running": False,
-                "cpu": 0,
-                "ram": 0,
+                "cpu": None,
+                "ram": None,
                 "detail": str(pe),
             },
             status=status.HTTP_403_FORBIDDEN,
@@ -744,14 +744,22 @@ def service_status_apiview(request):
             stats = Container(name=name).get_container_stats() or {}
 
         running = bool(stats.get("running"))
-        cpu = float(stats.get("cpu", stats.get("cpu_percent", 0.0)) or 0.0)
-        ram = float(stats.get("memory", stats.get("mem_percent", stats.get("ram", 0.0))) or 0.0)
+        raw_cpu = stats.get("cpu", stats.get("cpu_percent"))
+        raw_ram = stats.get("memory", stats.get("mem_percent", stats.get("ram")))
+        cpu = float(raw_cpu) if raw_cpu is not None else None
+        ram = float(raw_ram) if raw_ram is not None else None
         detail = _("Service is running.") if running else _("Service is not running.")
+        if stats.get("metrics_available") is False:
+            detail = _(
+                "Service is running, but resource metrics are temporarily unavailable."
+            ) if running else _(
+                "Service is not running; resource metrics are unavailable."
+            )
     except Exception as e:
         logger.exception("service_status error: %s", e)
         running = False
-        cpu = 0.0
-        ram = 0.0
+        cpu = None
+        ram = None
         detail = _("Failed to get service stats.")
 
     return Response(
