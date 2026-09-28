@@ -621,6 +621,19 @@ def build_registered_base_image(
         owner_task_id = task_id or row.build_task_id or str(uuid.uuid4())
         owner_deployment_id = str(row.build_owner_deployment_id or "")
         requested_force_rebuild = bool(force_rebuild or row.rebuild_requested)
+        pending_details = dict(row.last_error_details or {})
+        preserved_pending = {
+            key: pending_details[key]
+            for key in (
+                "rebuild_pending",
+                "pending_definition_fingerprint",
+                "pending_image_ref",
+                "pending_source_image",
+                "pending_image_repository",
+                "pending_image_tag",
+            )
+            if key in pending_details
+        }
         row.status = BaseRuntimeImage.Status.BUILDING
         row.build_task_id = owner_task_id
         row.build_owner_deployment_id = owner_deployment_id
@@ -629,12 +642,12 @@ def build_registered_base_image(
         row.build_started_at = row.build_started_at or timezone.now()
         row.build_completed_at = None
         row.last_error = ""
-        row.last_error_details = {}
+        row.last_error_details = preserved_pending
         row.save(update_fields=[
             "status", "build_task_id", "build_owner_deployment_id",
             "definition_fingerprint", "rebuild_requested",
-            "build_started_at", "build_completed_at",
-            "last_error", "last_error_details", "updated_at",
+            "build_started_at", "build_completed_at", "last_error",
+            "last_error_details", "updated_at",
         ])
 
     try:
