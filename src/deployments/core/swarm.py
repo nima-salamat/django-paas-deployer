@@ -1162,28 +1162,41 @@ class SwarmRuntime:
                 **{key: value for key, value in kwargs.items() if key != "name"},
             )
             service.reload()
-            expected_image = (
-                str(
-                    (
-                        ((service.attrs or {}).get("Spec") or {})
-                        .get("TaskTemplate") or {}
-                    )
-                    .get("ContainerSpec") or {}
-                ).get("Image") or ""
-            ).strip() or None
+            observed = self.inspect_service(service_name)
+            if observed is not None and observed.update_state in {
+                "rollback_started",
+                "rollback_paused",
+                "rollback_completed",
+            }:
+                service_logs = self._service_logs_for_failure(service_name)
+                technical = (
+                    f"Swarm service {service_name!r} was already rolled back before readiness. "
+                    f"update_state={observed.update_state!r}; "
+                    f"update_message={observed.update_message or ''!r}; "
+                    f"service_logs={service_logs[-12000:]}"
+                )
+                raise DeploymentError(
+                    technical,
+                    stage="swarm_startup",
+                    code="SWARM_UPDATE_ROLLED_BACK",
+                    user_message="The Swarm service failed to start the new application version and was rolled back.",
+                    technical_message=technical,
+                    details={
+                        "service": service_name,
+                        "update_state": observed.update_state,
+                        "update_message": observed.update_message,
+                        "expected_image": image_ref,
+                        "service_image": observed.service_image,
+                        "service_logs": service_logs[-12000:],
+                    },
+                )
+            expected_image = observed.service_image if observed is not None else image_ref
         except docker.errors.NotFound:
             try:
                 service = self.client.services.create(image_ref, **kwargs)
                 service.reload()
-                expected_image = (
-                    str(
-                        (
-                            ((service.attrs or {}).get("Spec") or {})
-                            .get("TaskTemplate") or {}
-                        )
-                        .get("ContainerSpec") or {}
-                    ).get("Image") or ""
-                ).strip() or None
+                observed = self.inspect_service(service_name)
+                expected_image = observed.service_image if observed is not None else image_ref
             except docker.errors.APIError as exc:
                 raise DeploymentError(
                     f"Unable to create Swarm service {service_name!r}: {exc}",
@@ -1243,30 +1256,43 @@ class SwarmRuntime:
             )
             operation["mutation_succeeded"] = True
             service.reload()
-            expected_image = (
-                str(
-                    (
-                        ((service.attrs or {}).get("Spec") or {})
-                        .get("TaskTemplate") or {}
-                    )
-                    .get("ContainerSpec") or {}
-                ).get("Image") or ""
-            ).strip() or None
+            observed = self.inspect_service(name)
+            if observed is not None and observed.update_state in {
+                "rollback_started",
+                "rollback_paused",
+                "rollback_completed",
+            }:
+                service_logs = self._service_logs_for_failure(name)
+                technical = (
+                    f"Swarm service {name!r} was already rolled back before readiness. "
+                    f"update_state={observed.update_state!r}; "
+                    f"update_message={observed.update_message or ''!r}; "
+                    f"service_logs={service_logs[-12000:]}"
+                )
+                raise DeploymentError(
+                    technical,
+                    stage="swarm_startup",
+                    code="SWARM_UPDATE_ROLLED_BACK",
+                    user_message="The Swarm service failed to start the new application version and was rolled back.",
+                    technical_message=technical,
+                    details={
+                        "service": name,
+                        "update_state": observed.update_state,
+                        "update_message": observed.update_message,
+                        "expected_image": image_ref,
+                        "service_image": observed.service_image,
+                        "service_logs": service_logs[-12000:],
+                    },
+                )
+            expected_image = observed.service_image if observed is not None else image_ref
         except docker.errors.NotFound:
             operation["mutation_started"] = True
             try:
                 service = self.client.services.create(image_ref, **kwargs)
                 operation["mutation_succeeded"] = True
                 service.reload()
-                expected_image = (
-                    str(
-                        (
-                            ((service.attrs or {}).get("Spec") or {})
-                            .get("TaskTemplate") or {}
-                        )
-                        .get("ContainerSpec") or {}
-                    ).get("Image") or ""
-                ).strip() or None
+                observed = self.inspect_service(name)
+                expected_image = observed.service_image if observed is not None else image_ref
             except docker.errors.APIError as exc:
                 raise DeploymentError(
                     f"Unable to create Swarm service {name!r}: {exc}",
