@@ -530,12 +530,13 @@ def request_base_runtime_image_build(
                 "image_ref": row.image_ref,
             }
         if (
-            row.status == BaseRuntimeImage.Status.READY
+            not force_rebuild
             and not row.rebuild_requested
-            and not force_rebuild
             and row.definition_fingerprint == fingerprint
             and _local_image_matches_fingerprint(row.image_ref, fingerprint)
         ):
+            if row.status != BaseRuntimeImage.Status.READY:
+                _mark_local_image_ready(row, expected_fingerprint=fingerprint)
             return {
                 "queued": False, "cache_hit": True, "waiting": False,
                 "task_id": "", "image_ref": row.image_ref,
