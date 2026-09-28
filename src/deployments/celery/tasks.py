@@ -204,31 +204,34 @@ def restart_service(self, service_id) -> None:
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=10)
 def _mark_base_image_retry_pending(base_image_id, task_id: str, exc: Exception) -> None:
-    updated = BaseRuntimeImage.objects.filter(
+    row = BaseRuntimeImage.objects.filter(pk=base_image_id).values(
+        "build_task_id", "last_error_details", "image_ref"
+    ).first()
+    if not row or str(row.get("build_task_id") or "") != str(task_id):
+        logger.info(
+            "Ignoring retry-pending state from superseded base-image task id=%s base=%s",
+            task_id, base_image_id,
+        )
+        return
+    details = dict(row.get("last_error_details") or {})
+    details.update({
+        "stage": "base_image",
+        "exception_type": type(exc).__name__,
+        "technical_message": str(exc) or type(exc).__name__,
+        "retry_pending": True,
+        "base_image_ref": row.get("image_ref") or "",
+        "resource_policy_source": "server_owned",
+    })
+    BaseRuntimeImage.objects.filter(
         pk=base_image_id,
         status=BaseRuntimeImage.Status.BUILDING,
         build_task_id=str(task_id),
     ).update(
-        status=BaseRuntimeImage.Status.BUILDING,
-        build_task_id=str(task_id),
         build_completed_at=None,
         last_error=str(exc),
-        last_error_details={
-            "stage": "base_image",
-            "exception_type": type(exc).__name__,
-            "technical_message": str(exc) or type(exc).__name__,
-            "retry_pending": True,
-            "base_image_ref": (
-                BaseRuntimeImage.objects.filter(pk=base_image_id)
-                .values_list("image_ref", flat=True)
-                .first()
-                or ""
-            ),
-            "resource_policy_source": "server_owned",
-        },
+        last_error_details=details,
         updated_at=timezone.now(),
     )
-
 
 def _mark_base_image_terminal_failure(base_image_id, task_id: str, exc: Exception) -> None:
     current = (
