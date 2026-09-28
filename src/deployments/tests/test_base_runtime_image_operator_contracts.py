@@ -249,3 +249,12 @@ def test_monitor_does_not_exempt_retry_pending_from_base_timeout():
     block = source.split("def _reconcile_base_runtime_builds", 1)[1].split("def ", 1)[0]
     assert 'policies["base_image_build_timeout_minutes"]' in block
     assert "Skipping stale timeout for retry-pending" not in block
+
+def test_base_image_lease_helpers_and_error_type_are_defined():
+    source = (ROOT / "deploy" / "base_images.py").read_text(encoding="utf-8")
+    assert "def acquire_base_image_leases(" in source
+    assert "def release_base_image_leases(" in source
+    assert "def release_stale_base_image_leases(" in source
+    assert "def logical_key(" in source
+    assert "from deployments.common.exceptions import BaseImageBuildError" in source
+    assert "except BaseImageBuildError:" in source
