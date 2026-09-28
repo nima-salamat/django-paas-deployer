@@ -318,6 +318,56 @@ def compose_yaml(spec: dict[str, Any]) -> str:
     return yaml.safe_dump(spec, sort_keys=False, allow_unicode=False)
 
 
+def _process_resource_limits(
+    plan_limits: dict[str, Any] | None,
+    process_limits: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge process resources without allowing a process to exceed its Plan."""
+    result = dict(plan_limits or {})
+    requested = dict(process_limits or {})
+
+    if "cpu" in requested and result.get("cpu") not in (None, ""):
+        try:
+            value = float(requested["cpu"])
+            ceiling = float(result["cpu"])
+        except (TypeError, ValueError) as exc:
+            raise DeploymentError(
+                "Invalid process CPU resource limit.",
+                stage="swarm_validation",
+                code="SWARM_INVALID_PROCESS_RESOURCE",
+            ) from exc
+        if value <= 0 or value > ceiling:
+            raise DeploymentError(
+                f"Process CPU limit {value!r} exceeds the plan ceiling {ceiling!r}.",
+                stage="swarm_validation",
+                code="SWARM_PROCESS_CPU_LIMIT_EXCEEDED",
+                user_message="A process resource limit exceeds the selected plan's CPU limit.",
+            )
+        result["cpu"] = value
+
+    if "memory_mb" in requested and result.get("memory_mb") not in (None, ""):
+        try:
+            value = int(requested["memory_mb"])
+            ceiling = int(result["memory_mb"])
+        except (TypeError, ValueError) as exc:
+            raise DeploymentError(
+                "Invalid process memory resource limit.",
+                stage="swarm_validation",
+                code="SWARM_INVALID_PROCESS_RESOURCE",
+            ) from exc
+        if value <= 0 or value > ceiling:
+            raise DeploymentError(
+                f"Process memory limit {value!r}MB exceeds the plan ceiling {ceiling!r}MB.",
+                stage="swarm_validation",
+                code="SWARM_PROCESS_MEMORY_LIMIT_EXCEEDED",
+                user_message="A process resource limit exceeds the selected plan's memory limit.",
+            )
+        result["memory_mb"] = value
+
+    # Only CPU and memory are consumable by the current Swarm compiler.
+    return result
+
+
 class SwarmRuntime:
     """Create/update/remove the real Docker Swarm services."""
 
@@ -725,6 +775,7 @@ class SwarmRuntime:
 
         self.assert_active()
         results: dict[str, SwarmServiceState] = {}
+        desired_service_names: set[str] = set()
         for raw in process_specs:
             if not isinstance(raw, dict) or raw.get("enabled", True) is False:
                 continue
@@ -736,10 +787,13 @@ class SwarmRuntime:
                     code="SWARM_INVALID_PROCESS_NAME",
                 )
             docker_name = config.name if process_name == "web" else _validate_service_name(f"{config.name}-{process_name}")
+            desired_service_names.add(docker_name)
             process_environment = dict(config.environment or {})
             process_environment.update({str(k): str(v) for k, v in (raw.get("environment") or {}).items()})
-            process_resources = dict(config.resource_limits or {})
-            process_resources.update({str(k): v for k, v in (raw.get("resources") or {}).items()})
+            process_resources = _process_resource_limits(
+                config.resource_limits,
+                raw.get("resources") or {},
+            )
             process_metadata = dict(raw.get("metadata") or {})
             process_runtime_options = dict(config.runtime_options or {})
             process_runtime_options["healthcheck"] = dict(raw.get("healthcheck") or {})
@@ -786,6 +840,28 @@ class SwarmRuntime:
                 code="SWARM_NO_ENABLED_PROCESSES",
                 user_message="The deployment has no enabled runtime process to start.",
             )
+
+        service_id = str((config.labels or {}).get("service.id") or "").strip()
+        if service_id:
+            existing_service_names = set(self.service_names_for_service(service_id))
+            stale_service_names = sorted(existing_service_names - desired_service_names)
+            for stale_name in stale_service_names:
+                try:
+                    self.remove(stale_name)
+                except docker.errors.DockerException as exc:
+                    raise DeploymentError(
+                        f"Unable to remove stale Swarm process service {stale_name!r}: {exc}",
+                        stage="swarm_cleanup",
+                        code="SWARM_STALE_PROCESS_CLEANUP_FAILED",
+                        recoverable=True,
+                    ) from exc
+            if stale_service_names:
+                logger.info(
+                    "Removed stale Swarm process services for service=%s: %s",
+                    service_id,
+                    stale_service_names,
+                )
+
         return results
 
     def cleanup_legacy_containers(self, *, service_id: str) -> int:
