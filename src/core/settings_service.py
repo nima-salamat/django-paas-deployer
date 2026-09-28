@@ -217,6 +217,22 @@ def build_max_ram_mb() -> int:
     return max(256, min(int(_wagtail_core_value("build_max_ram_mb", get_int("build.max_ram_mb", 1024))), 8192))
 
 
+def volume_release_retention_days() -> int:
+    """Return the bounded operator retention period for released volumes."""
+    return max(
+        1,
+        min(
+            int(
+                _wagtail_core_value(
+                    "volume_release_retention_days",
+                    30,
+                )
+            ),
+            3650,
+        ),
+    )
+
+
 def volume_usage_warning_percent() -> float:
     import os
     env_default = os.environ.get("VOLUME_USAGE_WARNING_PERCENT", "90.0")
