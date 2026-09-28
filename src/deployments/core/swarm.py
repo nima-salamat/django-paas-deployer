@@ -263,6 +263,10 @@ def compile_compose_service(config, *, image_ref: str, replicas: int = 1) -> dic
     runtime_options = dict(config.runtime_options or {})
     healthcheck = _healthcheck_spec(runtime_options.get("healthcheck"))
 
+    network_names = [str(network.name) for network in (config.networks or ())]
+    if public_http_endpoints(config) and "proxy_net" not in network_names:
+        network_names.append("proxy_net")
+
     service = {
         "image": image_ref,
         "command": _command(config.start_command),
@@ -271,7 +275,7 @@ def compile_compose_service(config, *, image_ref: str, replicas: int = 1) -> dic
         "read_only": bool(config.read_only),
         "environment": _env_list(config.environment),
         "healthcheck": healthcheck,
-        "networks": [str(network.name) for network in (config.networks or ())],
+        "networks": network_names,
         "volumes": _mount_strings(config.volumes),
         "deploy": {
             "replicas": replicas,
@@ -1277,12 +1281,7 @@ class SwarmRuntime:
         self.assert_active()
         for network in config.networks or ():
             self.ensure_network(network.name, attachable=True)
-        if any(
-            endpoint.enabled
-            and endpoint.exposure == "public"
-            and endpoint.protocol in {"http", "https", "ws"}
-            for endpoint in config.endpoints or ()
-        ):
+        if public_http_endpoints(config):
             self.ensure_network("proxy_net", attachable=True)
 
         image_ref = self.prepare_image(image_ref, config.name, config.tag)
