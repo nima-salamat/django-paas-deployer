@@ -591,15 +591,23 @@ def build_registered_base_image(
         def _assert_db_owner() -> None:
             if not task_id:
                 return
-            current_task_id = (
-                BaseRuntimeImage.objects.filter(pk=base_image_id)
-                .values_list("build_task_id", flat=True)
-                .first()
-            )
+            current = BaseRuntimeImage.objects.filter(pk=base_image_id).values(
+                "build_task_id", "build_started_at"
+            ).first() or {}
+            current_task_id = current.get("build_task_id")
             if str(current_task_id or "") != str(task_id):
                 raise RuntimeError(
                     "Base-image build ownership was superseded by another task or monitor recovery."
                 )
+            from core.settings_service import base_image_build_timeout_minutes
+            started = current.get("build_started_at")
+            if started is not None:
+                elapsed = (timezone.now() - started).total_seconds()
+                if elapsed >= base_image_build_timeout_minutes() * 60:
+                    raise TimeoutError(
+                        "Base-image build exceeded the dedicated "
+                        f"{base_image_build_timeout_minutes()}-minute lifecycle budget."
+                    )
 
         _build_spec(
             spec,
@@ -616,8 +624,20 @@ def build_registered_base_image(
                 "Base-image build ownership changed before READY state could be committed."
             )
         requested_by_deployment = str(row.build_owner_deployment_id or "")
-        rebuild_pending_definition = bool((row.last_error_details or {}).get("rebuild_pending"))
-        rebuild_after_success = bool(row.rebuild_requested and not rebuild_pending_definition)
+        pending_details = dict(row.last_error_details or {})
+        rebuild_pending_definition = bool(pending_details.get("rebuild_pending"))
+        rebuild_after_success = bool(row.rebuild_requested)
+        pending_definition = (
+            {
+                "fingerprint": pending_details.get("pending_definition_fingerprint"),
+                "image_ref": pending_details.get("pending_image_ref"),
+                "source_image": pending_details.get("pending_source_image"),
+                "image_repository": pending_details.get("pending_image_repository"),
+                "image_tag": pending_details.get("pending_image_tag"),
+            }
+            if rebuild_pending_definition
+            else None
+        )
         row.status = BaseRuntimeImage.Status.READY
         row.image_id = getattr(img, "id", "") or ""
         attrs = getattr(img, "attrs", {}) or {}
@@ -629,7 +649,13 @@ def build_registered_base_image(
         row.build_task_id = ""
         row.build_owner_deployment_id = ""
         row.last_error = ""
-        row.last_error_details = {}
+        row.last_error_details = (
+            {"stage": "base_image", "rebuild_pending": True, **pending_details}
+            if rebuild_pending_definition
+            else {}
+        )
+        row.rebuild_requested = bool(rebuild_pending_definition or rebuild_after_success)
+        row.rebuild_requested_at = timezone.now() if row.rebuild_requested else None
         row.save(update_fields=[
             "status", "image_id", "image_digest", "definition_fingerprint",
             "build_completed_at", "build_count", "build_task_id",
@@ -637,9 +663,41 @@ def build_registered_base_image(
             "rebuild_requested", "rebuild_requested_at",
             "updated_at",
         ])
-        if rebuild_after_success:
+        if rebuild_pending_definition and pending_definition:
+            # A new operator definition arrived while this build was active.
+            # Publish the pending identity only after the active owner finishes,
+            # then queue exactly one rebuild for that definition.
+            row.variant = "apache" if row.logical_runtime == "php" else row.variant
+            row.source_image = pending_definition.get("source_image") or row.source_image
+            row.image_repository = pending_definition.get("image_repository") or row.image_repository
+            row.image_tag = pending_definition.get("image_tag") or row.image_tag
+            row.image_ref = pending_definition.get("image_ref") or row.image_ref
+            row.definition_fingerprint = pending_definition.get("fingerprint") or row.definition_fingerprint
+            row.status = BaseRuntimeImage.Status.PENDING
+            row.image_id = ""
+            row.image_digest = ""
+            row.rebuild_requested = False
+            row.rebuild_requested_at = None
+            row.last_error_details = {}
+            row.save(update_fields=[
+                "variant", "source_image", "image_repository", "image_tag",
+                "image_ref", "definition_fingerprint", "status", "image_id",
+                "image_digest", "rebuild_requested", "rebuild_requested_at",
+                "last_error_details", "updated_at",
+            ])
+            try:
+                request_base_runtime_image_build(
+                    row.pk,
+                    force_rebuild=False,
+                    deployment_id=None,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to queue pending-definition rebuild for base image %s.",
+                    row.image_ref,
+                )
+        elif rebuild_after_success:
             # An operator requested Renew while this build was already active.
-            # Queue exactly one follow-up build through the same ownership path.
             try:
                 request_base_runtime_image_build(
                     row.pk,
