@@ -102,8 +102,10 @@ def test_application_phase_deadline_is_fresh_after_base_ready():
         base_image_ready_at=now - timedelta(minutes=7),
         application_started_at=now - timedelta(minutes=7),
     )
-    from deploy.base_images import deployment_phase_remaining_seconds
-    assert deployment_phase_remaining_seconds(deployment, now=now) == 3 * 60
+    deadline = deployment.lifecycle_phase_deadline(
+        base_timeout_minutes=10, application_timeout_minutes=10, now=now
+    )
+    assert int((deadline - now).total_seconds()) == 3 * 60
 
 
 def test_manual_and_automatic_operator_builds_share_one_request_helper():
