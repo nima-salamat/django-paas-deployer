@@ -768,6 +768,8 @@ def service_status_apiview(request):
             "running": running,
             "cpu": cpu,
             "ram": ram,
+            "metrics_available": stats.get("metrics_available"),
+            "metrics_reason": stats.get("metrics_reason"),
             "detail": detail,
         },
         status=status.HTTP_200_OK,
