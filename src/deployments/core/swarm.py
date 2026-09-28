@@ -1410,6 +1410,29 @@ class SwarmRuntime:
         except docker.errors.NotFound:
             return
 
+    def wait_service_group_stopped(self, service_id: str, *, timeout: float = 30.0) -> bool:
+        """Wait until every managed Swarm process has zero running tasks."""
+        deadline = time.monotonic() + max(float(timeout), 0.0)
+        while True:
+            names = self.service_names_for_service(service_id)
+            if not names:
+                return True
+            running = False
+            for name in names:
+                try:
+                    state = self.inspect_service(name)
+                except Exception:
+                    running = True
+                    continue
+                if state is not None and state.replicas_running > 0:
+                    running = True
+                    break
+            if not running:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.25)
+
     def service_names_for_service(self, service_id: str) -> list[str]:
         names: list[str] = []
         try:
