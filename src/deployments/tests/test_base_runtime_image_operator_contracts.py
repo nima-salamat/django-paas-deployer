@@ -198,7 +198,7 @@ def test_active_base_build_coalesces_repeated_renew_requests(monkeypatch):
 
     row = FakeRow()
     monkeypatch.setattr(base_images.BaseRuntimeImage, "objects", FakeManager())
-    monkeypatch.setattr(base_images.transaction, "atomic", lambda: FakeAtomic())
+    monkeypatch.setattr(base_images.transaction, "atomic", lambda *args, **kwargs: FakeAtomic())
     result = base_images.request_base_runtime_image_build(row.pk, force_rebuild=True)
     assert result["coalesced"] is True
     assert result["waiting"] is True
