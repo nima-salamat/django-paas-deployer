@@ -227,3 +227,49 @@ def test_release_transition_is_centralized_and_reclaimable():
     ).read_text(encoding="utf-8")
     assert "reclaim_released_volumes" in tasks
     assert "released_at__lte=cutoff" in tasks
+def test_unknown_usage_reaches_deployment_event_sink():
+    from deployments.core.deployment_logger import DeploymentLogger
+    from deployments.core.types import VolumeSpec
+    from deployments.core.volumes import VolumeMountManager
+    from deployments.core import volume_storage
+
+    sink = Mock()
+    logger = DeploymentLogger(deployment_id="deploy-volume-unknown", sink=sink)
+    usage = volume_storage.VolumeUsage(
+        volume="vol-unknown",
+        declared_capacity_bytes=100 * 1024 * 1024,
+        actual_used_bytes=None,
+        usage_percent=None,
+        usage_state=volume_storage.USAGE_UNKNOWN,
+        threshold_percent=90.0,
+        driver="local",
+        scope="local",
+        enforced=False,
+        capacity_mode=volume_storage.CAPACITY_LOGICAL_ONLY,
+        usage_available=False,
+        error="Docker did not provide a measurable usage value.",
+    )
+    with patch("deployments.core.manager.client_manager.Client", return_value=Mock(client=Mock())),          patch("deployments.core.volume_storage.inspect_volume_usage", return_value=usage),          patch("deployments.core.volume_storage.usage_details", return_value={
+             "volume": "vol-unknown",
+             "declared_mb": 100,
+             "used_mb": None,
+             "usage_percent": None,
+             "threshold_percent": 90.0,
+             "usage_state": "usage_unavailable",
+             "driver": "local",
+             "scope": "local",
+             "enforced": False,
+             "capacity_mode": "LOGICAL_ONLY",
+             "usage_available": False,
+             "error": "Docker did not provide a measurable usage value.",
+         }):
+        VolumeMountManager(logger=logger).warn_about_usage([
+            VolumeSpec(source="vol-unknown", target="/data", size_mb=100)
+        ])
+
+    sink.assert_called_once()
+    event = sink.call_args.args[0]
+    assert event.stage == "volume_creation"
+    assert event.level == "warning"
+    assert event.details["usage_state"] == "usage_unavailable"
+    assert event.details["usage_available"] is False
