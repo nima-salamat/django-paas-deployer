@@ -378,6 +378,7 @@ def _build_spec(
     force_rebuild: bool = False,
     on_output=None,
     ownership_check=None,
+    timeout_seconds: float | None = None,
 ):
     from deployments.common.resource_policy import resolve_build_policy
 
@@ -398,6 +399,7 @@ def _build_spec(
     return image.create(
         on_build_output=on_output,
         ownership_check=ownership_check,
+        timeout_seconds=timeout_seconds,
     )
 
 def _spec_for_record(row: BaseRuntimeImage) -> BaseImageSpec:
@@ -698,6 +700,17 @@ def build_registered_base_image(
             build_policy=effective_policy,
             force_rebuild=requested_force_rebuild,
             ownership_check=_assert_db_owner,
+            timeout_seconds=max(
+                0.1,
+                (
+                    __import__("datetime").timedelta(minutes=__import__("core.settings_service", fromlist=["base_image_build_timeout_minutes"]).base_image_build_timeout_minutes())
+                ).total_seconds()
+                - (
+                    timezone.now() - row.build_started_at
+                ).total_seconds()
+                if row.build_started_at
+                else __import__("core.settings_service", fromlist=["base_image_build_timeout_minutes"]).base_image_build_timeout_minutes() * 60,
+            ),
         )
         _assert_db_owner()
         client = get_docker_client()
