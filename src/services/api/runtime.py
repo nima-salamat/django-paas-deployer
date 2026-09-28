@@ -729,14 +729,17 @@ def service_status_apiview(request):
             {
                 "result": "error",
                 "running": False,
-                "cpu": 0,
-                "ram": 0,
+                "cpu": None,
+                "ram": None,
+                "metrics_available": False,
+                "metrics_reason": "service_not_found",
                 "detail": _("Service with the ID not found."),
             },
             status=status.HTTP_404_NOT_FOUND,
         )
 
     name = service_item.get_docker_service_name()
+    stats = {}
     try:
         if swarm_enabled():
             stats = SwarmRuntime().service_stats(name)
