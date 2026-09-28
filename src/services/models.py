@@ -779,8 +779,24 @@ class Volume(BaseModel):
         #      read/modify/write critical section.
         from django.db import transaction
         with transaction.atomic():
+            previous_service_id = None
             if self.pk:
-                Volume.objects.select_for_update().filter(pk=self.pk).first()
+                previous = (
+                    Volume.objects.select_for_update()
+                    .filter(pk=self.pk)
+                    .values("service_id")
+                    .first()
+                )
+                previous_service_id = previous.get("service_id") if previous else None
+
+            # Clearing Service ownership is a logical RELEASE, not an
+            # unclassified orphan. Record the transition centrally so API,
+            # Wagtail and model callers cannot accidentally bypass retention.
+            if previous_service_id and self.service_id is None and self.released_at is None:
+                self.released_at = timezone.now()
+                self.reclaim_attempted_at = None
+                self.reclaim_error = ""
+
             if self.service_id:
                 from .models import Service
                 locked_service = Service.objects.select_for_update().get(pk=self.service_id)
