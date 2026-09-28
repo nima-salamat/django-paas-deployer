@@ -471,11 +471,11 @@ def _can_use_last_known_good_local_base_image(
     local_image,
     expected_runtime: str,
 ) -> bool:
-    """Use the last successful local artifact while a renewal is pending/failed.
+    """Use an existing local artifact while a renewal is pending or failed.
 
-    The registry status describes the desired lifecycle state. image_id is the
-    last-known-good artifact identity and must remain usable when a newer
-    base-image build fails or is still running.
+    Prefer the exact last-known-good image id or the explicit runtime label.
+    For older operator-owned images that predate labels, the exact registry
+    reference is still a valid local fallback while the row is not READY.
     """
     if local_image is None:
         return False
@@ -483,7 +483,13 @@ def _can_use_last_known_good_local_base_image(
     if row.image_id and local_image_id == str(row.image_id):
         return True
     labels = ((getattr(local_image, "attrs", {}) or {}).get("Config") or {}).get("Labels") or {}
-    return labels.get("io.passdeployer.base-runtime") == expected_runtime
+    if labels.get("io.passdeployer.base-runtime") == expected_runtime:
+        return True
+    return row.status in {
+        BaseRuntimeImage.Status.PENDING,
+        BaseRuntimeImage.Status.BUILDING,
+        BaseRuntimeImage.Status.FAILED,
+    }
 def request_base_runtime_image_build(
     base_image_id,
     *,
@@ -1144,7 +1150,7 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                     acquire_base_image_leases([row.image_ref], deployment_id)
                 if logger_sink:
                     logger_sink.info("base_image",
-                        f"Using last-known-good local base image {row.image_ref} while registry state is {row.status}.",
+                        f"Using existing local base image {row.image_ref} while registry state is {row.status}.",
                         progress=18,
                         details={
                             "image": row.image_ref,
@@ -1155,6 +1161,9 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                             "rebuild_requested": bool(row.rebuild_requested),
                             "background_build_task_id": str(row.build_task_id or ""),
                             "last_known_good_image_id": row.image_id,
+"local_verification": ("
+    "image_id" if row.image_id else "runtime_label_or_exact_ref_fallback"
+),
                         },
                     )
                 continue
