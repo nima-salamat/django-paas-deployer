@@ -14,6 +14,7 @@ import socket
 import tarfile
 import time
 import uuid
+from datetime import timedelta
 from dataclasses import dataclass
 from typing import Any
 
@@ -703,10 +704,8 @@ def build_registered_base_image(
             timeout_seconds=max(
                 0.1,
                 (
-                    __import__("datetime").timedelta(minutes=__import__("core.settings_service", fromlist=["base_image_build_timeout_minutes"]).base_image_build_timeout_minutes())
-                ).total_seconds()
-                - (
-                    timezone.now() - row.build_started_at
+                    timedelta(minutes=__import__("core.settings_service", fromlist=["base_image_build_timeout_minutes"]).base_image_build_timeout_minutes())
+                    - (timezone.now() - row.build_started_at)
                 ).total_seconds()
                 if row.build_started_at
                 else __import__("core.settings_service", fromlist=["base_image_build_timeout_minutes"]).base_image_build_timeout_minutes() * 60,
