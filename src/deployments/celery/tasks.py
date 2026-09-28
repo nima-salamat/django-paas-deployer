@@ -328,6 +328,84 @@ def build_base_runtime_image(self, base_image_id, force_rebuild=False, build_pol
         )
         raise
 
+@shared_task(bind=True, max_retries=0, name="deployments.celery.tasks.reclaim_released_volumes")
+def reclaim_released_volumes(self, batch_size=100) -> dict[str, int]:
+    """Reclaim physically retained managed volumes after bounded retention."""
+    from datetime import timedelta
+    import docker.errors
+    from services.models import Volume as RegistryVolume
+    from deployments.core.manager.volume_manager import Volume as DockerVolume
+    from core.settings_service import volume_release_retention_days
+
+    retention_days = volume_release_retention_days()
+    cutoff = timezone.now() - timedelta(days=retention_days)
+    try:
+        limit = max(1, min(int(batch_size), 1000))
+    except (TypeError, ValueError):
+        limit = 100
+
+    candidates = list(
+        RegistryVolume.objects.filter(
+            service__isnull=True,
+            released_at__isnull=False,
+            released_at__lte=cutoff,
+        ).order_by("released_at").values_list("pk", flat=True)[:limit]
+    )
+    reclaimed = failed = skipped = 0
+
+    for volume_id in candidates:
+        with transaction.atomic():
+            row = (RegistryVolume.objects.select_for_update().filter(
+                pk=volume_id,
+                service__isnull=True,
+                released_at__isnull=False,
+                released_at__lte=cutoff,
+            ).first())
+            if row is None:
+                skipped += 1
+                continue
+            now = timezone.now()
+            RegistryVolume.objects.filter(pk=row.pk).update(
+                reclaim_attempted_at=now, reclaim_error="", updated_at=now,
+            )
+            docker_name = row.get_docker_volume_name()
+            try:
+                docker_volume = DockerVolume(docker_name)
+                try:
+                    raw_volume = docker_volume.client.volumes.get(docker_name)
+                except docker.errors.NotFound:
+                    raw_volume = None
+                if raw_volume is not None:
+                    labels = dict(getattr(raw_volume, "attrs", {}).get("Labels") or {})
+                    if labels.get("managed-by") != "django-paas-deployer":
+                        raise RuntimeError(
+                            f"Refusing to reclaim Docker volume {row.name!r}: ownership label is missing or unexpected."
+                        )
+                    docker_volume.remove()
+                    try:
+                        docker_volume.client.volumes.get(docker_name)
+                    except docker.errors.NotFound:
+                        pass
+                    else:
+                        raise RuntimeError(f"Docker volume {docker_name!r} still exists after reclaim.")
+                row.delete()
+                reclaimed += 1
+            except Exception as exc:
+                failed += 1
+                RegistryVolume.objects.filter(pk=row.pk).update(
+                    reclaim_error=f"{type(exc).__name__}: {exc}",
+                    updated_at=timezone.now(),
+                )
+                logger.exception(
+                    "Released volume reclaim failed volume=%s docker=%s", row.pk, docker_name,
+                )
+
+    logger.info(
+        "Released volume reclaim completed retention_days=%s candidates=%s reclaimed=%s failed=%s skipped=%s",
+        retention_days, len(candidates), reclaimed, failed, skipped,
+    )
+    return {"retention_days": retention_days, "candidates": len(candidates), "reclaimed": reclaimed, "failed": failed, "skipped": skipped}
+
 # ===========================================================================
 # DB deploy helpers
 # ===========================================================================
