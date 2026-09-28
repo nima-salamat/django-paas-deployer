@@ -63,10 +63,15 @@ class StopService:
             logger.info("Skipped stop execution for service ID %s: %s", service_id, str(exc))
             return
 
-        # Desired state is declarative; bump lifecycle so in-flight deploys cannot
-        # restore desired_state=running after this stop intent.
+        # The HTTP Stop intent normally fences desired_state before this worker
+        # acquires the advisory lock. Keep direct task execution safe without
+        # bumping the generation a second time.
         from services.lifecycle import bump_lifecycle
-        gen = bump_lifecycle(service.pk, desired_state="stopped")
+        from services.lifecycle.fencing import capture_generation
+        if str(service.desired_state or "").lower() != "stopped":
+            gen = bump_lifecycle(service.pk, desired_state="stopped")
+        else:
+            gen = capture_generation(service)
         service.desired_state = "stopped"
         service.lifecycle_generation = gen
 
