@@ -378,6 +378,7 @@ class SwarmRuntime:
     def __init__(self, client=None):
         self.client = client or get_docker_client()
         self._last_apply_operation: dict[str, Any] | None = None
+        self._last_apply_recovery: dict[str, Any] = {}
 
     def assert_active(self) -> dict[str, Any]:
         if not swarm_enabled():
@@ -920,6 +921,24 @@ class SwarmRuntime:
         recovery_operations: list[dict[str, Any]] = []
         self._last_apply_operation = None
 
+        def build_recovery() -> dict[str, Any]:
+            return {
+                "service_id": service_id,
+                "preexisting_service_names": sorted(preexisting_service_names),
+                "operations": [dict(item) for item in recovery_operations],
+                "rollback_services": sorted({
+                    str(item["name"])
+                    for item in recovery_operations
+                    if item.get("preexisting") and item.get("mutation_started")
+                }),
+                "remove_services": sorted({
+                    str(item["name"])
+                    for item in recovery_operations
+                    if not item.get("preexisting") and item.get("mutation_started")
+                }),
+            }
+
+        self._last_apply_recovery = build_recovery()
         self.assert_active()
         results: dict[str, SwarmServiceState] = {}
         desired_service_names: set[str] = set()
@@ -983,33 +1002,24 @@ class SwarmRuntime:
                 results[process_name] = self.apply(process_config, image_ref=image_ref)
                 if self._last_apply_operation:
                     recovery_operations.append(dict(self._last_apply_operation))
+                self._last_apply_recovery = build_recovery()
             except DeploymentError as exc:
                 if self._last_apply_operation:
                     recovery_operations.append(dict(self._last_apply_operation))
-                recovery = {
-                    "service_id": service_id,
-                    "preexisting_service_names": sorted(preexisting_service_names),
-                    "operations": recovery_operations,
-                    "rollback_services": sorted({
-                        str(item["name"])
-                        for item in recovery_operations
-                        if item.get("preexisting") and item.get("mutation_started")
-                    }),
-                    "remove_services": sorted({
-                        str(item["name"])
-                        for item in recovery_operations
-                        if not item.get("preexisting") and item.get("mutation_started")
-                    }),
-                }
+                recovery = build_recovery()
+                self._last_apply_recovery = recovery
                 exc.details = {**exc.details, "swarm_recovery": recovery}
                 raise
 
         if not results:
+            recovery = build_recovery()
+            self._last_apply_recovery = recovery
             raise DeploymentError(
                 "No enabled runtime processes were available for the Swarm deployment.",
                 stage="swarm_validation",
                 code="SWARM_NO_ENABLED_PROCESSES",
                 user_message="The deployment has no enabled runtime process to start.",
+                details={"swarm_recovery": recovery},
             )
 
         stale_service_names = sorted(
@@ -1019,12 +1029,20 @@ class SwarmRuntime:
             try:
                 self.remove(stale_name)
             except docker.errors.DockerException as exc:
+                recovery = build_recovery()
+                self._last_apply_recovery = recovery
                 raise DeploymentError(
                     f"Unable to remove stale Swarm process service {stale_name!r}: {exc}",
                     stage="swarm_cleanup",
                     code="SWARM_STALE_PROCESS_CLEANUP_FAILED",
                     recoverable=True,
+                    details={"swarm_recovery": recovery},
                 ) from exc
+
+        recovery = build_recovery()
+        recovery["stale_service_names"] = stale_service_names
+        self._last_apply_recovery = recovery
+
         if stale_service_names:
             logger.info(
                 "Removed stale Swarm process services for service=%s: %s",
