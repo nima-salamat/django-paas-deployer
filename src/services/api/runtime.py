@@ -304,11 +304,19 @@ def start_service_apiview(request):
                         exc,
                     )
 
+            from services.lifecycle import bump_lifecycle
+            lifecycle_generation = bump_lifecycle(service_item.pk, desired_state="running")
+            service_item.desired_state = "running"
+            service_item.lifecycle_generation = lifecycle_generation
+
             task_id = make_uuid4()
             service_item.status = SERVICE_STATUS_CHOICES.QUEUED
             service_item.deploy_started = timezone.now()
             service_item.task_id = task_id
-            service_item.save()
+            service_item.save(update_fields=[
+                "status", "deploy_started", "task_id",
+                "desired_state", "lifecycle_generation",
+            ])
 
             Deploy.objects.filter(pk=deploy_item.pk).update(
                 status="pending",
