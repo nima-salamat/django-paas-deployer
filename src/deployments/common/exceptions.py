@@ -97,8 +97,8 @@ class InternalPlatformError(DeploymentError):
             recoverable=False,
             details=details,
             user_message=user_message
-            or "Deployment failed during deployment preparation. "
-               "The deployment platform encountered an internal error before the build started.",
+            or "Deployment failed because of an internal platform error. "
+               "See deployment diagnostics for the technical reason.",
             technical_message=technical_message or message,
             code=code,
             category="internal_platform_error",
