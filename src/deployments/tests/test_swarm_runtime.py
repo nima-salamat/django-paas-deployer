@@ -94,10 +94,10 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             ["node.labels.region == eu"],
         )
 
-    def test_create_kwargs_map_compose_entrypoint_to_swarm_command_and_args(self):
+    def test_create_kwargs_preserve_effective_start_command(self):
         config = _config(
-            entry_point=["/bin/sh", "-c"],
-            start_command="python app.py",
+            entry_point="python app.py --port 8000",
+            start_command="ignored start command",
         )
         spec = compile_compose_service(config, image_ref="demo:r1")
 
@@ -110,7 +110,7 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             )
 
         self.assertNotIn("entrypoint", kwargs)
-        self.assertEqual(kwargs["command"], spec["services"]["demo"]["entrypoint"])
+        self.assertEqual(kwargs["command"], ["/bin/sh", "-lc", "python app.py --port 8000"])
         self.assertNotIn("args", kwargs)
 
     def test_rejects_more_than_one_replica(self):
