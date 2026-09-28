@@ -2,7 +2,7 @@
 
 ## Read this first
 
-**This file is the canonical entry point for deployment architecture. Read it before opening source under \`src/deployments/\`.**
+**This file is the canonical entry point for deployment architecture. Read it before opening source under `src/deployments/`.**
 
 The purpose is not to list modules. It is to preserve the reasoning needed to modify the deployment engine safely.
 
@@ -12,7 +12,7 @@ When this manual and implementation disagree, **current master code is authorita
 
 PassDeployer turns durable Service intent plus an immutable ServiceRevision into runtime infrastructure and then continuously reconciles that infrastructure.
 
-~~~text
+```text
 Service / ServiceProcess
         |
         | mutable desired intent
@@ -32,7 +32,7 @@ Docker Engine / Swarm
         |
         v
 Swarm Service / Task
-~~~
+```
 
 The deployment subsystem owns execution, not the business definition of the Service.
 
@@ -40,14 +40,14 @@ The deployment subsystem owns execution, not the business definition of the Serv
 
 | Concern | Owner | Why |
 |---|---|---|
-| User/service intent | \`src/services/\` | It must remain durable and declarative. |
-| Immutable executable intent | \`services.revisioning\` | Deployment must not race mutable Service fields. |
-| One execution attempt | \`src/deploy/models.py::Deploy\` | Provenance, timing, ownership and diagnostics belong to the attempt. |
-| Normalized execution description | \`deployments/planning/\` | Planning needs a runtime-neutral contract before infrastructure calls. |
-| Docker/Swarm calls | \`deployments/core/\` + runtime adapters | Infrastructure state is external and must be isolated from policy. |
-| Persisted lifecycle transitions | \`deployments/core/state/\` + \`common/state_machine.py\` | State changes need one auditable transition contract. |
-| Desired/observed repair choice | \`deployments/reconciliation/\` and current monitor | Reconciliation must not silently redefine desired state. |
-| Async execution | \`deployments/celery/\` | Long-running work, retries and worker ownership belong at the async boundary. |
+| User/service intent | `src/services/` | It must remain durable and declarative. |
+| Immutable executable intent | `services.revisioning` | Deployment must not race mutable Service fields. |
+| One execution attempt | `src/deploy/models.py::Deploy` | Provenance, timing, ownership and diagnostics belong to the attempt. |
+| Normalized execution description | `deployments/planning/` | Planning needs a runtime-neutral contract before infrastructure calls. |
+| Docker/Swarm calls | `deployments/core/` + runtime adapters | Infrastructure state is external and must be isolated from policy. |
+| Persisted lifecycle transitions | `deployments/core/state/` + `common/state_machine.py` | State changes need one auditable transition contract. |
+| Desired/observed repair choice | `deployments/reconciliation/` and current monitor | Reconciliation must not silently redefine desired state. |
+| Async execution | `deployments/celery/` | Long-running work, retries and worker ownership belong at the async boundary. |
 
 ## Current architecture versus migration seams
 
@@ -55,7 +55,7 @@ There is an intentional incomplete migration.
 
 ### Current production application path
 
-\`\`\`text
+```text
 Celery deploy task
   -> DeployService.execute()
   -> advisory lock
@@ -70,17 +70,17 @@ Celery deploy task
   -> Deploy facade
   -> DeploymentOrchestrator
   -> SwarmRuntime (when enabled)
-\`\`\`
+```
 
 This means the newer planning/runtime/application contracts are **already real**, but they are not yet the only path.
 
 ### Migration seams
 
-- \`DeploymentPlanCompatibilityCompiler\` translates a plan back into the legacy \`DeploymentConfig\`.
-- \`core/deploy.py::Deploy\` remains a compatibility facade around \`DeploymentOrchestrator\`.
-- \`runtime/swarm/adapter.py::SwarmRuntimeAdapter\` wraps \`core/swarm.py::SwarmRuntime\`.
-- \`application/lifecycle.py::DeploymentLifecycleExecutor\` is the framework-neutral lifecycle seam; the main \`DeployService\` path has not yet replaced the concrete orchestrator with it.
-- \`reconciliation/planner.py::ReconciliationPlanner\` is a pure decision model; the scheduled monitor still contains concrete Docker/Swarm repair logic.
+- `DeploymentPlanCompatibilityCompiler` translates a plan back into the legacy `DeploymentConfig`.
+- `core/deploy.py::Deploy` remains a compatibility facade around `DeploymentOrchestrator`.
+- `runtime/swarm/adapter.py::SwarmRuntimeAdapter` wraps `core/swarm.py::SwarmRuntime`.
+- `application/lifecycle.py::DeploymentLifecycleExecutor` is the framework-neutral lifecycle seam; the main `DeployService` path has not yet replaced the concrete orchestrator with it.
+- `reconciliation/planner.py::ReconciliationPlanner` is a pure decision model; the scheduled monitor still contains concrete Docker/Swarm repair logic.
 
 Do not “finish” these migrations accidentally while fixing an unrelated bug.
 
@@ -88,7 +88,7 @@ Do not “finish” these migrations accidentally while fixing an unrelated bug.
 
 The intended semantic direction is:
 
-~~~text
+```text
 Service domain / revision
         |
         v
@@ -105,16 +105,16 @@ Concrete runtime
         |
         v
 Docker / Swarm
-~~~
+```
 
 Two compatibility exceptions are deliberate:
 
-1. the application boundary still calls the legacy \`Deploy\` facade, which uses the orchestrator;
-2. the runtime adapter currently delegates down into \`core/swarm.py\`.
+1. the application boundary still calls the legacy `Deploy` facade, which uses the orchestrator;
+2. the runtime adapter currently delegates down into `core/swarm.py`.
 
 There is a second direction for reconciliation:
 
-~~~text
+```text
 Desired state + revision provenance
               |
               v
@@ -125,17 +125,17 @@ Reconciliation decision
               |
               v
 Runtime action
-~~~
+```
 
 And the async direction:
 
-~~~text
+```text
 Celery task
    -> ownership/state gate
    -> lifecycle/execution
    -> external runtime
    -> terminal state
-~~~
+```
 
 ### Boundary rule
 
@@ -146,22 +146,22 @@ If you are tempted to make a Docker call from planning, put lifecycle transition
 
 ## How to use the major packages
 
-### \`application/\`
+### `application/`
 
 Use this package when changing the **semantic lifecycle contract**.
 
-- \`DeploymentExecutionContext\` carries immutable identity, worker ownership, cancellation and event ports.
-- \`DeploymentLifecycleExecutor\` owns the generic sequence of plan -> apply -> readiness -> activation -> terminal state.
-- \`DeploymentStrategyResolver\` chooses the workload strategy.
-- \`cancellation.py\` contains framework-neutral cancellation policy.
+- `DeploymentExecutionContext` carries immutable identity, worker ownership, cancellation and event ports.
+- `DeploymentLifecycleExecutor` owns the generic sequence of plan -> apply -> readiness -> activation -> terminal state.
+- `DeploymentStrategyResolver` chooses the workload strategy.
+- `cancellation.py` contains framework-neutral cancellation policy.
 
-**Called by:** the current system still composes most production execution through \`DeployService\`; the framework-neutral executor is the migration/contract seam.
+**Called by:** the current system still composes most production execution through `DeployService`; the framework-neutral executor is the migration/contract seam.
 
 **Preconditions:** lifecycle composition must already have a RuntimeSelection, strategy, persistence port and ownership/cancellation callbacks.
 
 **Must not:** perform Django ORM work or Docker SDK calls in the framework-neutral application layer.
 
-### \`celery/\`
+### `celery/`
 
 Use this package when changing **asynchronous ownership**: queue selection, retry policy, scheduled monitor work, stop/redeploy task boundaries or task-id fencing.
 
@@ -173,48 +173,48 @@ Use this package when changing **asynchronous ownership**: queue selection, retr
 
 **Must not:** duplicate the deployment state machine or make queue delivery itself authoritative runtime state.
 
-### \`common/\`
+### `common/`
 
 Use common modules for rules that must be shared across multiple deployment paths:
 
 | Module | Use |
 |---|---|
-| \`config.py\` | Parse/sanitize Deploy.config and enforce the public config vocabulary |
-| \`deployment_profile.py\` | Normalize legacy flat/nested build/runtime profiles |
-| \`resource_policy.py\` | Resolve server-owned build/runtime resources |
-| \`security.py\` | Validate commands, names and host-path boundaries |
-| \`retry.py\` | Shared bounded retry classification |
-| \`exceptions.py\` | Error categories and recoverability |
-| \`state_machine.py\` | Legal Service/Deploy transitions |
+| `config.py` | Parse/sanitize Deploy.config and enforce the public config vocabulary |
+| `deployment_profile.py` | Normalize legacy flat/nested build/runtime profiles |
+| `resource_policy.py` | Resolve server-owned build/runtime resources |
+| `security.py` | Validate commands, names and host-path boundaries |
+| `retry.py` | Shared bounded retry classification |
+| `exceptions.py` | Error categories and recoverability |
+| `state_machine.py` | Legal Service/Deploy transitions |
 
 A new rule belongs here only when it is genuinely cross-cutting. Do not move Docker behavior here for convenience.
 
-### \`core/\`
+### `core/`
 
 Use this package when fixing the **current concrete execution implementation**.
 
 Start at:
 
-- \`orchestrator.py\` for the end-to-end concrete pipeline;
-- \`swarm.py\` for actual Swarm API behavior;
-- \`manager/\` for Docker client/image/network/volume/container operations;
-- \`platforms/\` for source/framework interpretation;
-- \`state/\` for locking and lifecycle persistence;
-- \`health.py\`, \`rollback.py\`, \`cleanup.py\` for safety-sensitive execution stages.
+- `orchestrator.py` for the end-to-end concrete pipeline;
+- `swarm.py` for actual Swarm API behavior;
+- `manager/` for Docker client/image/network/volume/container operations;
+- `platforms/` for source/framework interpretation;
+- `state/` for locking and lifecycle persistence;
+- `health.py`, `rollback.py`, `cleanup.py` for safety-sensitive execution stages.
 
-This package contains migration-era concrete behavior. Before extracting or moving a component, inspect its current caller in \`DeployService\`.
+This package contains migration-era concrete behavior. Before extracting or moving a component, inspect its current caller in `DeployService`.
 
-### \`planning/\`
+### `planning/`
 
 Use this package for deterministic conversion of resolved facts into a normalized execution description.
 
 **Precondition:** values should already be represented as bounded configuration/runtime inputs.
 
-**Output:** \`ResolvedConfiguration\`, provenance and \`DeploymentPlan\`.
+**Output:** `ResolvedConfiguration`, provenance and `DeploymentPlan`.
 
 **Must not:** call Docker or mutate lifecycle state.
 
-### \`reconciliation/\`
+### `reconciliation/`
 
 Use this package when the question is:
 
@@ -222,19 +222,19 @@ Use this package when the question is:
 
 The planner should return a decision. A runtime executor should perform the actual Docker operation.
 
-### \`runtime/\`
+### `runtime/`
 
 Use this package when changing backend-neutral runtime semantics: identity, capabilities, availability, handles, observations or backend selection.
 
-Use \`runtime/swarm/adapter.py\` for the migration seam. Use \`core/swarm.py\` for the current concrete Swarm implementation.
+Use `runtime/swarm/adapter.py` for the migration seam. Use `core/swarm.py` for the current concrete Swarm implementation.
 
-### \`infrastructure/\`
+### `infrastructure/`
 
 Use these adapters when framework-neutral application contracts need Django persistence/runtime composition.
 
-- \`django_lifecycle.py\` -> LifecycleStore backed by StateManager.
-- \`django_runtime.py\` -> Django loading of operator-managed cluster context and RuntimeRegistry selection.
-- \`django_cancellation.py\` -> cancellation policy applied under the authoritative Deploy row lock.
+- `django_lifecycle.py` -> LifecycleStore backed by StateManager.
+- `django_runtime.py` -> Django loading of operator-managed cluster context and RuntimeRegistry selection.
+- `django_cancellation.py` -> cancellation policy applied under the authoritative Deploy row lock.
 
 **Must not:** become a second home for domain policy. Adapters translate between ports and Django state.
 
@@ -242,7 +242,7 @@ Use these adapters when framework-neutral application contracts need Django pers
 
 When debugging, move **down one architectural layer at a time**:
 
-~~~text
+```text
 domain intent
   -> revision
   -> application/lifecycle or DeployService
@@ -250,7 +250,7 @@ domain intent
   -> platform/build
   -> runtime
   -> Docker/Swarm
-~~~
+```
 
 Move back upward only when the lower layer reports a state/concurrency/ownership problem.
 
@@ -260,17 +260,17 @@ Do not skip directly from an API symptom to Docker code without first locating t
 
 | Area | Architectural responsibility | Entered from | Produces | Must not own |
 |---|---|---|---|---|
-| \`application/\` | framework-neutral lifecycle sequencing, cancellation, strategy ports | future/current lifecycle composition | lifecycle result | Docker details or Django queries |
-| \`celery/\` | task routing, worker boundaries, concrete Django execution | API/monitor/beat | async work + task ownership | business rules that belong to planning/state |
-| \`common/\` | shared parsing, safety, policy, retries, state machine | all layers | normalized inputs/errors/rules | Docker execution |
-| \`planning/\` | configuration resolution, provenance, DeploymentPlan | DeployService / strategy | immutable plan | Docker calls |
-| \`core/platforms/\` | source inspection and framework detection | orchestrator/platform bridge | DetectionResult + ProjectConfig | lifecycle state and Docker |
-| \`core/\` | concrete legacy-compatible orchestration, Docker managers, Swarm runtime | Deploy facade/monitor | runtime side effects | tenant policy decisions |
-| \`core/state/\` | advisory locks + persisted state transitions | Celery/services/monitor | ownership and state commits | long-running Docker work under row locks |
-| \`infrastructure/\` | Django adapters for ports/contracts | application contracts | persisted state/runtime selection | framework-neutral policy |
-| \`reconciliation/\` | pure desired-vs-observed decision model | monitor/future executor | safe action decision | direct Docker calls |
-| \`runtime/\` | runtime backend contract/selection/observation | application/reconciliation | runtime-neutral handle/observation | tenant policy |
-| \`runtime/swarm/\` | contract adapter around current Swarm implementation | runtime registry | RuntimeOperationResult | second independent Swarm engine |
+| `application/` | framework-neutral lifecycle sequencing, cancellation, strategy ports | future/current lifecycle composition | lifecycle result | Docker details or Django queries |
+| `celery/` | task routing, worker boundaries, concrete Django execution | API/monitor/beat | async work + task ownership | business rules that belong to planning/state |
+| `common/` | shared parsing, safety, policy, retries, state machine | all layers | normalized inputs/errors/rules | Docker execution |
+| `planning/` | configuration resolution, provenance, DeploymentPlan | DeployService / strategy | immutable plan | Docker calls |
+| `core/platforms/` | source inspection and framework detection | orchestrator/platform bridge | DetectionResult + ProjectConfig | lifecycle state and Docker |
+| `core/` | concrete legacy-compatible orchestration, Docker managers, Swarm runtime | Deploy facade/monitor | runtime side effects | tenant policy decisions |
+| `core/state/` | advisory locks + persisted state transitions | Celery/services/monitor | ownership and state commits | long-running Docker work under row locks |
+| `infrastructure/` | Django adapters for ports/contracts | application contracts | persisted state/runtime selection | framework-neutral policy |
+| `reconciliation/` | pure desired-vs-observed decision model | monitor/future executor | safe action decision | direct Docker calls |
+| `runtime/` | runtime backend contract/selection/observation | application/reconciliation | runtime-neutral handle/observation | tenant policy |
+| `runtime/swarm/` | contract adapter around current Swarm implementation | runtime registry | RuntimeOperationResult | second independent Swarm engine |
 
 ## End-to-end deployment call chain
 
@@ -279,18 +279,18 @@ The arrows below are semantic contracts, not decoration.
 | Transition | Caller | Input | Important effect | Consumer |
 |---|---|---|---|---|
 | request -> Deploy | service/API layer | requested service state/config | creates PENDING Deploy and queues async work | Celery |
-| Celery -> DeployService | \`deploy()\` | deploy id + Celery task id | establishes async owner | DeployService |
-| DeployService -> lock | \`execute()\` | Service id | serializes all same-Service deployment/stop work | _execute_locked |
-| lock -> state start | \`StateManager.lock_and_get_deployment()\` | Deploy id + task id | Service QUEUED→DEPLOYING; Deploy PENDING→RUNNING | lifecycle |
-| state -> revision | \`ensure_revision_for_deploy()\` | Deploy + Service | freezes executable snapshot | materializer |
-| revision -> graph | \`ServiceRuntimeGraph.from_revision()\` | immutable revision | reconstructs process/runtime semantics | planning/orchestrator |
-| graph -> plan | \`DeploymentPlanCompiler.compile()\` | graph + selection + resolved config | validates capabilities and freezes execution description | compatibility bridge |
-| plan -> legacy DTO | \`DeploymentPlanCompatibilityCompiler.compile()\` | plan + base config | maps plan into current orchestrator DTO | Deploy facade |
-| DTO -> orchestration | \`DeploymentOrchestrator.deploy()\` | DeploymentConfig | validates, builds image, applies runtime | Swarm/legacy runtime |
+| Celery -> DeployService | `deploy()` | deploy id + Celery task id | establishes async owner | DeployService |
+| DeployService -> lock | `execute()` | Service id | serializes all same-Service deployment/stop work | _execute_locked |
+| lock -> state start | `StateManager.lock_and_get_deployment()` | Deploy id + task id | Service QUEUED→DEPLOYING; Deploy PENDING→RUNNING | lifecycle |
+| state -> revision | `ensure_revision_for_deploy()` | Deploy + Service | freezes executable snapshot | materializer |
+| revision -> graph | `ServiceRuntimeGraph.from_revision()` | immutable revision | reconstructs process/runtime semantics | planning/orchestrator |
+| graph -> plan | `DeploymentPlanCompiler.compile()` | graph + selection + resolved config | validates capabilities and freezes execution description | compatibility bridge |
+| plan -> legacy DTO | `DeploymentPlanCompatibilityCompiler.compile()` | plan + base config | maps plan into current orchestrator DTO | Deploy facade |
+| DTO -> orchestration | `DeploymentOrchestrator.deploy()` | DeploymentConfig | validates, builds image, applies runtime | Swarm/legacy runtime |
 | runtime -> readiness | concrete runtime/health checker | runtime resource | proves resource can serve | activation |
 | readiness -> activation | DeployService callback | revision id + previous-deploy expectation | commits active revision under Service lock | Service |
 | activation -> cleanup | orchestrator | active replacement + previous resources | removes old owned resources | terminal state |
-| cleanup -> terminal | \`DjangoDeploymentState.finish()\` | result + owner | owned terminal state commit | reconciliation |
+| cleanup -> terminal | `DjangoDeploymentState.finish()` | result + owner | owned terminal state commit | reconciliation |
 
 ## Important lifecycle distinction
 
@@ -354,11 +354,11 @@ Deployment state changes happen at concurrency boundaries. A state write is ther
 ## Reading order
 
 1. This README.
-2. [01-system-model.md](01-system-model.md) — nouns and ownership.
-3. [02-request-to-plan.md](02-request-to-plan.md) — how inputs become a plan.
-4. [03-execution-lifecycle.md](03-execution-lifecycle.md) — actual production call path.
-5. [04-build-and-platforms.md](04-build-and-platforms.md) — source/build semantics.
-6. [05-runtime-and-swarm.md](05-runtime-and-swarm.md) — runtime contract and concrete Swarm.
+2. [01-system-model.md](execution/01-system-model.md) — nouns and ownership.
+3. [02-request-to-plan.md](execution/02-request-to-plan.md) — how inputs become a plan.
+4. [03-execution-lifecycle.md](execution/03-execution-lifecycle.md) — actual production call path.
+5. [04-build-and-platforms.md](execution/04-build-and-platforms.md) — source/build semantics.
+6. [05-runtime-and-swarm.md](execution/05-runtime-and-swarm.md) — runtime contract and concrete Swarm.
 7. [06-workers-concurrency-and-state.md](06-workers-concurrency-and-state.md) — locks, state, queues, races.
 8. [07-reconciliation-and-recovery.md](07-reconciliation-and-recovery.md) — drift and crash recovery.
 9. [08-base-images.md](08-base-images.md) — shared runtime image lifecycle.
@@ -371,14 +371,14 @@ Deployment state changes happen at concurrency boundaries. A state write is ther
 
 | Problem | Start here | Then inspect | Why | Primary invariant/test |
 |---|---|---|---|---|
-| Base image unexpectedly rebuilds | 08-base-images.md | \`deploy/base_images.py\` | resolver owns compatibility/cache decision | fingerprint/cache tests |
-| Deployment stuck RUNNING | 03 + 06 | \`deploy_service.py\`, monitor | RUNNING is DB state, not proof of runtime health | ownership/state/recovery tests |
+| Base image unexpectedly rebuilds | 08-base-images.md | `deploy/base_images.py` | resolver owns compatibility/cache decision | fingerprint/cache tests |
+| Deployment stuck RUNNING | 03 + 06 | `deploy_service.py`, monitor | RUNNING is DB state, not proof of runtime health | ownership/state/recovery tests |
 | FAILED while runtime is healthy | 03 + 09 | state tracker + event sink + runtime labels | terminal DB state and runtime observation can diverge | activation/reconciliation tests |
 | Deployment never activates | 03 | DeployService activation callback + revisioning | activation is fenced and happens after readiness | test_activation_consistency.py |
 | Two deployments race | 06 | locks + DeployService | advisory lock spans external work | test_deployment_ownership.py |
 | Cancellation races completion | 06 + 03 | cancellation gateway + state manager | cancellation is serialized under the owner fence | test_lifecycle_executor.py |
 | Worker disappears | 07 + 06 | monitor + state manager | recovery must prove ownership | recovery/ownership tests |
-| Swarm exists but not ready | 05 + 09 | \`core/swarm.py\`, health | runtime readiness differs from app readiness | test_swarm_runtime.py |
+| Swarm exists but not ready | 05 + 09 | `core/swarm.py`, health | runtime readiness differs from app readiness | test_swarm_runtime.py |
 | Wrong framework/platform | 04 + 02 | platform registry/plugin + _process_deployment | detection and policy refinement are separate | multiplatform tests |
 | Wrong Dockerfile | 04 | platform bridge + DockerfileGenerator | build inputs were wrong before Docker ran | build regressions |
 | Image builds, runtime fails | 05 + 09 | SwarmRuntime/orchestrator | build success does not imply runtime readiness | runtime/readiness tests |

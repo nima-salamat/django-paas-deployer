@@ -6,7 +6,7 @@ This document defines the semantic types used by the deployment engine. Read it 
 
 ## State categories
 
-~~~text
+```text
 DESIRED / DECLARATIVE
   Service
   ServiceProcess
@@ -25,13 +25,13 @@ COMPILED EXECUTION
 OBSERVED INFRASTRUCTURE
   RuntimeObservation
   Swarm Service / Swarm Task
-~~~
+```
 
 The categories are intentionally different. Bugs often come from treating one as another.
 
 ## Service
 
-**Path:** \`src/services/models.py\`
+**Path:** `src/services/models.py`
 
 ### Owns
 
@@ -60,7 +60,7 @@ Service domain code must not directly perform Docker/Swarm operations.
 
 ## ServiceProcess
 
-**Path:** \`src/services/models.py\`
+**Path:** `src/services/models.py`
 
 ### Owns
 
@@ -84,7 +84,7 @@ A Service can have multiple independently executable processes without making th
 
 ## ServiceRevision
 
-**Path:** \`src/services/revisioning.py\`
+**Path:** `src/services/revisioning.py`
 
 ### Owns
 
@@ -92,7 +92,7 @@ An immutable snapshot of executable configuration/provenance: source, build, run
 
 ### Called by
 
-\`DeployService._execute_locked()\` through \`ensure_revision_for_deploy()\`.
+`DeployService._execute_locked()` through `ensure_revision_for_deploy()`.
 
 ### Preconditions
 
@@ -114,11 +114,11 @@ Service intent may change. Secrets may gain newer versions. A new Deploy may be 
 
 ### Consumption boundary
 
-\`materialize_revision_config()\` resolves the revision into the legacy DeploymentConfig-shaped mapping; \`ServiceRuntimeGraph.from_revision()\` reconstructs runtime-neutral process/endpoints/volumes/networks.
+`materialize_revision_config()` resolves the revision into the legacy DeploymentConfig-shaped mapping; `ServiceRuntimeGraph.from_revision()` reconstructs runtime-neutral process/endpoints/volumes/networks.
 
 ### Compatibility
 
-\`selected_deploy\` is a legacy Service projection. \`active_revision\` is the authoritative active revision. The compatibility fallback exists so older successful deployment rows do not disappear from legacy readers.
+`selected_deploy` is a legacy Service projection. `active_revision` is the authoritative active revision. The compatibility fallback exists so older successful deployment rows do not disappear from legacy readers.
 
 ### Must not do
 
@@ -126,7 +126,7 @@ Do not mutate a revision to “fix” a currently executing deployment. Create/e
 
 ## Deploy
 
-**Path:** \`src/deploy/models.py\`
+**Path:** `src/deploy/models.py`
 
 ### Owns
 
@@ -160,7 +160,7 @@ An execution attempt is ephemeral compared with Service intent. Multiple Deploy 
 
 ## DeploymentPlan
 
-**Path:** \`src/deployments/planning/plan.py\`
+**Path:** `src/deployments/planning/plan.py`
 
 ### Contract
 
@@ -193,7 +193,7 @@ A plan is data, not a service object. It must not call Docker or mutate Django s
 
 ## ServiceRuntimeGraph
 
-**Path:** \`src/deployments/core/runtime_graph.py\`
+**Path:** `src/deployments/core/runtime_graph.py`
 
 ### Contract
 
@@ -215,7 +215,7 @@ The same runtime semantics should be representable without baking Docker object 
 
 ## RuntimeIdentity
 
-**Path:** \`src/deployments/runtime/identity.py\`
+**Path:** `src/deployments/runtime/identity.py`
 
 Identity is the correlation key for external runtime state: Service, Deploy, Revision, process and runtime resource name.
 
@@ -225,7 +225,7 @@ The runtime needs stable identity to inspect the right resource and reconciliati
 
 ## RuntimeSelection
 
-**Path:** \`src/deployments/runtime/contract.py\`
+**Path:** `src/deployments/runtime/contract.py`
 
 It records:
 
@@ -246,7 +246,7 @@ Do not collapse unsupported, disabled, unreachable and temporarily degraded into
 
 ## RuntimeObservation
 
-**Path:** \`src/deployments/runtime/observations.py\`
+**Path:** `src/deployments/runtime/observations.py`
 
 It reports what infrastructure observed:
 
@@ -266,7 +266,7 @@ An observation is read-only evidence. It must not become desired state merely be
 
 ## BaseRuntimeImage
 
-**Path:** \`src/deploy/models.py\` + \`src/deploy/base_images.py\`
+**Path:** `src/deploy/models.py` + `src/deploy/base_images.py`
 
 Operator-owned reusable runtime artifact keyed by runtime/version/variant/architecture/Docker host.
 
@@ -284,19 +284,19 @@ Runtime labels carry deployment/revision identity used by activation recovery an
 
 Activation means changing the durable Service pointer to the new revision after runtime readiness.
 
-Current callback in \`DeployService._execute_locked()\`:
+Current callback in `DeployService._execute_locked()`:
 
 1. locks Service;
 2. gets current active Deploy;
-3. checks it still equals \`previous_deploy_id\`;
-4. calls \`activate_revision_locked()\`;
+3. checks it still equals `previous_deploy_id`;
+4. calls `activate_revision_locked()`;
 5. sets desired_state=running.
 
 This prevents a worker that started earlier from overwriting a newer deployment's authority.
 
 ## Entity relationship summary
 
-~~~text
+```text
 Service
   ├── ServiceProcess*
   ├── ServiceRevision*
@@ -316,13 +316,13 @@ DeploymentPlan
 
 RuntimeObservation
   └── derived from Docker/Swarm reality
-~~~
+```
 
 ## Modification navigation
 
 | Desired change | Change here | Not here |
 |---|---|---|
-| Service user intent | \`src/services/\` | Docker runtime |
+| Service user intent | `src/services/` | Docker runtime |
 | Freeze/rollback executable config | revisioning | runtime adapter |
 | Process topology | ServiceProcess/revisioning/runtime graph | Swarm service code |
 | Runtime backend identity | runtime contracts/selection | tenant config |

@@ -37,4 +37,4 @@ See background.md and the deep deployment docs. A PENDING/BUILDING base-image ro
 5. operation resource identity is recorded so recovery can target the correct runtime resource.
 6. operator desired node state and observed Docker state are distinct.
 
-For execution semantics always continue to ../../deployments/README.md.
+For execution semantics always continue to ../deployments/README.md.

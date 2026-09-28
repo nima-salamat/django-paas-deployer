@@ -36,7 +36,7 @@ Read the app README before changing that app. Follow its models/api/serializers/
 
 The per-app deployments README points here rather than duplicating that manual.
 
-## Cross-system operations
+- [Source-derived coverage manifest](apps/COVERAGE.md)\n\n## Cross-system operations
 
 - [Observability](observability.md)
 - [Testing and security](testing-and-security.md)

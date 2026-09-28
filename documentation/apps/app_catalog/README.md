@@ -30,7 +30,7 @@ Catalog definitions are validated before child creation. Unsupported privileged/
 
 ## Main lifecycle
 
-~~~text
+```text
 catalog source
  -> validated definition + variant
  -> ApplicationPlan
@@ -38,7 +38,7 @@ catalog source
  -> child Service/Deploy
  -> normal ServiceRevision/deployments pipeline
  -> coordinator running/failed/cancelled
-~~~
+```
 
 ## Invariants
 
@@ -50,4 +50,4 @@ catalog source
 
 ## Reading order
 
-Read models.md -> api.md -> serializers.md -> background.md. For child runtime behavior also read ../services/README.md and ../deployments/README.md, then ../../deployments/02-request-to-plan.md.
+Read models.md -> api.md -> serializers.md -> background.md. For child runtime behavior also read ../services/README.md and ../deployments/README.md, then ../../deployments/execution/02-request-to-plan.md.

@@ -6,7 +6,7 @@ This is the operational map of one application deployment. Read it before changi
 
 ## Production call chain
 
-~~~text
+```text
 deploy()
   |
   v
@@ -48,11 +48,11 @@ DjangoDeploymentState.finish()
   |
   v
 terminal Deploy + legacy Service sync
-~~~
+```
 
 ## Entry: Celery task
 
-**Module:** \`deployments/celery/tasks.py::deploy\`
+**Module:** `deployments/celery/tasks.py::deploy`
 
 ### Preconditions
 
@@ -62,11 +62,11 @@ terminal Deploy + legacy Service sync
 
 ### Action
 
-Calls \`DeployService.execute()\` with the Celery task id as execution owner.
+Calls `DeployService.execute()` with the Celery task id as execution owner.
 
 ### Retry boundary
 
-Permanent errors are logged without retry. Only \`DeploymentError\` instances carrying recoverable=True are retried. Unknown Python errors are translated to non-recoverable platform errors.
+Permanent errors are logged without retry. Only `DeploymentError` instances carrying recoverable=True are retried. Unknown Python errors are translated to non-recoverable platform errors.
 
 ### Why the task boundary matters
 
@@ -74,7 +74,7 @@ Celery is where asynchronous retry/acknowledgement semantics belong. It should n
 
 ## DeployService.execute()
 
-**Module:** \`celery/services/deploy_service.py\`
+**Module:** `celery/services/deploy_service.py`
 
 ### Called by
 
@@ -88,7 +88,7 @@ Deploy exists and has a Service.
 
 1. obtains Service id;
 2. acquires per-Service PostgreSQL advisory lock;
-3. enters \`_execute_locked()\`.
+3. enters `_execute_locked()`.
 
 ### Why advisory lock exists
 
@@ -100,7 +100,7 @@ Either the lifecycle has been completed by the owner or execution was skipped/fa
 
 ## State start
 
-**Module:** \`core/state/manager.py\`, \`celery/service_status.py\`
+**Module:** `core/state/manager.py`, `celery/service_status.py`
 
 ### Preconditions
 
@@ -108,10 +108,10 @@ Service is in the expected queued/eligible state and task ownership matches.
 
 ### Transition
 
-~~~text
+```text
 Service  QUEUED -> DEPLOYING
 Deploy   PENDING -> RUNNING
-~~~
+```
 
 ### Side effect
 
@@ -123,11 +123,11 @@ This is the authoritative handoff from async queue delivery to active deployment
 
 ## Revision boundary
 
-\`ensure_revision_for_deploy()\` is called before the deployment uses mutable configuration as an execution source.
+`ensure_revision_for_deploy()` is called before the deployment uses mutable configuration as an execution source.
 
 ### Postcondition
 
-\`deploy_item.revision_id\` exists and can materialize the executable snapshot.
+`deploy_item.revision_id` exists and can materialize the executable snapshot.
 
 If revision creation fails, no runtime execution should continue.
 
@@ -143,9 +143,9 @@ It:
 4. refines supported framework aliases;
 5. validates scoped customizations;
 6. gets Dockerfile text;
-7. runs \`DeploymentValidator.validate_for_deploy()\`;
+7. runs `DeploymentValidator.validate_for_deploy()`;
 8. uses a legacy restart-only fast path only when Swarm is disabled;
-9. otherwise enters \`_execute_orchestrator()\`.
+9. otherwise enters `_execute_orchestrator()`.
 
 ### Why this layer exists
 
@@ -167,19 +167,19 @@ Important inputs:
 
 ### Important ownership rule
 
-The deployment constructs the configuration passed to the orchestrator once and passes it explicitly. Downstream code must not secretly reparse mutable \`Deploy.config\` to discover a different policy.
+The deployment constructs the configuration passed to the orchestrator once and passes it explicitly. Downstream code must not secretly reparse mutable `Deploy.config` to discover a different policy.
 
 ## DeploymentOrchestrator.deploy()
 
-**Module:** \`core/orchestrator.py\`
+**Module:** `core/orchestrator.py`
 
 ### Called by
 
-\`core/deploy.py::Deploy.deploy_result()\` / deploy facade.
+`core/deploy.py::Deploy.deploy_result()` / deploy facade.
 
 ### Preconditions
 
-A complete \`DeploymentConfig\` is available and worker ownership/cancellation is still valid.
+A complete `DeploymentConfig` is available and worker ownership/cancellation is still valid.
 
 ### Stages
 
@@ -199,11 +199,11 @@ A complete \`DeploymentConfig\` is available and worker ownership/cancellation i
 
 ### Postcondition
 
-Returns a \`DeploymentResult\` describing success, failure, cancellation and rollback state. It does not by itself define which revision is authoritative; activation callback does.
+Returns a `DeploymentResult` describing success, failure, cancellation and rollback state. It does not by itself define which revision is authoritative; activation callback does.
 
 ## Base-image phase
 
-The orchestrator calls \`ensure_base_images()\`.
+The orchestrator calls `ensure_base_images()`.
 
 ### Preconditions
 
@@ -231,7 +231,7 @@ No Service activation should happen until runtime readiness succeeds.
 
 ### Swarm mode
 
-\`_deploy_swarm_runtime()\` delegates to \`SwarmRuntime\` and process application.
+`_deploy_swarm_runtime()` delegates to `SwarmRuntime` and process application.
 
 ### Legacy mode
 
@@ -251,7 +251,7 @@ Current Swarm readiness is satisfied by the runtime service reaching one running
 
 ### Legacy container
 
-\`DockerHealthChecker.wait_until_healthy()\` may require:
+`DockerHealthChecker.wait_until_healthy()` may require:
 
 - Docker health status;
 - repeated running polls when no healthcheck exists;
@@ -263,7 +263,7 @@ Only a successful readiness result is allowed to enter activation.
 
 ## Activation
 
-**Caller:** the callback created in \`DeployService._execute_locked()\`.
+**Caller:** the callback created in `DeployService._execute_locked()`.
 
 ### Preconditions
 
@@ -275,9 +275,9 @@ Only a successful readiness result is allowed to enter activation.
 
 1. lock Service;
 2. resolve current active deployment;
-3. compare with captured \`previous_deploy_id\`;
+3. compare with captured `previous_deploy_id`;
 4. reject if another deployment already became active;
-5. call \`activate_revision_locked()\`;
+5. call `activate_revision_locked()`;
 6. set desired_state=running.
 
 ### Why compare previous_deploy_id
@@ -298,11 +298,11 @@ Before activation, a failed deployment must not remove the only known-good previ
 
 ### Global Docker cleanup
 
-Not owned by an individual deployment. \`CleanupManager.prune_dangling_images()\` intentionally performs no global prune.
+Not owned by an individual deployment. `CleanupManager.prune_dangling_images()` intentionally performs no global prune.
 
 ## State finalization
 
-**Module:** \`deploy/deployment_state.py::DjangoDeploymentState\`
+**Module:** `deploy/deployment_state.py::DjangoDeploymentState`
 
 ### Called by
 
@@ -314,7 +314,7 @@ The worker computes a result and current ownership can be checked.
 
 ### Postcondition
 
-Owned terminal transitions are committed through \`StateManager.transition_deploy_terminal_if_owned()\`.
+Owned terminal transitions are committed through `StateManager.transition_deploy_terminal_if_owned()`.
 
 A stale worker cannot overwrite a newer terminal outcome.
 
@@ -338,11 +338,11 @@ There are two paths.
 
 ### Before worker execution
 
-\`PENDING -> CANCELLED\` can be committed immediately.
+`PENDING -> CANCELLED` can be committed immediately.
 
 ### During execution
 
-~~~
+```
 cancel_requested = true
        |
        v
@@ -356,7 +356,7 @@ owned runtime stop/remove where safe
        |
        v
 CANCELLED
-~~~
+```
 
 ### Race guarantee
 
@@ -364,9 +364,9 @@ The state manager re-checks cancellation under the Deploy row lock. A cancellati
 
 ## Rollback semantics
 
-Legacy container rollback relies on a pre-mutation \`ContainerSnapshot\`.
+Legacy container rollback relies on a pre-mutation `ContainerSnapshot`.
 
-The newer lifecycle executor supports a plan-level \`rollback_plan\` through RuntimeContract.
+The newer lifecycle executor supports a plan-level `rollback_plan` through RuntimeContract.
 
 These are two currently coexisting mechanisms.
 
@@ -398,13 +398,13 @@ Do not:
 
 ## Related code
 
-- \`src/deployments/celery/tasks.py\`
-- \`src/deployments/celery/services/deploy_service.py\`
-- \`src/deploy/deployment_state.py\`
-- \`src/deployments/core/orchestrator.py\`
-- \`src/deployments/core/state/manager.py\`
-- \`src/deployments/common/state_machine.py\`
-- \`src/services/revisioning.py\`
+- `src/deployments/celery/tasks.py`
+- `src/deployments/celery/services/deploy_service.py`
+- `src/deploy/deployment_state.py`
+- `src/deployments/core/orchestrator.py`
+- `src/deployments/core/state/manager.py`
+- `src/deployments/common/state_machine.py`
+- `src/services/revisioning.py`
 
 
 ## Ready-to-Deploy entry point

@@ -2,14 +2,14 @@
 
 ## Request path
 
-~~~text
+```text
 HTTP / WebSocket
  -> Django / DRF / Channels
  -> domain app (users/auth/services/deploy/etc.)
  -> Celery
  -> deployments
  -> Docker Engine / Swarm
-~~~
+```
 
 Use [apps/README.md](apps/README.md) to locate the owning application and [deployments/README.md](deployments/README.md) for runtime execution.
 
@@ -19,15 +19,15 @@ Django model state is the durable control-plane authority for desired state, own
 
 ## Workers
 
-Deployment-related worker topology, queues, locks, task ownership, retries and cancellation are canonical in [deployments/06-workers-concurrency-and-state.md](deployments/06-workers-concurrency-and-state.md).
+Deployment-related worker topology, queues, locks, task ownership, retries and cancellation are canonical in [deployments/execution/06-workers-concurrency-and-state.md](deployments/execution/06-workers-concurrency-and-state.md).
 
 ## Reconciliation
 
-Scheduled reconciliation compares durable desired state against runtime/worker observations. The detailed recovery contract is [deployments/07-reconciliation-and-recovery.md](deployments/07-reconciliation-and-recovery.md).
+Scheduled reconciliation compares durable desired state against runtime/worker observations. The detailed recovery contract is [deployments/execution/07-reconciliation-and-recovery.md](deployments/execution/07-reconciliation-and-recovery.md).
 
 ## Databases
 
-The primary PostgreSQL database stores control-plane/domain state. DeployLog may use a dedicated PostgreSQL database; see [apps/deploy/models.md](apps/deploy/models.md) and [deployments/09-logs-health-rollback-cleanup.md](deployments/09-logs-health-rollback-cleanup.md).
+The primary PostgreSQL database stores control-plane/domain state. DeployLog may use a dedicated PostgreSQL database; see [apps/deploy/models.md](apps/deploy/models.md) and [deployments/execution/09-logs-health-rollback-cleanup.md](deployments/execution/09-logs-health-rollback-cleanup.md).
 
 ## Redis and Channels
 

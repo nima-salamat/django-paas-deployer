@@ -16,4 +16,4 @@ platform is constrained by core.global_settings.config.PLATFORM_CHOICES and iden
 
 log_retention_days, log_storage_mb and log_ingest_bytes_per_sec are optional overrides. Null means inherit the platform/default policy. log_quota_behavior may be fifo_delete, drop_new or realtime_only; blank means inherit.
 
-See ../../deployments/04-build-and-platforms.md for execution-resource policy separation.
+See ../deployments/execution/04-build-and-platforms.md for execution-resource policy separation.

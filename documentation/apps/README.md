@@ -25,7 +25,7 @@ src/config/, src/static/, src/templates/ and root documentation/ are not first-p
 
 ## Cross-app interaction map
 
-~~~text
+```text
 users
 ├── auth_users        identity consumed by authentication state
 ├── services          ownership and actor identity
@@ -92,7 +92,7 @@ core
 cms
 ├── users              custom Wagtail user forms
 └── app-level hooks    Wagtail snippet administration
-~~~
+```
 
 ## Authority map
 
@@ -129,11 +129,11 @@ src/docs is product CMS data; root documentation is engineering architecture mem
 |---|---|---|
 | Login/session failure | auth_users/README.md | users, authentication/session tests |
 | Resource access leak | resource app API docs | users/share permissions/serializer |
-| Service field accepted but runtime ignores it | services/README.md | deployments/02-request-to-plan.md and revisioning |
-| Wrong deployment activation | deploy/README.md | deployments/03-execution-lifecycle.md and services/revisioning |
-| Unexpected base-image rebuild | deploy/README.md | deployments/08-base-images.md |
+| Service field accepted but runtime ignores it | services/README.md | deployments/execution/02-request-to-plan.md and revisioning |
+| Wrong deployment activation | deploy/README.md | deployments/execution/03-execution-lifecycle.md and services/revisioning |
+| Unexpected base-image rebuild | deploy/README.md | deployments/execution/08-base-images.md |
 | Missing runtime logs | logs/README.md | services runtime-log API and collector |
-| Missing deployment logs | deploy/README.md | deployments/09-logs-health-rollback-cleanup.md |
+| Missing deployment logs | deploy/README.md | deployments/execution/09-logs-health-rollback-cleanup.md |
 | Secret masking failure | app serializers.md | permission helper and sensitive model |
 | Messenger realtime mismatch | messenger/README.md | messenger/background.md |
 | Catalog installation stuck | app_catalog/README.md | coordinator tasks and child Deploy |
@@ -170,9 +170,9 @@ A conceptual product relationship is not an implementation dependency unless one
 
 ## Contract navigation
 
-Service runtime field: services/models.md -> services/state-contracts.md -> services.revisioning -> deployments/02-request-to-plan.md.
+Service runtime field: services/models.md -> services/state-contracts.md -> services.revisioning -> deployments/execution/02-request-to-plan.md.
 
-Deployment activation race: deploy/state-contracts.md -> deployments/03-execution-lifecycle.md -> deployments/06-workers-concurrency-and-state.md.
+Deployment activation race: deploy/state-contracts.md -> deployments/execution/03-execution-lifecycle.md -> deployments/execution/06-workers-concurrency-and-state.md.
 
 Messenger join-request bug: messenger/api.md -> messenger/state-contracts.md -> src/messenger/api/groups.py -> src/messenger/consumers.py.
 

@@ -53,4 +53,4 @@ Owner access and effective ServiceShare rules are rechecked server-side. Secret 
 
 ## Reading order
 
-models.md -> serializers.md -> api.md -> background.md -> tests.md. Then ../../deployments/02-request-to-plan.md and 03-execution-lifecycle.md for execution crossings.
+models.md -> serializers.md -> api.md -> background.md -> tests.md. Then ../deployments/execution/02-request-to-plan.md and 03-execution-lifecycle.md for execution crossings.

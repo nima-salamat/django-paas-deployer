@@ -6,7 +6,7 @@ These concerns cross the main lifecycle but have different responsibilities. The
 
 ## Event path
 
-~~~text
+```text
 orchestrator / DBDeployer
        |
        v
@@ -18,11 +18,11 @@ DjangoDeploymentState / DBAndChannelEventSink
        +--> DeployLog database
        +--> Deploy progress/stage/status
        +--> Channels group deploy_<id>
-~~~
+```
 
 ## DeploymentLogger
 
-**Path:** \`core/deployment_logger.py\`
+**Path:** `core/deployment_logger.py`
 
 ### Called by
 
@@ -37,7 +37,7 @@ Create a DeploymentEvent containing stage/message/level/progress/details and:
 
 ### Why diagnostics are rendered into log text
 
-The Celery worker formatter may display only \`message\`. High-signal Docker fields are therefore rendered in the message as well as structured sink details.
+The Celery worker formatter may display only `message`. High-signal Docker fields are therefore rendered in the message as well as structured sink details.
 
 ### Failure behavior
 
@@ -45,7 +45,7 @@ Sink exceptions are swallowed/sampled. Observability failure must not become a r
 
 ## DBAndChannelEventSink
 
-**Path:** \`core/sink.py\`
+**Path:** `core/sink.py`
 
 ### Responsibilities
 
@@ -71,7 +71,7 @@ It must not make “the UI received the event” a prerequisite for deployment c
 
 DeployLog uses scalar Deploy/Service ids because logs may live in a separate PostgreSQL database.
 
-The Compose stack contains \`deployment-log-db\`.
+The Compose stack contains `deployment-log-db`.
 
 Do not introduce cross-database Django foreign keys into the log store.
 
@@ -90,7 +90,7 @@ Application-level condition, such as:
 
 ### Legacy container health
 
-\`DockerHealthChecker.wait_until_healthy()\`:
+`DockerHealthChecker.wait_until_healthy()`:
 
 - repeatedly checks container state;
 - may require a Docker health status;
@@ -99,7 +99,7 @@ Application-level condition, such as:
 
 ### Important non-equivalence
 
-~~~text
+```text
 container exists
    !=
 container ready
@@ -107,7 +107,7 @@ container ready
 application ready
    !=
 revision active
-~~~
+```
 
 Do not use existence as success.
 
@@ -135,9 +135,9 @@ Application-level HTTP semantics are separate.
 
 ### Legacy container path
 
-**Path:** \`core/rollback.py\`
+**Path:** `core/rollback.py`
 
-Before replacing an active container, the orchestrator can capture \`ContainerSnapshot\`.
+Before replacing an active container, the orchestrator can capture `ContainerSnapshot`.
 
 The snapshot preserves enough information to restore the previous runtime resource:
 
@@ -152,20 +152,20 @@ The snapshot preserves enough information to restore the previous runtime resour
 
 ### Failure flow
 
-~~~text
+```text
 previous resource
     -> snapshot
     -> replacement
     -> start
     -> readiness fails
     -> rollback restore
-~~~
+```
 
-Rollback errors are surfaced as \`RollbackError\`.
+Rollback errors are surfaced as `RollbackError`.
 
 ### New lifecycle contract path
 
-\`DeploymentLifecycleExecutor\` can call \`RuntimeContract.rollback()\` with an explicit rollback_plan.
+`DeploymentLifecycleExecutor` can call `RuntimeContract.rollback()` with an explicit rollback_plan.
 
 This is a migration seam, not the only current production rollback path.
 
@@ -179,7 +179,7 @@ When rollback fails, it reports failure plus rollback_failed and preserves diagn
 
 ## Cleanup
 
-**Path:** \`core/cleanup.py\`
+**Path:** `core/cleanup.py`
 
 ### Owns
 
@@ -189,7 +189,7 @@ Explicitly owned deployment resource cleanup.
 
 Host-wide Docker garbage collection.
 
-\`prune_dangling_images()\` intentionally returns without global prune.
+`prune_dangling_images()` intentionally returns without global prune.
 
 ### Why
 
@@ -199,14 +199,14 @@ The deployment worker shares the Docker daemon with unrelated services. It canno
 
 Safe sequence:
 
-~~~text
+```text
 build
  -> apply
  -> readiness
  -> activate
  -> remove old owned release
  -> release leases
-~~~
+```
 
 Before activation, preserve the previous known-good release.
 
@@ -214,9 +214,9 @@ Before activation, preserve the previous known-good release.
 
 A failed application container is not sufficient reason to delete persistent data.
 
-Volume release/reclamation is separately scheduled through \`reclaim_released_volumes\`.
+Volume release/reclamation is separately scheduled through `reclaim_released_volumes`.
 
-Database \`force_reinit\` is explicit destructive behavior and is handled by the database deployment path.
+Database `force_reinit` is explicit destructive behavior and is handled by the database deployment path.
 
 ## Cancellation cleanup
 
@@ -267,11 +267,11 @@ Do not:
 
 ## Related code
 
-- \`src/deployments/core/deployment_logger.py\`
-- \`src/deployments/core/sink.py\`
-- \`src/deployments/core/health.py\`
-- \`src/deployments/core/rollback.py\`
-- \`src/deployments/core/cleanup.py\`
-- \`src/deployments/core/volumes.py\`
-- \`src/deployments/core/volume_storage.py\`
-- \`src/deploy/deployment_state.py\`
+- `src/deployments/core/deployment_logger.py`
+- `src/deployments/core/sink.py`
+- `src/deployments/core/health.py`
+- `src/deployments/core/rollback.py`
+- `src/deployments/core/cleanup.py`
+- `src/deployments/core/volumes.py`
+- `src/deployments/core/volume_storage.py`
+- `src/deploy/deployment_state.py`

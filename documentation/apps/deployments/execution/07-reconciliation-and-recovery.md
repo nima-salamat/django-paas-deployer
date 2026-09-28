@@ -6,7 +6,7 @@ Reconciliation handles the gap between what the database says should exist and w
 
 The architectural split is:
 
-~~~text
+```text
 desired state
     +
 runtime observation
@@ -14,7 +14,7 @@ runtime observation
 reconciliation decision
     ->
 runtime action
-~~~
+```
 
 **Decision and execution are intentionally separate.**
 
@@ -22,14 +22,14 @@ runtime action
 
 Two layers coexist:
 
-- \`ReconciliationPlanner\` is a pure, runtime-neutral decision model.
-- \`deployments.celery.schedules\` is the current production monitor and still contains concrete Docker/Swarm repair logic.
+- `ReconciliationPlanner` is a pure, runtime-neutral decision model.
+- `deployments.celery.schedules` is the current production monitor and still contains concrete Docker/Swarm repair logic.
 
 The planner is an architectural contract and test target, not yet the only production reconciliation engine.
 
 ## DesiredRuntimeState
 
-**Path:** \`reconciliation/planner.py\`
+**Path:** `reconciliation/planner.py`
 
 Contains:
 
@@ -46,7 +46,7 @@ A repair decision must use a stable representation of intent rather than rereadi
 
 ## RuntimeObservation
 
-**Path:** \`runtime/observations.py\`
+**Path:** `runtime/observations.py`
 
 An observation contains:
 
@@ -64,7 +64,7 @@ Runtime state without identity is unsafe for destructive repair.
 
 ## ReconciliationPlanner
 
-**Path:** \`reconciliation/planner.py\`
+**Path:** `reconciliation/planner.py`
 
 ### Called by
 
@@ -102,11 +102,11 @@ It returns MANUAL_INTERVENTION.
 
 Consider:
 
-~~~text
+```text
 desired revision = B
 runtime service name exists
 revision label = missing
-~~~
+```
 
 Possible explanations include:
 
@@ -121,7 +121,7 @@ The architecture therefore prefers manual intervention over unsafe convergence.
 
 ## Scheduled monitor
 
-**Path:** \`celery/schedules.py::monitor_services\`
+**Path:** `celery/schedules.py::monitor_services`
 
 ### Entry
 
@@ -169,13 +169,13 @@ They do not replace Service/Deploy lifecycle state.
 
 ### Failure scenario
 
-~~~text
+```text
 DB transaction commits Deploy=PENDING
         |
 Celery publish is interrupted
         |
 no worker receives task
-~~~
+```
 
 The DB state remains valid.
 
@@ -205,11 +205,11 @@ A canonical container name can refer to the previous release during build.
 
 Therefore:
 
-~~~text
+```text
 running container
    !=
 proof that stale Deploy succeeded
-~~~
+```
 
 For container creation/start/health phases, recovery first proves the resource belongs to the stale deployment through the deployment identity label before removing/restoring it.
 
@@ -229,7 +229,7 @@ It does not invent a new desired revision.
 
 ## Timeout ownership
 
-When a deployment times out, the monitor marks \`cancel_requested\`.
+When a deployment times out, the monitor marks `cancel_requested`.
 
 It does **not** become the ordinary runtime cleanup owner.
 
@@ -249,7 +249,7 @@ A later rebuild can safely claim the resource again.
 
 ## Swarm infrastructure synchronization
 
-\`sync_swarm_infrastructure\` synchronizes operator-visible SwarmCluster/SwarmNode metadata when Swarm is enabled.
+`sync_swarm_infrastructure` synchronizes operator-visible SwarmCluster/SwarmNode metadata when Swarm is enabled.
 
 This is separate from application runtime reconciliation.
 
@@ -286,11 +286,11 @@ Do not:
 
 ## Related code
 
-- \`src/deployments/reconciliation/planner.py\`
-- \`src/deployments/celery/schedules.py\`
-- \`src/deployments/celery/monitoring/actions.py\`
-- \`src/deployments/celery/monitoring/policies.py\`
-- \`src/deployments/runtime/observations.py\`
-- \`src/deployments/runtime/registry.py\`
-- \`src/deployments/runtime/swarm/adapter.py\`
-- \`src/deployments/core/swarm.py\`
+- `src/deployments/reconciliation/planner.py`
+- `src/deployments/celery/schedules.py`
+- `src/deployments/celery/monitoring/actions.py`
+- `src/deployments/celery/monitoring/policies.py`
+- `src/deployments/runtime/observations.py`
+- `src/deployments/runtime/registry.py`
+- `src/deployments/runtime/swarm/adapter.py`
+- `src/deployments/core/swarm.py`

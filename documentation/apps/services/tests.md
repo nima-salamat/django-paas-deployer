@@ -12,4 +12,4 @@
 
 Use revisioning tests when changing Service/Revision fields, serializers or deploy inputs. Use shell tests together when changing any shell endpoint, not one file in isolation.
 
-Cross-app activation and worker ownership contracts live in deployments; see ../../deployments/11-testing-contracts-and-invariants.md.
+Cross-app activation and worker ownership contracts live in deployments; see ../deployments/execution/11-testing-contracts-and-invariants.md.

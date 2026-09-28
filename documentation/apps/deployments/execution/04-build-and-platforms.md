@@ -6,7 +6,7 @@ This document explains how source code is interpreted and turned into an applica
 
 ## Information flow
 
-~~~text
+```text
 ZIP
  |
  v
@@ -37,15 +37,15 @@ application image
  |
  v
 runtime configuration
-~~~
+```
 
 ## ProjectInspector
 
-**Path:** \`core/platforms/inspector.py\`
+**Path:** `core/platforms/inspector.py`
 
 ### Called by
 
-\`PlatformRegistry.detect()\`.
+`PlatformRegistry.detect()`.
 
 ### Input
 
@@ -67,11 +67,11 @@ The archive is untrusted input. Detection should inspect enough structure to cla
 
 ## PlatformRegistry
 
-**Path:** \`core/platforms/registry.py\`
+**Path:** `core/platforms/registry.py`
 
 ### Called by
 
-\`core/platform_bridge.py::enrich_config_from_project()\`.
+`core/platform_bridge.py::enrich_config_from_project()`.
 
 ### Preconditions
 
@@ -79,7 +79,7 @@ Plugins loaded, project root extracted.
 
 ### Output
 
-\`(plugin, DetectionResult, ProjectConfig)\`.
+`(plugin, DetectionResult, ProjectConfig)`.
 
 ### Decision algorithm
 
@@ -96,11 +96,11 @@ Confidence expresses evidence from the source tree. Priority is a deterministic 
 
 ## BasePlatform contract
 
-**Path:** \`core/platforms/base/platform.py\`
+**Path:** `core/platforms/base/platform.py`
 
 A plugin supplies source interpretation.
 
-### \`detect(file_index)\`
+### `detect(file_index)`
 
 **Input:** inspector file index.
 
@@ -108,27 +108,27 @@ A plugin supplies source interpretation.
 
 **Must not:** mutate state or perform infrastructure calls.
 
-### \`defaults()\`
+### `defaults()`
 
 Lowest-priority platform defaults.
 
-### \`inspect(file_index)\`
+### `inspect(file_index)`
 
 Extracts concrete project facts such as runtime version, entrypoint or build directory.
 
-### \`resolve()\`
+### `resolve()`
 
 Combines:
 
-~~~text
+```text
 platform defaults
     < auto-detected values
     < user_config
-~~~
+```
 
 and produces ProjectConfig plus source provenance.
 
-### \`validate()\`
+### `validate()`
 
 Validates the resolved ProjectConfig against the platform schema.
 
@@ -145,15 +145,15 @@ The current loader registers:
 - PHP: PHP, Laravel;
 - Other: Go, Static, Generic.
 
-Use \`core/platforms/loader.py\` as the exact registry source before documenting a new framework.
+Use `core/platforms/loader.py` as the exact registry source before documenting a new framework.
 
 ## Platform bridge
 
-**Path:** \`core/platform_bridge.py\`
+**Path:** `core/platform_bridge.py`
 
 ### Called by
 
-\`DeploymentOrchestrator.deploy()\` during source extraction/build preparation.
+`DeploymentOrchestrator.deploy()` during source extraction/build preparation.
 
 ### Input
 
@@ -177,7 +177,7 @@ The Dockerfile renderer owns the final image startup semantics for these familie
 
 ## DockerfileGenerator
 
-**Path:** \`core/dockerfile.py\`
+**Path:** `core/dockerfile.py`
 
 ### Called by
 
@@ -226,11 +226,11 @@ The build pipeline can detect/receive frontend settings such as:
 
 The important distinction is:
 
-~~~text
+```text
 frontend build tooling
       !=
 runtime backend
-~~~
+```
 
 A Node build stage can be part of an application image without changing the application's runtime family from PHP.
 
@@ -246,19 +246,19 @@ Putting application document-root semantics into the shared PHP base image would
 
 ## Base image versus application image
 
-~~~text
+```text
 operator-owned runtime/tooling layers
         +
 application source + dependency/build instructions
         =
 deployment-specific application image
-~~~
+```
 
 Shared base images must never absorb tenant source or tenant dependency trees.
 
 ## Build resource ownership
 
-\`common/resource_policy.py\` determines build resource limits from operator-owned configuration, optionally constrained by operator plan build mode.
+`common/resource_policy.py` determines build resource limits from operator-owned configuration, optionally constrained by operator plan build mode.
 
 Tenant JSON is not the authority for CPU/RAM/PIDs/shm.
 
@@ -296,12 +296,12 @@ Image existence is necessary but not sufficient for deployment success. Runtime 
 
 ## Related code
 
-- \`src/deployments/core/platforms/inspector.py\`
-- \`src/deployments/core/platforms/registry.py\`
-- \`src/deployments/core/platforms/base/platform.py\`
-- \`src/deployments/core/platforms/base/schema.py\`
-- \`src/deployments/core/platforms/loader.py\`
-- \`src/deployments/core/platform_bridge.py\`
-- \`src/deployments/core/dockerfile.py\`
-- \`src/deployments/core/manager/image_manager.py\`
-- \`src/deployments/common/resource_policy.py\`
+- `src/deployments/core/platforms/inspector.py`
+- `src/deployments/core/platforms/registry.py`
+- `src/deployments/core/platforms/base/platform.py`
+- `src/deployments/core/platforms/base/schema.py`
+- `src/deployments/core/platforms/loader.py`
+- `src/deployments/core/platform_bridge.py`
+- `src/deployments/core/dockerfile.py`
+- `src/deployments/core/manager/image_manager.py`
+- `src/deployments/common/resource_policy.py`

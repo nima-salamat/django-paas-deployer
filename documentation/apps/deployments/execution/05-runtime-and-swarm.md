@@ -10,7 +10,7 @@ The key rule is:
 
 ## Runtime layers
 
-~~~text
+```text
 DeploymentPlan
       |
       v
@@ -27,11 +27,11 @@ core.swarm.SwarmRuntime
       |
       v
 Docker Engine / Swarm
-~~~
+```
 
 ## RuntimeSelection
 
-**Path:** \`runtime/registry.py\`, \`runtime/contract.py\`
+**Path:** `runtime/registry.py`, `runtime/contract.py`
 
 ### Called by
 
@@ -49,19 +49,19 @@ RuntimeSelection.
 
 A Service request may specify application behavior, but it must not select arbitrary host infrastructure.
 
-The registry intentionally ignores \`backend\` fields on Service/Revision/Deploy tenant data.
+The registry intentionally ignores `backend` fields on Service/Revision/Deploy tenant data.
 
 ### Availability
 
-With \`probe=False\`, selection can remain UNKNOWN availability.
+With `probe=False`, selection can remain UNKNOWN availability.
 
-With \`probe=True\`, the adapter checks whether the runtime is active, reachable and manager-capable.
+With `probe=True`, the adapter checks whether the runtime is active, reachable and manager-capable.
 
 Do not interpret UNKNOWN as ACTIVE.
 
 ## RuntimeCapabilities
 
-**Path:** \`runtime/capabilities.py\`
+**Path:** `runtime/capabilities.py`
 
 Capabilities describe what a backend supports:
 
@@ -95,11 +95,11 @@ Availability describes:
 
 ## RuntimeContract
 
-**Path:** \`runtime/contract.py\`
+**Path:** `runtime/contract.py`
 
 This is the semantic interface for a runtime backend.
 
-### \`apply(plan, operation_key)\`
+### `apply(plan, operation_key)`
 
 **Preconditions**
 
@@ -116,33 +116,33 @@ Make the external runtime represent the plan and return a RuntimeHandle.
 
 A handle is returned if the operation succeeded.
 
-### \`inspect(identity)\`
+### `inspect(identity)`
 
 Returns observed runtime state for the requested identity.
 
 It is observational and must not silently mutate desired state.
 
-### \`wait_ready(handle, timeout, cancel_check)\`
+### `wait_ready(handle, timeout, cancel_check)`
 
 Waits until backend-specific readiness is satisfied.
 
 The caller must not treat a handle returned by apply as automatically ready.
 
-### \`stop(handle)\` / \`remove(handle)\`
+### `stop(handle)` / `remove(handle)`
 
 Perform explicit lifecycle actions against the identified runtime resource.
 
-### \`rollback(plan, target_plan)\`
+### `rollback(plan, target_plan)`
 
 Restore a known-good target plan. A runtime backend should reject rollback when no explicit target is available.
 
-### \`logs(identity)\`
+### `logs(identity)`
 
 Returns runtime logs/diagnostics; it is observational.
 
 ### Idempotency and operation keys
 
-Runtime results expose \`changed\` and \`idempotent\`.
+Runtime results expose `changed` and `idempotent`.
 
 The fake runtime contract tests require repeating the same application operation to be recognized as idempotent rather than creating a duplicate logical resource.
 
@@ -164,7 +164,7 @@ Later lifecycle operations must act on the resource returned by apply rather tha
 
 ## RuntimeObservation
 
-**Path:** \`runtime/observations.py\`
+**Path:** `runtime/observations.py`
 
 ### Status semantics
 
@@ -182,7 +182,7 @@ An observation can tell you what exists, but identity fields determine whether i
 
 ## SwarmRuntimeAdapter
 
-**Path:** \`runtime/swarm/adapter.py\`
+**Path:** `runtime/swarm/adapter.py`
 
 ### Why it exists
 
@@ -210,7 +210,7 @@ Do not make this adapter a second independent Swarm implementation.
 
 ## Current concrete implementation: core/swarm.py
 
-**Path:** \`core/swarm.py\`
+**Path:** `core/swarm.py`
 
 The current production application path calls this class directly.
 
@@ -235,9 +235,9 @@ It should not derive tenant security policy from raw request data.
 
 ## Process-to-Swarm-Service mapping
 
-\`SwarmRuntime.apply_processes()\` maps each enabled process to an independent Swarm Service.
+`SwarmRuntime.apply_processes()` maps each enabled process to an independent Swarm Service.
 
-- \`web\` uses the canonical service runtime name;
+- `web` uses the canonical service runtime name;
 - other process names receive service-name suffixes.
 
 If the graph has no process list, a default web process is synthesized.
@@ -258,7 +258,7 @@ The runtime, not the platform plugin, owns actual Docker network creation/attach
 
 Persistent volumes are registry-backed.
 
-\`VolumeMountManager\`:
+`VolumeMountManager`:
 
 - validates names and bind sources;
 - rejects unregistered managed volumes;
@@ -289,11 +289,11 @@ Runtime does not rebuild the application image.
 
 Current Swarm-level readiness is:
 
-~~~text
+```text
 replicas_desired == 1
 AND
 replicas_running == 1
-~~~
+```
 
 If a desired-running task fails/rejects, wait_ready raises a runtime error with task diagnostics.
 
@@ -301,7 +301,7 @@ This is backend readiness, not necessarily application HTTP readiness.
 
 ## Health and application readiness
 
-In legacy container mode, \`DockerHealthChecker\` provides application-level checks.
+In legacy container mode, `DockerHealthChecker` provides application-level checks.
 
 In Swarm mode, the concrete runtime applies Docker HEALTHCHECK semantics and service/task state; public application readiness may additionally be represented by runtime health policy depending on the generated configuration.
 
@@ -317,11 +317,11 @@ A same-name resource without the expected identity is ambiguous.
 
 ## Legacy runtime
 
-\`RuntimeBackend.LEGACY_DOCKER\` remains for \`SWARM_ENABLED=false\`.
+`RuntimeBackend.LEGACY_DOCKER` remains for `SWARM_ENABLED=false`.
 
 It uses Docker container operations and snapshot/rename/restore patterns.
 
-The event consumer is also legacy-only in Compose under the \`legacy-runtime\` profile.
+The event consumer is also legacy-only in Compose under the `legacy-runtime` profile.
 
 ### Why it remains
 
@@ -333,7 +333,7 @@ Do not add new Swarm semantics to the legacy container manager or assume legacy 
 
 Use the runtime contract when implementing backend-neutral lifecycle behavior.
 
-Use \`core/swarm.py\` when fixing the actual current Swarm Docker behavior.
+Use `core/swarm.py` when fixing the actual current Swarm Docker behavior.
 
 Use the adapter when changing the migration seam.
 
@@ -341,11 +341,11 @@ Do not introduce a Docker call in planning simply because the runtime object is 
 
 ## Related code
 
-- \`src/deployments/runtime/contract.py\`
-- \`src/deployments/runtime/capabilities.py\`
-- \`src/deployments/runtime/observations.py\`
-- \`src/deployments/runtime/registry.py\`
-- \`src/deployments/runtime/swarm/adapter.py\`
-- \`src/deployments/core/swarm.py\`
-- \`src/deployments/core/volumes.py\`
-- \`src/deployments/core/manager/\`
+- `src/deployments/runtime/contract.py`
+- `src/deployments/runtime/capabilities.py`
+- `src/deployments/runtime/observations.py`
+- `src/deployments/runtime/registry.py`
+- `src/deployments/runtime/swarm/adapter.py`
+- `src/deployments/core/swarm.py`
+- `src/deployments/core/volumes.py`
+- `src/deployments/core/manager/`

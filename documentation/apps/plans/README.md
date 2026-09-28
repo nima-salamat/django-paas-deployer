@@ -37,4 +37,4 @@ Plan changes are operator/admin changes. Service.clean blocks plan changes durin
 
 ## Reading order
 
-models.md -> api.md -> serializers.md -> state-contracts.md -> ../services/README.md -> ../../deployments/04-build-and-platforms.md.
+models.md -> api.md -> serializers.md -> state-contracts.md -> ../services/README.md -> ../deployments/execution/04-build-and-platforms.md.

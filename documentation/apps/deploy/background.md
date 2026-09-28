@@ -6,6 +6,6 @@ BaseRuntimeImage build/reuse behavior is a shared execution concern. BaseRuntime
 
 Deploy deletion can remove uploaded deployment archives. Deleting a Deploy is not equivalent to stopping a runtime Service; runtime lifecycle remains in deployments.
 
-Wagtail/admin controls in deploy expose operator infrastructure state with guarded editing. See ../../deployments/08-base-images.md and ../../deployments/06-workers-concurrency-and-state.md.
+Wagtail/admin controls in deploy expose operator infrastructure state with guarded editing. See ../deployments/execution/08-base-images.md and ../deployments/execution/06-workers-concurrency-and-state.md.
 
 Tests are split between src/deploy/tests.py and the deployment contract suite; use both when changing persistence/runtime boundaries.

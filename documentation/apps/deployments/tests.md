@@ -26,7 +26,7 @@ The deployment test suite protects concurrency, planning, runtime and recovery c
 
 A failing contract test should be read as an architectural signal before editing implementation. For example, changing activation code requires reading ownership and activation-consistency tests together; changing a base-image lookup requires reading cache, fingerprint, queue and lease tests together.
 
-Cross-app invariants involving ServiceRevision/activation are also summarized in ../../deployments/11-testing-contracts-and-invariants.md.
+Cross-app invariants involving ServiceRevision/activation are also summarized in ../deployments/execution/11-testing-contracts-and-invariants.md.
 
 ## Modification rule
 

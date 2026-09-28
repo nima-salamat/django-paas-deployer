@@ -10,24 +10,24 @@ The key principle is:
 
 ## Worker topology
 
-Current Celery routing in \`src/config/settings.py\`:
+Current Celery routing in `src/config/settings.py`:
 
 | Task | Queue | Role |
 |---|---|---|
-| \`deployments.celery.tasks.deploy\` | \`deployments\` | application deployment |
-| \`deployments.celery.tasks.run_db_deploy\` | \`deployments\` | database deployment |
-| \`deployments.celery.tasks.stop\` | \`operations\` | service stop |
-| \`deployments.celery.tasks.build_base_runtime_image\` | \`base-images\` | shared operator base-image build |
-| \`deployments.celery.tasks.reclaim_released_volumes\` | \`operations\` | retained-volume reclamation |
+| `deployments.celery.tasks.deploy` | `deployments` | application deployment |
+| `deployments.celery.tasks.run_db_deploy` | `deployments` | database deployment |
+| `deployments.celery.tasks.stop` | `operations` | service stop |
+| `deployments.celery.tasks.build_base_runtime_image` | `base-images` | shared operator base-image build |
+| `deployments.celery.tasks.reclaim_released_volumes` | `operations` | retained-volume reclamation |
 
 Scheduled monitor/sync work is defined in Celery Beat.
 
 ### Compose consumers
 
-- \`celery\`: \`celery,deployments,operations\`
-- \`deployment-worker\`: \`deployments,operations\`, prefork, default concurrency 2
-- \`base-image-worker\`: \`base-images\`, prefork, default concurrency 1
-- \`celery-beat\`: emits scheduled tasks
+- `celery`: `celery,deployments,operations`
+- `deployment-worker`: `deployments,operations`, prefork, default concurrency 2
+- `base-image-worker`: `base-images`, prefork, default concurrency 1
+- `celery-beat`: emits scheduled tasks
 
 Base-image isolation is intentional: deployment workers synchronously waiting on a base-image task must not also consume the queue that task requires.
 
@@ -48,32 +48,32 @@ State/ownership mechanisms are still required.
 
 ### Entry
 
-\`deployments.celery.tasks.deploy()\`
+`deployments.celery.tasks.deploy()`
 
 ### Preconditions
 
 - Deploy exists;
 - it is not already cancelled;
-- database-platform guard has not redirected it to \`run_db_deploy\`.
+- database-platform guard has not redirected it to `run_db_deploy`.
 
 ### Handoff
 
-\`\`\`text
+```text
 Celery task id
     -> DeployService.execute(task_id=...)
     -> acquire_service_deployment_lock(service_id)
     -> StateManager.lock_and_get_deployment(deploy_id, task_id=...)
-\`\`\`
+```
 
 The task id becomes the execution fence.
 
 ## Service advisory lock
 
-**Path:** \`core/state/locks.py\`
+**Path:** `core/state/locks.py`
 
 ### Called by
 
-\`DeployService.execute()\`, \`StopService.execute()\`, and database deployment.
+`DeployService.execute()`, `StopService.execute()`, and database deployment.
 
 ### Preconditions
 
@@ -81,39 +81,39 @@ Service id exists.
 
 ### Contract
 
-\`acquire_service_deployment_lock()\` acquires a PostgreSQL advisory lock keyed by Service id.
+`acquire_service_deployment_lock()` acquires a PostgreSQL advisory lock keyed by Service id.
 
-By default it is non-blocking and raises \`DeploymentLockError\` immediately if another operation owns the Service.
+By default it is non-blocking and raises `DeploymentLockError` immediately if another operation owns the Service.
 
 ### Why a database row lock is insufficient
 
-A row lock from \`select_for_update()\` lasts only for a transaction. Docker build/runtime work can last minutes.
+A row lock from `select_for_update()` lasts only for a transaction. Docker build/runtime work can last minutes.
 
 Without a transaction-independent lock:
 
-~~~text
+```text
 A locks row
 A commits
 A builds image
 B locks same row
 B starts conflicting Docker work
-~~~
+```
 
 The advisory lock spans the external work.
 
 ### Must not
 
-Do not use \`is_service_locked()\` as authorization to mutate. It is diagnostic and inherently racy. Acquire the lock yourself.
+Do not use `is_service_locked()` as authorization to mutate. It is diagnostic and inherently racy. Acquire the lock yourself.
 
 ## StateManager
 
-**Path:** \`core/state/manager.py\`
+**Path:** `core/state/manager.py`
 
 ### Contract
 
 StateManager is the authoritative persistence port for lifecycle transitions.
 
-\`transition_deploy_if_owned()\` is the critical fencing primitive.
+`transition_deploy_if_owned()` is the critical fencing primitive.
 
 Under one Deploy row lock it:
 
@@ -130,7 +130,7 @@ Ownership, cancellation and transition legality are one atomic decision. Splitti
 
 ## State machine
 
-**Path:** \`common/state_machine.py\`
+**Path:** `common/state_machine.py`
 
 The actual legal transition table is code. This document explains its meaning.
 
@@ -164,7 +164,7 @@ Service and Deploy machines are independent. Lifecycle code aligns them; do not 
 
 These are separate axes:
 
-~~~text
+```text
 Service.desired_state
     = what should exist
 
@@ -176,7 +176,7 @@ worker ownership
 
 RuntimeObservation
     = what Docker/Swarm currently reports
-~~~
+```
 
 Examples:
 
@@ -214,7 +214,7 @@ The worker must stop attempting state/runtime mutation.
 
 ## Heartbeats
 
-\`heartbeat_deploy()\` refreshes \`worker_heartbeat_at\` only while the stored execution_task_id matches.
+`heartbeat_deploy()` refreshes `worker_heartbeat_at` only while the stored execution_task_id matches.
 
 It is liveness evidence, not ownership itself.
 
@@ -239,14 +239,14 @@ A worker that started first does not automatically own the right to activate las
 
 If cancellation is committed before final completion:
 
-~~~text
+```text
 worker -> terminal transition
              ^
              |
      cancellation row lock
-~~~
+```
 
-The StateManager sees \`cancel_requested\` and redirects the terminal transition to CANCELLED.
+The StateManager sees `cancel_requested` and redirects the terminal transition to CANCELLED.
 
 The later worker result cannot override it.
 
@@ -268,19 +268,19 @@ In legacy mode, “container with canonical name exists” is deliberately insuf
 
 Case:
 
-~~~text
+```text
 BaseRuntimeImage = BUILDING
 local image = compatible
-~~~
+```
 
 Application deployment continues using the local image. The renewal owner can continue rebuilding in parallel.
 
 Case:
 
-~~~text
+```text
 BaseRuntimeImage = BUILDING
 local image = incompatible/missing
-~~~
+```
 
 Application deployment waits for the shared build rather than creating a duplicate.
 
@@ -298,13 +298,13 @@ Every state update is matched against its task id so an old retry cannot mark a 
 
 ### Application deploy
 
-The Celery task retries only \`DeploymentError.recoverable == True\`.
+The Celery task retries only `DeploymentError.recoverable == True`.
 
 Deterministic validation and build errors remain terminal for that attempt.
 
 ### Database deploy
 
-Uses bounded retries and \`is_retryable_exception()\` to identify transient infrastructure conditions.
+Uses bounded retries and `is_retryable_exception()` to identify transient infrastructure conditions.
 
 ### Base image
 
@@ -316,9 +316,9 @@ A bad Dockerfile, invalid state transition, unsupported runtime or programming b
 
 ## Cancellation contract
 
-**Policy:** \`application/cancellation.py\`
+**Policy:** `application/cancellation.py`
 
-**Persistence:** \`infrastructure/django_cancellation.py\`
+**Persistence:** `infrastructure/django_cancellation.py`
 
 - pending -> immediate terminal cancellation;
 - running/rolling back -> set cancellation token and let owner stop/clean;
@@ -348,15 +348,15 @@ Do not:
 
 ## Related code
 
-- \`src/config/settings.py\`
-- \`compose.yaml\`
-- \`src/deployments/celery/tasks.py\`
-- \`src/deployments/celery/schedules.py\`
-- \`src/deployments/celery/services/deploy_service.py\`
-- \`src/deployments/celery/services/stop_service.py\`
-- \`src/deployments/core/state/locks.py\`
-- \`src/deployments/core/state/manager.py\`
-- \`src/deployments/common/state_machine.py\`
-- \`src/deployments/common/retry.py\`
-- \`src/deployments/application/cancellation.py\`
-- \`src/deployments/application/context.py\`
+- `src/config/settings.py`
+- `compose.yaml`
+- `src/deployments/celery/tasks.py`
+- `src/deployments/celery/schedules.py`
+- `src/deployments/celery/services/deploy_service.py`
+- `src/deployments/celery/services/stop_service.py`
+- `src/deployments/core/state/locks.py`
+- `src/deployments/core/state/manager.py`
+- `src/deployments/common/state_machine.py`
+- `src/deployments/common/retry.py`
+- `src/deployments/application/cancellation.py`
+- `src/deployments/application/context.py`
