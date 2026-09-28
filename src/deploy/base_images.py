@@ -1098,8 +1098,6 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                 continue
 
             if logger_sink:
-
-            if logger_sink:
                 logger_sink.info(
                     "base_image",
                     f"Base image resolution: runtime={key}, image={row.image_ref}, status={row.status}, docker_local={local_exists}, rebuild_requested={row.rebuild_requested}.",
