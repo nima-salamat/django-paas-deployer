@@ -46,7 +46,20 @@ Build-scoped secrets are currently rejected because the build backend does not p
 
 `VOLUME_USAGE_WARNING_PERCENT` is an operator-only threshold for real Docker volume usage warnings. The default is 90%. It controls observability only; it does not enable a filesystem quota.
 
-`Volume.size_mb` is the logical allocation used by Service/Plan quota checks. The default Docker `local` backend is reported as LOGICAL_ONLY because this installation does not configure a verified per-volume hard-quota mechanism.
+This installation currently supports the Docker `local` backend for managed tenant volumes. Backend selection is operator-controlled; tenant configuration cannot inject arbitrary Docker driver options or driver options. `VolumeSpec` carries backend identity to provisioning, and the current managed-volume path resolves to `driver=local`.
+
+`Volume.size_mb` is the logical allocation used by Service/Plan quota checks. The local Docker backend is reported as `LOGICAL_ONLY` because this installation has no verified per-volume hard-quota or resize enforcement.
+
+Volume lifecycle is explicit:
+**DETACH** removes mount metadata but keeps Service ownership and logical quota.
+**RELEASE** removes Service ownership and frees logical quota while retaining the Docker volume.
+**DELETE / RECLAIM** removes the physical Docker volume and then deletes the registry row.
+
+`volume_release_retention_days` defaults to 30 days. An hourly Celery task reclaims expired released volumes after checking the managed-volume ownership label and verifying Docker deletion. A reclaim failure keeps the registry row and records `reclaim_error`, so the database cannot silently claim that physical storage disappeared.
+
+Reconciliation classifies physical storage as `active_tenant_storage`, `released_retained_storage`, `orphan_storage`, or `unknown_storage`, with measured `used_mb` where Docker reports usage. This is per connected Docker daemon, not a cluster-wide storage-accounting service.
+
+Deployment-time usage warnings use the deployment event pipeline; this is not continuous tenant filesystem monitoring.
 ## Base runtime image lifecycle
 
 Base runtime images are operator-owned infrastructure artifacts. The canonical PHP base is `paas-base/php-apache:<version>-r1`; application-specific Apache DocumentRoot selection is applied later in the application Dockerfile. Plain PHP and PHP frameworks therefore share one PHP base identity.
