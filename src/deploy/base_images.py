@@ -699,32 +699,33 @@ def build_registered_base_image(
         _assert_db_owner()
         client = get_docker_client()
         img = client.images.get(spec.image_ref)
-        row = BaseRuntimeImage.objects.select_for_update().get(pk=base_image_id)
-        if task_id and str(row.build_task_id or "") != str(task_id):
-            raise RuntimeError(
-                "Base-image build ownership changed before READY state could be committed."
-            )
-        requested_by_deployment = str(row.build_owner_deployment_id or "")
-        rebuild_after_success = bool(row.rebuild_requested)
-        pending_details = dict(row.last_error_details or {})
-        row.status = BaseRuntimeImage.Status.READY
-        row.image_id = getattr(img, "id", "") or ""
-        attrs = getattr(img, "attrs", {}) or {}
-        digests = attrs.get("RepoDigests") or []
-        row.image_digest = str(digests[0]) if digests else ""
-        row.definition_fingerprint = _spec_fingerprint(spec)
-        row.build_completed_at = timezone.now()
-        row.build_count = (row.build_count or 0) + 1
-        row.build_task_id = ""
-        row.build_owner_deployment_id = ""
-        row.last_error = ""
-        row.last_error_details = {}
-        row.save(update_fields=[
-            "status", "image_id", "image_digest", "definition_fingerprint",
-            "build_completed_at", "build_count", "build_task_id",
-            "build_owner_deployment_id", "last_error", "last_error_details",
-            "updated_at",
-        ])
+        with transaction.atomic():
+            row = BaseRuntimeImage.objects.select_for_update().get(pk=base_image_id)
+            if task_id and str(row.build_task_id or "") != str(task_id):
+                raise RuntimeError(
+                    "Base-image build ownership changed before READY state could be committed."
+                )
+            requested_by_deployment = str(row.build_owner_deployment_id or "")
+            rebuild_after_success = bool(row.rebuild_requested)
+            pending_details = dict(row.last_error_details or {})
+            row.status = BaseRuntimeImage.Status.READY
+            row.image_id = getattr(img, "id", "") or ""
+            attrs = getattr(img, "attrs", {}) or {}
+            digests = attrs.get("RepoDigests") or []
+            row.image_digest = str(digests[0]) if digests else ""
+            row.definition_fingerprint = _spec_fingerprint(spec)
+            row.build_completed_at = timezone.now()
+            row.build_count = (row.build_count or 0) + 1
+            row.build_task_id = ""
+            row.build_owner_deployment_id = ""
+            row.last_error = ""
+            row.last_error_details = {}
+            row.save(update_fields=[
+                "status", "image_id", "image_digest", "definition_fingerprint",
+                "build_completed_at", "build_count", "build_task_id",
+                "build_owner_deployment_id", "last_error", "last_error_details",
+                "updated_at",
+            ])
         if rebuild_after_success:
             try:
                 pending_fp = pending_details.get("pending_definition_fingerprint")
