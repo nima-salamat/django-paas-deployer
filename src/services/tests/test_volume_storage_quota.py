@@ -318,3 +318,14 @@ def test_reclaim_failure_keeps_registry_row_for_truthful_retry():
     assert "except Exception:" in source
     assert "return" not in source.split("except Exception:", 1)[1].split("logger.", 1)[0]
     assert "Refusing to remove Docker volume" in source
+def test_volume_save_marks_service_clear_as_release():
+    source = __import__("inspect").getsource(Volume.save)
+    assert "previous_service_id" in source
+    assert "self.released_at = timezone.now()" in source
+    assert "self.reclaim_attempted_at = None" in source
+
+
+def test_released_volume_reclaim_state_is_operator_bookkeeping():
+    source = __import__("inspect").getsource(Volume.release_from_service)
+    assert '"reclaim_attempted_at"' in source
+    assert '"reclaim_error"' in source
