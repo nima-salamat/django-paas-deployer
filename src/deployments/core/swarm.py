@@ -929,12 +929,12 @@ class SwarmRuntime:
                 "rollback_services": sorted({
                     str(item["name"])
                     for item in recovery_operations
-                    if item.get("preexisting") and item.get("mutation_started")
+                    if item.get("preexisting") and item.get("mutation_succeeded")
                 }),
                 "remove_services": sorted({
                     str(item["name"])
                     for item in recovery_operations
-                    if not item.get("preexisting") and item.get("mutation_started")
+                    if not item.get("preexisting") and item.get("mutation_succeeded")
                 }),
             }
 
