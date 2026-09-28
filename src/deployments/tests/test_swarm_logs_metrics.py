@@ -73,6 +73,16 @@ class SwarmLogAndMetricsTests(unittest.TestCase):
         self.assertEqual(messages, ["hello from swarm", "second line"])
         self.assertNotIn("generator object", " ".join(messages))
 
+    def test_service_logs_materializes_swarm_generator(self):
+        service = FakeSwarmLogService(
+            [b"2026-09-29T02:44:47.000000000Z hello\\n"]
+        )
+        runtime = SwarmRuntime(FakeClient(service))
+        raw = runtime.service_logs("demo", tail=100)
+        self.assertIsInstance(raw, bytes)
+        self.assertIn(b"hello", raw)
+        self.assertNotIn(b"generator object", raw)
+
     def test_cpu_percent_uses_two_samples(self):
         first = {
             "cpu_stats": {
