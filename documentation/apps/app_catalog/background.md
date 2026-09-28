@@ -15,3 +15,11 @@ reconcile_application_installations is the recovery scheduler: it inspects persi
 Queue routing for these tasks is configured centrally in src/config/settings.py. Child deployment work remains subject to deployments ownership/retry/fencing rules.
 
 Tests: test_application_plan.py, test_adversarial_contracts.py, test_compatibility.py and integration/test_ready_app_runtime.py protect planning, security and normal runtime integration.
+
+## Management command: migrate_service_domain
+
+Source: src/app_catalog/management/commands/migrate_service_domain.py.
+
+Backfills legacy catalog child Deploy rows into the Service -> ServiceRevision domain without deleting legacy plaintext data. The optional --application UUID limits the operation to one ApplicationInstance. Rows without a Deploy or with an existing revision are skipped; revision materialization errors are reported and make the command exit non-zero.
+
+This is a migration/repair command, not an installation command. It is safe to rerun for already-revisioned children because those rows are skipped.
