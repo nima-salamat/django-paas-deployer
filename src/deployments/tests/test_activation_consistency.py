@@ -55,7 +55,9 @@ class DeploymentActivationConsistencyContractTests(unittest.TestCase):
 
     def test_swarm_recovery_uses_authoritative_deployment_pointer(self):
         self.assertIn("get_authoritative_deploy", self.scheduler)
-        recovery = self.scheduler.split("def _recover_stale_running_deploys_swarm", 1)[1]
+        recovery = self.scheduler.split("def _recover_stale_running_deploys_swarm", 1)[1].split(
+            "def _reconcile_active_deploy", 1
+        )[0]
         self.assertNotIn("get_active_deploy(", recovery)
 
     def test_each_replacement_router_has_deployment_identity(self):
