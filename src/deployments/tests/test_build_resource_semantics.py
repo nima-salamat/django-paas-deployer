@@ -16,15 +16,17 @@ def test_build_cpu_is_mapped_to_relative_cpu_shares_not_hard_quota():
     assert "nano_cpus" not in limits
 
 
-def test_base_image_timeout_is_the_same_setting_used_for_stale_recovery():
+def test_base_image_timeout_has_a_dedicated_ten_minute_source_of_truth():
     from pathlib import Path
     settings_source = (Path(__file__).resolve().parents[2] / "core" / "settings_service.py").read_text(encoding="utf-8")
+    assert "def base_image_build_timeout_minutes() -> int:" in settings_source
+    assert '"base_image_build_timeout_minutes"' in settings_source
     assert "def base_image_timeout_minutes() -> int:" in settings_source
-    assert "return base_image_timeout_minutes()" in settings_source
+    assert "return base_image_build_timeout_minutes()" in settings_source
 
 def test_runtime_policies_expose_canonical_base_image_timeout(monkeypatch):
     import core.settings_service as svc
-    monkeypatch.setattr(svc, "base_image_timeout_minutes", lambda: 41)
+    monkeypatch.setattr(svc, "base_image_build_timeout_minutes", lambda: 41)
     monkeypatch.setattr(svc, "deploy_timeout_minutes", lambda: 10)
     import deployments.celery.monitoring.policies as policies
     out = policies.runtime_policies()
