@@ -83,6 +83,26 @@ class DeploymentActivationConsistencyContractTests(unittest.TestCase):
         self.assertIn("traefik.http.routers.{self.router_name}.priority", self.container)
         self.assertIn("traefik.http.services.{self.router_name}.loadbalancer.healthcheck.path", self.container)
 
+    def test_swarm_recovery_uses_operation_context_for_all_processes(self):
+        orchestrator = self.orchestrator
+        self.assertIn("self._swarm_recovery_context", orchestrator)
+        self.assertIn("def _recover_swarm_mutations", orchestrator)
+        self.assertIn(
+            "recovery = dict((exc.details or {}).get(\"swarm_recovery\")",
+            orchestrator,
+        )
+        self.assertIn("runtime.rollback_service(service_name)", orchestrator)
+        self.assertIn("runtime.remove(service_name)", orchestrator)
+        self.assertNotIn("service.rollback()", orchestrator)
+
+    def test_swarm_cancellation_rolls_back_runtime_mutations(self):
+        cancellation = self.orchestrator.split("def _handle_cancellation", 1)[1].split(
+            "def _handle_failure", 1
+        )[0]
+        self.assertIn("self._swarm_recovery_context", cancellation)
+        self.assertIn("self._recover_swarm_mutations(", cancellation)
+        self.assertIn("snapshot = ContainerSnapshot.empty(config.name)", cancellation)
+
     def test_swarm_failure_uses_swarm_rollback_or_removal(self):
         orchestrator = self.orchestrator.split("def _handle_failure", 1)[1].split(
             "def _deploy_process_containers", 1
