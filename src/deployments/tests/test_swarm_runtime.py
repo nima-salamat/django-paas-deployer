@@ -3,7 +3,12 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from deployments.core.swarm import SwarmRuntime, compile_compose_service, _validate_replicas
+from deployments.core.swarm import (
+    SwarmRuntime,
+    compile_compose_service,
+    _process_resource_limits,
+    _validate_replicas,
+)
 from deployments.core.types import DeploymentConfig, NetworkSpec, EndpointSpec, VolumeSpec
 
 
@@ -93,6 +98,26 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             service["deploy"]["placement"]["constraints"],
             ["node.labels.region == eu"],
         )
+
+    def test_process_resources_cannot_exceed_plan_cpu_or_memory(self):
+        with self.assertRaises(Exception):
+            _process_resource_limits(
+                {"cpu": 1.0, "memory_mb": 512},
+                {"cpu": 2.0},
+            )
+        with self.assertRaises(Exception):
+            _process_resource_limits(
+                {"cpu": 1.0, "memory_mb": 512},
+                {"memory_mb": 1024},
+            )
+
+    def test_process_resources_can_refine_plan_within_ceiling(self):
+        limits = _process_resource_limits(
+            {"cpu": 2.0, "memory_mb": 1024},
+            {"cpu": 1.5, "memory_mb": 768},
+        )
+        self.assertEqual(limits["cpu"], 1.5)
+        self.assertEqual(limits["memory_mb"], 768)
 
     def test_create_kwargs_preserve_effective_start_command(self):
         config = _config(
