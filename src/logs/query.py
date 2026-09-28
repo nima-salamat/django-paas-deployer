@@ -80,6 +80,12 @@ def query_logs(
     alias = _alias()
     limit = max(1, min(int(limit or 100), 500))
     qs = ServiceLogEntry.objects.using(alias).filter(service_id=str(service_id))
+    # Older collectors could persist the repr of Service.logs(stream=True)
+    # instead of consuming the generator. Hide those historical corrupt rows
+    # at the query boundary while newer collectors are prevented from writing them.
+    qs = qs.exclude(
+        message__startswith="<generator object APIClient._multiplexed_response_stream_helper at 0x"
+    )
     if from_ts:
         qs = qs.filter(ts__gte=from_ts)
     if to_ts:
