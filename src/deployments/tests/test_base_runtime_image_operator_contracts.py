@@ -163,31 +163,7 @@ def test_migration_handles_legacy_php_rows_without_deleting_docker_images():
     assert "safe_to_remove_after_release" in migration
     assert "BaseRuntimeImageLease" in migration
 
-def test_active_base_build_coalesces_repeated_renew_requests(db, monkeypatch):
-    from django.test import TestCase
-
-    # Kept as a standalone behavioral contract; database setup is provided by
-    # the repository's standard test runner.
-    row = BaseRuntimeImage.objects.create(
-        logical_runtime="php", runtime_version="8.4", variant="apache",
-        architecture="", docker_host="test-daemon",
-        source_image="docker.io/php:8.4-apache",
-        image_repository="paas-base/php-apache", image_tag="8.4-r1",
-        image_ref="paas-base/php-apache:8.4-r1",
-        status=BaseRuntimeImage.Status.BUILDING, enabled=True, auto_build=True,
-        build_task_id="owner-task", build_started_at=timezone.now(),
-    )
-    result = __import__("deploy.base_images", fromlist=["request_base_runtime_image_build"]).request_base_runtime_image_build(
-        row.pk, force_rebuild=True
-    )
-    row.refresh_from_db()
-    assert result["coalesced"] is True
-    assert result["waiting"] is True
-    assert result["rebuild_requested"] is True
-    assert row.build_task_id == "owner-task"
-    assert row.status == BaseRuntimeImage.Status.BUILDING
-
-
+def test_active_base_build_coalesces_repeated_renew_requests(monkeypatch):,    import deploy.base_images as base_images,,    class FakeAtomic:,        def __enter__(self):,            return self,        def __exit__(self, exc_type, exc, tb):,            return False,,    class FakeManager:,        def select_for_update(self):,            return self,        def get(self, pk):,            return row,,    class FakeRow:,        pk = "base-1",        enabled = True,        logical_runtime = "node",        runtime_version = "20",        variant = "alpine",        architecture = "",        docker_host = "daemon-1",        status = BaseRuntimeImage.Status.BUILDING,        build_task_id = "owner-task",        rebuild_requested = False,        rebuild_requested_at = None,        definition_fingerprint = "fp",        image_ref = "paas-base/node-alpine:20-r1",        def save(self, **kwargs):,            return None,,    row = FakeRow(),    monkeypatch.setattr(base_images.BaseRuntimeImage, "objects", FakeManager()),    monkeypatch.setattr(base_images.transaction, "atomic", lambda: FakeAtomic()),    result = base_images.request_base_runtime_image_build(row.pk, force_rebuild=True),    assert result["coalesced"] is True,    assert result["waiting"] is True,    assert result["rebuild_requested"] is True,    assert row.build_task_id == "owner-task",    assert row.status == BaseRuntimeImage.Status.BUILDING,
 def test_wagtail_listing_hook_returns_build_and_renew_for_operator():
     from deploy.wagtail_hooks import base_runtime_image_listing_buttons
 
