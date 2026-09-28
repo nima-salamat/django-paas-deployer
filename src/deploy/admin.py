@@ -391,18 +391,41 @@ class BaseRuntimeImageAdmin(admin.ModelAdmin):
         count = queryset.update(enabled=False, status=BaseRuntimeImage.Status.DISABLED)
         self.message_user(request, f"Disabled {count} base image(s).")
 
-    @admin.action(description="Remove Docker image for selected rows")
+    @admin.action(description="Remove unused Docker images for selected rows")
     def delete_docker_images(self, request, queryset):
         from deployments.core.manager.image_manager import Image
-        count = 0
+        count = skipped = 0
         for obj in queryset:
+            if obj.status == BaseRuntimeImage.Status.BUILDING or obj.build_task_id:
+                self.message_user(
+                    request,
+                    f"Refused to remove {obj.image_ref}: a base-image build is active.",
+                    level=messages.WARNING,
+                )
+                skipped += 1
+                continue
+            if obj.leases.filter(released_at__isnull=True).exists():
+                self.message_user(
+                    request,
+                    f"Refused to remove {obj.image_ref}: an active deployment lease still references it.",
+                    level=messages.WARNING,
+                )
+                skipped += 1
+                continue
             try:
                 Image.remove_by_name(obj.image_ref)
             except Exception:
                 self.message_user(request, f"Failed to remove {obj.image_ref}.", level=messages.ERROR)
+                skipped += 1
                 continue
+            BaseRuntimeImage.objects.filter(pk=obj.pk).update(
+                status=BaseRuntimeImage.Status.PENDING,
+                image_id="",
+                image_digest="",
+                updated_at=timezone.now(),
+            )
             count += 1
-        self.message_user(request, f"Removed Docker image for {count} row(s).")
+        self.message_user(request, f"Removed {count} unused base image(s); skipped {skipped}.")
     def delete_model(self, request, obj):
         try:
             from deployments.core.manager.image_manager import Image
