@@ -673,20 +673,24 @@ class SwarmRuntime:
         labels = dict(deploy_doc.get("labels") or {})
 
         # Docker SDK service APIs model the Swarm ContainerSpec using
-        # command (ENTRYPOINT) + args (CMD). "entrypoint" is a Compose
-        # concept and is NOT a valid top-level keyword for Service.create()
-        # or Service.update(). Passing it through directly causes:
-        #   create() got an unexpected keyword argument 'entrypoint'
-        # Preserve Compose semantics by mapping entrypoint -> command and
-        # Compose command -> args when an entrypoint is present.
-        swarm_entrypoint = _command(service_doc.get("entrypoint"))
-        swarm_args = _command(service_doc.get("command")) if swarm_entrypoint else None
-        swarm_command = swarm_entrypoint or _command(service_doc.get("command"))
+        # command + args. "entrypoint" is NOT a valid top-level keyword for
+        # Service.create() or Service.update().
+        #
+        # In PassDeployer's DeploymentConfig, entry_point is the effective
+        # application start command that replaces the generated Dockerfile CMD
+        # (not a separate Docker ENTRYPOINT). compile_compose_service therefore
+        # materializes it in the Compose-shaped "entrypoint" field. Prefer that
+        # effective command here so it is not accidentally combined with the
+        # generated start command a second time.
+        swarm_command = (
+            service_doc.get("entrypoint")
+            if service_doc.get("entrypoint") not in (None, "", [])
+            else service_doc.get("command")
+        )
 
         return {
             "name": name,
             "command": swarm_command,
-            "args": swarm_args,
             "workdir": service_doc.get("working_dir"),
             "read_only": bool(service_doc.get("read_only")),
             "healthcheck": healthcheck,
