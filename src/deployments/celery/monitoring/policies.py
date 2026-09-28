@@ -88,6 +88,9 @@ def runtime_policies() -> dict[str, int | bool]:
             "stop_timeout_minutes": 5, "unexpected_death_grace_seconds": 15,
             "monitor_enabled": True, "monitor_interval_seconds": 30,
             "monitor_batch_size": 100, "recovery_enabled": True,
-            "max_recovery_attempts": 3, "base_image_timeout_minutes": 30, "stale_base_build_minutes": 30,
+            "max_recovery_attempts": 3,
+            "base_image_build_timeout_minutes": 10,
+            "base_image_timeout_minutes": 10,
+            "stale_base_build_minutes": 10,
             "stale_worker_seconds": 90, "scheduler_lock_seconds": 20,
         }
