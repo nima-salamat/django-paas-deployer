@@ -105,6 +105,28 @@ def test_application_phase_gets_a_fresh_budget_after_base_readiness():
 
 
 
+
+def test_base_builder_checks_the_same_ten_minute_budget_during_execution():
+    source = (ROOT / "deploy" / "base_images.py").read_text(encoding="utf-8")
+    assert "base_image_build_timeout_minutes() * 60" in source
+    assert "Base-image build exceeded the dedicated" in source
+    assert '"build_task_id", "build_started_at"' in source
+
+
+def test_pending_definition_is_requeued_after_active_base_build_finishes():
+    source = (ROOT / "deploy" / "base_images.py").read_text(encoding="utf-8")
+    block = source.split("def build_registered_base_image", 1)[1].split("def _wait_for_existing_build", 1)[0]
+    assert 'pending_definition = (' in block
+    assert 'row.status = BaseRuntimeImage.Status.PENDING' in block
+    assert 'request_base_runtime_image_build(' in block
+    assert '"pending_definition_fingerprint"' in block
+
+
+def test_manual_build_and_renew_use_the_same_request_path():
+    source = (ROOT / "deploy" / "base_images.py").read_text(encoding="utf-8")
+    request_block = source.split("def request_base_runtime_image_build", 1)[1].split("def build_registered_base_image", 1)[0]
+    assert "build_base_runtime_image.apply_async" in request_block
+    assert 'kwargs={"force_rebuild": requested_force' in request_block
 def test_phase_timeout_examples_match_10_plus_10_contract():
     now = timezone.now()
 
