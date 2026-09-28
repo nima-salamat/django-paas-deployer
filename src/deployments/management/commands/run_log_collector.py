@@ -6,6 +6,7 @@ Celery is NOT used for continuous ingestion.
 from __future__ import annotations
 
 import logging
+import re
 import os
 import socket
 import threading
@@ -24,6 +25,13 @@ logger = logging.getLogger(__name__)
 
 MAX_FOLLOW_WORKERS = int(os.environ.get("LOG_COLLECTOR_WORKERS", "8"))
 BUFFER_MAX_BYTES = int(os.environ.get("LOG_COLLECTOR_BUFFER_BYTES", str(8 * 1024 * 1024)))
+GENERATOR_LOG_ARTIFACT_RE = re.compile(
+    r"^<generator object APIClient\\._multiplexed_response_stream_helper at 0x[0-9a-fA-F]+>$"
+)
+
+
+def _is_generator_log_artifact(value) -> bool:
+    return bool(GENERATOR_LOG_ARTIFACT_RE.fullmatch(str(value or "").strip()))
 
 
 def _instance_id() -> str:
@@ -377,7 +385,7 @@ class Command(BaseCommand):
                     pairs = (
                         self._demux_docker_payloads(raw)
                         if isinstance(raw, (bytes, bytearray))
-                        else [("stdout", str(raw))]
+                        else [] if _is_generator_log_artifact(raw) else [("stdout", str(raw))]
                     )
                     for stream_kind, line in assembler.feed(pairs):
                         ts, msg = self._parse_ts_line(line)
@@ -576,7 +584,7 @@ class Command(BaseCommand):
                     pairs = (
                         self._demux_docker_payloads(raw)
                         if isinstance(raw, (bytes, bytearray))
-                        else [("stdout", str(raw))]
+                        else [] if _is_generator_log_artifact(raw) else [("stdout", str(raw))]
                     )
                     for stream_kind, line in assembler.feed(pairs):
                         ts, msg = self._parse_ts_line(line)
@@ -656,7 +664,7 @@ class Command(BaseCommand):
             for chunk in iterator:
                 if isinstance(chunk, (bytes, bytearray)):
                     pairs.extend(self._demux_docker_chunk(chunk))
-                elif chunk:
+                elif chunk and not _is_generator_log_artifact(chunk):
                     pairs.append(("stdout", str(chunk)))
         lines = []
         skew = stream.last_persisted_ts - timedelta(seconds=5) if stream.last_persisted_ts else None
@@ -679,6 +687,14 @@ class Command(BaseCommand):
             self._persist_batch(instance, service, stream, policy, lines)
 
     def _persist_batch(self, instance, service, stream, policy, lines: list):
+        # Never persist Docker SDK iterator representations. Older collectors
+        # accidentally stored the repr of Service.logs(stream=True) here.
+        lines = [
+            line for line in (lines or [])
+            if not _is_generator_log_artifact((line or {}).get("message"))
+        ]
+        if not lines:
+            return
         from logs.ingestion import ingest_lines
         from logs.realtime import publish_log_events
         from logs.query import encode_cursor
