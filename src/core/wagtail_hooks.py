@@ -1,4 +1,9 @@
-"""Wagtail hooks: core snippets + Cache menu + home system gauges."""
+"""Wagtail hooks for core operational administration.
+
+Core deliberately does not auto-register Django models in Wagtail. Settings
+remain Django-admin owned, while Wagtail contains only explicit operational
+views such as the cache dashboard and system gauges.
+"""
 from __future__ import annotations
 
 from django.urls import path, reverse_lazy
@@ -7,28 +12,13 @@ from wagtail import hooks
 from wagtail.admin.menu import MenuItem
 
 
-@hooks.register("register_admin_viewset")
-def register_universal_model_viewsets():
-    from core.wagtail_admin.universal_models import UniversalModelsGroup
-    return UniversalModelsGroup()
-
-
-
 @hooks.register("register_admin_urls")
 def register_core_admin_urls():
     from core.wagtail_admin.views import cache_dashboard, system_metrics_api
 
     return [
-        path(
-            "system/cache/",
-            cache_dashboard,
-            name="wagtail_core_cache_dashboard",
-        ),
-        path(
-            "system/metrics/",
-            system_metrics_api,
-            name="wagtail_core_system_metrics",
-        ),
+        path("system/cache/", cache_dashboard, name="wagtail_core_cache_dashboard"),
+        path("system/metrics/", system_metrics_api, name="wagtail_core_system_metrics"),
     ]
 
 
@@ -46,6 +36,5 @@ def register_cache_menu_item():
 def add_system_gauges_panel(request, panels):
     from core.wagtail_admin.panels import SystemGaugesPanel
 
-    # Only show for staff (everyone in Wagtail admin is staff, but be safe)
     if request.user.is_staff:
         panels.append(SystemGaugesPanel())
