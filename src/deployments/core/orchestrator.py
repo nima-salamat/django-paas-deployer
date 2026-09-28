@@ -82,6 +82,7 @@ class DeploymentOrchestrator:
         self._cancel_check = cancel_check
         self._activation_callback = activation_callback
         self._base_image_refs: list[str] = []
+        self._swarm_recovery_context: dict = {}
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -468,7 +469,16 @@ class DeploymentOrchestrator:
             details={"service": config.name},
         )
         runtime = SwarmRuntime()
-        states = runtime.apply_processes(config, image_ref=image_ref)
+        try:
+            states = runtime.apply_processes(config, image_ref=image_ref)
+            self._swarm_recovery_context = dict(runtime._last_apply_recovery or {})
+        except DeploymentError as exc:
+            self._swarm_recovery_context = dict(
+                (exc.details or {}).get("swarm_recovery")
+                or getattr(runtime, "_last_apply_recovery", {})
+                or {}
+            )
+            raise
         self._check_cancelled()
 
         self.logger.info(
@@ -563,6 +573,74 @@ class DeploymentOrchestrator:
     # Failure / cancellation handlers
     # ------------------------------------------------------------------
 
+    def _recover_swarm_mutations(
+        self,
+        recovery: dict | None,
+        *,
+        rollback_progress: int = 96,
+    ) -> tuple[bool, bool]:
+        """Rollback pre-existing Swarm services and remove newly-created ones."""
+        recovery = dict(recovery or {})
+        rollback_services = list(recovery.get("rollback_services") or [])
+        remove_services = list(recovery.get("remove_services") or [])
+        if not rollback_services and not remove_services:
+            return False, False
+
+        runtime = SwarmRuntime()
+        rollback_performed = False
+        rollback_failed = False
+
+        for service_name in rollback_services:
+            try:
+                requested = runtime.rollback_service(service_name)
+                self.logger.warning(
+                    "rollback",
+                    (
+                        "Swarm service rollback requested."
+                        if requested
+                        else "Swarm service rollback was already in progress or completed."
+                    ),
+                    progress=rollback_progress,
+                    details={"service": service_name},
+                )
+                rollback_performed = True
+            except docker.errors.NotFound:
+                self.logger.info(
+                    "rollback",
+                    "Swarm service was already absent; no rollback was required.",
+                    progress=rollback_progress,
+                    details={"service": service_name},
+                )
+            except Exception as rollback_exc:
+                rollback_failed = True
+                self.logger.error(
+                    "rollback",
+                    f"Swarm service rollback failed: {rollback_exc}",
+                    progress=99,
+                    details={"service": service_name, "error": str(rollback_exc)},
+                )
+
+        for service_name in remove_services:
+            try:
+                runtime.remove(service_name)
+                rollback_performed = True
+                self.logger.warning(
+                    "rollback",
+                    "Removed newly created failed Swarm process service.",
+                    progress=min(99, rollback_progress + 1),
+                    details={"service": service_name},
+                )
+            except Exception as remove_exc:
+                rollback_failed = True
+                self.logger.error(
+                    "rollback",
+                    f"Failed to remove newly created Swarm process service: {remove_exc}",
+                    progress=99,
+                    details={"service": service_name, "error": str(remove_exc)},
+                )
+
+        return rollback_performed, rollback_failed
+
     def _handle_cancellation(
         self,
         config: DeploymentConfig,
@@ -576,6 +654,17 @@ class DeploymentOrchestrator:
     ) -> DeploymentResult:
         rollback_performed = False
         rollback_failed = False
+
+        if swarm_enabled():
+            swarm_performed, swarm_failed = self._recover_swarm_mutations(
+                self._swarm_recovery_context,
+                rollback_progress=96,
+            )
+            rollback_performed = rollback_performed or swarm_performed
+            rollback_failed = rollback_failed or swarm_failed
+            # Swarm failure recovery is authoritative; do not run legacy
+            # container snapshot restoration for this runtime.
+            snapshot = ContainerSnapshot.empty(config.name)
 
         # Capture internal logs if a new container was started then cancelled.
         if new_container_started:
@@ -738,13 +827,11 @@ class DeploymentOrchestrator:
             self._cleanup_old_container(renamed_old_name, config.stop_timeout)
 
         if swarm_enabled():
-            # Swarm owns rollback of service updates. apply_processes records
-            # exactly which process services were mutated so a failure in a
-            # later process can recover the entire deployment atomically.
-            recovery = dict((exc.details or {}).get("swarm_recovery") or {})
-            rollback_services = list(recovery.get("rollback_services") or [])
-            remove_services = list(recovery.get("remove_services") or [])
-
+            recovery = dict(
+                (exc.details or {}).get("swarm_recovery")
+                or self._swarm_recovery_context
+                or {}
+            )
             if not recovery:
                 self.logger.warning(
                     "rollback",
@@ -753,62 +840,13 @@ class DeploymentOrchestrator:
                     progress=96,
                     details={"service": config.name},
                 )
-
-            runtime = SwarmRuntime()
-            for service_name in rollback_services:
-                try:
-                    requested = runtime.rollback_service(service_name)
-                    self.logger.warning(
-                        "rollback",
-                        (
-                            "Swarm service rollback requested."
-                            if requested
-                            else "Swarm service rollback was already in progress or completed."
-                        ),
-                        progress=96,
-                        details={"service": service_name},
-                    )
-                    rollback_performed = True
-                except docker.errors.NotFound:
-                    self.logger.info(
-                        "rollback",
-                        "Swarm service was already absent; no rollback was required.",
-                        progress=96,
-                        details={"service": service_name},
-                    )
-                except Exception as rollback_exc:
-                    rollback_failed = True
-                    self.logger.error(
-                        "rollback",
-                        f"Swarm service rollback failed: {rollback_exc}",
-                        progress=99,
-                        details={
-                            "service": service_name,
-                            "error": str(rollback_exc),
-                        },
-                    )
-
-            for service_name in remove_services:
-                try:
-                    runtime.remove(service_name)
-                    rollback_performed = True
-                    self.logger.warning(
-                        "rollback",
-                        "Removed newly created failed Swarm process service.",
-                        progress=97,
-                        details={"service": service_name},
-                    )
-                except Exception as remove_exc:
-                    rollback_failed = True
-                    self.logger.error(
-                        "rollback",
-                        f"Failed to remove newly created Swarm process service: {remove_exc}",
-                        progress=99,
-                        details={
-                            "service": service_name,
-                            "error": str(remove_exc),
-                        },
-                    )
+            else:
+                swarm_performed, swarm_failed = self._recover_swarm_mutations(
+                    recovery,
+                    rollback_progress=96,
+                )
+                rollback_performed = rollback_performed or swarm_performed
+                rollback_failed = rollback_failed or swarm_failed
 
         elif snapshot.image_ref:
             try:
