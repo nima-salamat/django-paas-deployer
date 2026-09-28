@@ -426,16 +426,21 @@ def _spec_for_record(row: BaseRuntimeImage) -> BaseImageSpec:
     raise ValueError(f"Unsupported base runtime '{runtime}'")
 
 
+def _get_local_base_image(image_ref: str):
+    """Return the local Docker image for a base-image reference, if present."""
+    try:
+        return get_docker_client().images.get(image_ref)
+    except Exception:
+        return None
+
+
 def _local_image_matches_fingerprint(image_ref: str, fingerprint: str) -> bool:
     """Return true only when the local image carries the expected definition label."""
-    if not _docker_image_exists(image_ref):
+    image = _get_local_base_image(image_ref)
+    if image is None:
         return False
-    try:
-        image = get_docker_client().images.get(image_ref)
-        labels = ((getattr(image, "attrs", {}) or {}).get("Config") or {}).get("Labels") or {}
-        return labels.get("io.passdeployer.base-definition") == fingerprint
-    except Exception:
-        return False
+    labels = ((getattr(image, "attrs", {}) or {}).get("Config") or {}).get("Labels") or {}
+    return labels.get("io.passdeployer.base-definition") == fingerprint
 
 
 def _can_use_compatible_local_base_image(
@@ -447,7 +452,7 @@ def _can_use_compatible_local_base_image(
 ) -> bool:
     """Allow a valid local base image even while a same-definition renewal is pending.
 
-    ``BUILDING`` and ``rebuild_requested`` describe the registry lifecycle, not
+    BUILDING and rebuild_requested describe the registry lifecycle, not
     the usability of an already-built image. A service deployment may safely use
     the local image when its operator definition fingerprint matches. An active
     renewal can continue in the background, while stale/gapped worker state no
@@ -460,6 +465,25 @@ def _can_use_compatible_local_base_image(
     )
 
 
+def _can_use_last_known_good_local_base_image(
+    row: BaseRuntimeImage,
+    *,
+    local_image,
+    expected_runtime: str,
+) -> bool:
+    """Use the last successful local artifact while a renewal is pending/failed.
+
+    The registry status describes the desired lifecycle state. image_id is the
+    last-known-good artifact identity and must remain usable when a newer
+    base-image build fails or is still running.
+    """
+    if local_image is None:
+        return False
+    local_image_id = str(getattr(local_image, "id", "") or "")
+    if row.image_id and local_image_id == str(row.image_id):
+        return True
+    labels = ((getattr(local_image, "attrs", {}) or {}).get("Config") or {}).get("Labels") or {}
+    return labels.get("io.passdeployer.base-runtime") == expected_runtime
 def request_base_runtime_image_build(
     base_image_id,
     *,
@@ -1044,8 +1068,10 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                 row.rebuild_requested = bool(definition_changed)
                 row.rebuild_requested_at = timezone.now() if definition_changed else row.rebuild_requested_at
                 if definition_changed:
-                    row.image_id = ""
-                    row.image_digest = ""
+                    # Keep image_id/image_digest as the last-known-good local
+                    # artifact. They are intentionally not cleared here: a
+                    # failed or in-progress renewal must not make an already
+                    # usable base image unavailable to application deploys.
                     row.last_error = ""
                     row.last_error_details = {}
                 row.save(update_fields=[
@@ -1055,10 +1081,13 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                     "last_error", "last_error_details", "updated_at",
                 ])
 
-            local_exists = _docker_image_exists(row.image_ref)
+            local_image = _get_local_base_image(row.image_ref)
+            local_exists = local_image is not None
             local_compatible = (
                 local_exists
-                and _local_image_matches_fingerprint(row.image_ref, fingerprint)
+                and (
+                    ((getattr(local_image, "attrs", {}) or {}).get("Config") or {}).get("Labels") or {}
+                ).get("io.passdeployer.base-definition") == fingerprint
             )
 
             if (
@@ -1097,11 +1126,43 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                     )
                 continue
 
+            if (
+                policy["auto_register_existing"]
+                and row.status in {
+                    BaseRuntimeImage.Status.BUILDING,
+                    BaseRuntimeImage.Status.FAILED,
+                    BaseRuntimeImage.Status.PENDING,
+                }
+                and _can_use_last_known_good_local_base_image(
+                    row,
+                    local_image=local_image,
+                    expected_runtime=f"{row.logical_runtime}:{row.runtime_version}:{row.variant}",
+                )
+            ):
+                result[logical_key(spec)] = row.image_ref
+                if deployment_id:
+                    acquire_base_image_leases([row.image_ref], deployment_id)
+                if logger_sink:
+                    logger_sink.info("base_image",
+                        f"Using last-known-good local base image {row.image_ref} while registry state is {row.status}.",
+                        progress=18,
+                        details={
+                            "image": row.image_ref,
+                            "runtime": key,
+                            "cache": "last-known-good",
+                            "definition_fingerprint": fingerprint,
+                            "registry_status": row.status,
+                            "rebuild_requested": bool(row.rebuild_requested),
+                            "background_build_task_id": str(row.build_task_id or ""),
+                            "last_known_good_image_id": row.image_id,
+                        },
+                    )
+                continue
+
             if logger_sink:
                 logger_sink.info(
                     "base_image",
-                    f"Base image resolution: runtime={key}, image={row.image_ref}, status={row.status}, docker_local={local_exists}, rebuild_requested={row.rebuild_requested}.",
-                    progress=17,
+                    f"Base image resolution: runtime={key}, image={row.image_ref}, status={row.status}, docker_local={local_exists}, rebuild_requested={row.rebuild_requested}.",                    progress=17,
                     details={
                         "image": row.image_ref, "runtime": key, "status": row.status,
                         "docker_local": local_exists, "rebuild_requested": bool(row.rebuild_requested),
