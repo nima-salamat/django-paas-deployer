@@ -75,6 +75,18 @@ class DeploymentActivationConsistencyContractTests(unittest.TestCase):
         self.assertIn("traefik.http.routers.{self.router_name}.priority", self.container)
         self.assertIn("traefik.http.services.{self.router_name}.loadbalancer.healthcheck.path", self.container)
 
+    def test_swarm_failure_uses_swarm_rollback_or_removal(self):
+        orchestrator = self.orchestrator.split("def _handle_failure", 1)[1].split(
+            "def _deploy_process_containers", 1
+        )[0]
+        self.assertIn("service.rollback()", orchestrator)
+        self.assertIn("service.remove()", orchestrator)
+        self.assertIn("Swarm deployment failed; requesting Swarm service rollback.", orchestrator)
+        self.assertNotIn(
+            'if snapshot.image_ref:\n            try:\n                self.logger.warning("rollback", "Starting rollback.',
+            orchestrator,
+        )
+
     def test_stale_recovery_requires_positive_resource_ownership(self):
         self.assertIn("owned_by_deploy", self.scheduler)
         self.assertIn('str(labels.get("deployment.id") or "") == str(locked.pk)', self.scheduler)
