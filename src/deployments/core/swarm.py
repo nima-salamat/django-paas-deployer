@@ -632,8 +632,30 @@ class SwarmRuntime:
             ]
             if failed:
                 task = failed[0]
+                task_detail = task.error or task.message or task.state
+                service_logs = ""
+                try:
+                    service = self.client.services.get(_validate_service_name(name))
+                    raw_logs = service.logs(
+                        stdout=True,
+                        stderr=True,
+                        timestamps=True,
+                        tail=200,
+                    )
+                    if isinstance(raw_logs, bytes):
+                        service_logs = raw_logs.decode("utf-8", errors="replace")
+                    elif raw_logs:
+                        service_logs = "".join(
+                            chunk.decode("utf-8", errors="replace")
+                            if isinstance(chunk, bytes)
+                            else str(chunk)
+                            for chunk in raw_logs
+                        )
+                except Exception as log_exc:
+                    service_logs = f"<unable to collect Swarm service logs: {log_exc}>"
+                detail_suffix = f"; recent service logs:\n{service_logs[-12000:]}" if service_logs else ""
                 raise DeploymentError(
-                    f"Swarm task failed: {task.error or task.message or task.state}",
+                    f"Swarm task failed: {task_detail}{detail_suffix}",
                     stage="swarm_startup",
                     code="SWARM_TASK_FAILED",
                     details={
@@ -642,6 +664,7 @@ class SwarmRuntime:
                         "node_name": task.node_name,
                         "error": task.error,
                         "message": task.message,
+                        "service_logs": service_logs[-12000:] if service_logs else "",
                     },
                 )
             time.sleep(1)
