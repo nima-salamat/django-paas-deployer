@@ -926,24 +926,36 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                     .first()
                 )
                 if legacy is not None:
-                    # Converge the legacy identity to the canonical row while
-                    # preserving an active owner/build task. The current code's
-                    # _spec_for_record() always resolves PHP to the canonical
-                    # definition, so an in-flight builder can finish at the
-                    # canonical image reference after the registry rename.
-                    row = legacy
-                    row.variant = "apache"
-                    row.source_image = spec.source_image
-                    row.image_repository = spec.repository
-                    row.image_tag = spec.tag
-                    row.image_ref = spec.image_ref
-                    if row.status != BaseRuntimeImage.Status.BUILDING:
-                        row.definition_fingerprint = fingerprint
-                    row.save(update_fields=[
-                        "variant", "source_image", "image_repository",
-                        "image_tag", "image_ref", "definition_fingerprint",
-                        "updated_at",
-                    ])
+                    # Re-check the canonical key after locking the legacy row.
+                    # Another transaction can have converted that row between
+                    # our first canonical lookup and this lock acquisition.
+                    canonical_now = (
+                        BaseRuntimeImage.objects.select_for_update()
+                        .filter(
+                            logical_runtime="php",
+                            runtime_version=spec.version,
+                            variant="apache",
+                            architecture="",
+                            docker_host=host,
+                        )
+                        .first()
+                    )
+                    if canonical_now is not None:
+                        row = canonical_now
+                    else:
+                        row = legacy
+                        row.variant = "apache"
+                        row.source_image = spec.source_image
+                        row.image_repository = spec.repository
+                        row.image_tag = spec.tag
+                        row.image_ref = spec.image_ref
+                        if row.status != BaseRuntimeImage.Status.BUILDING:
+                            row.definition_fingerprint = fingerprint
+                        row.save(update_fields=[
+                            "variant", "source_image", "image_repository",
+                            "image_tag", "image_ref", "definition_fingerprint",
+                            "updated_at",
+                        ])
             if row is None:
                 row = BaseRuntimeImage.objects.create(
                     logical_runtime=spec.logical_runtime,
