@@ -174,6 +174,45 @@ def _dockerfile_with_fingerprint(spec: BaseImageSpec, fingerprint: str) -> str:
     return spec.dockerfile[:match.end()] + label + spec.dockerfile[match.end():]
 
 
+def _legacy_php(version: str, *, public_root: bool) -> BaseImageSpec:
+    """Reconstruct an old PHP definition only for in-flight legacy rows."""
+    src = f"{_docker_mirror()}/php:{version}-apache"
+    variant = "apache-public" if public_root else "apache-root"
+    repository = "paas-base/php-apache" if public_root else "paas-base/php-apache-root"
+    doc_root = "/var/www/html/public" if public_root else "/var/www/html"
+    return BaseImageSpec(
+        "php", version, variant, src, repository, f"{_tag_token(version)}-r1",
+        f'''FROM {src}
+
+ENV APACHE_DOCUMENT_ROOT={doc_root}\
+    COMPOSER_ALLOW_SUPERUSER=1\
+    COMPOSER_MEMORY_LIMIT=-1
+
+WORKDIR /var/www/html
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git unzip libzip-dev libpng-dev libjpeg62-turbo-dev libfreetype6-dev \
+        libicu-dev libonig-dev libxml2-dev curl ca-certificates \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && missing=""; for ext in mysqli pdo pdo_mysql opcache zip gd intl bcmath mbstring exif pcntl; do \
+         if php -m | grep -Eiq "^${{ext}}$"; then \
+             echo "PHP extension ${{ext}} already enabled; skipping build"; \
+         else missing="$missing $ext"; fi; \
+       done; \
+       if [ -n "$missing" ]; then docker-php-ext-install -j$(nproc) $missing; fi \
+    && a2enmod rewrite headers mime dir expires alias \
+    && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \
+    && printf '%s\\n' 'ServerName localhost' > /etc/apache2/conf-available/deployer-server-name.conf \
+    && a2enconf deployer-server-name \
+    && printf '%s\\n' '<VirtualHost *:80>' '    ServerName localhost' '    DocumentRoot {doc_root}' '    <Directory {doc_root}>' '        AllowOverride All' '        Require all granted' '        Options FollowSymLinks' '    </Directory>' '    RewriteEngine On' '    RewriteCond %{{REQUEST_FILENAME}} -f [OR]' '    RewriteCond %{{REQUEST_FILENAME}} -d' '    RewriteRule ^ - [END]' '    RewriteCond %{{REQUEST_FILENAME}} !-f' '    RewriteCond %{{REQUEST_FILENAME}} !-d' '    RewriteRule ^ index.php [L]' '</VirtualHost>' > /etc/apache2/sites-available/000-default.conf \
+    && echo 'opcache.enable=1' >> /usr/local/etc/php/conf.d/opcache-laravel.ini \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from={_docker_mirror()}/composer:2 /usr/bin/composer /usr/bin/composer
+
+CMD ["apache2-foreground"]
+'''
+    )
 def _php(version: str) -> BaseImageSpec:
     """Return the canonical generic PHP/Apache runtime base.
 
@@ -366,7 +405,13 @@ def _spec_for_record(row: BaseRuntimeImage) -> BaseImageSpec:
     version = str(row.runtime_version or "")
     variant = str(row.variant or "default")
     if runtime == "php":
-        return _php(version, public_root=variant != "apache-root")
+        if variant == "apache":
+            return _php(version)
+        if variant == "apache-root":
+            return _legacy_php(version, public_root=False)
+        if variant == "apache-public":
+            return _legacy_php(version, public_root=True)
+        raise ValueError(f"Unsupported PHP base-image variant '{variant}'")
     if runtime == "python":
         return _python(version)
     if runtime == "node":
