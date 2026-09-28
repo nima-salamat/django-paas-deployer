@@ -638,6 +638,27 @@ def build_registered_base_image(
             raise RuntimeError(
                 "Base-image build ownership changed before READY state could be committed."
             )
+        if not row.enabled or row.status == BaseRuntimeImage.Status.DISABLED:
+            # An operator may disable an image while its queued/active build is
+            # still running. Never publish READY after that decision.
+            row.status = BaseRuntimeImage.Status.DISABLED
+            row.build_task_id = ""
+            row.build_owner_deployment_id = ""
+            row.build_completed_at = timezone.now()
+            row.rebuild_requested = False
+            row.rebuild_requested_at = None
+            row.last_error = ""
+            row.last_error_details = {
+                "stage": "base_image",
+                "disabled_during_build": True,
+                "image_ref": spec.image_ref,
+            }
+            row.save(update_fields=[
+                "status", "build_task_id", "build_owner_deployment_id",
+                "build_completed_at", "rebuild_requested", "rebuild_requested_at",
+                "last_error", "last_error_details", "updated_at",
+            ])
+            return
         requested_by_deployment = str(row.build_owner_deployment_id or "")
         pending_details = dict(row.last_error_details or {})
         rebuild_pending_definition = bool(pending_details.get("rebuild_pending"))
