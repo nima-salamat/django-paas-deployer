@@ -408,18 +408,49 @@ def request_base_runtime_image_build(
                 f"Base runtime image {row.logical_runtime}:{row.runtime_version}:{row.variant} is disabled."
             )
         if str(row.logical_runtime).lower() == "php" and str(row.variant).lower() in {"apache-root", "apache-public"}:
-            # Transitional database rows are safely converged before an operator
-            # build. Do not preserve duplicate PHP identities.
-            row.variant = "apache"
-            row.source_image = _php(str(row.runtime_version)).source_image
-            row.image_repository = _php(str(row.runtime_version)).repository
-            row.image_tag = _php(str(row.runtime_version)).tag
-            row.image_ref = _php(str(row.runtime_version)).image_ref
-            row.definition_fingerprint = ""
-            row.save(update_fields=[
-                "variant", "source_image", "image_repository", "image_tag",
-                "image_ref", "definition_fingerprint", "updated_at",
-            ])
+            # A canonical row may already exist for this host/version. Reuse it
+            # instead of mutating the legacy row into a uniqueness collision.
+            canonical = (
+                BaseRuntimeImage.objects.select_for_update()
+                .filter(
+                    logical_runtime="php",
+                    runtime_version=row.runtime_version,
+                    variant="apache",
+                    architecture=row.architecture,
+                    docker_host=row.docker_host,
+                )
+                .first()
+            )
+            if canonical is not None and canonical.pk != row.pk:
+                row.status = BaseRuntimeImage.Status.DISABLED
+                row.enabled = False
+                row.rebuild_requested = False
+                row.last_error = (
+                    "Legacy PHP base-image identity is superseded by the canonical "
+                    f"row {canonical.image_ref}."
+                )
+                row.last_error_details = {
+                    "stage": "base_image",
+                    "superseded_by": canonical.image_ref,
+                    "legacy_variant": row.variant,
+                    "safe_to_remove": True,
+                }
+                row.save(update_fields=[
+                    "status", "enabled", "rebuild_requested", "last_error",
+                    "last_error_details", "updated_at",
+                ])
+                row = canonical
+            else:
+                row.variant = "apache"
+                row.source_image = _php(str(row.runtime_version)).source_image
+                row.image_repository = _php(str(row.runtime_version)).repository
+                row.image_tag = _php(str(row.runtime_version)).tag
+                row.image_ref = _php(str(row.runtime_version)).image_ref
+                row.definition_fingerprint = ""
+                row.save(update_fields=[
+                    "variant", "source_image", "image_repository", "image_tag",
+                    "image_ref", "definition_fingerprint", "updated_at",
+                ])
         spec = _spec_for_record(row)
         if str(row.logical_runtime).lower() == "php" and str(row.variant).lower() in {"apache-root", "apache-public"}:
             row.variant = "apache"
