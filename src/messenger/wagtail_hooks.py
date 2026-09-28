@@ -1,12 +1,14 @@
-"""Wagtail hooks: register messenger models and cache administration."""
+"""Wagtail hooks for messenger operational cache administration only.
+
+Conversation/message/call records have per-user and per-participant visibility
+rules. They are intentionally not registered as Wagtail snippets; Django admin
+remains the canonical staff moderation surface and the Wagtail cache dashboard
+remains available through the separate admin URL below.
+"""
 from __future__ import annotations
 
 from django.urls import path
 from wagtail import hooks
-
-from messenger.wagtail_admin import register as _register_messenger
-
-_register_messenger()
 
 
 @hooks.register("register_admin_urls")
@@ -16,4 +18,3 @@ def register_messenger_admin_urls():
     return [
         path("messenger/cache/", cache_dashboard, name="wagtail_messenger_cache_dashboard"),
     ]
-
