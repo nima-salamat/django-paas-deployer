@@ -423,6 +423,159 @@ def _spec_for_record(row: BaseRuntimeImage) -> BaseImageSpec:
     raise ValueError(f"Unsupported base runtime '{runtime}'")
 
 
+def request_base_runtime_image_build(
+    base_image_id,
+    *,
+    force_rebuild: bool = False,
+    deployment_id: str | None = None,
+) -> dict[str, Any]:
+    """Queue a base-image build through the canonical Celery lifecycle.
+
+    This is the single operator/manual request path. It never calls Docker
+    build from HTTP and never replaces an active owner.
+    """
+    from deployments.celery.tasks import build_base_runtime_image
+    from deployments.common.resource_policy import resolve_build_policy
+
+    with transaction.atomic():
+        row = BaseRuntimeImage.objects.select_for_update().get(pk=base_image_id)
+        if not row.enabled:
+            raise RuntimeError(
+                f"Base runtime image {row.logical_runtime}:{row.runtime_version}:{row.variant} is disabled."
+            )
+        # Legacy PHP rows are compatibility records. Prefer the canonical
+        # apache row when one exists; otherwise safely normalize an inactive
+        # legacy row before queuing a new canonical build.
+        if str(row.logical_runtime).lower() == "php" and row.variant in {"apache-root", "apache-public"}:
+            canonical = (
+                BaseRuntimeImage.objects.select_for_update()
+                .filter(
+                    logical_runtime="php",
+                    runtime_version=row.runtime_version,
+                    variant="apache",
+                    architecture=row.architecture,
+                    docker_host=row.docker_host,
+                )
+                .first()
+            )
+            active_leases = row.leases.filter(released_at__isnull=True).exists()
+            if canonical is not None and canonical.pk != row.pk:
+                if row.status == BaseRuntimeImage.Status.BUILDING or row.build_task_id or active_leases:
+                    if force_rebuild:
+                        canonical.rebuild_requested = True
+                        canonical.rebuild_requested_at = timezone.now()
+                        canonical.save(update_fields=["rebuild_requested", "rebuild_requested_at", "updated_at"])
+                    return {
+                        "queued": False,
+                        "coalesced": True,
+                        "waiting": row.status == BaseRuntimeImage.Status.BUILDING,
+                        "task_id": canonical.build_task_id,
+                        "rebuild_requested": bool(canonical.rebuild_requested),
+                        "image_ref": canonical.image_ref,
+                    }
+                row.status = BaseRuntimeImage.Status.DISABLED
+                row.enabled = False
+                row.rebuild_requested = False
+                row.last_error = f"Legacy PHP identity superseded by {canonical.image_ref}."
+                row.last_error_details = {
+                    "stage": "base_image",
+                    "superseded_by": canonical.image_ref,
+                    "legacy_image_ref": row.image_ref,
+                    "safe_to_remove_after_release": True,
+                }
+                row.save(update_fields=[
+                    "status", "enabled", "rebuild_requested", "last_error",
+                    "last_error_details", "updated_at",
+                ])
+                row = canonical
+            elif not active_leases and row.status != BaseRuntimeImage.Status.BUILDING and not row.build_task_id:
+                row.variant = "apache"
+                spec = _php(str(row.runtime_version))
+                row.source_image = spec.source_image
+                row.image_repository = spec.repository
+                row.image_tag = spec.tag
+                row.image_ref = spec.image_ref
+                row.definition_fingerprint = ""
+                row.status = BaseRuntimeImage.Status.PENDING
+                row.image_id = ""
+                row.image_digest = ""
+                row.save(update_fields=[
+                    "variant", "source_image", "image_repository", "image_tag",
+                    "image_ref", "definition_fingerprint", "status", "image_id",
+                    "image_digest", "updated_at",
+                ])
+
+        spec = _spec_for_record(row)
+        fingerprint = _spec_fingerprint(spec)
+        if row.status == BaseRuntimeImage.Status.BUILDING:
+            if force_rebuild and not row.rebuild_requested:
+                row.rebuild_requested = True
+                row.rebuild_requested_at = timezone.now()
+                row.save(update_fields=["rebuild_requested", "rebuild_requested_at", "updated_at"])
+            return {
+                "queued": False, "coalesced": True, "waiting": True,
+                "task_id": row.build_task_id,
+                "rebuild_requested": bool(row.rebuild_requested),
+                "image_ref": row.image_ref,
+            }
+        if (
+            row.status == BaseRuntimeImage.Status.READY
+            and not row.rebuild_requested
+            and not force_rebuild
+            and row.definition_fingerprint == fingerprint
+            and _local_image_matches_fingerprint(row.image_ref, fingerprint)
+        ):
+            return {
+                "queued": False, "cache_hit": True, "waiting": False,
+                "task_id": "", "image_ref": row.image_ref,
+            }
+
+        task_id = f"base-image-{row.pk}-{uuid.uuid4()}"
+        requested_force = bool(force_rebuild or row.rebuild_requested)
+        row.status = BaseRuntimeImage.Status.BUILDING
+        row.build_task_id = task_id
+        row.build_owner_deployment_id = str(deployment_id or "")[:255]
+        row.definition_fingerprint = fingerprint
+        row.rebuild_requested = rebuild_after_success
+        row.rebuild_requested_at = timezone.now() if rebuild_after_success else None
+        row.build_started_at = row.build_started_at or timezone.now()
+        row.build_completed_at = None
+        row.last_error = ""
+        row.last_error_details = {}
+        row.save(update_fields=[
+            "status", "build_task_id", "build_owner_deployment_id",
+            "definition_fingerprint", "rebuild_requested", "rebuild_requested_at",
+            "build_started_at", "build_completed_at", "last_error",
+            "last_error_details", "updated_at",
+        ])
+    try:
+        effective_policy = resolve_build_policy(None)
+        build_base_runtime_image.apply_async(
+            args=[str(row.pk)],
+            kwargs={"force_rebuild": requested_force, "build_policy": effective_policy},
+            task_id=task_id,
+        )
+    except Exception as exc:
+        BaseRuntimeImage.objects.filter(
+            pk=row.pk, status=BaseRuntimeImage.Status.BUILDING, build_task_id=task_id
+        ).update(
+            status=BaseRuntimeImage.Status.PENDING, build_task_id="",
+            build_owner_deployment_id="", build_completed_at=timezone.now(),
+            last_error=str(exc),
+            last_error_details={
+                "stage": "base_image_dispatch", "base_image_ref": spec.image_ref,
+                "resource_policy_source": "server_owned", "retry_pending": False,
+                "docker_api_reached": False, "exception_type": type(exc).__name__,
+                "technical_message": str(exc) or type(exc).__name__,
+            },
+            updated_at=timezone.now(),
+        )
+        raise
+    return {
+        "queued": True, "cache_hit": False, "waiting": False,
+        "task_id": task_id, "rebuild_requested": False,
+        "image_ref": spec.image_ref,
+    }
 def build_registered_base_image(
     base_image_id,
     *,
@@ -488,15 +641,24 @@ def build_registered_base_image(
         def _assert_db_owner() -> None:
             if not task_id:
                 return
-            current_task_id = (
+            current = (
                 BaseRuntimeImage.objects.filter(pk=base_image_id)
-                .values_list("build_task_id", flat=True)
+                .values("build_task_id", "build_started_at")
                 .first()
+                or {}
             )
-            if str(current_task_id or "") != str(task_id):
+            if str(current.get("build_task_id") or "") != str(task_id):
                 raise RuntimeError(
                     "Base-image build ownership was superseded by another task or monitor recovery."
                 )
+            started = current.get("build_started_at")
+            if started is not None:
+                from core.settings_service import base_image_build_timeout_minutes
+                if (timezone.now() - started).total_seconds() >= base_image_build_timeout_minutes() * 60:
+                    raise TimeoutError(
+                        "Base-image build exceeded the dedicated "
+                        f"{base_image_build_timeout_minutes()}-minute lifecycle budget."
+                    )
 
         _build_spec(
             spec,
@@ -513,6 +675,8 @@ def build_registered_base_image(
                 "Base-image build ownership changed before READY state could be committed."
             )
         requested_by_deployment = str(row.build_owner_deployment_id or "")
+        rebuild_after_success = bool(row.rebuild_requested)
+        pending_details = dict(row.last_error_details or {})
         row.status = BaseRuntimeImage.Status.READY
         row.image_id = getattr(img, "id", "") or ""
         attrs = getattr(img, "attrs", {}) or {}
@@ -531,6 +695,13 @@ def build_registered_base_image(
             "build_owner_deployment_id", "last_error", "last_error_details",
             "updated_at",
         ])
+        if rebuild_after_success:
+            try:
+                request_base_runtime_image_build(
+                    row.pk, force_rebuild=True, deployment_id=None
+                )
+            except Exception:
+                logger.exception("Failed to queue requested post-build base-image renewal for %s.", row.image_ref)
         if requested_by_deployment:
             try:
                 settings = base_image_settings()
