@@ -110,8 +110,8 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             )
 
         self.assertNotIn("entrypoint", kwargs)
-        self.assertEqual(kwargs["command"], ["/bin/sh", "-c"])
-        self.assertEqual(kwargs["args"], ["/bin/sh", "-lc", "python app.py"])
+        self.assertEqual(kwargs["command"], spec["services"]["demo"]["entrypoint"])
+        self.assertNotIn("args", kwargs)
 
     def test_rejects_more_than_one_replica(self):
         with self.assertRaises(Exception):
