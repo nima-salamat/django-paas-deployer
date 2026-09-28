@@ -1,47 +1,44 @@
 # messenger serializers
 
-## UserMiniSerializer
+Each serializer is documented independently. Serialization is representation logic; API/queryset/participant checks remain the authorization boundary.
 
-Viewer-aware user card: id/username/color plus derived avatar, is_contact, is_blocked, is_online and bio. These values come from bulk context maps produced by the view. The serializer deliberately uses safe defaults when a map is absent instead of issuing hidden database queries.
+## UserMiniSerializer
+Compact viewer-aware user card. Derived contact/block/avatar/online/bio values come from view-built context maps; absent context uses safe defaults instead of hidden per-row queries.
 
 ## MessageAttachmentSerializer
-
-Exposes file metadata plus derived url and view_once_state. For view-once recipients, url is omitted until the explicit open operation; senders may receive a download path. A purged attachment has no usable URL.
+Attachment metadata plus derived URL/view-once state. View-once recipients do not receive a usable URL until the explicit open operation; purged attachments have no usable file URL.
 
 ## ReactionSerializer
-
-Read-only reaction row nested with UserMiniSerializer.
+Read-only reaction representation with nested user presentation. It is not an input authority for reaction ownership.
 
 ## MessageSerializer
-
-All message fields are read-only in representation. It derives reactions, reply_to_preview and viewer-specific read_state from bulk context/prefetched relations. It exposes scheduled state, edit/delete/system flags and forwarding metadata.
+Message representation including body, sender, reply/forward metadata, edit/delete/system flags, scheduled state and reactions. Viewer-specific read state and previews are derived from prefetched/bulk context. Mutation authorization is performed by the API.
 
 ## ParticipantSerializer
-
-Read-only membership representation containing role and per-action flags (send, media, add members, pin, change info), mute/pin/read/left timestamps.
+Read-only ConversationParticipant representation: role, send/media/member/pin/change-info flags, mute/pin/read/left state. These values describe current membership state.
 
 ## ConversationListSerializer
-
-Viewer-oriented chat-list payload. It derives participants, last_message, unread_count, peer, pin state and draft text from preloaded/annotated data. In lean-list mode, group participant payloads are deliberately reduced to the caller's row to avoid multi-megabyte lists.
+Viewer-oriented chat-list projection. It derives participants, last message, unread count, peer, pin state and draft text. Lean-list mode intentionally reduces group participant payload.
 
 ## ConversationDetailSerializer
+Detailed conversation projection extending the list representation with prepared invite-link/pin/member data. It does not bypass participant checks.
 
-Extends conversation list with invite-links and pins, both attached by the view's preparation function.
+## GroupInviteLinkSerializer
+Invite capability metadata. Validity comes from active/use/expiry model rules; serialization does not itself grant membership.
 
-## GroupInviteLinkSerializer / ContactSerializer / ProfilePhotoSerializer / ProfilePhotoPrivacySerializer / JoinRequestSerializer
+## ContactSerializer
+Caller-owned contact representation with viewer-aware user data. Contact creation/deletion authorization belongs to the contacts API.
 
-These expose bounded metadata and viewer-specific representations. Profile privacy returns allowed_user_ids; invite URLs are derived client paths; join-request user data uses UserMiniSerializer.
+## ProfilePhotoSerializer
+Caller profile-photo metadata. File access remains subject to authenticated media and photo-privacy policy.
 
-## Sensitivity
+## ProfilePhotoPrivacySerializer
+Caller photo-privacy representation. Allowed-user IDs are policy data, not authorization by themselves.
 
-- viewer context affects contact/block/online/avatar/bio state;
-- message/attachment URLs depend on current viewer and view-once state;
-- conversation payloads depend on active participation;
-- profile photos depend on privacy policy;
-- nested user data comes from users.Profile/User but is not owned by messenger.
+## JoinRequestSerializer
+JoinRequest plus requesting-user presentation. status/decision fields are durable workflow state; legal transition is owned by the join-request API.
 
-## Query contract
-
-The module explicitly states that view/context builders should do DB work. SerializerMethodField is shaping logic, not a replacement for select_related/prefetch/annotation.
+## Context/performance contract
+SerializerMethodField values depend on view-built context. Views are responsible for select_related/prefetch/annotation; adding derived fields must be reviewed for authorization context and query cost.
 
 Source: src/messenger/serializers.py.

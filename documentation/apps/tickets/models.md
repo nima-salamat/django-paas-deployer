@@ -10,13 +10,13 @@ Base: models.Model
 
 | Field | Django type | Null / default / key metadata | Architectural meaning, writers/readers and authority |
 |---|---|---|---|
-| name | CharField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\| | Human-facing/domain identifier text. Written through the app's validated API/admin paths and read by UI/search; uniqueness/normalization rules must be preserved. |
-| slug | SlugField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|b\\|l\\|a\\|n\\|k\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|u\\|n\\|i\\|q\\|u\\|e\\| | Human-facing/domain identifier text. Written through the app's validated API/admin paths and read by UI/search; uniqueness/normalization rules must be preserved. |
-| description | TextField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|b\\|l\\|a\\|n\\|k\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|"\\|"\\| | Human-facing/domain identifier text. Written through the app's validated API/admin paths and read by UI/search; uniqueness/normalization rules must be preserved. |
-| is_active | BooleanField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|T\\|r\\|u\\|e\\| | Boolean policy/state flag. Written by the owning workflow or admin boundary; consumers use it as authorization or lifecycle state, not as a substitute for an independent state machine. |
-| order | PositiveIntegerField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|0\\| | Presentation/order value. Written by the app's ordering logic and read for deterministic UI ordering; it is not domain identity. |
-| created_at | DateTimeField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\| | Lifecycle/audit time. Normally written by the owning model/workflow and read for ordering, expiry or history; a future change must preserve timezone/meaning. |
-| updated_at | DateTimeField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\| | Lifecycle/audit time. Normally written by the owning model/workflow and read for ordering, expiry or history; a future change must preserve timezone/meaning. |
+| name | CharField | \\ | n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\| | Human-facing/domain identifier text. Written through the app's validated API/admin paths and read by UI/search; uniqueness/normalization rules must be preserved. |
+| slug | SlugField | \\ | n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|b\\|l\\|a\\|n\\|k\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|u\\|n\\|i\\|q\\|u\\|e\\| | Human-facing/domain identifier text. Written through the app's validated API/admin paths and read by UI/search; uniqueness/normalization rules must be preserved. |
+| description | TextField | \\ | n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|b\\|l\\|a\\|n\\|k\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|"\\|"\\| | Human-facing/domain identifier text. Written through the app's validated API/admin paths and read by UI/search; uniqueness/normalization rules must be preserved. |
+| is_active | BooleanField | \\ | n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|T\\|r\\|u\\|e\\| | Boolean policy/state flag. Written by the owning workflow or admin boundary; consumers use it as authorization or lifecycle state, not as a substitute for an independent state machine. |
+| order | PositiveIntegerField | \\ | n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|0\\| | Presentation/order value. Written by the app's ordering logic and read for deterministic UI ordering; it is not domain identity. |
+| created_at | DateTimeField | \\ | Historical creation timestamp; provenance rather than mutable lifecycle state. |
+| updated_at | DateTimeField | \\ | Last persistence timestamp; not the timestamp of a particular business transition. |
 
 ## DepartmentMembership
 
@@ -26,10 +26,10 @@ Base: models.Model
 
 | Field | Django type | Null / default / key metadata | Architectural meaning, writers/readers and authority |
 |---|---|---|---|
-| user | ForeignKey | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|r\\|e\\|l\\|a\\|t\\|e\\|s\\| \\|t\\|o\\| \\|r\\|e\\|l\\|a\\|t\\|i\\|o\\|n\\| | Ownership relation to the canonical users.User. Resource authorization normally starts from this relation. |
-| department | ForeignKey | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|r\\|e\\|l\\|a\\|t\\|e\\|s\\| \\|t\\|o\\| \\|r\\|e\\|l\\|a\\|t\\|i\\|o\\|n\\| | Domain data field owned by this model. The app's create/update workflow is responsible for writing it; callers should use the documented API/model operation rather than assuming direct mutation is safe. |
-| is_manager | BooleanField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|F\\|a\\|l\\|s\\|e\\| | Boolean policy/state flag. Written by the owning workflow or admin boundary; consumers use it as authorization or lifecycle state, not as a substitute for an independent state machine. |
-| created_at | DateTimeField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\| | Lifecycle/audit time. Normally written by the owning model/workflow and read for ordering, expiry or history; a future change must preserve timezone/meaning. |
+| user | ForeignKey | \\ | n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|r\\|e\\|l\\|a\\|t\\|e\\|s\\| \\|t\\|o\\| \\|r\\|e\\|l\\|a\\|t\\|i\\|o\\|n\\| | Ownership relation to the canonical users.User. Resource authorization normally starts from this relation. |
+| department | ForeignKey | \\ | Support routing boundary; changing it changes staff scope. |
+| is_manager | BooleanField | \\ | n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|F\\|a\\|l\\|s\\|e\\| | Boolean policy/state flag. Written by the owning workflow or admin boundary; consumers use it as authorization or lifecycle state, not as a substitute for an independent state machine. |
+| created_at | DateTimeField | \\ | Historical creation timestamp; provenance rather than mutable lifecycle state. |
 
 ## Ticket
 
@@ -39,19 +39,19 @@ Base: models.Model
 
 | Field | Django type | Null / default / key metadata | Architectural meaning, writers/readers and authority |
 |---|---|---|---|
-| public_id | CharField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|u\\|n\\|i\\|q\\|u\\|e\\|;\\| \\|i\\|n\\|d\\|e\\|x\\|e\\|d\\| | Stable model identity; generated by the model layer. Readers use it as the durable object key; it is not business state and should not be repurposed. |
-| user | ForeignKey | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|r\\|e\\|l\\|a\\|t\\|e\\|s\\| \\|t\\|o\\| \\|r\\|e\\|l\\|a\\|t\\|i\\|o\\|n\\| | Ownership relation to the canonical users.User. Resource authorization normally starts from this relation. |
-| department | ForeignKey | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|r\\|e\\|l\\|a\\|t\\|e\\|s\\| \\|t\\|o\\| \\|r\\|e\\|l\\|a\\|t\\|i\\|o\\|n\\| | Domain data field owned by this model. The app's create/update workflow is responsible for writing it; callers should use the documented API/model operation rather than assuming direct mutation is safe. |
-| service | ForeignKey | \\|n\\|u\\|l\\|l\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|b\\|l\\|a\\|n\\|k\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|r\\|e\\|l\\|a\\|t\\|e\\|s\\| \\|t\\|o\\| \\|r\\|e\\|l\\|a\\|t\\|i\\|o\\|n\\| | Service-domain relation. This field connects a resource to desired workload ownership/configuration; it is not proof that runtime currently exists. |
-| deploy | ForeignKey | \\|n\\|u\\|l\\|l\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|b\\|l\\|a\\|n\\|k\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|r\\|e\\|l\\|a\\|t\\|e\\|s\\| \\|t\\|o\\| \\|r\\|e\\|l\\|a\\|t\\|i\\|o\\|n\\| | Domain data field owned by this model. The app's create/update workflow is responsible for writing it; callers should use the documented API/model operation rather than assuming direct mutation is safe. |
-| subject | CharField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\| | Domain data field owned by this model. The app's create/update workflow is responsible for writing it; callers should use the documented API/model operation rather than assuming direct mutation is safe. |
-| status | CharField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|S\\|t\\|a\\|t\\|u\\|s\\|.\\|O\\|P\\|E\\|N\\|;\\| \\|i\\|n\\|d\\|e\\|x\\|e\\|d\\| | State-machine field. The owning workflow defines legal transitions; readers use the value to decide which operations are safe. |
-| priority | CharField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|P\\|r\\|i\\|o\\|r\\|i\\|t\\|y\\|.\\|N\\|O\\|R\\|M\\|A\\|L\\|;\\| \\|i\\|n\\|d\\|e\\|x\\|e\\|d\\| | Domain data field owned by this model. The app's create/update workflow is responsible for writing it; callers should use the documented API/model operation rather than assuming direct mutation is safe. |
-| assigned_to | ForeignKey | \\|n\\|u\\|l\\|l\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|b\\|l\\|a\\|n\\|k\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|r\\|e\\|l\\|a\\|t\\|e\\|s\\| \\|t\\|o\\| \\|r\\|e\\|l\\|a\\|t\\|i\\|o\\|n\\| | Domain data field owned by this model. The app's create/update workflow is responsible for writing it; callers should use the documented API/model operation rather than assuming direct mutation is safe. |
-| created_at | DateTimeField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|i\\|n\\|d\\|e\\|x\\|e\\|d\\| | Lifecycle/audit time. Normally written by the owning model/workflow and read for ordering, expiry or history; a future change must preserve timezone/meaning. |
-| updated_at | DateTimeField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\| | Lifecycle/audit time. Normally written by the owning model/workflow and read for ordering, expiry or history; a future change must preserve timezone/meaning. |
-| closed_at | DateTimeField | \\|n\\|u\\|l\\|l\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|b\\|l\\|a\\|n\\|k\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\| | Lifecycle/audit time. Normally written by the owning model/workflow and read for ordering, expiry or history; a future change must preserve timezone/meaning. |
-| last_message_at | DateTimeField | \\|n\\|u\\|l\\|l\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|b\\|l\\|a\\|n\\|k\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|i\\|n\\|d\\|e\\|x\\|e\\|d\\| | Lifecycle/audit time. Normally written by the owning model/workflow and read for ordering, expiry or history; a future change must preserve timezone/meaning. |
+| public_id | CharField | \\ | n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|u\\|n\\|i\\|q\\|u\\|e\\|;\\| \\|i\\|n\\|d\\|e\\|x\\|e\\|d\\| | Stable model identity; generated by the model layer. Readers use it as the durable object key; it is not business state and should not be repurposed. |
+| user | ForeignKey | \\ | n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|r\\|e\\|l\\|a\\|t\\|e\\|s\\| \\|t\\|o\\| \\|r\\|e\\|l\\|a\\|t\\|i\\|o\\|n\\| | Ownership relation to the canonical users.User. Resource authorization normally starts from this relation. |
+| department | ForeignKey | \\ | Support routing boundary; changing it changes staff scope. |
+| service | ForeignKey | \\ | n\\|u\\|l\\|l\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|b\\|l\\|a\\|n\\|k\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|r\\|e\\|l\\|a\\|t\\|e\\|s\\| \\|t\\|o\\| \\|r\\|e\\|l\\|a\\|t\\|i\\|o\\|n\\| | Service-domain relation. This field connects a resource to desired workload ownership/configuration; it is not proof that runtime currently exists. |
+| deploy | ForeignKey | \\ | Optional deploy.Deploy correlation; identifies execution history, not desired state. |
+| subject | CharField | \\ | Customer-facing ticket subject used for identification. |
+| status | CharField | \\ | n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|S\\|t\\|a\\|t\\|u\\|s\\|.\\|O\\|P\\|E\\|N\\|;\\| \\|i\\|n\\|d\\|e\\|x\\|e\\|d\\| | State-machine field. The owning workflow defines legal transitions; readers use the value to decide which operations are safe. |
+| priority | CharField | \\ | Support urgency classification; it does not grant permission. |
+| assigned_to | ForeignKey | \\ | Current staff owner of the ticket; null means unassigned. |
+| created_at | DateTimeField | \\ | Historical creation timestamp; provenance rather than mutable lifecycle state. |
+| updated_at | DateTimeField | \\ | Last persistence timestamp; not the timestamp of a particular business transition. |
+| closed_at | DateTimeField | \\ | Time the resource was closed; null while open. |
+| last_message_at | DateTimeField | \\ | Denormalized activity timestamp used to order support/ticket lists. |
 
 ## TicketMessage
 
@@ -61,13 +61,13 @@ Base: models.Model
 
 | Field | Django type | Null / default / key metadata | Architectural meaning, writers/readers and authority |
 |---|---|---|---|
-| ticket | ForeignKey | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|r\\|e\\|l\\|a\\|t\\|e\\|s\\| \\|t\\|o\\| \\|r\\|e\\|l\\|a\\|t\\|i\\|o\\|n\\| | Domain data field owned by this model. The app's create/update workflow is responsible for writing it; callers should use the documented API/model operation rather than assuming direct mutation is safe. |
-| author | ForeignKey | \\|n\\|u\\|l\\|l\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|r\\|e\\|l\\|a\\|t\\|e\\|s\\| \\|t\\|o\\| \\|r\\|e\\|l\\|a\\|t\\|i\\|o\\|n\\| | Domain data field owned by this model. The app's create/update workflow is responsible for writing it; callers should use the documented API/model operation rather than assuming direct mutation is safe. |
-| body | TextField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\| | Domain data field owned by this model. The app's create/update workflow is responsible for writing it; callers should use the documented API/model operation rather than assuming direct mutation is safe. |
-| is_staff_reply | BooleanField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|F\\|a\\|l\\|s\\|e\\| | Boolean policy/state flag. Written by the owning workflow or admin boundary; consumers use it as authorization or lifecycle state, not as a substitute for an independent state machine. |
-| seen_at | DateTimeField | \\|n\\|u\\|l\\|l\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|b\\|l\\|a\\|n\\|k\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|i\\|n\\|d\\|e\\|x\\|e\\|d\\| | Lifecycle/audit time. Normally written by the owning model/workflow and read for ordering, expiry or history; a future change must preserve timezone/meaning. |
-| created_at | DateTimeField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|i\\|n\\|d\\|e\\|x\\|e\\|d\\| | Lifecycle/audit time. Normally written by the owning model/workflow and read for ordering, expiry or history; a future change must preserve timezone/meaning. |
-| updated_at | DateTimeField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\| | Lifecycle/audit time. Normally written by the owning model/workflow and read for ordering, expiry or history; a future change must preserve timezone/meaning. |
+| ticket | ForeignKey | \\ | Stores the ticket value for TicketMessage; preserve current writers, readers, null/default semantics and constraints when changing it. |
+| author | ForeignKey | \\ | Stores the author value for TicketMessage; preserve current writers, readers, null/default semantics and constraints when changing it. |
+| body | TextField | \\ | Durable ticket message content written by the ticket API. |
+| is_staff_reply | BooleanField | \\ | n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|F\\|a\\|l\\|s\\|e\\| | Boolean policy/state flag. Written by the owning workflow or admin boundary; consumers use it as authorization or lifecycle state, not as a substitute for an independent state machine. |
+| seen_at | DateTimeField | \\ | Read marker for the owning message; null means no read marker was recorded. |
+| created_at | DateTimeField | \\ | Historical creation timestamp; provenance rather than mutable lifecycle state. |
+| updated_at | DateTimeField | \\ | Last persistence timestamp; not the timestamp of a particular business transition. |
 
 ## TicketReadState
 
@@ -77,10 +77,10 @@ Base: models.Model
 
 | Field | Django type | Null / default / key metadata | Architectural meaning, writers/readers and authority |
 |---|---|---|---|
-| ticket | ForeignKey | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|r\\|e\\|l\\|a\\|t\\|e\\|s\\| \\|t\\|o\\| \\|r\\|e\\|l\\|a\\|t\\|i\\|o\\|n\\| | Domain data field owned by this model. The app's create/update workflow is responsible for writing it; callers should use the documented API/model operation rather than assuming direct mutation is safe. |
-| user | ForeignKey | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|r\\|e\\|l\\|a\\|t\\|e\\|s\\| \\|t\\|o\\| \\|r\\|e\\|l\\|a\\|t\\|i\\|o\\|n\\| | Ownership relation to the canonical users.User. Resource authorization normally starts from this relation. |
-| last_read_at | DateTimeField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|t\\|i\\|m\\|e\\|z\\|o\\|n\\|e\\|.\\|n\\|o\\|w\\| | Lifecycle/audit time. Normally written by the owning model/workflow and read for ordering, expiry or history; a future change must preserve timezone/meaning. |
-| updated_at | DateTimeField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\| | Lifecycle/audit time. Normally written by the owning model/workflow and read for ordering, expiry or history; a future change must preserve timezone/meaning. |
+| ticket | ForeignKey | \\ | Stores the ticket value for TicketReadState; preserve current writers, readers, null/default semantics and constraints when changing it. |
+| user | ForeignKey | \\ | n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|r\\|e\\|l\\|a\\|t\\|e\\|s\\| \\|t\\|o\\| \\|r\\|e\\|l\\|a\\|t\\|i\\|o\\|n\\| | Ownership relation to the canonical users.User. Resource authorization normally starts from this relation. |
+| last_read_at | DateTimeField | \\ | Per-user read cursor recording the latest acknowledged point. |
+| updated_at | DateTimeField | \\ | Last persistence timestamp; not the timestamp of a particular business transition. |
 
 ## TicketAttachment
 
@@ -90,14 +90,14 @@ Base: models.Model
 
 | Field | Django type | Null / default / key metadata | Architectural meaning, writers/readers and authority |
 |---|---|---|---|
-| ticket | ForeignKey | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|r\\|e\\|l\\|a\\|t\\|e\\|s\\| \\|t\\|o\\| \\|r\\|e\\|l\\|a\\|t\\|i\\|o\\|n\\| | Domain data field owned by this model. The app's create/update workflow is responsible for writing it; callers should use the documented API/model operation rather than assuming direct mutation is safe. |
-| message | ForeignKey | \\|n\\|u\\|l\\|l\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|b\\|l\\|a\\|n\\|k\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|r\\|e\\|l\\|a\\|t\\|e\\|s\\| \\|t\\|o\\| \\|r\\|e\\|l\\|a\\|t\\|i\\|o\\|n\\| | Domain data field owned by this model. The app's create/update workflow is responsible for writing it; callers should use the documented API/model operation rather than assuming direct mutation is safe. |
-| uploaded_by | ForeignKey | \\|n\\|u\\|l\\|l\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\|;\\| \\|r\\|e\\|l\\|a\\|t\\|e\\|s\\| \\|t\\|o\\| \\|r\\|e\\|l\\|a\\|t\\|i\\|o\\|n\\| | Domain data field owned by this model. The app's create/update workflow is responsible for writing it; callers should use the documented API/model operation rather than assuming direct mutation is safe. |
-| file | FileField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\| | Domain data field owned by this model. The app's create/update workflow is responsible for writing it; callers should use the documented API/model operation rather than assuming direct mutation is safe. |
-| original_filename | CharField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\| | Domain data field owned by this model. The app's create/update workflow is responsible for writing it; callers should use the documented API/model operation rather than assuming direct mutation is safe. |
-| content_type | CharField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|b\\|l\\|a\\|n\\|k\\|=\\|T\\|r\\|u\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|"\\|"\\| | Domain data field owned by this model. The app's create/update workflow is responsible for writing it; callers should use the documented API/model operation rather than assuming direct mutation is safe. |
-| size | PositiveIntegerField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|0\\| | Domain data field owned by this model. The app's create/update workflow is responsible for writing it; callers should use the documented API/model operation rather than assuming direct mutation is safe. |
-| created_at | DateTimeField | \\|n\\|u\\|l\\|l\\|=\\|F\\|a\\|l\\|s\\|e\\|;\\| \\|d\\|e\\|f\\|a\\|u\\|l\\|t\\|=\\|n\\|o\\|n\\|e\\| | Lifecycle/audit time. Normally written by the owning model/workflow and read for ordering, expiry or history; a future change must preserve timezone/meaning. |
+| ticket | ForeignKey | \\ | Stores the ticket value for TicketAttachment; preserve current writers, readers, null/default semantics and constraints when changing it. |
+| message | ForeignKey | \\ | Persisted log line/message content. |
+| uploaded_by | ForeignKey | \\ | User who supplied the attachment; provenance and authorization context. |
+| file | FileField | \\ | Uploaded attachment payload; access is mediated by authenticated download handling. |
+| original_filename | CharField | \\ | User-visible filename snapshot retained independently of storage path/name. |
+| content_type | CharField | \\ | Content-type metadata used when validating/serving the attachment. |
+| size | PositiveIntegerField | \\ | Stored size metadata used for quota/accounting; not physical capacity authority. |
+| created_at | DateTimeField | \\ | Historical creation timestamp; provenance rather than mutable lifecycle state. |
 
 ## State, deletion and maintenance rules
 

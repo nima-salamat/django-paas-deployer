@@ -1,29 +1,25 @@
 # messenger state and choice contracts
 
 ## Conversation
+type is private or group. history_visibility is all, from_join or none and controls what new members can see; it is not an authorization bypass.
 
-type: private or group.
-
-history_visibility: all, from_join or none. It controls what new group members can see; it is not an authorization bypass.
-
-## Participant role
-
-owner, admin or member. Current owner/admin state is represented by ConversationParticipant.role. Group ownership transfer changes participant roles; Conversation.created_by remains creator history.
-
-Action flags can_send_messages, can_send_media, can_add_members, can_pin_messages and can_change_info narrow what that participant can do.
+## Participant
+role is owner/admin/member. left_at null means active membership. Ownership transfer changes participant roles while Conversation.created_by remains creator history. Action flags constrain operations.
 
 ## JoinRequest
-
-pending -> approved/rejected. A user may cancel a pending request; approval also creates membership and a system event/message.
+pending -> approved/rejected. Caller cancellation is DELETE on the request resource. Approval also creates membership/system-event side effects.
 
 ## Message
+Messages may be scheduled, edited, deleted, forwarded or replied. client_message_id is the sender/conversation idempotency key.
 
-Messages can be scheduled, edited/deleted, forwarded/replied and marked system. client_message_id provides request idempotency for sender/conversation.
+## Durable event cursor
+MessengerEvent.id is the reconnect cursor. WebSocket delivery is downstream of this durable row.
 
 ## CallSession
-
-A call moves through the implemented ringing/active/end/missed/declined/busy lifecycle. There is a uniqueness rule preventing multiple active call sessions for the same conversation.
+Call state is managed by transition_call: ringing -> active or terminal states such as ended, missed, declined and no_answer. Conversation-level locking prevents competing active calls.
 
 ## View-once
+AttachmentViewOnceOpen records recipient-specific open/expiry state. MessageAttachment.is_purged means the stored file has been invalidated/removed.
 
-Attachment state combines is_view_once/is_purged with per-user AttachmentViewOnceOpen rows. Opening creates a recipient-specific capability window; later access follows expiry/purge rules.
+## Boundary invariant
+Durable state is committed before realtime consumers are expected to act on it. Redis is a cache; the database and durable event rows are authoritative.

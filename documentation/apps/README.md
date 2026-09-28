@@ -152,3 +152,28 @@ Architectural intent: domain state stays with its owning app while execution/run
 Compatibility behavior: legacy routes, selected_deploy and compatibility facades remain supported.
 
 Do not assume: package names alone prove that every production path uses the newest abstraction.
+
+
+## Source-evidence dependency types
+
+| Edge | Evidence mechanism | Current example |
+|---|---|---|
+| Model relationship | Django FK/O2O/M2M | services.Service.plan -> plans.Plan |
+| Python import | Direct cross-app import | auth_users -> users.User; services -> Messenger membership |
+| Service invocation | Domain function call across apps | deployment/control -> services.revisioning |
+| Task dependency | Celery task owned by another app | app_catalog -> child Deploy; services -> deployments |
+| Event dependency | Durable/realtime event crossing boundary | Messenger membership -> ServiceShare cleanup |
+| Authorization dependency | Permission calculation reads another app | Service group shares -> Messenger membership; sessions -> UserSession |
+| Runtime dependency | Runtime owner differs from persistence owner | deploy -> deployments runtime |
+
+A conceptual product relationship is not an implementation dependency unless one of these mechanisms exists.
+
+## Contract navigation
+
+Service runtime field: services/models.md -> services/state-contracts.md -> services.revisioning -> deployments/02-request-to-plan.md.
+
+Deployment activation race: deploy/state-contracts.md -> deployments/03-execution-lifecycle.md -> deployments/06-workers-concurrency-and-state.md.
+
+Messenger join-request bug: messenger/api.md -> messenger/state-contracts.md -> src/messenger/api/groups.py -> src/messenger/consumers.py.
+
+Session/security issue: auth_users/api.md -> auth_users/models.md -> src/auth_users/session_auth.py and token_serializers.py -> users.
