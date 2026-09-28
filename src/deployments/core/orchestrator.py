@@ -738,51 +738,78 @@ class DeploymentOrchestrator:
             self._cleanup_old_container(renamed_old_name, config.stop_timeout)
 
         if swarm_enabled():
-            # Swarm owns rollback of an updated service. On a first deploy there
-            # is no previous service revision, so remove the failed service
-            # instead of pretending a legacy container rollback is possible.
-            try:
-                runtime = SwarmRuntime()
-                service_name = config.name
-                service = runtime.client.services.get(service_name)
+            # Swarm owns rollback of service updates. apply_processes records
+            # exactly which process services were mutated so a failure in a
+            # later process can recover the entire deployment atomically.
+            recovery = dict((exc.details or {}).get("swarm_recovery") or {})
+            rollback_services = list(recovery.get("rollback_services") or [])
+            remove_services = list(recovery.get("remove_services") or [])
+
+            if not recovery:
                 self.logger.warning(
                     "rollback",
-                    "Swarm deployment failed; requesting Swarm service rollback.",
+                    "No Swarm mutation context was recorded for this failure; "
+                    "leaving existing Swarm services untouched.",
                     progress=96,
-                    details={"service": service_name},
+                    details={"service": config.name},
                 )
+
+            runtime = SwarmRuntime()
+            for service_name in rollback_services:
                 try:
-                    service.rollback()
-                    rollback_performed = True
-                except Exception as rollback_exc:
-                    # First-deploy services have no previous Swarm spec to
-                    # roll back to. Remove the failed service so restart_policy
-                    # cannot keep restarting a known-bad task.
+                    requested = runtime.rollback_service(service_name)
                     self.logger.warning(
                         "rollback",
-                        "Swarm service rollback was unavailable; removing failed service.",
-                        progress=97,
+                        (
+                            "Swarm service rollback requested."
+                            if requested
+                            else "Swarm service rollback was already in progress or completed."
+                        ),
+                        progress=96,
+                        details={"service": service_name},
+                    )
+                    rollback_performed = True
+                except docker.errors.NotFound:
+                    self.logger.info(
+                        "rollback",
+                        "Swarm service was already absent; no rollback was required.",
+                        progress=96,
+                        details={"service": service_name},
+                    )
+                except Exception as rollback_exc:
+                    rollback_failed = True
+                    self.logger.error(
+                        "rollback",
+                        f"Swarm service rollback failed: {rollback_exc}",
+                        progress=99,
                         details={
                             "service": service_name,
-                            "rollback_error": str(rollback_exc),
+                            "error": str(rollback_exc),
                         },
                     )
-                    service.remove()
+
+            for service_name in remove_services:
+                try:
+                    runtime.remove(service_name)
                     rollback_performed = True
-            except docker.errors.NotFound:
-                self.logger.info(
-                    "rollback",
-                    "Failed Swarm service was already absent; no rollback cleanup was required.",
-                    progress=96,
-                )
-            except Exception as rollback_exc:
-                rollback_failed = True
-                self.logger.error(
-                    "rollback",
-                    f"Swarm failure recovery could not be completed: {rollback_exc}",
-                    progress=99,
-                    details={"service": config.name, "error": str(rollback_exc)},
-                )
+                    self.logger.warning(
+                        "rollback",
+                        "Removed newly created failed Swarm process service.",
+                        progress=97,
+                        details={"service": service_name},
+                    )
+                except Exception as remove_exc:
+                    rollback_failed = True
+                    self.logger.error(
+                        "rollback",
+                        f"Failed to remove newly created Swarm process service: {remove_exc}",
+                        progress=99,
+                        details={
+                            "service": service_name,
+                            "error": str(remove_exc),
+                        },
+                    )
+
         elif snapshot.image_ref:
             try:
                 self.logger.warning("rollback", "Starting rollback.", progress=96)
