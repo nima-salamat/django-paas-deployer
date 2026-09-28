@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from django.utils import timezone
 
-from deploy.base_images import BaseImageSpec, _legacy_php, _php, _spec_for_record, deployment_phase_remaining_seconds, make_specs
+from deploy.base_images import BaseImageSpec, _php, _spec_for_record, deployment_phase_remaining_seconds, make_specs
 from deploy.models import BaseRuntimeImage, Deploy
 
 
@@ -22,7 +22,7 @@ def test_php_base_identity_is_canonical_and_variant_is_stable():
     assert spec.variant == "apache"
     assert spec.repository == "paas-base/php-apache"
     assert "/var/www/html/public" not in spec.dockerfile
-    assert "APACHE_DOCUMENT_ROOT=/var/www/html" in spec.dockerfile
+    assert "APACHE_DOCUMENT_ROOT" not in spec.dockerfile
 
 
 def test_plain_php_and_framework_php_share_the_same_base_identity():
@@ -53,20 +53,21 @@ def test_php_registry_identity_includes_variant_and_host():
     assert fields == ("logical_runtime", "runtime_version", "variant", "architecture", "docker_host")
 
 
-def test_legacy_php_rows_reconstruct_their_old_image_references_without_becoming_canonical():
-    root = _legacy_php("8.4", "apache-root")
-    public = _legacy_php("8.4", "apache-public")
-    assert root.image_ref == "paas-base/php-apache-root:8.4-r1"
-    assert public.image_ref == "paas-base/php-apache:8.4-r1"
-    assert root.variant == "apache-root"
-    assert public.variant == "apache-public"
-    assert _spec_for_record(BaseRuntimeImage(logical_runtime="php", runtime_version="8.4", variant="apache")).image_ref == "paas-base/php-apache:8.4-r1"
+def test_legacy_php_registry_rows_resolve_to_the_canonical_definition():
+    root_row = BaseRuntimeImage(logical_runtime="php", runtime_version="8.4", variant="apache-root")
+    public_row = BaseRuntimeImage(logical_runtime="php", runtime_version="8.4", variant="apache-public")
+    assert _spec_for_record(root_row).image_ref == "paas-base/php-apache:8.4-r1"
+    assert _spec_for_record(public_row).image_ref == "paas-base/php-apache:8.4-r1"
 
 
-def test_definition_fingerprint_keeps_variant_definition_distinct():
+def test_php_definition_fingerprint_is_shared_by_canonical_and_legacy_rows():
     from deploy.base_images import _spec_fingerprint
-    assert _spec_fingerprint(_php("8.4")) != _spec_fingerprint(_legacy_php("8.4", "apache-root"))
-    assert _spec_fingerprint(_php("8.4")) != _spec_fingerprint(_legacy_php("8.4", "apache-public"))
+    canonical = _php("8.4")
+    assert _spec_fingerprint(canonical) == _spec_fingerprint(
+        _spec_for_record(
+            BaseRuntimeImage(logical_runtime="php", runtime_version="8.4", variant="apache-root")
+        )
+    )
 
 
 def test_phase_deadline_uses_base_wait_start_not_deployment_start():
@@ -179,12 +180,11 @@ def test_base_runtime_timeout_setting_is_dedicated_and_legacy_name_is_alias_only
     assert 'def monitor_stale_base_build_minutes()' in source
     assert 'return base_image_build_timeout_minutes()' in source
 
-def test_legacy_php_public_build_cannot_race_the_canonical_same_tag():
+def test_legacy_php_rows_are_converged_by_manual_build_request():
     source = (ROOT / "deploy" / "base_images.py").read_text(encoding="utf-8")
-    assert "_wait_for_legacy_php_tag_collision" in source
-    assert '"apache-public"' in source
-    assert "tag_collision_guard" in source
-    assert "two definitions writing the same image reference" in source
+    block = source.split("def request_base_runtime_image_build", 1)[1].split("def build_registered_base_image", 1)[0]
+    assert 'row.variant = "apache"' in block
+    assert 'row.image_repository = _php(str(row.runtime_version)).repository' in block
 
 
 def test_legacy_php_identity_migration_is_ordered_after_phase_timestamp_migration():
@@ -194,8 +194,3 @@ def test_legacy_php_identity_migration_is_ordered_after_phase_timestamp_migratio
     assert "safe_to_remove" in migration
 
 
-def test_noncanonical_php_rows_are_not_manual_build_targets():
-    source = (ROOT / "deploy" / "base_images.py").read_text(encoding="utf-8")
-    block = source.split("def request_base_runtime_image_build", 1)[1].split("def build_registered_base_image", 1)[0]
-    assert '"apache-root", "apache-public"' in block
-    assert "not a supported manual build target" in block
