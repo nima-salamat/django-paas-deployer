@@ -31,6 +31,7 @@ class SwarmTaskState:
     error: str
     message: str
     image: str | None = None
+    status_timestamp: str | None = None
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,8 @@ class SwarmServiceState:
     service_image: str | None = None
     update_state: str | None = None
     update_message: str | None = None
+    restart_condition: str | None = None
+    restart_max_attempts: int | None = None
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -592,6 +595,7 @@ class SwarmRuntime:
                     error=str(status.get("Err") or ""),
                     message=str(status.get("Message") or ""),
                     image=task_image,
+                    status_timestamp=str(status.get("Timestamp") or "") or None,
                 )
             )
         return tuple(rows)
@@ -608,6 +612,9 @@ class SwarmRuntime:
         update_status = attrs.get("UpdateStatus") or {}
         mode = spec.get("Mode") or {}
         replicas = int((mode.get("Replicated") or {}).get("Replicas") or 0)
+        restart_policy = task_template.get("RestartPolicy") or {}
+        restart_condition = str(restart_policy.get("Condition") or "").strip().lower() or None
+        restart_max_attempts = int(restart_policy.get("MaxAttempts") or 0)
         tasks = self._task_states(service)
         running = sum(
             1 for task in tasks
@@ -627,6 +634,8 @@ class SwarmRuntime:
             service_image=str(container_spec.get("Image") or "").strip() or None,
             update_state=str(update_status.get("State") or "").strip().lower() or None,
             update_message=str(update_status.get("Message") or "").strip() or None,
+            restart_condition=restart_condition,
+            restart_max_attempts=restart_max_attempts,
         )
 
     def _service_logs_for_failure(self, name: str, *, tail: int = 200) -> str:
