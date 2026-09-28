@@ -642,11 +642,22 @@ class Command(BaseCommand):
         except Exception as exc:
             logger.warning("catch-up failed %s: %s", container.name, exc)
             return
-        pairs = (
-            self._demux_docker_chunk(raw)
-            if isinstance(raw, (bytes, bytearray))
-            else [("stdout", str(raw or ""))]
-        )
+        if isinstance(raw, (bytes, bytearray)):
+            pairs = self._demux_docker_chunk(raw)
+        else:
+            # Container.logs() returns bytes for non-streaming reads, while
+            # Swarm Service.logs() returns a generator. Never stringify the
+            # iterator: consume each emitted Docker payload and demultiplex it.
+            pairs = []
+            try:
+                iterator = iter(raw)
+            except TypeError:
+                iterator = iter(())
+            for chunk in iterator:
+                if isinstance(chunk, (bytes, bytearray)):
+                    pairs.extend(self._demux_docker_chunk(chunk))
+                elif chunk:
+                    pairs.append(("stdout", str(chunk)))
         lines = []
         skew = stream.last_persisted_ts - timedelta(seconds=5) if stream.last_persisted_ts else None
         for stream_kind, line in pairs:
