@@ -62,15 +62,21 @@ def _render_volume_size(value, *, config: dict, secrets: dict) -> int:
 
 
 def _find_plan(*, base_plan: Plan, platform: str, plan_type: str) -> Plan:
-    # Catalog services are all executed by the generic Docker deployment
-    # engine. The catalog platform is descriptive metadata, not a special
-    # deployment implementation.
-    if plan_type == str(PlanTypeChoices.APP):
+    plan_type = str(plan_type or PlanTypeChoices.APP)
+    platform = str(platform or "docker").lower().strip()
+    if plan_type in {str(PlanTypeChoices.APP), str(PlanTypeChoices.READY)}:
         if str(base_plan.platform) != "docker" or str(base_plan.plan_type) not in {
             str(PlanTypeChoices.APP), str(PlanTypeChoices.READY)
         }:
             raise CatalogValidationError("Choose an application plan that supports Docker/ready-made applications.")
         return base_plan
+    if plan_type == str(PlanTypeChoices.DB):
+        if platform == "docker":
+            raise CatalogValidationError("Database catalog services must declare a database platform.")
+        db_plan = Plan.objects.filter(platform=platform, plan_type=PlanTypeChoices.DB).order_by("id").first()
+        if db_plan is None:
+            raise CatalogValidationError(f"No database plan is configured for catalog database platform {platform!r}.")
+        return db_plan
     raise CatalogValidationError(f"Unsupported catalog plan type: {plan_type}")
 
 
@@ -80,11 +86,61 @@ def _render_service_value(value: str, *, config: dict, secrets: dict, service_ho
     out = value
     for key, val in config.items():
         out = out.replace(f"${{config.{key}}}", str(val))
-    for key, val in secrets.items():
-        out = out.replace(f"${{secret.{key}}}", str(val))
     for key, host in service_hosts.items():
         out = out.replace(f"${{service.{key}.host}}", str(host))
     return out
+
+
+_SECRET_REF_RE = re.compile(r"\$\{secret\.([A-Za-z0-9_]+)\}")
+
+
+def _secret_references(value) -> set[str]:
+    if isinstance(value, dict):
+        refs = set()
+        for item in value.values():
+            refs.update(_secret_references(item))
+        return refs
+    if isinstance(value, (list, tuple)):
+        refs = set()
+        for item in value:
+            refs.update(_secret_references(item))
+        return refs
+    if isinstance(value, str):
+        return set(_SECRET_REF_RE.findall(value))
+    return set()
+
+
+def _render_secret_value(value: str, *, config: dict, secrets: dict, service_hosts: dict) -> str:
+    rendered = _render_service_value(value, config=config, secrets={}, service_hosts=service_hosts)
+    for key in _secret_references(rendered):
+        if key not in secrets:
+            raise CatalogValidationError(f"Catalog references unknown secret {key!r}.")
+        rendered = rendered.replace(f"${{secret.{key}}}", str(secrets[key]))
+    return rendered
+
+
+def _database_runtime_config(spec: dict, *, environment: dict) -> dict:
+    if str(spec.get("role") or "") != "database" or str(spec.get("plan_type") or "") != str(PlanTypeChoices.DB):
+        return {}
+    platform = str(spec.get("platform") or "").lower()
+    prefix = {"postgresql": "POSTGRES", "postgres": "POSTGRES", "mysql": "MYSQL", "mariadb": "MARIADB", "mongodb": "MONGO", "mongo": "MONGO", "oracle": "ORACLE"}.get(platform, "")
+    normalized = {str(k).upper(): v for k, v in environment.items()}
+    username = spec.get("database_username")
+    database = spec.get("database_name")
+    password = spec.get("password")
+    root_password = spec.get("root_password")
+    if prefix:
+        username = username or normalized.get(f"{prefix}_USER") or normalized.get(f"{prefix}_USERNAME")
+        database = database or normalized.get(f"{prefix}_DB") or normalized.get(f"{prefix}_DATABASE")
+        password = password or normalized.get(f"{prefix}_PASSWORD")
+        root_password = root_password or normalized.get(f"{prefix}_ROOT_PASSWORD")
+    if not password and prefix == "MARIADB":
+        password = normalized.get("MYSQL_PASSWORD")
+        root_password = root_password or normalized.get("MYSQL_ROOT_PASSWORD")
+    return {key: value for key, value in {
+        "platform": platform, "username": username, "database": database,
+        "password": password, "root_password": root_password,
+    }.items() if value not in (None, "")}
 
 
 def _write_archive(dockerfile: str, extra_files: dict[str, str] | None = None) -> ContentFile:
@@ -156,8 +212,7 @@ def validate_install_request(user, payload: dict) -> tuple[object, dict, Plan]:
     return definition, resolved, plan
 
 
-@transaction.atomic
-def create_application_installation(user, payload: dict) -> ApplicationInstance:
+def _create_application_installation(user, payload: dict, storage_artifacts: list[tuple[object, str]]) -> ApplicationInstance:
     definition, resolved, base_plan = validate_install_request(user, payload)
     requested_name = str(payload["name"]).strip()
     slug = safe_slug(requested_name)
@@ -204,9 +259,15 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
                 network=network,
             )
     except IntegrityError as exc:
-        raise ApplicationNameConflict(
-            "An application with this name already exists."
-        ) from exc
+        constraint = getattr(getattr(getattr(exc, "__cause__", None), "diag", None), "constraint_name", None)
+        message = str(exc).lower()
+        is_name_conflict = (
+            constraint == "uniq_application_instance_user_slug"
+            or ("unique constraint failed" in message and "user_id" in message and "slug" in message)
+        )
+        if not is_name_conflict:
+            raise
+        raise ApplicationNameConflict("An application with this name already exists.") from exc
     created_by = user
     service_rows = []
     for sequence, spec in enumerate(resolved["services"]):
@@ -239,11 +300,14 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
 
     for sequence, spec, service, plan in service_rows:
         key = str(spec["key"])
+        plan_type = str(spec.get("plan_type") or PlanTypeChoices.APP)
+        is_database = plan_type == str(PlanTypeChoices.DB)
         resolved_config = dict(resolved["config"])
+        raw_environment = {str(k): str(v) for k, v in (spec.get("environment") or {}).items()}
         cfg = {
-            "platform": "docker",
+            "platform": str(spec.get("platform") or "docker") if is_database else "docker",
             "catalog_platform": str(spec.get("platform") or "docker"),
-            "catalog_plan_type": str(spec.get("plan_type") or PlanTypeChoices.APP),
+            "catalog_plan_type": plan_type,
             "catalog_id": definition.id,
             "catalog_definition_version": definition.definition_version,
             "catalog_software_version": definition.software_version,
@@ -257,30 +321,16 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
                 "managed-by": "passdeployer",
                 **{str(k): str(v) for k, v in (spec.get("labels") or {}).items()},
             },
-            "depends_on": list(spec.get("depends_on") or []),
-            "required": bool(spec.get("required", True)),
             "working_directory": spec.get("working_directory"),
         }
-
-        env = {
-            k: _render_service_value(
-                str(v),
-                config=resolved_config,
-                secrets=resolved["secrets"],
-                service_hosts=service_hosts,
-            )
-            for k, v in (spec.get("environment") or {}).items()
-        }
+        cfg.update(_database_runtime_config(spec, environment=raw_environment))
+        env = {k: _render_service_value(v, config=resolved_config, secrets=resolved["secrets"], service_hosts=service_hosts) for k, v in raw_environment.items()}
 
         from services.revisioning import _get_or_create_secret
-        for secret_key, secret_value in (resolved.get("secrets") or {}).items():
-            _get_or_create_secret(
-                service,
-                str(secret_key),
-                str(secret_value),
-                created_by=created_by,
-                note=f"Catalog secret for {definition.id}:{key}",
-            )
+        for secret_key in _secret_references(raw_environment):
+            if secret_key not in resolved["secrets"]:
+                raise CatalogValidationError(f"Catalog references unknown secret {secret_key!r}.")
+            _get_or_create_secret(service, secret_key, str(resolved["secrets"][secret_key]), created_by=created_by, note=f"Catalog secret for {definition.id}:{key}")
 
         for env_key, raw_value in (spec.get("environment") or {}).items():
             text_value = str(raw_value)
@@ -298,14 +348,9 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
                         "enabled": True,
                     },
                 )
-            elif re.search(r"\$\{secret\.[A-Za-z0-9_]+\}", text_value):
+            elif _secret_references(text_value):
                 composite_key = "catalog_env_" + str(env_key).lower()
-                rendered_value = _render_service_value(
-                    text_value,
-                    config=resolved_config,
-                    secrets=resolved["secrets"],
-                    service_hosts=service_hosts,
-                )
+                rendered_value = _render_secret_value(text_value, config=resolved_config, secrets=resolved["secrets"], service_hosts=service_hosts)
                 composite_secret, _ = _get_or_create_secret(
                     service,
                     composite_key[:128],
@@ -335,53 +380,55 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
                     },
                 )
 
+        healthcheck = spec.get("healthcheck") if isinstance(spec.get("healthcheck"), dict) else None
+        unsupported_secret_locations = {
+            "name_template": spec.get("name_template"),
+            "command": spec.get("command"),
+            "entrypoint": spec.get("entrypoint"),
+            "ports": spec.get("ports"),
+            "volumes": spec.get("volumes"),
+            "labels": spec.get("labels"),
+            "healthcheck": healthcheck,
+        }
+        for location, value in unsupported_secret_locations.items():
+            if _secret_references(value):
+                raise CatalogValidationError(
+                    f"Catalog service {key} uses a secret in unsupported {location} metadata."
+                )
+
+        image_template = str(spec.get("image_template") or spec.get("image") or "")
+        if _secret_references(image_template):
+            raise CatalogValidationError(
+                f"Catalog service {key} uses a secret in its image reference, which is unsupported."
+            )
         image = _render_service_value(
-            str(spec.get("image_template") or spec.get("image") or ""),
+            image_template,
             config=resolved_config,
             secrets={},
             service_hosts=service_hosts,
         )
         dockerfile = spec.get("dockerfile")
-        healthcheck = spec.get("healthcheck") if isinstance(spec.get("healthcheck"), dict) else None
-        if dockerfile and "${secret." in str(dockerfile).lower():
-            raise CatalogValidationError(
-                f"Catalog service {key} attempts to bake a secret into its Dockerfile. "
-                "Move the secret to a runtime environment variable instead."
-            )
-        if dockerfile:
-            dockerfile_text = _render_service_value(
-                str(dockerfile),
-                config=resolved_config,
-                secrets=resolved["secrets"],
-                service_hosts=service_hosts,
-            ).replace("$"+"{config.image_template}", image)
-        elif image:
-            dockerfile_text = f"FROM {image}\n"
+        is_database = plan_type == str(PlanTypeChoices.DB)
+        if is_database:
+            dockerfile_text = ""
+            files = {}
         else:
-            raise CatalogValidationError(f"Catalog service {key} must define an image or Dockerfile.")
-
-        if "${secret." in dockerfile_text.lower():
-            raise CatalogValidationError(
-                f"Catalog service {key} attempts to bake a secret into its Dockerfile. Move the secret to an environment variable instead."
-            )
-
-        healthcheck_instruction = _dockerfile_healthcheck(healthcheck)
-        if healthcheck_instruction and "HEALTHCHECK" not in dockerfile_text:
-            dockerfile_text = dockerfile_text.rstrip() + "\n" + healthcheck_instruction + "\n"
-
-        files = {}
-        for name, content in (spec.get("files") or {}).items():
-            if "${secret." in str(content).lower():
-                raise CatalogValidationError(
-                    f"Catalog service {key} attempts to bake a secret into build file {name!r}. "
-                    "Move the secret to a runtime environment variable instead."
-                )
-            files[str(name)] = _render_service_value(
-                str(content),
-                config=resolved_config,
-                secrets={},
-                service_hosts=service_hosts,
-            )
+            if dockerfile:
+                dockerfile_text = _render_service_value(str(dockerfile), config=resolved_config, secrets=resolved["secrets"], service_hosts=service_hosts).replace("$"+"{config.image_template}", image)
+            elif image:
+                dockerfile_text = f"FROM {image}\n"
+            else:
+                raise CatalogValidationError(f"Catalog service {key} must define an image or Dockerfile.")
+            if "${secret." in dockerfile_text.lower():
+                raise CatalogValidationError(f"Catalog service {key} attempts to bake a secret into its Dockerfile. Move the secret to a runtime environment variable instead.")
+            healthcheck_instruction = _dockerfile_healthcheck(healthcheck)
+            if healthcheck_instruction and "HEALTHCHECK" not in dockerfile_text:
+                dockerfile_text = dockerfile_text.rstrip() + "\n" + healthcheck_instruction + "\n"
+            files = {}
+            for name, content in (spec.get("files") or {}).items():
+                if _secret_references(content):
+                    raise CatalogValidationError(f"Catalog service {key} attempts to bake a secret into build file {name!r}. Move the secret to a runtime environment variable instead.")
+                files[str(name)] = _render_service_value(str(content), config=resolved_config, secrets={}, service_hosts=service_hosts)
 
         public = bool(spec.get("public", False))
         port = spec.get("port")
@@ -398,12 +445,10 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
                     break
 
         runtime_config = {
-            "platform": "docker",
+            "platform": str(spec.get("platform") or "docker") if is_database else "docker",
             "catalog_platform": str(spec.get("platform") or "docker"),
             "catalog_service_key": key,
             "catalog_managed": True,
-            "depends_on": list(spec.get("depends_on") or []),
-            "required": bool(spec.get("required", True)),
             "start_command": (
                 shlex.join([str(x) for x in (spec.get("command") or [])])
                 if isinstance(spec.get("command"), (list, tuple)) and spec.get("command")
@@ -423,8 +468,13 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
             "healthcheck_path": spec.get("healthcheck_path"),
             "healthcheck_timeout": float(spec.get("healthcheck_timeout") or 5),
         }
+        runtime_config.update(_database_runtime_config(spec, environment=raw_environment))
+        for secret_key in _secret_references(runtime_config):
+            if secret_key not in resolved["secrets"]:
+                raise CatalogValidationError(f"Catalog references unknown secret {secret_key!r}.")
+            _get_or_create_secret(service, secret_key, str(resolved["secrets"][secret_key]), created_by=created_by, note=f"Catalog runtime secret for {definition.id}:{key}")
         service.runtime_config = runtime_config
-        service.build_config = {
+        service.build_config = {} if is_database else {
             "dockerfile_source": "archive",
             "dockerfile": dockerfile_text,
             "files": files,
@@ -522,14 +572,25 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
                 if volume.service_id is None:
                     volume.attach_to_service(service, bind=bind, mode=mode)
 
-        deploy = Deploy.objects.create(
+        deploy = Deploy(
             name=allocate_deploy_name(service),
             service=service,
             created_by=created_by,
             version=1.0,
             config=cfg,
-            zip_file=_write_archive(dockerfile_text, files),
+            zip_file=None if is_database else _write_archive(dockerfile_text, files),
         )
+        try:
+            deploy.save()
+        except Exception:
+            if deploy.zip_file and deploy.zip_file.name:
+                try:
+                    deploy.zip_file.storage.delete(deploy.zip_file.name)
+                except Exception:
+                    pass
+            raise
+        if deploy.zip_file and deploy.zip_file.name:
+            storage_artifacts.append((deploy.zip_file.storage, deploy.zip_file.name))
         ApplicationInstanceService.objects.create(
             instance=instance,
             service=service,
@@ -538,3 +599,18 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
             sequence=sequence,
         )
     return instance
+
+
+@transaction.atomic
+def create_application_installation(user, payload: dict) -> ApplicationInstance:
+    storage_artifacts: list[tuple[object, str]] = []
+    try:
+        return _create_application_installation(user, payload, storage_artifacts)
+    except Exception:
+        for storage, name in storage_artifacts:
+            try:
+                if storage.exists(name):
+                    storage.delete(name)
+            except Exception:
+                pass
+        raise

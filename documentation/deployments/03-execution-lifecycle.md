@@ -405,3 +405,8 @@ Do not:
 - \`src/deployments/core/state/manager.py\`
 - \`src/deployments/common/state_machine.py\`
 - \`src/services/revisioning.py\`
+
+
+## Ready-to-Deploy entry point
+
+A catalog installation reaches this lifecycle only after `ApplicationInstanceService` has created a normal child `Deploy`. The catalog coordinator owns dependency readiness and dispatch fencing, while this subsystem owns revision compilation, DB/app routing, build/runtime execution, readiness and terminal Deploy state. A catalog database child therefore follows the existing DBDeployer path rather than the APP image-build path.

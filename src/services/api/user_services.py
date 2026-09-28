@@ -199,6 +199,17 @@ class ServiceViewSet(ModelViewSet):
                 {"result": "error", "detail": _("Only the service owner can delete it.")},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if service.source_kind == Service.SourceKind.CATALOG:
+            from app_catalog.models import ApplicationInstanceService
+            if ApplicationInstanceService.objects.filter(service=service).exists():
+                return Response(
+                    {
+                        "result": "error",
+                        "detail": _("Catalog-managed services must be deleted through their ApplicationInstance."),
+                        "code": "catalog_service_managed",
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
         status_now = str(getattr(service, "status", "") or "").lower().strip()
         blocked = {
             SERVICE_STATUS_CHOICES.QUEUED,

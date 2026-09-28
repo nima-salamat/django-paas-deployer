@@ -49,7 +49,7 @@ def _schedule_next(instance_id: str, current_key: str | None = None):
             ApplicationInstanceService.objects.filter(
                 pk=dispatch.binding_id,
                 dispatched_at__isnull=False,
-            ).update(dispatched_at=None)
+            ).update(dispatched_at=None, dispatch_task_id="")
 
 
 
@@ -82,7 +82,7 @@ def gate_application_service(self, instance_id: str, service_key: str):
             binding.dispatch_task_id = ""
             binding.save(update_fields=["dispatched_at", "dispatch_task_id"])
             return
-        if binding.dispatch_task_id and binding.dispatch_task_id != str(self.request.id):
+        if binding.dispatch_task_id != str(self.request.id):
             return
         try:
             _loaded_instance, plan = ApplicationStackExecutor(instance_id)._load()
@@ -186,7 +186,7 @@ def reconcile_application_installations():
             deploy__status=DeploymentStatusChoices.PENDING,
         )
         if stale.exists():
-            stale.update(dispatched_at=None)
+            stale.update(dispatched_at=None, dispatch_task_id="")
             recovered += stale.count()
         try:
             _schedule_next(str(instance.pk))

@@ -17,7 +17,10 @@ class ApplicationInstanceSerializer(serializers.ModelSerializer):
 
     def get_config(self, obj):
         out = dict(obj.config or {})
-        out["secrets_configured"] = sorted((obj.secret_config or {}).keys())
+        secret_keys = set()
+        for binding in obj.services.select_related("service").all():
+            secret_keys.update(binding.service.secrets.filter(enabled=True).values_list("key", flat=True))
+        out["secrets_configured"] = sorted(secret_keys)
         return out
 
     def get_services(self, obj):

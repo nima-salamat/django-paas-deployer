@@ -48,6 +48,7 @@ plan_type = "DB"
 name_template = "${config.slug}-db"
 database_username = "synapse"
 database_name = "synapse"
+password = "${secret.postgres_password}"
 depends_on = []
 port = 5432
 

@@ -25,9 +25,9 @@ The durable owner and coordinator for one catalog installation.
 | definition_version | CharField(32) | Version/provenance of the definition used for this installation. |
 | software_version | CharField(64), default unknown | Selected application software release. |
 | variant_id | CharField(64) | Exact catalog variant installed. Reconciliation must remain tied to this variant even if the catalog later changes. |
-| definition_snapshot | JSON, default {} | Immutable installation provenance. It contains the selected catalog definition plus `_application_orchestration.services[]` with each child key, role, platform, plan type, dependencies and required flag. Recovery uses persisted child materialization for coordination and never trusts a later catalog source. |
+| definition_snapshot | JSON, default {} | Immutable installation intent. `_application_orchestration.services[]` is the sole coordinator graph and contains child key, role, platform, plan type, dependencies and required flag. Recovery never reads mutable Service runtime metadata or reloads a catalog. |
 | config | JSON, default {} | Non-secret normalized user configuration used while materializing child Services. It may contain derived non-secret values such as the installation slug. |
-| secret_config | JSON, default {} | Reserved compatibility field; new installs intentionally leave it empty. Generated credentials are persisted through ServiceSecret/ServiceSecretVersion so recovery never needs plaintext secret values or secret regeneration. |
+| secret_config | JSON, default {} | Compatibility field retained for older API/database rows; new installs intentionally leave it empty. `secrets_configured` is derived from enabled child ServiceSecret keys, while secret values live only in ServiceSecret/ServiceSecretVersion. |
 | status | ApplicationStatus, default pending | Coordinator state machine. Written by app_catalog tasks. |
 | error_code | CharField(96), blank | Stable machine-oriented failure reason for UI/recovery. |
 | error_message | Text, blank | Human-readable failure detail. |

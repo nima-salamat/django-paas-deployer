@@ -151,3 +151,20 @@ def test_normalized_plan_rejects_dangling_dependencies():
         plan_from_resolved(_resolved([
             {"key": "web", "role": "app", "platform": "docker", "image_template": "example/web:1", "depends_on": ["missing"]},
         ]))
+
+
+def test_required_service_cannot_depend_on_optional_service():
+    import pytest
+    with pytest.raises(ApplicationPlanError, match="cannot depend on optional"):
+        plan_from_resolved(_resolved([
+            {"key": "optional", "role": "worker", "platform": "docker", "image_template": "example/worker:1", "required": False},
+            {"key": "web", "role": "app", "platform": "docker", "image_template": "example/web:1", "depends_on": ["optional"], "required": True},
+        ]))
+
+
+def test_database_plan_type_requires_database_role_and_platform():
+    import pytest
+    with pytest.raises(ApplicationPlanError, match="role=database"):
+        plan_from_resolved(_resolved([
+            {"key": "db", "role": "app", "platform": "postgresql", "plan_type": "DB"},
+        ]))

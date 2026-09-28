@@ -120,9 +120,16 @@ class ApplicationInstanceDetailAPIView(CatalogPermissionMixin, APIView):
         # containers/volumes before the application-owned Docker network is
         # deleted; relying on Django CASCADE ordering could otherwise attempt
         # to remove an attached network too early and leak it.
-        service_rows = list(instance.services.select_related("service").all())
+        service_rows = list(instance.services.select_related("service", "deploy").all())
         network = instance.network
         for row in service_rows:
+            deploy = row.deploy
+            if deploy.zip_file and deploy.zip_file.name:
+                try:
+                    deploy.zip_file.delete(save=False)
+                except Exception:
+                    pass
+            row.delete()
             row.service.delete()
         if network is not None:
             network.delete()

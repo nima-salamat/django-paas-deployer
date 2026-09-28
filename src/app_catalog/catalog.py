@@ -268,12 +268,14 @@ def resolve_variant(definition: CatalogDefinition, variant_id: str, values: dict
 
 
 def _render_services(services: list[dict], context: dict) -> list[dict]:
-    service_names = {svc["key"]: svc.get("name_template") for svc in services}
     rendered = []
     for svc in services:
         row = dict(svc)
         row["name_template"] = _render_template(row.get("name_template", svc["key"]), context)
-        row["environment"] = {str(k): _render_template(str(v), context) for k, v in (svc.get("environment") or {}).items()}
+        row["environment"] = {
+            str(k): _render_template(str(v), context)
+            for k, v in (svc.get("environment") or {}).items()
+        }
         row["dockerfile"] = _render_template(str(svc.get("dockerfile", "")), context)
         row["volumes"] = [
             {
@@ -282,6 +284,9 @@ def _render_services(services: list[dict], context: dict) -> list[dict]:
             }
             for volume in (svc.get("volumes") or [])
         ]
+        for field in ("database_username", "database_name", "password", "root_password"):
+            if field in row and isinstance(row[field], str):
+                row[field] = _render_template(row[field], context)
         rendered.append(row)
     return rendered
 
@@ -290,9 +295,10 @@ def _render_template(value: str, context: dict) -> str:
     if not isinstance(value, str) or "${" not in value:
         return value
     out = value
-    for root in ("config", "secret"):
-        for key, v in context[root].items():
-            out = out.replace("${%s.%s}" % (root, key), str(v))
+    for key, v in context["config"].items():
+        out = out.replace("${config.%s}" % key, str(v))
+    # Secret references intentionally survive catalog compilation. Their values
+    # are materialized only at the ServiceSecret boundary.
     return out
 
 

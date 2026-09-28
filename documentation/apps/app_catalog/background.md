@@ -2,7 +2,7 @@
 
 start_application_installation claims/continues an ApplicationInstance execution and advances the child-service DAG.
 
-gate_application_service waits for child prerequisites before dispatch. The coordinator never re-resolves the catalog during recovery: its graph is reconstructed from persisted child Service runtime metadata, while generated credentials remain in ServiceSecret/ServiceSecretVersion.
+gate_application_service waits for child prerequisites before dispatch. The coordinator never re-resolves the catalog during recovery: its graph comes only from `ApplicationInstance.definition_snapshot._application_orchestration`, while generated credentials remain in ServiceSecret/ServiceSecretVersion.
 
 advance_application_service creates/dispatches the next ApplicationInstanceService child.
 

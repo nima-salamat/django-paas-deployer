@@ -175,3 +175,31 @@ services:
     image: example/web:1
     {key}: {value}
 """, app_id="unsupported")
+
+
+
+def test_imported_database_compose_service_is_normalized_as_db_service():
+    from app_catalog.compose_catalog import compose_to_resolved
+    resolved = compose_to_resolved(
+        document={
+            "services": {
+                "postgres": {
+                    "image": "postgres:16-alpine",
+                    "environment": [
+                        "POSTGRES_USER=app",
+                        "POSTGRES_DB=app",
+                        "POSTGRES_PASSWORD=$SERVICE_PASSWORD_POSTGRES",
+                    ],
+                },
+                "web": {"image": "example/web:1", "depends_on": ["postgres"]},
+            }
+        },
+        metadata={}, config={},
+        secrets={"service_password_postgres": "fixed-secret"},
+        catalog_id="compose-db", version="1",
+    )
+    db = next(item for item in resolved["services"] if item["key"] == "postgres")
+    assert db["role"] == "database"
+    assert db["platform"] == "postgresql"
+    assert db["plan_type"] == "DB"
+    assert db["environment"]["POSTGRES_PASSWORD"] == "${" + "secret.service_password_postgres}"

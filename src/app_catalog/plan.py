@@ -78,6 +78,24 @@ class ApplicationPlan:
                     deps.discard(key)
         return tuple(order)
 
+    def validate_dependency_semantics(self) -> None:
+        required = {svc.key: svc.required for svc in self.services}
+        for service in self.services:
+            missing = sorted(set(service.dependencies) - set(required))
+            if missing:
+                raise ApplicationPlanError(
+                    f"Service {service.key!r} references missing dependency(s): "
+                    + ", ".join(missing)
+                )
+            optional_dependencies = sorted(
+                dep for dep in service.dependencies if not required.get(dep, True)
+            )
+            if optional_dependencies:
+                raise ApplicationPlanError(
+                    f"Required service {service.key!r} cannot depend on optional service(s): "
+                    + ", ".join(optional_dependencies)
+                )
+
 def ready_service_keys(
     plan: ApplicationPlan,
     statuses: dict[str, str],
@@ -167,6 +185,21 @@ def plan_from_resolved(resolved: dict[str, Any]) -> ApplicationPlan:
                 + ", ".join(missing)
             )
     plan.topological_order()
+    plan.validate_dependency_semantics()
+    for service in services:
+        if service.plan_type == "DB":
+            if service.role != "database":
+                raise ApplicationPlanError(
+                    f"Database plan type requires role=database for service {service.key!r}."
+                )
+            if service.platform == "docker":
+                raise ApplicationPlanError(
+                    f"Database service {service.key!r} must declare its database platform."
+                )
+        elif service.plan_type not in {"APP", "READY"}:
+            raise ApplicationPlanError(
+                f"Unsupported application service plan type {service.plan_type!r} for {service.key!r}."
+            )
     network_sets = [set(svc.networks) for svc in services if svc.networks]
     if network_sets:
         known = set(plan.networks) or {"default"}
@@ -255,4 +288,5 @@ def plan_from_compose(compose: dict[str, Any], *, app_id: str, version: str = "1
         )
     plan = ApplicationPlan(id=app_id, version=version, variant=variant, services=tuple(services), networks=networks)
     plan.topological_order()
+    plan.validate_dependency_semantics()
     return plan

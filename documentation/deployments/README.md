@@ -402,3 +402,8 @@ Before modifying any deployment component, answer:
 7. Which existing test proves the invariant?
 8. What must not be bypassed?
 
+
+
+## Ready-to-Deploy integration boundary
+
+`app_catalog` supplies installation intent and materialized Services/Deploys; it does not execute them. Catalog DB children use the normal `Deploy` path and are routed by `deployments.celery.tasks.run_db_deploy` to `DBDeployer`. Application-level DAG state is owned by `ApplicationInstance`; child execution state remains owned by `Deploy`.

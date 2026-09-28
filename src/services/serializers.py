@@ -102,6 +102,14 @@ class ServiceSerializer(serializers.ModelSerializer):
             }
 
     def validate(self, attrs):
+        if self.instance is not None and self.instance.source_kind == Service.SourceKind.CATALOG:
+            protected = {"plan", "network", "source_kind", "source_config"}
+            changed = protected.intersection(attrs)
+            if changed:
+                raise serializers.ValidationError({
+                    field: "Catalog-managed Service ownership and execution metadata are controlled by its ApplicationInstance."
+                    for field in sorted(changed)
+                })
         if self.instance is not None and "plan" in attrs:
             current = str(getattr(self.instance, "status", "") or "").lower()
             transitional = {"queued", "deploying", "stopping"}

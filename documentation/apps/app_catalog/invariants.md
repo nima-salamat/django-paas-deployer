@@ -1,0 +1,20 @@
+# Ready-to-Deploy Application Invariants
+
+- **I1:** `app_catalog` coordinates applications but never owns Docker/runtime execution.
+- **I2:** `ApplicationInstance.definition_snapshot._application_orchestration` is immutable after installation creation.
+- **I3:** Coordinator dependency ordering is read from the immutable installation graph, never from mutable `Service.runtime_config` or a reloaded catalog.
+- **I4:** ApplicationInstanceService binding keys must exactly match the persisted installation graph.
+- **I5:** Catalog secret values are materialized only through ServiceSecret/ServiceSecretVersion; ApplicationInstance does not persist plaintext generated secrets.
+- **I6:** A catalog secret is materialized only on Services that reference it.
+- **I7:** Build artifacts cannot contain catalog secret material; unsupported build-time secret use fails closed.
+- **I8:** Database catalog children use a DB Plan and the normal Deploy/DBDeployer path; they are not APP services.
+- **I9:** A required service cannot depend on an optional service.
+- **I10:** Required child failure converges the application to FAILED and terminalizes undispatched siblings.
+- **I11:** Cancellation is durable and converges pending and running children through the normal deployment lifecycle.
+- **I12:** Application RUNNING means all child Deploys are terminal and all required children succeeded.
+- **I13:** A stale coordinator task cannot execute after its dispatch claim has been replaced.
+- **I14:** `(user, slug)` uniquely identifies an installed application; unrelated IntegrityErrors are not translated to name conflicts.
+- **I15:** Catalog child Service and Deploy deletion is protected while bound to an ApplicationInstance.
+- **I16:** Database transactions do not imply storage/Docker transactions; catalog deployment archives are explicitly compensated on failed installation.
+- **I17:** Published endpoint reservations remain owned by the normal Service endpoint subsystem.
+- **I18:** `ServiceProcess.name="web"` is a compatibility identifier; `process_type` carries service role semantics.

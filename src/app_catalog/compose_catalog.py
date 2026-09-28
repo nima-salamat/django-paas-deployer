@@ -168,6 +168,10 @@ def _transform(value: Any, resolved: dict[str, Any], aliases: dict[str, str]) ->
     # Coolify-style $NAME / ${NAME:-default} syntax.
     def replace_catalog_ref(match: re.Match[str]) -> str:
         kind, name = match.group(1), match.group(2)
+        if kind == "secret":
+            if name not in resolved:
+                raise ApplicationPlanError(f"Required catalog secret {name} is not configured.")
+            return match.group(0)
         value = resolved.get(f"{kind}.{name}")
         if value is None:
             raise ApplicationPlanError(f"Required catalog variable {kind}.{name} is not configured.")
@@ -182,6 +186,8 @@ def _transform(value: Any, resolved: dict[str, Any], aliases: dict[str, str]) ->
         field_id = aliases.get(name, name.lower())
         if name.startswith("SERVICE_URL_") or name.startswith("SERVICE_FQDN_"):
             field_id = "domain"
+        if field_id in secrets:
+            return "${secret." + field_id + "}"
         value = resolved.get(field_id)
         if value in (None, ""):
             if op in (":", "-") and default is not None:
@@ -323,6 +329,20 @@ def compose_to_resolved(*, document: dict[str, Any], metadata: dict[str, Any], c
                 if sep and host and not public:
                     raise ApplicationPlanError(f"Catalog service {key!r} publishes a host port but is not declared public.")
         role = str((raw.get("x-passdeployer") or {}).get("role") or "")
+        image_hint = str(raw.get("image") or "").lower()
+        database_platform = next(
+            (
+                candidate for marker, candidate in (
+                    ("postgres", "postgresql"),
+                    ("mariadb", "mariadb"),
+                    ("mysql", "mysql"),
+                    ("mongo", "mongodb"),
+                    ("oracle", "oracle"),
+                )
+                if marker in image_hint or marker in str(key).lower()
+            ),
+            None,
+        )
         if not role:
             low = str(key).lower()
             if any(x in low for x in ("postgres", "mysql", "mariadb", "mongo", "database", "db")):
@@ -337,6 +357,12 @@ def compose_to_resolved(*, document: dict[str, Any], metadata: dict[str, Any], c
                 role = "app"
             else:
                 role = "internal"
+        if role == "database" and database_platform:
+            platform = database_platform
+            plan_type = "DB"
+        else:
+            platform = "docker"
+            plan_type = "APP"
         health = raw.get("healthcheck")
         readiness_path = (raw.get("x-passdeployer") or {}).get("readiness_path")
         if not readiness_path and isinstance(health, dict) and health.get("test"):
@@ -354,8 +380,8 @@ def compose_to_resolved(*, document: dict[str, Any], metadata: dict[str, Any], c
             "key": str(key),
             "name_template": str((raw.get("x-passdeployer") or {}).get("name") or key),
             "role": role,
-            "platform": "docker",
-            "plan_type": "APP",
+            "platform": platform,
+            "plan_type": plan_type,
             "depends_on": depends,
             "image_template": _transform(raw.get("image"), render_context, aliases) if raw.get("image") else "",
             "dockerfile": _transform(str(inline_dockerfile), render_context, aliases) if inline_dockerfile else None,

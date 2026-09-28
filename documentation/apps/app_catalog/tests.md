@@ -12,3 +12,8 @@
 | recovery/reconciliation tests | coordinator restart/lost task recovery | installations remain stuck or duplicate children |
 
 A catalog change must be tested as both a plan compiler change and a coordinator/runtime boundary change.
+
+
+## Architecture-hardening coverage
+
+The architecture suite covers immutable snapshot authority, real catalog secret-reference preservation, per-Service secret scope, DB-child materialization, required-failure convergence, catalog child deletion protection, and a PostgreSQL-only two-transaction installation race. These complement the catalog-wide compile/plan tests; compile success is not treated as proof of installation or runtime success.

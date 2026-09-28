@@ -40,63 +40,37 @@ class ApplicationStackExecutor:
         self.instance_id = str(instance_id)
 
     def _load(self) -> tuple[ApplicationInstance, ApplicationPlan]:
-        """Load the persisted coordinator graph without re-resolving catalog secrets.
-
-        Generated credentials are persisted in ServiceSecret/ServiceSecretVersion,
-        not in ApplicationInstance.secret_config. Recovery must not call
-        resolve_variant(), because generator fields would produce new credentials.
-        The coordinator only needs the already-materialized dependency graph.
-        """
-        instance = ApplicationInstance.objects.prefetch_related(
-            "services__deploy", "services__service__processes"
-        ).get(pk=self.instance_id)
-        bindings = list(instance.services.all())
-        if not bindings:
-            raise ValueError("Application instance has no child service bindings.")
-
-        seen_keys = set()
-        service_plans = []
-        for binding in bindings:
-            key = str(binding.service_key)
-            if key in seen_keys:
-                raise ValueError(f"Duplicate application service binding: {key}")
-            seen_keys.add(key)
-            service = binding.service
-            runtime = dict(service.runtime_config or {})
-            processes = list(service.processes.all())
-            role = (
-                str(processes[0].process_type)
-                if processes and processes[0].process_type
-                else "app"
+        """Load only the immutable coordinator graph persisted at installation time."""
+        instance = ApplicationInstance.objects.prefetch_related("services__deploy").get(pk=self.instance_id)
+        snapshot = dict(instance.definition_snapshot or {})
+        graph = dict(snapshot.get("_application_orchestration") or {})
+        specs = list(graph.get("services") or [])
+        if not specs:
+            raise ValueError("Application installation is missing its immutable orchestration graph.")
+        service_plans = [
+            ServicePlan(
+                key=str(spec["key"]),
+                role=str(spec.get("role") or "app"),
+                platform=str(spec.get("platform") or "docker"),
+                plan_type=str(spec.get("plan_type") or "APP"),
+                dependencies=tuple(str(dep) for dep in (spec.get("depends_on") or ())),
+                required=bool(spec.get("required", True)),
             )
-            service_plans.append(
-                ServicePlan(
-                    key=key,
-                    role=role,
-                    platform=str(runtime.get("catalog_platform") or "docker"),
-                    plan_type=str(runtime.get("catalog_plan_type") or "APP"),
-                    dependencies=tuple(str(dep) for dep in (runtime.get("depends_on") or ())),
-                    required=bool(runtime.get("required", True)),
-                )
-            )
-
+            for spec in specs
+        ]
         plan = ApplicationPlan(
             id=str(instance.catalog_id),
             version=str(instance.definition_version),
             variant=str(instance.variant_id),
             services=tuple(service_plans),
         )
-        known_keys = {service.key for service in plan.services}
-        for service in plan.services:
-            missing = sorted(set(service.dependencies) - known_keys)
-            if missing:
-                raise ValueError(
-                    f"Application service {service.key!r} references missing dependency(s): "
-                    + ", ".join(missing)
-                )
         plan.topological_order()
+        plan.validate_dependency_semantics()
+        binding_keys = {str(key) for key in instance.services.values_list("service_key", flat=True)}
+        graph_keys = {service.key for service in plan.services}
+        if binding_keys != graph_keys:
+            raise ValueError("Application service bindings do not match the immutable application graph.")
         return instance, plan
-
     @staticmethod
     def _timeout_minutes() -> int:
         try:
@@ -183,11 +157,53 @@ class ApplicationStackExecutor:
             locked = ApplicationInstance.objects.select_for_update().get(pk=self.instance_id)
             if locked.status in {ApplicationStatus.FAILED, ApplicationStatus.CANCELLED, ApplicationStatus.RUNNING}:
                 return True
-            bindings = list(ApplicationInstanceService.objects.select_related("deploy").filter(instance_id=self.instance_id))
+            bindings = list(
+                ApplicationInstanceService.objects.select_related("deploy").filter(instance_id=self.instance_id)
+            )
             required = {svc.key: svc.required for svc in plan.services}
-            failed = [b for b in bindings if required.get(b.service_key, True) and b.deploy.status in {DeploymentStatusChoices.FAILED, DeploymentStatusChoices.ROLLED_BACK, DeploymentStatusChoices.CANCELLED}]
+            status_by_key = {b.service_key: str(b.deploy.status) for b in bindings}
+
+            for binding in bindings:
+                if binding.deploy.status != DeploymentStatusChoices.PENDING:
+                    continue
+                spec = plan.service(binding.service_key)
+                if any(
+                    status_by_key.get(dep) in {
+                        DeploymentStatusChoices.FAILED,
+                        DeploymentStatusChoices.ROLLED_BACK,
+                        DeploymentStatusChoices.CANCELLED,
+                    }
+                    for dep in spec.dependencies
+                ):
+                    StateManager.transition_deploy(
+                        binding.deploy.pk,
+                        DeploymentStatusChoices.CANCELLED,
+                        update_fields={
+                            "stage": "cancelled",
+                            "progress": 100,
+                            "status_message": "Service was not started because a dependency became unavailable.",
+                        },
+                    )
+                    status_by_key[binding.service_key] = DeploymentStatusChoices.CANCELLED
+
+            failed = [
+                b for b in bindings
+                if required.get(b.service_key, True)
+                and b.deploy.status in {
+                    DeploymentStatusChoices.FAILED,
+                    DeploymentStatusChoices.ROLLED_BACK,
+                    DeploymentStatusChoices.CANCELLED,
+                }
+            ]
             if locked.cancel_requested:
-                active = [b for b in bindings if b.deploy.status in {DeploymentStatusChoices.PENDING, DeploymentStatusChoices.RUNNING, DeploymentStatusChoices.ROLLING_BACK}]
+                active = [
+                    b for b in bindings
+                    if b.deploy.status in {
+                        DeploymentStatusChoices.PENDING,
+                        DeploymentStatusChoices.RUNNING,
+                        DeploymentStatusChoices.ROLLING_BACK,
+                    }
+                ]
                 if not active:
                     locked.status = ApplicationStatus.CANCELLED
                     locked.stage = "cancelled"
@@ -200,21 +216,42 @@ class ApplicationStackExecutor:
             if failed:
                 first = failed[0]
                 message = first.deploy.error_message or first.deploy.status_message or "Service deployment did not complete."
-                downstream = [b.service_key for b in bindings if b.deploy.status == DeploymentStatusChoices.PENDING]
-                if downstream:
-                    message += " Dependent services were not started: " + ", ".join(sorted(downstream)) + "."
                 locked.status = ApplicationStatus.FAILED
                 locked.stage = "service_failed"
                 locked.error_code = "APPLICATION_SERVICE_DEPLOYMENT_FAILED"
                 locked.error_message = f"{first.service_key}: {message}"
                 locked.save(update_fields=["status", "stage", "error_code", "error_message", "updated_at"])
                 for binding in bindings:
-                    if binding.deploy.status == DeploymentStatusChoices.RUNNING:
+                    if binding.deploy.status == DeploymentStatusChoices.PENDING:
+                        StateManager.transition_deploy(
+                            binding.deploy.pk,
+                            DeploymentStatusChoices.CANCELLED,
+                            update_fields={
+                                "stage": "cancelled",
+                                "progress": 100,
+                                "status_message": "Service was not started because a required application service failed.",
+                            },
+                        )
+                    elif binding.deploy.status in {
+                        DeploymentStatusChoices.RUNNING,
+                        DeploymentStatusChoices.ROLLING_BACK,
+                    }:
                         binding.deploy.cancel_requested = True
                         binding.deploy.save(update_fields=["cancel_requested", "updated_at"])
                 return True
             required_bindings = [b for b in bindings if required.get(b.service_key, True)]
-            if required_bindings and all(b.deploy.status == DeploymentStatusChoices.SUCCEEDED for b in required_bindings):
+            all_terminal = all(
+                b.deploy.status in {
+                    DeploymentStatusChoices.SUCCEEDED,
+                    DeploymentStatusChoices.FAILED,
+                    DeploymentStatusChoices.ROLLED_BACK,
+                    DeploymentStatusChoices.CANCELLED,
+                }
+                for b in bindings
+            )
+            if required_bindings and all_terminal and all(
+                b.deploy.status == DeploymentStatusChoices.SUCCEEDED for b in required_bindings
+            ):
                 locked.status = ApplicationStatus.RUNNING
                 locked.stage = "application_ready"
                 locked.error_code = ""

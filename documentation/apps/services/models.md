@@ -86,3 +86,8 @@ ShellSession and ShellAuditEvent store restricted shell capability/audit state. 
 Foreign-key cascades remove subordinate durable state according to the declarations above. Signals coordinate runtime cleanup for Services/Volumes/PrivateNetworks. Runtime resources are not the Service database source of truth.
 
 Source: src/services/models.py.
+
+
+## Catalog-managed Services
+
+A `Service` with `source_kind=catalog` remains a normal mutable desired-state object, but its execution ownership is constrained by `ApplicationInstanceService`. Catalog-owned plan, network and provenance metadata cannot be changed independently, and direct deletion is rejected while the application binding exists. Mutable runtime configuration still flows through the normal `ServiceRevision -> Deploy` pipeline.

@@ -120,9 +120,16 @@ class Service(BaseModel):
             old = (
                 type(self).objects
                 .filter(pk=self.pk)
-                .values("plan_id", "status")
+                .values("plan_id", "status", "network_id", "source_kind", "source_config")
                 .first()
             )
+            if old and old["source_kind"] == self.SourceKind.CATALOG:
+                if old["plan_id"] != self.plan_id or old["network_id"] != self.network_id or old["source_kind"] != self.source_kind:
+                    raise ValidationError("Catalog-managed Service execution ownership cannot be changed independently of its application.")
+                old_source = dict(old["source_config"] or {})
+                new_source = dict(self.source_config or {})
+                if old_source != new_source:
+                    raise ValidationError("Catalog-managed Service provenance is immutable.")
             transitional = {"queued", "deploying", "stopping"}
             if old and old["plan_id"] != self.plan_id and str(old["status"] or "").lower() in transitional:
                 raise ValidationError(

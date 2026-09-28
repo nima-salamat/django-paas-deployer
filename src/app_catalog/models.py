@@ -54,13 +54,29 @@ class ApplicationInstance(models.Model):
         ]
         ordering = ("-created_at",)
 
+    def save(self, *args, **kwargs):
+        if self.pk and not self._state.adding:
+            old = type(self).objects.filter(pk=self.pk).values(
+                "catalog_id", "definition_version", "software_version",
+                "variant_id", "definition_snapshot",
+            ).first()
+            if old and any([
+                old["catalog_id"] != self.catalog_id,
+                old["definition_version"] != self.definition_version,
+                old["software_version"] != self.software_version,
+                old["variant_id"] != self.variant_id,
+                old["definition_snapshot"] != self.definition_snapshot,
+            ]):
+                raise ValueError("Installed application intent is immutable after creation.")
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.name} ({self.catalog_id})"
 
 
 class ApplicationInstanceService(models.Model):
     instance = models.ForeignKey(ApplicationInstance, on_delete=models.CASCADE, related_name="services")
-    service = models.OneToOneField(Service, on_delete=models.CASCADE, related_name="application_binding")
+    service = models.OneToOneField(Service, on_delete=models.PROTECT, related_name="application_binding")
     deploy = models.OneToOneField(
         "deploy.Deploy",
         on_delete=models.CASCADE,
