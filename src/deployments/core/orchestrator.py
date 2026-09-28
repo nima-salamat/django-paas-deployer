@@ -623,7 +623,6 @@ class DeploymentOrchestrator:
         for service_name in remove_services:
             try:
                 runtime.remove(service_name)
-                rollback_performed = True
                 self.logger.warning(
                     "rollback",
                     "Removed newly created failed Swarm process service.",
