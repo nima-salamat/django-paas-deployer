@@ -213,6 +213,15 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             _validate_replicas(2)
 
     @override_settings(DEPLOYMENT_DOMAIN="deploy.echonode.website")
+    def test_legacy_port_without_endpoint_gets_public_route_and_proxy_network(self):
+        config = _config(public_host=None, endpoints=[])
+        spec = compile_compose_service(config, image_ref="demo:r1")
+        service = spec["services"]["demo"]
+        labels = service["deploy"]["labels"]
+        self.assertEqual(labels["traefik.http.routers.demo-http.rule"], "Host(`demo.deploy.echonode.website`)")
+        self.assertIn("proxy_net", service["networks"])
+
+    @override_settings(DEPLOYMENT_DOMAIN="deploy.echonode.website")
     def test_legacy_public_endpoint_uses_same_host_and_web_entrypoint(self):
         config = _config(
             public_host=None,
