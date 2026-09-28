@@ -607,12 +607,12 @@ class SwarmRuntime:
         update_status = attrs.get("UpdateStatus") or {}
         mode = spec.get("Mode") or {}
         replicas = int((mode.get("Replicated") or {}).get("Replicas") or 0)
+        tasks = self._task_states(service)
         running = sum(
-            1 for task in self._task_states(service)
+            1 for task in tasks
             if task.state.lower() == "running"
             and task.desired_state.lower() == "running"
         )
-        tasks = self._task_states(service)
         return SwarmServiceState(
             name=str(service.name),
             service_id=str(service.id),
@@ -1153,6 +1153,7 @@ class SwarmRuntime:
             image_ref=image_ref,
             compose_spec=spec,
         )
+        expected_image = None
         try:
             service = self.client.services.get(service_name)
             service.reload()
@@ -1160,9 +1161,29 @@ class SwarmRuntime:
                 image=image_ref,
                 **{key: value for key, value in kwargs.items() if key != "name"},
             )
+            service.reload()
+            expected_image = (
+                str(
+                    (
+                        ((service.attrs or {}).get("Spec") or {})
+                        .get("TaskTemplate") or {}
+                    )
+                    .get("ContainerSpec") or {}
+                ).get("Image") or ""
+            ).strip() or None
         except docker.errors.NotFound:
             try:
                 service = self.client.services.create(image_ref, **kwargs)
+                service.reload()
+                expected_image = (
+                    str(
+                        (
+                            ((service.attrs or {}).get("Spec") or {})
+                            .get("TaskTemplate") or {}
+                        )
+                        .get("ContainerSpec") or {}
+                    ).get("Image") or ""
+                ).strip() or None
             except docker.errors.APIError as exc:
                 raise DeploymentError(
                     f"Unable to create Swarm service {service_name!r}: {exc}",
@@ -1177,7 +1198,11 @@ class SwarmRuntime:
                 code="SWARM_SERVICE_UPDATE_FAILED",
                 recoverable=True,
             ) from exc
-        return self.wait_ready(service_name, timeout=180)
+        return self.wait_ready(
+            service_name,
+            timeout=180,
+            expected_image=expected_image,
+        )
 
     def apply(self, config, *, image_ref: str) -> SwarmServiceState:
         self.assert_active()
