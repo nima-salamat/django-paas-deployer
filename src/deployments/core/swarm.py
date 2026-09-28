@@ -19,6 +19,7 @@ from django.utils import timezone
 
 from deployments.common.exceptions import DeploymentError
 from deployments.core.manager.client_manager import get_docker_client
+from deployments.core.routing import resolve_public_host
 
 
 @dataclass(frozen=True)
@@ -244,7 +245,7 @@ def _service_labels(config) -> dict[str, str]:
             f"{config.name}-{endpoint.name}".lower(),
         ).strip("-")[:50]
         tick = chr(96)
-        host = endpoint.hostname or config.public_host or ""
+        host = resolve_public_host(config, endpoint)
         rule = f"Host({tick}{host}{tick})" if host else ""
         if endpoint.path:
             path_rule = f"PathPrefix({tick}{endpoint.path}{tick})"
@@ -1498,7 +1499,12 @@ class SwarmRuntime:
             return container.stats() or {}
 
     @staticmethod
-    def _cpu_percent(first: dict[str, Any], second: dict[str, Any]) -> float | None:
+    def _cpu_percent(
+        first: dict[str, Any],
+        second: dict[str, Any],
+        *,
+        cpu_limit_cores: float | None = None,
+    ) -> float | None:
         first_cpu = (first.get("cpu_stats") or {})
         second_cpu = (second.get("cpu_stats") or {})
         first_total = float((first_cpu.get("cpu_usage") or {}).get("total_usage") or 0)
@@ -1515,13 +1521,20 @@ class SwarmRuntime:
                 len(((second_cpu.get("cpu_usage") or {}).get("percpu_usage") or []))
                 or 1
             )
-        return round((cpu_delta / system_delta) * online * 100.0, 2)
+        used_cores = (cpu_delta / system_delta) * online
+        if cpu_limit_cores is not None and cpu_limit_cores > 0:
+            return round((used_cores / cpu_limit_cores) * 100.0, 2)
+        return round((used_cores / online) * 100.0, 2)
 
     @staticmethod
-    def _memory_percent(sample: dict[str, Any]) -> float | None:
+    def _memory_percent(
+        sample: dict[str, Any],
+        *,
+        memory_limit_bytes: float | None = None,
+    ) -> float | None:
         memory = sample.get("memory_stats") or {}
         used = float(memory.get("usage") or 0)
-        limit = float(memory.get("limit") or 0)
+        limit = float(memory_limit_bytes or memory.get("limit") or 0)
         if used < 0 or limit <= 0:
             return None
         # cgroup v2 can expose cache separately; usage is still the
@@ -1561,8 +1574,32 @@ class SwarmRuntime:
             first = self._container_stats_sample(container)
             time.sleep(0.25)
             second = self._container_stats_sample(container)
-            result["cpu"] = self._cpu_percent(first, second)
-            result["memory"] = self._memory_percent(second)
+            host_config = (getattr(container, "attrs", {}) or {}).get("HostConfig", {}) or {}
+            cpu_limit_cores = None
+            try:
+                nano_cpus = float(host_config.get("NanoCpus") or 0)
+                if nano_cpus > 0:
+                    cpu_limit_cores = nano_cpus / 1_000_000_000.0
+                else:
+                    cpu_quota = float(host_config.get("CpuQuota") or 0)
+                    cpu_period = float(host_config.get("CpuPeriod") or 0)
+                    if cpu_quota > 0 and cpu_period > 0:
+                        cpu_limit_cores = cpu_quota / cpu_period
+            except (TypeError, ValueError):
+                cpu_limit_cores = None
+            memory_limit_bytes = None
+            try:
+                configured_memory = float(host_config.get("Memory") or 0)
+                if configured_memory > 0:
+                    memory_limit_bytes = configured_memory
+            except (TypeError, ValueError):
+                memory_limit_bytes = None
+            result["cpu"] = self._cpu_percent(
+                first, second, cpu_limit_cores=cpu_limit_cores
+            )
+            result["memory"] = self._memory_percent(
+                second, memory_limit_bytes=memory_limit_bytes
+            )
             result["metrics_available"] = (
                 result["cpu"] is not None or result["memory"] is not None
             )
@@ -1575,7 +1612,7 @@ class SwarmRuntime:
     def service_logs(self, name: str, *, tail: int | str = 200):
         try:
             raw = self.client.services.get(_validate_service_name(name)).logs(
-                stdout=True, stderr=True, timestamps=True, tail=tail
+                stdout=True, stderr=True, timestamps=True, tail=tail, stream=False
             )
         except docker.errors.NotFound:
             return b""
