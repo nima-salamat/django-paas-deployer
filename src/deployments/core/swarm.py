@@ -1479,6 +1479,46 @@ class SwarmRuntime:
                 continue
         return None
 
+    @staticmethod
+    def _container_stats_sample(container) -> dict[str, Any]:
+        """Read one non-streaming Docker stats sample."""
+        try:
+            return container.stats(stream=False) or {}
+        except TypeError:
+            # Some SDK/container test doubles do not accept stream=False.
+            return container.stats() or {}
+
+    @staticmethod
+    def _cpu_percent(first: dict[str, Any], second: dict[str, Any]) -> float | None:
+        first_cpu = (first.get("cpu_stats") or {})
+        second_cpu = (second.get("cpu_stats") or {})
+        first_total = float((first_cpu.get("cpu_usage") or {}).get("total_usage") or 0)
+        second_total = float((second_cpu.get("cpu_usage") or {}).get("total_usage") or 0)
+        first_system = float(first_cpu.get("system_cpu_usage") or 0)
+        second_system = float(second_cpu.get("system_cpu_usage") or 0)
+        cpu_delta = second_total - first_total
+        system_delta = second_system - first_system
+        if cpu_delta < 0 or system_delta <= 0:
+            return None
+        online = float(second_cpu.get("online_cpus") or 0)
+        if online <= 0:
+            online = float(
+                len(((second_cpu.get("cpu_usage") or {}).get("percpu_usage") or []))
+                or 1
+            )
+        return round((cpu_delta / system_delta) * online * 100.0, 2)
+
+    @staticmethod
+    def _memory_percent(sample: dict[str, Any]) -> float | None:
+        memory = sample.get("memory_stats") or {}
+        used = float(memory.get("usage") or 0)
+        limit = float(memory.get("limit") or 0)
+        if used < 0 or limit <= 0:
+            return None
+        # cgroup v2 can expose cache separately; usage is still the
+        # container's accounted memory and is the stable user-facing metric.
+        return round((used / limit) * 100.0, 2)
+
     def service_stats(self, name: str) -> dict[str, Any]:
         state = self.inspect_service(name)
         result: dict[str, Any] = {
@@ -1487,32 +1527,40 @@ class SwarmRuntime:
             "replicas_desired": state.replicas_desired if state else 0,
             "replicas_running": state.replicas_running if state else 0,
             "tasks": [task.__dict__ for task in (state.tasks if state else ())],
-            "cpu": 0.0,
-            "memory": 0.0,
+            "cpu": None,
+            "memory": None,
+            "metrics_available": False,
+            "metrics_reason": None,
         }
+        if state is None:
+            result["metrics_reason"] = "service_not_found"
+            return result
+
         container = None
         try:
             container = self.primary_task_container(name)
-        except Exception:
-            container = None
-        if container is not None:
-            try:
-                stats = container.stats(stream=False) or {}
-                cpu_stats = stats.get("cpu_stats") or {}
-                precpu = stats.get("precpu_stats") or {}
-                cpu_delta = float((cpu_stats.get("cpu_usage") or {}).get("total_usage") or 0)
-                precpu_delta = float((precpu.get("cpu_usage") or {}).get("total_usage") or 0)
-                system_delta = float((cpu_stats.get("system_cpu_usage") or 0) - (precpu.get("system_cpu_usage") or 0))
-                online_cpus = float(cpu_stats.get("online_cpus") or 1)
-                if cpu_delta > 0 and system_delta > 0:
-                    result["cpu"] = round((cpu_delta / system_delta) * online_cpus * 100.0, 2)
-                memory = stats.get("memory_stats") or {}
-                used = float(memory.get("usage") or 0)
-                limit = float(memory.get("limit") or 0)
-                if limit > 0:
-                    result["memory"] = round((used / limit) * 100.0, 2)
-            except Exception:
-                pass
+        except Exception as exc:
+            result["metrics_reason"] = f"container_lookup_failed: {exc}"
+        if container is None:
+            if not result["metrics_reason"]:
+                result["metrics_reason"] = "task_container_not_available_on_this_docker_node"
+            return result
+
+        try:
+            # One sample often has zero CPU delta. Two samples make CPU
+            # measurement deterministic for short-lived API requests.
+            first = self._container_stats_sample(container)
+            time.sleep(0.25)
+            second = self._container_stats_sample(container)
+            result["cpu"] = self._cpu_percent(first, second)
+            result["memory"] = self._memory_percent(second)
+            result["metrics_available"] = (
+                result["cpu"] is not None or result["memory"] is not None
+            )
+            if not result["metrics_available"]:
+                result["metrics_reason"] = "docker_stats_returned_no_usable_counters"
+        except Exception as exc:
+            result["metrics_reason"] = f"docker_stats_failed: {exc}"
         return result
 
     def service_logs(self, name: str, *, tail: int | str = 200):
