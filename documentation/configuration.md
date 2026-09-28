@@ -46,7 +46,18 @@ Build-scoped secrets are currently rejected because the build backend does not p
 
 `VOLUME_USAGE_WARNING_PERCENT` is an operator-only threshold for real Docker volume usage warnings. The default is 90%. It controls observability only; it does not enable a filesystem quota.
 
+This installation currently supports the Docker `local` volume backend for managed tenant volumes. The backend is platform-controlled; tenant deployment configuration cannot inject arbitrary Docker driver names or `driver_opts`. The runtime carries `driver=local` through the VolumeSpec into Docker provisioning. A future non-local backend must add an explicit operator-controlled backend definition before it is enabled.
+
 `Volume.size_mb` is the logical allocation used by Service/Plan quota checks. The default Docker `local` backend is reported as LOGICAL_ONLY because this installation does not configure a verified per-volume hard-quota mechanism.
+
+Volume lifecycle is explicit:
+**DETACH** clears mount metadata but keeps Service ownership and therefore keeps logical quota charged.
+**RELEASE** clears Service ownership and frees logical quota, but intentionally retains the physical Docker volume for a bounded retention period.
+**DELETE / RECLAIM** removes the physical Docker volume and then removes the registry row.
+
+The operator setting `volume_release_retention_days` defaults to 30 days. A Celery reclaim task runs hourly and reclaims expired released volumes. Reclaim checks the managed-volume ownership label and verifies Docker deletion before deleting the registry row. A reclaim failure leaves the registry row in place with `reclaim_error`, so physical storage cannot silently disappear from accounting.
+
+The platform exposes deployment-time usage inspection and warnings; this is not continuous tenant storage monitoring. Reconciliation separately classifies active tenant storage, retained released storage, orphan storage, and unknown/unaccounted storage.
 
 ## Base runtime images
 
