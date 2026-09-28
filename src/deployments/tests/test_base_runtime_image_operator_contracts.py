@@ -160,3 +160,67 @@ def test_migration_handles_legacy_php_rows_without_deleting_docker_images():
     assert "docker_image_preserved" in migration
     assert "safe_to_remove_after_release" in migration
     assert "BaseRuntimeImageLease" in migration
+
+def test_active_base_build_coalesces_repeated_renew_requests(db, monkeypatch):
+    from django.test import TestCase
+
+    # Kept as a standalone behavioral contract; database setup is provided by
+    # the repository's standard test runner.
+    row = BaseRuntimeImage.objects.create(
+        logical_runtime="php", runtime_version="8.4", variant="apache",
+        architecture="", docker_host="test-daemon",
+        source_image="docker.io/php:8.4-apache",
+        image_repository="paas-base/php-apache", image_tag="8.4-r1",
+        image_ref="paas-base/php-apache:8.4-r1",
+        status=BaseRuntimeImage.Status.BUILDING, enabled=True, auto_build=True,
+        build_task_id="owner-task", build_started_at=timezone.now(),
+    )
+    result = __import__("deploy.base_images", fromlist=["request_base_runtime_image_build"]).request_base_runtime_image_build(
+        row.pk, force_rebuild=True
+    )
+    row.refresh_from_db()
+    assert result["coalesced"] is True
+    assert result["waiting"] is True
+    assert result["rebuild_requested"] is True
+    assert row.build_task_id == "owner-task"
+    assert row.status == BaseRuntimeImage.Status.BUILDING
+
+
+def test_wagtail_listing_hook_returns_build_and_renew_for_operator():
+    from deploy.wagtail_hooks import base_runtime_image_listing_buttons
+
+    class User:
+        is_staff = True
+        is_superuser = False
+        def has_perm(self, name):
+            return name == "deploy.change_baseruntimeimage"
+
+    row = BaseRuntimeImage(
+        logical_runtime="php", runtime_version="8.4", variant="apache",
+        architecture="", docker_host="test-daemon",
+        source_image="docker.io/php:8.4-apache",
+        image_repository="paas-base/php-apache", image_tag="8.4-r1",
+        image_ref="paas-base/php-apache:8.4-r1",
+    )
+    buttons = list(base_runtime_image_listing_buttons(row, User(), "/admin/snippets/deploy/base-runtime-images/"))
+    labels = [button.label for button in buttons]
+    assert labels == ["Build / Ensure available", "Renew / Rebuild"]
+
+
+def test_wagtail_listing_hook_hides_infrastructure_actions_from_non_operator():
+    from deploy.wagtail_hooks import base_runtime_image_listing_buttons
+
+    class User:
+        is_staff = False
+        is_superuser = False
+        def has_perm(self, name):
+            return False
+
+    row = BaseRuntimeImage(
+        logical_runtime="php", runtime_version="8.4", variant="apache",
+        architecture="", docker_host="test-daemon",
+        source_image="docker.io/php:8.4-apache",
+        image_repository="paas-base/php-apache", image_tag="8.4-r1",
+        image_ref="paas-base/php-apache:8.4-r1",
+    )
+    assert list(base_runtime_image_listing_buttons(row, User())) == []
