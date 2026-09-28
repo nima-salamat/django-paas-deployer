@@ -25,6 +25,25 @@ def register_base_runtime_image_control_urls():
     ]
 
 
+@hooks.register("before_delete_snippet")
+def protect_base_runtime_image_delete(request, instances):
+    """Do not delete a base-image registry row while it is actively needed."""
+    from django.http import HttpResponseBadRequest
+
+    base_rows = [item for item in instances if isinstance(item, BaseRuntimeImage)]
+    blocked = []
+    for row in base_rows:
+        if row.status == BaseRuntimeImage.Status.BUILDING or row.build_task_id:
+            blocked.append(f"{row.image_ref}: active build")
+            continue
+        if row.leases.filter(released_at__isnull=True).exists():
+            blocked.append(f"{row.image_ref}: active deployment lease")
+    if blocked:
+        return HttpResponseBadRequest(
+            "Cannot delete active base runtime image rows: " + "; ".join(blocked)
+        )
+    return None
+
 @hooks.register("register_snippet_listing_buttons")
 def base_runtime_image_listing_buttons(snippet, user, next_url=None):
     if not isinstance(snippet, BaseRuntimeImage):
