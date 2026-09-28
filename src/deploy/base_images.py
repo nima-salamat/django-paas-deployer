@@ -437,6 +437,27 @@ def _local_image_matches_fingerprint(image_ref: str, fingerprint: str) -> bool:
     except Exception:
         return False
 
+
+def _can_use_compatible_local_base_image(
+    row: BaseRuntimeImage,
+    fingerprint: str,
+    *,
+    local_exists: bool,
+    local_compatible: bool,
+) -> bool:
+    """Allow a valid local base image even while a same-definition renewal is pending.
+
+    ``BUILDING`` and ``rebuild_requested`` describe the registry lifecycle, not
+    the usability of an already-built image. A service deployment may safely use
+    the local image when its operator definition fingerprint matches. An active
+    renewal can continue in the background, while stale/gapped worker state no
+    longer blocks unrelated application deployments.
+    """
+    return bool(
+        local_exists
+        and local_compatible
+        and row.definition_fingerprint == fingerprint
+    )
 def request_base_runtime_image_build(
     base_image_id,
     *,
@@ -1033,26 +1054,47 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                 ])
 
             local_exists = _docker_image_exists(row.image_ref)
-            local_compatible = False
-            if not row.rebuild_requested and local_exists:
-                try:
-                    local_image = get_docker_client().images.get(row.image_ref)
-                    labels = ((getattr(local_image, "attrs", {}) or {}).get("Config") or {}).get("Labels") or {}
-                    local_compatible = labels.get("io.passdeployer.base-definition") == fingerprint
-                except Exception:
-                    local_compatible = False
+            local_compatible = (
+                local_exists
+                and _local_image_matches_fingerprint(row.image_ref, fingerprint)
+            )
 
             if (
                 policy["auto_register_existing"]
-                and row.status != BaseRuntimeImage.Status.BUILDING
-                and local_compatible
-                and row.definition_fingerprint == fingerprint
-                and _mark_local_image_ready(row, expected_fingerprint=fingerprint)
+                and _can_use_compatible_local_base_image(
+                    row,
+                    fingerprint,
+                    local_exists=local_exists,
+                    local_compatible=local_compatible,
+                )
             ):
+                # A matching local image is already a valid artifact. Do not
+                # let BUILDING/rebuild_requested registry state block an
+                # application deployment; an active operator renewal may keep
+                # running independently, and stale state can no longer create
+                # a false "wait for shared build" dependency.
+                if row.status != BaseRuntimeImage.Status.BUILDING:
+                    _mark_local_image_ready(row, expected_fingerprint=fingerprint)
                 result[logical_key(spec)] = row.image_ref
                 if deployment_id:
                     acquire_base_image_leases([row.image_ref], deployment_id)
                 if logger_sink:
+                    logger_sink.info(
+                        "base_image",
+                        f"Using compatible local base image {row.image_ref}.",
+                        progress=18,
+                        details={
+                            "image": row.image_ref,
+                            "runtime": key,
+                            "cache": "compatible-local",
+                            "definition_fingerprint": fingerprint,
+                            "registry_status": row.status,
+                            "rebuild_requested": bool(row.rebuild_requested),
+                            "background_build_task_id": str(row.build_task_id or ""),
+                        },
+                    )
+                continue
+            if logger_sink:
                     logger_sink.info(
                         "base_image",
                         f"Registered compatible local base image {row.image_ref}.",
