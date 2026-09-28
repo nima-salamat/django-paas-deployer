@@ -248,7 +248,10 @@ def build_slot_lease_seconds() -> int:
 
 
 def deploy_timeout_minutes() -> int:
-    return max(1, min(int(_wagtail_core_value("deploy_timeout_minutes", get_int("deploy.max_time_minute", 10))), 1440))
+    value = _wagtail_core_value("deploy_timeout_minutes", None)
+    if value is None:
+        value = get_int("deploy.max_time_minute", 10)
+    return max(1, min(int(value), 1440))
 
 
 def queued_timeout_minutes() -> int:
