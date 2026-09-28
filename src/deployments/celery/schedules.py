@@ -21,6 +21,7 @@ from deploy.models import (
     BaseRuntimeImage,
 )
 from services.models import Service
+from services.lifecycle.authority import get_authoritative_deploy
 from services.revisioning import ensure_revision_for_deploy, get_active_deploy
 
 from .monitoring.policies import ACTIVE_DEPLOY_STATUSES, ACTIVE_SERVICE_STATUSES, runtime_policies
@@ -361,7 +362,7 @@ def _recover_stale_running_deploys(policies) -> None:
                     except Exception:
                         logger.exception("Could not materialize revision for stale deployment %s", locked.pk)
                         continue
-                    current_active = get_active_deploy(service)
+                    current_active = get_authoritative_deploy(service)
                     current_selected = current_active.pk if current_active else None
                     if current_selected != locked.pk:
                         expected_previous = locked.previous_deploy_id
@@ -752,7 +753,7 @@ def _reconcile_desired_state(service: Service) -> bool:
                     logger.exception("Could not queue Swarm stop reconciliation for service %s", service.pk)
             return False
         if desired == "running" and not running and service.status not in ACTIVE_SERVICE_STATUSES:
-            revision_deploy = get_active_deploy(service)
+            revision_deploy = get_authoritative_deploy(service)
             if revision_deploy and revision_deploy.status in {
                 DeploymentStatusChoices.SUCCEEDED,
                 DeploymentStatusChoices.FAILED,
