@@ -46,6 +46,7 @@ from .manager.network_manager import Network
 from .platform_bridge import enrich_config_from_project, extract_zip_to_temp
 from .rollback import ContainerSnapshot, RollbackManager
 from .types import DeploymentConfig, DeploymentResult, EventSink, EndpointSpec
+from .routing import resolve_public_host
 from .validation import DeploymentValidator
 from .volumes import VolumeMountManager
 from .swarm import SwarmRuntime, swarm_enabled
@@ -1074,19 +1075,18 @@ class DeploymentOrchestrator:
                 continue
             router = f"{config.name}-ep-{index}-{endpoint.name}".replace("_", "-")
             safe_router = "".join(ch if ch.isalnum() or ch == "-" else "-" for ch in router).lower()
-            hostname = endpoint.hostname or config.public_host or ""
+            hostname = resolve_public_host(config, endpoint)
             if not hostname:
                 continue
             rule = f"Host(`{hostname}`)"
             if endpoint.path:
                 rule += f" && PathPrefix(`{endpoint.path}`)"
             labels[f"traefik.http.routers.{safe_router}.rule"] = rule
-            entrypoint = "websecure" if endpoint.protocol == "https" or endpoint.tls else "web"
-            labels[f"traefik.http.routers.{safe_router}.entrypoints"] = entrypoint
+            # Host Nginx terminates public TLS before forwarding to Traefik.
+            # The compose stack exposes only Traefik's web entrypoint.
+            labels[f"traefik.http.routers.{safe_router}.entrypoints"] = "web"
             labels[f"traefik.http.routers.{safe_router}.service"] = safe_router
             labels[f"traefik.http.routers.{safe_router}.priority"] = str(priority + index)
-            if endpoint.protocol == "https" or endpoint.tls:
-                labels[f"traefik.http.routers.{safe_router}.tls"] = "true"
             labels[f"traefik.http.services.{safe_router}.loadbalancer.server.port"] = str(endpoint.target_port)
             health_path = endpoint.metadata.get("healthcheck_path")
             if health_path:
