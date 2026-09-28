@@ -458,6 +458,8 @@ def _can_use_compatible_local_base_image(
         and local_compatible
         and row.definition_fingerprint == fingerprint
     )
+
+
 def request_base_runtime_image_build(
     base_image_id,
     *,
