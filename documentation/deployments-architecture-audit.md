@@ -896,4 +896,10 @@ PHP has one canonical active runtime identity, `variant=apache`, with repository
 A compatible READY base image is reused only when its definition fingerprint matches the current operator-owned definition. A missing or incompatible image has a single DB owner. Other deployments emit a `base_image` wait event and wait on the same registry row rather than dispatching duplicate builds. A Renew operation while BUILDING sets `rebuild_requested`; it does not replace the active task owner.
 
 Deployment timing is phase-based. `base_image_wait_started_at` owns the dedicated base-image budget, while `application_started_at` starts a fresh application budget after base-image resolution completes. The monitor and synchronous worker use the same phase-deadline helper.
+### Managed volume lifecycle and storage accounting
 
+Managed tenant volumes currently use the Docker `local` backend only. The deployment pipeline passes that backend through `VolumeSpec`; tenant configuration is not allowed to inject Docker driver options. Because the local backend has no verified hard per-volume quota, `size_mb` remains logical quota metadata and actual usage is measured separately through Docker usage inspection.
+
+Volume lifecycle is intentionally split into DETACH, RELEASE, and DELETE/RECLAIM. DETACH removes mount metadata but preserves Service ownership and quota. RELEASE removes Service ownership and frees logical quota while retaining the Docker volume for the operator-configured retention period. DELETE/RECLAIM physically removes the Docker volume before the registry row is deleted. Expired released volumes are reclaimed hourly; failures keep the registry row and record the error.
+
+Reconciliation distinguishes active tenant storage, released retained storage, orphan storage, and unknown storage on the connected Docker daemon. This is a per-daemon physical-storage view, not a cluster-wide storage accounting service. Usage warnings occur during deployment-time inspection; there is no claim of continuous tenant filesystem monitoring.
