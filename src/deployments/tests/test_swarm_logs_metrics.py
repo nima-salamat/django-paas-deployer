@@ -83,6 +83,11 @@ class SwarmLogAndMetricsTests(unittest.TestCase):
         self.assertIn(b"hello", raw)
         self.assertNotIn(b"generator object", raw)
 
+    def test_cpu_percent_can_report_percentage_of_swarm_cpu_limit(self):
+        first = {"cpu_stats": {"cpu_usage": {"total_usage": 100}, "system_cpu_usage": 1000, "online_cpus": 4}}
+        second = {"cpu_stats": {"cpu_usage": {"total_usage": 300}, "system_cpu_usage": 2000, "online_cpus": 4}}
+        self.assertEqual(SwarmRuntime._cpu_percent(first, second, cpu_limit_cores=1.0), 80.0)
+
     def test_cpu_percent_uses_two_samples(self):
         first = {
             "cpu_stats": {
