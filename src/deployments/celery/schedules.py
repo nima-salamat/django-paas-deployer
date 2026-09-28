@@ -71,7 +71,10 @@ def _swarm_has_terminal_runtime_failure(state) -> bool:
         if str(getattr(task, "desired_state", "") or "").lower() == "running"
     ]
     if not desired:
-        return state.replicas_desired == 0
+        # A desired-one service with no desired-running task has no active
+        # restart candidate left. Treat that as terminal; a real restart loop
+        # will expose its newly-created task in one of the transient states.
+        return state.replicas_desired > 0
 
     if any(
         str(getattr(task, "state", "") or "").lower() in SWARM_TRANSIENT_TASK_STATES
