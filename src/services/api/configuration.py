@@ -768,10 +768,20 @@ class ServiceRevisionRollbackAPIView(ServiceConfigBaseAPIView):
                 previous_deploy_id=current,
             )
             now = __import__("django.utils.timezone", fromlist=["now"]).now()
+            from services.lifecycle import bump_lifecycle
+            lifecycle_generation = bump_lifecycle(service.pk, desired_state="running")
+            service.desired_state = "running"
+            service.lifecycle_generation = lifecycle_generation
+
             StateManager.transition_service(
                 service.pk,
                 SERVICE_STATUS_CHOICES.QUEUED,
-                update_fields={"task_id": None, "deploy_started": now},
+                update_fields={
+                    "task_id": None,
+                    "deploy_started": now,
+                    "desired_state": "running",
+                    "lifecycle_generation": lifecycle_generation,
+                },
             )
             StateManager.transition_deploy(
                 deploy.pk,
