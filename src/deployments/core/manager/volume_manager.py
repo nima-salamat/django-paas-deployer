@@ -80,7 +80,8 @@ class Volume(Client):
                 info = _C().client.info()
             except Exception:
                 pass
-            root = (info or {}).get("DockerRootDir") or "/var/lib/docker"
+            configured_root = os.environ.get("DOCKER_HOST_STORAGE_PATH", "").strip()
+            root = configured_root or (info or {}).get("DockerRootDir") or "/var/lib/docker"
             usage = shutil.disk_usage(root)
             free_mb = usage.free // (1024 * 1024)
             if required_mb is None or required_mb <= 0:
@@ -88,7 +89,11 @@ class Volume(Client):
             needed = int(required_mb) + _MIN_FREE_AFTER_MB
             return free_mb >= needed, free_mb
         except Exception as exc:
-            logger.warning("Host disk-space check failed: %s", exc)
+            logger.warning(
+                "Host disk-space check failed for Docker storage path '%s': %s",
+                root if "root" in locals() else "<unresolved>",
+                exc,
+            )
             # Storage safety cannot be proven when the Docker root filesystem
             # cannot be inspected. Do not silently proceed with a persistent
             # volume whose host capacity is unknown.
