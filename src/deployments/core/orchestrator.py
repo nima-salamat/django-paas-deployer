@@ -37,6 +37,8 @@ from deployments.common.exceptions import (
     RollbackError,
     to_deployment_error,
 )
+import docker
+
 from .health import DockerHealthChecker
 from .manager.container_manager import Container
 from .manager.image_manager import Image
@@ -735,7 +737,59 @@ class DeploymentOrchestrator:
         if renamed_old_name:
             self._cleanup_old_container(renamed_old_name, config.stop_timeout)
 
-        if snapshot.image_ref:
+        if swarm_enabled():
+            # Swarm owns rollback of an updated service. On a first deploy there
+            # is no previous service revision, so remove the failed service
+            # instead of pretending a legacy container rollback is possible.
+            try:
+                runtime = SwarmRuntime()
+                service_name = config.name
+                service = runtime.client.services.get(service_name)
+                if snapshot.image_ref:
+                    self.logger.warning(
+                        "rollback",
+                        "Swarm deployment failed; requesting Swarm service rollback.",
+                        progress=96,
+                        details={"service": service_name},
+                    )
+                    try:
+                        service.rollback()
+                        rollback_performed = True
+                    except Exception as rollback_exc:
+                        rollback_failed = True
+                        self.logger.error(
+                            "rollback",
+                            f"Swarm service rollback failed: {rollback_exc}",
+                            progress=99,
+                            details={
+                                "service": service_name,
+                                "error": str(rollback_exc),
+                            },
+                        )
+                else:
+                    self.logger.warning(
+                        "rollback",
+                        "Removing failed first-deploy Swarm service.",
+                        progress=96,
+                        details={"service": service_name},
+                    )
+                    service.remove()
+                    rollback_performed = True
+            except docker.errors.NotFound:
+                self.logger.info(
+                    "rollback",
+                    "Failed Swarm service was already absent; no rollback cleanup was required.",
+                    progress=96,
+                )
+            except Exception as rollback_exc:
+                rollback_failed = True
+                self.logger.error(
+                    "rollback",
+                    f"Swarm failure recovery could not be completed: {rollback_exc}",
+                    progress=99,
+                    details={"service": config.name, "error": str(rollback_exc)},
+                )
+        elif snapshot.image_ref:
             try:
                 self.logger.warning("rollback", "Starting rollback.", progress=96)
                 rollback_performed = self.rollback_manager.restore_from_snapshot(
