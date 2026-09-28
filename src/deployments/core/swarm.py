@@ -1565,11 +1565,25 @@ class SwarmRuntime:
 
     def service_logs(self, name: str, *, tail: int | str = 200):
         try:
-            return self.client.services.get(_validate_service_name(name)).logs(
+            raw = self.client.services.get(_validate_service_name(name)).logs(
                 stdout=True, stderr=True, timestamps=True, tail=tail
             )
         except docker.errors.NotFound:
             return b""
+
+        if isinstance(raw, (bytes, bytearray)):
+            return bytes(raw)
+
+        chunks: list[bytes] = []
+        try:
+            for chunk in raw:
+                if isinstance(chunk, (bytes, bytearray)):
+                    chunks.append(bytes(chunk))
+                elif chunk:
+                    chunks.append(str(chunk).encode("utf-8", "replace"))
+        except TypeError:
+            chunks.append(str(raw).encode("utf-8", "replace"))
+        return b"".join(chunks)
 
 
 def sync_swarm_nodes(*, cluster_name: str | None = None) -> dict[str, Any]:
