@@ -106,7 +106,8 @@ def test_revision_artifact_initial_write_bypasses_immutable_model_save():
 def test_pending_deploys_are_not_timed_out_from_stale_started_at():
     source = (ROOT / "src" / "deployments" / "celery" / "schedules.py").read_text(encoding="utf-8")
 
-    assert 'if locked.status == "running" and locked.started_at:' in source
+    assert 'if locked.status == "running":' in source
+    assert "deployment_phase_remaining_seconds" in source
     assert 'status=DeploymentStatusChoices.PENDING,' in source
     assert 'cancel_requested=False,' in source
     assert 'updated_at__lt=cutoff' in source
