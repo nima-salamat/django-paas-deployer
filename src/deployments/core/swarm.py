@@ -19,7 +19,7 @@ from django.utils import timezone
 
 from deployments.common.exceptions import DeploymentError
 from deployments.core.manager.client_manager import get_docker_client
-from deployments.core.routing import resolve_public_host
+from deployments.core.routing import public_http_endpoints, resolve_public_host
 
 
 @dataclass(frozen=True)
@@ -234,11 +234,7 @@ def _service_labels(config) -> dict[str, str]:
     }
     labels.update({str(k): str(v) for k, v in (config.labels or {}).items()})
 
-    for endpoint in (
-        item for item in (config.endpoints or ())
-        if item.enabled and item.exposure == "public"
-        and item.protocol in {"http", "https", "ws"}
-    ):
+    for endpoint in public_http_endpoints(config):
         router = re.sub(
             r"[^a-z0-9-]",
             "-",
