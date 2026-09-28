@@ -1175,6 +1175,7 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
             )
 
         task_dispatched = False
+        task_id = ""
         if logger_sink:
             logger_sink.info(
                 "base_image",
@@ -1232,7 +1233,13 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
                 "docker_api_reached": False, "exception_type": type(exc).__name__,
                 "technical_message": str(exc) or type(exc).__name__,
             }
-            BaseRuntimeImage.objects.filter(pk=row.pk, status=BaseRuntimeImage.Status.BUILDING, build_task_id=task_id).update(
+            dispatch_filter = {
+                "pk": row.pk,
+                "status": BaseRuntimeImage.Status.BUILDING,
+            }
+            if task_id:
+                dispatch_filter["build_task_id"] = task_id
+            BaseRuntimeImage.objects.filter(**dispatch_filter).update(
                 status=BaseRuntimeImage.Status.PENDING, build_task_id="", build_owner_deployment_id="",
                 last_error=str(exc), last_error_details=details,
                 build_completed_at=timezone.now(), updated_at=timezone.now(),
