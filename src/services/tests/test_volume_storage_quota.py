@@ -135,8 +135,8 @@ def test_volume_usage_reconciliation_detects_docker_orphan_and_missing_registry_
         DockerRow("vol-orphan-unregistered"),
     ]
     registry_rows = [
-        {"id": db_id, "name": "db-data", "service_id": "svc-1", "size_mb": 1024},
-        {"id": "87654321-1234-1234-1234-123456789abc", "name": "app-data", "service_id": "svc-2", "size_mb": 512},
+        {"id": db_id, "name": "db-data", "service_id": "svc-1", "size_mb": 1024, "released_at": None},
+        {"id": "87654321-1234-1234-1234-123456789abc", "name": "app-data", "service_id": "svc-2", "size_mb": 512, "released_at": None},
     ]
     with patch("services.models.Volume.objects.values", return_value=registry_rows):
         result = reconcile_managed_volumes(manager)
