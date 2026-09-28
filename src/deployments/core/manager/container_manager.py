@@ -67,6 +67,7 @@ class Container(Client):
         restart_policy: dict | None = None,
         extra_host_config: dict | None = None,
         resource_limits: dict | None = None,
+        entrypoint: str | list[str] | None = None,
     ):
         # NOTE: no super().__init__() side-effect beyond caching the
         # singleton client.
@@ -81,6 +82,7 @@ class Container(Client):
         self.volumes = volumes or {}
         self.read_only = read_only
         self.command = command
+        self.entrypoint = entrypoint
         self.environment = environment or {}
         self.exposed_ports = exposed_ports or {}
         self.port_bindings = port_bindings or {}
@@ -388,7 +390,7 @@ class Container(Client):
             )
             return False
 
-    def create(self):
+    def create(self, *, entrypoint: str | list[str] | None = None):
         """
         Create the container.
 
@@ -424,6 +426,7 @@ class Container(Client):
         host_kwargs = self._host_config_kwargs()
         networking_config = self._networking_config()
         labels = self._labels()
+        effective_entrypoint = self.entrypoint if entrypoint is None else entrypoint
 
         # Runtime semantics such as restart policy, tmpfs, resources, security
         # options, and networking are part of the deployment contract. Do not
@@ -438,6 +441,7 @@ class Container(Client):
                 name=self.name,
                 image=self.image_name,
                 command=self.command,
+                entrypoint=effective_entrypoint,
                 environment=self.environment,
                 host_config=host_config,
                 networking_config=networking_config,
@@ -462,6 +466,7 @@ class Container(Client):
                             name=self.name,
                             image=self.image_name,
                             command=self.command,
+                            entrypoint=effective_entrypoint,
                             environment=self.environment,
                             host_config=host_config,
                             networking_config=networking_config,

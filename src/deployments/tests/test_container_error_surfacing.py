@@ -162,6 +162,23 @@ class ContainerCreateErrorSurfacingTests(unittest.TestCase):
         self.assertEqual(ctx.exception.details.get("status_code"), 400)
         self.assertEqual(ctx.exception.details.get("image_present"), True)
 
+    def test_create_accepts_and_forwards_entrypoint(self):
+        """Container.create() must forward an explicit Docker entrypoint."""
+        with patch("deployments.core.manager.client_manager.get_docker_client") as gdc:
+            mock_client = MagicMock()
+            gdc.return_value = mock_client
+            mock_client.images.get.return_value = MagicMock()
+            mock_client.api.create_host_config.return_value = MagicMock()
+            mock_client.api.create_container.return_value = MagicMock(id="new-container-id")
+
+            c = Container("app-entrypoint-test", image_name="app:v1", command=["serve"])
+            result = c.create(entrypoint=["/bin/sh", "-c"])
+
+        self.assertIsNotNone(result)
+        kwargs = mock_client.api.create_container.call_args.kwargs
+        self.assertEqual(kwargs["entrypoint"], ["/bin/sh", "-c"])
+        self.assertEqual(kwargs["command"], ["serve"])
+
     def test_409_conflict_removes_stale_container_and_retries(self):
         """
         On 409 conflict, the create() must attempt to remove a stopped
