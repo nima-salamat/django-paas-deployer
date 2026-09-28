@@ -7,7 +7,7 @@ from auth_users.authentication import SessionJWTAuthentication as JWTAuthenticat
 from .catalog import ApplicationCatalog, CatalogValidationError, redact_resolved, redacted_definition, resolve_variant
 from .models import ApplicationInstance, ApplicationStatus
 from .serializers import ApplicationInstanceSerializer, catalog_listing
-from .services import create_application_installation
+from .services import ApplicationNameConflict, create_application_installation
 from .tasks import start_application_installation, cancel_application_installation
 
 
@@ -49,6 +49,11 @@ class ApplicationInstanceListCreateAPIView(CatalogPermissionMixin, APIView):
     def post(self, request):
         try:
             instance = create_application_installation(request.user, request.data)
+        except ApplicationNameConflict as exc:
+            return Response(
+                {"error": str(exc), "code": "application_name_conflict"},
+                status=status.HTTP_409_CONFLICT,
+            )
         except (CatalogValidationError, ValueError) as exc:
             return Response({"error": str(exc)}, status=400)
         try:

@@ -101,7 +101,14 @@ def ready_service_keys(
 
 def plan_from_resolved(resolved: dict[str, Any]) -> ApplicationPlan:
     services: list[ServicePlan] = []
+    seen_keys: set[str] = set()
     for raw in resolved.get("services") or []:
+        key = str(raw.get("key") or "")
+        if not key:
+            raise ApplicationPlanError("Application service key is required.")
+        if key in seen_keys:
+            raise ApplicationPlanError(f"Duplicate application service key: {key!r}.")
+        seen_keys.add(key)
         services.append(
             ServicePlan(
                 key=str(raw["key"]),
@@ -151,6 +158,14 @@ def plan_from_resolved(resolved: dict[str, Any]) -> ApplicationPlan:
         networks=tuple(str(x) for x in (resolved.get("networks") or ())),
         metadata=dict(resolved.get("metadata") or {}),
     )
+    known_keys = {svc.key for svc in services}
+    for service in services:
+        missing = sorted(set(service.dependencies) - known_keys)
+        if missing:
+            raise ApplicationPlanError(
+                f"Service {service.key!r} references missing dependency(s): "
+                + ", ".join(missing)
+            )
     plan.topological_order()
     network_sets = [set(svc.networks) for svc in services if svc.networks]
     if network_sets:

@@ -65,3 +65,46 @@ def test_preview_redaction_removes_secret_values_from_catalog_definitions():
         for field in variant.get("fields", []):
             if field.get("secret") or field.get("type") == "secret":
                 assert field.get("default") in (None, "")
+
+
+def _catalog_example_values(variant):
+    values = {}
+    for field in variant.get("fields") or []:
+        fid = str(field["id"])
+        if field.get("generate"):
+            continue
+        if "default" in field and field.get("default") not in (None, ""):
+            values[fid] = field["default"]
+        elif field.get("type") == "choice":
+            options = field.get("options") or []
+            if options:
+                values[fid] = options[0]
+        elif field.get("type") == "integer":
+            values[fid] = 1
+        elif field.get("type") == "boolean":
+            values[fid] = False
+        elif field.get("type") == "domain":
+            values[fid] = "app.example.com"
+        elif field.get("required"):
+            values[fid] = "example-value"
+    return values
+
+
+def test_every_advertised_variant_resolves_to_a_valid_application_plan():
+    from app_catalog.plan import plan_from_resolved
+
+    failures = []
+    for definition in ApplicationCatalog.definitions():
+        for variant_id, variant in definition.variants.items():
+            try:
+                resolved = resolve_variant(
+                    definition,
+                    variant_id,
+                    _catalog_example_values(variant),
+                )
+                plan = plan_from_resolved(resolved)
+                assert plan.services
+                assert len(plan.topological_order()) == len(plan.services)
+            except Exception as exc:
+                failures.append(f"{definition.id}:{variant_id}: {type(exc).__name__}: {exc}")
+    assert not failures, "\n".join(failures)

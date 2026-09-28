@@ -1,8 +1,8 @@
 # app_catalog background behavior
 
-start_application_installation claims/continues an ApplicationInstance execution and advances the child-service sequence.
+start_application_installation claims/continues an ApplicationInstance execution and advances the child-service DAG.
 
-gate_application_service waits for child prerequisites before dispatch.
+gate_application_service waits for child prerequisites before dispatch. The coordinator never re-resolves the catalog during recovery: its graph is reconstructed from persisted child Service runtime metadata, while generated credentials remain in ServiceSecret/ServiceSecretVersion.
 
 advance_application_service creates/dispatches the next ApplicationInstanceService child.
 

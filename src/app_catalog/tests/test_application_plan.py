@@ -132,3 +132,22 @@ def test_real_catalog_applications_resolve_into_executable_plans():
         )
     )
     assert mattermost.service("mattermost").volumes[0].size_mb == 4096
+
+
+def test_normalized_plan_rejects_duplicate_service_keys():
+    import pytest
+
+    with pytest.raises(ApplicationPlanError, match="Duplicate application service key"):
+        plan_from_resolved(_resolved([
+            {"key": "web", "role": "app", "platform": "docker", "image_template": "example/web:1"},
+            {"key": "web", "role": "worker", "platform": "docker", "image_template": "example/web:1"},
+        ]))
+
+
+def test_normalized_plan_rejects_dangling_dependencies():
+    import pytest
+
+    with pytest.raises(ApplicationPlanError, match="missing dependency"):
+        plan_from_resolved(_resolved([
+            {"key": "web", "role": "app", "platform": "docker", "image_template": "example/web:1", "depends_on": ["missing"]},
+        ]))

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import uuid
-from pathlib import Path
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Iterable
@@ -14,9 +13,8 @@ from django.utils import timezone
 from deploy.models import DeploymentStatusChoices
 from deployments.core.state.manager import StateManager
 
-from .catalog import ApplicationCatalog, CatalogDefinition, resolve_variant
 from .models import ApplicationInstance, ApplicationInstanceService, ApplicationStatus
-from .plan import ApplicationPlan, plan_from_resolved, ready_service_keys
+from .plan import ApplicationPlan, ServicePlan, ready_service_keys
 
 logger = logging.getLogger(__name__)
 
@@ -42,23 +40,62 @@ class ApplicationStackExecutor:
         self.instance_id = str(instance_id)
 
     def _load(self) -> tuple[ApplicationInstance, ApplicationPlan]:
+        """Load the persisted coordinator graph without re-resolving catalog secrets.
+
+        Generated credentials are persisted in ServiceSecret/ServiceSecretVersion,
+        not in ApplicationInstance.secret_config. Recovery must not call
+        resolve_variant(), because generator fields would produce new credentials.
+        The coordinator only needs the already-materialized dependency graph.
+        """
         instance = ApplicationInstance.objects.prefetch_related(
-            "services__deploy", "services__service"
+            "services__deploy", "services__service__processes"
         ).get(pk=self.instance_id)
-        if instance.definition_snapshot:
-            definition = CatalogDefinition(
-                data=dict(instance.definition_snapshot),
-                source=Path(f"<installed:{instance.catalog_id}>"),
+        bindings = list(instance.services.all())
+        if not bindings:
+            raise ValueError("Application instance has no child service bindings.")
+
+        seen_keys = set()
+        service_plans = []
+        for binding in bindings:
+            key = str(binding.service_key)
+            if key in seen_keys:
+                raise ValueError(f"Duplicate application service binding: {key}")
+            seen_keys.add(key)
+            service = binding.service
+            runtime = dict(service.runtime_config or {})
+            processes = list(service.processes.all())
+            role = (
+                str(processes[0].process_type)
+                if processes and processes[0].process_type
+                else "app"
             )
-        else:
-            # Backward compatibility for installations created before immutable
-            # definition snapshots were introduced.
-            definition = ApplicationCatalog.get(instance.catalog_id)
-        supplied = dict(instance.config or {})
-        supplied.update(instance.secret_config or {})
-        resolved = resolve_variant(definition, instance.variant_id, supplied)
-        resolved["config"]["slug"] = instance.slug
-        return instance, plan_from_resolved(resolved)
+            service_plans.append(
+                ServicePlan(
+                    key=key,
+                    role=role,
+                    platform=str(runtime.get("catalog_platform") or "docker"),
+                    plan_type=str(runtime.get("catalog_plan_type") or "APP"),
+                    dependencies=tuple(str(dep) for dep in (runtime.get("depends_on") or ())),
+                    required=bool(runtime.get("required", True)),
+                )
+            )
+
+        plan = ApplicationPlan(
+            id=str(instance.catalog_id),
+            version=str(instance.definition_version),
+            variant=str(instance.variant_id),
+            services=tuple(service_plans),
+        )
+        known_keys = {service.key for service in plan.services}
+        for service in plan.services:
+            missing = sorted(set(service.dependencies) - known_keys)
+            if missing:
+                raise ValueError(
+                    f"Application service {service.key!r} references missing dependency(s): "
+                    + ", ".join(missing)
+                )
+        plan.topological_order()
+        return instance, plan
 
     @staticmethod
     def _timeout_minutes() -> int:

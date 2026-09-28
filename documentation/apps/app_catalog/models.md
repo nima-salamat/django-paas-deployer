@@ -25,9 +25,9 @@ The durable owner and coordinator for one catalog installation.
 | definition_version | CharField(32) | Version/provenance of the definition used for this installation. |
 | software_version | CharField(64), default unknown | Selected application software release. |
 | variant_id | CharField(64) | Exact catalog variant installed. Reconciliation must remain tied to this variant even if the catalog later changes. |
-| definition_snapshot | JSON, default {} | Immutable-ish copy of the resolved definition inputs used by this installation. Consumer: coordinator/recovery. Treat as structured schema, not free-form metadata. |
-| config | JSON, default {} | Non-secret user/configuration values passed into the resolved application plan. |
-| secret_config | JSON, default {} | Generated/secret configuration needed by child services. Sensitive; normal serializer exposes only secret keys as configured, never values. |
+| definition_snapshot | JSON, default {} | Immutable installation provenance. It contains the selected catalog definition plus `_application_orchestration.services[]` with each child key, role, platform, plan type, dependencies and required flag. Recovery uses persisted child materialization for coordination and never trusts a later catalog source. |
+| config | JSON, default {} | Non-secret normalized user configuration used while materializing child Services. It may contain derived non-secret values such as the installation slug. |
+| secret_config | JSON, default {} | Reserved compatibility field; new installs intentionally leave it empty. Generated credentials are persisted through ServiceSecret/ServiceSecretVersion so recovery never needs plaintext secret values or secret regeneration. |
 | status | ApplicationStatus, default pending | Coordinator state machine. Written by app_catalog tasks. |
 | error_code | CharField(96), blank | Stable machine-oriented failure reason for UI/recovery. |
 | error_message | Text, blank | Human-readable failure detail. |

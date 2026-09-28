@@ -55,7 +55,7 @@ Names are limited to 50 characters. plan_id must resolve to a compatible applica
 
 ## Idempotency/concurrency
 
-The coordinator stores execution/dispatch task ids and dispatch timestamps. Reconciliation can recover lost task delivery without blindly duplicating child creation. Child Deploy ownership is independent of coordinator ownership.
+The coordinator stores execution/dispatch task ids and dispatch timestamps. Reconciliation can recover lost task delivery without blindly duplicating child creation. Child Deploy ownership is independent of coordinator ownership. Concurrent same-name installations are finally serialized by the `(user, slug)` database uniqueness constraint; the losing API request returns HTTP 409. Installation materialization is transactional, so a database failure rolls back the ApplicationInstance, network, child Services, secrets, endpoints, volumes and Deploy rows created by that installation.
 
 ## Related tests
 

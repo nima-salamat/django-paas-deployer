@@ -64,6 +64,18 @@ services:
                 else:
                     os.environ["APP_CATALOG_SOURCE_DIRS"] = old
 
+    def test_deprecated_imported_catalog_is_explicitly_excluded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "deprecated.yaml"
+            path.write_text(
+                "# deprecated: true\n"
+                "services:\n"
+                "  web:\n"
+                "    image: example/web:1\n",
+                encoding="utf-8",
+            )
+            self.assertIsNone(load_yaml_definition(path))
+
     def test_unsafe_compose_is_rejected(self):
         with self.assertRaises(CatalogValidationError):
             load_compose("""

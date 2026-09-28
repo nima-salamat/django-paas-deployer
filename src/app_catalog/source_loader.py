@@ -13,7 +13,7 @@ import yaml
 from .compose_catalog import validate_compose_security, _infer_variable_fields
 from .catalog import CatalogDefinition, CatalogValidationError
 
-HEADER_RE = re.compile(r"^#\s*(documentation|slogan|category|tags|logo|port|minversion|ignore):\s*(.+?)\s*$", re.I)
+HEADER_RE = re.compile(r"^#\s*(documentation|slogan|category|tags|logo|port|minversion|ignore|deprecated):\s*(.+?)\s*$", re.I)
 
 
 def _source_dirs() -> list[Path]:
@@ -35,7 +35,7 @@ def _header_metadata(text: str) -> dict:
                 meta[key] = int(value)
             except ValueError:
                 pass
-        elif key == "ignore":
+        elif key in {"ignore", "deprecated"}:
             meta[key] = value.lower() == "true"
         else:
             meta[key] = value
@@ -62,7 +62,7 @@ def load_yaml_definition(path: Path) -> CatalogDefinition | None:
     xpd = dict(document.get("x-passdeployer") or {})
     header = _header_metadata(text)
     meta = {**header, **xpd}
-    if bool(meta.get("ignore")):
+    if bool(meta.get("ignore")) or bool(meta.get("deprecated")):
         return None
     app_id = str(meta.get("id") or path.stem).strip().lower().replace("_", "-")
     name = str(meta.get("name") or meta.get("title") or path.stem.replace("-", " ").title())

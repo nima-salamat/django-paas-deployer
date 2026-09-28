@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from django.core.files.base import ContentFile
-from django.db import transaction
+from django.db import transaction, IntegrityError
 from django.utils.text import slugify
 
 from plans.models import Plan
@@ -24,6 +24,10 @@ import shlex
 
 
 _NAME_RE = re.compile(r"[^a-z0-9-]+")
+
+
+class ApplicationNameConflict(CatalogValidationError):
+    """Raised when a user concurrently claims an existing application slug."""
 
 
 @dataclass(frozen=True)
@@ -166,21 +170,43 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
         description=f"Private network for catalog application {requested_name}",
     )
 
-    instance = ApplicationInstance.objects.create(
-        user=user,
-        name=requested_name,
-        slug=slug,
-        catalog_id=definition.id,
-        definition_version=definition.definition_version,
-        software_version=definition.software_version,
-        variant_id=str(payload["variant"]),
-        definition_snapshot=copy.deepcopy(definition.data),
-        config=dict(resolved["config"]),
-        secret_config={},
-        status=ApplicationStatus.PENDING,
-        network=network,
-    )
-
+    try:
+        with transaction.atomic():
+            instance = ApplicationInstance.objects.create(
+                user=user,
+                name=requested_name,
+                slug=slug,
+                catalog_id=definition.id,
+                definition_version=definition.definition_version,
+                software_version=definition.software_version,
+                variant_id=str(payload["variant"]),
+                definition_snapshot={
+                    **copy.deepcopy(definition.data),
+                    "_application_orchestration": {
+                        "services": [
+                            {
+                                "key": str(spec["key"]),
+                                "role": str(spec.get("role") or "app"),
+                                "platform": str(spec.get("platform") or "docker"),
+                                "plan_type": str(spec.get("plan_type") or PlanTypeChoices.APP),
+                                "depends_on": [str(dep) for dep in (spec.get("depends_on") or [])],
+                                "required": bool(spec.get("required", True)),
+                            }
+                            for spec in (resolved.get("services") or [])
+                        ],
+                    },
+                },
+                config=dict(resolved["config"]),
+                # Generated secrets are persisted in ServiceSecret/ServiceSecretVersion.
+                # Keep ApplicationInstance free of plaintext secret material.
+                secret_config={},
+                status=ApplicationStatus.PENDING,
+                network=network,
+            )
+    except IntegrityError as exc:
+        raise ApplicationNameConflict(
+            "An application with this name already exists."
+        ) from exc
     created_by = user
     service_rows = []
     for sequence, spec in enumerate(resolved["services"]):
@@ -272,6 +298,31 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
                         "enabled": True,
                     },
                 )
+            elif re.search(r"\$\{secret\.[A-Za-z0-9_]+\}", text_value):
+                composite_key = "catalog_env_" + str(env_key).lower()
+                rendered_value = _render_service_value(
+                    text_value,
+                    config=resolved_config,
+                    secrets=resolved["secrets"],
+                    service_hosts=service_hosts,
+                )
+                composite_secret, _ = _get_or_create_secret(
+                    service,
+                    composite_key[:128],
+                    rendered_value,
+                    created_by=created_by,
+                    note=f"Catalog composite environment secret for {definition.id}:{key}:{env_key}",
+                )
+                ServiceEnvironmentVariable.objects.update_or_create(
+                    service=service,
+                    key=str(env_key),
+                    defaults={
+                        "secret": composite_secret,
+                        "value": "",
+                        "scope": ServiceEnvironmentVariable.Scope.RUNTIME,
+                        "enabled": True,
+                    },
+                )
             else:
                 ServiceEnvironmentVariable.objects.update_or_create(
                     service=service,
@@ -292,6 +343,11 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
         )
         dockerfile = spec.get("dockerfile")
         healthcheck = spec.get("healthcheck") if isinstance(spec.get("healthcheck"), dict) else None
+        if dockerfile and "${secret." in str(dockerfile).lower():
+            raise CatalogValidationError(
+                f"Catalog service {key} attempts to bake a secret into its Dockerfile. "
+                "Move the secret to a runtime environment variable instead."
+            )
         if dockerfile:
             dockerfile_text = _render_service_value(
                 str(dockerfile),
@@ -313,15 +369,19 @@ def create_application_installation(user, payload: dict) -> ApplicationInstance:
         if healthcheck_instruction and "HEALTHCHECK" not in dockerfile_text:
             dockerfile_text = dockerfile_text.rstrip() + "\n" + healthcheck_instruction + "\n"
 
-        files = {
-            str(name): _render_service_value(
+        files = {}
+        for name, content in (spec.get("files") or {}).items():
+            if "${secret." in str(content).lower():
+                raise CatalogValidationError(
+                    f"Catalog service {key} attempts to bake a secret into build file {name!r}. "
+                    "Move the secret to a runtime environment variable instead."
+                )
+            files[str(name)] = _render_service_value(
                 str(content),
                 config=resolved_config,
-                secrets=resolved["secrets"],
+                secrets={},
                 service_hosts=service_hosts,
             )
-            for name, content in (spec.get("files") or {}).items()
-        }
 
         public = bool(spec.get("public", False))
         port = spec.get("port")
