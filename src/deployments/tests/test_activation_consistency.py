@@ -41,6 +41,14 @@ class DeploymentActivationConsistencyContractTests(unittest.TestCase):
         self.assertNotIn("get_active_deploy(service)", self.service.split("def _activate_deployment", 1)[1].split("result = self._process_deployment", 1)[0])
 
 
+    def test_activation_rechecks_deploy_cancellation_before_commit(self):
+        activation = self.service.split("def _activate_deployment", 1)[1].split(
+            "result = self._process_deployment", 1
+        )[0]
+        self.assertIn("current_deploy = Deploy.objects.select_for_update().get(pk=deploy_item.pk)", activation)
+        self.assertIn("current_deploy.cancel_requested", activation)
+        self.assertIn("Deployment cancellation was requested before activation.", activation)
+
     def test_activation_is_fenced_by_service_lifecycle_generation(self):
         self.assertIn("expected_lifecycle_generation", self.service)
         self.assertIn("actual_lifecycle_generation != expected_lifecycle_generation", self.service)
