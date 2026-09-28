@@ -101,6 +101,66 @@ def _spec_fingerprint(spec: BaseImageSpec) -> str:
     ]).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
+def deployment_phase_remaining_seconds(deployment_or_id, *, now=None) -> int | None:
+    """Return remaining seconds for the deployment's current lifecycle phase."""
+    from core.settings_service import base_image_build_timeout_minutes, deploy_timeout_minutes
+    from .models import Deploy
+    deploy = deployment_or_id
+    if not hasattr(deploy, "lifecycle_phase_deadline"):
+        deploy = Deploy.objects.filter(pk=deployment_or_id).first()
+    if deploy is None:
+        return None
+    now = now or timezone.now()
+    deadline = deploy.lifecycle_phase_deadline(
+        base_timeout_minutes=base_image_build_timeout_minutes(),
+        application_timeout_minutes=deploy_timeout_minutes(),
+        now=now,
+    )
+    if deadline is None:
+        return None
+    return max(0, int((deadline - now).total_seconds()))
+
+def mark_base_image_phase_started(deployment_id: str | None):
+    """Start a deployment's dedicated base-image budget without resetting it."""
+    if not deployment_id:
+        return None
+    from .models import Deploy
+    now = timezone.now()
+    with transaction.atomic():
+        deploy = Deploy.objects.select_for_update().filter(pk=deployment_id).first()
+        if deploy is None:
+            return None
+        started = deploy.base_image_wait_started_at or now
+        deploy.stage = "base_image"
+        deploy.base_image_wait_started_at = started
+        deploy.base_image_ready_at = None
+        deploy.application_started_at = None
+        deploy.status_message = "Waiting for the required base runtime image."
+        deploy.save(update_fields=[
+            "stage", "base_image_wait_started_at", "base_image_ready_at",
+            "application_started_at", "status_message", "updated_at",
+        ])
+        return started
+
+def mark_application_phase_started(deployment_id: str | None):
+    """Start a fresh application timeout after base-image resolution."""
+    if not deployment_id:
+        return None
+    from .models import Deploy
+    now = timezone.now()
+    with transaction.atomic():
+        deploy = Deploy.objects.select_for_update().filter(pk=deployment_id).first()
+        if deploy is None:
+            return None
+        if deploy.base_image_wait_started_at:
+            deploy.base_image_ready_at = now
+        deploy.application_started_at = now
+        if str(deploy.stage or "").strip().lower() == "base_image":
+            deploy.stage = "starting"
+        deploy.save(update_fields=[
+            "base_image_ready_at", "application_started_at", "stage", "updated_at",
+        ])
+        return now
 
 def _dockerfile_with_fingerprint(spec: BaseImageSpec, fingerprint: str) -> str:
     """Add an inspectable content fingerprint without making it part of itself."""
@@ -114,17 +174,25 @@ def _dockerfile_with_fingerprint(spec: BaseImageSpec, fingerprint: str) -> str:
     return spec.dockerfile[:match.end()] + label + spec.dockerfile[match.end():]
 
 
-def _php(version: str, *, public_root: bool = True) -> BaseImageSpec:
+def _php(version: str) -> BaseImageSpec:
+    """Return the canonical generic PHP/Apache runtime base.
+
+    DocumentRoot is application-specific and is applied later by
+    ``DockerfileGenerator``. Therefore PHP has exactly one base identity:
+    variant=apache, repository=paas-base/php-apache.
+    """
     src = f"{_docker_mirror()}/php:{version}-apache"
-    variant = "apache-public" if public_root else "apache-root"
-    repository = "paas-base/php-apache" if public_root else "paas-base/php-apache-root"
-    doc_root = "/var/www/html/public" if public_root else "/var/www/html"
+    repository = "paas-base/php-apache"
     return BaseImageSpec(
-        "php", version, variant, src, repository, f"{_tag_token(version)}-r1",
+        "php",
+        version,
+        "apache",
+        src,
+        repository,
+        f"{_tag_token(version)}-r1",
         f'''FROM {src}
 
-ENV APACHE_DOCUMENT_ROOT={doc_root}\\
-    COMPOSER_ALLOW_SUPERUSER=1\\
+ENV COMPOSER_ALLOW_SUPERUSER=1 \
     COMPOSER_MEMORY_LIMIT=-1
 
 WORKDIR /var/www/html
@@ -150,24 +218,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf \
     && printf '%s\\n' 'ServerName localhost' > /etc/apache2/conf-available/deployer-server-name.conf \
     && a2enconf deployer-server-name \
-    && printf '%s\\n' \
-       '<VirtualHost *:80>' \
-       '    ServerName localhost' \
-       '    DocumentRoot {doc_root}' \
-       '    <Directory {doc_root}>' \
-       '        AllowOverride All' \
-       '        Require all granted' \
-       '        Options FollowSymLinks' \
-       '    </Directory>' \
-       '    RewriteEngine On' \
-       '    RewriteCond %{{REQUEST_FILENAME}} -f [OR]' \
-       '    RewriteCond %{{REQUEST_FILENAME}} -d' \
-       '    RewriteRule ^ - [END]' \
-       '    RewriteCond %{{REQUEST_FILENAME}} !-f' \
-       '    RewriteCond %{{REQUEST_FILENAME}} !-d' \
-       '    RewriteRule ^ index.php [L]' \
-       '</VirtualHost>' \
-       > /etc/apache2/sites-available/000-default.conf \
     && echo 'opcache.enable=1' >> /usr/local/etc/php/conf.d/opcache-laravel.ini \
     && rm -rf /var/lib/apt/lists/*
 
@@ -176,7 +226,6 @@ COPY --from={_docker_mirror()}/composer:2 /usr/bin/composer /usr/bin/composer
 CMD ["apache2-foreground"]
 '''
     )
-
 
 def _python(version: str) -> BaseImageSpec:
     src = f"{_docker_mirror()}/python:{version}-slim"
@@ -216,7 +265,7 @@ def make_specs(config) -> list[BaseImageSpec]:
     specs: list[BaseImageSpec] = []
     if platform in {"php", "laravel", "lumen", "symfony", "codeigniter"}:
         version = _normalize_version(runtime, "8.4")
-        specs.append(_php(version, public_root=platform != "php"))
+        specs.append(_php(version))
         if platform == "laravel" and getattr(config, "frontend_root", None) is not None:
             specs.append(_node("20"))
     elif platform in {"python", "django", "flask", "fastapi"}:
@@ -230,7 +279,6 @@ def make_specs(config) -> list[BaseImageSpec]:
     elif platform == "go":
         specs.append(_go(_normalize_version(runtime, "1.21")))
     return specs
-
 
 def _core_settings():
     try:
