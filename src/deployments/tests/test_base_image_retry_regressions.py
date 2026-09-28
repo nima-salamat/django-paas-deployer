@@ -81,5 +81,7 @@ def test_application_phase_gets_full_budget_after_base_ready():
         base_image_ready_at=now - __import__("datetime").timedelta(minutes=7),
         application_started_at=now - __import__("datetime").timedelta(minutes=7),
     )
-    from deploy.base_images import deployment_phase_remaining_seconds
-    assert deployment_phase_remaining_seconds(deployment, now=now) == 3 * 60
+    deadline = deployment.lifecycle_phase_deadline(
+        base_timeout_minutes=10, application_timeout_minutes=10, now=now
+    )
+    assert int((deadline - now).total_seconds()) == 3 * 60
