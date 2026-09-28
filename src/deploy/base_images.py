@@ -925,6 +925,7 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
         return {}
 
     from django.db import IntegrityError
+    from deployments.common.exceptions import BaseImageBuildError
     from deployments.common.resource_policy import resolve_build_policy
 
     effective_build_policy = resolve_build_policy(build_policy)
@@ -1258,3 +1259,157 @@ def ensure_base_images(config, *, build_policy=None, logger_sink=None, deploymen
             )
             raise
     return result
+
+
+def release_stale_base_image_leases(max_age_hours: int = 24) -> int:
+    """Release leases left behind by workers that died without running finally."""
+    from deploy.models import Deploy, DeploymentStatusChoices
+
+    cutoff = timezone.now() - timedelta(hours=max(1, max_age_hours))
+    terminal = {
+        DeploymentStatusChoices.SUCCEEDED,
+        DeploymentStatusChoices.FAILED,
+        DeploymentStatusChoices.ROLLED_BACK,
+        DeploymentStatusChoices.CANCELLED,
+    }
+    count = 0
+    stale = BaseRuntimeImageLease.objects.filter(
+        released_at__isnull=True,
+        acquired_at__lt=cutoff,
+    ).only("id", "deployment_id")
+    for lease in stale.iterator():
+        deploy = Deploy.objects.filter(pk=lease.deployment_id).only("status").first()
+        if deploy is not None and deploy.status not in terminal:
+            continue
+        updated = BaseRuntimeImageLease.objects.filter(
+            pk=lease.pk,
+            released_at__isnull=True,
+        ).update(released_at=timezone.now(), updated_at=timezone.now())
+        count += updated
+    if count:
+        logger.warning("Released %d stale base image lease(s).", count)
+    return count
+
+
+def acquire_base_image_leases(
+    image_refs: list[str] | tuple[str, ...],
+    deployment_id: str | None,
+) -> None:
+    """Create active deployment leases for the resolved base-image references."""
+    if not deployment_id or not image_refs:
+        return
+
+    refs = sorted({str(ref).strip() for ref in image_refs if str(ref).strip()})
+    if not refs:
+        return
+
+    deployment_id = str(deployment_id)[:255]
+    for ref in refs:
+        row = (
+            BaseRuntimeImage.objects
+            .filter(image_ref=ref)
+            .order_by("-updated_at")
+            .first()
+        )
+        if row is None:
+            logger.warning(
+                "Cannot acquire base-image lease: registry row not found for %s",
+                ref,
+            )
+            continue
+
+        BaseRuntimeImageLease.objects.update_or_create(
+            base_image=row,
+            deployment_id=deployment_id,
+            defaults={"released_at": None},
+        )
+
+
+def release_base_image_leases(
+    deployment_id: str | None,
+    *,
+    remove_if_unretained: bool = False,
+) -> None:
+    """Release all active base-image leases owned by one deployment."""
+    if not deployment_id:
+        return
+
+    deployment_id = str(deployment_id)[:255]
+    leases = list(
+        BaseRuntimeImageLease.objects
+        .select_related("base_image")
+        .filter(
+            deployment_id=deployment_id,
+            released_at__isnull=True,
+        )
+    )
+    if not leases:
+        return
+
+    now = timezone.now()
+    client = None
+
+    for lease in leases:
+        lease.released_at = now
+        lease.save(update_fields=["released_at", "updated_at"])
+
+        if not remove_if_unretained:
+            continue
+
+        try:
+            with transaction.atomic():
+                locked = (
+                    BaseRuntimeImage.objects
+                    .select_for_update()
+                    .get(pk=lease.base_image.pk)
+                )
+                active = BaseRuntimeImageLease.objects.filter(
+                    base_image=locked,
+                    released_at__isnull=True,
+                ).exists()
+                if active:
+                    continue
+
+                if client is None:
+                    client = get_docker_client()
+
+                client.images.remove(locked.image_ref, force=False)
+                locked.status = BaseRuntimeImage.Status.PENDING
+                locked.image_id = ""
+                locked.image_digest = ""
+                locked.save(
+                    update_fields=[
+                        "status",
+                        "image_id",
+                        "image_digest",
+                        "updated_at",
+                    ]
+                )
+                logger.info(
+                    "Removed unretained base runtime image %s after deployment %s",
+                    locked.image_ref,
+                    deployment_id,
+                )
+        except Exception as exc:
+            # Lease release itself succeeded. Physical cleanup is best-effort;
+            # a failed remove must not make deployment completion fail.
+            logger.warning(
+                "Unable to remove unretained base image %s: %s",
+                lease.base_image.image_ref,
+                exc,
+            )
+
+
+def logical_key(spec: BaseImageSpec) -> str:
+    """Return the stable configuration key used for resolved base images."""
+    if spec.logical_runtime == "php":
+        return "base_image"
+    if spec.logical_runtime == "node":
+        return "node_base_image"
+    if spec.logical_runtime == "nginx":
+        return "nginx_base_image"
+    if spec.logical_runtime == "python":
+        return "base_image"
+    if spec.logical_runtime == "go":
+        return "base_image"
+    return "base_image"
