@@ -32,6 +32,14 @@ class DeploymentActivationConsistencyContractTests(unittest.TestCase):
     def test_activation_requires_previous_selection_to_match(self):
         self.assertIn("if current != previous_deploy_id:", self.service)
 
+    def test_activation_is_idempotent_for_the_same_revision(self):
+        self.assertIn("if str(service.active_revision_id or \"\") == str(deploy_item.revision_id):", self.service)
+        self.assertIn("Activation already committed for deploy=", self.service)
+
+    def test_activation_reads_authoritative_revision_not_legacy_projection(self):
+        self.assertIn("get_authoritative_deploy(service)", self.service)
+        self.assertNotIn("get_active_deploy(service)", self.service.split("def _activate_deployment", 1)[1].split("result = self._process_deployment", 1)[0])
+
     def test_each_replacement_router_has_deployment_identity(self):
         self.assertIn('router_name=f"{config.name}-deploy-', self.orchestrator)
         self.assertIn('"deployment.id": str(config.labels.get("deployment.id")', self.orchestrator)
