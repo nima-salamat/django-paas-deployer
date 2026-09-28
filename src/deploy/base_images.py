@@ -423,6 +423,17 @@ def _spec_for_record(row: BaseRuntimeImage) -> BaseImageSpec:
     raise ValueError(f"Unsupported base runtime '{runtime}'")
 
 
+def _local_image_matches_fingerprint(image_ref: str, fingerprint: str) -> bool:
+    """Return true only when the local image carries the expected definition label."""
+    if not _docker_image_exists(image_ref):
+        return False
+    try:
+        image = get_docker_client().images.get(image_ref)
+        labels = ((getattr(image, "attrs", {}) or {}).get("Config") or {}).get("Labels") or {}
+        return labels.get("io.passdeployer.base-definition") == fingerprint
+    except Exception:
+        return False
+
 def request_base_runtime_image_build(
     base_image_id,
     *,
@@ -538,7 +549,7 @@ def request_base_runtime_image_build(
         row.definition_fingerprint = fingerprint
         row.rebuild_requested = False
         row.rebuild_requested_at = None
-        row.build_started_at = row.build_started_at or timezone.now()
+        row.build_started_at = timezone.now()
         row.build_completed_at = None
         row.last_error = ""
         row.last_error_details = {}
@@ -618,6 +629,11 @@ def build_registered_base_image(
         ):
             return
 
+        continuing_build = bool(
+            task_id
+            and row.status == BaseRuntimeImage.Status.BUILDING
+            and str(row.build_task_id or "") == str(task_id)
+        )
         owner_task_id = task_id or row.build_task_id or str(uuid.uuid4())
         owner_deployment_id = str(row.build_owner_deployment_id or "")
         requested_force_rebuild = bool(force_rebuild or row.rebuild_requested)
@@ -639,7 +655,7 @@ def build_registered_base_image(
         row.build_owner_deployment_id = owner_deployment_id
         row.definition_fingerprint = fingerprint
         row.rebuild_requested = False
-        row.build_started_at = row.build_started_at or timezone.now()
+        row.build_started_at = row.build_started_at if continuing_build and row.build_started_at else timezone.now()
         row.build_completed_at = None
         row.last_error = ""
         row.last_error_details = preserved_pending
