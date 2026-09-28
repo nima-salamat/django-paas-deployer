@@ -84,3 +84,54 @@ def test_local_base_image_resolution_checks_docker_fingerprint_even_when_rebuild
     assert 'policy["auto_register_existing"]' in resolution
     assert "row.status != BaseRuntimeImage.Status.BUILDING" in resolution
     assert '"registry_status": row.status' in resolution
+def test_last_known_good_local_base_image_is_usable_when_renewal_failed():
+    from types import SimpleNamespace
+
+    from deploy.base_images import _can_use_last_known_good_local_base_image
+
+    row = SimpleNamespace(
+        image_id="sha256:good",
+        logical_runtime="php",
+        runtime_version="8.4",
+        variant="apache",
+        status="failed",
+        rebuild_requested=True,
+    )
+    local_image = SimpleNamespace(id="sha256:good", attrs={"Config": {"Labels": {}}})
+
+    assert _can_use_last_known_good_local_base_image(
+        row,
+        local_image=local_image,
+        expected_runtime="php:8.4:apache",
+    )
+
+
+def test_last_known_good_local_base_image_can_use_runtime_identity_label():
+    from types import SimpleNamespace
+
+    from deploy.base_images import _can_use_last_known_good_local_base_image
+
+    row = SimpleNamespace(
+        image_id="",
+        logical_runtime="php",
+        runtime_version="8.4",
+        variant="apache",
+        status="building",
+        rebuild_requested=True,
+    )
+    local_image = SimpleNamespace(
+        id="sha256:old",
+        attrs={"Config": {"Labels": {"io.passdeployer.base-runtime": "php:8.4:apache"}}},
+    )
+
+    assert _can_use_last_known_good_local_base_image(
+        row,
+        local_image=local_image,
+        expected_runtime="php:8.4:apache",
+    )
+
+
+def test_definition_change_preserves_last_known_good_image_identity():
+    text = (ROOT / "deploy/base_images.py").read_text(encoding="utf-8")
+    section = text.split("def ensure_base_images", 1)[1]
+    assert "Keep image_id/image_digest as the last-known-good local" in section
