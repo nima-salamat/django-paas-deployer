@@ -60,6 +60,12 @@ def test_legacy_php_registry_rows_resolve_to_the_canonical_definition():
     assert _spec_for_record(public_row).image_ref == "paas-base/php-apache:8.4-r1"
 
 
+
+def test_legacy_php_builder_persists_canonical_identity_fields():
+    source = (ROOT / "deploy" / "base_images.py").read_text(encoding="utf-8")
+    block = source.split("def build_registered_base_image", 1)[1].split("def _wait_for_existing_build", 1)[0]
+    assert "legacy_php_identity" in block
+    assert '"variant", "source_image", "image_repository", "image_tag", "image_ref"' in block
 def test_php_definition_fingerprint_is_shared_by_canonical_and_legacy_rows():
     from deploy.base_images import _spec_fingerprint
     canonical = _php("8.4")
