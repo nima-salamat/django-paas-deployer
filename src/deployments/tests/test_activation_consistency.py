@@ -49,6 +49,16 @@ class DeploymentActivationConsistencyContractTests(unittest.TestCase):
         self.assertIn("current_deploy.cancel_requested", activation)
         self.assertIn("Deployment cancellation was requested before activation.", activation)
 
+    def test_stop_intent_is_fenced_before_celery_execution(self):
+        runtime_api = (ROOT / "services/api/runtime.py").read_text()
+        stop_endpoint = runtime_api.split("def stop_service_apiview", 1)[1].split("def _force_cancel_runtime_cleanup", 1)[0]
+        self.assertIn("bump_lifecycle(service_item.pk, desired_state=\"stopped\")", stop_endpoint)
+        self.assertIn("service_item.lifecycle_generation = lifecycle_generation", stop_endpoint)
+        self.assertIn("stop_service.apply_async(", stop_endpoint)
+
+    def test_deploy_worker_does_not_overwrite_lifecycle_intent(self):
+        self.assertNotIn("objects.filter(pk=deploy_item.service_id).update(desired_state=\"running\")", self.service)
+
     def test_activation_is_fenced_by_service_lifecycle_generation(self):
         self.assertIn("expected_lifecycle_generation", self.service)
         self.assertIn("actual_lifecycle_generation != expected_lifecycle_generation", self.service)
