@@ -462,6 +462,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "logs.retain_all_services",
         "schedule": 3600.0,  # hourly retention
     },
+    "reclaim_released_volumes": {
+        "task": "deployments.celery.tasks.reclaim_released_volumes",
+        "schedule": 3600.0,  # hourly bounded storage reclamation
+    },
     "logs_reconcile_usage": {
         "task": "logs.reconcile_usage",
         "schedule": 21600.0,  # 6h
