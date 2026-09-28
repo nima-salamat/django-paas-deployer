@@ -169,6 +169,25 @@ class StreamModeTests(SimpleTestCase):
         self.assertEqual(result["realtime_lines"][0]["message"], "[REDACTED]")
         redact.assert_called_once_with("password=secret")
 
+    @patch("logs.ingestion.ingest_lines")
+    def test_generator_artifact_is_never_persisted(self, mock_ingest):
+        from deployments.management.commands.run_log_collector import Command
+        mock_ingest.return_value = {
+            "inserted": 1, "duplicates": 0, "dropped": 0, "bytes": 6, "persisted": True,
+            "inserted_entries": [], "realtime_lines": [],
+        }
+        cmd = Command()
+        service = SimpleNamespace(pk="service-1")
+        stream = SimpleNamespace(pk=10)
+        policy = self.policy()
+        artifact = "<generator object APIClient._multiplexed_response_stream_helper at 0x7f525ff7b3e0>"
+        cmd._persist_batch("collector-1", service, stream, policy, [
+            {"ts": timezone.now(), "stream": "stdout", "message": artifact},
+            {"ts": timezone.now(), "stream": "stdout", "message": "real log"},
+        ])
+        persisted = mock_ingest.call_args.args[1]
+        self.assertEqual([item["message"] for item in persisted], ["real log"])
+
     def test_cursor_with_entry_id_roundtrip(self):
         from logs.query import _decode_cursor_parts, decode_cursor, encode_cursor
 
