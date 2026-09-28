@@ -697,13 +697,6 @@ def build_registered_base_image(
         ])
         if rebuild_after_success:
             try:
-                request_base_runtime_image_build(
-                    row.pk, force_rebuild=True, deployment_id=None
-                )
-            except Exception:
-                logger.exception("Failed to queue requested post-build base-image renewal for %s.", row.image_ref)
-        if rebuild_after_success:
-            try:
                 pending_fp = pending_details.get("pending_definition_fingerprint")
                 pending_ref = pending_details.get("pending_image_ref")
                 if pending_fp and pending_ref:
@@ -844,6 +837,7 @@ def _base_image_wait_timeout_seconds(deployment_id: str | None) -> int:
     if remaining is None:
         return base_image_build_timeout_minutes() * 60
     return remaining
+
 
 def _raise_base_image_failure(
     image_ref: str,
