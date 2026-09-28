@@ -53,12 +53,15 @@ class VolumeViewSet(SnippetViewSet):
     icon = "cog"
     menu_label = _("Volumes")
     menu_order = 103
-    list_display = ["name", "user", "service", "size_mb", "default_mode", "created_at"]
+    list_display = ["name", "user", "service", "size_mb", "default_mode", "released_at", "reclaim_attempted_at", "created_at"]
     search_fields = ["name", "user__username", "service__name"]
     list_filter = ["default_mode", "user"]
     panels = panels_for(
         editable=["name", "user", "service", "size_mb", "default_bind", "default_mode"],
-        read_only=["id", "service_attachments", "created_at", "updated_at"],
+        read_only=[
+            "id", "service_attachments", "released_at", "reclaim_attempted_at",
+            "reclaim_error", "created_at", "updated_at",
+        ],
     )
 
 
