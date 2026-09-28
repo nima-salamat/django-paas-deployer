@@ -137,46 +137,128 @@ def usage_details(usage: VolumeUsage) -> dict[str, Any]:
     }
 
 def reconcile_managed_volumes(client) -> dict[str, list[dict[str, Any]]]:
-    """Compare Docker volumes on the connected node with the Django registry."""
+    """Compare Docker volumes on the connected node with the Django registry.
+
+    The report distinguishes logical ownership from physical retention and
+    exposes measured usage when Docker provides it.
+    """
     try:
         docker_rows = client.volumes.list()
     except Exception as exc:
         return {
+            "active_tenant_storage": [],
+            "released_retained_storage": [],
+            "orphan_storage": [],
+            "unknown_storage": [],
             "docker_orphans": [],
             "docker_unowned_conflicts": [],
             "missing_docker": [],
             "error": [{"exception_type": type(exc).__name__, "error": str(exc)}],
         }
+
     docker_by_name = {}
     for row in docker_rows:
-        name = str(getattr(row, "name", "") or getattr(row, "attrs", {}).get("Name") or "").strip()
+        attrs = getattr(row, "attrs", {}) or {}
+        name = str(getattr(row, "name", "") or attrs.get("Name") or "").strip()
         if name:
             docker_by_name[name] = row
+
     try:
         from services.models import Volume as RegistryVolume
-        registry_rows = list(RegistryVolume.objects.values("id", "name", "service_id", "size_mb"))
+        registry_rows = list(
+            RegistryVolume.objects.values(
+                "id", "name", "service_id", "size_mb", "released_at"
+            )
+        )
     except Exception as exc:
         return {
+            "active_tenant_storage": [],
+            "released_retained_storage": [],
+            "orphan_storage": [],
+            "unknown_storage": [],
             "docker_orphans": [],
             "docker_unowned_conflicts": [],
             "missing_docker": [],
             "error": [{"exception_type": type(exc).__name__, "error": str(exc)}],
         }
+
+    usage_by_name = {}
+    try:
+        for record in _records(client.df()):
+            name = _name(record)
+            if name:
+                usage_by_name[name] = _used_bytes(record)
+    except Exception:
+        # Reconciliation remains useful even when Docker cannot report sizes.
+        usage_by_name = {}
+
     expected = {}
     for row in registry_rows:
         volume_id = str(row["id"])
         expected_name = f"vol-{volume_id.replace('-', '')[:8]}-{row['name']}"
         expected[expected_name] = row
+
     managed_names = set()
     for name, row in docker_by_name.items():
-        labels = dict(getattr(row, "attrs", {}).get("Labels") or {})
+        labels = dict((getattr(row, "attrs", {}) or {}).get("Labels") or {})
         if labels.get("managed-by") == "django-paas-deployer":
             managed_names.add(name)
+
+    active_tenant_storage = []
+    released_retained_storage = []
+    for name, row in expected.items():
+        if name not in docker_by_name:
+            continue
+        used_bytes = usage_by_name.get(name)
+        item = {
+            "volume": name,
+            "service_id": str(row["service_id"]) if row["service_id"] else None,
+            "declared_mb": row["size_mb"],
+            "used_mb": round(used_bytes / (1024 * 1024), 2) if used_bytes is not None else None,
+            "usage_available": used_bytes is not None,
+            "scope": "connected_node",
+        }
+        if row["released_at"] is not None and not row["service_id"]:
+            item.update({
+                "classification": "released_retained_storage",
+                "released_at": row["released_at"].isoformat(),
+            })
+            released_retained_storage.append(item)
+        elif row["service_id"]:
+            item["classification"] = "active_tenant_storage"
+            active_tenant_storage.append(item)
+
+    docker_orphans = [
+        {
+            "volume": name,
+            "scope": "connected_node",
+            "classification": "orphan_storage",
+            "used_mb": (
+                round(usage_by_name[name] / (1024 * 1024), 2)
+                if usage_by_name.get(name) is not None else None
+            ),
+        }
+        for name in sorted(managed_names - set(expected))
+    ]
+    unknown_storage = [
+        {
+            "volume": name,
+            "scope": "connected_node",
+            "classification": "unknown_storage",
+            "used_mb": (
+                round(usage_by_name[name] / (1024 * 1024), 2)
+                if usage_by_name.get(name) is not None else None
+            ),
+        }
+        for name in sorted(set(docker_by_name) - managed_names - set(expected))
+    ]
+
     return {
-        "docker_orphans": [
-            {"volume": name, "scope": "connected_node"}
-            for name in sorted(managed_names - set(expected))
-        ],
+        "active_tenant_storage": active_tenant_storage,
+        "released_retained_storage": released_retained_storage,
+        "orphan_storage": docker_orphans,
+        "unknown_storage": unknown_storage,
+        "docker_orphans": docker_orphans,
         "docker_unowned_conflicts": [
             {
                 "volume": name,
