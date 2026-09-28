@@ -244,3 +244,8 @@ def test_wagtail_listing_hook_hides_infrastructure_actions_from_non_operator():
         image_ref="paas-base/php-apache:8.4-r1",
     )
     assert list(base_runtime_image_listing_buttons(row, User())) == []
+def test_monitor_does_not_exempt_retry_pending_from_base_timeout():
+    source = (ROOT / "deployments" / "celery" / "schedules.py").read_text(encoding="utf-8")
+    block = source.split("def _reconcile_base_runtime_builds", 1)[1].split("def ", 1)[0]
+    assert 'policies["base_image_build_timeout_minutes"]' in block
+    assert "Skipping stale timeout for retry-pending" not in block
