@@ -30,6 +30,7 @@ class SwarmTaskState:
     node_name: str | None
     error: str
     message: str
+    image: str | None = None
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,9 @@ class SwarmServiceState:
     replicas_running: int
     tasks: tuple[SwarmTaskState, ...]
     labels: Mapping[str, str] = field(default_factory=dict)
+    service_image: str | None = None
+    update_state: str | None = None
+    update_message: str | None = None
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -373,6 +377,7 @@ class SwarmRuntime:
 
     def __init__(self, client=None):
         self.client = client or get_docker_client()
+        self._last_apply_operation: dict[str, Any] | None = None
 
     def assert_active(self) -> dict[str, Any]:
         if not swarm_enabled():
@@ -565,6 +570,8 @@ class SwarmRuntime:
         rows = []
         for task in service.tasks() or ():
             status = task.get("Status") or {}
+            task_spec = (task.get("Spec") or {}).get("ContainerSpec") or {}
+            task_image = str(task_spec.get("Image") or "").strip() or None
             node_name = None
             node_id = task.get("NodeID")
             if node_id:
@@ -583,6 +590,7 @@ class SwarmRuntime:
                     node_name=node_name,
                     error=str(status.get("Err") or ""),
                     message=str(status.get("Message") or ""),
+                    image=task_image,
                 )
             )
         return tuple(rows)
@@ -592,14 +600,19 @@ class SwarmRuntime:
             service = self.client.services.get(_validate_service_name(name))
         except docker.errors.NotFound:
             return None
-        tasks = self._task_states(service)
-        mode = ((service.attrs or {}).get("Spec") or {}).get("Mode") or {}
+        attrs = service.attrs or {}
+        spec = attrs.get("Spec") or {}
+        task_template = spec.get("TaskTemplate") or {}
+        container_spec = task_template.get("ContainerSpec") or {}
+        update_status = attrs.get("UpdateStatus") or {}
+        mode = spec.get("Mode") or {}
         replicas = int((mode.get("Replicated") or {}).get("Replicas") or 0)
         running = sum(
-            1 for task in tasks
+            1 for task in self._task_states(service)
             if task.state.lower() == "running"
             and task.desired_state.lower() == "running"
         )
+        tasks = self._task_states(service)
         return SwarmServiceState(
             name=str(service.name),
             service_id=str(service.id),
@@ -608,13 +621,51 @@ class SwarmRuntime:
             tasks=tasks,
             labels={
                 str(key): str(value)
-                for key, value in dict(((service.attrs or {}).get("Spec") or {}).get("Labels") or {}).items()
+                for key, value in dict(spec.get("Labels") or {}).items()
             },
+            service_image=str(container_spec.get("Image") or "").strip() or None,
+            update_state=str(update_status.get("State") or "").strip().lower() or None,
+            update_message=str(update_status.get("Message") or "").strip() or None,
         )
 
-    def wait_ready(self, name: str, *, timeout: float = 60.0) -> SwarmServiceState:
+    def _service_logs_for_failure(self, name: str, *, tail: int = 200) -> str:
+        """Best-effort collection of the failing Swarm service stdout/stderr."""
+        try:
+            service = self.client.services.get(_validate_service_name(name))
+            raw_logs = service.logs(
+                stdout=True,
+                stderr=True,
+                timestamps=True,
+                tail=tail,
+            )
+            if isinstance(raw_logs, bytes):
+                return raw_logs.decode("utf-8", errors="replace")
+            if not raw_logs:
+                return ""
+            return "".join(
+                chunk.decode("utf-8", errors="replace")
+                if isinstance(chunk, bytes)
+                else str(chunk)
+                for chunk in raw_logs
+            )
+        except Exception as exc:
+            return f"<unable to collect Swarm service logs: {exc}>"
+
+    def wait_ready(
+        self,
+        name: str,
+        *,
+        timeout: float = 60.0,
+        expected_image: str | None = None,
+    ) -> SwarmServiceState:
+        """Wait until a Swarm service has a running task for the expected spec."""
         deadline = time.monotonic() + float(timeout)
         latest = None
+        rollback_states = {
+            "rollback_started",
+            "rollback_paused",
+            "rollback_completed",
+        }
         while time.monotonic() < deadline:
             latest = self.inspect_service(name)
             if latest is None:
@@ -623,8 +674,71 @@ class SwarmRuntime:
                     stage="swarm_startup",
                     code="SWARM_SERVICE_MISSING",
                 )
-            if latest.replicas_desired == 1 and latest.replicas_running == 1:
+
+            if expected_image and latest.update_state in rollback_states:
+                service_logs = self._service_logs_for_failure(name)
+                technical = (
+                    f"Swarm service {name!r} rolled back from the requested image. "
+                    f"update_state={latest.update_state!r}; "
+                    f"update_message={latest.update_message or ''!r}; "
+                    f"expected_image={expected_image!r}; "
+                    f"service_image={latest.service_image!r}; "
+                    f"service_logs={service_logs[-12000:]}"
+                )
+                raise DeploymentError(
+                    technical,
+                    stage="swarm_startup",
+                    code="SWARM_UPDATE_ROLLED_BACK",
+                    user_message="The Swarm service failed to start the new application version and was rolled back.",
+                    technical_message=technical,
+                    details={
+                        "service": name,
+                        "update_state": latest.update_state,
+                        "update_message": latest.update_message,
+                        "expected_image": expected_image,
+                        "service_image": latest.service_image,
+                        "service_logs": service_logs[-12000:],
+                    },
+                )
+
+            if (
+                expected_image
+                and latest.service_image
+                and latest.service_image != expected_image
+                and latest.update_state not in rollback_states
+            ):
+                service_logs = self._service_logs_for_failure(name)
+                technical = (
+                    f"Swarm service {name!r} changed its task image while deployment "
+                    f"was waiting for readiness. expected_image={expected_image!r}; "
+                    f"service_image={latest.service_image!r}; "
+                    f"update_state={latest.update_state!r}; "
+                    f"service_logs={service_logs[-12000:]}"
+                )
+                raise DeploymentError(
+                    technical,
+                    stage="swarm_startup",
+                    code="SWARM_SERVICE_SPEC_CHANGED",
+                    user_message="The Swarm service changed while the deployment was starting it.",
+                    technical_message=technical,
+                    details={
+                        "service": name,
+                        "expected_image": expected_image,
+                        "service_image": latest.service_image,
+                        "update_state": latest.update_state,
+                        "service_logs": service_logs[-12000:],
+                    },
+                )
+
+            running = [
+                task for task in latest.tasks
+                if task.state.lower() == "running"
+                and task.desired_state.lower() == "running"
+                and (not expected_image or task.image == expected_image)
+            ]
+            if latest.replicas_desired == 1 and len(running) == 1:
                 return latest
+
             failed = [
                 task for task in latest.tasks
                 if task.state.lower() in {"failed", "rejected"}
@@ -633,47 +747,48 @@ class SwarmRuntime:
             if failed:
                 task = failed[0]
                 task_detail = task.error or task.message or task.state
-                service_logs = ""
-                try:
-                    service = self.client.services.get(_validate_service_name(name))
-                    raw_logs = service.logs(
-                        stdout=True,
-                        stderr=True,
-                        timestamps=True,
-                        tail=200,
-                    )
-                    if isinstance(raw_logs, bytes):
-                        service_logs = raw_logs.decode("utf-8", errors="replace")
-                    elif raw_logs:
-                        service_logs = "".join(
-                            chunk.decode("utf-8", errors="replace")
-                            if isinstance(chunk, bytes)
-                            else str(chunk)
-                            for chunk in raw_logs
-                        )
-                except Exception as log_exc:
-                    service_logs = f"<unable to collect Swarm service logs: {log_exc}>"
-                detail_suffix = f"; recent service logs:\n{service_logs[-12000:]}" if service_logs else ""
+                service_logs = self._service_logs_for_failure(name)
+                technical = (
+                    f"Swarm task failed: {task_detail}; "
+                    f"task_id={task.task_id}; node={task.node_name or task.node_id or ''}; "
+                    f"expected_image={expected_image!r}; task_image={task.image!r}; "
+                    f"service_image={latest.service_image!r}; "
+                    f"update_state={latest.update_state!r}; "
+                    f"update_message={latest.update_message or ''!r}; "
+                    f"service_logs={service_logs[-12000:]}"
+                )
                 raise DeploymentError(
-                    f"Swarm task failed: {task_detail}{detail_suffix}",
+                    technical,
                     stage="swarm_startup",
                     code="SWARM_TASK_FAILED",
+                    user_message="The Swarm task failed to start. Review deployment diagnostics for the application error.",
+                    technical_message=technical,
                     details={
                         "task_id": task.task_id,
                         "node_id": task.node_id,
                         "node_name": task.node_name,
                         "error": task.error,
                         "message": task.message,
-                        "service_logs": service_logs[-12000:] if service_logs else "",
+                        "task_image": task.image,
+                        "expected_image": expected_image,
+                        "service_image": latest.service_image,
+                        "update_state": latest.update_state,
+                        "update_message": latest.update_message,
+                        "service_logs": service_logs[-12000:],
                     },
                 )
             time.sleep(1)
+
         raise DeploymentError(
-            f"Swarm service {name!r} did not reach one running task within {timeout:.0f}s.",
+            f"Swarm service {name!r} did not reach the expected running task within {timeout:.0f}s.",
             stage="swarm_startup",
             code="SWARM_START_TIMEOUT",
             recoverable=True,
             details={
+                "expected_image": expected_image,
+                "service_image": latest.service_image if latest else None,
+                "update_state": latest.update_state if latest else None,
+                "update_message": latest.update_message if latest else None,
                 "replicas_desired": latest.replicas_desired if latest else None,
                 "replicas_running": latest.replicas_running if latest else None,
                 "tasks": [task.__dict__ for task in (latest.tasks if latest else ())],
@@ -796,6 +911,15 @@ class SwarmRuntime:
                 "environment": {},
             }]
 
+        service_id = str((config.labels or {}).get("service.id") or "").strip()
+        preexisting_service_names = (
+            set(self.service_names_for_service(service_id))
+            if service_id
+            else set()
+        )
+        recovery_operations: list[dict[str, Any]] = []
+        self._last_apply_operation = None
+
         self.assert_active()
         results: dict[str, SwarmServiceState] = {}
         desired_service_names: set[str] = set()
@@ -854,7 +978,31 @@ class SwarmRuntime:
                     stage="swarm_validation",
                     code="SWARM_REPLICA_COUNT_UNSUPPORTED",
                 )
-            results[process_name] = self.apply(process_config, image_ref=image_ref)
+
+            try:
+                results[process_name] = self.apply(process_config, image_ref=image_ref)
+                if self._last_apply_operation:
+                    recovery_operations.append(dict(self._last_apply_operation))
+            except DeploymentError as exc:
+                if self._last_apply_operation:
+                    recovery_operations.append(dict(self._last_apply_operation))
+                recovery = {
+                    "service_id": service_id,
+                    "preexisting_service_names": sorted(preexisting_service_names),
+                    "operations": recovery_operations,
+                    "rollback_services": sorted({
+                        str(item["name"])
+                        for item in recovery_operations
+                        if item.get("preexisting") and item.get("mutation_started")
+                    }),
+                    "remove_services": sorted({
+                        str(item["name"])
+                        for item in recovery_operations
+                        if not item.get("preexisting") and item.get("mutation_started")
+                    }),
+                }
+                exc.details = {**exc.details, "swarm_recovery": recovery}
+                raise
 
         if not results:
             raise DeploymentError(
@@ -864,28 +1012,28 @@ class SwarmRuntime:
                 user_message="The deployment has no enabled runtime process to start.",
             )
 
-        service_id = str((config.labels or {}).get("service.id") or "").strip()
-        if service_id:
-            existing_service_names = set(self.service_names_for_service(service_id))
-            stale_service_names = sorted(existing_service_names - desired_service_names)
-            for stale_name in stale_service_names:
-                try:
-                    self.remove(stale_name)
-                except docker.errors.DockerException as exc:
-                    raise DeploymentError(
-                        f"Unable to remove stale Swarm process service {stale_name!r}: {exc}",
-                        stage="swarm_cleanup",
-                        code="SWARM_STALE_PROCESS_CLEANUP_FAILED",
-                        recoverable=True,
-                    ) from exc
-            if stale_service_names:
-                logger.info(
-                    "Removed stale Swarm process services for service=%s: %s",
-                    service_id,
-                    stale_service_names,
-                )
+        stale_service_names = sorted(
+            set(self.service_names_for_service(service_id)) - desired_service_names
+        ) if service_id else []
+        for stale_name in stale_service_names:
+            try:
+                self.remove(stale_name)
+            except docker.errors.DockerException as exc:
+                raise DeploymentError(
+                    f"Unable to remove stale Swarm process service {stale_name!r}: {exc}",
+                    stage="swarm_cleanup",
+                    code="SWARM_STALE_PROCESS_CLEANUP_FAILED",
+                    recoverable=True,
+                ) from exc
+        if stale_service_names:
+            logger.info(
+                "Removed stale Swarm process services for service=%s: %s",
+                service_id,
+                stale_service_names,
+            )
 
         return results
+
 
     def cleanup_legacy_containers(self, *, service_id: str) -> int:
         """Remove old container-based runtime resources after Swarm activation."""
@@ -1052,16 +1200,48 @@ class SwarmRuntime:
             )
         )
         kwargs = self._create_kwargs(config, image_ref=image_ref, compose_spec=spec)
+        operation = {
+            "name": name,
+            "preexisting": False,
+            "mutation_started": False,
+            "mutation_succeeded": False,
+        }
+        expected_image = None
         try:
             service = self.client.services.get(name)
+            operation["preexisting"] = True
             service.reload()
+            operation["mutation_started"] = True
             service.update(
                 image=image_ref,
                 **{key: value for key, value in kwargs.items() if key != "name"},
             )
+            operation["mutation_succeeded"] = True
+            service.reload()
+            expected_image = (
+                str(
+                    (
+                        ((service.attrs or {}).get("Spec") or {})
+                        .get("TaskTemplate") or {}
+                    )
+                    .get("ContainerSpec") or {}
+                ).get("Image") or ""
+            ).strip() or None
         except docker.errors.NotFound:
+            operation["mutation_started"] = True
             try:
                 service = self.client.services.create(image_ref, **kwargs)
+                operation["mutation_succeeded"] = True
+                service.reload()
+                expected_image = (
+                    str(
+                        (
+                            ((service.attrs or {}).get("Spec") or {})
+                            .get("TaskTemplate") or {}
+                        )
+                        .get("ContainerSpec") or {}
+                    ).get("Image") or ""
+                ).strip() or None
             except docker.errors.APIError as exc:
                 raise DeploymentError(
                     f"Unable to create Swarm service {name!r}: {exc}",
@@ -1078,7 +1258,45 @@ class SwarmRuntime:
                 details={"service": name, "compose": spec},
                 recoverable=True,
             ) from exc
-        return self.wait_ready(name, timeout=getattr(config, "health_timeout", 60) or 60)
+        finally:
+            self._last_apply_operation = dict(operation)
+
+        return self.wait_ready(
+            name,
+            timeout=getattr(config, "health_timeout", 60) or 60,
+            expected_image=expected_image,
+        )
+
+    def rollback_service(self, name: str) -> bool:
+        """Request a server-side rollback to the previous Swarm service spec."""
+        service = self.client.services.get(_validate_service_name(name))
+        service.reload()
+        attrs = service.attrs or {}
+        update_state = str((attrs.get("UpdateStatus") or {}).get("State") or "").strip().lower()
+        if update_state in {"rollback_started", "rollback_paused", "rollback_completed"}:
+            return False
+
+        version = int(
+            ((attrs.get("Version") or {}).get("Index"))
+            or getattr(service, "version", 0)
+            or 0
+        )
+        if version <= 0:
+            raise DeploymentError(
+                f"Cannot rollback Swarm service {name!r}: missing service version.",
+                stage="rollback",
+                code="SWARM_ROLLBACK_VERSION_MISSING",
+            )
+
+        api = self.client.api
+        url = api._url("/services/{0}/update", service.id)
+        response = api._post_json(
+            url,
+            data={},
+            params={"version": version, "rollback": "previous"},
+        )
+        api._result(response, json=True)
+        return True
 
     def stop(self, name: str) -> None:
         try:
