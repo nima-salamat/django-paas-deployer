@@ -46,7 +46,7 @@ from .manager.network_manager import Network
 from .platform_bridge import enrich_config_from_project, extract_zip_to_temp
 from .rollback import ContainerSnapshot, RollbackManager
 from .types import DeploymentConfig, DeploymentResult, EventSink, EndpointSpec
-from .routing import resolve_public_host
+from .routing import public_http_endpoints, resolve_public_host
 from .validation import DeploymentValidator
 from .volumes import VolumeMountManager
 from .swarm import SwarmRuntime, swarm_enabled
@@ -1064,7 +1064,7 @@ class DeploymentOrchestrator:
     def _endpoint_labels(self, config: DeploymentConfig) -> dict[str, str]:
         """Generate Traefik routes for all public HTTP-family endpoints."""
         labels: dict[str, str] = {}
-        endpoints = [endpoint for endpoint in (config.endpoints or []) if endpoint.enabled and endpoint.exposure == "public"]
+        endpoints = public_http_endpoints(config)
         if not endpoints:
             return labels
         labels["traefik.enable"] = "true"
