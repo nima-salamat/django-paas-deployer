@@ -308,18 +308,20 @@ class BaseRuntimeImageAdmin(admin.ModelAdmin):
     list_filter = ("logical_runtime", "variant", "status", "enabled", "auto_build", "docker_host")
     search_fields = ("logical_runtime", "runtime_version", "image_ref", "source_image", "docker_host", "last_error")
     ordering = ("logical_runtime", "runtime_version", "variant")
-    actions = ("rebuild_selected", "enable_selected", "disable_selected", "delete_docker_images")
+    actions = ("ensure_selected", "rebuild_selected", "enable_selected", "disable_selected", "delete_docker_images")
     readonly_fields = (
         "image_ref", "image_id", "image_digest", "source_image", "docker_host", "status",
         "rebuild_requested", "rebuild_requested_at", "build_started_at", "build_completed_at",
-        "build_count", "build_task_id", "build_owner_deployment_id", "last_error", "created_at", "updated_at",
+        "build_count", "build_task_id", "build_owner_deployment_id", "definition_fingerprint",
+        "last_error", "created_at", "updated_at",
+        "logical_runtime", "runtime_version", "variant", "architecture", "image_repository", "image_tag",
     )
 
     fieldsets = (
-        ("Runtime", {"fields": ("logical_runtime", "runtime_version", "variant", "architecture")}),
+        ("Runtime identity", {"fields": ("logical_runtime", "runtime_version", "variant", "architecture")}),
         ("Docker image", {"fields": ("source_image", "image_repository", "image_tag", "image_ref", "image_id", "image_digest", "docker_host")}),
         ("Policy", {"fields": ("enabled", "auto_build", "rebuild_requested")}),
-        ("Build state", {"fields": ("status", "rebuild_requested_at", "build_started_at", "build_completed_at", "build_count", "build_task_id", "build_owner_deployment_id", "last_error")}),
+        ("Build state", {"fields": ("status", "rebuild_requested_at", "build_started_at", "build_completed_at", "build_count", "build_task_id", "build_owner_deployment_id", "definition_fingerprint", "last_error")}),
         ("Timestamps", {"fields": ("created_at", "updated_at")}),
     )
 
@@ -333,20 +335,42 @@ class BaseRuntimeImageAdmin(admin.ModelAdmin):
         color = colors.get(obj.status, "#6b7280")
         return format_html('<span class="badge" style="background:{};">{}</span>', color, obj.get_status_display())
 
-    @admin.action(description="Rebuild selected base images")
-    def rebuild_selected(self, request, queryset):
-        from django.utils import timezone
-        from deployments.celery.tasks import build_base_runtime_image
+    @admin.action(description="Build / ensure selected base images")
+    def ensure_selected(self, request, queryset):
+        from deploy.base_images import request_base_runtime_image_build
         count = 0
         for obj in queryset:
-            obj.status = BaseRuntimeImage.Status.PENDING
-            obj.enabled = True
-            obj.rebuild_requested = True
-            obj.rebuild_requested_at = timezone.now()
-            obj.save(update_fields=["status", "enabled", "rebuild_requested", "rebuild_requested_at", "updated_at"])
-            build_base_runtime_image.apply_async(args=[str(obj.pk)])
-            count += 1
-        self.message_user(request, f"Queued rebuild for {count} base image(s).")
+            try:
+                result = request_base_runtime_image_build(obj.pk, force_rebuild=False)
+            except Exception as exc:
+                self.message_user(request, f"{obj.image_ref}: {exc}", level=messages.ERROR)
+                continue
+            if result.get("cache_hit"):
+                self.message_user(request, f"{obj.image_ref}: already ready and compatible.")
+            else:
+                count += int(bool(result.get("queued")))
+        if count:
+            self.message_user(request, f"Queued {count} base image build(s).")
+
+    @admin.action(description="Renew / rebuild selected base images")
+    def rebuild_selected(self, request, queryset):
+        from deploy.base_images import request_base_runtime_image_build
+        count = 0
+        for obj in queryset:
+            try:
+                result = request_base_runtime_image_build(obj.pk, force_rebuild=True)
+            except Exception as exc:
+                self.message_user(request, f"{obj.image_ref}: {exc}", level=messages.ERROR)
+                continue
+            if result.get("coalesced"):
+                self.message_user(
+                    request,
+                    f"{obj.image_ref}: active build retained; renewal requested as a single follow-up."
+                )
+            elif result.get("queued"):
+                count += 1
+        if count:
+            self.message_user(request, f"Queued {count} base image renewal build(s).")
 
     @admin.action(description="Enable selected base images")
     def enable_selected(self, request, queryset):
@@ -370,6 +394,7 @@ class BaseRuntimeImageAdmin(admin.ModelAdmin):
                 continue
             count += 1
         self.message_user(request, f"Removed Docker image for {count} row(s).")
+
     def delete_model(self, request, obj):
         try:
             from deployments.core.manager.image_manager import Image
@@ -386,4 +411,3 @@ class BaseRuntimeImageAdmin(admin.ModelAdmin):
             except Exception:
                 self.message_user(request, f"Could not remove Docker image {obj.image_ref}.", level=messages.WARNING)
         super().delete_queryset(request, queryset)
-
