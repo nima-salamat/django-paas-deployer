@@ -45,6 +45,78 @@ logger = logging.getLogger(__name__)
 # Stages where a container is not expected to exist yet (build / prepare).
 # health_check / credentials / container_startup are excluded: by then a
 # container should exist and a missing one is a real failure.
+# Docker Swarm can transiently report zero running replicas while an
+# on-failure restart is between task attempts. Treat those states as degraded,
+# not terminal, until no desired-running task remains in a non-terminal state.
+SWARM_TRANSIENT_TASK_STATES = frozenset({
+    "new", "pending", "assigned", "accepted",
+    "preparing", "ready", "starting", "running",
+})
+SWARM_TERMINAL_TASK_STATES = frozenset({
+    "failed", "rejected", "shutdown", "orphaned",
+})
+
+def _swarm_has_terminal_runtime_failure(state) -> bool:
+    """True only when Swarm has no active restart/update path left."""
+    if state is None:
+        return True
+    update_state = str(getattr(state, "update_state", "") or "").lower()
+    if update_state in {"updating", "rollback_started", "rollback_paused"}:
+        return False
+    if update_state == "rollback_completed":
+        return True
+
+    desired = [
+        task for task in (getattr(state, "tasks", ()) or ())
+        if str(getattr(task, "desired_state", "") or "").lower() == "running"
+    ]
+    if not desired:
+        return state.replicas_desired == 0
+
+    if any(
+        str(getattr(task, "state", "") or "").lower() in SWARM_TRANSIENT_TASK_STATES
+        for task in desired
+    ):
+        return False
+
+    return all(
+        str(getattr(task, "state", "") or "").lower() in SWARM_TERMINAL_TASK_STATES
+        for task in desired
+    )
+
+def _swarm_failure_details(runtime, service_name: str, state) -> dict:
+    details = {
+        "runtime": "docker-swarm",
+        "service": service_name,
+        "replicas_desired": getattr(state, "replicas_desired", 0) if state else 0,
+        "replicas_running": getattr(state, "replicas_running", 0) if state else 0,
+        "update_state": getattr(state, "update_state", None) if state else None,
+        "update_message": getattr(state, "update_message", None) if state else None,
+        "tasks": [
+            {
+                "task_id": task.task_id,
+                "desired_state": task.desired_state,
+                "state": task.state,
+                "node_id": task.node_id,
+                "node_name": task.node_name,
+                "error": task.error,
+                "message": task.message,
+                "image": task.image,
+            }
+            for task in (getattr(state, "tasks", ()) or ())
+        ],
+    }
+    try:
+        raw = runtime.service_logs(service_name, tail=100)
+        details["service_logs"] = (
+            raw.decode("utf-8", "replace")
+            if isinstance(raw, (bytes, bytearray))
+            else str(raw or "")
+        )[-12000:]
+    except Exception as exc:
+        details["service_logs"] = f"<log collection failed: {exc}>"
+    return details
+
 PRE_CONTAINER_STAGES = frozenset({
     "",
     "idle",
@@ -717,11 +789,18 @@ def _reconcile_active_deploy_swarm(deploy: Deploy) -> None:
             stage = (locked.stage or "").strip().lower()
             if stage in PRE_CONTAINER_STAGES or int(locked.progress or 0) < 85:
                 return
+            if not _swarm_has_terminal_runtime_failure(state):
+                logger.warning(
+                    "Swarm service %s has no running task during a restart/update; "
+                    "waiting for Swarm to converge.",
+                    service_name,
+                )
+                return
             mark_deploy_failed(
                 deploy=locked,
-                message="The Swarm service has no running task.",
+                message="The Swarm service has no running task and no active restart attempt remains.",
                 stage="swarm_service_not_running",
-                details={"service": service_name, "runtime": "docker-swarm"},
+                details=_swarm_failure_details(runtime, service_name, state),
             )
             return
         if locked.status == DeploymentStatusChoices.ROLLING_BACK:
@@ -965,15 +1044,19 @@ def _reconcile_service_runtime_swarm(service: Service) -> None:
             return
         if locked.status in (SERVICE_STATUS_CHOICES.RUNNING, SERVICE_STATUS_CHOICES.SUCCEEDED):
             if not running:
+                if not _swarm_has_terminal_runtime_failure(state):
+                    logger.warning(
+                        "Swarm service %s has no running task during restart/backoff; "
+                        "keeping service status=%s.",
+                        service_name,
+                        locked.status,
+                    )
+                    return
                 mark_service_failed(
                     service=locked,
-                    message="Swarm service has no running task.",
+                    message="Swarm service has no running task and no active restart attempt remains.",
                     deploy=deploy,
-                    details={
-                        "runtime": "docker-swarm",
-                        "service": service_name,
-                        "replicas_desired": state.replicas_desired if state else 0,
-                    },
+                    details=_swarm_failure_details(runtime, service_name, state),
                 )
             elif locked.status == SERVICE_STATUS_CHOICES.SUCCEEDED:
                 mark_service_running(locked, deploy=deploy)
