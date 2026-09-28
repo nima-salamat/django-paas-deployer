@@ -35,6 +35,18 @@ class SwarmMonitorSemanticsTests(unittest.TestCase):
         state = self._state(tasks=[self._task(state="starting")])
         self.assertFalse(_swarm_has_terminal_runtime_failure(state))
 
+    def test_failed_task_with_restart_policy_is_transient(self):
+        state = self._state(
+            tasks=[self._task(state="failed", error="exit 1")],
+        )
+        state.restart_condition = "on-failure"
+        self.assertFalse(_swarm_has_terminal_runtime_failure(state))
+
+    def test_missing_task_with_restart_policy_is_transient(self):
+        state = self._state(tasks=[], replicas_desired=1)
+        state.restart_condition = "on-failure"
+        self.assertFalse(_swarm_has_terminal_runtime_failure(state))
+
     def test_terminal_failed_task_is_terminal(self):
         state = self._state(
             tasks=[self._task(
