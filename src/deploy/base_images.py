@@ -322,7 +322,10 @@ def make_specs(config) -> list[BaseImageSpec]:
             platform == "laravel"
             or str(getattr(application, "kind", "") or "").lower() == "laravel"
         )
-        has_frontend = getattr(config, "frontend_root", None) is not None
+        has_frontend = (
+            getattr(config, "frontend_root", None) is not None
+            or bool(getattr(project_model, "frontends", None))
+        )
         if is_laravel and has_frontend:
             specs.append(_node("20"))
     elif platform in {"python", "django", "flask", "fastapi"}:
