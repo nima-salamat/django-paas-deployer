@@ -665,6 +665,43 @@ class DeployService:
                     cfg["public_host"] = primary_endpoint.hostname
 
 
+        # Docker-source runtime metadata intentionally overrides the stale
+        # revision graph for this source kind. The immutable revision still
+        # carries the original service intent, while the uploaded Docker
+        # source is the authority for its own Compose runtime semantics.
+        docker_runtime_source = cfg.get("docker_source_runtime") or {}
+        if platform == "docker" and docker_runtime_source:
+            source_environment = {
+                str(k): str(v)
+                for k, v in dict(docker_runtime_source.get("environment") or {}).items()
+            }
+            explicit_environment = {
+                str(k): str(v)
+                for k, v in dict(cfg.get("env") or cfg.get("environment") or {}).items()
+            }
+            environment = {**source_environment, **explicit_environment}
+            cfg["environment"] = dict(environment)
+            if docker_runtime_source.get("read_only"):
+                runtime_options["read_only"] = True
+            if docker_runtime_source.get("working_directory"):
+                runtime_options["working_directory"] = str(docker_runtime_source["working_directory"])
+            if docker_runtime_source.get("port"):
+                port = int(docker_runtime_source["port"])
+            if docker_runtime_source.get("healthcheck_path"):
+                healthcheck_path = str(docker_runtime_source["healthcheck_path"])
+            if docker_runtime_source.get("healthcheck_timeout"):
+                healthcheck_timeout = float(docker_runtime_source["healthcheck_timeout"])
+            command = docker_runtime_source.get("entrypoint") or docker_runtime_source.get("command")
+            if docker_runtime_source.get("entrypoint") and docker_runtime_source.get("command"):
+                command = f"{docker_runtime_source['entrypoint']} {docker_runtime_source['command']}".strip()
+            if command:
+                cfg["start_command"] = str(command)
+            runtime_options["docker_source_labels"] = dict(docker_runtime_source.get("labels") or {})
+            if docker_runtime_source.get("public") and docker_runtime_source.get("port"):
+                runtime_options["docker_source_public"] = True
+            cfg["runtime_options"] = runtime_options
+
+
         # URL handling is intentionally scoped: it can change the public/asset
         # URL policy without disabling platform detection, builds or static
         # serving. Explicit environment values always win.
@@ -809,22 +846,56 @@ class DeployService:
         )
 
         endpoint_specs = []
-        for raw_endpoint in (runtime_graph.endpoints if runtime_graph is not None else ()):
+        if platform == "docker" and docker_runtime_source.get("port"):
             endpoint_specs.append(
                 EndpointSpec(
-                    name=raw_endpoint.name,
-                    target_port=raw_endpoint.target_port,
-                    published_port=raw_endpoint.published_port,
-                    protocol=raw_endpoint.protocol,
-                    exposure=raw_endpoint.exposure,
-                    hostname=raw_endpoint.hostname,
-                    path=raw_endpoint.path,
-                    tls=raw_endpoint.tls,
-                    enabled=raw_endpoint.enabled,
-                    process=raw_endpoint.process,
-                    metadata=raw_endpoint.metadata,
+                    name="docker-web",
+                    target_port=int(docker_runtime_source["port"]),
+                    published_port=None,
+                    protocol="http",
+                    exposure="public" if docker_runtime_source.get("public") else "internal",
+                    hostname=str(cfg.get("public_host") or cfg.get("domain") or ""),
+                    path="",
+                    tls=False,
+                    enabled=True,
+                    process="web",
+                    metadata={
+                        "source": "docker-compose" if cfg.get("source_kind") == "compose" else "dockerfile",
+                        "source_file": str((cfg.get("docker_source_report") or {}).get("source_file") or ""),
+                    },
                 )
             )
+        elif runtime_graph is not None:
+            for raw_endpoint in runtime_graph.endpoints:
+                endpoint_specs.append(
+                    EndpointSpec(
+                        name=raw_endpoint.name,
+                        target_port=raw_endpoint.target_port,
+                        published_port=raw_endpoint.published_port,
+                        protocol=raw_endpoint.protocol,
+                        exposure=raw_endpoint.exposure,
+                        hostname=raw_endpoint.hostname,
+                        path=raw_endpoint.path,
+                        tls=raw_endpoint.tls,
+                        enabled=raw_endpoint.enabled,
+                        process=raw_endpoint.process,
+                        metadata=raw_endpoint.metadata,
+                    )
+                )
+
+        if platform == "docker" and docker_runtime_source:
+            source_command = cfg.get("start_command")
+            if source_command:
+                cfg["processes"] = [{
+                    "name": "web",
+                    "process_type": "web",
+                    "command": source_command,
+                    "entrypoint": None,
+                    "replicas": 1,
+                    "enabled": True,
+                    "environment": {},
+                }]
+                runtime_options["processes"] = list(cfg["processes"])
 
         networks: list[tuple[str, str]] = []
         if getattr(service, "network", None) is not None and getattr(service.network, "name", None):
