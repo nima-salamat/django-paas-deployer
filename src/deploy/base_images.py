@@ -306,7 +306,25 @@ def make_specs(config) -> list[BaseImageSpec]:
     if platform in {"php", "laravel", "lumen", "symfony", "codeigniter"}:
         version = _normalize_version(runtime, "8.4")
         specs.append(_php(version))
-        if platform == "laravel" and getattr(config, "frontend_root", None) is not None:
+
+        # Laravel + Node frontend can arrive with platform="php" when the
+        # platform inspector misses the framework marker (for example a
+        # deeply nested archive). The structured project model is the
+        # authoritative secondary signal and should still enable the cached
+        # Node builder.
+        project_model = getattr(config, "project_model", None)
+        application = None
+        try:
+            application = project_model.applications[0] if project_model and project_model.applications else None
+        except (AttributeError, IndexError, TypeError):
+            application = None
+        is_laravel = (
+            platform == "laravel"
+            or str(getattr(project_model, "applications", [{}])[0].kind if project_model and getattr(project_model, "applications", None) else "").lower() == "laravel"
+            or str(getattr(application, "kind", "") or "").lower() == "laravel"
+        )
+        has_frontend = getattr(config, "frontend_root", None) is not None
+        if is_laravel and has_frontend:
             specs.append(_node("20"))
     elif platform in {"python", "django", "flask", "fastapi"}:
         specs.append(_python(_normalize_version(runtime, "3.11")))
