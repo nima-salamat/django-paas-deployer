@@ -222,8 +222,9 @@ def test_release_transition_is_centralized_and_reclaimable():
     assert "previous_service_id" in source
     assert "self.released_at = self.released_at or timezone.now()" in source
     assert "reclaim_attempted_at" in source
-    tasks = __import__("pathlib").Path(
-        __file__).resolve().parents[2] / "deployments" / "celery" / "tasks.py"
+    tasks = (
+        __import__("pathlib").Path(__file__).resolve().parents[2]
+        / "deployments" / "celery" / "tasks.py"
     ).read_text(encoding="utf-8")
     assert "reclaim_released_volumes" in tasks
     assert "released_at__lte=cutoff" in tasks
