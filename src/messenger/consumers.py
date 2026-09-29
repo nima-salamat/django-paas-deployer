@@ -17,6 +17,7 @@ from channels.layers import get_channel_layer
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from rest_framework.exceptions import AuthenticationFailed
+from auth_users.authentication import get_session_id_from_access_token, resolve_user_from_access_token
 from auth_users.session_auth import resolve_session
 
 User = get_user_model()
@@ -251,7 +252,6 @@ async def authenticate_from_scope(scope):
     access_token = (params.get("token") or [None])[0]
     if not access_token:
         return None
-    from auth_users.authentication import resolve_user_from_access_token
     user = await database_sync_to_async(resolve_user_from_access_token)(access_token)
     if not user:
         return None
