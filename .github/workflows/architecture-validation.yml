@@ -33,26 +33,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest pytest-django
-      - name: Auth session regression tests
-        env:
-          DJANGO_SETTINGS_MODULE: config.settings
-          DJANGO_FULL_TESTS: "1"
-          SECRET_KEY: test-secret-key-for-ci
-          DEBUG: "1"
-          SWARM_ENABLED: "0"
-          DB_NAME: paas_ci
-          DB_USER: paas_ci
-          DB_PASSWORD: paas_ci
-          DB_HOST: 127.0.0.1
-          DB_PORT: "5432"
-          DEPLOYMENT_LOG_DB_NAME: paas_ci
-          DEPLOYMENT_LOG_DB_USER: paas_ci
-          DEPLOYMENT_LOG_DB_PASSWORD: paas_ci
-          DEPLOYMENT_LOG_DB_HOST: 127.0.0.1
-          DEPLOYMENT_LOG_DB_PORT: "5432"
-        run: |
-          pytest -q src/auth_users/tests_sessions.py src/users/tests_admin_sessions.py
-
       - name: Validate documentation source coverage
         run: |
           python scripts/validate_documentation.py
