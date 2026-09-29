@@ -25,7 +25,7 @@ CRITICAL_COMPOSE_KEYS = {
     "cap_add", "cap_drop", "security_opt", "sysctls", "ulimits", "runtime",
     "secrets", "configs", "credential_spec", "container_name", "hostname",
     "domainname", "extra_hosts", "dns", "dns_search", "init", "profiles", "extends",
-    "links", "external_links", "volumes_from", "user",
+    "links", "external_links", "volumes_from", "user", "platform",
 }
 
 RESERVED_LABEL_PREFIXES = (
@@ -417,6 +417,15 @@ def inspect_docker_source(project_root: str, *, environment: dict[str, str] | No
                     "compose_custom_network", "critical", "deny",
                     "Custom/external Compose networks are not imported; PassDeployer owns networking.", compose_name,
                 ))
+        service_networks = service.get("networks") or []
+        if isinstance(service_networks, dict):
+            service_networks = list(service_networks)
+        if any(str(item) != "default" for item in service_networks):
+            findings.append(DockerPolicyFinding(
+                "compose_service_custom_network", "critical", "deny",
+                "Service-level custom/external networks are not imported.",
+                compose_name,
+            ))
         if document.get("secrets") or document.get("configs"):
             findings.append(DockerPolicyFinding(
                 "compose_top_level_secrets_or_configs", "critical", "deny",
@@ -493,9 +502,17 @@ def inspect_docker_source(project_root: str, *, environment: dict[str, str] | No
 
         findings.extend(analyze_dockerfile(dockerfile_text, source_file=source_file))
 
+        restart_value = str(service.get("restart") or "").strip().lower()
+        restart_policy = {
+            "always": {"condition": "any"},
+            "unless-stopped": {"condition": "any"},
+            "on-failure": {"condition": "on-failure"},
+            "no": {"condition": "none"},
+        }.get(restart_value)
         runtime: dict[str, Any] = {
             "environment": env,
             "build_args": build_args,
+            "restart_policy": restart_policy or {},
             "command": _command(service.get("command"), "command"),
             "entrypoint": _command(service.get("entrypoint"), "entrypoint"),
             "working_directory": service.get("working_dir"),
@@ -516,6 +533,12 @@ def inspect_docker_source(project_root: str, *, environment: dict[str, str] | No
 
         ports = list(service.get("ports") or [])
         if ports:
+            if any("/udp" in str(item).lower() for item in ports):
+                findings.append(DockerPolicyFinding(
+                    "compose_udp_port_unsupported", "critical", "deny",
+                    "UDP port publication is not supported by the Docker application routing model.",
+                    compose_name,
+                ))
             raw = ports[0]
             if isinstance(raw, dict):
                 target = int(raw.get("target") or raw.get("published") or 0)
