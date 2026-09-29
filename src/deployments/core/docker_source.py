@@ -300,7 +300,7 @@ def analyze_dockerfile(text: str, *, source_file: str) -> list[DockerPolicyFindi
             tokens = line.split()
             sources = tokens[1:-1] if len(tokens) >= 3 else []
             for source in sources:
-                source_clean = source.strip("'\\"")
+                source_clean = source.strip("'\\\"")
                 if SENSITIVE_CONTEXT_RE.search(source_clean):
                     findings.append(DockerPolicyFinding(
                         "dockerfile_sensitive_context_copy", "critical", "deny",
