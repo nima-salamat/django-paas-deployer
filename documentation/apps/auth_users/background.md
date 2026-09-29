@@ -6,7 +6,13 @@ OTP creation, validation and consumption are synchronous security operations; de
 
 ## Session state
 
-SessionJWTAuthentication resolves session-bound JWTs on every authenticated request. Session resolution may use Redis acceleration, but revocation/expiry/device state comes from UserSession.
+SessionJWTAuthentication resolves session-bound JWTs on every authenticated request. Redis is a bounded acceleration layer for UserSession lookups; PostgreSQL remains authoritative for session identity, expiry and revocation.
+
+A newly issued session is populated into Redis immediately after the login transaction commits. The default session-cache lease is 15 minutes and is renewed while the cached entry is actively used, with a 5-minute refresh threshold. Session last-seen timestamps are persisted on a bounded interval rather than on every API request.
+
+Session revocation paths invalidate Redis only after the durable database transaction commits. This includes single-session revoke, logout-all, device revoke, automatic oldest-session eviction and Django Admin session/device actions.
+
+Each user is limited by LoginSettings.max_active_sessions. When that ceiling is reached the configured eviction policy either revokes the oldest active sessions or rejects the new login.
 
 Password reset and verified contact changes revoke existing sessions after the durable mutation commits.
 
