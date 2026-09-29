@@ -8,6 +8,7 @@ from .authentication import SessionJWTAuthentication
 from .models import Device, LoginSettings, UserSession
 from .session_auth import (
     ensure_session_can_revoke_others,
+    session_management_min_age,
     invalidate_all_sessions,
     invalidate_device,
     invalidate_session,
@@ -60,11 +61,29 @@ class SessionListAPIView(SessionAPIBase):
             .order_by("-last_seen_at")
         )
         policy = LoginSettings.get_solo()
+        current_session = next(
+            (session for session in sessions if session.session_id == current_id),
+            None,
+        )
+        min_management_age = session_management_min_age()
+        current_age_seconds = (
+            max(0, int((now - current_session.created_at).total_seconds()))
+            if current_session is not None
+            else 0
+        )
+        can_revoke_others = current_session is not None and (
+            current_age_seconds >= int(min_management_age.total_seconds())
+        )
         return Response(
             {
                 "results": [_session_payload(s, current_id) for s in sessions],
                 "active_count": len(sessions),
                 "max_active_sessions": policy.max_active_sessions,
+                "session_management": {
+                    "minimum_age_seconds": int(min_management_age.total_seconds()),
+                    "current_session_age_seconds": current_age_seconds,
+                    "can_revoke_others": can_revoke_others,
+                },
             }
         )
 
