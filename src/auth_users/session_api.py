@@ -1,9 +1,11 @@
 from rest_framework.permissions import IsAuthenticated
+from django.db.models import Count, Q
+from django.utils import timezone
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .authentication import SessionJWTAuthentication
-from .models import Device, UserSession
+from .models import Device, LoginSettings, UserSession
 from .session_auth import invalidate_all_sessions, invalidate_device, invalidate_session
 
 
@@ -31,10 +33,24 @@ def _session_payload(session, current_id=None):
 class SessionListAPIView(SessionAPIBase):
     def get(self, request):
         current_id = getattr(request.auth, "get", lambda *_: None)("sid") if request.auth else None
-        sessions = UserSession.objects.filter(
-            user=request.user, revoked_at__isnull=True
-        ).select_related("device").order_by("-last_seen_at")
-        return Response({"results": [_session_payload(s, current_id) for s in sessions]})
+        now = timezone.now()
+        sessions = list(
+            UserSession.objects.filter(
+                user=request.user,
+                revoked_at__isnull=True,
+                expires_at__gt=now,
+            )
+            .select_related("device")
+            .order_by("-last_seen_at")
+        )
+        policy = LoginSettings.get_solo()
+        return Response(
+            {
+                "results": [_session_payload(s, current_id) for s in sessions],
+                "active_count": len(sessions),
+                "max_active_sessions": policy.max_active_sessions,
+            }
+        )
 
 
 class SessionRevokeAPIView(SessionAPIBase):
@@ -54,21 +70,36 @@ class SessionLogoutAllAPIView(SessionAPIBase):
 
 class DeviceListAPIView(SessionAPIBase):
     def get(self, request):
-        devices = Device.objects.filter(user=request.user).order_by("-last_seen_at")
-        return Response({
-            "results": [
-                {
-                    "id": str(device.public_id),
-                    "name": device.name,
-                    "platform": device.platform,
-                    "client": device.client,
-                    "last_seen_at": device.last_seen_at,
-                    "revoked_at": device.revoked_at,
-                    "active_sessions": device.sessions.filter(revoked_at__isnull=True).count(),
-                }
-                for device in devices
-            ]
-        })
+        now = timezone.now()
+        devices = (
+            Device.objects.filter(user=request.user)
+            .annotate(
+                active_session_count=Count(
+                    "sessions",
+                    filter=Q(
+                        sessions__revoked_at__isnull=True,
+                        sessions__expires_at__gt=now,
+                    ),
+                )
+            )
+            .order_by("-last_seen_at")
+        )
+        return Response(
+            {
+                "results": [
+                    {
+                        "id": str(device.public_id),
+                        "name": device.name,
+                        "platform": device.platform,
+                        "client": device.client,
+                        "last_seen_at": device.last_seen_at,
+                        "revoked_at": device.revoked_at,
+                        "active_sessions": device.active_session_count,
+                    }
+                    for device in devices
+                ]
+            }
+        )
 
 
 class DeviceSessionsRevokeAPIView(SessionAPIBase):
