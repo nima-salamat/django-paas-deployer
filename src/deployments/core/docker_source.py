@@ -340,7 +340,7 @@ def analyze_dockerfile(text: str, *, source_file: str) -> list[DockerPolicyFindi
             if match:
                 findings.append(DockerPolicyFinding(
                     "dockerfile_dangerous_command", "high", "deny",
-                    f"Dangerous build operation '{match.group(2)}' is not allowed.", source_file, number,
+                    f"Dangerous build operation '{match.group(1)}' is not allowed.", source_file, number,
                 ))
         if upper.startswith(("ENV ", "ARG ")):
             assignment = line.split(None, 1)[1]
@@ -361,7 +361,7 @@ def analyze_dockerfile(text: str, *, source_file: str) -> list[DockerPolicyFindi
             if match:
                 findings.append(DockerPolicyFinding(
                     "dockerfile_dangerous_runtime", "critical", "deny",
-                    f"Runtime operation '{match.group(2)}' is not allowed.", source_file, number,
+                    f"Runtime operation '{match.group(1)}' is not allowed.", source_file, number,
                 ))
         if upper.startswith("USER ") and line.split(None, 1)[1].strip().lower() in {"0", "root"}:
             findings.append(DockerPolicyFinding(
