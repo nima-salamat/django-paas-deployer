@@ -35,7 +35,6 @@ class AuthenticatedSessionContext:
 @dataclass(frozen=True)
 class _CachedSession:
     context: AuthenticatedSessionContext
-    cached_at: datetime
 
 
 def session_cache_key(session_id: str) -> str:
@@ -93,21 +92,12 @@ def _deserialize_cache_value(value) -> _CachedSession | None:
         # values do not carry a lease timestamp, so treat them as freshly read.
         if "session" in data:
             session_data = data["session"]
-            cached_at_raw = data.get("cached_at")
         else:
             session_data = data
-            cached_at_raw = None
 
         expires_at = datetime.fromisoformat(str(session_data["expires_at"]))
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=dt_timezone.utc)
-
-        if cached_at_raw:
-            cached_at = datetime.fromisoformat(str(cached_at_raw))
-            if cached_at.tzinfo is None:
-                cached_at = cached_at.replace(tzinfo=dt_timezone.utc)
-        else:
-            cached_at = timezone.now()
 
         return _CachedSession(
             context=AuthenticatedSessionContext(
