@@ -35,3 +35,16 @@ user/service cache quotas.
 Tenant quota numbers are logical artifact accounting; the global BuildKit
 number is the physical shared cache measurement. They are intentionally not
 expected to be equal when layers are shared.
+
+## Implementation ownership
+
+The production implementation is in `src/deploy/build_cache.py`.
+
+The durable tenant records are:
+
+- `BuildCacheArtifact`: one logical application-image artifact linked to its User, Service and Deploy.
+- `BuildCacheQuota`: an operator override owned by exactly one User or one Service.
+
+The Docker image build integration is in `src/deployments/core/manager/image_manager.py`
+and `src/deployments/core/orchestrator.py`. Scheduled maintenance is owned by
+`src/deployments/celery/tasks.py`.
