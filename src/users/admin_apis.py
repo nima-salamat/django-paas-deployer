@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from django.contrib.auth import get_user_model
 from django.db.models import Q
+from django.utils import timezone
 from django.utils.translation import gettext as _
 from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
@@ -34,6 +35,8 @@ from rest_framework.views import APIView
 from auth_users.authentication import SessionJWTAuthentication as JWTAuthentication
 
 from .models import Rule, Profile
+from auth_users.models import LoginSettings, UserSession
+from auth_users.session_auth import invalidate_all_sessions, invalidate_session
 
 User = get_user_model()
 
@@ -68,6 +71,8 @@ KNOWN_PERMISSIONS = [
     # Login system
     "login_settings.view",
     "login_settings.manage",
+    "auth_sessions.view",
+    "auth_sessions.manage",
     # DB tables browser (NEW)
     "tables.view",
     "tables.manage",
@@ -507,6 +512,115 @@ class AdminUserRulesAPIView(APIView):
         clean = [r for r in rules if r in KNOWN_PERMISSIONS]
         Rule.objects.update_or_create(user=u, defaults={"rules": clean})
         return ok("Rules updated", data={"rules": clean})
+
+
+class _AdminSessionPermission(BasePermission):
+    """Require a session-management permission for staff operators."""
+
+    def has_permission(self, request, view):
+        u = request.user
+        if not u or not u.is_authenticated:
+            return False
+        if u.is_superuser:
+            return True
+        if not u.is_staff:
+            return False
+        required = getattr(view, "required_rule", None)
+        return bool(required and user_has_rule(u, required))
+
+
+class AdminUserSessionListAPIView(APIView):
+    """List active authentication sessions for a managed user."""
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, _AdminSessionPermission]
+    required_rule = "auth_sessions.view"
+
+    def get(self, request, pk):
+        try:
+            target = User.objects.get(pk=pk)
+        except User.DoesNotExist:
+            return err("User not found", status.HTTP_404_NOT_FOUND)
+
+        now = timezone.now()
+        sessions = list(
+            UserSession.objects.filter(
+                user=target,
+                revoked_at__isnull=True,
+                expires_at__gt=now,
+                device__revoked_at__isnull=True,
+            )
+            .select_related("device")
+            .order_by("-last_seen_at")
+        )
+        policy = LoginSettings.get_solo()
+        return ok(
+            data={
+                "user": {
+                    "id": target.id,
+                    "username": target.username,
+                    "is_active": bool(target.is_active),
+                },
+                "active_count": len(sessions),
+                "max_active_sessions": policy.max_active_sessions,
+                "results": [
+                    {
+                        "id": session.session_id,
+                        "device_id": str(session.device.public_id),
+                        "device": {
+                            "name": session.device.name,
+                            "platform": session.device.platform,
+                            "client": session.device.client,
+                        },
+                        "created_at": session.created_at,
+                        "last_seen_at": session.last_seen_at,
+                        "expires_at": session.expires_at,
+                    }
+                    for session in sessions
+                ],
+            }
+        )
+
+
+class AdminUserSessionRevokeAPIView(APIView):
+    """Revoke one active session of a managed user."""
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, _AdminSessionPermission]
+    required_rule = "auth_sessions.manage"
+
+    def delete(self, request, pk, session_id):
+        try:
+            target = User.objects.get(pk=pk)
+        except User.DoesNotExist:
+            return err("User not found", status.HTTP_404_NOT_FOUND)
+
+        session = UserSession.objects.filter(
+            user=target,
+            session_id=str(session_id),
+        ).first()
+        if session is None:
+            return err("Session not found", status.HTTP_404_NOT_FOUND)
+
+        invalidate_session(session.session_id)
+        return ok("Session revoked")
+
+
+class AdminUserSessionLogoutAllAPIView(APIView):
+    """Revoke every active session of a managed user."""
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, _AdminSessionPermission]
+    required_rule = "auth_sessions.manage"
+
+    def post(self, request, pk):
+        try:
+            target = User.objects.get(pk=pk)
+        except User.DoesNotExist:
+            return err("User not found", status.HTTP_404_NOT_FOUND)
+
+        count = invalidate_all_sessions(target.id)
+        return ok("Sessions revoked", data={"revoked": count})
 
 
 class MePermissionsAPIView(APIView):
