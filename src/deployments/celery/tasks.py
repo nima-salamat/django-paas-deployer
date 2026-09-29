@@ -36,7 +36,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from core.global_settings.config import SERVICE_STATUS_CHOICES  # type: ignore
-from deploy.models import BaseRuntimeImage, Deploy, DeployLog, DeploymentStatusChoices  # type: ignore
+from deploy.models import BuildCacheArtifact, BaseRuntimeImage, Deploy, DeployLog, DeploymentStatusChoices  # type: ignore
 from deployments.core.db_deployer import (
     DB_PLATFORMS,
     DBDeployer,
@@ -324,6 +324,54 @@ def build_base_runtime_image(self, base_image_id, force_rebuild=False, build_pol
             exc,
         )
         raise
+
+@shared_task(bind=True, max_retries=0, name="deployments.celery.tasks.maintain_build_cache")
+def maintain_build_cache(self, force=False) -> dict[str, object]:
+    """Reconcile tenant application-image retention and global BuildKit GC."""
+    from deploy.build_cache import (
+        build_cache_policy,
+        enforce_service_cache_quota,
+        enforce_user_cache_quota,
+        prune_global_build_cache,
+    )
+    policy = build_cache_policy()
+    if not policy["enabled"] and not force:
+        return {"status": "disabled"}
+
+    service_ids = (
+        BuildCacheArtifact.objects.filter(reclaimed_at__isnull=True)
+        .values_list("service_id", flat=True)
+        .distinct()
+    )
+    user_ids = (
+        BuildCacheArtifact.objects.filter(reclaimed_at__isnull=True)
+        .values_list("user_id", flat=True)
+        .distinct()
+    )
+    service_results = [
+        enforce_service_cache_quota(str(service_id))
+        for service_id in service_ids.iterator()
+    ]
+    user_results = [
+        enforce_user_cache_quota(str(user_id))
+        for user_id in user_ids.iterator()
+    ]
+    global_result = prune_global_build_cache(force=bool(force))
+    return {
+        "status": global_result.get("status", "ok"),
+        "services": len(service_results),
+        "users": len(user_results),
+        "tenant_removed": sum(
+            int(item.get("removed", 0))
+            for item in service_results + user_results
+        ),
+        "tenant_reclaimed_bytes": sum(
+            int(item.get("reclaimed_bytes", 0))
+            for item in service_results + user_results
+        ),
+        "global": global_result,
+    }
+
 
 @shared_task(bind=True, max_retries=0, name="deployments.celery.tasks.reclaim_released_volumes")
 def reclaim_released_volumes(self, batch_size=100) -> dict[str, int]:
