@@ -774,9 +774,14 @@ class DeployService:
             networks=networks,
             volumes=volume_specs,
             port=port,
-            # Laravel/PHP need writable storage even when service.read_only
-            # is True (root FS RO).  Named volumes cover storage paths.
-            read_only=service.read_only,
+            # The Service flag is the default compatibility value, but an
+            # explicit runtime.read_only setting is a deliberate per-deployment
+            # override and must not be silently ignored.
+            read_only=(
+                as_bool(runtime_options["read_only"])
+                if "read_only" in runtime_options
+                else bool(service.read_only)
+            ),
             platform=platform,
             platform_type=service.plan.plan_type,
             event_sink=state_tracker.event_sink,
