@@ -322,8 +322,11 @@ def detect_laravel_roots(
             artisan_dirs.add(parent_of(n))
         elif base == "composer.json":
             pkg = _read_json_bytes(read_file(n))
-            req = pkg.get("require")
-            if isinstance(req, dict) and "laravel/framework" in req:
+            requirements = {
+                **(pkg.get("require") or {}),
+                **(pkg.get("require-dev") or {}),
+            }
+            if "laravel/framework" in requirements:
                 composer_laravel_dirs.append(parent_of(n))
 
     if composer_laravel_dirs:
