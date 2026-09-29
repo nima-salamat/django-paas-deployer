@@ -13,14 +13,21 @@ class SessionJWTAuthentication(JWTAuthentication):
     """Authenticate JWTs and enforce the server-side session authority when present."""
 
     def authenticate(self, request):
-        raw_token = self.get_raw_token(self.get_header(request))
+        header = self.get_header(request)
+        if header is None:
+            return None
+
+        raw_token = self.get_raw_token(header)
         if raw_token is None:
             return None
 
         validated_token = self.get_validated_token(raw_token)
+        return self._authenticate_validated_token(validated_token)
+
+    def _authenticate_validated_token(self, validated_token):
         session_id = validated_token.get("sid")
         if not session_id:
-            return super().authenticate(request)
+            raise AuthenticationFailed("Authentication session is required.")
 
         user_id = validated_token.get("user_id")
         try:
@@ -42,14 +49,18 @@ def resolve_user_from_access_token(raw_token):
     """Resolve bearer/query credentials for non-DRF transports."""
     try:
         validated = AccessToken(raw_token)
+        session_id = validated.get("sid")
+        if not session_id:
+            return None
+
         user_id = validated.get("user_id") or validated.get("user")
         if not user_id:
             return None
+
+        resolve_session(session_id, user_id=user_id)
         user = get_user_model().objects.only(
             "id", "is_active", "username"
         ).get(pk=user_id)
-        if validated.get("sid"):
-            resolve_session(validated["sid"], user_id=user.id)
         if not user.is_active:
             return None
         return user
