@@ -45,6 +45,16 @@ class SessionJWTAuthentication(JWTAuthentication):
         return user, validated_token
 
 
+def get_session_id_from_access_token(raw_token):
+    """Return the session id embedded in a validated access JWT."""
+    try:
+        validated = AccessToken(raw_token)
+        session_id = validated.get("sid")
+        return str(session_id) if session_id else None
+    except (InvalidToken, TokenError, KeyError):
+        return None
+
+
 def resolve_user_from_access_token(raw_token):
     """Resolve bearer/query credentials for non-DRF transports."""
     try:
