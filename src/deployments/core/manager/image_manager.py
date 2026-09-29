@@ -259,6 +259,57 @@ def _make_image_ref(name: str, tag: Any) -> str:
 # Image manager
 # ---------------------------------------------------------------------------
 
+_SECURE_CONTEXT_IGNORE_LINES = (
+    ".env",
+    ".env.*",
+    "!.env.example",
+    "!.env.*.example",
+    "*.env",
+    "!*.env.example",
+    "!*.env.*.example",
+    "*.pem",
+    "*.key",
+    "id_rsa*",
+    "credentials/",
+    "credentials.*",
+    "secrets/",
+    ".aws/",
+    ".ssh/",
+)
+
+
+def _ensure_secure_dockerignore(build_root: str) -> None:
+    """Prevent common secret material from entering a tenant Docker build context.
+
+    This is defense in depth for Docker-source deployments. The policy layer
+    rejects explicit Dockerfile copies of sensitive paths, while this ignore
+    file protects broad COPY . instructions too.
+    """
+    path = os.path.join(build_root, ".dockerignore")
+    existing = ""
+    try:
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                existing = handle.read()
+    except OSError:
+        existing = ""
+
+    present = {line.strip() for line in existing.splitlines() if line.strip() and not line.lstrip().startswith("#")}
+    additions = [line for line in _SECURE_CONTEXT_IGNORE_LINES if line not in present]
+    if not additions:
+        return
+
+    block = "\n# PassDeployer mandatory secret-file protection\n" + "\n".join(additions) + "\n"
+    try:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(block)
+    except OSError as exc:
+        raise ImageBuildError(
+            "PassDeployer could not establish secure Docker build-context filtering.",
+            details={"path": path, "error": str(exc)},
+        ) from exc
+
+
 class Image(Client):
     def __init__(
         self,
@@ -624,18 +675,39 @@ class Image(Client):
                             stripped,
                         )
 
-                    build_path = tmpdir
-                    app_dir = os.path.join(tmpdir, "app")
-                    if os.path.isdir(app_dir) and os.path.exists(os.path.join(app_dir, "Dockerfile")):
-                        build_path = app_dir
-                    else:
-                        with open(os.path.join(tmpdir, "Dockerfile"), "w", encoding="utf-8") as f:
-                            f.write(self.dockerfile_text)
+                    secure_docker_source = bool(
+                        (self.build_options or {}).get("secure_docker_source")
+                    )
 
-                    df_path = os.path.join(build_path, "Dockerfile")
-                    if not os.path.isfile(df_path):
-                        with open(df_path, "w", encoding="utf-8") as f:
+                    if secure_docker_source:
+                        # The security inspector validated the archive root as the
+                        # only supported Compose build context. Do not auto-select
+                        # an app/ subdirectory here: doing so could make a different
+                        # Dockerfile become authoritative than the one we inspected.
+                        # Always materialize exactly the validated Dockerfile and
+                        # attach the mandatory Dockerfile ignore rules to the
+                        # actual Docker build context.
+                        build_path = tmpdir
+                        with open(
+                            os.path.join(build_path, "Dockerfile"),
+                            "w",
+                            encoding="utf-8",
+                        ) as f:
                             f.write(self.dockerfile_text)
+                        _ensure_secure_dockerignore(build_path)
+                    else:
+                        build_path = tmpdir
+                        app_dir = os.path.join(tmpdir, "app")
+                        if os.path.isdir(app_dir) and os.path.exists(os.path.join(app_dir, "Dockerfile")):
+                            build_path = app_dir
+                        else:
+                            with open(os.path.join(tmpdir, "Dockerfile"), "w", encoding="utf-8") as f:
+                                f.write(self.dockerfile_text)
+
+                        df_path = os.path.join(build_path, "Dockerfile")
+                        if not os.path.isfile(df_path):
+                            with open(df_path, "w", encoding="utf-8") as f:
+                                f.write(self.dockerfile_text)
 
                     # docker-py 7.x validates BuildApiMixin.build(tag=...) as a
                     # *tag only*, not as a full repository:tag reference, and

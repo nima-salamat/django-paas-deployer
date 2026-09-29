@@ -396,6 +396,121 @@ class DeployService:
             except Exception:
                 pass
 
+        # Docker platform is source-driven: a tenant Dockerfile or single-service
+        # Compose file is inspected and normalized before any Docker build starts.
+        # Never execute docker compose itself and never import host paths from it.
+        docker_source_resolution = None
+        if platform == "docker" and getattr(deploy_item, "zip_file", None):
+            inspect_dir = None
+            try:
+                archive_path = deploy_item.zip_file.path
+                from deployments.core.platform_bridge import extract_zip_to_temp
+                from deployments.core.docker_source import inspect_docker_source
+                inspect_dir, docker_root = extract_zip_to_temp(archive_path)
+                docker_source_resolution = inspect_docker_source(
+                    docker_root,
+                    environment=dict(cfg.get("env") or cfg.get("environment") or {}),
+                )
+            except DeploymentValidationError:
+                raise
+            except Exception as exc:
+                raise DeploymentValidationError(
+                    "Docker source security validation failed.",
+                    stage="docker_source_validation",
+                    details={"technical_error": str(exc)},
+                ) from exc
+            finally:
+                if inspect_dir:
+                    import shutil as _shutil
+                    _shutil.rmtree(inspect_dir, ignore_errors=True)
+
+            report = docker_source_resolution.report()
+            cfg["docker_source_report"] = report
+            cfg["docker_source_runtime"] = dict(docker_source_resolution.runtime or {})
+            cfg["docker_source_volumes"] = list(docker_source_resolution.volumes or [])
+            if docker_source_resolution.blocked:
+                raise DeploymentValidationError(
+                    "The supplied Docker source contains operations that PassDeployer does not allow.",
+                    stage="docker_source_validation",
+                    details=report,
+                )
+            for finding in docker_source_resolution.findings:
+                if finding.action == "strip":
+                    logger.warning(
+                        "Docker source policy stripped %s from %s: %s",
+                        finding.code, finding.path or "source", finding.message,
+                    )
+                elif finding.action == "warn":
+                    logger.warning(
+                        "Docker source policy warning %s in %s: %s",
+                        finding.code, finding.path or "source", finding.message,
+                    )
+            logger.info(
+                "Docker source accepted: kind=%s file=%s findings=%d volumes=%d",
+                docker_source_resolution.source_kind,
+                docker_source_resolution.source_file,
+                len(docker_source_resolution.findings),
+                len(docker_source_resolution.volumes),
+            )
+            # Current execution uses the normalized Dockerfile as the sole build
+            # input; Compose is only the declarative source for runtime options.
+            dockerfile_text = docker_source_resolution.dockerfile_text
+            docker_runtime = docker_source_resolution.runtime or {}
+            compose_env = dict(docker_runtime.get("environment") or {})
+            explicit_env = dict(cfg.get("env") or cfg.get("environment") or {})
+            cfg["environment"] = {**compose_env, **explicit_env}
+            cfg["env"] = dict(cfg["environment"])
+            source_build_args = dict(docker_runtime.get("build_args") or {})
+            if source_build_args:
+                cfg["build_options"] = {
+                    **dict(cfg.get("build_options") or {}),
+                    "build_args": {
+                        **source_build_args,
+                        **dict((cfg.get("build_options") or {}).get("build_args") or {}),
+                    },
+                }
+            if "read_only" in docker_runtime:
+                cfg.setdefault("runtime_options", {})["read_only"] = bool(docker_runtime.get("read_only"))
+            if "restart_policy" in docker_runtime:
+                cfg.setdefault("runtime_options", {})["restart_policy"] = dict(
+                    docker_runtime.get("restart_policy") or {}
+                )
+            if docker_runtime.get("working_directory"):
+                cfg["working_directory"] = str(docker_runtime["working_directory"])
+            if docker_runtime.get("port"):
+                cfg["port"] = int(docker_runtime["port"])
+            if docker_runtime.get("public") and docker_runtime.get("port"):
+                cfg["docker_source_public"] = True
+            command = docker_runtime.get("entrypoint") or docker_runtime.get("command")
+            if docker_runtime.get("entrypoint") and docker_runtime.get("command"):
+                command = f"{docker_runtime['entrypoint']} {docker_runtime['command']}".strip()
+            if command:
+                cfg["start_command"] = str(command)
+            if docker_runtime.get("healthcheck_path"):
+                cfg["healthcheck_path"] = str(docker_runtime["healthcheck_path"])
+            if docker_runtime.get("healthcheck_timeout"):
+                cfg["healthcheck_timeout"] = float(docker_runtime["healthcheck_timeout"])
+            if docker_runtime.get("labels"):
+                cfg["labels"] = {
+                    **dict(docker_runtime.get("labels") or {}),
+                    **dict(cfg.get("labels") or {}),
+                }
+            cfg["source_kind"] = docker_source_resolution.source_kind
+            cfg.setdefault("build_options", {})["secure_docker_source"] = True
+            # Keep the normalized result on the in-memory Deploy compatibility
+            # object so volume resolution later in this same execution sees it.
+            try:
+                raw_cfg = dict(deploy_item.config or {}) if isinstance(deploy_item.config, dict) else {}
+                raw_cfg.update({
+                    "source_kind": docker_source_resolution.source_kind,
+                    "docker_source_report": report,
+                    "docker_source_runtime": dict(docker_source_resolution.runtime or {}),
+                    "docker_source_volumes": list(docker_source_resolution.volumes or []),
+                })
+                deploy_item.config = raw_cfg
+            except Exception:
+                pass
+
         # Explicit config always wins over detector output.
         detected_project_cfg = runtime_options.get("project_cfg") or {}
         build_command = cfg.get("build_command") or detected_project_cfg.get("build_command")
@@ -428,7 +543,11 @@ class DeployService:
             )
             if cfg.get(k) is not None and str(cfg.get(k)).strip() != ""
         }
-        if str(cfg.get("dockerfile_source") or "").strip().lower() == "archive":
+        if docker_source_resolution is not None:
+            # Secure Docker source inspection above already selected and
+            # validated the tenant Dockerfile / Compose build input.
+            pass
+        elif str(cfg.get("dockerfile_source") or "").strip().lower() == "archive":
             try:
                 archive_path = deploy_item.zip_file.path if getattr(deploy_item, "zip_file", None) else ""
                 dockerfile_text = DeploymentHelper.get_dockerfile_from_archive(archive_path)
@@ -562,6 +681,43 @@ class DeployService:
                 port = primary_endpoint.target_port
                 if primary_endpoint.hostname:
                     cfg["public_host"] = primary_endpoint.hostname
+
+
+        # Docker-source runtime metadata intentionally overrides the stale
+        # revision graph for this source kind. The immutable revision still
+        # carries the original service intent, while the uploaded Docker
+        # source is the authority for its own Compose runtime semantics.
+        docker_runtime_source = cfg.get("docker_source_runtime") or {}
+        if platform == "docker" and docker_runtime_source:
+            source_environment = {
+                str(k): str(v)
+                for k, v in dict(docker_runtime_source.get("environment") or {}).items()
+            }
+            explicit_environment = {
+                str(k): str(v)
+                for k, v in dict(cfg.get("env") or cfg.get("environment") or {}).items()
+            }
+            environment = {**source_environment, **explicit_environment}
+            cfg["environment"] = dict(environment)
+            if docker_runtime_source.get("read_only"):
+                runtime_options["read_only"] = True
+            if docker_runtime_source.get("working_directory"):
+                runtime_options["working_directory"] = str(docker_runtime_source["working_directory"])
+            if docker_runtime_source.get("port"):
+                port = int(docker_runtime_source["port"])
+            if docker_runtime_source.get("healthcheck_path"):
+                healthcheck_path = str(docker_runtime_source["healthcheck_path"])
+            if docker_runtime_source.get("healthcheck_timeout"):
+                healthcheck_timeout = float(docker_runtime_source["healthcheck_timeout"])
+            command = docker_runtime_source.get("entrypoint") or docker_runtime_source.get("command")
+            if docker_runtime_source.get("entrypoint") and docker_runtime_source.get("command"):
+                command = f"{docker_runtime_source['entrypoint']} {docker_runtime_source['command']}".strip()
+            if command:
+                cfg["start_command"] = str(command)
+            runtime_options["docker_source_labels"] = dict(docker_runtime_source.get("labels") or {})
+            if docker_runtime_source.get("public") and docker_runtime_source.get("port"):
+                runtime_options["docker_source_public"] = True
+            cfg["runtime_options"] = runtime_options
 
 
         # URL handling is intentionally scoped: it can change the public/asset
@@ -708,22 +864,56 @@ class DeployService:
         )
 
         endpoint_specs = []
-        for raw_endpoint in (runtime_graph.endpoints if runtime_graph is not None else ()):
+        if platform == "docker" and docker_runtime_source.get("port"):
             endpoint_specs.append(
                 EndpointSpec(
-                    name=raw_endpoint.name,
-                    target_port=raw_endpoint.target_port,
-                    published_port=raw_endpoint.published_port,
-                    protocol=raw_endpoint.protocol,
-                    exposure=raw_endpoint.exposure,
-                    hostname=raw_endpoint.hostname,
-                    path=raw_endpoint.path,
-                    tls=raw_endpoint.tls,
-                    enabled=raw_endpoint.enabled,
-                    process=raw_endpoint.process,
-                    metadata=raw_endpoint.metadata,
+                    name="docker-web",
+                    target_port=int(docker_runtime_source["port"]),
+                    published_port=None,
+                    protocol="http",
+                    exposure="public" if docker_runtime_source.get("public") else "internal",
+                    hostname=str(cfg.get("public_host") or cfg.get("domain") or ""),
+                    path="",
+                    tls=False,
+                    enabled=True,
+                    process="web",
+                    metadata={
+                        "source": "docker-compose" if cfg.get("source_kind") == "compose" else "dockerfile",
+                        "source_file": str((cfg.get("docker_source_report") or {}).get("source_file") or ""),
+                    },
                 )
             )
+        elif runtime_graph is not None:
+            for raw_endpoint in runtime_graph.endpoints:
+                endpoint_specs.append(
+                    EndpointSpec(
+                        name=raw_endpoint.name,
+                        target_port=raw_endpoint.target_port,
+                        published_port=raw_endpoint.published_port,
+                        protocol=raw_endpoint.protocol,
+                        exposure=raw_endpoint.exposure,
+                        hostname=raw_endpoint.hostname,
+                        path=raw_endpoint.path,
+                        tls=raw_endpoint.tls,
+                        enabled=raw_endpoint.enabled,
+                        process=raw_endpoint.process,
+                        metadata=raw_endpoint.metadata,
+                    )
+                )
+
+        if platform == "docker" and docker_runtime_source:
+            source_command = cfg.get("start_command")
+            if source_command:
+                cfg["processes"] = [{
+                    "name": "web",
+                    "process_type": "web",
+                    "command": source_command,
+                    "entrypoint": None,
+                    "replicas": 1,
+                    "enabled": True,
+                    "environment": {},
+                }]
+                runtime_options["processes"] = list(cfg["processes"])
 
         networks: list[tuple[str, str]] = []
         if getattr(service, "network", None) is not None and getattr(service.network, "name", None):
@@ -1100,6 +1290,56 @@ class DeployService:
                     },
                 ) from exc
 
+
+    @classmethod
+    def _ensure_docker_source_volumes(cls, service, volume_defs: list[dict]) -> None:
+        """Materialize Compose named volumes as registry-owned PassDeployer volumes."""
+        if not volume_defs:
+            return
+        for item in volume_defs[:8]:
+            target = str(item.get("target") or "").strip()
+            compose_name = str(item.get("compose_name") or "").strip()
+            mode = str(item.get("mode") or "rw").lower()
+            if not target:
+                continue
+            existing = service.volumes.filter(default_bind=target).order_by("created_at").first()
+            if existing is not None:
+                continue
+            safe_name = re.sub(r"[^a-z0-9_.-]+", "-", compose_name.lower()).strip("-") or "data"
+            volume_name = f"dv-{service.id.hex[:8]}-{safe_name}"[:32]
+            size_mb = 256
+            ok, msg = service.can_allocate_storage(size_mb)
+            if not ok:
+                raise DeploymentValidationError(
+                    f"Compose persistent volume '{compose_name or target}' cannot be allocated within the service storage quota.",
+                    stage="volume_creation",
+                    details={
+                        "service_id": str(service.pk),
+                        "compose_volume": compose_name,
+                        "target": target,
+                        "requested_mb": size_mb,
+                        "quota_error": msg,
+                    },
+                )
+            Volume.objects.create(
+                name=volume_name,
+                user_id=service.user_id,
+                service=service,
+                service_attachments={
+                    str(service.id): {
+                        "bind": target,
+                        "mode": "ro" if mode in {"ro", "readonly"} else "rw",
+                    }
+                },
+                default_bind=target,
+                default_mode="r" if mode in {"ro", "readonly"} else "rw",
+                size_mb=size_mb,
+            )
+            logger.info(
+                "Registered Docker Compose named volume %s -> %s for service %s.",
+                volume_name, target, service.pk,
+            )
+
     @staticmethod
     def _volume_specs(deploy_item: Deploy, platform: str | None = None) -> list:
         service = deploy_item.service
@@ -1118,6 +1358,12 @@ class DeployService:
                 except Exception:
                     cfg = {}
             plat = (platform or str(cfg.get("platform") or "")).lower()
+            if plat == "docker":
+                cls_source_volumes = cfg.get("docker_source_volumes") or []
+                if isinstance(cls_source_volumes, list):
+                    DeployService._ensure_docker_source_volumes(
+                        service, cls_source_volumes
+                    )
             cfg_db = ""
             env_cfg = cfg.get("env") or cfg.get("environment") or {}
             if isinstance(env_cfg, dict):
