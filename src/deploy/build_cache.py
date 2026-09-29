@@ -257,7 +257,7 @@ def _running_image_ids(client=None) -> set[str]:
     client = client or get_docker_client()
     ids: set[str] = set()
     try:
-        for container in client.containers.list(all=True):
+        for container in client.containers.list():
             image_id = str(getattr(getattr(container, "image", None), "id", "") or "")
             if image_id:
                 ids.add(image_id)
