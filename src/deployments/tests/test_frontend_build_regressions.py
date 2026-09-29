@@ -320,6 +320,44 @@ def test_laravel_only_in_wrapper_dir():
     assert model.flattened_wrapper == "MyProject"
 
 
+def test_laravel_frontend_detection_falls_back_to_tar_when_project_model_is_empty():
+    d = load_dockerfile_module()
+    import types as _types
+
+    empty_model = _types.SimpleNamespace(
+        frontends=[],
+        application_root=".",
+    )
+    tar = make_tar({
+        "artisan": "<?php",
+        "composer.json": LARAVEL_COMPOSER,
+        "package.json": '{"scripts":{"build":"vite build"},"devDependencies":{"vite":"7"}}',
+        "vite.config.js": "export default {}",
+        "package-lock.json": "{}",
+    })
+    detected = d._detect_laravel_frontend(
+        tar,
+        project_model=empty_model,
+    )
+    assert detected["has_package_json"] is True
+    assert detected["kind"] == "vite"
+    assert detected["frontend_root"] == "."
+
+
+def test_laravel_vite_react_swc_is_detected_as_vite():
+    model = _build_model({
+        "artisan": "<?php",
+        "composer.json": LARAVEL_COMPOSER,
+        "package.json": (
+            '{"scripts":{"build":"vite build"},'
+            '"dependencies":{"react":"19"},'
+            '"devDependencies":{"@vitejs/plugin-react-swc":"4"}}'
+        ),
+        "vite.config.ts": "export default {}",
+    })
+    assert model.frontends[0].kind == "vite"
+
+
 def test_laravel_plus_vite_same_directory():
     model = _build_model({
         "artisan": "<?php",
