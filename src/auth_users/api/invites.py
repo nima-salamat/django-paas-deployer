@@ -43,6 +43,7 @@ def ok(msg, data=None, http_status=status.HTTP_200_OK):
 # Public endpoint: current login settings
 # ---------------------------------------------------------------------------
 class InviteValidateAPIView(APIView):
+    authentication_classes = []
     permission_classes = [AllowAny]
 
     def get(self, request):
