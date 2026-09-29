@@ -1,4 +1,4 @@
-"""DRF authentication for JWTs bound to revocable server-side sessions."""
+"""DRF authentication requiring JWTs bound to revocable server-side sessions."""
 from __future__ import annotations
 
 from django.contrib.auth import get_user_model
@@ -10,7 +10,7 @@ from .session_auth import resolve_session
 
 
 class SessionJWTAuthentication(JWTAuthentication):
-    """Authenticate JWTs and enforce the server-side session authority when present."""
+    """Authenticate only JWTs bound to an active server-side session."""
 
     def authenticate(self, request):
         header = self.get_header(request)
