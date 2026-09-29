@@ -469,8 +469,12 @@ class DeployService:
                         **dict((cfg.get("build_options") or {}).get("build_args") or {}),
                     },
                 }
-            if docker_runtime.get("read_only"):
-                cfg.setdefault("runtime_options", {})["read_only"] = True
+            if "read_only" in docker_runtime:
+                cfg.setdefault("runtime_options", {})["read_only"] = bool(docker_runtime.get("read_only"))
+            if "restart_policy" in docker_runtime:
+                cfg.setdefault("runtime_options", {})["restart_policy"] = dict(
+                    docker_runtime.get("restart_policy") or {}
+                )
             if docker_runtime.get("working_directory"):
                 cfg["working_directory"] = str(docker_runtime["working_directory"])
             if docker_runtime.get("port"):
