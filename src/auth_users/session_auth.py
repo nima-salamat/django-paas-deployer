@@ -18,9 +18,8 @@ from .models import Device, UserSession
 logger = logging.getLogger("auth_users.session")
 
 SESSION_CACHE_PREFIX = "auth:session:"
-SESSION_CACHE_VERSION = 2
+SESSION_CACHE_VERSION = 3
 DEFAULT_SESSION_CACHE_TTL = 15 * 60
-DEFAULT_SESSION_CACHE_REFRESH_THRESHOLD = 5 * 60
 DEFAULT_SESSION_DB_TOUCH_INTERVAL = 5 * 60
 
 
@@ -50,20 +49,6 @@ def _cache_ttl() -> int:
         return DEFAULT_SESSION_CACHE_TTL
 
 
-def _cache_refresh_threshold() -> int:
-    try:
-        configured = int(
-            getattr(
-                settings,
-                "AUTH_SESSION_CACHE_REFRESH_THRESHOLD",
-                DEFAULT_SESSION_CACHE_REFRESH_THRESHOLD,
-            )
-        )
-    except (TypeError, ValueError):
-        configured = DEFAULT_SESSION_CACHE_REFRESH_THRESHOLD
-    return max(0, min(configured, _cache_ttl()))
-
-
 def _db_touch_interval() -> int:
     try:
         return max(
@@ -82,13 +67,10 @@ def _db_touch_interval() -> int:
 
 def _serialize_cache_value(
     context: AuthenticatedSessionContext,
-    *,
-    cached_at: datetime,
 ) -> str:
     return json.dumps(
         {
             "version": SESSION_CACHE_VERSION,
-            "cached_at": cached_at.isoformat(),
             "session": {
                 "session_id": context.session_id,
                 "user_id": context.user_id,
@@ -185,7 +167,7 @@ def _write_cached_context(
     try:
         cache.set(
             session_cache_key(context.session_id),
-            _serialize_cache_value(context, cached_at=now),
+            _serialize_cache_value(context),
             ttl,
         )
     except Exception:
@@ -194,6 +176,26 @@ def _write_cached_context(
             context.session_id[:12],
             exc_info=True,
         )
+
+
+def _touch_session_cache(
+    context: AuthenticatedSessionContext,
+    *,
+    now: datetime,
+) -> bool:
+    remaining = int((context.expires_at - now).total_seconds())
+    ttl = min(_cache_ttl(), remaining)
+    if ttl <= 0:
+        return False
+    try:
+        return bool(cache.touch(session_cache_key(context.session_id), ttl))
+    except Exception:
+        logger.warning(
+            "session cache touch failed session=%s",
+            context.session_id[:12],
+            exc_info=True,
+        )
+        return False
 
 
 def cache_session(
@@ -255,10 +257,11 @@ def resolve_session(session_id: str, *, user_id=None) -> AuthenticatedSessionCon
         cached = cached_entry.context
         same_user = user_id is None or cached.user_id == int(user_id)
         if same_user and cached.expires_at > now:
-            age = max(0.0, (now - cached_entry.cached_at).total_seconds())
-            if age >= _cache_refresh_threshold():
-                _write_cached_context(cached, now=now)
-            return cached
+            # touch() extends an existing key without recreating it. If a
+            # concurrent revoke deleted the key between GET and TOUCH, fall
+            # through to the authoritative database lookup.
+            if _touch_session_cache(cached, now=now):
+                return cached
 
         try:
             cache.delete(key)
