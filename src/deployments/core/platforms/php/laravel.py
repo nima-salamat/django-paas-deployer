@@ -18,10 +18,22 @@ class LaravelPlatform(PHPPlatform):
         has_artisan = self._exists("artisan", file_index)
         composer_paths = self._find("composer.json", file_index)
         is_laravel = False
-        if composer_paths:
-            text = self._read_text(file_index[composer_paths[0]]).lower()
-            if "laravel/framework" in text:
-                is_laravel = True
+        for composer_path in composer_paths:
+            try:
+                import json
+                with open(file_index[composer_path], "rb") as fh:
+                    data = json.loads(fh.read(512_000).decode("utf-8", "ignore"))
+                requirements = {
+                    **(data.get("require") or {}),
+                    **(data.get("require-dev") or {}),
+                }
+                if "laravel/framework" in requirements:
+                    is_laravel = True
+                    break
+            except (OSError, ValueError, TypeError):
+                # A malformed/unreadable composer file should not prevent
+                # artisan-based Laravel detection from succeeding.
+                continue
         if not has_artisan and not is_laravel:
             return None
         return DetectionResult(
