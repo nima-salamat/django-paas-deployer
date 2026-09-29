@@ -496,6 +496,7 @@ class DeployService:
                     **dict(cfg.get("labels") or {}),
                 }
             cfg["source_kind"] = docker_source_resolution.source_kind
+            cfg.setdefault("build_options", {})["secure_docker_source"] = True
             # Keep the normalized result on the in-memory Deploy compatibility
             # object so volume resolution later in this same execution sees it.
             try:
