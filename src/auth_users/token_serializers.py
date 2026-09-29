@@ -35,10 +35,7 @@ class SessionTokenRefreshSerializer(TokenRefreshSerializer):
             session_id = refresh.get("sid")
             user_id = refresh.get("user_id")
 
-            if not session_id:
-                # Legacy tokens remain compatible during the migration window.
-                return super().validate(attrs)
-            if not user_id:
+            if not session_id or not user_id:
                 raise AuthenticationFailed(
                     "Authentication session is invalid or revoked."
                 )
@@ -108,12 +105,11 @@ class SessionTokenVerifySerializer(TokenVerifySerializer):
             token = UntypedToken(attrs["token"])
             session_id = token.get("sid")
             user_id = token.get("user_id")
-            if session_id:
-                if not user_id:
-                    raise AuthenticationFailed(
-                        "Authentication session is invalid or revoked."
-                    )
-                resolve_session(session_id, user_id=user_id)
+            if not session_id or not user_id:
+                raise AuthenticationFailed(
+                    "Authentication session is required."
+                )
+            resolve_session(session_id, user_id=user_id)
         except (InvalidToken, TokenError, AuthenticationFailed) as exc:
             raise AuthenticationFailed(
                 "Authentication session is invalid or revoked."
