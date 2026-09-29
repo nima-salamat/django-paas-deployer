@@ -51,6 +51,13 @@ RUNTIME_DOCKER_RE = re.compile(
     r"(?i)(^|[\s;&|])(dockerd\b|docker\s+run\b|docker\s+exec\b|nsenter\b|unshare\b|/var/run/docker\.sock|mount\b)"
 )
 
+SENSITIVE_CONTEXT_RE = re.compile(
+    r"(?i)(^|[/\\])(?:\.env(?:\.[^/\\]+)?|.*\.(?:pem|key)|id_rsa(?:\.[^/\\]+)?|"
+    r"credentials?(?:\.[^/\\]+)?|secrets?(?:[/\\]|\.|$)|\.aws(?:[/\\]|$)|\.ssh(?:[/\\]|$))"
+)
+
+DIND_IMAGE_RE = re.compile(r"(?i)^FROM\s+(?:[^\s/]+/)?docker(?::[^\s]+)?[-:]dind(?:@sha256:[^\s]+)?")
+
 
 @dataclass(frozen=True)
 class DockerPolicyFinding:
@@ -280,6 +287,25 @@ def analyze_dockerfile(text: str, *, source_file: str) -> list[DockerPolicyFindi
         upper = line.upper()
         if not line or line.startswith("#"):
             continue
+        if upper.startswith("FROM "):
+            image_ref = line.split(None, 1)[1].strip().split()[0]
+            if DIND_IMAGE_RE.search(line):
+                findings.append(DockerPolicyFinding(
+                    "dockerfile_dind_base", "critical", "deny",
+                    "Docker-in-Docker base images are not allowed for tenant applications.",
+                    source_file, number,
+                ))
+        if upper.startswith(("COPY ", "ADD ")):
+            tokens = line.split()
+            sources = tokens[1:-1] if len(tokens) >= 3 else []
+            for source in sources:
+                source_clean = source.strip("'\\"")
+                if SENSITIVE_CONTEXT_RE.search(source_clean):
+                    findings.append(DockerPolicyFinding(
+                        "dockerfile_sensitive_context_copy", "critical", "deny",
+                        f"Sensitive host/project file '{source_clean}' cannot be copied into the application image.",
+                        source_file, number,
+                    ))
         if upper.startswith("ADD "):
             first = line.split(None, 1)[1].split()[0] if len(line.split(None, 1)) > 1 else ""
             if re.match(r"^https?://", first, re.I):
@@ -323,7 +349,7 @@ def analyze_dockerfile(text: str, *, source_file: str) -> list[DockerPolicyFindi
                 "Dockerfile VOLUME instructions are disabled because PassDeployer must own and account for persistent storage.",
                 source_file, number,
             ))
-        if upper.startswith(("CMD ", "ENTRYPOINT ")):
+        if upper.startswith(("CMD ", "ENTRYPOINT ", "HEALTHCHECK ")):
             match = RUNTIME_DOCKER_RE.search(line)
             if match:
                 findings.append(DockerPolicyFinding(
