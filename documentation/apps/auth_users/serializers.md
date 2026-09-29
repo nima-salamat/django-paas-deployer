@@ -4,7 +4,7 @@
 
 Purpose: bridge SimpleJWT refresh with server-side session revocation.
 
-Input is the refresh token. Before parent refresh processing, the serializer extracts sid and user_id and resolves the corresponding UserSession. A token without sid is treated as a legacy compatibility JWT.
+Input is the refresh token. Before parent refresh processing, the serializer extracts sid and user_id and resolves the corresponding UserSession. A token without sid is rejected because authenticated credentials must be bound to a UserSession.
 
 After successful refresh, the new refresh token hash replaces credential_hash on the still-valid session and last_seen_at is updated. A revoked/invalid/expired session raises AuthenticationFailed.
 
