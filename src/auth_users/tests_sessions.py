@@ -1,4 +1,5 @@
 from datetime import timedelta
+import hashlib
 import uuid
 
 from django.test import TestCase, override_settings
@@ -27,6 +28,8 @@ from django.core.cache import cache
     SIMPLE_JWT={
         "ACCESS_TOKEN_LIFETIME": timedelta(minutes=5),
         "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
+        "ROTATE_REFRESH_TOKENS": True,
+        "BLACKLIST_AFTER_ROTATION": True,
         "SIGNING_KEY": "session-test-key",
         "ALGORITHM": "HS256",
         "USER_ID_FIELD": "id",
@@ -143,7 +146,7 @@ def test_second_session_resolution_is_cache_hit_without_database_queries(self):
         self.assertEqual(str(rotated["sid"]), session_id)
         self.assertEqual(
             UserSession.objects.get(session_id=session_id).credential_hash,
-            __import__("hashlib").sha256(data["refresh"].encode("utf-8")).hexdigest(),
+            hashlib.sha256(data["refresh"].encode("utf-8")).hexdigest(),
         )
 
     def test_token_verify_rejects_a_revoked_session(self):
