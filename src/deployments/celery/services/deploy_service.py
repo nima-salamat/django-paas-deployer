@@ -529,7 +529,11 @@ class DeployService:
             )
             if cfg.get(k) is not None and str(cfg.get(k)).strip() != ""
         }
-        if str(cfg.get("dockerfile_source") or "").strip().lower() == "archive":
+        if docker_source_resolution is not None:
+            # Secure Docker source inspection above already selected and
+            # validated the tenant Dockerfile / Compose build input.
+            pass
+        elif str(cfg.get("dockerfile_source") or "").strip().lower() == "archive":
             try:
                 archive_path = deploy_item.zip_file.path if getattr(deploy_item, "zip_file", None) else ""
                 dockerfile_text = DeploymentHelper.get_dockerfile_from_archive(archive_path)
