@@ -55,6 +55,40 @@ def test_bun_lockfile_is_prepared():
     assert "COPY bun.lockb ./" in out
 
 
+def test_plain_php_index_html_does_not_force_composer_with_logger():
+    from deployments.core.dockerfile import _detect_php_project, _render_php
+    from unittest.mock import Mock
+
+    tar = make_tar({
+        "index.html": "<!doctype html><html><body>hello</body></html>",
+    })
+    info = _detect_php_project(tar)
+    assert info["has_composer"] is False
+    assert info["is_laravel"] is False
+
+    class ConfigStub:
+        entry_point = None
+        environment = {}
+        platform = "php"
+        document_root = None
+        runtime_options = {}
+
+    dockerfile = (
+        "FROM registry.example.test/php:8.2-apache\n"
+        "COPY . /var/www/html/\n"
+        "EXPOSE 80\n"
+        'CMD ["apache2-foreground"]\n'
+    )
+    logger = Mock()
+    out = _render_php(dockerfile, tar, ConfigStub(), logger)
+
+    assert "composer install" not in out
+    assert "composer.json not found in app root" not in out
+    assert "paas-php-entrypoint.sh" not in out
+    assert "COPY --from=registry.example.test/composer:2 /usr/bin/composer" not in out
+    assert "ENV APACHE_DOCUMENT_ROOT=/var/www/html" in out
+
+
 def test_php_wrapped_archive_uses_app_root_for_composer():
     from deployments.core.dockerfile import _detect_php_document_root, _detect_php_project, _render_php
     import base64
