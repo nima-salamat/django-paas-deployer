@@ -8,7 +8,7 @@ Public login/recovery/invite operations use the authentication-free boundary req
 
 | Method | Route | Effect |
 |---|---|---|
-| GET | /api/sessions/ | Lists active sessions, including active_count and max_active_sessions for the authenticated user. |
+| GET | /api/sessions/ | Lists active sessions, including active_count, max_active_sessions, and session-management eligibility. |
 | POST | /api/sessions/logout-all/ | Revokes all eligible sessions for the caller. |
 | DELETE | /api/sessions/<session_id>/ | Revokes one session after verifying caller ownership. |
 | GET | /api/devices/ | Lists caller-owned devices. |
