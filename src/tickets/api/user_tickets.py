@@ -292,13 +292,13 @@ def user_can_access_ticket(user, ticket) -> bool:
 
 
 class JWTQueryOrHeaderAuthentication(JWTAuthentication):
-    """Accept Bearer header OR ?token= / ?access= query (for <img>/<audio> tags)."""
+    """Accept Bearer header OR ?token= / ?access= query (for media tags)."""
 
     def authenticate(self, request):
         raw = request.GET.get("token") or request.GET.get("access")
         if raw:
             validated = self.get_validated_token(raw)
-            return self.get_user(validated), validated
+            return self._authenticate_validated_token(validated)
         return super().authenticate(request)
 
 
