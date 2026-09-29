@@ -12,6 +12,8 @@ from deploy.models import (
     BaseRuntimeImageLease,
     SwarmCluster,
     SwarmNode,
+    BuildCacheArtifact,
+    BuildCacheQuota,
 )
 from wagtail.permission_policies.base import ModelPermissionPolicy
 from wagtail.snippets.views.snippets import SnippetViewSet, SnippetViewSetGroup
@@ -109,6 +111,50 @@ class BaseRuntimeImageLeaseViewSet(SnippetViewSet):
     ])
 
 
+class BuildCacheArtifactViewSet(SnippetViewSet):
+    """Read-only audit surface for tenant-owned application image artifacts."""
+    model = BuildCacheArtifact
+    permission_policy = ReadOnlyModelPermissionPolicy(BuildCacheArtifact)
+    inspect_view_enabled = True
+    copy_view_enabled = False
+    icon = "doc-full"
+    menu_label = _("Build cache artifacts")
+    menu_order = 110
+    list_display = [
+        "service", "user", "deployment", "image_ref", "size_bytes",
+        "last_used_at", "reclaimed_at", "pinned",
+    ]
+    list_filter = ["service", "user", "reclaimed_at", "pinned"]
+    search_fields = ["image_ref", "image_id", "user__username", "service__name"]
+    ordering = ["-last_used_at"]
+    panels = read_only_panels([
+        "id", "deployment", "service", "user", "image_ref", "image_id",
+        "image_digest", "size_bytes", "last_used_at", "pinned",
+        "reclaimed_at", "reclaim_error", "created_at", "updated_at",
+    ])
+
+
+class BuildCacheQuotaOperatorViewSet(SnippetViewSet):
+    """Editable operator overrides for one user or one service."""
+    model = BuildCacheQuota
+    icon = "cog"
+    menu_label = _("Build cache quotas")
+    menu_order = 111
+    list_display = [
+        "user", "service", "quota_mb", "retention_days",
+        "keep_successful_deployments", "updated_at",
+    ]
+    list_filter = ["user", "service"]
+    search_fields = ["user__username", "user__email", "service__name"]
+    panels = panels_for(
+        editable=[
+            "user", "service", "quota_mb", "retention_days",
+            "keep_successful_deployments",
+        ],
+        read_only=["id", "created_at", "updated_at"],
+    )
+
+
 class SwarmInfrastructurePermissionPolicy(ModelPermissionPolicy):
     """Infrastructure records are discovered from Docker; operators edit desired state only."""
 
@@ -187,6 +233,8 @@ class DeployGroup(SnippetViewSetGroup):
         BaseRuntimeImageLeaseViewSet,
         SwarmClusterViewSet,
         SwarmNodeViewSet,
+        BuildCacheArtifactViewSet,
+        BuildCacheQuotaOperatorViewSet,
     )
     menu_label = _("Deploy")
     menu_icon = "upload"

@@ -350,3 +350,37 @@ def max_concurrent_shell_sessions() -> int:
 
 def shell_audit_retention_days() -> int:
     return max(1, min(get_int("shell.audit_retention_days", 90), 3650))
+
+
+# ---- Docker build-cache governance ----
+
+def build_cache_enabled() -> bool:
+    return bool(_wagtail_core_value("build_cache_enabled", True))
+
+
+def build_cache_global_limit_mb() -> int:
+    return max(1024, min(int(_wagtail_core_value("build_cache_global_limit_mb", 20480)), 1048576))
+
+
+def build_cache_user_quota_mb() -> int:
+    return max(128, min(int(_wagtail_core_value("build_cache_user_quota_mb", 5120)), 1048576))
+
+
+def build_cache_service_quota_mb() -> int:
+    return max(128, min(int(_wagtail_core_value("build_cache_service_quota_mb", 2048)), 1048576))
+
+
+def build_cache_retention_days() -> int:
+    return max(1, min(int(_wagtail_core_value("build_cache_retention_days", 30)), 3650))
+
+
+def build_cache_keep_successful_deployments() -> int:
+    return max(0, min(int(_wagtail_core_value("build_cache_keep_successful_deployments", 3)), 100))
+
+
+def build_cache_cleanup_target_percent() -> int:
+    return max(50, min(int(_wagtail_core_value("build_cache_cleanup_target_percent", 80)), 95))
+
+
+def build_cache_batch_size() -> int:
+    return max(1, min(int(_wagtail_core_value("build_cache_batch_size", 50)), 500))

@@ -192,6 +192,8 @@ class DeploymentOrchestrator:
 
             # 6. Build image
             self.logger.info("image_build", "Building Docker image.", progress=20)
+            from deploy.build_cache import get_build_cache_sources
+            cache_sources = get_build_cache_sources(self.logger.deployment_id)
             image = Image(
                 config.name, str(config.tag), dockerfile_text, tar_stream,
                 max_cpu=config.resource_limits.get("cpu", config.max_cpu),
@@ -199,9 +201,33 @@ class DeploymentOrchestrator:
                 build_options=config.build_options,
                 build_resource_policy=config.build_resource_policy,
                 deployment_id=self.logger.deployment_id,
+                cache_sources=cache_sources,
+                build_labels={
+                    "io.passdeployer.deployment": str(self.logger.deployment_id or ""),
+                    "io.passdeployer.service": str((config.labels or {}).get("service.id") or ""),
+                },
             )
-            image.create(on_build_output=self._on_build_output, cancel_check=self._cancel_check)
+            built_image = image.create(on_build_output=self._on_build_output, cancel_check=self._cancel_check)
             image_built = True
+            try:
+                from deploy.build_cache import (
+                    record_application_image,
+                    enforce_service_cache_quota,
+                    enforce_user_cache_quota,
+                )
+                artifact = record_application_image(self.logger.deployment_id, built_image)
+                enforce_service_cache_quota(str(artifact.service_id))
+                enforce_user_cache_quota(str(artifact.user_id))
+            except Exception:
+                # Cache accounting is operational telemetry/retention; it must
+                # never turn a successfully built application image into a
+                # failed deployment.
+                self.logger.warning(
+                    "image_build",
+                    "Application build-cache accounting could not be completed.",
+                    progress=35,
+                    details={"deployment_id": self.logger.deployment_id},
+                )
             self.logger.info(
                 "image_build", "Docker image built successfully.",
                 progress=35, details={"image": config.image_ref},

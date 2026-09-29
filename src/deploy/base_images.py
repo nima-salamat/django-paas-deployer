@@ -415,6 +415,9 @@ def _build_spec(
         build_resource_policy_source="server_owned_base_image",
         build_scope="base_image",
         build_options={"pull": True, "no_cache": bool(force_rebuild)},
+        build_labels={
+            "io.passdeployer.base-runtime": f"{spec.logical_runtime}:{spec.version}:{spec.variant}"
+        },
         deployment_id=f"base:{spec.image_ref}",
     )
     return image.create(

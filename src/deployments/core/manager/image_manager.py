@@ -274,6 +274,8 @@ class Image(Client):
         deployment_id: Any | None = None,
         build_resource_policy_source: str | None = None,
         build_scope: str = "application",
+        cache_sources: list[str] | None = None,
+        build_labels: dict[str, str] | None = None,
     ):
         super().__init__()
         self.name = _validate_image_name(name)
@@ -295,6 +297,16 @@ class Image(Client):
             or ("server_owned_explicit" if raw_build_policy else "server_owned_build_limits")
         )
         self.build_scope = str(build_scope or "application")
+        self.cache_sources = [
+            str(value).strip()
+            for value in (cache_sources or [])
+            if isinstance(value, str) and str(value).strip()
+        ][:8]
+        self.build_labels = {
+            str(k): str(v)
+            for k, v in (build_labels or {}).items()
+            if str(k).strip() and v is not None
+        }
         self.deployment_id = deployment_id
         if not self.name:
             raise ValueError("Image name must not be empty")
@@ -635,6 +647,11 @@ class Image(Client):
                     # name/version. The Deploy model owns the tag.
                     build_options = dict(self.build_options or {})
                     extra_build = {}
+                    build_labels = dict(self.build_labels)
+                    if self.build_scope == "application":
+                        build_labels.setdefault("io.passdeployer.cache.role", "application")
+                    elif self.build_scope == "base_image":
+                        build_labels.setdefault("io.passdeployer.cache.role", "base")
                     if bool(build_options.get("no_cache")):
                         extra_build["nocache"] = True
                     if bool(build_options.get("pull")):
@@ -643,10 +660,13 @@ class Image(Client):
                     attempt_kwargs = [
                         dict(path=build_path, tag=self.tag, rm=True, forcerm=True, decode=True,
                              container_limits=limits, shmsize=build_shm_size, buildargs=buildargs,
+                             labels=build_labels, cache_from=self.cache_sources,
                              network_mode="default", **extra_build),
                         dict(path=build_path, tag=self.tag, rm=True, forcerm=True, decode=True,
-                             shmsize=build_shm_size, buildargs=buildargs, **extra_build),
-                        dict(path=build_path, tag=self.tag, rm=True, forcerm=True, decode=True, **extra_build),
+                             shmsize=build_shm_size, buildargs=buildargs, labels=build_labels,
+                             cache_from=self.cache_sources, **extra_build),
+                        dict(path=build_path, tag=self.tag, rm=True, forcerm=True, decode=True,
+                             labels=build_labels, cache_from=self.cache_sources, **extra_build),
                     ]
 
                     response = None

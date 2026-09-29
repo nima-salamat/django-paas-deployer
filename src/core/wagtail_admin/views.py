@@ -102,6 +102,13 @@ def cache_dashboard(request):
                 + f"?flushed={ns}&deleted={deleted}"
             )
 
+        if action == "build_cache_gc":
+            from deployments.celery.tasks import maintain_build_cache
+            maintain_build_cache.delay(force=True)
+            return redirect(
+                reverse("wagtail_core_cache_dashboard") + "?build_cache_gc=1"
+            )
+
         if action == "reset_stats":
             reset_cache_stats()
             return redirect(reverse("wagtail_core_cache_dashboard") + "?stats_reset=1")
@@ -152,6 +159,8 @@ def cache_dashboard(request):
     total_list = messenger["list_hit"] + messenger["list_miss"]
 
     policy = _policy_values()
+    from deploy.build_cache import cache_overview
+    build_cache = cache_overview()
 
     return render(
         request,
@@ -173,6 +182,7 @@ def cache_dashboard(request):
             "deleted": request.GET.get("deleted") or "0",
             "saved": request.GET.get("saved") == "1",
             "policy_error": request.GET.get("policy_error") == "1",
+            "build_cache_gc": request.GET.get("build_cache_gc") == "1",
             "stats_reset": request.GET.get("stats_reset") == "1",
             "conversation_action": request.GET.get("conversation_action") or "",
             "policy_fields": [

@@ -154,9 +154,11 @@
     </div>
   </header>
 
-  {% if flushed or saved or stats_reset or conversation_action or policy_error %}
+  {% if flushed or saved or stats_reset or conversation_action or policy_error or build_cache_gc %}
     <div class="cache-notice {% if policy_error %}cache-notice--error{% endif %}">
-      {% if policy_error %}
+      {% if build_cache_gc %}
+        {% trans "Build cache maintenance has been queued." %}
+      {% elif policy_error %}
         {% trans "One or more cache policy values could not be saved." %}
       {% elif saved %}
         {% trans "Cache policy saved successfully." %}
@@ -226,6 +228,45 @@
           <button type="submit" class="button button-primary">{% trans "Save cache policy" %}</button>
         </div>
       </form>
+    </div>
+  </section>
+
+
+  <section class="cache-section">
+    <div class="cache-section__header">
+      <h2>{% trans "Docker build cache governance" %}</h2>
+      <p>{% trans "Physical BuildKit storage is governed globally; user and service quotas apply to tracked application image artifacts." %}</p>
+    </div>
+    <div class="cache-section__body">
+      <div class="cache-grid">
+        <div class="cache-card">
+          <p class="cache-card__label">{% trans "Physical BuildKit cache" %}</p>
+          <div class="cache-card__value">{{ build_cache.physical.total_size|filesizeformat }}</div>
+          <div class="cache-card__meta">{% trans "Global limit" %}: {{ build_cache.global_limit_bytes|filesizeformat }}</div>
+        </div>
+        <div class="cache-card">
+          <p class="cache-card__label">{% trans "Reclaimable" %}</p>
+          <div class="cache-card__value">{{ build_cache.physical.reclaimable|filesizeformat }}</div>
+          <div class="cache-card__meta">{{ build_cache.physical.total_count }} {% trans "BuildKit records" %}</div>
+        </div>
+        <div class="cache-card">
+          <p class="cache-card__label">{% trans "Logical artifacts" %}</p>
+          <div class="cache-card__value">{{ build_cache.logical_artifact_usage_bytes|filesizeformat }}</div>
+          <div class="cache-card__meta">{{ build_cache.artifact_count }} {% trans "application images" %}</div>
+        </div>
+        <div class="cache-card">
+          <p class="cache-card__label">{% trans "Default quotas" %}</p>
+          <div class="cache-card__value" style="font-size:18px;">{{ build_cache.default_user_quota_mb }} / {{ build_cache.default_service_quota_mb }} MB</div>
+          <div class="cache-card__meta">{% trans "User / service" %}</div>
+        </div>
+      </div>
+      <div class="cache-actions">
+        <form method="post" onsubmit="return confirm('Queue global and tenant build-cache maintenance now?');">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="build_cache_gc">
+          <button type="submit" class="button button-primary">{% trans "Run build-cache maintenance" %}</button>
+        </form>
+      </div>
     </div>
   </section>
 

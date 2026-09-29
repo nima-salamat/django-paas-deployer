@@ -290,6 +290,54 @@ class CoreSettings(BaseGenericSetting):
     monitor_scheduler_lock_seconds = models.PositiveIntegerField(
         default=20, verbose_name=_("Monitor scheduler lock (seconds)"),
     )
+    build_cache_enabled = models.BooleanField(
+        default=True,
+        verbose_name=_("Enable Docker build cache governance"),
+        help_text=_("Enable automatic global BuildKit garbage collection and tenant application-image retention."),
+    )
+    build_cache_global_limit_mb = models.PositiveIntegerField(
+        default=20480,
+        validators=[MinValueValidator(1024), MaxValueValidator(1048576)],
+        verbose_name=_("Global build cache limit (MB)"),
+        help_text=_("Maximum target size for Docker BuildKit cache on each managed Docker daemon."),
+    )
+    build_cache_user_quota_mb = models.PositiveIntegerField(
+        default=5120,
+        validators=[MinValueValidator(128), MaxValueValidator(1048576)],
+        verbose_name=_("Default user cache quota (MB)"),
+        help_text=_("Logical application-image cache quota inherited by users without an override."),
+    )
+    build_cache_service_quota_mb = models.PositiveIntegerField(
+        default=2048,
+        validators=[MinValueValidator(128), MaxValueValidator(1048576)],
+        verbose_name=_("Default service cache quota (MB)"),
+        help_text=_("Logical application-image cache quota inherited by services without an override."),
+    )
+    build_cache_retention_days = models.PositiveIntegerField(
+        default=30,
+        validators=[MinValueValidator(1), MaxValueValidator(3650)],
+        verbose_name=_("Build cache retention (days)"),
+        help_text=_("Age after which non-protected application image artifacts and old BuildKit records become cleanup candidates."),
+    )
+    build_cache_keep_successful_deployments = models.PositiveSmallIntegerField(
+        default=3,
+        validators=[MaxValueValidator(100)],
+        verbose_name=_("Retained successful deployments"),
+        help_text=_("Newest successful deployments per service remain protected from tenant cache GC."),
+    )
+    build_cache_cleanup_target_percent = models.PositiveSmallIntegerField(
+        default=80,
+        validators=[MinValueValidator(50), MaxValueValidator(95)],
+        verbose_name=_("Global cleanup target (%)"),
+        help_text=_("After global cleanup, BuildKit is asked to reduce cache toward this percentage of the global limit."),
+    )
+    build_cache_batch_size = models.PositiveSmallIntegerField(
+        default=50,
+        validators=[MinValueValidator(1), MaxValueValidator(500)],
+        verbose_name=_("Cache GC batch size"),
+        help_text=_("Maximum tenant image groups reclaimed in one maintenance run."),
+    )
+
     shell_idle_timeout_minutes = models.PositiveSmallIntegerField(
         default=10, verbose_name=_("Restricted shell idle timeout (minutes)"),
         help_text=_("Close inactive shell sessions after this many minutes. Commands and file operations refresh activity."),
@@ -341,6 +389,19 @@ class CoreSettings(BaseGenericSetting):
                 FieldPanel("unexpected_death_grace_seconds"),
             ],
             heading=_("Deployment timeouts"),
+        ),
+        MultiFieldPanel(
+            [
+                FieldPanel("build_cache_enabled"),
+                FieldPanel("build_cache_global_limit_mb"),
+                FieldPanel("build_cache_user_quota_mb"),
+                FieldPanel("build_cache_service_quota_mb"),
+                FieldPanel("build_cache_retention_days"),
+                FieldPanel("build_cache_keep_successful_deployments"),
+                FieldPanel("build_cache_cleanup_target_percent"),
+                FieldPanel("build_cache_batch_size"),
+            ],
+            heading=_("Build cache governance"),
         ),
         MultiFieldPanel(
             [
