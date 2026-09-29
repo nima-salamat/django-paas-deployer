@@ -53,8 +53,11 @@ jobs:
       - name: Django system checks
         run: python manage.py check
 
+      - name: Auth session regression tests
+        run: pytest -q src/auth_users/tests_sessions.py src/users/tests_admin_sessions.py
+
       - name: Migration drift check
         run: python manage.py makemigrations --check --dry-run --verbosity 2
 
       - name: Regression tests
-        run: pytest -q core/tests/test_wagtail_cache_admin.py deployments/tests/test_deploy_file_upload_regressions.py src/auth_users/tests_sessions.py src/users/tests_admin_sessions.py
+        run: pytest -q core/tests/test_wagtail_cache_admin.py deployments/tests/test_deploy_file_upload_regressions.py
