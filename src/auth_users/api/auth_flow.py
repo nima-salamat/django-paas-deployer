@@ -86,6 +86,7 @@ class StartAuthAPIView(APIView):
         a valid invite token is mandatory to create a new account.
     """
 
+    authentication_classes = []
     permission_classes = [AllowAny]
 
     def post(self, request):
