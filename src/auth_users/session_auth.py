@@ -100,6 +100,12 @@ def _deserialize_cache_value(value) -> _CachedSession | None:
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=dt_timezone.utc)
 
+        cached_at = session_data.get("cached_at")
+        if cached_at:
+            cached_at = datetime.fromisoformat(str(cached_at))
+            if cached_at.tzinfo is None:
+                cached_at = cached_at.replace(tzinfo=dt_timezone.utc)
+
         return _CachedSession(
             context=AuthenticatedSessionContext(
                 session_id=str(session_data["session_id"]),
