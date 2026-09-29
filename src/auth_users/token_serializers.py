@@ -21,6 +21,7 @@ from .models import UserSession
 from .session_auth import (
     get_active_session_for_update,
     cache_session,
+    resolve_session,
 )
 
 
@@ -112,8 +113,6 @@ class SessionTokenVerifySerializer(TokenVerifySerializer):
                     raise AuthenticationFailed(
                         "Authentication session is invalid or revoked."
                     )
-                get_active_session_for_update.__name__  # Keep import resolution explicit.
-                from .session_auth import resolve_session
                 resolve_session(session_id, user_id=user_id)
         except (InvalidToken, TokenError, AuthenticationFailed) as exc:
             raise AuthenticationFailed(
