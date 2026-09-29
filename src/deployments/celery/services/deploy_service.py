@@ -1276,6 +1276,56 @@ class DeployService:
                     },
                 ) from exc
 
+
+    @classmethod
+    def _ensure_docker_source_volumes(cls, service, volume_defs: list[dict]) -> None:
+        """Materialize Compose named volumes as registry-owned PassDeployer volumes."""
+        if not volume_defs:
+            return
+        for item in volume_defs[:8]:
+            target = str(item.get("target") or "").strip()
+            compose_name = str(item.get("compose_name") or "").strip()
+            mode = str(item.get("mode") or "rw").lower()
+            if not target:
+                continue
+            existing = service.volumes.filter(default_bind=target).order_by("created_at").first()
+            if existing is not None:
+                continue
+            safe_name = re.sub(r"[^a-z0-9_.-]+", "-", compose_name.lower()).strip("-") or "data"
+            volume_name = f"dv-{service.id.hex[:8]}-{safe_name}"[:32]
+            size_mb = 256
+            ok, msg = service.can_allocate_storage(size_mb)
+            if not ok:
+                raise DeploymentValidationError(
+                    f"Compose persistent volume '{compose_name or target}' cannot be allocated within the service storage quota.",
+                    stage="volume_creation",
+                    details={
+                        "service_id": str(service.pk),
+                        "compose_volume": compose_name,
+                        "target": target,
+                        "requested_mb": size_mb,
+                        "quota_error": msg,
+                    },
+                )
+            Volume.objects.create(
+                name=volume_name,
+                user_id=service.user_id,
+                service=service,
+                service_attachments={
+                    str(service.id): {
+                        "bind": target,
+                        "mode": "ro" if mode in {"ro", "readonly"} else "rw",
+                    }
+                },
+                default_bind=target,
+                default_mode="r" if mode in {"ro", "readonly"} else "rw",
+                size_mb=size_mb,
+            )
+            logger.info(
+                "Registered Docker Compose named volume %s -> %s for service %s.",
+                volume_name, target, service.pk,
+            )
+
     @staticmethod
     def _volume_specs(deploy_item: Deploy, platform: str | None = None) -> list:
         service = deploy_item.service
@@ -1294,6 +1344,12 @@ class DeployService:
                 except Exception:
                     cfg = {}
             plat = (platform or str(cfg.get("platform") or "")).lower()
+            if plat == "docker":
+                cls_source_volumes = cfg.get("docker_source_volumes") or []
+                if isinstance(cls_source_volumes, list):
+                    DeployService._ensure_docker_source_volumes(
+                        service, cls_source_volumes
+                    )
             cfg_db = ""
             env_cfg = cfg.get("env") or cfg.get("environment") or {}
             if isinstance(env_cfg, dict):
