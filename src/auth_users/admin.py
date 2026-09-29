@@ -3,6 +3,7 @@ from django.utils.html import format_html
 from django.utils import timezone
 from django.urls import reverse
 from .models import Device, LoginSettings, AuthCode, InviteLink, InviteUsage, LoginLog, UserSession, UserContactChange
+from .session_auth import invalidate_device, revoke_session_queryset
 
 
 @admin.register(Device)
@@ -15,8 +16,10 @@ class DeviceAdmin(admin.ModelAdmin):
 
     @admin.action(description="Revoke selected devices")
     def revoke_devices(self, request, queryset):
-        updated = queryset.filter(revoked_at__isnull=True).update(revoked_at=timezone.now())
-        self.message_user(request, f"{updated} device(s) revoked.")
+        updated = 0
+        for device_id in queryset.values_list("public_id", flat=True).iterator():
+            updated += invalidate_device(device_id)
+        self.message_user(request, f"{updated} active session(s) revoked; selected devices were disabled.")
 
 
 @admin.register(UserSession)
@@ -36,7 +39,7 @@ class UserSessionAdmin(admin.ModelAdmin):
 
     @admin.action(description="Revoke selected sessions")
     def revoke_sessions(self, request, queryset):
-        updated = queryset.filter(revoked_at__isnull=True).update(revoked_at=timezone.now())
+        updated = revoke_session_queryset(queryset)
         self.message_user(request, f"{updated} session(s) revoked.")
 
 
