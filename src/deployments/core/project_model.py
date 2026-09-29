@@ -393,7 +393,8 @@ def frontend_candidates(
         # plugin package without declaring the "vite" package in this
         # package.json (for example a workspace/monorepo layout).
         script_vite = any(
-            "vite" in str(value).lower()
+            "vite" in str(value).lower().replace("&&", " ").replace("||", " ")
+            .replace(";", " ").replace("|", " ").split()
             for value in scripts.values()
             if isinstance(value, str)
         )
