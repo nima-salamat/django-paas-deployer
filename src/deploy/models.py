@@ -1,5 +1,6 @@
 from django.db import models
 from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator, MaxValueValidator
 from core.base.BaseModel import BaseModel
 from services.models import Service
 from django.utils.translation import gettext_lazy as _
@@ -242,6 +243,109 @@ class DeployLog(BaseModel):
     def __str__(self):
         return f"Deployment {self.deploy_id}: {self.stage} - {self.level}"
 
+
+
+class BuildCacheArtifact(BaseModel):
+    """Logical record of an application image eligible for tenant cache GC."""
+
+    deployment = models.OneToOneField(
+        "deploy.Deploy",
+        on_delete=models.CASCADE,
+        related_name="cache_artifact",
+    )
+    user = models.ForeignKey(
+        "users.User",
+        on_delete=models.CASCADE,
+        related_name="build_cache_artifacts",
+    )
+    service = models.ForeignKey(
+        Service,
+        on_delete=models.CASCADE,
+        related_name="build_cache_artifacts",
+    )
+    image_ref = models.CharField(max_length=384)
+    image_id = models.CharField(max_length=255, db_index=True)
+    image_digest = models.CharField(max_length=255, blank=True, default="")
+    size_bytes = models.BigIntegerField(default=0)
+    last_used_at = models.DateTimeField(default=timezone.now, db_index=True)
+    pinned = models.BooleanField(default=False)
+    reclaimed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    reclaim_error = models.TextField(blank=True, default="")
+
+    class Meta:
+        verbose_name = _("Build cache artifact")
+        verbose_name_plural = _("Build cache artifacts")
+        ordering = ("-last_used_at", "-created_at")
+        indexes = [
+            models.Index(fields=("service", "reclaimed_at", "last_used_at"), name="deploy_bca_service_gc"),
+            models.Index(fields=("user", "reclaimed_at", "last_used_at"), name="deploy_bca_user_gc"),
+            models.Index(fields=("image_id", "reclaimed_at"), name="deploy_bca_image_gc"),
+        ]
+
+    def __str__(self):
+        return f"{self.service} — {self.image_ref}"
+
+
+class BuildCacheQuota(BaseModel):
+    """Optional user/service override for application build-image retention."""
+
+    quota_mb = models.PositiveIntegerField(
+        _("Cache quota (MB)"),
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(128), MaxValueValidator(1048576)],
+        help_text=_("Logical application-image cache quota. Null inherits the applicable default."),
+    )
+    retention_days = models.PositiveIntegerField(
+        _("Retention (days)"),
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1), MaxValueValidator(3650)],
+        help_text=_("How long non-protected application image artifacts may be retained. Null inherits the applicable default."),
+    )
+    keep_successful_deployments = models.PositiveSmallIntegerField(
+        _("Keep successful deployments"),
+        null=True,
+        blank=True,
+        validators=[MaxValueValidator(100)],
+        help_text=_("Number of newest successful deployments to keep protected. Null inherits the applicable default."),
+    )
+    user = models.OneToOneField(
+        "users.User",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="build_cache_quota",
+    )
+    service = models.OneToOneField(
+        Service,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="build_cache_quota",
+    )
+
+    class Meta:
+        verbose_name = _("Build cache quota")
+        verbose_name_plural = _("Build cache quotas")
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(user__isnull=False, service__isnull=True)
+                    | models.Q(user__isnull=True, service__isnull=False)
+                ),
+                name="build_cache_quota_exactly_one_owner",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        if bool(self.user_id) == bool(self.service_id):
+            raise ValidationError(_("A build cache quota must belong to exactly one user or one service."))
+
+    def __str__(self):
+        owner = self.user or self.service
+        return f"{owner} cache quota"
 
 
 class BaseRuntimeImageLease(BaseModel):
