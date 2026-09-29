@@ -460,6 +460,15 @@ class DeployService:
             explicit_env = dict(cfg.get("env") or cfg.get("environment") or {})
             cfg["environment"] = {**compose_env, **explicit_env}
             cfg["env"] = dict(cfg["environment"])
+            source_build_args = dict(docker_runtime.get("build_args") or {})
+            if source_build_args:
+                cfg["build_options"] = {
+                    **dict(cfg.get("build_options") or {}),
+                    "build_args": {
+                        **source_build_args,
+                        **dict((cfg.get("build_options") or {}).get("build_args") or {}),
+                    },
+                }
             if docker_runtime.get("read_only"):
                 cfg.setdefault("runtime_options", {})["read_only"] = True
             if docker_runtime.get("working_directory"):
