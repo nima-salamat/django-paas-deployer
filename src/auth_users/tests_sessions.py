@@ -592,3 +592,29 @@ class UserSessionTests(TestCase):
                 session_id=first["session_id"]
             ).revoked_at
         )
+
+
+    def test_legacy_access_token_is_rejected_by_service_detail_and_runtime_status(self):
+        client = self._client_for(self._legacy_access_token())
+
+        retrieve = client.get(
+            "/services/service/00000000-0000-0000-0000-000000000001/"
+        )
+        status = client.post(
+            "/services/service_status/",
+            {"service_id": "00000000-0000-0000-0000-000000000001"},
+            format="json",
+        )
+
+        self.assertEqual(retrieve.status_code, 401)
+        self.assertEqual(status.status_code, 401)
+
+    def test_session_bound_access_token_reaches_service_detail_authorization(self):
+        tokens = issue_tokens_for_user(self.user)
+        client = self._client_for(tokens["access"])
+
+        response = client.get(
+            "/services/service/00000000-0000-0000-0000-000000000001/"
+        )
+
+        self.assertIn(response.status_code, {404, 403})
