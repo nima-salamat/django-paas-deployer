@@ -50,6 +50,9 @@ from django.core.cache import cache
 )
 class UserSessionTests(TestCase):
     def setUp(self):
+        # Async consumer tests may leave the thread-local PostgreSQL handle closed.
+        # Reset it so each TestCase starts from a reconnectable connection.
+        connection.close()
         self.user = User.objects.create_user(
             username="session-user", email="session@example.test", password="pass12345"
         )
