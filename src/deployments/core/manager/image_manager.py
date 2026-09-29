@@ -259,6 +259,57 @@ def _make_image_ref(name: str, tag: Any) -> str:
 # Image manager
 # ---------------------------------------------------------------------------
 
+_SECURE_CONTEXT_IGNORE_LINES = (
+    ".env",
+    ".env.*",
+    "!.env.example",
+    "!.env.*.example",
+    "*.env",
+    "!*.env.example",
+    "!*.env.*.example",
+    "*.pem",
+    "*.key",
+    "id_rsa*",
+    "credentials/",
+    "credentials.*",
+    "secrets/",
+    ".aws/",
+    ".ssh/",
+)
+
+
+def _ensure_secure_dockerignore(build_root: str) -> None:
+    """Prevent common secret material from entering a tenant Docker build context.
+
+    This is defense in depth for Docker-source deployments. The policy layer
+    rejects explicit Dockerfile copies of sensitive paths, while this ignore
+    file protects broad COPY . instructions too.
+    """
+    path = os.path.join(build_root, ".dockerignore")
+    existing = ""
+    try:
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                existing = handle.read()
+    except OSError:
+        existing = ""
+
+    present = {line.strip() for line in existing.splitlines() if line.strip() and not line.lstrip().startswith("#")}
+    additions = [line for line in _SECURE_CONTEXT_IGNORE_LINES if line not in present]
+    if not additions:
+        return
+
+    block = "\n# PassDeployer mandatory secret-file protection\n" + "\n".join(additions) + "\n"
+    try:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(block)
+    except OSError as exc:
+        raise ImageBuildError(
+            "PassDeployer could not establish secure Docker build-context filtering.",
+            details={"path": path, "error": str(exc)},
+        ) from exc
+
+
 class Image(Client):
     def __init__(
         self,
@@ -623,6 +674,9 @@ class Image(Client):
                             "Stripped single top-level archive directory '%s' from build context.",
                             stripped,
                         )
+
+                    if bool((self.build_options or {}).get("secure_docker_source")):
+                        _ensure_secure_dockerignore(tmpdir)
 
                     build_path = tmpdir
                     app_dir = os.path.join(tmpdir, "app")
