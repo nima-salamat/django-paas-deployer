@@ -173,6 +173,29 @@ def schedule_session_cache_invalidation(session_ids: Iterable[str]) -> None:
     transaction.on_commit(lambda: _delete_session_cache_keys(ids))
 
 
+def _write_cached_context(
+    context: AuthenticatedSessionContext,
+    *,
+    now: datetime,
+) -> None:
+    remaining = int((context.expires_at - now).total_seconds())
+    ttl = min(_cache_ttl(), remaining)
+    if ttl <= 0:
+        return
+    try:
+        cache.set(
+            session_cache_key(context.session_id),
+            _serialize_cache_value(context, cached_at=now),
+            ttl,
+        )
+    except Exception:
+        logger.warning(
+            "session cache write failed session=%s",
+            context.session_id[:12],
+            exc_info=True,
+        )
+
+
 def cache_session(
     session: UserSession,
     *,
@@ -181,23 +204,7 @@ def cache_session(
     """Cache one active session for a bounded sliding Redis lease."""
     now = now or timezone.now()
     context = _context_from_session(session)
-    remaining = int((context.expires_at - now).total_seconds())
-    ttl = min(_cache_ttl(), remaining)
-    if ttl <= 0:
-        return context
-
-    try:
-        cache.set(
-            session_cache_key(session.session_id),
-            _serialize_cache_value(context, cached_at=now),
-            ttl,
-        )
-    except Exception:
-        logger.warning(
-            "session cache write failed session=%s",
-            session.session_id[:12],
-            exc_info=True,
-        )
+    _write_cached_context(context, now=now)
     return context
 
 
@@ -250,16 +257,7 @@ def resolve_session(session_id: str, *, user_id=None) -> AuthenticatedSessionCon
         if same_user and cached.expires_at > now:
             age = max(0.0, (now - cached_entry.cached_at).total_seconds())
             if age >= _cache_refresh_threshold():
-                cache_session(
-                    UserSession(
-                        session_id=cached.session_id,
-                        user_id=cached.user_id,
-                        device_id=None,
-                        auth_generation=cached.auth_generation,
-                        expires_at=cached.expires_at,
-                    ),
-                    now=now,
-                )
+                _write_cached_context(cached, now=now)
             return cached
 
         try:
