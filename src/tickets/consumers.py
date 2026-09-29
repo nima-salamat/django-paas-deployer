@@ -8,6 +8,8 @@ from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.layers import get_channel_layer
+from auth_users.authentication import get_session_id_from_access_token, resolve_user_from_access_token
+from auth_users.session_auth import resolve_session
 logger = logging.getLogger("tickets.ws")
 
 
@@ -17,8 +19,13 @@ async def authenticate_from_scope(scope):
     access_token = (params.get("token") or [None])[0]
     if not access_token:
         return None
-    from auth_users.authentication import resolve_user_from_access_token
-    return await database_sync_to_async(resolve_user_from_access_token)(access_token)
+    user = await database_sync_to_async(resolve_user_from_access_token)(access_token)
+    if not user:
+        return None
+    session_id = get_session_id_from_access_token(access_token)
+    if not session_id:
+        return None
+    return user, session_id
 
 
 class TicketEventsConsumer(AsyncJsonWebsocketConsumer):
@@ -29,10 +36,11 @@ class TicketEventsConsumer(AsyncJsonWebsocketConsumer):
         return bool(user.is_staff), bool(user.is_superuser)
 
     async def connect(self):
-        user = await authenticate_from_scope(self.scope)
-        if not user:
+        auth = await authenticate_from_scope(self.scope)
+        if not auth:
             await self.close(code=4403)
             return
+        user, self.auth_session_id = auth
         is_staff, is_superuser = await self._user_flags(user)
         if not (is_staff or is_superuser):
             await self.close(code=4403)
@@ -51,6 +59,14 @@ class TicketEventsConsumer(AsyncJsonWebsocketConsumer):
 
     async def receive_json(self, content, **kwargs):
         if isinstance(content, dict) and content.get("type") == "ping":
+            try:
+                await database_sync_to_async(resolve_session)(
+                    self.auth_session_id,
+                    user_id=self.user.id,
+                )
+            except Exception:
+                await self.close(code=4401)
+                return
             await self.send_json({"type": "pong"})
 
     async def ticket_event(self, event):
@@ -68,10 +84,11 @@ class TicketNotifyConsumer(AsyncJsonWebsocketConsumer):
         return bool(user.is_staff), bool(user.is_superuser)
 
     async def connect(self):
-        user = await authenticate_from_scope(self.scope)
-        if not user:
+        auth = await authenticate_from_scope(self.scope)
+        if not auth:
             await self.close(code=4401)
             return
+        user, self.auth_session_id = auth
         self.user = user
         self.groups_joined = []
         is_staff, is_superuser = await self._user_flags(user)
@@ -104,6 +121,14 @@ class TicketNotifyConsumer(AsyncJsonWebsocketConsumer):
             return
         t = content.get("type")
         if t == "ping":
+            try:
+                await database_sync_to_async(resolve_session)(
+                    self.auth_session_id,
+                    user_id=self.user.id,
+                )
+            except Exception:
+                await self.close(code=4401)
+                return
             await self.send_json({"type": "pong"})
             return
         if t == "subscribe_ticket":
