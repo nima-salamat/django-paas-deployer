@@ -26,7 +26,7 @@ Canonical identity/profile is users. Resource authorization is owned by each dom
 
 ## Security boundary
 
-Session-bound JWTs with sid are validated against UserSession on every authenticated request. Legacy JWTs without sid remain a compatibility path. OTPs are purpose-scoped and expiry/attempt limited. Contact changes mutate User only after destination verification.
+Session-bound JWTs with sid are validated against UserSession on every authenticated request. JWTs without sid are rejected. OTPs are purpose-scoped and expiry/attempt limited. Contact changes mutate User only after destination verification.
 
 ## Invariants
 
