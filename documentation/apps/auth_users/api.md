@@ -51,7 +51,7 @@ Legacy /api/login/ and /api/signup/ delegate into the same underlying flow.
 
 - GET/POST /api/validateToken/ — compatibility token validation.
 - POST /api/login/token/refresh and /api/login/token/refresh/ — session-aware refresh plus legacy compatibility.
-- GET/POST /api/login/token/verify and /api/login/token/verify/ — SimpleJWT verification.
+- POST /api/login/token/verify and /api/login/token/verify/ — session-aware SimpleJWT verification.
 
 SessionTokenRefreshSerializer validates sid-bearing tokens against authoritative UserSession state, atomically rotates the stored refresh credential, rejects reuse of the previous refresh token, and refreshes the session cache after commit. The token verification endpoint applies the same session validity check for sid-bearing access tokens.
 
