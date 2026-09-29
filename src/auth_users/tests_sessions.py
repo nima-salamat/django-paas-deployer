@@ -175,7 +175,8 @@ class UserSessionTests(TestCase):
 
         second = client.get("/api/users/user/")
         self.assertEqual(second.status_code, 401)
-def _client_for(self, access_token):
+
+    def _client_for(self, access_token):
         client = APIClient()
         client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
         return client
