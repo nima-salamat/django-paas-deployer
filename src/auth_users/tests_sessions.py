@@ -511,3 +511,43 @@ class UserSessionTests(TestCase):
         ):
             with self.subTest(consumer=consumer_cls.__name__):
                 self._assert_live_session_ping_returns_pong(consumer_cls)
+
+
+    def test_non_drf_resolver_rejects_a_revoked_session_token(self):
+        tokens = issue_tokens_for_user(self.user)
+        self.assertEqual(
+            resolve_user_from_access_token(tokens["access"]),
+            self.user,
+        )
+        invalidate_session(tokens["session_id"])
+        self.assertIsNone(
+            resolve_user_from_access_token(tokens["access"])
+        )
+
+    def test_all_websocket_connections_reject_legacy_access_tokens(self):
+        legacy_access = self._legacy_access_token()
+        cases = [
+            (MessengerConsumer, 4401, {"auth_session_id": None}),
+            (TicketEventsConsumer, 4403, {}),
+            (TicketNotifyConsumer, 4401, {}),
+            (ServiceLogsConsumer, 4002, {}),
+            (RestrictedShellConsumer, 4003, {"shell_token": "invalid"}),
+            (DeploymentConsumer, 4002, {}),
+        ]
+
+        for consumer_cls, expected_code, extra_scope in cases:
+            with self.subTest(consumer=consumer_cls.__name__):
+                consumer = consumer_cls.__new__(consumer_cls)
+                query = f"token={legacy_access}"
+                for key, value in extra_scope.items():
+                    if value is not None:
+                        query += f"&{key}={value}"
+                consumer.scope = {
+                    "query_string": query.encode("utf-8"),
+                    "url_route": {"kwargs": {"service_id": "1", "deploy_id": "1"}},
+                }
+                consumer.close = AsyncMock()
+
+                async_to_sync(consumer.connect)()
+
+                consumer.close.assert_awaited_once_with(code=expected_code)
