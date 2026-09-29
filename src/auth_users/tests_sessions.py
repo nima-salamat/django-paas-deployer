@@ -100,7 +100,8 @@ class UserSessionTests(TestCase):
         with self.assertRaises(AuthenticationFailed):
             resolve_session(session_id, user_id=self.user.id)
         self.assertIsNone(cache.get(session_cache_key(session_id)))
-def test_second_session_resolution_is_cache_hit_without_database_queries(self):
+
+    def test_second_session_resolution_is_cache_hit_without_database_queries(self):
         tokens = issue_tokens_for_user(self.user)
         session_id = tokens["session_id"]
 
