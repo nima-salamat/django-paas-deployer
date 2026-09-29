@@ -186,7 +186,17 @@ class DeviceSessionsRevokeAPIView(SessionAPIBase):
                 status=401,
             )
 
-        if str(current_session.device.public_id) != str(device_id):
+        other_session_on_target_device = UserSession.objects.filter(
+            user=request.user,
+            device=current_session.device if str(current_session.device.public_id) == str(device_id) else None,
+            revoked_at__isnull=True,
+            expires_at__gt=timezone.now(),
+        ).exclude(session_id=current_id).exists()
+
+        if (
+            str(current_session.device.public_id) != str(device_id)
+            or other_session_on_target_device
+        ):
             ensure_session_can_revoke_others(
                 str(current_id),
                 user_id=request.user.id,
