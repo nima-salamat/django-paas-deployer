@@ -62,6 +62,8 @@ class WagtailExposureContractTests(SimpleTestCase):
             "deploy.BaseRuntimeImageLease",
             "deploy.SwarmCluster",
             "deploy.SwarmNode",
+            "deploy.BuildCacheArtifact",
+            "deploy.BuildCacheQuota",
         }
         assert {viewset.model._meta.label for viewset in ApplicationCatalogGroup.items} == {
             "app_catalog.ApplicationInstance",
