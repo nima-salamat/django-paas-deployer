@@ -2,6 +2,8 @@ from datetime import timedelta
 import uuid
 
 from django.test import TestCase, override_settings
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.exceptions import AuthenticationFailed
@@ -9,7 +11,15 @@ from rest_framework.exceptions import AuthenticationFailed
 from users.models import User
 from .models import Device, LoginSettings, UserSession
 from .services import SessionLimitExceeded, issue_tokens_for_user
-from .session_auth import invalidate_session, resolve_session, session_cache_key
+from .session_auth import (
+    invalidate_session,
+    resolve_session,
+    session_cache_key,
+)
+from .token_serializers import (
+    SessionTokenRefreshSerializer,
+    SessionTokenVerifySerializer,
+)
 from django.core.cache import cache
 
 
@@ -87,3 +97,62 @@ class UserSessionTests(TestCase):
         with self.assertRaises(AuthenticationFailed):
             resolve_session(session_id, user_id=self.user.id)
         self.assertIsNone(cache.get(session_cache_key(session_id)))
+def test_second_session_resolution_is_cache_hit_without_database_queries(self):
+        tokens = issue_tokens_for_user(self.user)
+        session_id = tokens["session_id"]
+
+        resolve_session(session_id, user_id=self.user.id)
+        with CaptureQueriesContext(connection) as queries:
+            context = resolve_session(session_id, user_id=self.user.id)
+
+        self.assertEqual(context.session_id, session_id)
+        self.assertEqual(len(queries), 0)
+
+    def test_session_eviction_removes_the_old_session_cache_entry(self):
+        LoginSettings.objects.update(max_active_sessions=1)
+        first = issue_tokens_for_user(self.user)
+        first_session_id = first["session_id"]
+        resolve_session(first_session_id, user_id=self.user.id)
+        self.assertIsNotNone(cache.get(session_cache_key(first_session_id)))
+
+        issue_tokens_for_user(self.user)
+
+        self.assertIsNone(cache.get(session_cache_key(first_session_id)))
+        with self.assertRaises(AuthenticationFailed):
+            resolve_session(first_session_id, user_id=self.user.id)
+
+    def test_refresh_rotation_rejects_reuse_of_previous_refresh_token(self):
+        tokens = issue_tokens_for_user(self.user)
+        serializer = SessionTokenRefreshSerializer(data={"refresh": tokens["refresh"]})
+
+        first = serializer.is_valid(raise_exception=True)
+        self.assertIn("refresh", first)
+
+        reused = SessionTokenRefreshSerializer(data={"refresh": tokens["refresh"]})
+        with self.assertRaises(AuthenticationFailed):
+            reused.is_valid(raise_exception=True)
+
+    def test_refresh_rotation_preserves_session_binding(self):
+        tokens = issue_tokens_for_user(self.user)
+        session_id = tokens["session_id"]
+
+        serializer = SessionTokenRefreshSerializer(data={"refresh": tokens["refresh"]})
+        data = serializer.is_valid(raise_exception=True)
+
+        rotated = RefreshToken(data["refresh"])
+        self.assertEqual(str(rotated["sid"]), session_id)
+        self.assertEqual(
+            UserSession.objects.get(session_id=session_id).credential_hash,
+            __import__("hashlib").sha256(data["refresh"].encode("utf-8")).hexdigest(),
+        )
+
+    def test_token_verify_rejects_a_revoked_session(self):
+        tokens = issue_tokens_for_user(self.user)
+        serializer = SessionTokenVerifySerializer(data={"token": tokens["access"]})
+        serializer.is_valid(raise_exception=True)
+
+        invalidate_session(tokens["session_id"])
+
+        revoked = SessionTokenVerifySerializer(data={"token": tokens["access"]})
+        with self.assertRaises(AuthenticationFailed):
+            revoked.is_valid(raise_exception=True)
