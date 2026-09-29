@@ -11,7 +11,6 @@ from datetime import timedelta
 import logging
 from typing import Any
 
-from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 
@@ -324,13 +323,22 @@ def _cleanup_rows(
     client = client or get_docker_client()
     running_ids = _running_image_ids(client)
     protected_image_ids = _base_image_ids()
-    grouped: dict[str, list[BuildCacheArtifact]] = defaultdict(list)
-
+    # Any protected/pinned artifact protects the underlying image identity as
+    # a whole. This avoids deleting an image through an unprotected duplicate
+    # record that happens to share the same Docker image ID.
     for row in rows:
-        if str(row.deployment_id) in protected_deployments or row.pinned:
-            continue
         image_id = str(row.image_id or "")
-        if image_id in running_ids or image_id in protected_image_ids:
+        if image_id and (str(row.deployment_id) in protected_deployments or row.pinned):
+            protected_image_ids.add(image_id)
+
+    grouped: dict[str, list[BuildCacheArtifact]] = defaultdict(list)
+    for row in rows:
+        image_id = str(row.image_id or "")
+        if image_id in protected_image_ids or image_id in running_ids:
+            continue
+        if not image_id:
+            row.reclaim_error = "Application cache artifact has no Docker image ID."
+            row.save(update_fields=["reclaim_error", "updated_at"])
             continue
         grouped[image_id].append(row)
 
@@ -358,6 +366,8 @@ def _cleanup_rows(
 
 def enforce_service_cache_quota(service_id: str, *, client=None, batch_size: int | None = None) -> dict[str, Any]:
     policy = build_cache_policy()
+    if not policy["enabled"]:
+        return {"status": "disabled", "service_id": str(service_id), "removed": 0, "reclaimed_bytes": 0}
     quota = _effective_service_quota(service_id)
     rows = _artifact_rows(service_id=service_id)
     usage, _ = _unique_usage(rows)
@@ -395,6 +405,8 @@ def _protected_user_deployments(user_id: str, keep_successful: int) -> set[str]:
 
 def enforce_user_cache_quota(user_id: str, *, client=None, batch_size: int | None = None) -> dict[str, Any]:
     policy = build_cache_policy()
+    if not policy["enabled"]:
+        return {"status": "disabled", "user_id": str(user_id), "removed": 0, "reclaimed_bytes": 0}
     quota = _effective_user_quota(user_id)
     rows = _artifact_rows(user_id=user_id)
     usage, _ = _unique_usage(rows)
@@ -480,6 +492,9 @@ def get_build_cache_sources(deployment_id: str | None, limit: int = 3) -> list[s
                 continue
             sources.append(ref)
             seen.add(ref)
+            row.last_used_at = timezone.now()
+            row.reclaim_error = ""
+            row.save(update_fields=["last_used_at", "reclaim_error", "updated_at"])
         return sources
     except Exception:
         logger.debug("Unable to resolve build cache sources for deployment=%s", deployment_id, exc_info=True)
