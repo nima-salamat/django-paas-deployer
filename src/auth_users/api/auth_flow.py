@@ -202,6 +202,7 @@ class StartAuthAPIView(APIView):
 # Step 2 – Verify OTP
 # ---------------------------------------------------------------------------
 class ValidateOTPAPIView(APIView):
+    authentication_classes = []
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -300,6 +301,7 @@ class ValidateOTPAPIView(APIView):
 # Step 3 – Final login with password
 # ---------------------------------------------------------------------------
 class FinalAuthAPIView(APIView):
+    authentication_classes = []
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -379,6 +381,7 @@ class SetPasswordAPIView(APIView):
       (normal flow: otp → set_password) → do NOT require the code again.
     - If require_otp=False → just set the password.
     """
+    authentication_classes = []
     permission_classes = [AllowAny]
 
     def post(self, request):
