@@ -35,6 +35,15 @@ def test_plain_php_and_laravel_share_one_php_base_identity():
     assert plain.variant == laravel.variant == "apache"
 
 
+def test_php_platform_uses_laravel_node_base_when_project_model_identifies_laravel():
+    application = SimpleNamespace(kind="laravel")
+    project_model = SimpleNamespace(applications=[application])
+    cfg = _config("php", frontend_root="frontend")
+    cfg.project_model = project_model
+    specs = make_specs(cfg)
+    assert [spec.logical_runtime for spec in specs] == ["php", "node"]
+
+
 def test_other_base_image_names_remain_stable():
     assert make_specs(_config("nodejs", "20"))[0].image_ref == "paas-base/node-alpine:20-r1"
     assert make_specs(_config("python", "3.11"))[0].image_ref == "paas-base/python-slim:3.11-r1"
