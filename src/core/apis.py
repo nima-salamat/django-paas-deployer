@@ -68,7 +68,7 @@ class DeploymentDownloadAPIView(APIView):
 
 
 class ProtectedMediaView(APIView):
-    """Serve media files from MEDIA_ROOT with JWT auth.
+    """Serve media files from MEDIA_ROOT with session-bound JWT auth.
 
     Accepts Authorization: Bearer <token> header OR ?token=<token> query.
     Used for group avatars, user profile photos, ticket attachments and
