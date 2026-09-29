@@ -167,7 +167,7 @@ def _parse_env_file(root: Path, rel: str) -> dict[str, str]:
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
             value = value[1:-1]
-        if SENSITIVE_KEY_RE.search(key) and value:
+        if SENSITIVE_KEY_RE.search(key) and value and "$" not in value:
             raise DeploymentSecurityError(
                 f"Sensitive value for '{key}' must be supplied through PassDeployer secrets, not '{rel}'.",
                 stage="docker_source_validation",
@@ -225,7 +225,7 @@ def _environment(raw: Any, variables: dict[str, str]) -> dict[str, str]:
                 stage="docker_source_validation",
             )
         value = _compose_interpolate(str(value), variables)
-        if SENSITIVE_KEY_RE.search(key) and value:
+        if SENSITIVE_KEY_RE.search(key) and value and "$" not in str(value):
             raise DeploymentSecurityError(
                 f"Sensitive environment '{key}' must be supplied through PassDeployer secrets.",
                 stage="docker_source_validation",
@@ -499,9 +499,19 @@ def inspect_docker_source(project_root: str, *, environment: dict[str, str] | No
             ))
 
         volumes: list[dict[str, Any]] = []
+        top_volumes = document.get("volumes") or {}
         for raw in service.get("volumes") or []:
             item = _compose_volume(raw, name, findings)
             if item:
+                if (
+                    item["compose_name"] in top_volumes
+                    and isinstance(top_volumes[item["compose_name"]], dict)
+                    and top_volumes[item["compose_name"]].get("external")
+                ):
+                    raise DeploymentSecurityError(
+                        f"External Compose volume '{item['compose_name']}' is not owned by PassDeployer.",
+                        stage="docker_source_validation",
+                    )
                 volumes.append(item)
 
         health = service.get("healthcheck")
