@@ -15,7 +15,7 @@ from rest_framework_simplejwt.serializers import (
     TokenRefreshSerializer,
     TokenVerifySerializer,
 )
-from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
+from rest_framework_simplejwt.tokens import RefreshToken, UntypedToken
 
 from .models import UserSession
 from .session_auth import (
@@ -105,7 +105,7 @@ class SessionTokenVerifySerializer(TokenVerifySerializer):
     def validate(self, attrs):
         data = super().validate(attrs)
         try:
-            token = AccessToken(attrs["token"])
+            token = UntypedToken(attrs["token"])
             session_id = token.get("sid")
             user_id = token.get("user_id")
             if session_id:
