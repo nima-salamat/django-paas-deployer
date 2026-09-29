@@ -153,6 +153,16 @@ class LoginSettingsAdmin(admin.ModelAdmin):
             },
         ),
         (
+            "Session policy",
+            {
+                "fields": ("max_active_sessions", "session_eviction_policy"),
+                "description": (
+                    "Controls the maximum number of active server-side sessions per user "
+                    "and the action taken when the limit is reached."
+                ),
+            },
+        ),
+        (
             "Status",
             {
                 "fields": ("is_active", "updated_at"),
