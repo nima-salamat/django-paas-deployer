@@ -25,6 +25,7 @@ CRITICAL_COMPOSE_KEYS = {
     "cap_add", "cap_drop", "security_opt", "sysctls", "ulimits", "runtime",
     "secrets", "configs", "credential_spec", "container_name", "hostname",
     "domainname", "extra_hosts", "dns", "dns_search", "init", "profiles", "extends",
+    "links", "external_links", "volumes_from", "user",
 }
 
 RESERVED_LABEL_PREFIXES = (
@@ -168,7 +169,7 @@ def _parse_env_file(root: Path, rel: str) -> dict[str, str]:
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
             value = value[1:-1]
         raw_value = value
-        if SENSITIVE_KEY_RE.search(key) and value and "$" not in raw_value:
+        if (SENSITIVE_KEY_RE.search(key) or key.upper() in {"DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CERT_PATH"}) and value and "$" not in raw_value:
             raise DeploymentSecurityError(
                 f"Sensitive value for '{key}' must be supplied through PassDeployer secrets, not '{rel}'.",
                 stage="docker_source_validation",
@@ -310,6 +311,12 @@ def analyze_dockerfile(text: str, *, source_file: str) -> list[DockerPolicyFindi
                     "dockerfile_secret_default", "critical", "deny",
                     f"Sensitive Dockerfile variable '{key}' cannot contain a baked-in value.", source_file, number,
                 ))
+        if upper.startswith("VOLUME "):
+            findings.append(DockerPolicyFinding(
+                "dockerfile_anonymous_volume", "critical", "deny",
+                "Dockerfile VOLUME instructions are disabled because PassDeployer must own and account for persistent storage.",
+                source_file, number,
+            ))
         if upper.startswith(("CMD ", "ENTRYPOINT ")):
             match = RUNTIME_DOCKER_RE.search(line)
             if match:
@@ -428,6 +435,41 @@ def inspect_docker_source(project_root: str, *, environment: dict[str, str] | No
             env = {**_parse_env_file(root, rel), **env}
 
         build = service.get("build")
+        build_args: dict[str, str] = {}
+        if isinstance(build, dict):
+            raw_args = build.get("args") or {}
+            args = list(raw_args.items()) if isinstance(raw_args, dict) else list(raw_args or [])
+            for item in args:
+                if isinstance(item, tuple):
+                    arg_key, arg_value = str(item[0]), item[1]
+                else:
+                    pair = str(item)
+                    if "=" not in pair:
+                        raise DeploymentSecurityError(
+                            "Compose build.args must provide explicit values or environment references.",
+                            stage="docker_source_validation",
+                        )
+                    arg_key, arg_value = pair.split("=", 1)
+                raw_arg = str(arg_value or "")
+                if (SENSITIVE_KEY_RE.search(arg_key) or arg_key.upper() in {"DOCKER_HOST", "DOCKER_CONTEXT"}) and raw_arg and "$" not in raw_arg:
+                    raise DeploymentSecurityError(
+                        f"Sensitive build argument '{arg_key}' must not be baked into a tenant build.",
+                        stage="docker_source_validation",
+                    )
+                build_args[str(arg_key)] = _compose_interpolate(raw_arg, variables)
+            build_network = str(build.get("network") or "").strip().lower()
+            if build_network == "host":
+                findings.append(DockerPolicyFinding(
+                    "compose_build_host_network", "critical", "deny",
+                    "Compose build.network=host is not allowed.",
+                    compose_name,
+                ))
+            if build.get("secrets"):
+                findings.append(DockerPolicyFinding(
+                    "compose_build_secrets", "critical", "deny",
+                    "Compose build secrets are not supplied to tenant builds.",
+                    compose_name,
+                ))
         if build:
             context = str(build.get("context") if isinstance(build, dict) else build or ".")
             if context not in {".", "./"}:
@@ -453,6 +495,7 @@ def inspect_docker_source(project_root: str, *, environment: dict[str, str] | No
 
         runtime: dict[str, Any] = {
             "environment": env,
+            "build_args": build_args,
             "command": _command(service.get("command"), "command"),
             "entrypoint": _command(service.get("entrypoint"), "entrypoint"),
             "working_directory": service.get("working_dir"),
