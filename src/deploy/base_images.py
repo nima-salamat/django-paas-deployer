@@ -320,7 +320,6 @@ def make_specs(config) -> list[BaseImageSpec]:
             application = None
         is_laravel = (
             platform == "laravel"
-            or str(getattr(project_model, "applications", [{}])[0].kind if project_model and getattr(project_model, "applications", None) else "").lower() == "laravel"
             or str(getattr(application, "kind", "") or "").lower() == "laravel"
         )
         has_frontend = getattr(config, "frontend_root", None) is not None
