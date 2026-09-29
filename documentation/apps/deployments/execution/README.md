@@ -365,6 +365,7 @@ Deployment state changes happen at concurrency boundaries. A state write is ther
 10. [09-logs-health-rollback-cleanup.md](execution/09-logs-health-rollback-cleanup.md) — diagnostics and destructive boundaries.
 11. [10-database-deployments.md](execution/10-database-deployments.md) — specialized branch.
 12. [11-testing-contracts-and-invariants.md](execution/11-testing-contracts-and-invariants.md) — executable architecture.
+12. [12-build-cache-governance.md](12-build-cache-governance.md) — physical BuildKit governance and tenant application-image retention.
 13. Only then open the specific source module.
 
 ## Problem-oriented navigation
