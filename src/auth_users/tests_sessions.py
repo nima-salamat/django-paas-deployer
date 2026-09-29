@@ -175,7 +175,6 @@ class UserSessionTests(TestCase):
 
         second = client.get("/api/users/user/")
         self.assertEqual(second.status_code, 401)
-
 def _client_for(self, access_token):
         client = APIClient()
         client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
@@ -192,9 +191,7 @@ def _client_for(self, access_token):
         )
 
         client = self._client_for(second["access"])
-        response = client.delete(
-            f"/auth/api/sessions/{first['session_id']}/"
-        )
+        response = client.delete(f"/auth/api/sessions/{first['session_id']}/")
 
         self.assertEqual(response.status_code, 403)
         self.assertEqual(
@@ -209,9 +206,7 @@ def _client_for(self, access_token):
         tokens = issue_tokens_for_user(self.user)
         client = self._client_for(tokens["access"])
 
-        response = client.delete(
-            f"/auth/api/sessions/{tokens['session_id']}/"
-        )
+        response = client.delete(f"/auth/api/sessions/{tokens['session_id']}/")
 
         self.assertEqual(response.status_code, 204)
         self.assertIsNotNone(
@@ -219,7 +214,7 @@ def _client_for(self, access_token):
         )
 
     def test_young_session_cannot_logout_other_sessions(self):
-        first = issue_tokens_for_user(self.user)
+        issue_tokens_for_user(self.user)
         second = issue_tokens_for_user(self.user)
 
         client = self._client_for(second["access"])
@@ -265,6 +260,14 @@ def _client_for(self, access_token):
         )
 
         self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            UserSession.objects.filter(
+                user=self.user,
+                device__public_id="00000000-0000-0000-0000-000000000011",
+                revoked_at__isnull=True,
+            ).count(),
+            1,
+        )
 
     def test_mature_session_can_revoke_another_device(self):
         issue_tokens_for_user(
@@ -295,9 +298,7 @@ def _client_for(self, access_token):
         second = issue_tokens_for_user(self.user, device_id=device_id)
 
         client = self._client_for(second["access"])
-        response = client.delete(
-            f"/auth/api/devices/{device_id}/sessions/"
-        )
+        response = client.delete(f"/auth/api/devices/{device_id}/sessions/")
 
         self.assertEqual(response.status_code, 403)
         self.assertEqual(
