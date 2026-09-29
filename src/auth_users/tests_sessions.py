@@ -175,3 +175,136 @@ class UserSessionTests(TestCase):
 
         second = client.get("/api/users/user/")
         self.assertEqual(second.status_code, 401)
+
+def _client_for(self, access_token):
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+        return client
+
+    def test_young_session_cannot_revoke_another_session(self):
+        first = issue_tokens_for_user(
+            self.user,
+            device_id="00000000-0000-0000-0000-000000000001",
+        )
+        second = issue_tokens_for_user(
+            self.user,
+            device_id="00000000-0000-0000-0000-000000000002",
+        )
+
+        client = self._client_for(second["access"])
+        response = client.delete(
+            f"/auth/api/sessions/{first['session_id']}/"
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            UserSession.objects.filter(
+                user=self.user,
+                revoked_at__isnull=True,
+            ).count(),
+            2,
+        )
+
+    def test_young_session_can_revoke_itself(self):
+        tokens = issue_tokens_for_user(self.user)
+        client = self._client_for(tokens["access"])
+
+        response = client.delete(
+            f"/auth/api/sessions/{tokens['session_id']}/"
+        )
+
+        self.assertEqual(response.status_code, 204)
+        self.assertIsNotNone(
+            UserSession.objects.get(session_id=tokens["session_id"]).revoked_at
+        )
+
+    def test_young_session_cannot_logout_other_sessions(self):
+        first = issue_tokens_for_user(self.user)
+        second = issue_tokens_for_user(self.user)
+
+        client = self._client_for(second["access"])
+        response = client.post("/auth/api/sessions/logout-all/")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            UserSession.objects.filter(
+                user=self.user,
+                revoked_at__isnull=True,
+            ).count(),
+            2,
+        )
+
+    def test_mature_session_can_logout_all_sessions(self):
+        issue_tokens_for_user(self.user)
+        second = issue_tokens_for_user(self.user)
+        UserSession.objects.filter(
+            session_id=second["session_id"]
+        ).update(
+            created_at=timezone.now() - timedelta(hours=2, seconds=1)
+        )
+
+        client = self._client_for(second["access"])
+        response = client.post("/auth/api/sessions/logout-all/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["revoked"], 2)
+
+    def test_young_session_cannot_revoke_another_device(self):
+        first = issue_tokens_for_user(
+            self.user,
+            device_id="00000000-0000-0000-0000-000000000011",
+        )
+        second = issue_tokens_for_user(
+            self.user,
+            device_id="00000000-0000-0000-0000-000000000012",
+        )
+
+        client = self._client_for(second["access"])
+        response = client.delete(
+            "/auth/api/devices/00000000-0000-0000-0000-000000000011/sessions/"
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_mature_session_can_revoke_another_device(self):
+        issue_tokens_for_user(
+            self.user,
+            device_id="00000000-0000-0000-0000-000000000021",
+        )
+        second = issue_tokens_for_user(
+            self.user,
+            device_id="00000000-0000-0000-0000-000000000022",
+        )
+        UserSession.objects.filter(
+            session_id=second["session_id"]
+        ).update(
+            created_at=timezone.now() - timedelta(hours=2, seconds=1)
+        )
+
+        client = self._client_for(second["access"])
+        response = client.delete(
+            "/auth/api/devices/00000000-0000-0000-0000-000000000021/sessions/"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["revoked"], 1)
+
+    def test_young_session_cannot_revoke_sibling_session_on_same_device(self):
+        device_id = "00000000-0000-0000-0000-000000000031"
+        issue_tokens_for_user(self.user, device_id=device_id)
+        second = issue_tokens_for_user(self.user, device_id=device_id)
+
+        client = self._client_for(second["access"])
+        response = client.delete(
+            f"/auth/api/devices/{device_id}/sessions/"
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            UserSession.objects.filter(
+                user=self.user,
+                device__public_id=device_id,
+                revoked_at__isnull=True,
+            ).count(),
+            2,
+        )
