@@ -10,6 +10,8 @@ from django.utils import timezone
 from .models import Service
 from deployments.core.manager.client_manager import Client
 from docker.errors import NotFound as DockerNotFound
+from auth_users.authentication import get_session_id_from_access_token, resolve_user_from_access_token
+from auth_users.session_auth import resolve_session
 
 
 class ServiceLogsConsumer(AsyncJsonWebsocketConsumer):
@@ -30,9 +32,9 @@ class ServiceLogsConsumer(AsyncJsonWebsocketConsumer):
             await self.close(code=4001)
             return
 
-        from auth_users.authentication import resolve_user_from_access_token
         self.user = await database_sync_to_async(resolve_user_from_access_token)(access_token)
-        if self.user is None:
+        self.auth_session_id = get_session_id_from_access_token(access_token)
+        if self.user is None or not self.auth_session_id:
             await self.close(code=4002)
             return
         self.service_id = self.scope["url_route"]["kwargs"].get("service_id")
@@ -135,6 +137,18 @@ class ServiceLogsConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json({"type": "logs.error", "detail": "replay failed"})
 
     async def receive_json(self, content, **kwargs):
+        if isinstance(content, dict) and content.get("type") == "ping":
+            try:
+                await database_sync_to_async(resolve_session)(
+                    self.auth_session_id,
+                    user_id=self.user.id,
+                )
+            except Exception:
+                await self.close(code=4401)
+                return
+            await self.send_json({"type": "pong"})
+            return
+
         """Client may request replay: {"action": "replay", "cursor": "..."}."""
         if not isinstance(content, dict):
             return
@@ -164,10 +178,10 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
         if not access_token or not shell_token:
             await self.close(code=4001)
             return
-        from auth_users.authentication import resolve_user_from_access_token
         try:
             self.user = await database_sync_to_async(resolve_user_from_access_token)(access_token)
-            if self.user is None:
+            self.auth_session_id = get_session_id_from_access_token(access_token)
+            if self.user is None or not self.auth_session_id:
                 raise PermissionError("Invalid authentication session")
             self.service = await database_sync_to_async(self._get_service)(service_id)
             self.session = await database_sync_to_async(self._authenticate_shell)(shell_token)
@@ -217,6 +231,17 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
 
     async def receive_json(self, content, **kwargs):
         message_type = str(content.get("type") or "").strip().lower()
+        if message_type == "ping":
+            try:
+                await database_sync_to_async(resolve_session)(
+                    self.auth_session_id,
+                    user_id=self.user.id,
+                )
+            except Exception:
+                await self.close(code=4401)
+                return
+            await self.send_json({"type": "pong"})
+            return
         if message_type == "command":
             await self._start_command(str(content.get("command") or ""), bool(content.get("confirm", False)))
             return
