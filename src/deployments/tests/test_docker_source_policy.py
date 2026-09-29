@@ -160,9 +160,13 @@ def test_dockerfile_inspects_relative_build_script(tmp_path: Path):
     assert any(item.action == "deny" for item in findings)
 
 
-def test_dockerfile_rejects_uninspectable_absolute_script():
+def test_dockerfile_rejects_uninspectable_absolute_script(tmp_path: Path):
     dockerfile = "FROM alpine:3.20\nRUN /usr/local/bin/install.sh\n"
-    findings = analyze_dockerfile(dockerfile, source_file="Dockerfile")
+    findings = analyze_referenced_build_scripts(
+        str(tmp_path),
+        dockerfile,
+        source_file="Dockerfile",
+    )
     script_findings = [
         item
         for item in findings
