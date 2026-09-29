@@ -300,6 +300,12 @@ def compile_compose_service(config, *, image_ref: str, replicas: int = 1) -> dic
         },
     }
 
+    # Apache/PHP needs ephemeral writable process state even when the root
+    # filesystem is read-only. The official PHP Apache entrypoint recreates
+    # missing runtime directories at startup, so /run is safe as tmpfs.
+    if bool(config.read_only):
+        service["tmpfs"] = [{"target": "/run", "size": 16 * 1024 * 1024, "mode": 0o1777}]
+
     ports = []
     for endpoint in config.endpoints or ():
         if (
@@ -823,6 +829,22 @@ class SwarmRuntime:
             for volume in (config.volumes or ())
             if getattr(volume, "source", None) and getattr(volume, "target", None)
         ]
+        for tmpfs in service_doc.get("tmpfs") or ():
+            if not isinstance(tmpfs, dict):
+                continue
+            target = str(tmpfs.get("target") or "").strip()
+            if not target:
+                continue
+            mounts.append(
+                Mount(
+                    target=target,
+                    source=None,
+                    type="tmpfs",
+                    read_only=False,
+                    tmpfs_size=tmpfs.get("size"),
+                    tmpfs_mode=int(tmpfs.get("mode") or 0o1777),
+                )
+            )
 
         ports = [
             docker.types.Port(
