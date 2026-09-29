@@ -25,6 +25,9 @@ urlpatterns = [
     path("admin/users/", admin_apis.AdminUserListAPIView.as_view(), name="admin_users"),
     path("admin/users/<int:pk>/", admin_apis.AdminUserDetailAPIView.as_view(), name="admin_user_detail"),
     path("admin/users/<int:pk>/rules/", admin_apis.AdminUserRulesAPIView.as_view(), name="admin_user_rules"),
+    path("admin/users/<int:pk>/sessions/", admin_apis.AdminUserSessionListAPIView.as_view(), name="admin_user_sessions"),
+    path("admin/users/<int:pk>/sessions/logout-all/", admin_apis.AdminUserSessionLogoutAllAPIView.as_view(), name="admin_user_sessions_logout_all"),
+    path("admin/users/<int:pk>/sessions/<str:session_id>/", admin_apis.AdminUserSessionRevokeAPIView.as_view(), name="admin_user_session_revoke"),
     # Tables browser (NEW)
     path("admin/tables/", admin_tables_api.AdminTableListView.as_view(), name="admin_tables_list"),
     path("admin/tables/<str:model_key>/", admin_tables_api.AdminTableRowsView.as_view(), name="admin_table_rows"),
