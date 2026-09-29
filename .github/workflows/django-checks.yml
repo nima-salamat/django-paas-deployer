@@ -54,6 +54,9 @@ jobs:
         run: python manage.py check
 
       - name: Auth session regression tests
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings
+          DJANGO_FULL_TESTS: "1"
         run: pytest -q src/auth_users/tests_sessions.py src/users/tests_admin_sessions.py
 
       - name: Migration drift check
