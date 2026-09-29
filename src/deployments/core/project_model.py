@@ -389,6 +389,15 @@ def frontend_candidates(
                 "@tailwindcss/vite",
             )
         )
+        # Script-level Vite evidence matters when a project uses a Vite
+        # plugin package without declaring the "vite" package in this
+        # package.json (for example a workspace/monorepo layout).
+        script_vite = any(
+            "vite" in str(value).lower()
+            for value in scripts.values()
+            if isinstance(value, str)
+        )
+        is_vite = is_vite or script_vite
 
         if is_vite:
             kind = "vite"
@@ -411,16 +420,6 @@ def frontend_candidates(
             (c for c in _BUILD_SCRIPT_CANDIDATES if c in scripts),
             "build",
         )
-
-        # Script-level Vite evidence matters when a project uses a Vite
-        # plugin package without declaring the "vite" package in this
-        # package.json (for example a workspace/monorepo layout).
-        script_vite = any(
-            "vite" in str(value).lower()
-            for value in scripts.values()
-            if isinstance(value, str)
-        )
-        is_vite = is_vite or script_vite
 
         lockfile = next((x for x in _LOCKFILE_BASENAMES if x in local_files), None)
 
