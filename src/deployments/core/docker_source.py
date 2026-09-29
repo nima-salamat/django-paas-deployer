@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 import os
+import shlex
 import re
 from typing import Any
 import yaml
@@ -324,6 +325,12 @@ def analyze_dockerfile(text: str, *, source_file: str) -> list[DockerPolicyFindi
                     "dockerfile_insecure_security", "critical", "deny",
                     "RUN --security=insecure is not allowed.", source_file, number,
                 ))
+            if re.search(r"--device(?:=|\s+)", line, re.I):
+                findings.append(DockerPolicyFinding(
+                    "dockerfile_device_entitlement", "critical", "deny",
+                    "RUN --device is not allowed for tenant Docker builds.",
+                    source_file, number,
+                ))
             if re.search(r"--mount(?:=|\s+)(?:[^ \n]*,)*type=(bind|secret|ssh)(?:,|\s|$)", line, re.I):
                 findings.append(DockerPolicyFinding(
                     "dockerfile_unsafe_mount", "critical", "deny",
@@ -360,6 +367,176 @@ def analyze_dockerfile(text: str, *, source_file: str) -> list[DockerPolicyFindi
             findings.append(DockerPolicyFinding(
                 "dockerfile_root_runtime", "warning", "warn",
                 "The final image explicitly runs as root.", source_file, number,
+            ))
+    return findings
+
+
+
+
+MAX_INSPECTED_BUILD_SCRIPTS = 32
+MAX_SCRIPT_BYTES = 256 * 1024
+
+_SCRIPT_INTERPRETERS = {"sh", "bash", "dash", "zsh", "ksh", "python", "python3", "node", "nodejs", "php", "perl", "ruby"}
+_SCRIPT_NAME_RE = re.compile(r"(?i)\.(?:sh|bash|zsh|ksh|py|js|mjs|cjs|ts|php|pl|pm|rb)$")
+_SCRIPT_RISK_RE = re.compile(
+    r"(?i)(?:"
+    r"docker(?:\s+|-)?(?:run|exec|build|socket)|/var/run/docker\.sock|"
+    r"\b(?:nsenter|unshare|mount|umount|modprobe|insmod|setcap|chroot)\b|"
+    r"\b(?:sudo|su|doas)\b|"
+    r"\b(?:curl|wget)\b[^\n|]*\|[ \t]*(?:sh|bash|dash|zsh|python|python3|php)\b|"
+    r"\b(?:base64)\b[^\n|]*(?:-d|--decode)[^\n|]*\|[ \t]*(?:sh|bash|dash|zsh|python|python3|php)\b|"
+    r"\beval[ \t]+(?:\$\(|\$[A-Za-z_{])|"
+    r"\b(?:python|python3)\b[^\n]*(?:socket|subprocess|os\.system|os\.popen)|"
+    r"\b(?:node|nodejs)\b[^\n]*(?:child_process|execSync|spawn)\b|"
+    r"\bphp\b[^\n]*(?:shell_exec|proc_open|passthru|system)\b"
+    r")"
+)
+
+def _strip_script_comments(text: str) -> str:
+    lines: list[str] = []
+    for raw in text.splitlines():
+        stripped = raw.lstrip()
+        if stripped.startswith(("#", "//")):
+            continue
+        lines.append(raw)
+    return "\n".join(lines)
+
+def _script_argument(tokens: list[str], interpreter: str) -> str | None:
+    start = 1
+    if interpreter in {"python", "python3", "node", "nodejs", "php", "perl", "ruby"}:
+        if start < len(tokens) and tokens[start] in {"-c", "--eval", "-e"}:
+            return None
+    while start < len(tokens):
+        token = tokens[start]
+        if token.startswith("-"):
+            start += 1
+            continue
+        return token
+    return None
+
+def _candidate_build_scripts(dockerfile_text: str) -> list[tuple[int, str]]:
+    candidates: list[tuple[int, str]] = []
+    for number, logical in enumerate(dockerfile_text.splitlines(), 1):
+        line = logical.strip()
+        if not line.upper().startswith("RUN "):
+            continue
+        command = line[4:].strip()
+        for segment in re.split(r"&&|\|\||[;|]", command):
+            segment = segment.strip()
+            if not segment:
+                continue
+            try:
+                tokens = shlex.split(segment, posix=True)
+            except ValueError:
+                tokens = segment.split()
+            if not tokens:
+                continue
+            first = tokens[0]
+            interpreter = Path(first).name.lower()
+            if interpreter in _SCRIPT_INTERPRETERS:
+                script = _script_argument(tokens, interpreter)
+                if script and (script.startswith(("./", "../")) or _SCRIPT_NAME_RE.search(script)):
+                    candidates.append((number, script))
+                continue
+            if first.startswith(("./", "../")) or _SCRIPT_NAME_RE.search(first):
+                candidates.append((number, first))
+    return candidates
+
+def analyze_referenced_build_scripts(
+    project_root: str,
+    dockerfile_text: str,
+    *,
+    source_file: str,
+) -> list[DockerPolicyFinding]:
+    root = Path(project_root).resolve()
+    findings: list[DockerPolicyFinding] = []
+    seen: set[str] = set()
+
+    for line_number, candidate in _candidate_build_scripts(dockerfile_text):
+        normalized = candidate.strip("'\"")
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        if len(seen) > MAX_INSPECTED_BUILD_SCRIPTS:
+            findings.append(DockerPolicyFinding(
+                "dockerfile_too_many_build_scripts",
+                "critical",
+                "deny",
+                f"Build references more than {MAX_INSPECTED_BUILD_SCRIPTS} local scripts; source inspection is bounded.",
+                source_file,
+                line_number,
+            ))
+            break
+
+        if normalized.startswith("/"):
+            findings.append(DockerPolicyFinding(
+                "dockerfile_uninspectable_script",
+                "critical",
+                "deny",
+                f"Build executes an absolute-path script '{normalized}' that cannot be safely mapped to the uploaded source context.",
+                source_file,
+                line_number,
+            ))
+            continue
+
+        try:
+            rel = _safe_relative(normalized, field="build script")
+        except DeploymentSecurityError:
+            findings.append(DockerPolicyFinding(
+                "dockerfile_unsafe_script_path",
+                "critical",
+                "deny",
+                f"Build script path '{normalized}' is outside the uploaded application context.",
+                source_file,
+                line_number,
+            ))
+            continue
+
+        target = (root / rel).resolve()
+        if root not in target.parents or not target.is_file():
+            findings.append(DockerPolicyFinding(
+                "dockerfile_unresolved_script",
+                "critical",
+                "deny",
+                f"Build script '{normalized}' could not be resolved inside the uploaded application context.",
+                source_file,
+                line_number,
+            ))
+            continue
+
+        try:
+            if target.stat().st_size > MAX_SCRIPT_BYTES:
+                findings.append(DockerPolicyFinding(
+                    "dockerfile_script_too_large",
+                    "critical",
+                    "deny",
+                    f"Build script '{normalized}' exceeds the source inspection limit.",
+                    source_file,
+                    line_number,
+                ))
+                continue
+            script_text = target.read_text("utf-8", errors="replace")
+        except OSError as exc:
+            findings.append(DockerPolicyFinding(
+                "dockerfile_script_unreadable",
+                "critical",
+                "deny",
+                f"Build script '{normalized}' could not be inspected: {exc}",
+                source_file,
+                line_number,
+            ))
+            continue
+
+        script_text = _strip_script_comments(script_text)
+        match = _SCRIPT_RISK_RE.search(script_text) or DANGEROUS_COMMAND_RE.search(script_text)
+        if match:
+            findings.append(DockerPolicyFinding(
+                "dockerfile_dangerous_build_script",
+                "critical",
+                "deny",
+                f"Build script '{normalized}' contains an operation that is not allowed in tenant Docker builds.",
+                str(target.relative_to(root)).replace("\\", "/"),
+                line_number,
             ))
     return findings
 
@@ -533,6 +710,13 @@ def inspect_docker_source(project_root: str, *, environment: dict[str, str] | No
             source_file = "<generated-from-image>"
 
         findings.extend(analyze_dockerfile(dockerfile_text, source_file=source_file))
+        findings.extend(
+            analyze_referenced_build_scripts(
+                str(root),
+                dockerfile_text,
+                source_file=source_file,
+            )
+        )
 
         restart_value = str(service.get("restart") or "").strip().lower()
         restart_policy = {
@@ -662,12 +846,20 @@ def inspect_docker_source(project_root: str, *, environment: dict[str, str] | No
         text = (root / dockerfile_name).read_text("utf-8", errors="replace")
         if len(text.encode()) > MAX_DOCKERFILE_BYTES:
             raise DeploymentSecurityError("Dockerfile exceeds the supported size limit.", stage="docker_source_validation")
+        dockerfile_findings = analyze_dockerfile(text, source_file=dockerfile_name)
+        dockerfile_findings.extend(
+            analyze_referenced_build_scripts(
+                str(root),
+                text,
+                source_file=dockerfile_name,
+            )
+        )
         return DockerSourceResolution(
             source_kind="dockerfile",
             source_file=dockerfile_name,
             dockerfile_text=text,
             runtime={"environment": dict(environment or {}), "labels": {}, "public": False},
-            findings=analyze_dockerfile(text, source_file=dockerfile_name),
+            findings=dockerfile_findings,
         )
 
     raise DeploymentSecurityError(
