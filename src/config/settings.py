@@ -495,9 +495,6 @@ def _positive_seconds_env(name: str, default: int, minimum: int = 0) -> int:
 
 
 AUTH_SESSION_CACHE_TTL = _positive_seconds_env("AUTH_SESSION_CACHE_TTL", 15 * 60, 60)
-AUTH_SESSION_CACHE_REFRESH_THRESHOLD = _positive_seconds_env(
-    "AUTH_SESSION_CACHE_REFRESH_THRESHOLD", 5 * 60, 0
-)
 AUTH_SESSION_DB_TOUCH_INTERVAL = _positive_seconds_env(
     "AUTH_SESSION_DB_TOUCH_INTERVAL", 5 * 60, 0
 )
