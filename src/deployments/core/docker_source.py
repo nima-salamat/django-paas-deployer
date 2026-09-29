@@ -167,7 +167,8 @@ def _parse_env_file(root: Path, rel: str) -> dict[str, str]:
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
             value = value[1:-1]
-        if SENSITIVE_KEY_RE.search(key) and value and "$" not in value:
+        raw_value = value
+        if SENSITIVE_KEY_RE.search(key) and value and "$" not in raw_value:
             raise DeploymentSecurityError(
                 f"Sensitive value for '{key}' must be supplied through PassDeployer secrets, not '{rel}'.",
                 stage="docker_source_validation",
@@ -224,8 +225,9 @@ def _environment(raw: Any, variables: dict[str, str]) -> dict[str, str]:
                 f"Invalid environment variable name '{key}'.",
                 stage="docker_source_validation",
             )
-        value = _compose_interpolate(str(value), variables)
-        if SENSITIVE_KEY_RE.search(key) and value and "$" not in str(value):
+        raw_value = str(value)
+        value = _compose_interpolate(raw_value, variables)
+        if SENSITIVE_KEY_RE.search(key) and value and "$" not in raw_value:
             raise DeploymentSecurityError(
                 f"Sensitive environment '{key}' must be supplied through PassDeployer secrets.",
                 stage="docker_source_validation",
