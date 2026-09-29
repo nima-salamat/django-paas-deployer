@@ -13,6 +13,7 @@ from rest_framework.test import APIClient
 from users.models import User
 from .models import Device, LoginSettings, UserSession
 from .services import SessionLimitExceeded, issue_tokens_for_user
+from .authentication import resolve_user_from_access_token
 from .session_auth import (
     invalidate_session,
     resolve_session,
@@ -310,3 +311,59 @@ class UserSessionTests(TestCase):
             ).count(),
             2,
         )
+
+
+    def test_anonymous_authenticated_request_returns_401_instead_of_server_error(self):
+        client = APIClient()
+        response = client.get("/api/users/user/")
+        self.assertEqual(response.status_code, 401)
+
+    def test_public_login_settings_ignores_stale_legacy_authorization_header(self):
+        legacy_refresh = RefreshToken.for_user(self.user)
+        client = APIClient()
+        client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {legacy_refresh.access_token}"
+        )
+
+        response = client.get("/auth/api/settings/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("settings", response.data)
+
+    def test_legacy_access_token_is_rejected_everywhere(self):
+        legacy_refresh = RefreshToken.for_user(self.user)
+        legacy_access = str(legacy_refresh.access_token)
+
+        self.assertIsNone(resolve_user_from_access_token(legacy_access))
+
+        client = self._client_for(legacy_access)
+        response = client.get("/api/users/user/")
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_legacy_refresh_token_is_rejected(self):
+        legacy_refresh = RefreshToken.for_user(self.user)
+
+        serializer = SessionTokenRefreshSerializer(
+            data={"refresh": str(legacy_refresh)}
+        )
+
+        with self.assertRaises(AuthenticationFailed):
+            serializer.is_valid(raise_exception=True)
+
+    def test_legacy_token_verify_is_rejected(self):
+        legacy_refresh = RefreshToken.for_user(self.user)
+        legacy_access = str(legacy_refresh.access_token)
+
+        serializer = SessionTokenVerifySerializer(
+            data={"token": legacy_access}
+        )
+
+        with self.assertRaises(AuthenticationFailed):
+            serializer.is_valid(raise_exception=True)
+
+    def test_legacy_session_token_cannot_authenticate_non_drf_media_helper(self):
+        legacy_refresh = RefreshToken.for_user(self.user)
+        legacy_access = str(legacy_refresh.access_token)
+
+        self.assertIsNone(resolve_user_from_access_token(legacy_access))
