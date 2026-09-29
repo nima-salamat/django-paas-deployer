@@ -15,6 +15,7 @@ import hashlib
 import uuid
 
 from .models import Device, LoginSettings, AuthCode, InviteLink, UserSession
+from .session_auth import cache_session, schedule_session_cache_invalidation
 
 User = get_user_model()
 
@@ -71,9 +72,14 @@ def issue_tokens_for_user(user, *, request=None, device_id=None, device=None):
             if policy.session_eviction_policy == LoginSettings.SessionEvictionPolicy.REJECT_NEW:
                 raise SessionLimitExceeded(_("error::session limit reached"))
             revoke_count = active_count - policy.max_active_sessions + 1
-            for old in active[:revoke_count]:
-                old.revoke(at=now)
-                old.save(update_fields=["revoked_at"])
+            revoked_ids = list(
+                active[:revoke_count].values_list("session_id", flat=True)
+            )
+            UserSession.objects.filter(
+                session_id__in=revoked_ids,
+                revoked_at__isnull=True,
+            ).update(revoked_at=now)
+            schedule_session_cache_invalidation(revoked_ids)
 
         refresh = RefreshToken.for_user(locked_user)
         session_id = str(refresh["jti"])
@@ -112,6 +118,9 @@ def issue_tokens_for_user(user, *, request=None, device_id=None, device=None):
             user_agent=metadata.get("user_agent", ""),
         )
 
+    # Populate the Redis session cache immediately after the durable login
+    # transaction commits, so the first authenticated API request is a cache hit.
+    cache_session(session)
     return {"refresh": refresh_text, "access": str(access), "session_id": session.session_id}
 
 
