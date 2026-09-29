@@ -324,10 +324,14 @@ def test_laravel_frontend_detection_falls_back_to_tar_when_project_model_is_empt
     d = load_dockerfile_module()
     import types as _types
 
-    empty_model = _types.SimpleNamespace(
-        frontends=[],
-        application_root=".",
-    )
+    class EmptyProjectModel:
+        frontends = []
+        application_root = "."
+
+        def frontend_info(self):
+            return None
+
+    empty_model = EmptyProjectModel()
     tar = make_tar({
         "artisan": "<?php",
         "composer.json": LARAVEL_COMPOSER,
