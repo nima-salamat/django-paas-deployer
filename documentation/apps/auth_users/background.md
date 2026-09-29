@@ -18,7 +18,7 @@ Password reset and verified contact changes revoke existing sessions after the d
 
 ## Admin maintenance
 
-Expired/old AuthCode cleanup is an admin operation. Login logs record success/failure metadata without storing raw passwords or session credentials.
+Expired/old AuthCode cleanup is an admin operation. Rotated SimpleJWT refresh tokens use the SimpleJWT blacklist app and expired blacklist records are purged daily by the authentication Celery task. Login logs record success/failure metadata without storing raw passwords or session credentials.
 
 ## Side effects
 
