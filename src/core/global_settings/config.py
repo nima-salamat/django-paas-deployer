@@ -290,10 +290,10 @@ EXPOSE {port}
 CMD ["npm", "start"]
 """
 
-    docker = """
-FROM docker:dind
-CMD ["dockerd"]
-"""
+    # Docker mode is source-driven. Tenant deployments must provide a
+    # Dockerfile or a supported single-service Compose file; there is
+    # intentionally no Docker-in-Docker fallback runtime.
+    docker = ""
 
     go = """
 FROM {MIRROR_DOCKER}/golang:{go_version}-alpine
