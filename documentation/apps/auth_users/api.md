@@ -8,7 +8,7 @@ Public login/recovery/invite operations use the authentication-free boundary req
 
 | Method | Route | Effect |
 |---|---|---|
-| GET | /api/sessions/ | Lists sessions associated with the authenticated user. |
+| GET | /api/sessions/ | Lists active sessions, including active_count and max_active_sessions for the authenticated user. |
 | POST | /api/sessions/logout-all/ | Revokes all eligible sessions for the caller. |
 | DELETE | /api/sessions/<session_id>/ | Revokes one session after verifying caller ownership. |
 | GET | /api/devices/ | Lists caller-owned devices. |
@@ -53,7 +53,7 @@ Legacy /api/login/ and /api/signup/ delegate into the same underlying flow.
 - POST /api/login/token/refresh and /api/login/token/refresh/ — session-aware refresh plus legacy compatibility.
 - GET/POST /api/login/token/verify and /api/login/token/verify/ — SimpleJWT verification.
 
-SessionTokenRefreshSerializer validates sid-bearing tokens against authoritative UserSession state before refresh and updates the stored refresh credential hash/last-seen data.
+SessionTokenRefreshSerializer validates sid-bearing tokens against authoritative UserSession state, atomically rotates the stored refresh credential, rejects reuse of the previous refresh token, and refreshes the session cache after commit. The token verification endpoint applies the same session validity check for sid-bearing access tokens.
 
 ## Contact-change boundary
 
