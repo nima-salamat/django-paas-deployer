@@ -1,7 +1,5 @@
 from django.test import TestCase
 from rest_framework.test import APIClient
-from rest_framework_simplejwt.tokens import RefreshToken
-
 from auth_users.models import LoginSettings, UserSession
 from auth_users.services import issue_tokens_for_user
 from users.models import Rule, User
