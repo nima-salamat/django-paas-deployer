@@ -6,12 +6,13 @@ from datetime import datetime, timezone as dt_timezone
 import json
 import logging
 from collections.abc import Iterable
+from datetime import timedelta
 
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
-from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 
 from .models import Device, UserSession
 
@@ -198,6 +199,40 @@ def cache_session(
     context = _context_from_session(session)
     _write_cached_context(context, now=now)
     return context
+
+
+def session_management_min_age() -> timedelta:
+    """Minimum age required before a session can revoke other sessions."""
+    try:
+        seconds = int(getattr(settings, "AUTH_SESSION_MANAGEMENT_MIN_AGE", 2 * 60 * 60))
+    except (TypeError, ValueError):
+        seconds = 2 * 60 * 60
+    return timedelta(seconds=max(0, seconds))
+
+
+def ensure_session_can_revoke_others(
+    session_id: str,
+    *,
+    user_id: int,
+) -> UserSession:
+    """Require the caller's active session to be at least the configured minimum age."""
+    session = get_active_session_for_update(session_id, user_id=user_id)
+    minimum_age = session_management_min_age()
+    age = timezone.now() - session.created_at
+    if age < minimum_age:
+        remaining = max(0, int((minimum_age - age).total_seconds()))
+        raise PermissionDenied(
+            {
+                "code": "session_too_new_for_management",
+                "detail": (
+                    "This session must be at least 2 hours old before it can "
+                    "revoke other sessions."
+                ),
+                "minimum_age_seconds": int(minimum_age.total_seconds()),
+                "remaining_seconds": remaining,
+            }
+        )
+    return session
 
 
 def get_active_session_for_update(
