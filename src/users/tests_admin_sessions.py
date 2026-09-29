@@ -4,7 +4,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from auth_users.models import LoginSettings, UserSession
 from auth_users.services import issue_tokens_for_user
-from users.models import User
+from users.models import Rule, User
 
 
 class AdminUserSessionAPITests(TestCase):
@@ -16,6 +16,7 @@ class AdminUserSessionAPITests(TestCase):
         )
         self.operator.is_staff = True
         self.operator.save(update_fields=["is_staff"])
+        Rule.objects.create(user=self.operator, rules=[])
 
         self.target = User.objects.create_user(
             username="session-target",
