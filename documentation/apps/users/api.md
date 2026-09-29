@@ -25,6 +25,9 @@ Administrative routes under /users/admin/ include:
 - GET /users/
 - GET/PUT/PATCH/DELETE /users/<int:pk>/
 - GET/POST/PATCH /users/<int:pk>/rules/
+- GET /users/<int:pk>/sessions/ (requires `auth_sessions.view`, or `auth_sessions.manage`)
+- DELETE /users/<int:pk>/sessions/<session_id>/ (requires `auth_sessions.manage`)
+- POST /users/<int:pk>/sessions/logout-all/ (requires `auth_sessions.manage`)
 
 These are operator surfaces and must be read together with users.admin_apis.
 
