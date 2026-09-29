@@ -415,6 +415,7 @@ CELERY_TASK_ROUTES = {
     "deployments.celery.tasks.stop": {"queue": "operations"},
     "deployments.celery.tasks.build_base_runtime_image": {"queue": "base-images"},
     "deployments.celery.tasks.reclaim_released_volumes": {"queue": "operations"},
+    "deployments.celery.tasks.maintain_build_cache": {"queue": "operations"},
     "app_catalog.start_application_installation": {"queue": "deployments"},
     "app_catalog.gate_application_service": {"queue": "deployments"},
     "app_catalog.advance_application_service": {"queue": "deployments"},
@@ -466,6 +467,10 @@ CELERY_BEAT_SCHEDULE = {
     "reclaim_released_volumes": {
         "task": "deployments.celery.tasks.reclaim_released_volumes",
         "schedule": 3600.0,  # hourly retained-volume reclamation
+    },
+    "maintain_build_cache": {
+        "task": "deployments.celery.tasks.maintain_build_cache",
+        "schedule": 1800.0,
     },
     "logs_reconcile_usage": {
         "task": "logs.reconcile_usage",
