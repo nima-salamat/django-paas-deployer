@@ -139,6 +139,7 @@ INSTALLED_APPS = [
     "phonenumber_field",
     "rest_framework",
     "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
     "django_celery_results",
     "django_celery_beat",
     "django_bootstrap5",
@@ -285,7 +286,7 @@ REST_FRAMEWORK = {
 
 # Simple jwt settings
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
     
     'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
     
@@ -416,6 +417,7 @@ CELERY_TASK_ROUTES = {
     "deployments.celery.tasks.build_base_runtime_image": {"queue": "base-images"},
     "deployments.celery.tasks.reclaim_released_volumes": {"queue": "operations"},
     "deployments.celery.tasks.maintain_build_cache": {"queue": "operations"},
+    "auth_users.tasks.cleanup_expired_jwt_blacklist": {"queue": "operations"},
     "app_catalog.start_application_installation": {"queue": "deployments"},
     "app_catalog.gate_application_service": {"queue": "deployments"},
     "app_catalog.advance_application_service": {"queue": "deployments"},
@@ -432,6 +434,7 @@ CELERY_IMPORTS = (
     "custom_emails.tasks",
     "messenger.tasks",
     "logs.tasks",
+    "auth_users.tasks",
 )
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
@@ -472,11 +475,34 @@ CELERY_BEAT_SCHEDULE = {
         "task": "deployments.celery.tasks.maintain_build_cache",
         "schedule": 1800.0,
     },
+    "cleanup_expired_jwt_blacklist": {
+        "task": "auth_users.tasks.cleanup_expired_jwt_blacklist",
+        "schedule": 86400.0,
+    },
     "logs_reconcile_usage": {
         "task": "logs.reconcile_usage",
         "schedule": 21600.0,  # 6h
     },
 }
+# Server-side authentication sessions use Redis as a bounded acceleration layer.
+# PostgreSQL remains the authority for session existence, expiry and revocation.
+def _positive_seconds_env(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
+AUTH_SESSION_CACHE_TTL = _positive_seconds_env("AUTH_SESSION_CACHE_TTL", 15 * 60, 60)
+AUTH_SESSION_CACHE_REFRESH_THRESHOLD = _positive_seconds_env(
+    "AUTH_SESSION_CACHE_REFRESH_THRESHOLD", 5 * 60, 0
+)
+AUTH_SESSION_DB_TOUCH_INTERVAL = _positive_seconds_env(
+    "AUTH_SESSION_DB_TOUCH_INTERVAL", 5 * 60, 0
+)
+
+
 CACHES = {
     'default': {
         'BACKEND': 'django_redis.cache.RedisCache',
