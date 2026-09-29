@@ -286,7 +286,7 @@ REST_FRAMEWORK = {
 
 # Simple jwt settings
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
     
     'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
     
