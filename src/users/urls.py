@@ -15,6 +15,9 @@ urlpatterns = [
     path("admin/users/", admin_apis.AdminUserListAPIView.as_view(), name="admin_users"),
     path("admin/users/<int:pk>/", admin_apis.AdminUserDetailAPIView.as_view(), name="admin_user_detail"),
     path("admin/users/<int:pk>/rules/", admin_apis.AdminUserRulesAPIView.as_view(), name="admin_user_rules"),
+    path("admin/users/<int:pk>/sessions/", admin_apis.AdminUserSessionListAPIView.as_view(), name="admin_user_sessions"),
+    path("admin/users/<int:pk>/sessions/logout-all/", admin_apis.AdminUserSessionLogoutAllAPIView.as_view(), name="admin_user_sessions_logout_all"),
+    path("admin/users/<int:pk>/sessions/<str:session_id>/", admin_apis.AdminUserSessionRevokeAPIView.as_view(), name="admin_user_session_revoke"),
 
     path("user/", UserAPIView.as_view(), name="user_api"),
     path("profile/list/", ProfileViewSet.as_view({"post":"list","get":"list"}), name="profile_list"),
