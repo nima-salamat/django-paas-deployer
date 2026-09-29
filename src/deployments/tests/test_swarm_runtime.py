@@ -198,6 +198,17 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         self.assertEqual(limits["cpu"], 1.5)
         self.assertEqual(limits["memory_mb"], 768)
 
+    def test_create_kwargs_materialize_read_only_runtime_tmpfs(self):
+        config = _config(read_only=True)
+        spec = compile_compose_service(config, image_ref="demo:r1")
+        runtime = SwarmRuntime.__new__(SwarmRuntime)
+        with patch.object(runtime, "_apply_local_volume_pin", return_value=[]):
+            kwargs = runtime._create_kwargs(config, image_ref="demo:r1", compose_spec=spec)
+        tmpfs_mounts = [mount for mount in kwargs["mounts"] if mount.get("Type") == "tmpfs"]
+        self.assertEqual(len(tmpfs_mounts), 1)
+        self.assertEqual(tmpfs_mounts[0]["Target"], "/run")
+        self.assertEqual(tmpfs_mounts[0]["TmpfsOptions"]["SizeBytes"], 16 * 1024 * 1024)
+
     def test_create_kwargs_preserve_effective_start_command(self):
         config = _config(
             entry_point="python app.py --port 8000",
