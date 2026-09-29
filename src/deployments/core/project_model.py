@@ -381,7 +381,9 @@ def frontend_candidates(
             k in deps
             for k in (
                 "vite", "laravel-vite-plugin",
-                "@vitejs/plugin-react", "@vitejs/plugin-vue",
+                "@vitejs/plugin-react", "@vitejs/plugin-react-swc",
+                "@vitejs/plugin-vue", "@vitejs/plugin-vue-jsx",
+                "@tailwindcss/vite",
             )
         )
 
@@ -406,6 +408,16 @@ def frontend_candidates(
             (c for c in _BUILD_SCRIPT_CANDIDATES if c in scripts),
             "build",
         )
+
+        # Script-level Vite evidence matters when a project uses a Vite
+        # plugin package without declaring the "vite" package in this
+        # package.json (for example a workspace/monorepo layout).
+        script_vite = any(
+            "vite" in str(value).lower()
+            for value in scripts.values()
+            if isinstance(value, str)
+        )
+        is_vite = is_vite or script_vite
 
         lockfile = next((x for x in _LOCKFILE_BASENAMES if x in local_files), None)
 
