@@ -57,7 +57,7 @@ jobs:
         env:
           DJANGO_SETTINGS_MODULE: config.settings
           DJANGO_FULL_TESTS: "1"
-        run: pytest -q src/auth_users/tests_sessions.py src/users/tests_admin_sessions.py
+        run: python manage.py test auth_users.tests_sessions users.tests_admin_sessions --verbosity 2
 
       - name: Migration drift check
         run: python manage.py makemigrations --check --dry-run --verbosity 2
