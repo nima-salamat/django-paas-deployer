@@ -3,17 +3,26 @@ import hashlib
 import uuid
 
 from django.test import TestCase, override_settings
+from unittest.mock import AsyncMock
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
+from asgiref.sync import async_to_sync
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.test import APIClient
 
 from users.models import User
 from .models import Device, LoginSettings, UserSession
+from messenger.consumers import MessengerConsumer
+from tickets.consumers import TicketEventsConsumer, TicketNotifyConsumer
+from services.consumers import ServiceLogsConsumer, RestrictedShellConsumer
+from deployments.consumers import DeploymentConsumer
 from .services import SessionLimitExceeded, issue_tokens_for_user
-from .authentication import resolve_user_from_access_token
+from .authentication import (
+    get_session_id_from_access_token,
+    resolve_user_from_access_token,
+)
 from .session_auth import (
     invalidate_session,
     resolve_session,
