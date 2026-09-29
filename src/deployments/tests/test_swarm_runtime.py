@@ -169,6 +169,15 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             ["node.labels.region == eu"],
         )
 
+    def test_read_only_swarm_service_gets_writable_runtime_tmpfs(self):
+        spec = compile_compose_service(
+            _config(read_only=True), image_ref="demo:r1"
+        )
+        self.assertEqual(
+            spec["services"]["demo"]["tmpfs"],
+            [{"target": "/run", "size": 16 * 1024 * 1024, "mode": 0o1777}],
+        )
+
     def test_process_resources_cannot_exceed_plan_cpu_or_memory(self):
         with self.assertRaises(Exception):
             _process_resource_limits(
