@@ -2516,9 +2516,13 @@ def _render_php(dockerfile_template, tar_stream, config, logger):
                 "is_laravel": bool(php_info.get("is_laravel") or forced_laravel),
             },
         )
-        # Ensure composer runs even if archive inspection missed composer.json
-        php_info["has_composer"] = True
-        # Never skip install just because a partial vendor/ was in the zip
+        # Keep Composer detection authoritative. A plain PHP project without
+        # composer.json must remain a plain PHP/Apache application even when
+        # deployment logging is enabled.
+        #
+        # We intentionally do not force has_composer here: that previously
+        # turned a package containing only index.html into a Composer project
+        # and caused the generated Dockerfile to fail at the composer guard.
         if not php_info.get("has_vendor"):
             php_info["has_vendor"] = False
         extra = getattr(project_cfg, "extra", None) or {}
