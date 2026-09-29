@@ -2600,15 +2600,49 @@ def _detect_laravel_frontend(
                     details={**info, "source": "project_model"},
                 )
             return info
-        # The model ran detection and found no frontend — still report the
-        # Laravel application root so the runtime logs stay observable.
+        # A ProjectModel produced by the filesystem inspector can be
+        # incomplete (depth limits, stale indexes, or an earlier detection
+        # failure). Never let an empty model suppress a second, authoritative
+        # scan of the actual Docker build context.
+        if tar_stream is not None:
+            try:
+                from .project_model import build_project_model_from_tar
+                fallback_model = build_project_model_from_tar(tar_stream)
+                fallback_info = frontend_info_from_model(fallback_model)
+                if fallback_info is not None:
+                    info.update(fallback_info)
+                    if logger is not None:
+                        logger.info(
+                            "frontend_detection",
+                            "Recovered Laravel frontend from the Docker build context after the attached ProjectModel returned no frontend.",
+                            progress=progress,
+                            details={
+                                **info,
+                                "source": "tar_fallback",
+                                "fallback_flattened_wrapper": getattr(
+                                    fallback_model, "flattened_wrapper", None
+                                ),
+                            },
+                        )
+                    return info
+            except Exception as exc:
+                if logger is not None:
+                    logger.warning(
+                        "frontend_detection",
+                        f"Fallback tar frontend detection failed: {exc}",
+                        progress=progress,
+                        details={"reason": "tar_fallback_exception", "exception": str(exc)},
+                    )
+
+        # Both detection paths found no frontend — still report the Laravel
+        # application root so the runtime logs stay observable.
         info["laravel_root"] = getattr(project_model, "application_root", ".") or "."
         if logger is not None:
             logger.info(
                 "frontend_detection",
-                "No package.json found in the Laravel archive; no frontend build step will be injected.",
+                "No usable frontend project was found in the Laravel archive; no frontend build step will be injected.",
                 progress=progress,
-                details={**info, "reason": "no_package_json"},
+                details={**info, "reason": "no_frontend"},
             )
         return info
 
