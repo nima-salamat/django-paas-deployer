@@ -3,7 +3,7 @@ import hashlib
 import uuid
 
 from django.test import TestCase, override_settings
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -563,6 +563,8 @@ class UserSessionTests(TestCase):
 
 
     def test_exactly_two_hour_old_session_can_manage_other_sessions(self):
+        from auth_users import session_auth
+
         first = issue_tokens_for_user(
             self.user,
             device_id="00000000-0000-0000-0000-000000000041",
@@ -571,16 +573,18 @@ class UserSessionTests(TestCase):
             self.user,
             device_id="00000000-0000-0000-0000-000000000042",
         )
+        management_now = timezone.now()
         UserSession.objects.filter(
             session_id=second["session_id"]
         ).update(
-            created_at=timezone.now() - timedelta(hours=2)
+            created_at=management_now - timedelta(hours=2)
         )
 
-        client = self._client_for(second["access"])
-        response = client.delete(
-            f"/auth/api/sessions/{first['session_id']}/"
-        )
+        with patch.object(session_auth.timezone, "now", return_value=management_now):
+            client = self._client_for(second["access"])
+            response = client.delete(
+                f"/auth/api/sessions/{first['session_id']}/"
+            )
 
         self.assertEqual(response.status_code, 204)
         self.assertIsNotNone(
