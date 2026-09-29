@@ -526,6 +526,11 @@ class _AdminSessionPermission(BasePermission):
         if not u.is_staff:
             return False
         required = getattr(view, "required_rule", None)
+        if required == "auth_sessions.view":
+            return bool(
+                user_has_rule(u, "auth_sessions.view")
+                or user_has_rule(u, "auth_sessions.manage")
+            )
         return bool(required and user_has_rule(u, required))
 
 
@@ -541,6 +546,11 @@ class AdminUserSessionListAPIView(APIView):
             target = User.objects.get(pk=pk)
         except User.DoesNotExist:
             return err("User not found", status.HTTP_404_NOT_FOUND)
+        if target.is_superuser and not request.user.is_superuser:
+            return err(
+                "Only superuser can manage another superuser's sessions",
+                status.HTTP_403_FORBIDDEN,
+            )
 
         now = timezone.now()
         sessions = list(
@@ -594,6 +604,11 @@ class AdminUserSessionRevokeAPIView(APIView):
             target = User.objects.get(pk=pk)
         except User.DoesNotExist:
             return err("User not found", status.HTTP_404_NOT_FOUND)
+        if target.is_superuser and not request.user.is_superuser:
+            return err(
+                "Only superuser can manage another superuser's sessions",
+                status.HTTP_403_FORBIDDEN,
+            )
 
         session = UserSession.objects.filter(
             user=target,
@@ -618,6 +633,11 @@ class AdminUserSessionLogoutAllAPIView(APIView):
             target = User.objects.get(pk=pk)
         except User.DoesNotExist:
             return err("User not found", status.HTTP_404_NOT_FOUND)
+        if target.is_superuser and not request.user.is_superuser:
+            return err(
+                "Only superuser can manage another superuser's sessions",
+                status.HTTP_403_FORBIDDEN,
+            )
 
         count = invalidate_all_sessions(target.id)
         return ok("Sessions revoked", data={"revoked": count})
