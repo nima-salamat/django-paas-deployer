@@ -95,6 +95,7 @@ class RecoveryRequestAPIView(APIView):
 
 
 class RecoveryConfirmAPIView(APIView):
+    authentication_classes = []
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -155,6 +156,7 @@ class PasswordRecoveryRequestAPIView(APIView):
     POST /api/password-recovery/request/
     Body: { "email": "..." }  or  { "phone_number": "..." }
     """
+    authentication_classes = []
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -209,6 +211,7 @@ class PasswordRecoveryConfirmAPIView(APIView):
     POST /api/password-recovery/confirm/
     Body: email/phone_number + code + password + password_confirm
     """
+    authentication_classes = []
     permission_classes = [AllowAny]
 
     def post(self, request):
