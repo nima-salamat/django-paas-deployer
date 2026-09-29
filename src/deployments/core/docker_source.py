@@ -380,7 +380,7 @@ _SCRIPT_INTERPRETERS = {"sh", "bash", "dash", "zsh", "ksh", "python", "python3",
 _SCRIPT_NAME_RE = re.compile(r"(?i)\.(?:sh|bash|zsh|ksh|py|js|mjs|cjs|ts|php|pl|pm|rb)$")
 _SCRIPT_RISK_RE = re.compile(
     r"(?i)(?:"
-    r"docker(?:\s+|-)?(?:run|exec|build|socket)|/var/run/docker\.sock|"
+    r"\bdocker\s+(?:run|exec|build|compose|service|swarm|system|volume|network|context|info|ps|inspect|cp|pull|push|tag|login)\b|/var/run/docker\.sock|"
     r"\b(?:nsenter|unshare|mount|umount|modprobe|insmod|setcap|chroot)\b|"
     r"\b(?:sudo|su|doas)\b|"
     r"\b(?:curl|wget)\b[^\n|]*\|[ \t]*(?:sh|bash|dash|zsh|python|python3|php)\b|"
