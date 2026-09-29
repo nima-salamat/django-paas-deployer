@@ -137,6 +137,7 @@ class ServiceLogsConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json({"type": "logs.error", "detail": "replay failed"})
 
     async def receive_json(self, content, **kwargs):
+        """Client may request replay: {"action": "replay", "cursor": "..."}."""
         if isinstance(content, dict) and content.get("type") == "ping":
             try:
                 await database_sync_to_async(resolve_session)(
@@ -148,8 +149,6 @@ class ServiceLogsConsumer(AsyncJsonWebsocketConsumer):
                 return
             await self.send_json({"type": "pong"})
             return
-
-        """Client may request replay: {"action": "replay", "cursor": "..."}."""
         if not isinstance(content, dict):
             return
         if content.get("action") == "replay" and content.get("cursor"):
