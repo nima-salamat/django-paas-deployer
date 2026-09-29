@@ -36,8 +36,14 @@ DANGEROUS_COMMAND_RE = re.compile(
     r"(?i)(?:^|[\s;&|])("
     r"nsenter|unshare|modprobe|insmod|setcap|mount|docker\s+run|docker\s+exec|"
     r"dockerd\b|containerd\b|/var/run/docker\.sock|"
-    r"curl\s+[^|\n]+\|\s*(?:sh|bash)|wget\s+[^|\n]+\|\s*(?:sh|bash)|"
-    r"chmod\s+[^ \n]+\s+\+s"
+    r"curl\s+[^|\n]+\|\s*(?:sh|bash|python|python3|php)|"
+    r"wget\s+[^|\n]+\|\s*(?:sh|bash|python|python3|php)|"
+    r"curl\s+[^\n]+(?:-o|--output|-O)\s+[^\n]+(?:&&|;|\|)\s*(?:sh|bash|python|python3|php)|"
+    r"wget\s+[^\n]+(?:-O|--output-document)\s+[^\n]+(?:&&|;|\|)\s*(?:sh|bash|python|python3|php)|"
+    r"sh\s+-c\s+[\"']?\$\(\s*(?:curl|wget)\b|"
+    r"python(?:3)?\s+-c\s+[^\n]*(?:urllib|requests|urlopen)|"
+    r"php\s+-r\s+[^\n]*(?:curl_init|file_get_contents)\s*\("
+    r"|chmod\s+[^ \n]+\s+\+s"
     r")"
 )
 
@@ -521,7 +527,17 @@ def inspect_docker_source(project_root: str, *, environment: dict[str, str] | No
             "public": False,
         }
 
-        for key, value in (service.get("labels") or {}).items():
+        raw_labels = service.get("labels") or {}
+        label_items = (
+            list(raw_labels.items())
+            if isinstance(raw_labels, dict)
+            else [
+                (str(item).split("=", 1)[0], str(item).split("=", 1)[1])
+                for item in raw_labels
+                if isinstance(item, str) and "=" in item
+            ]
+        )
+        for key, value in label_items:
             label = str(key)
             if label.lower().startswith(RESERVED_LABEL_PREFIXES):
                 findings.append(DockerPolicyFinding(
@@ -541,7 +557,12 @@ def inspect_docker_source(project_root: str, *, environment: dict[str, str] | No
                 ))
             raw = ports[0]
             if isinstance(raw, dict):
-                target = int(raw.get("target") or raw.get("published") or 0)
+                if raw.get("target") in (None, ""):
+                    raise DeploymentSecurityError(
+                        "Compose published ports must declare an explicit target port.",
+                        stage="docker_source_validation",
+                    )
+                target = int(raw.get("target"))
             else:
                 parts = str(raw).split(":")
                 target = int(parts[-1].split("/")[0])
