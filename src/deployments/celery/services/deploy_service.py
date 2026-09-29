@@ -396,6 +396,107 @@ class DeployService:
             except Exception:
                 pass
 
+        # Docker platform is source-driven: a tenant Dockerfile or single-service
+        # Compose file is inspected and normalized before any Docker build starts.
+        # Never execute docker compose itself and never import host paths from it.
+        docker_source_resolution = None
+        if platform == "docker" and getattr(deploy_item, "zip_file", None):
+            inspect_dir = None
+            try:
+                archive_path = deploy_item.zip_file.path
+                from deployments.core.platform_bridge import extract_zip_to_temp
+                from deployments.core.docker_source import inspect_docker_source
+                inspect_dir, docker_root = extract_zip_to_temp(archive_path)
+                docker_source_resolution = inspect_docker_source(
+                    docker_root,
+                    environment=dict(cfg.get("env") or cfg.get("environment") or {}),
+                )
+            except DeploymentValidationError:
+                raise
+            except Exception as exc:
+                raise DeploymentValidationError(
+                    "Docker source security validation failed.",
+                    stage="docker_source_validation",
+                    details={"technical_error": str(exc)},
+                ) from exc
+            finally:
+                if inspect_dir:
+                    import shutil as _shutil
+                    _shutil.rmtree(inspect_dir, ignore_errors=True)
+
+            report = docker_source_resolution.report()
+            cfg["docker_source_report"] = report
+            cfg["docker_source_runtime"] = dict(docker_source_resolution.runtime or {})
+            cfg["docker_source_volumes"] = list(docker_source_resolution.volumes or [])
+            if docker_source_resolution.blocked:
+                raise DeploymentValidationError(
+                    "The supplied Docker source contains operations that PassDeployer does not allow.",
+                    stage="docker_source_validation",
+                    details=report,
+                )
+            for finding in docker_source_resolution.findings:
+                if finding.action == "strip":
+                    logger.warning(
+                        "Docker source policy stripped %s from %s: %s",
+                        finding.code, finding.path or "source", finding.message,
+                    )
+                elif finding.action == "warn":
+                    logger.warning(
+                        "Docker source policy warning %s in %s: %s",
+                        finding.code, finding.path or "source", finding.message,
+                    )
+            logger.info(
+                "Docker source accepted: kind=%s file=%s findings=%d volumes=%d",
+                docker_source_resolution.source_kind,
+                docker_source_resolution.source_file,
+                len(docker_source_resolution.findings),
+                len(docker_source_resolution.volumes),
+            )
+            # Current execution uses the normalized Dockerfile as the sole build
+            # input; Compose is only the declarative source for runtime options.
+            dockerfile_text = docker_source_resolution.dockerfile_text
+            docker_runtime = docker_source_resolution.runtime or {}
+            compose_env = dict(docker_runtime.get("environment") or {})
+            explicit_env = dict(cfg.get("env") or cfg.get("environment") or {})
+            cfg["environment"] = {**compose_env, **explicit_env}
+            cfg["env"] = dict(cfg["environment"])
+            if docker_runtime.get("read_only"):
+                cfg.setdefault("runtime_options", {})["read_only"] = True
+            if docker_runtime.get("working_directory"):
+                cfg["working_directory"] = str(docker_runtime["working_directory"])
+            if docker_runtime.get("port"):
+                cfg["port"] = int(docker_runtime["port"])
+            if docker_runtime.get("public") and docker_runtime.get("port"):
+                cfg["docker_source_public"] = True
+            command = docker_runtime.get("entrypoint") or docker_runtime.get("command")
+            if docker_runtime.get("entrypoint") and docker_runtime.get("command"):
+                command = f"{docker_runtime['entrypoint']} {docker_runtime['command']}".strip()
+            if command:
+                cfg["start_command"] = str(command)
+            if docker_runtime.get("healthcheck_path"):
+                cfg["healthcheck_path"] = str(docker_runtime["healthcheck_path"])
+            if docker_runtime.get("healthcheck_timeout"):
+                cfg["healthcheck_timeout"] = float(docker_runtime["healthcheck_timeout"])
+            if docker_runtime.get("labels"):
+                cfg["labels"] = {
+                    **dict(docker_runtime.get("labels") or {}),
+                    **dict(cfg.get("labels") or {}),
+                }
+            cfg["source_kind"] = docker_source_resolution.source_kind
+            # Keep the normalized result on the in-memory Deploy compatibility
+            # object so volume resolution later in this same execution sees it.
+            try:
+                raw_cfg = dict(deploy_item.config or {}) if isinstance(deploy_item.config, dict) else {}
+                raw_cfg.update({
+                    "source_kind": docker_source_resolution.source_kind,
+                    "docker_source_report": report,
+                    "docker_source_runtime": dict(docker_source_resolution.runtime or {}),
+                    "docker_source_volumes": list(docker_source_resolution.volumes or []),
+                })
+                deploy_item.config = raw_cfg
+            except Exception:
+                pass
+
         # Explicit config always wins over detector output.
         detected_project_cfg = runtime_options.get("project_cfg") or {}
         build_command = cfg.get("build_command") or detected_project_cfg.get("build_command")
