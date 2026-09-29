@@ -8,6 +8,7 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.test import APIClient
 
 from users.models import User
 from .models import Device, LoginSettings, UserSession
@@ -160,3 +161,17 @@ class UserSessionTests(TestCase):
         revoked = SessionTokenVerifySerializer(data={"token": tokens["access"]})
         with self.assertRaises(AuthenticationFailed):
             revoked.is_valid(raise_exception=True)
+
+
+    def test_revoked_session_is_rejected_by_an_authenticated_api_endpoint(self):
+        tokens = issue_tokens_for_user(self.user)
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+
+        first = client.get("/api/users/user/")
+        self.assertEqual(first.status_code, 200)
+
+        invalidate_session(tokens["session_id"])
+
+        second = client.get("/api/users/user/")
+        self.assertEqual(second.status_code, 401)
