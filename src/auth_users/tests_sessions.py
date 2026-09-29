@@ -560,3 +560,31 @@ class UserSessionTests(TestCase):
                 async_to_sync(consumer.connect)()
 
                 consumer.close.assert_awaited_once_with(code=expected_code)
+
+
+    def test_exactly_two_hour_old_session_can_manage_other_sessions(self):
+        first = issue_tokens_for_user(
+            self.user,
+            device_id="00000000-0000-0000-0000-000000000041",
+        )
+        second = issue_tokens_for_user(
+            self.user,
+            device_id="00000000-0000-0000-0000-000000000042",
+        )
+        UserSession.objects.filter(
+            session_id=second["session_id"]
+        ).update(
+            created_at=timezone.now() - timedelta(hours=2)
+        )
+
+        client = self._client_for(second["access"])
+        response = client.delete(
+            f"/auth/api/sessions/{first['session_id']}/"
+        )
+
+        self.assertEqual(response.status_code, 204)
+        self.assertIsNotNone(
+            UserSession.objects.get(
+                session_id=first["session_id"]
+            ).revoked_at
+        )
