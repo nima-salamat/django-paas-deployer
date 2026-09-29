@@ -162,3 +162,19 @@ JSON fields are structured contracts. Do not introduce keys by observation from 
 **Compatibility behavior:** fields explicitly described as projections, legacy state, or migration bridges must not be interpreted as a second source of truth.
 
 **Do not assume:** a Django field being writable at the ORM level means any API or worker is allowed to mutate it. Workflow ownership and invariants in the app documentation control safe writes.
+
+
+## Build cache governance models
+
+`src/deploy/models.py::BuildCacheArtifact` records one logical application
+image artifact with its User, Service and Deploy ownership, image identity,
+size, last-use timestamp, protection flag and reclamation state.
+
+`src/deploy/models.py::BuildCacheQuota` stores an operator override owned by
+exactly one User or exactly one Service. Quota, retention and protected
+successful-deployment count are optional and inherit the global build-cache
+policy when left unset.
+
+The cache policy engine is implemented in `src/deploy/build_cache.py`.
+Physical Docker BuildKit storage is global; these models provide logical
+tenant accounting and safe application-image retention.
