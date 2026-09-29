@@ -8,7 +8,7 @@ OTP creation, validation and consumption are synchronous security operations; de
 
 SessionJWTAuthentication resolves session-bound JWTs on every authenticated request. Redis is a bounded acceleration layer for UserSession lookups; PostgreSQL remains authoritative for session identity, expiry and revocation.
 
-A newly issued session is populated into Redis immediately after the login transaction commits. The default session-cache lease is 15 minutes and is renewed while the cached entry is actively used, with a 5-minute refresh threshold. Session last-seen timestamps are persisted on a bounded interval rather than on every API request.
+A newly issued session is populated into Redis immediately after the login transaction commits. The default session-cache lease is 15 minutes and is renewed on each successful cache hit without rewriting the cached session payload. Session last-seen timestamps are persisted on a bounded interval rather than on every API request.
 
 Session revocation paths invalidate Redis only after the durable database transaction commits. This includes single-session revoke, logout-all, device revoke, automatic oldest-session eviction and Django Admin session/device actions.
 
