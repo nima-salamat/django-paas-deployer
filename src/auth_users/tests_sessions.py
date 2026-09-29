@@ -367,3 +367,147 @@ class UserSessionTests(TestCase):
         legacy_access = str(legacy_refresh.access_token)
 
         self.assertIsNone(resolve_user_from_access_token(legacy_access))
+
+
+    def _legacy_access_token(self):
+        return str(RefreshToken.for_user(self.user).access_token)
+
+    def test_new_login_flow_issues_a_session_bound_token(self):
+        self.user.set_unusable_password()
+        self.user.save(update_fields=["password"])
+        LoginSettings.objects.update(
+            require_otp=False,
+            require_password=True,
+            password_as_second_factor=False,
+        )
+
+        client = APIClient()
+        response = client.post(
+            "/auth/api/authentication/",
+            {"username": self.user.username, "email": self.user.email},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["success"])
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+
+        access = RefreshToken(response.data["refresh"]).access_token
+        self.assertEqual(str(access["sid"]), str(response.data["session_id"]))
+        self.assertTrue(
+            UserSession.objects.filter(
+                session_id=response.data["session_id"],
+                user=self.user,
+                revoked_at__isnull=True,
+            ).exists()
+        )
+
+    def test_all_public_auth_routes_ignore_a_stale_bearer_token(self):
+        legacy_access = self._legacy_access_token()
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {legacy_access}")
+
+        cases = [
+            ("get", "/auth/api/settings/", None, 200),
+            ("post", "/auth/api/authentication/", {}, 400),
+            ("post", "/auth/api/login/", {}, 400),
+            ("post", "/auth/api/signup/", {}, 400),
+            ("post", "/auth/api/login/validate/", {}, 400),
+            ("post", "/auth/api/login/token/", {}, 400),
+            ("post", "/auth/api/set-password/", {}, 400),
+            ("post", "/auth/api/recovery/request/", {}, 400),
+            ("post", "/auth/api/recovery/confirm/", {}, 400),
+            ("post", "/auth/api/password-recovery/request/", {}, 400),
+            ("post", "/auth/api/password-recovery/confirm/", {}, 400),
+            ("get", "/auth/api/invite/validate/", None, 400),
+        ]
+
+        for method, url, body, expected in cases:
+            with self.subTest(method=method, url=url):
+                if body is None:
+                    response = getattr(client, method)(url)
+                else:
+                    response = getattr(client, method)(url, data=body, format="json")
+                self.assertEqual(response.status_code, expected)
+
+    def test_validate_token_rejects_a_legacy_access_token(self):
+        client = self._client_for(self._legacy_access_token())
+        response = client.get("/auth/api/validateToken/")
+        self.assertEqual(response.status_code, 401)
+
+    def test_session_id_helper_rejects_legacy_token_and_accepts_new_token(self):
+        self.assertIsNone(
+            get_session_id_from_access_token(self._legacy_access_token())
+        )
+        tokens = issue_tokens_for_user(self.user)
+        self.assertEqual(
+            get_session_id_from_access_token(tokens["access"]),
+            tokens["session_id"],
+        )
+
+    def _assert_revoked_session_ping_closes(self, consumer_cls, *, scope_mode=False):
+        tokens = issue_tokens_for_user(self.user)
+        session_id = tokens["session_id"]
+        invalidate_session(session_id)
+
+        consumer = consumer_cls.__new__(consumer_cls)
+        consumer.user = self.user
+        consumer.auth_session_id = session_id
+        consumer.close = AsyncMock()
+        consumer.send_json = AsyncMock()
+        if scope_mode:
+            consumer.scope = {"auth_session_id": session_id}
+
+        async_to_sync(consumer.receive_json)({"type": "ping"})
+
+        consumer.close.assert_awaited_once_with(code=4401)
+        consumer.send_json.assert_not_awaited()
+
+    def _assert_live_session_ping_returns_pong(self, consumer_cls, *, scope_mode=False):
+        tokens = issue_tokens_for_user(self.user)
+        session_id = tokens["session_id"]
+
+        consumer = consumer_cls.__new__(consumer_cls)
+        consumer.user = self.user
+        consumer.auth_session_id = session_id
+        consumer.close = AsyncMock()
+        consumer.send_json = AsyncMock()
+        if scope_mode:
+            consumer.scope = {"auth_session_id": session_id}
+
+        async_to_sync(consumer.receive_json)({"type": "ping"})
+
+        consumer.close.assert_not_awaited()
+        consumer.send_json.assert_awaited_once_with({"type": "pong"})
+
+    def test_messenger_websocket_revalidates_revoked_session(self):
+        self._assert_revoked_session_ping_closes(
+            MessengerConsumer,
+            scope_mode=True,
+        )
+
+    def test_ticket_websockets_revalidate_revoked_session(self):
+        for consumer_cls in (TicketEventsConsumer, TicketNotifyConsumer):
+            with self.subTest(consumer=consumer_cls.__name__):
+                self._assert_revoked_session_ping_closes(consumer_cls)
+
+    def test_service_and_deployment_websockets_revalidate_revoked_session(self):
+        for consumer_cls in (ServiceLogsConsumer, RestrictedShellConsumer, DeploymentConsumer):
+            with self.subTest(consumer=consumer_cls.__name__):
+                self._assert_revoked_session_ping_closes(consumer_cls)
+
+    def test_websocket_heartbeats_accept_live_sessions(self):
+        self._assert_live_session_ping_returns_pong(
+            MessengerConsumer,
+            scope_mode=True,
+        )
+        for consumer_cls in (
+            TicketEventsConsumer,
+            TicketNotifyConsumer,
+            ServiceLogsConsumer,
+            RestrictedShellConsumer,
+            DeploymentConsumer,
+        ):
+            with self.subTest(consumer=consumer_cls.__name__):
+                self._assert_live_session_ping_returns_pong(consumer_cls)
