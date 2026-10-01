@@ -13,6 +13,7 @@ from .session_auth import (
     invalidate_all_sessions,
     invalidate_device,
     invalidate_session,
+    touch_session_activity,
 )
 
 
@@ -76,6 +77,7 @@ class SessionListAPIView(SessionAPIBase):
                 "results": [_session_payload(s, current_id) for s in sessions],
                 "active_count": len(sessions),
                 "max_active_sessions": policy.max_active_sessions,
+                "server_now": now,
                 "session_management": {
                     "minimum_age_seconds": int(min_management_age.total_seconds()),
                     "current_session_age_seconds": current_age_seconds,
@@ -83,6 +85,28 @@ class SessionListAPIView(SessionAPIBase):
                 },
             }
         )
+
+
+class SessionActivityAPIView(SessionAPIBase):
+    """Record recent authenticated presence for the caller's current session."""
+
+    def post(self, request):
+        current_id = _require_current_session(request)
+        if not current_id:
+            return Response(
+                {
+                    "code": "session_context_required",
+                    "detail": "A session-bound authentication token is required.",
+                },
+                status=403,
+            )
+
+        now = touch_session_activity(
+            str(current_id),
+            user_id=request.user.id,
+            request=request,
+        )
+        return Response({"last_seen_at": now})
 
 
 class SessionRevokeAPIView(SessionAPIBase):
