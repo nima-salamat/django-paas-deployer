@@ -10,9 +10,9 @@ class DeploymentLogger:
     Emit structured deployment events to Python logging and an optional sink.
 
     The sink (typically DBAndChannelEventSink) is responsible for:
-      - DeployLog rows
-      - Deploy progress/stage updates
-      - WebSocket broadcast to the browser
+      - synchronous Deploy progress/stage updates
+      - durable event-outbox persistence for non-noise lifecycle events
+      - leaving DeployLog and WebSocket delivery to the outbox dispatcher
 
     Sink failures never abort the pipeline (except DeploymentCancelled).
     """
