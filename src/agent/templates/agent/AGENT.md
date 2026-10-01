@@ -50,6 +50,28 @@ OpenAPI:
 
     GET {{ api_base_url }}/openapi.json
 
+Complete deployment/configuration help:
+
+    GET {{ api_base_url }}/deployments/help
+
+ZIP inspection before creating a deployment:
+
+    POST {{ api_base_url }}/deployments/inspect
+
+Runtime metrics for an accessible service:
+
+    GET {{ api_base_url }}/services/{service_id}/metrics
+
+Database credentials are a separately scoped operation. A normal service read
+never returns database passwords. When the Agent has the high-risk
+`service_database_credentials.read` scope and the existing ServiceShare
+policy allows `can_view_db_credentials`, use:
+
+    GET {{ api_base_url }}/services/{service_id}/database-credentials?reveal=true
+
+The response may contain a decrypted password/root password. Treat it as
+secret material and never log or persist it.
+
 ## Operational rules
 
 - Agent scopes are an upper bound. Existing PassDeployer User authorization and
@@ -70,6 +92,10 @@ OpenAPI:
   scopes can differ between Agents.
 - Supported first-class deployment inputs are archive/ZIP and database-native
   deployment. Git and existing-image deployment are not part of this contract.
+- CPU/RAM/PIDs/worker counts are server/Plan-controlled; never try to inject
+  resource_limits, resources or worker-count overrides into tenant config.
+- Volumes and networks are managed through their dedicated Agent endpoints so
+  quota, ownership, attachment and lifecycle rules remain enforced.
 
 ## Common workflows
 
