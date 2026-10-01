@@ -117,6 +117,7 @@ class AgentAPIView(APIView):
     audit_resource_type = ""
     audit_mutating = False
     idempotency_store_response = True
+    suppress_error_fields = False
 
     def initial(self, request, *args, **kwargs):
         request.agent_request_id = get_request_id(request)
@@ -583,6 +584,7 @@ class ServiceLogsExportView(AgentSecuredAPIView):
 
 
 class ConfigurationView(AgentSecuredAPIView):
+    suppress_error_fields = True
     idempotency_store_response=False
     audit_resource_type="service"
     def get(self,request,service_id):
@@ -598,6 +600,7 @@ class ConfigurationView(AgentSecuredAPIView):
 
 
 class EnvironmentView(AgentSecuredAPIView):
+    suppress_error_fields = True
     idempotency_store_response=False
     audit_resource_type="service"
     def get(self,request,service_id):
@@ -617,6 +620,7 @@ class EnvironmentView(AgentSecuredAPIView):
 
 
 class SecretsView(AgentSecuredAPIView):
+    suppress_error_fields = True
     idempotency_store_response=False
     audit_resource_type="service"
     def get(self,request,service_id):
@@ -789,6 +793,7 @@ def _volume_payload(v):
 
 
 class DatabaseBindingsView(AgentSecuredAPIView):
+    suppress_error_fields = True
     idempotency_store_response = False
     audit_resource_type = "service"
 
