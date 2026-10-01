@@ -3,20 +3,15 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
 from core.global_settings.config import SERVICE_STATUS_CHOICES
-from deploy.models import Deploy, DeployLog, DeploymentStatusChoices, RollbackStatusChoices
+from deploy.models import Deploy, DeploymentStatusChoices, RollbackStatusChoices
 from services.models import Service
 from deployments.core.state.manager import StateManager
 
 logger = logging.getLogger(__name__)
-
-
-def _log_db_alias() -> str:
-    return getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", None) or "default"
 
 
 # ---------------------------------------------------------------------------
@@ -33,48 +28,28 @@ def _create_deploy_log(
     progress: int | None = None,
     details: dict | None = None,
 ) -> None:
-    """
-    Write a DeployLog entry (cross-DB safe) and best-effort broadcast
-    to the WebSocket group.
-    """
+    """Persist a monitor event through the durable deployment outbox."""
     try:
-        DeployLog.objects.using(_log_db_alias()).create(
-            deploy_id=deploy.pk,
-            service_id=getattr(deploy, "service_id", None)
-            or (deploy.service.pk if getattr(deploy, "service", None) else None),
-            stage=stage,
-            event_type=event_type,
-            level=level,
-            message=message,
-            progress=progress,
-            details=details or {},
-        )
-    except Exception:
-        logger.exception(
-            "Failed to write DeployLog for deploy %s stage=%s", deploy.pk, stage
-        )
-
-    # Live push to connected browsers
-    try:
-        try:
-            from deployments.core.sink import DBAndChannelEventSink
-        except ImportError:
-            from deploy.sink import DBAndChannelEventSink
+        from deployments.core.sink import DBAndChannelEventSink
         from deployments.core.types import DeploymentEvent
 
-        sink = DBAndChannelEventSink(deploy.pk)
-        sink(
+        DBAndChannelEventSink(deploy.pk)(
             DeploymentEvent(
                 stage=stage,
                 message=message,
                 level=level,
                 progress=progress,
-                details=details or {},
+                details={
+                    **(details or {}),
+                    "event_type": event_type,
+                },
             )
         )
     except Exception:
-        logger.debug(
-            "Monitor WS broadcast skipped for deploy %s", deploy.pk, exc_info=True
+        logger.exception(
+            "Failed to persist durable monitor event for deploy %s stage=%s",
+            deploy.pk,
+            stage,
         )
 
 
