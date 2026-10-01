@@ -887,9 +887,10 @@ def _reconcile_desired_state(service: Service) -> bool:
             }:
                 try:
                     from deployments.celery.tasks import deploy as deploy_task
-                    Service.objects.filter(pk=service.pk).update(
-                        status=SERVICE_STATUS_CHOICES.QUEUED,
-                        deploy_started=timezone.now(),
+                    StateManager.transition_service(
+                        service.pk,
+                        SERVICE_STATUS_CHOICES.QUEUED,
+                        update_fields={"deploy_started": timezone.now()},
                     )
                     deploy_task.delay(str(revision_deploy.pk))
                     return True
@@ -934,9 +935,10 @@ def _reconcile_desired_state(service: Service) -> bool:
             return False
         try:
             from deployments.celery.tasks import deploy as deploy_task
-            Service.objects.filter(pk=service.pk).update(
-                status=SERVICE_STATUS_CHOICES.QUEUED,
-                deploy_started=timezone.now(),
+            StateManager.transition_service(
+                service.pk,
+                SERVICE_STATUS_CHOICES.QUEUED,
+                update_fields={"deploy_started": timezone.now()},
             )
             deploy_task.delay(str(revision_deploy.pk))
             logger.info(
