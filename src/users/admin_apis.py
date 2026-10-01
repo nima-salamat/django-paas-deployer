@@ -36,6 +36,7 @@ from auth_users.authentication import SessionJWTAuthentication as JWTAuthenticat
 
 from .models import Rule, Profile
 from auth_users.models import LoginSettings, UserSession
+from auth_users.device_metadata import device_descriptor
 from auth_users.session_auth import invalidate_all_sessions, invalidate_session
 
 User = get_user_model()
@@ -577,11 +578,7 @@ class AdminUserSessionListAPIView(APIView):
                     {
                         "id": session.session_id,
                         "device_id": str(session.device.public_id),
-                        "device": {
-                            "name": session.device.name,
-                            "platform": session.device.platform,
-                            "client": session.device.client,
-                        },
+                        "device": device_descriptor(session.device, session=session),
                         "created_at": session.created_at,
                         "last_seen_at": session.last_seen_at,
                         "expires_at": session.expires_at,
