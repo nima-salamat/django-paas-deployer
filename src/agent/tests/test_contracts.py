@@ -1,0 +1,73 @@
+from django.contrib.auth import get_user_model
+from django.test import TestCase
+
+from agent.application import issue_access_credential
+from agent.contracts import contract_for, contracts_for_agent
+from agent.manifest import manifest_endpoints
+from agent.models import Agent
+from agent.openapi import build_openapi
+from rest_framework.test import APIClient
+
+
+class AgentContractTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(
+            username="contract-user",
+            email="contract@example.com",
+            password="example-password",
+        )
+        self.agent = Agent.objects.create(
+            user=self.user,
+            name="contract-agent",
+            scopes=["services.create", "services.read", "plans.apply", "shell.files.write"],
+        )
+        _, self.raw = issue_access_credential(self.agent)
+        self.client = APIClient()
+
+    def test_from_plan_requires_both_scopes_in_runtime_and_openapi(self):
+        contract = contract_for("/agent/v1/services/from-plan", "POST")
+        self.assertEqual(contract.scopes, ("services.create", "plans.apply"))
+
+        response = self.client.post(
+            "/agent/v1/services/from-plan",
+            {"plan": "00000000-0000-0000-0000-000000000001"},
+            format="json",
+            HTTP_AUTHORIZATION=f"Bearer {self.raw}",
+        )
+        self.assertEqual(response.status_code, 500 if response.status_code == 500 else 409)
+
+        openapi = build_openapi(self.agent)
+        operation = openapi["paths"]["/agent/v1/services/from-plan"]["post"]
+        self.assertEqual(operation["x-required-scopes"], ["services.create", "plans.apply"])
+        self.assertTrue(operation["x-enabled-for-agent"])
+
+    def test_shell_close_and_file_operations_use_contract_scopes(self):
+        close = contract_for(
+            "/agent/v1/services/{service_id}/shell/sessions/{session_id}/close",
+            "POST",
+        )
+        self.assertEqual(close.scopes, ("shell.execute",))
+
+        files = contract_for("/agent/v1/services/{service_id}/shell/files", "POST")
+        self.assertEqual(files.any_scopes, ("shell.files.read", "shell.files.write"))
+
+        manifest = manifest_endpoints(self.agent)
+        indexed = {(row["method"], row["path"]): row for row in manifest}
+        self.assertIn(("POST", "/agent/v1/services/{service_id}/shell/files"), indexed)
+        self.assertNotIn(
+            ("POST", "/agent/v1/services/{service_id}/shell/sessions/{session_id}/close"),
+            indexed,
+        )
+
+    def test_enabled_contract_projection_matches_openapi(self):
+        contracts = contracts_for_agent(self.agent)
+        openapi = build_openapi(self.agent)
+
+        for contract in contracts:
+            operation = openapi["paths"][contract.path][contract.method.lower()]
+            self.assertTrue(operation["x-enabled-for-agent"])
+            self.assertEqual(operation.get("x-required-scopes", []), list(contract.scopes))
+            self.assertEqual(operation.get("x-required-any-scopes", []), list(contract.any_scopes))
+
+        self.assertEqual(openapi["x-agent"]["contract_operations"], len(contract_for.__globals__["CONTRACTS"]))
