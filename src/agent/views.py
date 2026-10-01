@@ -231,6 +231,8 @@ class AgentCapabilitiesView(AgentSecuredAPIView):
 
 
 class AgentManifestView(AgentSecuredAPIView):
+    required_scopes = ("agent.manifest.generate",)
+    throttle_scope = "mutation"
     audit_action = "agent.manifest.generate"
     def get(self, request):
         from .manifest import render_agent_manifest
