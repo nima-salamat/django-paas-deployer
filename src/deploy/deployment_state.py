@@ -1,6 +1,7 @@
 from django.db import transaction
 from django.utils import timezone
 import logging
+import uuid
 
 from .event_pipeline import DeploymentEventPipeline
 from .models import Deploy, DeploymentStatusChoices, RollbackStatusChoices
@@ -57,6 +58,7 @@ class DjangoDeploymentState:
         if deploy is None:
             raise ValueError("DjangoDeploymentState requires a Deploy instance")
         self.deploy = deploy
+        self._owner_task_id = str(getattr(deploy, "execution_task_id", "") or "") or ("inline:" + str(uuid.uuid4()))
         self.events = DeploymentEventPipeline(deploy)
         self._finished = False
 
@@ -70,8 +72,10 @@ class DjangoDeploymentState:
         with transaction.atomic():
             locked = Deploy.objects.select_for_update().get(pk=self.deploy.pk)
             if locked.cancel_requested or locked.status == DeploymentStatusChoices.CANCELLED:
-                StateManager.transition_deploy(
-                    locked.pk, DeploymentStatusChoices.CANCELLED,
+                StateManager.transition_deploy_terminal_if_owned(
+                    locked.pk,
+                    DeploymentStatusChoices.CANCELLED,
+                    task_id=self._owner_task_id,
                     update_fields={
                         "stage": "cancelled",
                         "progress": 100,
@@ -187,9 +191,7 @@ class DjangoDeploymentState:
         if stage == "deployment_completed":
             update.update(
                 {
-                    "status": DeploymentStatusChoices.SUCCEEDED,
                     "progress": 100,
-                    "completed_at": timezone.now(),
                     "image_status": "built",
                     "network_status": "ready",
                     "volume_status": "ready",
@@ -212,9 +214,7 @@ class DjangoDeploymentState:
             )
             update.update(
                 {
-                    "status": terminal_status,
                     "progress": 100,
-                    "completed_at": timezone.now(),
                 }
             )
             if details.get("rollback_performed"):
@@ -331,25 +331,13 @@ class DjangoDeploymentState:
             final_stage = update["stage"]
             final_level = "error"
 
-        owner = str((current or {}).get("execution_task_id") or getattr(self.deploy, "execution_task_id", "") or "")
-        committed = False
-        if owner:
-            committed = StateManager.transition_deploy_terminal_if_owned(
-                self.deploy.pk,
-                terminal_target,
-                task_id=owner,
-                update_fields=update,
-            )
-        else:
-            try:
-                StateManager.transition_deploy(
-                    self.deploy.pk,
-                    terminal_target,
-                    update_fields=update,
-                )
-                committed = True
-            except Exception:
-                committed = False
+        owner = self._owner_task_id or str((current or {}).get("execution_task_id") or "")
+        committed = bool(owner) and StateManager.transition_deploy_terminal_if_owned(
+            self.deploy.pk,
+            terminal_target,
+            task_id=owner,
+            update_fields=update,
+        )
 
         if not committed:
             logger.info(
