@@ -657,7 +657,7 @@ def force_cancel_deploy_apiview(request):
             or None
         )
         from deployments.core.state.manager import StateManager
-        StateManager.transition_deploy(
+        StateManager.transition_deploy_system_terminal(
             locked.pk,
             DeploymentStatusChoices.CANCELLED,
             update_fields={
@@ -666,6 +666,20 @@ def force_cancel_deploy_apiview(request):
                 "progress": 100,
                 "status_message": "Deployment force-cancelled by user.",
                 "error_message": "Force cancelled by user.",
+            },
+            event_payload={
+                "event_id": str(uuid.uuid4()),
+                "trace_id": str(locked.pk),
+                "deployment_id": str(locked.pk),
+                "service_id": str(locked.service_id),
+                "revision_id": str(getattr(locked, "revision_id", "") or ""),
+                "task_id": "force-cancel-api",
+                "event_type": "deployment.cancelled.warning",
+                "stage": "cancelled",
+                "level": "warning",
+                "message": "Deployment force-cancelled by user.",
+                "progress": 100,
+                "details": {"controlled_by": "force_cancel_api"},
             },
         )
         selected = locked
