@@ -161,3 +161,17 @@ def test_event_sink_sanitizes_message_before_state_projection():
     source = (__import__("pathlib").Path(__file__).resolve().parents[2] / "deployments/core/sink.py").read_text(encoding="utf-8")
     assert "from deploy.event_pipeline import sanitize" in source
     assert 'message = sanitize(payload.get("message") or "")' in source
+
+
+def test_outbox_retention_only_prunes_dispatched_rows():
+    source = (__import__("pathlib").Path(__file__).resolve().parents[2] / "deployments/common/event_outbox.py").read_text(encoding="utf-8")
+    method = source.split("def prune_dispatched", 1)[1].split("def _log_db_alias", 1)[0]
+    assert "dispatched_at__isnull=False" in method
+    assert "dispatched_at__lt=cutoff" in method
+
+def test_outbox_retention_is_scheduled_and_operator_bounded():
+    task_source = (__import__("pathlib").Path(__file__).resolve().parents[2] / "deployments/celery/tasks.py").read_text(encoding="utf-8")
+    settings_source = (__import__("pathlib").Path(__file__).resolve().parents[2] / "config/settings.py").read_text(encoding="utf-8")
+    assert "prune_deployment_event_outbox" in task_source
+    assert "DEPLOYMENT_EVENT_OUTBOX_RETENTION_DAYS" in task_source
+    assert ""schedule": 3600.0" in settings_source
