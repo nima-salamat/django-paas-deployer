@@ -318,7 +318,7 @@ def ensure_session_can_revoke_others(
                 "remaining_seconds": remaining,
             }
         )
-        return session
+    return session
 
 
 def get_active_session_for_update(
