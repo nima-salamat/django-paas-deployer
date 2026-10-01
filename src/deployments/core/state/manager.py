@@ -422,14 +422,41 @@ class StateManager:
         """
         from deploy.models import Deploy  # type: ignore
 
+        if terminal and not task_id:
+            # Every terminal mutation must be associated with an execution
+            # owner. An unowned caller may create diagnostics or intents, but
+            # it cannot commit a deployment terminal state.
+            return False
+
         with transaction.atomic():
-            deploy = Deploy.objects.select_for_update().filter(pk=deploy_id).first()
+            deploy = (
+                Deploy.objects
+                .select_related("service")
+                .select_for_update()
+                .filter(pk=deploy_id)
+                .first()
+            )
             if deploy is None:
                 return False
             if task_id and deploy.execution_task_id != task_id:
                 return False
             if terminal and sm.is_deploy_terminal(deploy.status):
                 return False
+
+            service = None
+            if terminal and deploy.revision_id:
+                from services.models import Service  # type: ignore
+                service = Service.objects.select_for_update().filter(pk=deploy.service_id).first()
+                # A newer activation means this deployment attempt has already
+                # been superseded. A stale worker may still write diagnostics,
+                # but it must not become the authoritative terminal outcome.
+                if (
+                    service is not None
+                    and service.active_revision_id is not None
+                    and str(service.active_revision_id) != str(deploy.revision_id)
+                    and target == sm.DEPLOY_SUCCEEDED
+                ):
+                    return False
 
             effective_target = target
             effective_updates = dict(update_fields or {})
