@@ -8,7 +8,7 @@ from typing import Any, Mapping
 
 from deployments.core.runtime_graph import ServiceRuntimeGraph
 from deployments.core.types import EndpointSpec, NetworkSpec, VolumeSpec
-from deployments.runtime.capabilities import RuntimeCapability
+from deployments.runtime.capabilities import RuntimeCapability, StorageCapability
 from deployments.runtime.contract import RuntimeIdentity, RuntimeSelection
 from deployments.runtime.errors import RuntimeUnsupportedError
 
@@ -100,6 +100,19 @@ class DeploymentPlanCompiler:
         ):
             required.add(RuntimeCapability.HEALTH_CHECKS)
         runtime_options = dict(resolved.get("runtime_options") or {})
+        storage_policy = dict(runtime_options.get("storage") or {})
+        hard_capacity_requested = bool(storage_policy.get("hard_capacity"))
+        if hard_capacity_requested and graph.volumes:
+            if StorageCapability.HARD_CAPACITY not in effective_selection.capabilities.storage:
+                raise RuntimeUnsupportedError(
+                    "The selected runtime cannot provide a hard persistent-storage capacity guarantee.",
+                    code="STORAGE_HARD_CAPACITY_UNSUPPORTED",
+                    details={
+                        "backend": effective_selection.backend,
+                        "scope": "node_local" if effective_selection.backend == "swarm" else "runtime_local",
+                        "requested": "hard_capacity",
+                    },
+                )
         if runtime_options.get("placement_constraints"):
             required.add(RuntimeCapability.NODE_CONSTRAINTS)
 
