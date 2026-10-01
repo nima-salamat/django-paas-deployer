@@ -229,6 +229,8 @@ def manage_plan(request, action, plan_id=None, data=None):
     from plans.apis import PlanAdminViewSet
     from plans.models import Plan
 
+    require_plan_management(request.user, action)
+
     response = call_viewset_action(
         PlanAdminViewSet, action, request, pk=plan_id, data=data,
     )
