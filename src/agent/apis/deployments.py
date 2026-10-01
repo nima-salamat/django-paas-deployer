@@ -8,6 +8,7 @@ from ..application import (
     call_api_view_handler, call_viewset_action, deployment_payload, deployment_queryset,
     get_deployment, get_service, upload_deployment_zip,
 )
+from ..errors import AgentError
 
 
 class DeploymentListCreateView(AgentPage):
