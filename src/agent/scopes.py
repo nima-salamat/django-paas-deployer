@@ -12,6 +12,12 @@ SHELL_SCOPES=("shell.read","shell.execute","shell.replace","shell.files.read","s
 ALL_SCOPES=frozenset(SERVICE_SCOPES+PLAN_SCOPES+DEPLOYMENT_SCOPES+RUNTIME_SCOPES+CONFIG_SCOPES+SHELL_SCOPES+AGENT_SCOPES)
 DEFAULT_SCOPES=frozenset({"services.read","plans.read","deployments.read","deployments.logs.read","service_logs.read","service_config.read","service_environment.read","service_endpoints.read","service_volumes.read","service_networks.read"})
 SCOPE_LABELS=OrderedDict((s,s.replace("."," / ").replace("_"," ").capitalize()) for s in sorted(ALL_SCOPES))
+DESTRUCTIVE_SCOPES=frozenset({
+    "services.delete","services.purge","deployments.cancel","deployments.delete",
+    "deployments.rollback","shell.execute","shell.replace","shell.files.write",
+    "service_secrets.write","service_volumes.write","service_networks.write",
+})
+
 HIGH_RISK_SCOPES=frozenset({"agent.manifest.generate","services.delete","services.purge","deployments.cancel","deployments.rebuild","deployments.rollback","deployments.delete","service_secrets.write","service_volumes.write","service_networks.write","shell.execute","shell.replace","shell.files.write"})
 
 def validate_scopes(scopes):
