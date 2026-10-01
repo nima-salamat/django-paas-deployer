@@ -191,6 +191,87 @@ class StateManager:
     # ------------------------------------------------------------------
 
     @classmethod
+    def activate_revision_and_succeed(
+        cls,
+        deploy_id: int,
+        revision_id,
+        *,
+        task_id: str | None = None,
+        update_fields: Optional[dict] = None,
+        event_payload: Optional[dict] = None,
+    ) -> bool:
+        """Atomically prove ownership, activate a revision, and commit success."""
+        from deploy.models import Deploy, DeploymentEventOutbox  # type: ignore
+        from services.models import Service  # type: ignore
+        from services.revisioning import activate_revision_locked
+
+        with transaction.atomic():
+            deploy = Deploy.objects.select_for_update().filter(pk=deploy_id).first()
+            if deploy is None or sm.is_deploy_terminal(deploy.status):
+                return False
+            if task_id and str(deploy.execution_task_id or "") != str(task_id):
+                return False
+            if deploy.cancel_requested:
+                return False
+            try:
+                sm.check_deploy_transition(deploy.status, sm.DEPLOY_SUCCEEDED)
+            except sm.InvalidTransition:
+                return False
+
+            service = (
+                Service.objects.select_for_update()
+                .filter(pk=deploy.service_id)
+                .first()
+            )
+            if service is None:
+                return False
+
+            if (
+                service.active_revision_id is not None
+                and str(service.active_revision_id) != str(revision_id)
+            ):
+                return False
+
+            activate_revision_locked(service, revision_id)
+
+            now = timezone.now()
+            updates = {
+                "status": sm.DEPLOY_SUCCEEDED,
+                **dict(update_fields or {}),
+                "updated_at": now,
+            }
+            updates.setdefault("stage", "finished")
+            updates.setdefault("progress", 100)
+            updates.setdefault("completed_at", now)
+            updates["worker_heartbeat_at"] = now
+            updates["execution_task_id"] = ""
+            Deploy.objects.filter(pk=deploy_id).update(**updates)
+
+            if event_payload is not None:
+                payload = dict(event_payload)
+                payload.setdefault("event_id", str(uuid.uuid4()))
+                payload.setdefault("deployment_id", str(deploy.pk))
+                payload.setdefault("service_id", str(deploy.service_id))
+                payload.setdefault("revision_id", str(revision_id))
+                payload.setdefault("task_id", str(task_id or "system"))
+                payload.setdefault("event_type", "deployment.finished.info")
+                payload.setdefault("stage", "finished")
+                payload.setdefault("level", "info")
+                payload.setdefault("message", "Deployment completed successfully.")
+                payload.setdefault("progress", 100)
+                DeploymentEventOutbox.objects.create(
+                    deployment_id=deploy_id,
+                    service_id=str(deploy.service_id),
+                    event_id=payload["event_id"],
+                    event_type=str(payload["event_type"])[:128],
+                    stage=str(payload["stage"])[:64],
+                    level=str(payload["level"])[:16],
+                    occurred_at=now,
+                    payload=payload,
+                )
+            return True
+
+    @classmethod
     def transition_deploy_system_terminal(
         cls,
         deploy_id: int,
