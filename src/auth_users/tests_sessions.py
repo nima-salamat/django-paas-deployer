@@ -4,7 +4,7 @@ import uuid
 
 from django.test import TestCase, override_settings
 from unittest.mock import AsyncMock, patch
-from django.db import connection
+from django.db import connection, close_old_connections
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from asgiref.sync import async_to_sync
@@ -51,9 +51,10 @@ from django.core.cache import cache
 )
 class UserSessionTests(TestCase):
     def setUp(self):
-        # Async consumer tests may leave the thread-local PostgreSQL handle closed.
-        # Reset it so each TestCase starts from a reconnectable connection.
-        connection.close()
+        # Async consumer tests may leave a stale thread-local database wrapper.
+        # Let Django close only unusable/obsolete connections so the next ORM
+        # access can reconnect normally inside TestCase.
+        close_old_connections()
         self.user = User.objects.create_user(
             username="session-user", email="session@example.test", password="pass12345"
         )
