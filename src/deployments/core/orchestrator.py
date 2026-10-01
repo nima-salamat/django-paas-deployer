@@ -490,6 +490,8 @@ class DeploymentOrchestrator:
                     "health": health,
                     "networks": [network.name for network in config.networks],
                     "volumes": [volume.target for volume in config.volumes],
+                    "cleanup_failures": cleanup_failures,
+                    "reconciliation_required": bool(cleanup_failures),
                 },
             )
 
