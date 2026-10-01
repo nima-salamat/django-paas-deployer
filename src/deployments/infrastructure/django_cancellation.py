@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from django.db import transaction
 
 from deploy.models import Deploy
@@ -32,14 +34,29 @@ class DjangoDeploymentCancellationGateway:
             )
             if decision.action is CancellationAction.CANCEL_PENDING:
                 Deploy.objects.filter(pk=locked.pk).update(cancel_requested=True)
-                StateManager.transition_deploy(
+                StateManager.transition_deploy_system_terminal(
                     locked.pk,
                     decision.target_status,
                     update_fields={
+                        "cancel_requested": True,
                         "stage": decision.stage,
                         "progress": decision.progress,
                         "status_message": decision.status_message,
                         "error_message": "",
+                    },
+                    event_payload={
+                        "event_id": str(uuid.uuid4()),
+                        "trace_id": str(locked.pk),
+                        "deployment_id": str(locked.pk),
+                        "service_id": str(locked.service_id),
+                        "revision_id": str(getattr(locked, "revision_id", "") or ""),
+                        "task_id": "cancellation-gateway",
+                        "event_type": "deployment.cancelled.warning",
+                        "stage": str(decision.stage or "cancelled"),
+                        "level": "warning",
+                        "message": decision.status_message or "Deployment cancelled.",
+                        "progress": decision.progress,
+                        "details": {"controlled_by": "cancellation_gateway"},
                     },
                 )
             else:
