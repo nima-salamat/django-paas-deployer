@@ -77,9 +77,10 @@ class DBAndChannelEventSink:
     Primary event sink used by DeploymentLogger / Orchestrator / DBDeployer.
 
     Responsibilities (always best-effort, never abort the deploy pipeline):
-      1. Persist DeployLog (cross-DB safe via raw FKs)
-      2. Keep Deploy.progress / stage / status_message in sync
-      3. Broadcast to Channels group ``deploy_<id>`` → DeploymentConsumer
+      1. Keep Deploy.progress / stage / status_message in sync synchronously.
+      2. Append non-noise lifecycle events to the durable deployment outbox.
+      3. Leave DeployLog and WebSocket delivery to the outbox dispatcher.
+
 
     Usage::
 
@@ -90,10 +91,6 @@ class DBAndChannelEventSink:
     def __init__(self, deployment_id):
         self.deployment_id = str(deployment_id)
         self._deploy_cache: Optional[Deploy] = None
-        self._group_name = f"deploy_{self.deployment_id}"
-        self._last_ws_at: float = 0.0
-        self._last_ws_message: str = ""
-        self._last_progress: Optional[int] = None
 
     def __call__(self, event: DeploymentEvent | dict) -> None:
         payload = _serialize_event(event)
