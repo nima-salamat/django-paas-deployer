@@ -7,7 +7,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from agent.application import exchange_enrollment, issue_access_credential
-from agent.models import Agent, AgentAuditEvent, AgentEnrollmentToken
+from agent.models import Agent, AgentAuditEvent, AgentCredential, AgentEnrollmentToken
 from agent.scopes import DEFAULT_SCOPES, ALL_SCOPES
 from agent.security import token_hash
 
