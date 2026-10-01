@@ -308,12 +308,22 @@ class Deploy:
             )
         return config
 
+    def _runtime_backend(self) -> str:
+        """Resolve the execution backend without embedding runtime policy in the orchestrator."""
+        plan = getattr(self, "execution_plan", None)
+        selection = getattr(plan, "runtime_selection", None)
+        if selection is not None:
+            return str(selection.backend)
+        from deployments.runtime import RuntimeRegistry
+        return str(RuntimeRegistry().resolve().backend)
+
     def deploy(self):
         orchestrator = DeploymentOrchestrator(
             event_sink=self.event_sink,
             deployment_id=self.deployment_id,
             cancel_check=getattr(self, '_cancel_check', None),
             activation_callback=self.activation_callback,
+            runtime_backend=self._runtime_backend(),
         )
         self.result = orchestrator.deploy(self._config())
         self.errors = [] if self.result.success else [DeployException(self.result.message, stage=self.result.stage)]
@@ -325,6 +335,7 @@ class Deploy:
             deployment_id=self.deployment_id,
             cancel_check=getattr(self, '_cancel_check', None),
             activation_callback=self.activation_callback,
+            runtime_backend=self._runtime_backend(),
         )
         self.result = orchestrator.deploy(self._config())
         return self.result
