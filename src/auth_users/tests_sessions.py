@@ -557,6 +557,37 @@ class UserSessionTests(TestCase):
             resolve_user_from_access_token(tokens["access"])
         )
 
+    def test_ticket_notify_websocket_accepts_session_bound_access_token(self):
+        tokens = issue_tokens_for_user(self.user)
+        consumer = TicketNotifyConsumer.__new__(TicketNotifyConsumer)
+        consumer.scope = {
+            "query_string": f"token={tokens['access']}".encode("utf-8"),
+            "url_route": {"kwargs": {}},
+        }
+        consumer.channel_layer = type(
+            "Layer",
+            (),
+            {
+                "group_add": AsyncMock(),
+                "group_discard": AsyncMock(),
+            },
+        )()
+        consumer.channel_name = "test-channel"
+        consumer.close = AsyncMock()
+        consumer.accept = AsyncMock()
+        consumer.send_json = AsyncMock()
+
+        async_to_sync(consumer.connect)()
+
+        consumer.close.assert_not_awaited()
+        consumer.accept.assert_awaited_once()
+        consumer.send_json.assert_awaited_once()
+        payload = consumer.send_json.await_args.args[0]
+        self.assertEqual(payload["type"], "connected")
+        self.assertEqual(payload["channel"], "notify")
+        self.assertEqual(payload["user_id"], self.user.id)
+        self.assertTrue(payload["is_staff"] is False)
+
     def test_all_websocket_connections_reject_legacy_access_tokens(self):
         legacy_access = self._legacy_access_token()
         cases = [
