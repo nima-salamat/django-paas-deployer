@@ -447,6 +447,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "deployments.celery.tasks.dispatch_deployment_event_outbox",
         "schedule": 2.0,
     },
+    "prune_deployment_event_outbox": {
+        "task": "deployments.celery.tasks.prune_deployment_event_outbox",
+        "schedule": 3600.0,
+    },
     "monitor_services_reconciliation": {
         "task": "deployments.celery.schedules.monitor_services",
         "schedule": 5.0,
