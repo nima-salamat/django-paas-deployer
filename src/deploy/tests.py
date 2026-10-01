@@ -30,15 +30,10 @@ class DeploymentEventSanitizationTests(SimpleTestCase):
 class DeploymentEventPipelineTests(SimpleTestCase):
     def make_pipeline(self):
         deploy = SimpleNamespace(pk="deploy-1", service_id="service-1")
-        with patch("deploy.event_pipeline.get_channel_layer", return_value=None):
-            pipeline = DeploymentEventPipeline(deploy)
-        pipeline.channel_layer = None
-        return pipeline
+        return DeploymentEventPipeline(deploy)
 
-    @patch("deploy.event_pipeline.DeployLog.objects")
-    def test_record_persists_sanitized_log_and_returns_ui_payload(self, objects):
-        created_log = SimpleNamespace(pk="log-1")
-        objects.using.return_value.create.return_value = created_log
+    @patch("deploy.event_pipeline.DeploymentEventOutbox.objects")
+    def test_record_persists_sanitized_event_to_durable_outbox(self, objects):
         pipeline = self.make_pipeline()
 
         payload = pipeline.record(
@@ -50,16 +45,18 @@ class DeploymentEventPipelineTests(SimpleTestCase):
             )
         )
 
-        self.assertEqual(payload["id"], "log-1")
         self.assertEqual(payload["event"], "deployment.validation.info")
         self.assertEqual(payload["message"], "validated token=[REDACTED]")
         self.assertEqual(payload["details"]["authorization"], "[REDACTED]")
-        objects.using.assert_called_once_with("deployment_logs")
-        objects.using.return_value.create.assert_called_once()
+        objects.create.assert_called_once()
+        event = objects.create.call_args.kwargs
+        self.assertEqual(event["deployment_id"], "deploy-1")
+        self.assertEqual(event["stage"], "validation")
+        self.assertEqual(event["payload"]["details"]["authorization"], "[REDACTED]")
 
-    @patch("deploy.event_pipeline.DeployLog.objects")
-    def test_record_does_not_raise_when_log_database_fails(self, objects):
-        objects.using.return_value.create.side_effect = OperationalError("log database unavailable")
+    @patch("deploy.event_pipeline.DeploymentEventOutbox.objects")
+    def test_record_does_not_raise_when_outbox_database_fails(self, objects):
+        objects.create.side_effect = OperationalError("outbox database unavailable")
         pipeline = self.make_pipeline()
 
         payload = pipeline.record(DeploymentEvent(stage="image", message="building image"))
@@ -67,19 +64,3 @@ class DeploymentEventPipelineTests(SimpleTestCase):
         self.assertEqual(payload["deployment_id"], "deploy-1")
         self.assertEqual(payload["message"], "building image")
 
-    @patch("deploy.event_pipeline.async_to_sync")
-    @patch("deploy.event_pipeline.DeployLog.objects")
-    def test_record_publishes_to_deployment_group_when_channel_layer_exists(self, objects, async_to_sync):
-        objects.using.return_value.create.return_value = SimpleNamespace(pk="log-2")
-        sender = Mock()
-        async_to_sync.return_value = sender
-        pipeline = self.make_pipeline()
-        pipeline.channel_layer = Mock()
-
-        payload = pipeline.record(DeploymentEvent(stage="health", message="healthy", progress=100))
-
-        async_to_sync.assert_called_once_with(pipeline.channel_layer.group_send)
-        sender.assert_called_once_with(
-            "deploy_deploy-1",
-            {"type": "deployment.message", "payload": payload},
-        )
