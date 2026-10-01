@@ -287,6 +287,8 @@ class StateManager:
             deploy = Deploy.objects.select_for_update().filter(pk=deploy_id).first()
             if deploy is None or sm.is_deploy_terminal(deploy.status):
                 return False
+            if target != sm.DEPLOY_CANCELLED and deploy.cancel_requested:
+                return False
             try:
                 sm.check_deploy_transition(deploy.status, target)
             except sm.InvalidTransition as exc:
