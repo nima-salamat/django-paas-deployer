@@ -327,12 +327,29 @@ class DjangoDeploymentState:
             final_stage = update["stage"]
             final_level = "error"
 
+        result_cleanup_failures = list(result_details.get("cleanup_failures") or [])
+        if result_cleanup_failures:
+            critical = any(str(item.get("severity") or "").lower() == "critical" for item in result_cleanup_failures if isinstance(item, dict))
+            cleanup_status = (
+                "critical"
+                if critical
+                else "degraded"
+            )
+        else:
+            cleanup_status = "clean"
+
         details = {
             "rollback_performed": rollback_performed,
             "error_code": error_code,
             "error_category": error_category,
             "recoverable": bool(error_recoverable) if error_recoverable is not None else None,
+            "cleanup_failures": result_cleanup_failures,
+            "reconciliation_required": bool(result_details.get("reconciliation_required") or result_cleanup_failures),
         }
+        if result_cleanup_failures:
+            update["cleanup_status"] = cleanup_status
+            update["cleanup_failures"] = result_cleanup_failures
+            update["reconciliation_required"] = True
         if result_details.get("technical_message"):
             details["technical_message"] = result_details["technical_message"]
         if error_code:
