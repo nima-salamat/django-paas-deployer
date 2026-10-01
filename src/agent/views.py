@@ -193,12 +193,15 @@ class AgentExchangeView(AgentPublicAPIView):
         request.agent = agent
         request.agent_credential = credential
         self.audit_metadata = {"credential_prefix": credential.token_prefix}
-        return Response({
+        response = Response({
             "result": "success", "token": access, "token_type": "Bearer",
             "expires_at": credential.expires_at,
             "agent": {"id": str(agent.pk), "name": agent.name},
             "scopes": sorted(agent.scopes or []),
         }, status=201)
+        response["Cache-Control"] = "no-store"
+        response["Pragma"] = "no-cache"
+        return response
 
 
 class AgentMeView(AgentSecuredAPIView):
@@ -250,7 +253,13 @@ class AgentManifestView(AgentSecuredAPIView):
         from .manifest import render_agent_manifest
         enrollment, row = create_enrollment(request.agent, request=request)
         self.audit_metadata = {"enrollment_prefix": row.token_prefix, "enrollment_expires_at": row.expires_at.isoformat()}
-        return HttpResponse(render_agent_manifest(request.agent, enrollment, request=request), content_type="text/markdown; charset=utf-8")
+        response = HttpResponse(
+            render_agent_manifest(request.agent, enrollment, request=request),
+            content_type="text/markdown; charset=utf-8",
+        )
+        response["Cache-Control"] = "no-store"
+        response["Pragma"] = "no-cache"
+        return response
 
 
 class AgentOpenAPIView(AgentSecuredAPIView):
