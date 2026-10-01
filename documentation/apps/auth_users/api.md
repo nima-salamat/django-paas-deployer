@@ -23,7 +23,7 @@ Public login/recovery/invite operations use the authentication-free boundary req
 | POST | /api/authentication/ | Starts the configured authentication flow and sends/records the required AuthCode. |
 | POST | /api/login/validate/ | Validates the purpose-scoped OTP/auth code and advances the flow. |
 | POST | /api/login/token/ | Completes authentication and creates/updates Device/UserSession state before issuing tokens. |
-| POST | /api/set-password/ | Sets a password for an allowed account-setup flow. |
+| POST | /api/set-password/ | Sets a password for an allowed account-setup flow and creates session/device state. |
 
 Legacy /api/login/ and /api/signup/ delegate into the same underlying flow.
 
@@ -81,3 +81,22 @@ They use auth_users.UserContactChange/AuthCode but mutate users.User only after 
 OTP and recovery flows are expiry/attempt bounded and anti-enumeration where configured. Authentication audit logging is best-effort. A revoked/expired Device or UserSession invalidates session-bound credentials.
 
 Source: src/auth_users/urls.py, authentication.py, session_auth.py, token_serializers.py, api/*.py.
+
+## Device metadata contract
+
+Browser clients generate a random, persistent installation UUID (device_id) and send descriptive client metadata when completing authentication. The backend never treats this client material as authentication authority.
+
+For each new login the backend records:
+- server-observed IP address and full User-Agent snapshot;
+- parsed browser and browser version;
+- parsed operating system and OS version;
+- device type and model when detectable;
+- client/platform labels;
+- a SHA-256 client signature derived from the installation identity and non-secret client context;
+- bounded browser context such as locale, timezone, screen size, hardware concurrency and mobile hint.
+
+The durable Device record stores the latest observed device metadata. UserSession.metadata stores the login-time snapshot so historical sessions retain the context that was observed when they were created.
+
+The REST session and device endpoints expose this information to the authenticated owner. Admin user-session endpoints expose the same descriptor subject to the existing auth_sessions.view / auth_sessions.manage permissions.
+
+Client metadata is diagnostic/audit context only. It is not a password, token, proof of possession, or replacement for the server-side sid session authority.
