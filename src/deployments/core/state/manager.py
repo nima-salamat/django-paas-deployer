@@ -531,6 +531,19 @@ class StateManager:
                 ) from exc
 
             updates = {"status": effective_target, **effective_updates}
+            if terminal and event_payload and effective_target != target:
+                event_payload = {
+                    **event_payload,
+                    "event_type": "deployment.cancelled.warning",
+                    "stage": "cancelled",
+                    "level": "warning",
+                    "message": "Deployment cancelled by the user.",
+                    "progress": 100,
+                    "details": {
+                        **dict(event_payload.get("details") or {}),
+                        "cancellation_won_race": True,
+                    },
+                }
             now = timezone.now()
             if effective_target == sm.DEPLOY_RUNNING:
                 updates.setdefault("started_at", now)
