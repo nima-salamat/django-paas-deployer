@@ -1107,13 +1107,17 @@ class DeploymentOrchestrator:
                 )
                 try:
                     container.create()
+                    self._journal_resource(config, kind="process", name=name, state="created")
                     container.start()
-                except Exception:
+                    self._journal_resource(config, kind="process", name=name, state="started")
+                except Exception as exc:
+                    self._journal_resource(config, kind="process", name=name, state="cleanup_pending", error=str(exc))
                     try:
                         if container.exists():
                             container.remove()
-                    except Exception:
-                        pass
+                            self._journal_resource(config, kind="process", name=name, state="retired")
+                    except Exception as cleanup_exc:
+                        self._journal_resource(config, kind="process", name=name, state="cleanup_pending", error=str(cleanup_exc))
                     raise
                 containers.append(container)
                 self._created_process_containers.append(container)
