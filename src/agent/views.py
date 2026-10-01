@@ -33,7 +33,7 @@ from .errors import AgentError, agent_error_response, normalize_exception
 from .models import Agent
 from .permissions import AgentScopePermission, IsAgentAuthenticated
 from .scopes import SERVICE_SCOPES, DESTRUCTIVE_SCOPES, HIGH_RISK_SCOPES, SCOPE_LABELS, scope_categories
-from .security import get_request_id
+from .security import get_request_id, sanitize_metadata
 from .throttling import AgentRateThrottle
 
 
@@ -59,10 +59,10 @@ def complete_error(response, request):
                 "failure_domain": domain, "visibility": "client", "resource_effect": "unchanged", "certainty": "known",
             }
             if isinstance(data, dict):
-                for key in ("errors", "action", "missing_scopes", "backend", "supported_inputs"):
+                for key in ("errors", "action", "missing_scopes", "supported_inputs"):
                     if key in data:
-                        body[key] = data[key]
-        response.data = body
+                        body[key] = sanitize_metadata(data[key])
+        response.data = sanitize_metadata(body)
     return response
 
 
