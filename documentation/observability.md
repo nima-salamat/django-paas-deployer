@@ -12,7 +12,7 @@ Service runtime APIs can report desired/running replicas, task states and local 
 
 ## WebSockets
 
-Channels publishes realtime events. The durable state remains in PostgreSQL/Docker.
+Channels publishes realtime events. The durable state remains in PostgreSQL/Docker. Browser clients authenticate first-party sockets with session-bound access JWTs, and reconnect after access-token refresh when a socket closes with `4401`; session revocation is enforced by heartbeat revalidation.
 
 ## Shell
 
