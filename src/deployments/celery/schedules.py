@@ -2,6 +2,7 @@
 from datetime import timedelta
 import os
 import logging
+import uuid
 
 from celery import shared_task
 from celery.result import AsyncResult
@@ -473,8 +474,9 @@ def _recover_stale_running_deploys(policies) -> None:
                             continue
                         activate_revision_locked(service, locked.revision_id)
 
-                    StateManager.transition_deploy(
-                        locked.pk, DeploymentStatusChoices.SUCCEEDED,
+                    StateManager.transition_deploy_system_terminal(
+                        locked.pk,
+                        DeploymentStatusChoices.SUCCEEDED,
                         update_fields={
                             "stage": "deployment_completed",
                             "progress": 100,
@@ -482,6 +484,20 @@ def _recover_stale_running_deploys(policies) -> None:
                             "error_message": "",
                             "health_status": "healthy",
                             "container_status": "running",
+                        },
+                        event_payload={
+                            "event_id": str(uuid.uuid4()),
+                            "trace_id": str(locked.pk),
+                            "deployment_id": str(locked.pk),
+                            "service_id": str(locked.service_id),
+                            "revision_id": str(getattr(locked, "revision_id", "") or ""),
+                            "task_id": "stale-recovery",
+                            "event_type": "deployment.deployment_completed.info",
+                            "stage": "deployment_completed",
+                            "level": "info",
+                            "message": "Deployment recovered after worker interruption; activation had already completed.",
+                            "progress": 100,
+                            "details": {"controlled_by": "stale_recovery", "health_status": "healthy"},
                         },
                     )
                     StateManager.transition_service(
@@ -523,13 +539,28 @@ def _recover_stale_running_deploys(policies) -> None:
                                 logger.warning("Unable to restore previous deployment resource %s: %s", previous.name, exc)
                     if restored:
                         logger.warning("Rolled back stale deploy %s to previous deployment %s.", locked.pk, previous_id)
-                        StateManager.transition_deploy(
-                            locked.pk, DeploymentStatusChoices.ROLLED_BACK,
+                        StateManager.transition_deploy_system_terminal(
+                            locked.pk,
+                            DeploymentStatusChoices.ROLLED_BACK,
                             update_fields={
                                 "stage": "rollback",
                                 "progress": 100,
                                 "status_message": "Deployment worker stopped before activation; previous deployment restored.",
                                 "error_message": "",
+                            },
+                            event_payload={
+                                "event_id": str(uuid.uuid4()),
+                                "trace_id": str(locked.pk),
+                                "deployment_id": str(locked.pk),
+                                "service_id": str(locked.service_id),
+                                "revision_id": str(getattr(locked, "revision_id", "") or ""),
+                                "task_id": "stale-recovery",
+                                "event_type": "deployment.rollback.info",
+                                "stage": "rollback",
+                                "level": "info",
+                                "message": "Deployment worker stopped before activation; previous deployment restored.",
+                                "progress": 100,
+                                "details": {"controlled_by": "stale_recovery", "previous_deploy_id": str(previous_id or "")},
                             },
                         )
                         StateManager.transition_service(
@@ -541,13 +572,28 @@ def _recover_stale_running_deploys(policies) -> None:
                             "Deployment worker stopped before activation and the previous deployment "
                             "could not be restored automatically."
                         )
-                        StateManager.transition_deploy(
-                            locked.pk, DeploymentStatusChoices.FAILED,
+                        StateManager.transition_deploy_system_terminal(
+                            locked.pk,
+                            DeploymentStatusChoices.FAILED,
                             update_fields={
                                 "stage": "worker_lost",
                                 "progress": 100,
                                 "status_message": message,
                                 "error_message": message,
+                            },
+                            event_payload={
+                                "event_id": str(uuid.uuid4()),
+                                "trace_id": str(locked.pk),
+                                "deployment_id": str(locked.pk),
+                                "service_id": str(locked.service_id),
+                                "revision_id": str(getattr(locked, "revision_id", "") or ""),
+                                "task_id": "stale-recovery",
+                                "event_type": "deployment.worker_lost.error",
+                                "stage": "worker_lost",
+                                "level": "error",
+                                "message": message,
+                                "progress": 100,
+                                "details": {"controlled_by": "stale_recovery", "previous_deploy_id": str(previous_id or "")},
                             },
                         )
                         StateManager.transition_service(
@@ -562,8 +608,9 @@ def _recover_stale_running_deploys(policies) -> None:
                     "Deployment worker stopped responding before activation. "
                     "The platform could not prove that the replacement deployment became active."
                 )
-                StateManager.transition_deploy(
-                    locked.pk, DeploymentStatusChoices.FAILED,
+                StateManager.transition_deploy_system_terminal(
+                    locked.pk,
+                    DeploymentStatusChoices.FAILED,
                     update_fields={
                         "stage": "worker_lost",
                         "progress": 100,
@@ -571,6 +618,24 @@ def _recover_stale_running_deploys(policies) -> None:
                         "error_message": message,
                         "health_status": runtime.get("health") or "unknown",
                         "container_status": runtime.get("status") or "unknown",
+                    },
+                    event_payload={
+                        "event_id": str(uuid.uuid4()),
+                        "trace_id": str(locked.pk),
+                        "deployment_id": str(locked.pk),
+                        "service_id": str(locked.service_id),
+                        "revision_id": str(getattr(locked, "revision_id", "") or ""),
+                        "task_id": "stale-recovery",
+                        "event_type": "deployment.worker_lost.error",
+                        "stage": "worker_lost",
+                        "level": "error",
+                        "message": message,
+                        "progress": 100,
+                        "details": {
+                            "controlled_by": "stale_recovery",
+                            "health_status": runtime.get("health") or "unknown",
+                            "container_status": runtime.get("status") or "unknown",
+                        },
                     },
                 )
                 if service.status not in (SERVICE_STATUS_CHOICES.STOPPED, SERVICE_STATUS_CHOICES.FAILED):
