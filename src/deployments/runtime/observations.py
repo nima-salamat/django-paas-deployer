@@ -29,6 +29,7 @@ class RuntimeTaskObservation:
     node_name: str | None = None
     error: str = ""
     message: str = ""
+    health_status: str | None = None
 
 
 @dataclass(frozen=True)
