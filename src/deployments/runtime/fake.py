@@ -63,6 +63,7 @@ class FakeRuntime:
         self.apply_count = 0
         self.stop_count = 0
         self.remove_count = 0
+        self.restart_count = 0
 
     def describe_capabilities(self) -> RuntimeCapabilities:
         return RuntimeCapabilities(backend=self.backend, supported=self._supported)
