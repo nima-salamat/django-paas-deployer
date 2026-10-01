@@ -61,7 +61,12 @@ def call_api_view_handler(api_view_function, request, method, *args, data=None, 
     proxy = RequestProxy(request, data=data)
     cls = getattr(api_view_function, "cls", None)
     if cls is not None:
-        handler = getattr(cls(), method.lower())
+        instance = cls()
+        instance.request = proxy
+        instance.args = ()
+        instance.kwargs = kwargs
+        instance.format_kwarg = None
+        handler = getattr(instance, method.lower())
         return handler(proxy, *args, **kwargs)
     return api_view_function(proxy, *args, **kwargs)
 
