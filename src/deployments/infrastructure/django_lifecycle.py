@@ -55,12 +55,31 @@ class DjangoDeploymentLifecycleStore:
         updates = {"status_message": message[:500]}
         if details:
             updates["error_message"] = str(details.get("error_message") or "")[:1000]
+        terminal = sm.is_deploy_terminal(target)
+        event_payload = None
+        if terminal:
+            import uuid
+            event_payload = {
+                "event_id": str(uuid.uuid4()),
+                "trace_id": str(context.operation_key),
+                "deployment_id": str(context.deployment_id),
+                "service_id": str(context.service_id),
+                "revision_id": str(context.revision_id or ""),
+                "task_id": str(self.task_id or context.worker_task_id or ""),
+                "event_type": f"deployment.{target}.info",
+                "stage": target,
+                "level": "info" if target == sm.DEPLOY_SUCCEEDED else "error",
+                "message": message,
+                "progress": 100,
+                "details": dict(details or {}),
+            }
         return StateManager.transition_deploy_if_owned(
             self.deployment_id,
             target,
             task_id=self.task_id or context.worker_task_id,
             update_fields=updates,
-            terminal=sm.is_deploy_terminal(target),
+            terminal=terminal,
+            event_payload=event_payload,
         )
 
     def is_terminal(self) -> bool:
