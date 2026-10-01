@@ -119,7 +119,7 @@ def build_openapi(agent, *, request=None):
             "post": {"summary": "Manage endpoint", "parameters": [idempotency]},
             "delete": {"summary": "Disable endpoint", "parameters": [idempotency]},
         },
-        "/agent/v1/services/{service_id}/networks": {
+        "/agent/v1/services/{service_id}/databases": {\n            "get": {"summary": "Read database bindings through the existing boundary"},\n            "post": {"summary": "Create/update database binding", "parameters": [idempotency]},\n            "delete": {"summary": "Remove database binding", "parameters": [idempotency]},\n        },\n        "/agent/v1/services/{service_id}/networks": {
             "get": {"summary": "Read network attachments"},
             "post": {"summary": "Attach network", "parameters": [idempotency]},
             "delete": {"summary": "Detach network", "parameters": [idempotency]},
@@ -349,7 +349,7 @@ def build_openapi(agent, *, request=None):
                 "git": False,
                 "existing_image": False,
             },
-            "log_sources_are_separate": True,
+            "log_sources_are_separate": True,\n            "rate_limits": {"read":"120/min","mutation":"30/min","deployment":"10/min","upload":"5/min","shell":"10/min","exchange":"10/min"},\n            "manifest_scope": "agent.manifest.generate",
         },
     }
     return result
