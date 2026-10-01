@@ -16,7 +16,7 @@ class AgentScopeAndEnrollmentTests(TestCase):
     def setUp(self):
         User = get_user_model()
         self.user = User.objects.create_user(username="scope-user", email="scope@example.com", password="test-password")
-        self.agent = Agent.objects.create(user=self.user, name="scope-agent", scopes=["services.read"])
+        self.agent = Agent.objects.create(user=self.user, name="scope-agent", scopes=["services.read", "agent.manifest.generate"])
         self.credential, self.raw = issue_access_credential(self.agent)
         self.client = APIClient()
 
@@ -33,7 +33,7 @@ class AgentScopeAndEnrollmentTests(TestCase):
     def test_capabilities_reflect_only_agent_scopes(self):
         response = self.client.get("/agent/v1/capabilities", HTTP_AUTHORIZATION=f"Bearer {self.raw}")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["scopes"], ["services.read"])
+        self.assertEqual(response.data["scopes"], ["agent.manifest.generate", "services.read"])
         self.assertTrue(response.data["capabilities"]["services"]["read"])
         self.assertFalse(response.data["capabilities"]["services"]["create"])
 
