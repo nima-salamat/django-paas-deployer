@@ -88,3 +88,15 @@ def test_pre_start_cancellation_does_not_directly_project_a_second_event():
     start = source.split("def start(self):", 1)[1].split("def event_sink", 1)[0]
     assert "finalize_pending_cancellation" not in start
     assert 'if not emit_cancelled:' in start
+
+
+
+def test_system_terminal_transition_owns_state_and_outbox_in_one_transaction():
+    source = (__import__("pathlib").Path(__file__).resolve().parents[2] / "deployments/core/state/manager.py").read_text(encoding="utf-8")
+    method = source.split("def transition_deploy_system_terminal", 1)[1].split(
+        "def finalize_pending_cancellation", 1
+    )[0]
+    assert "select_for_update" in method
+    assert "check_deploy_transition" in method
+    assert "Deploy.objects.filter(pk=deploy_id).update" in method
+    assert "DeploymentEventOutbox.objects.create" in method
