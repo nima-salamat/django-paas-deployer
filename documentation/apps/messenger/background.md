@@ -8,7 +8,12 @@ deliver_due_scheduled_messages runs on a short Beat interval. It selects due sch
 
 purge_view_once_if_complete removes expired/fully-consumed view-once media according to the model policy.
 
+## WebSocket authentication
+
+MessengerConsumer accepts only a session-bound access JWT with `sid`, validates the corresponding UserSession during the handshake, and revalidates the server-side session on heartbeat. Revoking the session therefore closes the connection without requiring the browser to reuse sessionless credentials.
+
 ## Event flow
+
 
 A successful HTTP mutation records MessengerEvent as part of the database lifecycle and broadcasts only after commit. Consumer helpers broadcast message/reaction/call/read/member/profile/join-request/pin events to Channels groups.
 
