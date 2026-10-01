@@ -65,6 +65,18 @@ class FailureCertainty(str, Enum):
     INFERRED = "INFERRED"
     UNKNOWN = "UNKNOWN"
 
+def _infer_failure_domain(*, category: str, code: str, recoverable: bool) -> FailureDomain:
+    value = f"{category}:{code}".lower()
+    if any(token in value for token in ("validation", "invalid", "forbidden", "security", "user_input")):
+        return FailureDomain.USER_INPUT
+    if any(token in value for token in ("policy", "configuration", "platform_config", "capability", "unsupported")):
+        return FailureDomain.PLATFORM_CONFIG
+    if any(token in value for token in ("runtime", "health", "container", "swarm", "image", "volume", "network")):
+        return FailureDomain.RUNTIME_APP
+    if recoverable:
+        return FailureDomain.TRANSIENT_INFRA
+    return FailureDomain.INTERNAL_BUG
+
 class DeploymentError(Exception):
     """Base error for all deployment failures.
 
@@ -106,8 +118,10 @@ class DeploymentError(Exception):
             self.recoverable = recoverable
         self.code = str(code or self.default_code)
         self.category = str(category or self.default_category)
-        self.failure_domain = str(failure_domain or (
-            FailureDomain.TRANSIENT_INFRA if self.recoverable else FailureDomain.INTERNAL_BUG
+        self.failure_domain = str(failure_domain or _infer_failure_domain(
+            category=self.category,
+            code=self.code,
+            recoverable=self.recoverable,
         ))
         self.retryability = str(retryability or (
             Retryability.BACKOFF if self.recoverable else Retryability.NEVER
