@@ -354,17 +354,17 @@ Deployment state changes happen at concurrency boundaries. A state write is ther
 ## Reading order
 
 1. This README.
-2. [01-system-model.md](execution/01-system-model.md) — nouns and ownership.
-3. [02-request-to-plan.md](execution/02-request-to-plan.md) — how inputs become a plan.
-4. [03-execution-lifecycle.md](execution/03-execution-lifecycle.md) — actual production call path.
-5. [04-build-and-platforms.md](execution/04-build-and-platforms.md) — source/build semantics.
-6. [05-runtime-and-swarm.md](execution/05-runtime-and-swarm.md) — runtime contract and concrete Swarm.
-7. [06-workers-concurrency-and-state.md](execution/06-workers-concurrency-and-state.md) — locks, state, queues, races.
-8. [07-reconciliation-and-recovery.md](execution/07-reconciliation-and-recovery.md) — drift and crash recovery.
-9. [08-base-images.md](execution/08-base-images.md) — shared runtime image lifecycle.
-10. [09-logs-health-rollback-cleanup.md](execution/09-logs-health-rollback-cleanup.md) — diagnostics and destructive boundaries.
-11. [10-database-deployments.md](execution/10-database-deployments.md) — specialized branch.
-12. [11-testing-contracts-and-invariants.md](execution/11-testing-contracts-and-invariants.md) — executable architecture.
+2. [01-system-model.md](01-system-model.md) — nouns and ownership.
+3. [02-request-to-plan.md](02-request-to-plan.md) — how inputs become a plan.
+4. [03-execution-lifecycle.md](03-execution-lifecycle.md) — actual production call path.
+5. [04-build-and-platforms.md](04-build-and-platforms.md) — source/build semantics.
+6. [05-runtime-and-swarm.md](05-runtime-and-swarm.md) — runtime contract and concrete Swarm.
+7. [06-workers-concurrency-and-state.md](06-workers-concurrency-and-state.md) — locks, state, queues, races.
+8. [07-reconciliation-and-recovery.md](07-reconciliation-and-recovery.md) — drift and crash recovery.
+9. [08-base-images.md](08-base-images.md) — shared runtime image lifecycle.
+10. [09-logs-health-rollback-cleanup.md](09-logs-health-rollback-cleanup.md) — diagnostics and destructive boundaries.
+11. [10-database-deployments.md](10-database-deployments.md) — specialized branch.
+12. [11-testing-contracts-and-invariants.md](11-testing-contracts-and-invariants.md) — executable architecture.
 12. [12-build-cache-governance.md](12-build-cache-governance.md) — physical BuildKit governance and tenant application-image retention.
 13. Only then open the specific source module.
 
