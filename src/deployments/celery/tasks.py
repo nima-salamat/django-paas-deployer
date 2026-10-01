@@ -37,7 +37,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from core.global_settings.config import SERVICE_STATUS_CHOICES  # type: ignore
-from deploy.models import BuildCacheArtifact, BaseRuntimeImage, Deploy, DeployLog, DeploymentStatusChoices  # type: ignore
+from deploy.models import BuildCacheArtifact, BaseRuntimeImage, Deploy, DeploymentStatusChoices  # type: ignore
 from deployments.core.db_deployer import (
     DB_PLATFORMS,
     DBDeployer,
