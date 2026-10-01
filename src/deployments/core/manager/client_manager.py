@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import os
 from typing import Optional
 
 import docker
@@ -41,9 +42,8 @@ _DEFAULT_PING_RETRIES = 3
 _DEFAULT_PING_BACKOFF = 0.5
 
 
-_singleton_lock = threading.Lock()
-_singleton_client: Optional[docker.DockerClient] = None
-_singleton_base_url: Optional[str] = None
+_pool_lock = threading.Lock()
+_client_pool: dict[tuple[str, str, str], docker.DockerClient] = {}
 
 
 def _resolve_base_url(explicit: Optional[str] = None) -> Optional[str]:
@@ -70,7 +70,7 @@ def _resolve_timeout() -> int:
         return _DEFAULT_TIMEOUT
 
 
-def get_docker_client(base_url: Optional[str] = None) -> docker.DockerClient:
+def get_docker_client(base_url: Optional[str] = None, *, backend: str = "docker", cluster: str | None = None, endpoint: str | None = None) -> docker.DockerClient:
     """
     Return the shared ``DockerClient`` singleton.
 
@@ -78,68 +78,42 @@ def get_docker_client(base_url: Optional[str] = None) -> docker.DockerClient:
     return the cached client.  This is intentional: the deployment
     subsystem talks to exactly one Docker daemon per process.
     """
-    global _singleton_client, _singleton_base_url
+    resolved_url = _resolve_base_url(endpoint or base_url)
+    resolved_cluster = str(cluster or os.environ.get("SWARM_CLUSTER_NAME") or "default")
+    key = (str(backend or "docker").strip().lower(), resolved_cluster, str(resolved_url or "from_env"))
 
-    if _singleton_client is not None:
-        return _singleton_client
+    with _pool_lock:
+        if key in _client_pool:
+            return _client_pool[key]
 
-    with _singleton_lock:
-        # Double-checked locking.
-        if _singleton_client is not None:
-            return _singleton_client
-
-        resolved_url = _resolve_base_url(base_url)
         timeout = _resolve_timeout()
-
-        def _construct() -> docker.DockerClient:
-            # docker-py accepts ``timeout`` as a top-level kwarg.
-            client = (
-                docker.DockerClient(base_url=resolved_url, timeout=timeout)
-                if resolved_url
-                else docker.from_env(timeout=timeout)
-            )
-            # Validate connectivity with a bounded retry.
-            retry_with_backoff(
-                client.ping,
-                retries=_DEFAULT_PING_RETRIES,
-                base_delay=_DEFAULT_PING_BACKOFF,
-                max_delay=2.0,
-                retry_on=(docker.errors.DockerException, OSError),
-                label="docker.ping",
-            )
-            return client
-
-        try:
-            client = _construct()
-        except Exception:
-            logger.exception("Failed to create Docker client (base_url=%s).", resolved_url)
-            raise
-
-        _singleton_client = client
-        _singleton_base_url = resolved_url
-        logger.info(
-            "Docker client initialised (base_url=%s timeout=%s).",
-            resolved_url or "from_env", timeout,
+        client = (
+            docker.DockerClient(base_url=resolved_url, timeout=timeout)
+            if resolved_url
+            else docker.from_env(timeout=timeout)
         )
+        retry_with_backoff(
+            client.ping,
+            retries=_DEFAULT_PING_RETRIES,
+            base_delay=_DEFAULT_PING_BACKOFF,
+            max_delay=2.0,
+            retry_on=(docker.errors.DockerException, OSError),
+            label="docker.ping[%s:%s]" % (key[0], key[1]),
+        )
+        _client_pool[key] = client
+        logger.info("Docker client initialised backend=%s cluster=%s endpoint=%s timeout=%s", key[0], key[1], key[2], timeout)
         return client
 
-
 def reset_docker_client() -> None:
-    """
-    Drop the cached singleton.  Intended for tests and for recovery
-    after a known daemon restart — production code should rarely call
-    this.
-    """
-    global _singleton_client, _singleton_base_url
-    with _singleton_lock:
-        if _singleton_client is not None:
-            try:
-                _singleton_client.close()
-            except Exception:
-                pass
-        _singleton_client = None
-        _singleton_base_url = None
-
+    """Close and clear all cached runtime-aware Docker clients."""
+    with _pool_lock:
+        clients = list(_client_pool.values())
+        _client_pool.clear()
+    for client in clients:
+        try:
+            client.close()
+        except Exception:
+            pass
 
 class Client:
     """
@@ -155,7 +129,20 @@ class Client:
     client.  Existing manager code does not need to change.
     """
 
-    def __init__(self, base_url: Optional[str] = None):
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        *,
+        backend: str = "docker",
+        cluster: str | None = None,
+        endpoint: str | None = None,
+    ):
+        self._client = get_docker_client(
+            base_url,
+            backend=backend,
+            cluster=cluster,
+            endpoint=endpoint,
+        )
         # No per-instance client construction — share the singleton.
         # We keep the ``base_url`` parameter for signature compatibility.
         self._client = get_docker_client(base_url)
