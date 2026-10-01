@@ -100,6 +100,14 @@ class DeploymentPlanCompiler:
         ):
             required.add(RuntimeCapability.HEALTH_CHECKS)
         runtime_options = dict(resolved.get("runtime_options") or {})
+        if runtime_options.get("placement_constraints"):
+            required.add(RuntimeCapability.NODE_CONSTRAINTS)
+
+        effective_selection = replace(
+            selection,
+            required_capabilities=frozenset(required),
+        )
+
         storage_policy = dict(runtime_options.get("storage") or {})
         hard_capacity_requested = bool(storage_policy.get("hard_capacity"))
         if hard_capacity_requested and graph.volumes:
@@ -113,13 +121,6 @@ class DeploymentPlanCompiler:
                         "requested": "hard_capacity",
                     },
                 )
-        if runtime_options.get("placement_constraints"):
-            required.add(RuntimeCapability.NODE_CONSTRAINTS)
-
-        effective_selection = replace(
-            selection,
-            required_capabilities=frozenset(required),
-        )
         missing = effective_selection.missing_capabilities
         if missing:
             raise RuntimeUnsupportedError(
