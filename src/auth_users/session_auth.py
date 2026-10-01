@@ -243,9 +243,21 @@ def touch_session_activity(
     Redis throttles database writes so high-frequency browser heartbeats do not
     turn into a write-per-request workload.
     """
-    session = get_active_session_for_update(session_id, user_id=user_id)
     now = timezone.now()
     interval = _activity_write_interval()
+    session = (
+        UserSession.objects.select_related("device")
+        .filter(
+            session_id=str(session_id),
+            user_id=user_id,
+            revoked_at__isnull=True,
+            expires_at__gt=now,
+            device__revoked_at__isnull=True,
+        )
+        .first()
+    )
+    if session is None:
+        raise AuthenticationFailed("Authentication session is invalid or revoked.")
     throttle_key = _activity_throttle_key(str(session_id))
 
     should_write = force
