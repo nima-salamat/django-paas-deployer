@@ -227,7 +227,7 @@ class DeploymentOrchestrator:
             built_image = image.create(
                 on_build_output=self._on_build_output,
                 cancel_check=self._cancel_check,
-                timeout_seconds=self._deadline.bound(config.health_timeout) if self._deadline else None,
+                timeout_seconds=self._deadline.remaining() if self._deadline else None,
             )
             image_built = True
             self._persist_runtime_provenance(config, built_image)
