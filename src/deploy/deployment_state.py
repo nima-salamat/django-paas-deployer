@@ -397,13 +397,7 @@ class DjangoDeploymentState:
                     logger.exception("Failed to persist stale-worker diagnostics for deploy %s", self.deploy.pk)
             return
 
-        try:
-            self.events.publish_payload(event_payload)
-        except Exception:
-            logger.exception(
-                "Failed to publish terminal deployment event for deploy %s",
-                self.deploy.pk,
-            )
+        # The terminal event is already durable in the transactionally written outbox.
 
         if exception is not None or traceback_text:
             technical_stage = (getattr(exception, "stage", None) or final_stage)[:64]
