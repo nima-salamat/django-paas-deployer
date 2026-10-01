@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.response import Response
 from rest_framework.test import APIRequestFactory
 
@@ -98,3 +99,50 @@ class AgentIdempotencyTests(TestCase):
         )
         row.refresh_from_db()
         self.assertNotIn("super-secret", str(row.response_body))
+
+
+    def test_upload_same_key_with_different_content_is_rejected(self):
+        factory = APIRequestFactory()
+        first = factory.post(
+            "/agent/v1/deployments/example/upload",
+            {"file": SimpleUploadedFile("app.zip", b"first-content", content_type="application/zip")},
+            format="multipart",
+            HTTP_IDEMPOTENCY_KEY="upload-key",
+        )
+        first.user = self.user
+        row, _ = begin_idempotency(self.agent, first)
+        complete_idempotency(row, Response({"result": "success"}, status=200))
+
+        second = factory.post(
+            "/agent/v1/deployments/example/upload",
+            {"file": SimpleUploadedFile("app.zip", b"second-content", content_type="application/zip")},
+            format="multipart",
+            HTTP_IDEMPOTENCY_KEY="upload-key",
+        )
+        second.user = self.user
+        with self.assertRaises(AgentError) as ctx:
+            begin_idempotency(self.agent, second)
+        self.assertEqual(ctx.exception.code, "IDEMPOTENCY_KEY_REUSED")
+
+    def test_query_string_is_part_of_idempotency_fingerprint(self):
+        factory = APIRequestFactory()
+        first = factory.post(
+            "/agent/v1/deployments/example/rebuild?force_reinit=true",
+            {"value": "same"},
+            format="json",
+            HTTP_IDEMPOTENCY_KEY="query-key",
+        )
+        first.user = self.user
+        row, _ = begin_idempotency(self.agent, first)
+        complete_idempotency(row, Response({"result": "success"}, status=200))
+
+        second = factory.post(
+            "/agent/v1/deployments/example/rebuild?force_reinit=false",
+            {"value": "same"},
+            format="json",
+            HTTP_IDEMPOTENCY_KEY="query-key",
+        )
+        second.user = self.user
+        with self.assertRaises(AgentError) as ctx:
+            begin_idempotency(self.agent, second)
+        self.assertEqual(ctx.exception.code, "IDEMPOTENCY_KEY_REUSED")
