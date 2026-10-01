@@ -214,11 +214,8 @@ class DBAndChannelEventSink:
                 })
 
             if terminal_transition:
-                from deployments.core.state.manager import StateManager
-                StateManager.transition_deploy(
-                    self.deployment_id, terminal_transition[0],
-                    update_fields=terminal_transition[1],
-                )
+                # Terminal lifecycle state is committed by the owner-fenced
+                # deployment state manager. This sink only projects progress.
                 update_fields = {k: v for k, v in update_fields.items() if k not in {"status", "completed_at"}}
 
             if update_fields:
