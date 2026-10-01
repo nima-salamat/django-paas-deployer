@@ -141,6 +141,15 @@ def get_service(service_id, user, *, action="can_view", owner_only=False):
     return service
 
 
+def _service_host(service):
+    """Resolve the published service hostname from the canonical serializer helper."""
+    try:
+        from services.serializers import _service_host as resolve_service_host
+        return resolve_service_host(service)
+    except Exception:
+        return None
+
+
 def _endpoint_url(service, endpoint):
     """Return the externally reachable URL without querying Docker."""
     try:
