@@ -28,6 +28,7 @@ from ..shell import (
     batch_path_writable,
     ShellPolicyError,
     classify_command_risk,
+    shell_protocol_metadata,
 )
 
 
@@ -105,11 +106,10 @@ def shell_catalog_apiview(request, service_id):
                 "pty": True,
                 "note": "Commands marked interactive may pause and request stdin without terminating the process.",
             },
+            "transport": shell_protocol_metadata(service.pk),
             "policy": {
-                "shell_operators": False,
                 "arbitrary_php_scripts": False,
                 "arbitrary_python_eval": False,
-                "destructive_commands_require_confirmation": True,
                 "custom_commands_require_admin_policy": False,
                 "advanced_interactive_tools_require_permission": True,
             },
