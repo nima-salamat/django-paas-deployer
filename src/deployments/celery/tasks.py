@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import traceback
+import uuid
 from typing import Any
 
 from celery import shared_task
@@ -810,25 +811,25 @@ def _create_deploy_log(
     database alias and Django's router would refuse FK objects.
     """
     try:
-        from django.conf import settings  # type: ignore
+        from deployments.core.sink import DBAndChannelEventSink
+        from deployments.core.types import DeploymentEvent
 
-        alias = getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", None) or "default"
-        kwargs = {
-            "deploy_id": deploy.pk,
-            "service_id": (
-                getattr(deploy, "service_id", None)
-                or (deploy.service.pk if getattr(deploy, "service", None) is not None else None)
-            ),
-            "stage": stage,
-            "event_type": event_type,
-            "level": level,
-            "message": message,
-            "progress": progress,
-            "details": details or {},
-            "exception_type": exception_type,
-            "traceback": traceback_str,
-        }
-        DeployLog.objects.using(alias).create(**kwargs)
+        event_details = dict(details or {})
+        event_details["event_type"] = event_type
+        if exception_type:
+            event_details["exception_type"] = exception_type
+        if traceback_str:
+            event_details["traceback"] = traceback_str
+
+        DBAndChannelEventSink(deploy.pk)(
+            DeploymentEvent(
+                stage=stage,
+                message=message,
+                level=level,
+                progress=progress,
+                details=event_details,
+            )
+        )
     except Exception:
         logger.exception(
             "Failed to write DeployLog for deploy %s stage=%s", deploy.pk, stage
