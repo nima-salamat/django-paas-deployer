@@ -177,9 +177,9 @@ class DeploymentLifecycleExecutor:
             context.emit("readiness", "Waiting for runtime readiness.", progress=75)
             with deployment_span("runtime.wait_ready", attributes={"deployment.id": context.deployment_id, "runtime.backend": runtime.backend}):
                 ready = runtime.wait_ready(
-                handle,
-                timeout=readiness_timeout,
-                cancel_check=context.cancellation_requested,
+                    handle,
+                    timeout=readiness_timeout,
+                    cancel_check=context.cancellation_requested,
                 )
             context.assert_can_continue()
 
