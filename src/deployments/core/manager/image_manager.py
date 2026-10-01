@@ -17,6 +17,7 @@ from docker.errors import BuildError, ImageNotFound
 
 from deployments.core.exceptions import CleanupError, DockerClientError, ImageBuildError, InternalPlatformError
 from deployments.common.build_slots import BuildSlot
+from deployments.common.retry import classify_docker_exception
 from .client_manager import Client
 
 logger = logging.getLogger(__name__)
@@ -767,12 +768,17 @@ class Image(Client):
 
                     if response is None:
                         if isinstance(last_err, docker.errors.DockerException):
+                            failure = classify_docker_exception(last_err, stage="image_build")
                             raise DockerClientError(
                                 "Docker could not execute the image build request.",
+                                recoverable=failure.retryable,
                                 details={
                                     "image": target_ref,
                                     "error": str(last_err),
                                     "error_type": type(last_err).__name__,
+                                    "reason_code": failure.reason_code,
+                                    "http_status": failure.http_status,
+                                    "stage": failure.stage,
                                 },
                             ) from last_err
                         raise ImageBuildError(
@@ -820,11 +826,16 @@ class Image(Client):
             raise
         except docker.errors.DockerException as exc:
             docker_api_reached = None
+            failure = classify_docker_exception(exc, stage="image_build")
             raise DockerClientError(
                 "Docker could not complete the image build.",
+                recoverable=failure.retryable,
                 details=_build_diagnostics({
                     "error": str(exc),
                     "error_type": type(exc).__name__,
+                    "reason_code": failure.reason_code,
+                    "http_status": failure.http_status,
+                    "stage": failure.stage,
                 }),
             ) from exc
         except Exception as exc:
