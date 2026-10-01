@@ -13,6 +13,7 @@ from deployments.core.manager.client_manager import Client
 from deployments.core.manager.container_manager import Container
 from deployments.core.manager.image_manager import Image
 from deployments.core.orchestrator import DeploymentOrchestrator
+from deployments.common.deadline import DeploymentDeadline
 from deployments.core.types import DeploymentConfig, EndpointSpec, NetworkSpec, VolumeSpec
 from deployments.planning.bridge import DeploymentPlanCompatibilityCompiler
 
@@ -120,6 +121,7 @@ class Deploy:
         endpoints=None,
         activation_callback=None,
         execution_plan=None,
+        deadline=None,
     ):
         self.name = name
         self.tag = str(tag)
@@ -184,6 +186,7 @@ class Deploy:
         # Transitional plan-to-legacy-executor bridge.  The orchestrator is
         # intentionally unchanged while callers migrate to DeploymentPlan.
         self.execution_plan = execution_plan
+        self.deadline = deadline
         self.errors = []
         self.result = None
 
@@ -324,6 +327,7 @@ class Deploy:
             cancel_check=getattr(self, '_cancel_check', None),
             activation_callback=self.activation_callback,
             runtime_backend=self._runtime_backend(),
+            deadline=self.deadline,
         )
         self.result = orchestrator.deploy(self._config())
         self.errors = [] if self.result.success else [DeployException(self.result.message, stage=self.result.stage)]
