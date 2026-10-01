@@ -28,6 +28,7 @@ from .apis import (
 )
 from .session_api import (
     SessionListAPIView,
+    SessionActivityAPIView,
     SessionRevokeAPIView,
     SessionLogoutAllAPIView,
     DeviceListAPIView,
@@ -36,6 +37,7 @@ from .session_api import (
 
 urlpatterns = [
     path("api/sessions/", SessionListAPIView.as_view(), name="auth_sessions"),
+    path("api/sessions/activity/", SessionActivityAPIView.as_view(), name="auth_session_activity"),
     path("api/sessions/logout-all/", SessionLogoutAllAPIView.as_view(), name="auth_sessions_logout_all"),
     path("api/sessions/<str:session_id>/", SessionRevokeAPIView.as_view(), name="auth_session_revoke"),
     path("api/devices/", DeviceListAPIView.as_view(), name="auth_devices"),
