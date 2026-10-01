@@ -100,3 +100,17 @@ def test_system_terminal_transition_owns_state_and_outbox_in_one_transaction():
     assert "check_deploy_transition" in method
     assert "Deploy.objects.filter(pk=deploy_id).update" in method
     assert "DeploymentEventOutbox.objects.create" in method
+
+
+
+def test_outbox_dispatcher_uses_deferred_retry_schedule():
+    source = (__import__("pathlib").Path(__file__).resolve().parents[2] / "deployments/common/event_outbox.py").read_text(encoding="utf-8")
+    assert "next_attempt_at__isnull=True" in source
+    assert "next_attempt_at__lte=timezone.now()" in source
+    assert "backoff_seconds = min(300, 2 ** min(attempts, 8))" in source
+
+
+def test_monitor_terminal_paths_use_system_owned_terminal_transition():
+    source = (__import__("pathlib").Path(__file__).resolve().parents[2] / "deployments/celery/monitoring/actions.py").read_text(encoding="utf-8")
+    assert source.count("transition_deploy_system_terminal(") >= 3
+    assert "DeploymentEventOutbox" not in source
