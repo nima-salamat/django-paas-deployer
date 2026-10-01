@@ -65,7 +65,6 @@ def extract_sensitive_request_values(value):
 def sanitize_error_payload(value, *, secret_values=()):
     """Sanitize error fields and redact exact sensitive values supplied by the client."""
     scrub_values = tuple(str(v) for v in secret_values if str(v))
-    sensitive_fields = SENSITIVE_KEY_MARKERS
 
     def walk(node):
         if isinstance(node, dict):
