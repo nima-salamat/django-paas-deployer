@@ -50,6 +50,7 @@ from .routing import public_http_endpoints, resolve_public_host
 from .validation import DeploymentValidator
 from .volumes import VolumeMountManager
 from .swarm import SwarmRuntime
+from deployments.planning.runtime_spec import RuntimeSpec
 
 
 class DeploymentOrchestrator:
@@ -215,6 +216,7 @@ class DeploymentOrchestrator:
             )
             built_image = image.create(on_build_output=self._on_build_output, cancel_check=self._cancel_check)
             image_built = True
+            self._persist_runtime_provenance(config, built_image)
             try:
                 from deploy.build_cache import (
                     record_application_image,
@@ -1243,6 +1245,49 @@ class DeploymentOrchestrator:
                 details={"renamed_old_name": renamed_old_name, "error": str(exc), "cleanup_severity": "critical"},
             )
             return False
+
+    def _persist_runtime_provenance(self, config: DeploymentConfig, built_image) -> None:
+        """Persist release identity and the immutable runtime specification."""
+        deployment_id = str(self.logger.deployment_id or "").strip()
+        if not deployment_id:
+            return
+        try:
+            attrs = getattr(built_image, "attrs", {}) or {}
+            repo_digests = list(attrs.get("RepoDigests") or ())
+            digest = ""
+            if repo_digests:
+                digest = str(repo_digests[0]).split("@", 1)[-1]
+            if not digest:
+                digest = str(getattr(built_image, "id", "") or "")
+            revision_id = str((config.labels or {}).get("revision.id") or "")
+            source_revision = str((config.labels or {}).get("source.revision") or revision_id)
+            runtime_spec = RuntimeSpec.from_config(
+                config,
+                image_ref=str(config.image_ref),
+                image_digest=digest,
+                source_revision=source_revision,
+                revision_id=revision_id,
+            )
+            from deploy.models import Deploy
+            Deploy.objects.filter(pk=deployment_id).update(
+                image_ref=str(config.image_ref or ""),
+                image_digest=digest,
+                source_revision=source_revision,
+                runtime_revision_id=revision_id,
+                runtime_spec=runtime_spec.as_dict(),
+                runtime_spec_sha256=runtime_spec.sha256,
+            )
+        except Exception as exc:
+            # Provenance is required for exact rollback where supported, so a
+            # persistence failure is surfaced instead of silently claiming the
+            # runtime has durable immutable identity.
+            raise DeploymentError(
+                "Deployment provenance could not be persisted.",
+                stage="provenance",
+                code="DEPLOYMENT_PROVENANCE_PERSIST_FAILED",
+                user_message="The deployment could not persist its immutable runtime identity.",
+                details={"error": str(exc), "error_type": type(exc).__name__},
+            ) from exc
 
     def _on_build_output(self, chunk):
         """Forward docker build stream to DeploymentLogger."""
