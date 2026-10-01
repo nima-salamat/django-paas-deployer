@@ -52,7 +52,8 @@ def dispatch_pending(*, batch_size: int = 100) -> dict[str, int]:
                         exception_type=str(payload.get("exception_type") or ""),
                         traceback=str(payload.get("traceback") or ""),
                     )
-                _publish(row.deployment_id, payload)
+                if not _publish(row.deployment_id, payload):
+                    raise RuntimeError("Deployment event channel layer is unavailable.")
                 row.dispatched_at = timezone.now()
                 row.next_attempt_at = None
                 row.attempts = int(row.attempts or 0) + 1
@@ -79,16 +80,18 @@ def _log_db_alias() -> str:
     return getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", None) or "default"
 
 
-def _publish(deployment_id, payload: dict) -> None:
+def _publish(deployment_id, payload: dict) -> bool:
     from asgiref.sync import async_to_sync
     from channels.layers import get_channel_layer
+
     layer = get_channel_layer()
     if layer is None:
-        return
+        return False
     async_to_sync(layer.group_send)(
         f"deploy_{deployment_id}",
         {"type": "deployment.message", "payload": payload},
     )
+    return True
 
 
 __all__ = ["dispatch_pending"]
