@@ -215,7 +215,7 @@ class AgentCapabilitiesView(AgentSecuredAPIView):
                     "deployments.read","deployments.create","deployments.upload","deployments.start","deployments.cancel",
                     "deployments.redeploy","deployments.rebuild","deployments.rollback","deployments.delete")},
                 "logs": {"deployment_read":"deployments.logs.read" in s,"deployment_export":"deployments.logs.export" in s,"runtime_read":"service_logs.read" in s,"runtime_export":"service_logs.export" in s},
-                "shell": {"read":"shell.read" in s,"execute":"shell.execute" in s,"replace":"shell.replace" in s,"files_read":"shell.files.read" in s,"files_write":"shell.files.write" in s},
+                "shell": {"read":"shell.read" in s,"execute":"shell.execute" in s,"replace":"shell.replace" in s,"files_read":"shell.files.read" in s,"files_write":"shell.files.write" in s},\n            "agent": {"manifest_generate":"agent.manifest.generate" in s},
             },
             "deployment_inputs": {"archive_zip": True, "database_native": True, "git": False, "existing_image": False},
             "logs": {
