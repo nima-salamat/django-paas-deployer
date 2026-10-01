@@ -49,6 +49,7 @@ class ContainerSnapshot:
     image_ref: str | None
     environment: dict[str, str] = field(default_factory=dict)
     command: str | None = None
+    entrypoint: str | list[str] | None = None
     labels: dict[str, str] = field(default_factory=dict)
     networks: list[str] = field(default_factory=list)
     binds: dict[str, dict[str, str]] = field(default_factory=dict)
@@ -59,6 +60,9 @@ class ContainerSnapshot:
     max_cpu: float | None = None
     max_ram: int | None = None
     restart_policy: dict | None = None
+    exposed_ports: dict = field(default_factory=dict)
+    port_bindings: dict = field(default_factory=dict)
+    healthcheck: dict | None = None
     host_config_extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -95,6 +99,7 @@ class ContainerSnapshot:
         # Command: list[str] | None -> joined string
         cmd_list = config.get("Cmd")
         command = " ".join(str(c) for c in cmd_list) if cmd_list else None
+        entrypoint = config.get("Entrypoint")
 
         # Networks: from NetworkSettings.Networks dict
         networks = list((network_settings.get("Networks") or {}).keys())
@@ -116,6 +121,7 @@ class ContainerSnapshot:
         # the entry_port that Traefik routes to.
         entry_port: int | None = None
         port_bindings = host_config.get("PortBindings") or {}
+        exposed_ports = config.get("ExposedPorts") or {}
         for container_port_str in port_bindings:
             # container_port_str looks like "8000/tcp"
             try:
@@ -133,6 +139,9 @@ class ContainerSnapshot:
                     break
                 except (TypeError, ValueError):
                     continue
+
+        # Full healthcheck/exposed-port state is part of the immutable runtime snapshot.
+        healthcheck = config.get("Healthcheck") or None
 
         # Labels
         labels = config.get("Labels") or {}
@@ -174,6 +183,7 @@ class ContainerSnapshot:
             image_ref=container.get_image_identifier() or config.get("Image"),
             environment=env,
             command=command,
+            entrypoint=entrypoint,
             labels=dict(labels),
             networks=networks,
             binds=binds,
@@ -184,6 +194,9 @@ class ContainerSnapshot:
             max_cpu=max_cpu,
             max_ram=max_ram,
             restart_policy=restart_policy,
+            exposed_ports=dict(exposed_ports),
+            port_bindings=dict(port_bindings),
+            healthcheck=healthcheck,
             host_config_extra=host_config_extra,
         )
 
@@ -255,7 +268,10 @@ class RollbackManager:
                 volumes=snapshot.binds,
                 read_only=snapshot.read_only,
                 command=snapshot.command,
+                entrypoint=snapshot.entrypoint,
                 environment=snapshot.environment,
+                exposed_ports=snapshot.exposed_ports,
+                port_bindings=snapshot.port_bindings,
                 entry_port=snapshot.entry_port,
                 labels=snapshot.labels or None,
                 route_name=snapshot.route_name,
@@ -265,6 +281,7 @@ class RollbackManager:
                     "pids_limit": snapshot.host_config_extra.get("PidsLimit") or 4096,
                     "security_opt": snapshot.host_config_extra.get("SecurityOpt")
                     or ["no-new-privileges:true"],
+                    "tmpfs": snapshot.host_config_extra.get("Tmpfs") or {},
                 },
             )
             restored.create()
