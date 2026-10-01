@@ -21,6 +21,7 @@ class DeploymentHelpView(AgentSecuredAPIView):
         from deployments.core.platform_bridge import _ensure_plugins_loaded
         from deployments.core.platforms.registry import PlatformRegistry
         from core.global_settings.config import PLATFORM_CHOICES
+        from deployments.core.db_deployer import DB_PLATFORMS, MUTABLE_DB_CONFIG_KEYS, validate_db_config
 
         _ensure_plugins_loaded()
         platform_labels = {str(value): str(label) for value, label in PLATFORM_CHOICES}
@@ -52,6 +53,22 @@ class DeploymentHelpView(AgentSecuredAPIView):
                 "database_native": True,
                 "git": False,
                 "existing_image": False,
+            },
+            "database_deployment": {
+                "platforms": sorted(DB_PLATFORMS),
+                "default_ports": {
+                    "mysql": 3306, "mariadb": 3306, "postgresql": 5432,
+                    "mongodb": 27017, "redis": 6379, "oracle": 1521,
+                },
+                "fields": {
+                    "root_password": {"type": "secret", "required_for": ["mysql", "mariadb"]},
+                    "username": {"type": "string", "required_for": ["mongodb"], "optional_for": ["mysql", "mariadb", "postgresql", "oracle"]},
+                    "password": {"type": "secret", "required_for": ["postgresql", "mongodb", "oracle"], "alias_for_root_password_on": ["mysql", "mariadb"]},
+                    "database": {"type": "string", "required_for": [], "description": "Optional database name where supported."},
+                    "port": {"type": "integer", "minimum": 1, "maximum": 65535, "default_by_platform": {"mysql": 3306, "mariadb": 3306, "postgresql": 5432, "mongodb": 27017, "redis": 6379, "oracle": 1521}},
+                },
+                "mutable_keys": sorted(MUTABLE_DB_CONFIG_KEYS),
+                "validation": "Use the same platform validator used by deployment execution; credentials are never echoed by the help endpoint.",
             },
             "config": {
                 "fields": {
