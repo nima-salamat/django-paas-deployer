@@ -138,7 +138,7 @@ class DatabaseCredentialsView(AgentSecuredAPIView):
     def get(self, request, service_id):
         from services.models import ServiceDatabaseBinding
 
-        service = get_service(service_id, request.user, action="can_view", owner_only=True)
+        service = get_service(service_id, request.user, action="can_view_db_credentials")
         reveal = str(request.query_params.get("reveal") or "").strip().lower() in {"1", "true", "yes", "on"}
         bindings = (
             ServiceDatabaseBinding.objects
