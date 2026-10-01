@@ -293,7 +293,8 @@ class DeploymentEventOutbox(BaseModel):
             models.Index(fields=("deployment", "occurred_at")),
         ]
 
-    event_id = models.UUIDField(null=True, blank=True, db_index=True, unique=True)
+
+
 class DeployLog(BaseModel):
     # The event store lives in a separate database, so these identifiers must
     # not create cross-database foreign-key constraints.
