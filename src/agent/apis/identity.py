@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from django.http import HttpResponse, JsonResponse
+from rest_framework.response import Response
 from .base import AgentPublicAPIView, AgentSecuredAPIView
 from ..application import create_enrollment
 from ..contracts import contracts_for_agent
