@@ -12,7 +12,7 @@ from .volumes import VolumeListCreateView, VolumeDetailView
 from .deployments import DeploymentListCreateView, DeploymentDetailView, DeploymentUploadView, DeploymentActionView, DeploymentRollbackView, DeploymentLogsView, DeploymentLogsExportView
 from .configuration import ConfigurationView, EnvironmentView, SecretsView, EndpointConfigView, NetworkAttachmentsView, RevisionListView, RevisionDetailView, RevisionRollbackView, DatabaseBindingsView
 from .shell import ShellInfoView, ShellSessionView, ShellCommandView, ShellCloseView, ShellReplaceView, ShellFileView
-from .extended import ServiceMetricsView, DeploymentHelpView, DeploymentInspectView, DatabaseCredentialsView
+from .extended import DeploymentHelpView, DeploymentInspectView, DatabaseCredentialsView
 
 __all__ = [
     name for name in (
