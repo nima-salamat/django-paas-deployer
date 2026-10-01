@@ -108,13 +108,7 @@ def accessible_service_queryset(user):
     view = ServiceViewSet()
     view.request = _viewset_request(user)
     view.action = "list"
-    queryset = view.get_queryset()
-    return (
-        queryset.select_related("user", "plan", "network", "active_revision", "selected_deploy")
-        .prefetch_related("processes", "endpoints", "volumes")
-        .distinct()
-        .order_by("-created_at")
-    )
+    return view.get_queryset().distinct().order_by("-created_at")
 
 
 def get_service(service_id, user, *, action="can_view", owner_only=False):
@@ -201,12 +195,7 @@ def deployment_queryset(user):
     view = DeployViewSet()
     view.request = _viewset_request(user)
     view.action = "list"
-    queryset = view.get_queryset()
-    return (
-        queryset.select_related("service", "service__user", "service__plan", "created_by", "revision")
-        .distinct()
-        .order_by("-created_at")
-    )
+    return view.get_queryset().distinct().order_by("-created_at")
 
 
 def deployment_payload(deploy):
