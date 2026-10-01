@@ -32,7 +32,7 @@ def _return_agent(request, agent):
     return redirect(reverse("wagtailsnippets_agent_agent:list"))
 
 
-def _confirm_page(title, action_url, description, method="POST"):
+def _confirm_page(request, title, action_url, description, method="POST"):
     safe_title = title.replace("<", "&lt;").replace(">", "&gt;")
     body = description.replace("<", "&lt;").replace(">", "&gt;")
     return HttpResponse(
@@ -54,6 +54,7 @@ def issue_credential_confirm(request, agent_id):
         return HttpResponse("Forbidden", status=403)
     agent = get_object_or_404(Agent, pk=agent_id)
     return _confirm_page(
+        request,
         "Issue Agent credential",
         reverse("wagtail_agent_issue_credential", kwargs={"agent_id": agent.pk}),
         f"Issue a new expiring Bearer credential for Agent {agent.name}. The plaintext will be shown once.",
@@ -97,6 +98,7 @@ def rotate_credential_confirm(request, agent_id):
         return HttpResponse("Forbidden", status=403)
     agent = get_object_or_404(Agent, pk=agent_id)
     return _confirm_page(
+        request,
         "Rotate Agent credentials",
         reverse("wagtail_agent_rotate_credential", kwargs={"agent_id": agent.pk}),
         f"Revoke all currently-active credentials and issue one new credential for Agent {agent.name}.",
@@ -144,6 +146,7 @@ def revoke_credential_confirm(request, credential_id):
         return HttpResponse("Forbidden", status=403)
     credential = get_object_or_404(AgentCredential, pk=credential_id)
     return _confirm_page(
+        request,
         "Revoke Agent credential",
         reverse("wagtail_agent_revoke_credential", kwargs={"credential_id": credential.pk}),
         f"Revoke credential {credential.token_prefix}? It cannot be reactivated.",
@@ -176,6 +179,7 @@ def disable_agent_confirm(request, agent_id):
         return HttpResponse("Forbidden", status=403)
     agent = get_object_or_404(Agent, pk=agent_id)
     return _confirm_page(
+        request,
         "Disable Agent",
         reverse("wagtail_agent_disable", kwargs={"agent_id": agent.pk}),
         f"Disable Agent {agent.name}? All authentication attempts will stop working until it is re-enabled.",
@@ -211,6 +215,7 @@ def revoke_agent_confirm(request, agent_id):
         return HttpResponse("Forbidden", status=403)
     agent = get_object_or_404(Agent, pk=agent_id)
     return _confirm_page(
+        request,
         "Revoke Agent",
         reverse("wagtail_agent_revoke", kwargs={"agent_id": agent.pk}),
         f"Revoke Agent {agent.name}? This is intended to be permanent.",
