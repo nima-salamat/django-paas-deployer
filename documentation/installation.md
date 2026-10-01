@@ -6,7 +6,7 @@ For multi-node Swarm, local persistent volumes are provisioned through the Djang
 
 Tenant storage quota is a logical Service policy; standard Docker local volumes do not provide a hard per-volume filesystem quota. Runtime usage is measured when the Docker backend can report it and warnings follow operator settings.
 
-Canonical storage/domain semantics are now under [apps/services/models.md](apps/services/models.md) and the deep runtime discussion in [deployments/05-runtime-and-swarm.md](deployments/05-runtime-and-swarm.md).
+Canonical storage/domain semantics are now under [apps/services/models.md](apps/services/models.md) and the deep runtime discussion in [deployments/05-runtime-and-swarm.md](apps/deployments/execution/05-runtime-and-swarm.md).
 
 ## Legacy mode
 
