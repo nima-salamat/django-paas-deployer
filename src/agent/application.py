@@ -106,14 +106,18 @@ def _viewset_request(user):
     )
 
 
-def accessible_service_queryset(user):
-    # Reuse the established ServiceViewSet queryset so ServiceShare visibility
-    # rules stay identical to the browser/user API and do not create a second
-    # sharing model in Agent.
+def accessible_service_queryset(user, *, include_shared=False):
+    """Reuse ServiceViewSet visibility rules for list vs resource operations.
+
+    The user-facing ServiceViewSet deliberately returns only owned Services for
+    ``list`` but includes active shared Services for retrieve/update actions.
+    Agent resource operations must use the latter path so ServiceShare checks
+    can run before allowing a shared resource action.
+    """
     from services.api.user_services import ServiceViewSet
     view = ServiceViewSet()
     view.request = _viewset_request(user)
-    view.action = "list"
+    view.action = "retrieve" if include_shared else "list"
     return (
         view.get_queryset()
         .select_related("user", "plan", "network", "active_revision", "selected_deploy")
@@ -122,9 +126,8 @@ def accessible_service_queryset(user):
         .order_by("-created_at")
     )
 
-
 def get_service(service_id, user, *, action="can_view", owner_only=False):
-    service = accessible_service_queryset(user).filter(pk=service_id).first()
+    service = accessible_service_queryset(user, include_shared=True).filter(pk=service_id).first()
     if service is None:
         raise AgentError("SERVICE_NOT_FOUND", "Service not found.", status_code=404, failure_domain="resource")
     ensure_service_access(service, user, action=action, owner_only=owner_only)
