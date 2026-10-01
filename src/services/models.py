@@ -48,7 +48,10 @@ class Service(BaseModel):
         related_name="Service",
     )
 
-    read_only = models.BooleanField(_("Read only"), default=not (settings.DEBUG))
+    # Keep the model default aligned with the persisted migration contract.
+    # Development callers that need a writable root filesystem should opt in
+    # explicitly rather than making schema state depend on DEBUG.
+    read_only = models.BooleanField(_("Read only"), default=True)
 
     selected_deploy = models.OneToOneField(
         "deploy.Deploy",
