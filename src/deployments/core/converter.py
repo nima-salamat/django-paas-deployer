@@ -57,7 +57,9 @@ def convert_zip_to_tar(zip_path: str) -> io.BytesIO:
 
             for zip_info in members:
                 # Normalize early so both dirs and files share the same checks
-                member_name = zip_info.filename.replace("\\", "/").lstrip("./")
+                member_name = zip_info.filename.replace("\\", "/")
+                while member_name.startswith("./"):
+                    member_name = member_name[2:]
                 if not member_name or member_name in {".", ".."}:
                     continue
 
