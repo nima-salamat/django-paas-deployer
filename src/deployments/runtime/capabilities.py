@@ -27,6 +27,11 @@ class RuntimeCapability(str, Enum):
     PROCESS_GRAPH = "process_graph"
 
 
+class StorageCapability(str, Enum):
+    """Storage behavior supported by a selected runtime backend."""
+    USAGE = "usage"
+    HARD_CAPACITY = "hard_capacity"
+    RESIZE = "resize"
 class RuntimeAvailabilityState(str, Enum):
     UNKNOWN = "unknown"
     ACTIVE = "active"
