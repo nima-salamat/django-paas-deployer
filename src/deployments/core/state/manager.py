@@ -178,6 +178,18 @@ class StateManager:
                 updates["execution_task_id"] = ""
 
             Deploy.objects.filter(pk=deploy_id).update(**updates)
+            if terminal and event_payload:
+                from deploy.models import DeploymentEventOutbox  # type: ignore
+                DeploymentEventOutbox.objects.create(
+                    deployment_id=deploy_id,
+                    service_id=str(deploy.service_id),
+                    event_id=event_payload.get("event_id") or None,
+                    event_type=str(event_payload.get("event_type") or "deployment.terminal"),
+                    stage=str(event_payload.get("stage") or effective_target)[:64],
+                    level=str(event_payload.get("level") or "info")[:16],
+                    occurred_at=timezone.now(),
+                    payload=event_payload,
+                )
             logger.info(
                 "StateManager: deploy %s %s -> %s",
                 deploy_id, src, target,
@@ -412,6 +424,7 @@ class StateManager:
         task_id: str | None = None,
         update_fields: Optional[dict] = None,
         terminal: bool = False,
+        event_payload: Optional[dict] = None,
     ) -> bool:
         """Transition a deployment only while ``task_id`` still owns it.
 
@@ -515,7 +528,13 @@ class StateManager:
 
     @classmethod
     def transition_deploy_terminal_if_owned(
-        cls, deploy_id: int, target: str, *, task_id: str | None = None, update_fields: Optional[dict] = None
+        cls,
+        deploy_id: int,
+        target: str,
+        *,
+        task_id: str | None = None,
+        update_fields: Optional[dict] = None,
+        event_payload: Optional[dict] = None,
     ) -> bool:
         """Commit a terminal transition only while this worker still owns the deploy."""
         return cls.transition_deploy_if_owned(
@@ -524,6 +543,7 @@ class StateManager:
             task_id=task_id,
             update_fields=update_fields,
             terminal=True,
+            event_payload=event_payload,
         )
 
 
