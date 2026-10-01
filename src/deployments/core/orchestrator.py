@@ -576,15 +576,16 @@ class DeploymentOrchestrator:
             },
         )
 
-        if self._activation_callback is not None:
-            self.logger.info(
-                "activation",
-                "Swarm runtime is ready; committing active revision.",
-                progress=94,
-                details={"service": config.name, "deployment_id": self.logger.deployment_id},
+        for key, state in states.items():
+            self._journal_resource(
+                config,
+                kind="swarm_service",
+                name=state.name,
+                runtime_id=state.service_id,
+                state="ready",
             )
-            self._activation_callback()
 
+        cleanup_failures = []
         service_id = str(config.labels.get("service.id") or "").strip()
         desired_service_names = [state.name for state in states.values()]
         stale_names = list(
@@ -595,25 +596,54 @@ class DeploymentOrchestrator:
                 service_id=service_id,
                 desired_service_names=desired_service_names,
             )
+            cleanup_failures.extend(
+                {**item, "severity": "critical"} for item in stale_failures
+            )
             self.logger.info(
                 "cleanup",
-                "Stale Swarm process cleanup completed after activation.",
-                progress=98,
+                "Stale Swarm process cleanup completed before activation.",
+                progress=92,
                 details={
                     "removed_stale_services": stale_removed,
                     "stale_cleanup_failures": stale_failures,
                 },
             )
 
-        removed = runtime.cleanup_legacy_containers(
-            service_id=str(config.labels.get("service.id") or "")
-        )
+        try:
+            removed = runtime.cleanup_legacy_containers(
+                service_id=str(config.labels.get("service.id") or "")
+            )
+        except Exception as exc:
+            removed = []
+            cleanup_failures.append(
+                {"resource": "legacy_containers", "severity": "critical", "reason": str(exc)}
+            )
         self.logger.info(
             "cleanup",
             "Legacy container runtime cleanup completed.",
             progress=98,
             details={"removed_containers": removed},
         )
+        if any(item.get("severity") == "critical" for item in cleanup_failures):
+            raise DeploymentError(
+                "Required Swarm cleanup could not be completed.",
+                stage="cleanup",
+                code="DEPLOYMENT_CRITICAL_CLEANUP_FAILED",
+                user_message="Required Swarm resource cleanup failed; the deployment was not activated.",
+                details={
+                    "cleanup_failures": cleanup_failures,
+                    "reconciliation_required": True,
+                },
+            )
+
+        if self._activation_callback is not None:
+            self.logger.info(
+                "activation",
+                "Swarm runtime is ready and required cleanup is complete; committing active revision.",
+                progress=94,
+                details={"service": config.name, "deployment_id": self.logger.deployment_id},
+            )
+            self._activation_callback()
         self.logger.info(
             "deployment_completed",
             "Deployment completed successfully on Docker Swarm.",
@@ -685,7 +715,7 @@ class DeploymentOrchestrator:
             return False, False
 
         try:
-            runtime = SwarmRuntime()
+            runtime = self._swarm_runtime()
         except Exception as exc:
             self.logger.error(
                 "rollback",
