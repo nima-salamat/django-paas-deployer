@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework.exceptions import AuthenticationFailed as DRFAuthenticationFailed
 from rest_framework_simplejwt.exceptions import AuthenticationFailed, InvalidToken, TokenError
 from rest_framework_simplejwt.tokens import AccessToken
 
@@ -80,5 +81,6 @@ def resolve_user_from_access_token(raw_token):
         KeyError,
         get_user_model().DoesNotExist,
         AuthenticationFailed,
+        DRFAuthenticationFailed,
     ):
         return None
