@@ -156,11 +156,11 @@ def _infer_variable_fields(document: dict[str, Any]) -> dict[str, dict[str, Any]
     return found
 
 
-def _transform(value: Any, resolved: dict[str, Any], aliases: dict[str, str]) -> Any:
+def _transform(value: Any, resolved: dict[str, Any], aliases: dict[str, str], secrets: dict[str, Any] | None = None) -> Any:
     if isinstance(value, dict):
-        return {str(k): _transform(v, resolved, aliases) for k, v in value.items()}
+        return {str(k): _transform(v, resolved, aliases, secrets) for k, v in value.items()}
     if isinstance(value, list):
-        return [_transform(v, resolved, aliases) for v in value]
+        return [_transform(v, resolved, aliases, secrets) for v in value]
     if not isinstance(value, str):
         return value
 
@@ -187,7 +187,7 @@ def _transform(value: Any, resolved: dict[str, Any], aliases: dict[str, str]) ->
         field_id = aliases.get(name, name.lower())
         if name.startswith("SERVICE_URL_") or name.startswith("SERVICE_FQDN_"):
             field_id = "domain"
-        if field_id in secrets:
+        if field_id in (secrets or {}):
             return "${secret." + field_id + "}"
         value = resolved.get(field_id)
         if value in (None, ""):
@@ -384,10 +384,10 @@ def compose_to_resolved(*, document: dict[str, Any], metadata: dict[str, Any], c
             "platform": platform,
             "plan_type": plan_type,
             "depends_on": depends,
-            "image_template": _transform(raw.get("image"), render_context, aliases) if raw.get("image") else "",
-            "dockerfile": _transform(str(inline_dockerfile), render_context, aliases) if inline_dockerfile else None,
+            "image_template": _transform(raw.get("image"), render_context, aliases, secrets) if raw.get("image") else "",
+            "dockerfile": _transform(str(inline_dockerfile), render_context, aliases, secrets) if inline_dockerfile else None,
             "files": {},
-            "environment": _transform(env, render_context, aliases),
+            "environment": _transform(env, render_context, aliases, secrets),
             "ports": raw.get("ports") or raw.get("expose") or [],
             "port": port_target,
             "volumes": volumes,
