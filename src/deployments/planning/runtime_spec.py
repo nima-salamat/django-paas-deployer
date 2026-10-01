@@ -9,15 +9,26 @@ from typing import Any, Mapping
 
 
 def _json_value(value: Any) -> Any:
-    if hasattr(value, "as_dict") and callable(value.as_dict):
-        return _json_value(value.as_dict())
     if isinstance(value, Mapping):
-        return {str(k): _json_value(v) for k, v in value.items()}
+        return {
+            str(k): "[SECRET_REF]" if _is_sensitive_key(str(k)) else _json_value(v)
+            for k, v in value.items()
+        }
     if isinstance(value, (list, tuple)):
         return [_json_value(v) for v in value]
+    if hasattr(value, "as_dict") and callable(value.as_dict):
+        return _json_value(value.as_dict())
     if hasattr(value, "__dict__") and not isinstance(value, type):
         return {str(k): _json_value(v) for k, v in vars(value).items() if not str(k).startswith("_")}
     return value
+
+
+def _is_sensitive_key(key: str) -> bool:
+    lowered = key.lower().replace("-", "_")
+    return any(token in lowered for token in (
+        "password", "secret", "token", "private_key",
+        "api_key", "apikey", "authorization", "credential",
+    ))
 
 
 @dataclass(frozen=True)
