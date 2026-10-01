@@ -53,6 +53,7 @@ class MessengerReadStateTests(APITestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["data"]["receipts"], 2)
+        self.assertEqual(response.data["data"]["last_read_at"], second.created_at.isoformat())
         participant = ConversationParticipant.objects.get(
             conversation=self.conversation,
             user=self.reader,
