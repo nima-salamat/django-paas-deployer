@@ -631,3 +631,13 @@ DEPLOY_MAX_ZIP_BYTES = int(os.getenv("DEPLOY_MAX_ZIP_BYTES", str(100 * 1024 * 10
 
 CATALOG_APPLICATION_TIMEOUT_MINUTES = 60
 CATALOG_DISPATCH_STALE_SECONDS = 300
+
+
+# Deployment observability is optional and never authoritative for lifecycle state.
+try:
+    from deployments.observability import configure
+    configure()
+    from opentelemetry.instrumentation.django import DjangoInstrumentor
+    DjangoInstrumentor().instrument()
+except Exception:
+    pass
