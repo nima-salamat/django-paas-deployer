@@ -48,7 +48,8 @@ class TestRecoveryOperationJournal(unittest.TestCase):
     def test_stale_terminal_result_is_ignored(self):
         source = (ROOT / "deploy" / "deployment_state.py").read_text()
         self.assertIn("transition_deploy_terminal_if_owned", source)
-        self.assertIn("if not terminal_committed:", source)
+        self.assertIn("committed = bool(owner)", source)
+        self.assertIn("if not committed:", source)
 
 
 if __name__ == "__main__":
