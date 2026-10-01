@@ -689,9 +689,10 @@ def _recover_stale_running_deploys_swarm(policies) -> None:
                 if current is not None and current.pk != locked.pk:
                     logger.warning("Refusing stale Swarm recovery for deploy=%s; active deploy=%s", locked.pk, current.pk)
                     continue
-                activate_revision_locked(locked.service, revision.revision_id)
-                StateManager.transition_deploy(
-                    locked.pk, DeploymentStatusChoices.SUCCEEDED,
+                committed = StateManager.activate_revision_and_succeed(
+                    locked.pk,
+                    revision.revision_id,
+                    task_id=locked.execution_task_id or None,
                     update_fields={
                         "stage": "deployment_completed",
                         "progress": 100,
@@ -700,7 +701,24 @@ def _recover_stale_running_deploys_swarm(policies) -> None:
                         "health_status": "running",
                         "container_status": "running",
                     },
+                    event_payload={
+                        "event_id": str(uuid.uuid4()),
+                        "trace_id": str(locked.pk),
+                        "deployment_id": str(locked.pk),
+                        "service_id": str(locked.service_id),
+                        "revision_id": str(getattr(locked, "revision_id", "") or ""),
+                        "task_id": "stale-recovery",
+                        "event_type": "deployment.deployment_completed.info",
+                        "stage": "deployment_completed",
+                        "level": "info",
+                        "message": "Deployment recovered from a running Swarm service after worker interruption.",
+                        "progress": 100,
+                        "details": {"controlled_by": "stale_recovery", "health_status": "running"},
+                    },
                 )
+                if not committed:
+                    logger.info("Refusing stale Swarm recovery success for deploy=%s", locked.pk)
+                    continue
                 StateManager.transition_service(
                     locked.service_id, SERVICE_STATUS_CHOICES.RUNNING,
                     update_fields={"deployed_at": timezone.now(), "deploy_started": None, "task_id": None},
