@@ -51,6 +51,7 @@ from .validation import DeploymentValidator
 from .volumes import VolumeMountManager
 from .swarm import SwarmRuntime
 from deployments.planning.runtime_spec import RuntimeSpec
+from deployments.common.deadline import DeploymentDeadline
 
 
 class DeploymentOrchestrator:
@@ -63,6 +64,7 @@ class DeploymentOrchestrator:
         activation_callback: Optional[callable] = None,
         runtime_backend: str = "legacy_docker",
         swarm_runtime: SwarmRuntime | None = None,
+        deadline: DeploymentDeadline | None = None,
     ):
         """
         Parameters
@@ -87,6 +89,7 @@ class DeploymentOrchestrator:
         self._activation_callback = activation_callback
         self._runtime_backend = str(runtime_backend or "legacy_docker").strip().lower()
         self._swarm_runtime_instance = swarm_runtime
+        self._deadline = deadline
         self._created_process_containers: list[Container] = []
         self._base_image_refs: list[str] = []
         self._swarm_recovery_context: dict = {}
@@ -103,6 +106,13 @@ class DeploymentOrchestrator:
         new_container_started = False
         renamed_old_name: str | None = None
         self._created_process_containers = []
+        if self._deadline and self._deadline.expired():
+            raise DeploymentError(
+                "The deployment lifecycle deadline has expired before execution could continue.",
+                stage="timeout",
+                code="DEPLOYMENT_DEADLINE_EXCEEDED",
+                recoverable=False,
+            )
 
         self.logger.info(
             "deployment_started",
@@ -214,7 +224,11 @@ class DeploymentOrchestrator:
                     "io.passdeployer.service": str((config.labels or {}).get("service.id") or ""),
                 },
             )
-            built_image = image.create(on_build_output=self._on_build_output, cancel_check=self._cancel_check)
+            built_image = image.create(
+                on_build_output=self._on_build_output,
+                cancel_check=self._cancel_check,
+                timeout_seconds=self._deadline.bound(config.health_timeout) if self._deadline else None,
+            )
             image_built = True
             self._persist_runtime_provenance(config, built_image)
             try:
@@ -386,7 +400,7 @@ class DeploymentOrchestrator:
             self.logger.info("health_check", "Verifying container health.", progress=86)
             health = self.health_checker.wait_until_healthy(
                 config.name,
-                timeout=config.health_timeout,
+                timeout=int(max(1, self._deadline.bound(config.health_timeout) if self._deadline else config.health_timeout)),
                 interval=config.health_interval,
                 healthcheck_path=config.healthcheck_path,
                 expected_status=config.healthcheck_expected_status,
