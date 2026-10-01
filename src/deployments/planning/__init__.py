@@ -7,6 +7,7 @@ from .configuration import (
     ResolvedConfiguration,
 )
 from .plan import DeploymentPlan, DeploymentPlanCompiler
+from .runtime_spec import RuntimeSpec
 from .provenance import ConfigurationProvenance, ProvenanceRecord
 from .bridge import DeploymentPlanCompatibilityCompiler
 
@@ -17,6 +18,7 @@ __all__ = [
     "ConfigurationResolver",
     "DeploymentPlan",
     "DeploymentPlanCompiler",
+    "RuntimeSpec",
     "DeploymentPlanCompatibilityCompiler",
     "ProvenanceRecord",
     "ResolvedConfiguration",
