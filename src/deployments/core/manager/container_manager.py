@@ -30,7 +30,7 @@ from typing import Any
 
 import docker
 
-from deployments.common.retry import retry_with_backoff
+from deployments.common.retry import retry_with_backoff, docker_retry_predicate
 from deployments.common.security import sanitize_route_name, validate_docker_name
 
 from deployments.common.exceptions import ContainerError
@@ -570,6 +570,7 @@ class Container(Client):
                 base_delay=0.5,
                 max_delay=2.0,
                 retry_on=_RETRYABLE_DOCKER_ERRORS,
+                retry_if=docker_retry_predicate(stage="container_start"),
                 skip_on=(docker.errors.NotFound,),
                 label=f"container.start[{self.name}]",
             )
