@@ -216,27 +216,35 @@ def mark_deploy_failed(
         return False
 
     now = timezone.now()
-    StateManager.transition_deploy(
-        deploy.pk, DeploymentStatusChoices.FAILED,
+    StateManager.transition_deploy_system_terminal(
+        deploy.pk,
+        DeploymentStatusChoices.FAILED,
         update_fields={
-            "stage": stage, "error_message": message,
+            "stage": stage,
+            "error_message": message,
             "status_message": "Deployment failed.",
+        },
+        event_payload={
+            "event_id": str(__import__("uuid").uuid4()),
+            "trace_id": str(deploy.pk),
+            "deployment_id": str(deploy.pk),
+            "service_id": str(locked.service_id),
+            "revision_id": str(getattr(locked, "revision_id", "") or ""),
+            "task_id": "system",
+            "event_type": "deployment.deployment_failed.error",
+            "stage": "deployment_failed",
+            "level": "error",
+            "message": message,
+            "progress": 100,
+            "details": {
+                "failure_stage": stage,
+                "deploy_status_before": locked.status,
+                **(details or {}),
+            },
         },
     )
 
     logger.warning("Deploy %s → failed [%s]: %s", deploy.pk, stage, message)
-
-    _create_deploy_log(
-        locked,
-        stage=stage,
-        message=message,
-        level="error",
-        event_type="deployment.monitor",
-        details={
-            "deploy_status_before": locked.status,
-            **(details or {}),
-        },
-    )
 
     service = locked.service
     if service and service.status not in (
@@ -355,23 +363,29 @@ def mark_rollback_complete(deploy: Deploy) -> bool:
     if locked is None or locked.status != DeploymentStatusChoices.ROLLING_BACK:
         return False
 
-    StateManager.transition_deploy(
-        deploy.pk, DeploymentStatusChoices.ROLLED_BACK,
+    StateManager.transition_deploy_system_terminal(
+        deploy.pk,
+        DeploymentStatusChoices.ROLLED_BACK,
         update_fields={
             "rollback_status": RollbackStatusChoices.SUCCEEDED,
             "stage": "rollback_completed",
             "progress": 100,
             "status_message": "Rollback completed successfully.",
         },
-    )
-
-    _create_deploy_log(
-        locked,
-        stage="rollback_completed",
-        message="Rollback completed successfully.",
-        level="info",
-        event_type="deployment.rollback",
-        progress=100,
+        event_payload={
+            "event_id": str(__import__("uuid").uuid4()),
+            "trace_id": str(deploy.pk),
+            "deployment_id": str(deploy.pk),
+            "service_id": str(locked.service_id),
+            "revision_id": str(getattr(locked, "revision_id", "") or ""),
+            "task_id": "system",
+            "event_type": "deployment.rollback_completed.info",
+            "stage": "rollback_completed",
+            "level": "info",
+            "message": "Rollback completed successfully.",
+            "progress": 100,
+            "details": {"deploy_status_before": locked.status},
+        },
     )
 
     service = locked.service
@@ -399,21 +413,28 @@ def mark_rollback_failed(deploy: Deploy) -> bool:
 
     message = "Rollback failed because the deployment container does not exist."
 
-    StateManager.transition_deploy(
-        deploy.pk, DeploymentStatusChoices.FAILED,
+    StateManager.transition_deploy_system_terminal(
+        deploy.pk,
+        DeploymentStatusChoices.FAILED,
         update_fields={
             "rollback_status": RollbackStatusChoices.FAILED,
             "stage": "rollback_failed",
             "error_message": message,
         },
-    )
-
-    _create_deploy_log(
-        locked,
-        stage="rollback_failed",
-        message=message,
-        level="error",
-        event_type="deployment.rollback",
+        event_payload={
+            "event_id": str(__import__("uuid").uuid4()),
+            "trace_id": str(deploy.pk),
+            "deployment_id": str(deploy.pk),
+            "service_id": str(locked.service_id),
+            "revision_id": str(getattr(locked, "revision_id", "") or ""),
+            "task_id": "system",
+            "event_type": "deployment.rollback_failed.error",
+            "stage": "rollback_failed",
+            "level": "error",
+            "message": message,
+            "progress": 100,
+            "details": {"deploy_status_before": locked.status},
+        },
     )
 
     service = locked.service
