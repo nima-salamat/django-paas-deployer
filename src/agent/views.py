@@ -34,6 +34,7 @@ from .models import Agent
 from .permissions import AgentScopePermission, IsAgentAuthenticated
 from .scopes import SERVICE_SCOPES, DESTRUCTIVE_SCOPES, HIGH_RISK_SCOPES, SCOPE_LABELS, scope_categories
 from .security import get_request_id, sanitize_metadata
+from .contracts import contracts_for_agent
 from .throttling import AgentRateThrottle
 
 
@@ -255,6 +256,18 @@ class AgentCapabilitiesView(AgentSecuredAPIView):
             },
             "pagination": {"default_page_size": 25, "max_page_size": 100},
             "idempotency": {"header":"Idempotency-Key","ttl_hours":24,"important_mutations":True},
+            "operations": [
+                {
+                    "method": item.method,
+                    "path": item.path,
+                    "required_scopes": list(item.scopes),
+                    "required_any_scopes": list(item.any_scopes),
+                    "mutating": item.mutating,
+                    "idempotent": item.idempotent,
+                    "throttle_scope": item.throttle_scope,
+                }
+                for item in contracts_for_agent(request.agent)
+            ],
             "high_risk_scopes": sorted(HIGH_RISK_SCOPES & s),
             "unsupported": ["Git deployment input", "existing-image deployment input", "host shell", "raw Docker API"],
             "confirmation": {"shell_destructive_commands": True, "deployment_rebuild": "deployments.rebuild" in s, "deployment_rollback": "deployments.rollback" in s},
