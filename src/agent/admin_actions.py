@@ -25,10 +25,10 @@ def can_manage(user):
 
 
 def _return_agent(request, agent):
-    referer = str(request.META.get("HTTP_REFERER") or "")
-    if referer:
-        return redirect(referer)
-    return redirect(reverse("wagtailsnippets_agent_agent:list"))
+    try:
+        return redirect("wagtailsnippets_agent_agent:list")
+    except Exception:
+        return redirect("/admin/snippets/")
 
 
 def _confirm_page(request, title, action_url, description, method="POST"):
