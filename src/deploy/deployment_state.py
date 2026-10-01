@@ -200,8 +200,6 @@ class DjangoDeploymentState:
                     "error_message": "",
                 }
             )
-            self._finished = True
-
         if stage == "rollback":
             update["rollback_status"] = RollbackStatusChoices.PENDING
             update["status"] = DeploymentStatusChoices.ROLLING_BACK
@@ -221,8 +219,6 @@ class DjangoDeploymentState:
                 update["rollback_status"] = RollbackStatusChoices.SUCCEEDED
             elif getattr(self.deploy, "rollback_status", None) == RollbackStatusChoices.PENDING:
                 update["rollback_status"] = RollbackStatusChoices.FAILED
-            self._finished = True
-
         self._update_deploy(**update)
 
         try:
@@ -331,12 +327,41 @@ class DjangoDeploymentState:
             final_stage = update["stage"]
             final_level = "error"
 
-        owner = self._owner_task_id or str((current or {}).get("execution_task_id") or "")
+        details = {
+            "rollback_performed": rollback_performed,
+            "error_code": error_code,
+            "error_category": error_category,
+            "recoverable": bool(error_recoverable) if error_recoverable is not None else None,
+        }
+        if result_details.get("technical_message"):
+            details["technical_message"] = result_details["technical_message"]
+        if error_code:
+            details["error_code"] = error_code
+        if error_category:
+            details["error_category"] = error_category
+        if error_recoverable is not None:
+            details["recoverable"] = bool(error_recoverable)
+
+        event_payload = {
+            "event_id": str(uuid.uuid4()),
+            "trace_id": self.events._trace_id(),
+            "deployment_id": str(self.deploy.pk),
+            "service_id": str(self.deploy.service_id),
+            "revision_id": str(getattr(self.deploy, "revision_id", "") or ""),
+            "task_id": owner,
+            "event_type": f"deployment.{final_stage}.{final_level}",
+            "stage": final_stage,
+            "level": final_level,
+            "message": update.get("status_message") or result_message,
+            "progress": 100,
+            "details": details,
+        }
         committed = bool(owner) and StateManager.transition_deploy_terminal_if_owned(
             self.deploy.pk,
             terminal_target,
             task_id=owner,
             update_fields=update,
+            event_payload=event_payload,
         )
 
         if not committed:
@@ -370,21 +395,6 @@ class DjangoDeploymentState:
                 except Exception:
                     logger.exception("Failed to persist stale-worker diagnostics for deploy %s", self.deploy.pk)
             return
-
-        details = {
-            "rollback_performed": rollback_performed,
-            "error_code": error_code,
-            "error_category": error_category,
-            "recoverable": bool(error_recoverable) if error_recoverable is not None else None,
-        }
-        if result_details.get("technical_message"):
-            details["technical_message"] = result_details["technical_message"]
-        if error_code:
-            details["error_code"] = error_code
-        if error_category:
-            details["error_category"] = error_category
-        if error_recoverable is not None:
-            details["recoverable"] = bool(error_recoverable)
 
         try:
             self.events.record(
