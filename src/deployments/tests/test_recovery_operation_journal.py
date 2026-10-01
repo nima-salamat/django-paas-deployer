@@ -39,8 +39,8 @@ class TestRecoveryOperationJournal(unittest.TestCase):
 
     def test_recovery_does_not_promote_arbitrary_running_container(self):
         source = (ROOT / "deployments" / "celery" / "schedules.py").read_text()
-        self.assertIn("replacement = next((item for item in owned", source)
-        self.assertIn("if replacement and replacement[\"status\"] in (\"running\", \"created\"):", source)
+        self.assertIn("owned_by_deploy", source)
+        self.assertIn('str(labels.get("deployment.id") or "") == str(locked.pk)', source)
         self.assertIn("recovery could not prove a safe completed state", source)
 
     def test_stale_terminal_result_is_ignored(self):
