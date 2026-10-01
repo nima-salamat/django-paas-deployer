@@ -171,6 +171,58 @@ def service_payload(service):
     }
 
 
+def create_service_from_plan(request, payload, *, plan_id=None):
+    """High-level plan application workflow built on the existing Service API."""
+    data = dict(payload or {})
+    if plan_id is not None:
+        supplied = data.get("plan")
+        if supplied and str(supplied) != str(plan_id):
+            raise AgentError(
+                "INVALID_REQUEST",
+                "The URL plan_id and request plan must match.",
+                status_code=400,
+            )
+        data["plan"] = str(plan_id)
+    if not data.get("plan"):
+        raise AgentError("INVALID_REQUEST", "plan is required.", status_code=400)
+
+    from plans.models import Plan
+    plan = Plan.objects.filter(pk=data["plan"]).first()
+    if plan is None:
+        raise AgentError("PLAN_NOT_FOUND", "Plan not found.", status_code=404, failure_domain="resource")
+
+    workflow_network = None
+    create_network_requested = bool(data.pop("create_network", False))
+    network_name = data.pop("network_name", None)
+    if not data.get("network") and create_network_requested:
+        require_scopes(request.agent, "service_networks.write")
+        workflow_network = create_network(
+            request,
+            {
+                "name": network_name or f"{data.get('name') or 'service'}-network",
+                "description": "Created by Agent service-from-plan workflow",
+            },
+        )
+        data["network"] = str(workflow_network.pk)
+
+    service = create_service(request, data)
+    return service, workflow_network
+
+
+def require_plan_management(user, action: str):
+    """Reuse the existing plans.apis staff/rule model for Agent plan administration."""
+    from plans.apis import _user_has_rule
+    if getattr(user, "is_superuser", False):
+        return
+    if not getattr(user, "is_staff", False) or not _user_has_rule(user, "plans.manage"):
+        raise AgentError(
+            "PERMISSION_DENIED",
+            "Plan management requires the existing staff plans.manage permission.",
+            status_code=403,
+            failure_domain="authorization",
+        )
+
+
 def create_service(request, payload):
     from services.api.user_services import ServiceViewSet
 
@@ -187,7 +239,7 @@ def create_service(request, payload):
     response = call_viewset_action(ServiceViewSet, "create", request, data=data)
     if response.status_code >= 400:
         raise AgentError("SERVICE_CREATE_FAILED", response.data.get("error") or response.data.get("detail") or "Service creation failed.",
-                         status_code=response.status_code, failure_domain="resource", extra={"backend": response.data})
+                         status_code=response.status_code, failure_domain="resource", extra={"validation": sanitize_metadata(response.data)})
     sid = response.data.get("id") or response.data.get("pk")
     return get_service(sid, request.user, action="can_view")
 
@@ -264,7 +316,7 @@ def create_deployment(request, payload):
     if response.status_code >= 400:
         body = response.data if isinstance(response.data, dict) else {}
         raise AgentError("DEPLOYMENT_CREATE_FAILED", body.get("detail") or body.get("error") or "Deployment creation failed.",
-                         status_code=response.status_code, failure_domain="resource", extra={"backend": body})
+                         status_code=response.status_code, failure_domain="resource", extra={"validation": sanitize_metadata(body)})
     did = response.data.get("id")
     if not did:
         raise AgentError("DEPLOYMENT_CREATE_FAILED", "The deployment service did not return a deployment id.", status_code=500)
@@ -313,7 +365,7 @@ def deployment_action(request, deployment_id, action):
 def rollback_revision(request, service_id, revision_id):
     get_service(service_id, request.user, action="can_deploy_add")
     from services.api.configuration import ServiceRevisionRollbackAPIView
-    return call_api_view_handler(ServiceRevisionRollbackAPIView.as_view(), request, "post", service_id, revision_id) if False else ServiceRevisionRollbackAPIView().post(RequestProxy(request), service_id, revision_id)
+    return ServiceRevisionRollbackAPIView().post(RequestProxy(request), service_id, revision_id)
 
 
 def runtime_logs(service_id, request):
