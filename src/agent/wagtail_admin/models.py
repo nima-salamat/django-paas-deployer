@@ -6,7 +6,7 @@ from cms.wagtail_admin.utils import panels_for, read_only_panels
 from wagtail.permission_policies.base import ModelPermissionPolicy
 from wagtail.snippets.views.snippets import SnippetViewSet, SnippetViewSetGroup
 
-from agent.models import Agent, AgentCredential
+from agent.models import Agent, AgentCredential, AgentAuditEvent
 
 
 class ReadOnlyCredentialPolicy(ModelPermissionPolicy):
@@ -54,8 +54,30 @@ class AgentCredentialViewSet(SnippetViewSet):
     ])
 
 
+class AgentAuditEventViewSet(SnippetViewSet):
+    model = AgentAuditEvent
+    permission_policy = ReadOnlyCredentialPolicy(AgentAuditEvent)
+    inspect_view_enabled = True
+    copy_view_enabled = False
+    icon = "history"
+    menu_label = _("Agent audit events")
+    menu_order = 117
+    list_display = [
+        "occurred_at", "agent", "action", "resource_type", "resource_id",
+        "success", "http_status", "error_code", "request_id",
+    ]
+    list_filter = ["success", "agent", "action", "resource_type"]
+    search_fields = ["action", "resource_type", "resource_id", "request_id", "error_code"]
+    panels = read_only_panels([
+        "id", "agent", "user", "credential", "action", "resource_type",
+        "resource_id", "request_id", "occurred_at", "success", "http_status",
+        "error_code", "failure_domain", "retryability", "visibility",
+        "resource_effect", "certainty", "duration_ms", "metadata",
+    ])
+
+
 class AgentGroup(SnippetViewSetGroup):
-    items = (AgentViewSet, AgentCredentialViewSet)
+    items = (AgentViewSet, AgentCredentialViewSet, AgentAuditEventViewSet)
     menu_label = _("Agent")
     menu_icon = "user"
     menu_order = 115
