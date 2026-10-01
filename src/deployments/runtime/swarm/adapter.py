@@ -289,6 +289,11 @@ class SwarmRuntimeAdapter:
             )
         return self.apply(rollback_plan, operation_key=operation_key)
 
+    def restart_service_group(self, service_id: str) -> RuntimeOperationResult:
+        self._ensure_available(self)
+        self.runtime.restart_service_group(str(service_id))
+        return RuntimeOperationResult(success=True, changed=True, details={"service_id": str(service_id)})
+
     def logs(self, identity: RuntimeIdentity, *, tail: int | str = 200) -> Any:
         self._ensure_available(self)
         return self.runtime.service_logs(identity.resource_name(), tail=tail)
