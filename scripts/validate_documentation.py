@@ -14,7 +14,23 @@ EXCLUDED_FILES = {"__init__.py"}
 
 def python_files(app):
     base = SRC / app
-    return sorted(p for p in base.rglob("*.py") if not any(x in EXCLUDED_PARTS for x in p.parts) and p.name not in EXCLUDED_FILES and not p.name.endswith(".bak"))
+
+    def is_test_module(path: Path) -> bool:
+        name = path.name
+        return (
+            name == "tests.py"
+            or name.startswith("test_")
+            or name.startswith("tests_")
+        )
+
+    return sorted(
+        p
+        for p in base.rglob("*.py")
+        if not any(x in EXCLUDED_PARTS for x in p.parts)
+        and p.name not in EXCLUDED_FILES
+        and not p.name.endswith(".bak")
+        and not is_test_module(p)
+    )
 
 def parse(path):
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
