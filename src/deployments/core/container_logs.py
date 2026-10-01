@@ -65,14 +65,14 @@ def capture_logs_for_deploy(
                 pass
 
         text = redact_secrets(text)
-    encoded = text.encode("utf-8", "replace")
-    original_bytes = len(encoded)
-    truncated = original_bytes > MAX_PERSISTED_LOG_BYTES
-    if truncated:
-        encoded = encoded[-MAX_PERSISTED_LOG_BYTES:]
-        text = encoded.decode("utf-8", "replace")
-    import hashlib
-    log_sha256 = hashlib.sha256(encoded).hexdigest()
+        encoded = text.encode("utf-8", "replace")
+        original_bytes = len(encoded)
+        truncated = original_bytes > MAX_PERSISTED_LOG_BYTES
+        if truncated:
+            encoded = encoded[-MAX_PERSISTED_LOG_BYTES:]
+            text = encoded.decode("utf-8", "replace")
+        import hashlib
+        log_sha256 = hashlib.sha256(encoded).hexdigest()
     except Exception as exc:
         logger.debug(
             "capture_logs_for_deploy: could not read logs for %s: %s",
