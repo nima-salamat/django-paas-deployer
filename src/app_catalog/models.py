@@ -79,7 +79,7 @@ class ApplicationInstanceService(models.Model):
     service = models.OneToOneField(Service, on_delete=models.PROTECT, related_name="application_binding")
     deploy = models.OneToOneField(
         "deploy.Deploy",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="application_binding",
     )
     service_key = models.CharField(max_length=64)
