@@ -1,7 +1,7 @@
 """
 deployments/core/manager/client_manager.py
 ------------------------------------------
-Docker client singleton with timeout + retry-aware ping.
+Runtime-aware Docker client pool with timeout + retry-aware ping.
 
 The previous implementation:
   * Created a NEW ``DockerClient`` on every ``Client()`` instantiation.
@@ -14,7 +14,7 @@ The previous implementation:
     construction aborted the entire deploy.
 
 This module now exposes:
-  * ``get_docker_client()`` — module-level lazy singleton.
+  * ``get_docker_client()`` — keyed lazy client pool.
   * ``Client`` — backward-compatible class.  Subclassing it (as the
     managers do) no longer creates a new docker-py client per instance;
     instead it shares the singleton.  Constructor accepts ``base_url``
@@ -74,9 +74,8 @@ def get_docker_client(base_url: Optional[str] = None, *, backend: str = "docker"
     """
     Return the shared ``DockerClient`` singleton.
 
-    The first caller wins — subsequent calls ignore ``base_url`` and
-    return the cached client.  This is intentional: the deployment
-    subsystem talks to exactly one Docker daemon per process.
+    Clients are cached by ``(backend, cluster, endpoint)`` so a worker can safely
+    talk to more than one runtime endpoint.
     """
     resolved_url = _resolve_base_url(endpoint or base_url)
     resolved_cluster = str(cluster or os.environ.get("SWARM_CLUSTER_NAME") or "default")
