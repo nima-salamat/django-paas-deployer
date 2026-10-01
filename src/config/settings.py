@@ -443,6 +443,10 @@ CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers.DatabaseScheduler'
 CELERY_BEAT_SCHEDULE = {
     # Lightweight pulse; the task reads the operator-configured interval from
     # Wagtail CoreSettings and throttles itself with a distributed lock.
+    "dispatch_deployment_event_outbox": {
+        "task": "deployments.celery.tasks.dispatch_deployment_event_outbox",
+        "schedule": 2.0,
+    },
     "monitor_services_reconciliation": {
         "task": "deployments.celery.schedules.monitor_services",
         "schedule": 5.0,
