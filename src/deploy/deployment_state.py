@@ -108,26 +108,23 @@ class DjangoDeploymentState:
                 self._finished = False
                 emit_cancelled = False
 
-        try:
-            self.events.record(
-                DeploymentEvent(
-                    stage="cancelled" if emit_cancelled else "deployment_started",
-                    message=(
-                        "Deployment cancelled before execution. "
-                        if emit_cancelled
-                        else "Deployment started."
-                    ),
-                    level="warning" if emit_cancelled else "info",
-                    progress=100 if emit_cancelled else 0,
+        if not emit_cancelled:
+            try:
+                self.events.record(
+                    DeploymentEvent(
+                        stage="deployment_started",
+                        message="Deployment started.",
+                        level="info",
+                        progress=0,
+                    )
                 )
-            )
-        except DeploymentCancelled:
-            raise
-        except Exception:
-            logger.exception(
-                "Failed to record start/cancel event for deploy %s",
-                self.deploy.pk,
-            )
+            except DeploymentCancelled:
+                raise
+            except Exception:
+                logger.exception(
+                    "Failed to record start event for deploy %s",
+                    self.deploy.pk,
+                )
         return not emit_cancelled
 
     def event_sink(self, event: DeploymentEvent):
