@@ -190,6 +190,52 @@ class StateManager:
     # ------------------------------------------------------------------
 
     @classmethod
+    def finalize_pending_cancellation(cls, deploy_id: int, *, message: str = "") -> bool:
+        """Terminalize a pending deployment only when cancellation is durable."""
+        from deploy.models import Deploy, DeploymentEventOutbox  # type: ignore
+        with transaction.atomic():
+            deploy = Deploy.objects.select_for_update().filter(pk=deploy_id).first()
+            if deploy is None or deploy.status != sm.DEPLOY_PENDING or not deploy.cancel_requested:
+                return False
+            now = timezone.now()
+            event_payload = {
+                "event_id": str(__import__("uuid").uuid4()),
+                "trace_id": str(deploy.pk),
+                "deployment_id": str(deploy.pk),
+                "service_id": str(deploy.service_id),
+                "revision_id": str(getattr(deploy, "revision_id", "") or ""),
+                "task_id": "",
+                "event_type": "deployment.cancelled.warning",
+                "stage": "cancelled",
+                "level": "warning",
+                "message": message or "Deployment cancelled before worker execution.",
+                "progress": 100,
+                "details": {"controlled_by": "scheduler", "pending_cancellation": True},
+            }
+            updates = {
+                "status": sm.DEPLOY_CANCELLED,
+                "stage": "cancelled",
+                "progress": 100,
+                "completed_at": now,
+                "worker_heartbeat_at": now,
+                "execution_task_id": "",
+                "status_message": event_payload["message"],
+                "updated_at": now,
+            }
+            Deploy.objects.filter(pk=deploy_id).update(**updates)
+            DeploymentEventOutbox.objects.create(
+                deployment_id=deploy_id,
+                service_id=str(deploy.service_id),
+                event_id=event_payload["event_id"],
+                event_type=event_payload["event_type"],
+                stage="cancelled",
+                level="warning",
+                occurred_at=now,
+                payload=event_payload,
+            )
+            return True
+
+    @classmethod
     def lock_and_get_deployment(cls, deploy_id: int, *, task_id: str | None = None):
         """
         Atomically:
