@@ -66,6 +66,7 @@ Status and runtime logs:
 
     GET {{ api_base_url }}/plans
     GET {{ api_base_url }}/plans/{plan_id}
+    POST {{ api_base_url }}/plans/{plan_id}/apply
 
 Create from plan:
 
@@ -100,6 +101,7 @@ Service creation requires a valid user-owned Private Network. Inspect networks f
 ### Runtime service logs
 
     GET {{ api_base_url }}/services/{service_id}/logs
+    GET {{ api_base_url }}/services/{service_id}/logs/export
 
 ### Configuration
 
