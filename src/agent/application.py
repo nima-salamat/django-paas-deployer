@@ -341,6 +341,10 @@ def issue_access_credential(agent, *, expires_at=None, metadata=None):
 def create_enrollment(agent, *, request=None):
     raw=issue_raw_enrollment_token(); now=timezone.now()
     ttl=max(1,min(int(getattr(settings,"AGENT_ENROLLMENT_TTL_MINUTES",10)),60))
+    # Only the newest bootstrap credential remains usable for this Agent.
+    AgentEnrollmentToken.objects.filter(
+        agent=agent, used_at__isnull=True, expires_at__gt=now
+    ).update(expires_at=now, updated_at=now)
     row=AgentEnrollmentToken.objects.create(agent=agent,token_prefix=token_prefix(raw),token_hash=token_hash(raw),
                                              expires_at=now+timedelta(minutes=ttl),issued_from_ip=client_ip(request) if request else None)
     return raw,row
