@@ -11,7 +11,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
 
-from .application import audit, create_enrollment, issue_access_credential
+from .application import audit, create_enrollment, issue_access_credential, rotate_access_credentials, set_agent_status
 from .manifest import render_agent_manifest
 from .models import Agent, AgentCredential
 
@@ -118,16 +118,14 @@ def rotate_credential(request, agent_id):
     if not can_manage(request.user):
         return HttpResponse("Forbidden", status=403)
     agent = get_object_or_404(Agent, pk=agent_id)
-    if agent.status != Agent.Status.ACTIVE:
-        return HttpResponse("Agent is not active.", status=409)
-    now = timezone.now()
-    AgentCredential.objects.filter(agent=agent, revoked_at__isnull=True).update(
-        revoked_at=now, updated_at=now
-    )
-    credential, token = issue_access_credential(
-        agent,
-        metadata={"rotated_by_wagtail_user": str(request.user.pk)},
-    )
+    try:
+        credential, token = rotate_access_credentials(
+            agent,
+            metadata={"rotated_by_wagtail_user": str(request.user.pk)},
+        )
+    except Exception as exc:
+        return HttpResponse(str(exc), status=getattr(exc, "status_code", 409))
+
     audit(
         request=request, agent=agent, user=request.user, credential=credential,
         action="admin.credential.rotate", success=True, status_code=201,
@@ -139,7 +137,7 @@ def rotate_credential(request, agent_id):
 <h1>Agent credential rotated</h1>
 <p>All previous active Agent credentials were revoked.</p>
 <p>The new Bearer credential is shown once:</p>
-<pre>{token}</pre>
+<pre>{escape(token)}</pre>
 <p>Expires: {credential.expires_at}</p>
 </body></html>""",
         content_type="text/html; charset=utf-8",
@@ -202,19 +200,46 @@ def disable_agent(request, agent_id):
     if not can_manage(request.user):
         return HttpResponse("Forbidden", status=403)
     agent = get_object_or_404(Agent, pk=agent_id)
-    now = timezone.now()
-    agent.status = Agent.Status.DISABLED
-    agent.disabled_at = now
-    agent.save(update_fields=["status", "disabled_at", "updated_at"])
-    AgentCredential.objects.filter(agent=agent, revoked_at__isnull=True).update(
-        revoked_at=now, updated_at=now
-    )
+    agent = set_agent_status(agent, Agent.Status.DISABLED)
     audit(
         request=request, agent=agent, user=request.user,
         action="admin.agent.disable", success=True, status_code=200,
         resource_type="agent", resource_id=agent.pk, resource_effect="changed",
     )
     messages.success(request, "Agent disabled and active credentials revoked.")
+    return _return_agent(request, agent)
+
+
+@staff_member_required
+@require_GET
+def enable_agent_confirm(request, agent_id):
+    if not can_manage(request.user):
+        return HttpResponse("Forbidden", status=403)
+    agent = get_object_or_404(Agent, pk=agent_id)
+    return _confirm_page(
+        request,
+        "Enable Agent",
+        reverse("wagtail_agent_enable", kwargs={"agent_id": agent.pk}),
+        f"Enable Agent {agent.name}? It will be able to authenticate again.",
+    )
+
+
+@staff_member_required
+@require_POST
+def enable_agent(request, agent_id):
+    if not can_manage(request.user):
+        return HttpResponse("Forbidden", status=403)
+    agent = get_object_or_404(Agent, pk=agent_id)
+    try:
+        agent = set_agent_status(agent, Agent.Status.ACTIVE)
+    except Exception as exc:
+        return HttpResponse(str(exc), status=getattr(exc, "status_code", 409))
+    audit(
+        request=request, agent=agent, user=request.user,
+        action="admin.agent.enable", success=True, status_code=200,
+        resource_type="agent", resource_id=agent.pk, resource_effect="changed",
+    )
+    messages.success(request, "Agent enabled. Issue a new credential if required.")
     return _return_agent(request, agent)
 
 
@@ -238,13 +263,7 @@ def revoke_agent(request, agent_id):
     if not can_manage(request.user):
         return HttpResponse("Forbidden", status=403)
     agent = get_object_or_404(Agent, pk=agent_id)
-    now = timezone.now()
-    agent.status = Agent.Status.REVOKED
-    agent.revoked_at = now
-    agent.save(update_fields=["status", "revoked_at", "updated_at"])
-    AgentCredential.objects.filter(agent=agent, revoked_at__isnull=True).update(
-        revoked_at=now, updated_at=now
-    )
+    agent = set_agent_status(agent, Agent.Status.REVOKED)
     audit(
         request=request, agent=agent, user=request.user,
         action="admin.agent.revoke", success=True, status_code=200,
@@ -255,7 +274,7 @@ def revoke_agent(request, agent_id):
 
 
 @staff_member_required
-@require_GET
+@require_POST
 def manifest(request, agent_id):
     if not can_manage(request.user):
         return HttpResponse("Forbidden", status=403)
@@ -278,3 +297,4 @@ def manifest(request, agent_id):
     response["Cache-Control"] = "no-store"
     response["Pragma"] = "no-cache"
     return response
+
