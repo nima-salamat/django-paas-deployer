@@ -185,24 +185,35 @@ def create_deploy_log(
     exception_type="",
     traceback="",
 ):
-    """
-    Create a deployment event log.
+    """Persist a scheduler event through the durable deployment outbox."""
+    try:
+        from deployments.core.sink import DBAndChannelEventSink
+        from deployments.core.types import DeploymentEvent
 
-    DeployLog is stored separately from the main deployment database,
-    so no cross-database FK constraint is created.
-    """
-    return DeployLog.objects.create(
-        deploy=deploy,
-        service=deploy.service,
-        stage=stage,
-        event_type=event_type,
-        level=level,
-        message=message,
-        progress=progress,
-        details=details,
-        exception_type=exception_type,
-        traceback=traceback,
-    )
+        event_details = {
+            **(details or {}),
+            "event_type": event_type,
+        }
+        if exception_type:
+            event_details["exception_type"] = exception_type
+        if traceback:
+            event_details["traceback"] = traceback
+
+        DBAndChannelEventSink(deploy.pk)(
+            DeploymentEvent(
+                stage=stage,
+                message=message,
+                level=level,
+                progress=progress,
+                details=event_details,
+            )
+        )
+    except Exception:
+        logger.exception(
+            "Failed to persist durable scheduler event for deploy %s stage=%s",
+            getattr(deploy, "pk", "?"),
+            stage,
+        )
 
 
 @shared_task(bind=True, name="deployments.celery.schedules.monitor_services")
