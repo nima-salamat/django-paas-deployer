@@ -47,6 +47,7 @@ class RuntimeCapabilities:
 
     backend: str
     supported: frozenset[RuntimeCapability] = field(default_factory=frozenset)
+    storage: frozenset[StorageCapability] = field(default_factory=lambda: frozenset({StorageCapability.USAGE}))
     version: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
