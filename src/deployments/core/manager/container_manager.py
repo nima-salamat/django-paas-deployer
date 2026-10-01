@@ -1083,6 +1083,9 @@ class Container(Client):
             return {
                 "cpu": round(cpu_percent, 2),
                 "memory": round(memory_percent, 2),
+                "cpu_cores": round(used_cores, 4),
+                "cpu_limit_cores": round(cpu_limit_cores, 4) if cpu_limit_cores > 0 else None,
+                "memory_usage": memory_usage,
                 "memory_limit": memory_limit,
                 "running": 1,
             }
