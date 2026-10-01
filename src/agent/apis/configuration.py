@@ -163,3 +163,118 @@ class DatabaseBindingsView(AgentSecuredAPIView):
         self.audit_mutating = True
         return self._delegate(request, service_id, "delete", write=True)
 
+
+
+class DatabaseCredentialsView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/{service_id}/database-credentials"
+    audit_action = "service_database_credentials.read"
+    audit_resource_type = "service"
+    suppress_error_fields = True
+    idempotency_store_response = False
+
+    def get(self, request, service_id):
+        from services.models import ServiceDatabaseBinding
+        from deployments.common.config import parse_config
+        from deployments.core.db_deployer import DB_PLATFORMS, SENSITIVE_CONFIG_KEYS
+        from ..application import get_service
+
+        service = get_service(
+            service_id,
+            request.user,
+            action="can_view_db_credentials",
+        )
+        reveal = str(
+            request.query_params.get("reveal") or ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+
+        results = []
+
+        # 1. DatabaseResource bindings attached to a workload Service.
+        bindings = (
+            ServiceDatabaseBinding.objects
+            .filter(service=service)
+            .select_related("database", "database__credential")
+            .order_by("alias")
+        )
+        for binding in bindings:
+            database = binding.database
+            credential = getattr(database, "credential", None)
+            password = credential.get_password() if reveal and credential else None
+            results.append({
+                "type": "managed_database_binding",
+                "id": str(binding.pk),
+                "alias": binding.alias,
+                "env_prefix": binding.env_prefix,
+                "access_mode": binding.access_mode,
+                "database": {
+                    "id": str(database.pk),
+                    "name": database.name,
+                    "engine": database.engine,
+                    "host": database.host,
+                    "port": database.port,
+                    "database_name": database.database_name,
+                    "status": database.status,
+                    "provider_service": str(database.provider_service_id) if database.provider_service_id else None,
+                },
+                "credentials": {
+                    "username": getattr(credential, "username", "") if credential else "",
+                    "password": password,
+                    "password_available": bool(
+                        credential and getattr(credential, "password_ciphertext", "")
+                    ),
+                    "revealed": reveal,
+                },
+            })
+
+        # 2. A first-class database Service stores its native credentials in
+        # the active Deploy.config. Read this through the same deployment
+        # configuration boundary; never put it into ordinary service_payload().
+        platform = str(getattr(getattr(service, "plan", None), "platform", "") or "").strip().lower()
+        if platform in DB_PLATFORMS:
+            from services.revisioning import get_active_deploy
+            deploy = get_active_deploy(service)
+            config = parse_config(getattr(deploy, "config", None)) if deploy is not None else {}
+            sensitive_keys = sorted(
+                key for key in config
+                if str(key) in SENSITIVE_CONFIG_KEYS
+            )
+            credentials = {
+                "username": str(config.get("username") or ""),
+                "password": str(config.get("password") or "") if reveal else None,
+                "root_password": str(config.get("root_password") or "") if reveal else None,
+                "password_available": bool(
+                    config.get("password") or config.get("root_password")
+                ),
+                "revealed": reveal,
+            }
+            results.append({
+                "type": "database_service",
+                "id": str(service.pk),
+                "alias": "service",
+                "database": {
+                    "id": str(service.pk),
+                    "name": service.name,
+                    "engine": platform,
+                    "host": service.get_docker_service_name(),
+                    "port": config.get("port"),
+                    "database_name": config.get("database"),
+                    "status": service.status,
+                    "deployment_id": str(deploy.pk) if deploy is not None else None,
+                },
+                "credential_keys_present": sensitive_keys,
+                "credentials": credentials,
+            })
+
+        response = Response({
+            "result": "success",
+            "service_id": str(service.pk),
+            "policy": {
+                "service_share_action": "can_view_db_credentials",
+                "agent_scope": "service_database_credentials.read",
+                "reveal": "query parameter reveal=true returns decrypted password/root_password",
+            },
+            "results": results,
+        })
+        response["Cache-Control"] = "no-store"
+        response["Pragma"] = "no-cache"
+        return response
