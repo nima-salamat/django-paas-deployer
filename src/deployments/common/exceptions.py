@@ -90,6 +90,11 @@ class DeploymentError(Exception):
         technical_message: str | None = None,
         code: str | None = None,
         category: str | None = None,
+        failure_domain: FailureDomain | str | None = None,
+        retryability: Retryability | str | None = None,
+        visibility: FailureVisibility | str | None = None,
+        resource_effect: ResourceEffect | str | None = None,
+        certainty: FailureCertainty | str | None = None,
     ) -> None:
         super().__init__(message)
         self.message = str(message)
@@ -100,7 +105,26 @@ class DeploymentError(Exception):
             self.recoverable = recoverable
         self.code = str(code or self.default_code)
         self.category = str(category or self.default_category)
+        self.failure_domain = str(failure_domain or (
+            FailureDomain.TRANSIENT_INFRA if self.recoverable else FailureDomain.INTERNAL_BUG
+        ))
+        self.retryability = str(retryability or (
+            Retryability.BACKOFF if self.recoverable else Retryability.NEVER
+        ))
+        self.visibility = str(visibility or FailureVisibility.USER)
+        self.resource_effect = str(resource_effect or ResourceEffect.NONE)
+        self.certainty = str(certainty or FailureCertainty.OBSERVED)
         self.details = dict(details or {})
+
+    @property
+    def failure_metadata(self) -> dict[str, str]:
+        return {
+            "failure_domain": self.failure_domain,
+            "retryability": self.retryability,
+            "visibility": self.visibility,
+            "resource_effect": self.resource_effect,
+            "certainty": self.certainty,
+        }
 
 
 class InternalPlatformError(DeploymentError):
