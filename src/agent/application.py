@@ -56,12 +56,13 @@ def ensure_service_access(service, user, *, action="can_view", owner_only=False)
 
 
 def call_api_view_handler(api_view_function, request, method, *args, data=None, **kwargs):
+    """Call an existing Django/DRF API boundary in-process, never over HTTP."""
     proxy = RequestProxy(request, data=data)
     cls = getattr(api_view_function, "cls", None)
-    if cls is None:
-        raise AgentError("INTERNAL_INTEGRATION_ERROR", "Existing application API boundary is unavailable.", status_code=500)
-    handler = getattr(cls(), method.lower())
-    return handler(proxy, *args, **kwargs)
+    if cls is not None:
+        handler = getattr(cls(), method.lower())
+        return handler(proxy, *args, **kwargs)
+    return api_view_function(proxy, *args, **kwargs)
 
 
 def call_viewset_action(viewset_cls, action_name, request, *, pk=None, data=None):
@@ -364,10 +365,17 @@ def begin_idempotency(agent,request):
         raise AgentError("IDEMPOTENCY_IN_PROGRESS","The same operation is already being processed.",status_code=409,retryability=True,failure_domain="request")
 
 
-def complete_idempotency(row,response):
-    if row is None:return
-    row.state="complete"; row.status_code=int(response.status_code); row.response_body=sanitize_metadata(getattr(response,"data",{}) if isinstance(getattr(response,"data",{}),dict) else {"detail":str(response.data)})
-    row.save(update_fields=["state","status_code","response_body","updated_at"])
+def complete_idempotency(row, response, *, store_body=True):
+    if row is None:
+        return
+    row.state = "complete"
+    row.status_code = int(response.status_code)
+    if store_body and int(response.status_code) < 400:
+        payload = getattr(response, "data", {})
+        row.response_body = sanitize_metadata(payload if isinstance(payload, dict) else {"detail": str(payload)})
+    else:
+        row.response_body = {"result": "success", "status_code": int(response.status_code)}
+    row.save(update_fields=["state", "status_code", "response_body", "updated_at"])
 
 
 def abandon_idempotency(row):
@@ -383,7 +391,8 @@ def audit(*,request,action,success,status_code=None,resource_type="",resource_id
           action=action,resource_type=resource_type,resource_id=str(resource_id or ""),request_id=str(getattr(request,"agent_request_id","")),
           success=bool(success),http_status=status_code,error_code=error_code,failure_domain=failure_domain,
           retryability="true" if retryability else "false",resource_effect=resource_effect,certainty=certainty,
-          duration_ms=int(duration_ms) if duration_ms is not None else None,metadata=sanitize_metadata(metadata or {}))
+          duration_ms=int(duration_ms) if duration_ms is not None else None,
+          metadata=sanitize_metadata(metadata or {}))
     except Exception:pass
 
 
