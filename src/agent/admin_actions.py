@@ -4,6 +4,7 @@ from __future__ import annotations
 from django.contrib import messages
 from django.contrib.admin.views.decorators import staff_member_required
 from django.http import HttpResponse
+from django.utils.html import escape
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
@@ -82,7 +83,7 @@ def issue_credential(request, agent_id):
         f"""<!doctype html><html><body>
 <h1>Agent credential issued</h1>
 <p>This credential is shown once. Store it in the external Agent secret store.</p>
-<pre>{token}</pre>
+<pre>{escape(token)}</pre>
 <p>Credential ID: {credential.pk}</p>
 <p>Expires: {credential.expires_at}</p>
 </body></html>""",
@@ -259,8 +260,11 @@ def manifest(request, agent_id):
         resource_type="agent", resource_id=agent.pk, resource_effect="unchanged",
         metadata={"enrollment_prefix": row.token_prefix, "enrollment_expires_at": row.expires_at.isoformat()},
     )
-    return HttpResponse(
+    response = HttpResponse(
         content,
         content_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="AGENT-{agent.pk}.md"'},
     )
+    response["Cache-Control"] = "no-store"
+    response["Pragma"] = "no-cache"
+    return response
