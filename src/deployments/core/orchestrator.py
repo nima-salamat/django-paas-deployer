@@ -423,12 +423,16 @@ class DeploymentOrchestrator:
                 )
 
             cleanup_failures = []
-            if renamed_old_name and not self._cleanup_old_container(renamed_old_name, config.stop_timeout):
-                cleanup_failures.append({
-                    "resource": renamed_old_name,
-                    "severity": "critical",
-                    "reason": "old_container_cleanup_failed",
-                })
+            if renamed_old_name:
+                old_cleanup_ok = self._cleanup_old_container(renamed_old_name, config.stop_timeout)
+                if old_cleanup_ok:
+                    self._journal_resource(config, kind="container", name=renamed_old_name, state="retired")
+                else:
+                    cleanup_failures.append({
+                        "resource": renamed_old_name,
+                        "severity": "critical",
+                        "reason": "old_container_cleanup_failed",
+                    })
             cleanup_failures.extend(self._cleanup_previous_process_containers(config))
             try:
                 self.cleanup_manager.prune_dangling_images()
@@ -1275,7 +1279,6 @@ class DeploymentOrchestrator:
                 return True
             old.stop(timeout=stop_timeout)
             old.remove()
-            self._journal_resource(self._last_config_for_journal, kind="container", name=self._last_journal_old_name, state="retired")
             self.logger.info(
                 "cleanup",
                 f"Removed old container '{renamed_old_name}'.",
