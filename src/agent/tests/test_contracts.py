@@ -2,9 +2,10 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import resolve
 
-from agent.application import issue_access_credential
+from agent.application import create_enrollment, issue_access_credential
 from agent.contracts import CONTRACTS, contract_for, contracts_for_agent
 from agent.manifest import manifest_endpoints
+from agent.throttling import AgentRateThrottle
 from agent.models import Agent
 from agent.openapi import build_openapi
 from rest_framework.test import APIClient, APIRequestFactory
@@ -128,6 +129,37 @@ class AgentContractTests(TestCase):
             self.assertEqual(operation.get("x-required-any-scopes", []), list(contract.any_scopes))
 
         self.assertEqual(openapi["x-agent"]["contract_operations"], len(CONTRACTS))
+
+    def test_shell_replace_never_uses_replay_storage(self):
+        contract = contract_for(
+            "/agent/v1/services/{service_id}/shell/replace",
+            "POST",
+        )
+        self.assertFalse(contract.idempotent)
+
+        from agent.views import ShellReplaceView
+        self.assertFalse(hasattr(ShellReplaceView.post, "__wrapped__"))
+
+    def test_enrollment_rotation_invalidates_previous_bootstrap(self):
+        first_token, first_row = create_enrollment(self.agent)
+        second_token, second_row = create_enrollment(self.agent)
+        self.assertNotEqual(first_token, second_token)
+        self.assertIsNotNone(first_row.expires_at)
+        self.assertIsNotNone(second_row.expires_at)
+        first_row.refresh_from_db()
+        self.assertLessEqual(first_row.expires_at, second_row.created_at)
+        self.assertGreater(second_row.expires_at, second_row.created_at)
+
+    def test_exchange_uses_exchange_throttle_contract(self):
+        from agent.views import AgentExchangeView
+        view = AgentExchangeView()
+        self.assertEqual(
+            view.get_agent_contract_path(SimpleNamespace()),
+            "/agent/v1/auth/exchange",
+        )
+        contract = contract_for("/agent/v1/auth/exchange", "POST")
+        self.assertEqual(contract.throttle_scope, "exchange")
+        self.assertIn("exchange", AgentRateThrottle.rate_map)
 
     def test_capabilities_projects_enabled_contracts(self):
         response = self.client.get(
