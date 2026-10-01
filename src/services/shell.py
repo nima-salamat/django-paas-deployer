@@ -150,6 +150,8 @@ ARTISAN_DESTRUCTIVE = {
 
 # Artisan interactive / advanced tools.
 ARTISAN_ADVANCED_INTERACTIVE = {"tinker", "psysh"}
+# Commands whose UX requires a live stdin/PTY rather than the one-shot command API.
+ARTISAN_INTERACTIVE_COMMANDS = ARTISAN_ADVANCED_INTERACTIVE | {"createsuperuser", "changepassword"}
 
 # Artisan long-running workers that must stay bounded.
 ARTISAN_ONE_SHOT_ONLY = {"queue:work", "queue:listen", "schedule:work", "serve", "horizon"}
@@ -159,6 +161,7 @@ DJANGO_DESTRUCTIVE = {"flush", "reset_db"}
 
 # Django interactive / advanced.
 DJANGO_ADVANCED_INTERACTIVE = {"shell", "shell_plus", "dbshell"}
+DJANGO_INTERACTIVE_COMMANDS = {"shell", "shell_plus", "createsuperuser", "changepassword"}
 
 # Git subcommands / option patterns that are unsafe in this boundary.
 GIT_FORBIDDEN_SUBCOMMANDS = {
@@ -412,6 +415,15 @@ def _artisan_queue_work_allowed(argv: list[str]) -> bool:
                 return 1 <= int(argv[3:][i + 1]) <= 50
             except ValueError:
                 return False
+    return False
+
+
+def is_interactive_command(argv: list[str]) -> bool:
+    """Return True when a command needs a persistent stdin/PTY."""
+    if len(argv) >= 3 and argv[0] == "php" and argv[1] == "artisan":
+        return argv[2] in ARTISAN_INTERACTIVE_COMMANDS
+    if len(argv) >= 3 and os.path.basename(argv[0]).lower() in {"python", "python3"} and argv[1] == "manage.py":
+        return argv[2] in DJANGO_INTERACTIVE_COMMANDS
     return False
 
 
@@ -1469,6 +1481,12 @@ def execute_compound_command(session,command,*,confirm=False):
             if op=='&&' and previous_code!=0: continue
             if op=='||' and previous_code==0: continue
         validate_argv_for_container(argv,session.platform,session.root_path,container, allow_advanced=can_use_advanced_shell(session.service, session.user))
+        if is_interactive_command(argv):
+            raise ShellPolicyError(
+                'This command requires the interactive PTY WebSocket. '
+                'Use the interactive shell transport instead of the one-shot command API.',
+                code='INTERACTIVE_REQUIRES_PTY',
+            )
         if _is_destructive_command(argv) and not confirm: raise ShellPolicyError('A command in this sequence is classified as destructive and requires confirmation.', code='CONFIRMATION_REQUIRED')
         if argv[0] == 'cd':
             if len(argv) > 2: raise ValidationError('cd accepts one path.')
@@ -1507,6 +1525,7 @@ def _catalog_item(command: str, label: str, *, risk: str = Risk.READ_ONLY, inter
         "dangerous": risk == Risk.DESTRUCTIVE,
         "interactive": interactive,
         "advanced": advanced,
+        "transport": "pty_websocket" if interactive else "command_api",
     }
 
 
@@ -1616,6 +1635,12 @@ def execute_command(session, command: str, *, confirm: bool = False, dry_run: bo
         argv, session.platform, session.root_path, container,
         allow_advanced=can_use_advanced_shell(session.service, session.user),
     )
+    if is_interactive_command(argv):
+        raise ShellPolicyError(
+            'This command requires the interactive PTY WebSocket. '
+            'Use the interactive shell transport instead of the one-shot command API.',
+            code='INTERACTIVE_REQUIRES_PTY',
+        )
     if dry_run:
         plan = [{"argv": argv, "operator": None, "destructive": _is_destructive_command(argv), "risk": classify_command_risk(argv)}]
         record_shell_audit(
