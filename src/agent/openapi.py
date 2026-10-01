@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .manifest import api_base_url
-from .contracts import CONTRACTS, contract_for, contracts_for_agent
+from .contracts import CONTRACTS, contracts_for_agent
 
 
 def build_openapi(agent, *, request=None):
@@ -15,7 +15,7 @@ def build_openapi(agent, *, request=None):
     }
     error_ref = {"$ref": "#/components/schemas/Error"}
     paths = {
-        "/agent/v1": {
+        "/agent/v1/": {
             "get": {"summary": "Read Agent identity", "responses": {"200": {"description": "Identity"}}},
         },
         "/agent/v1/auth/exchange": {
