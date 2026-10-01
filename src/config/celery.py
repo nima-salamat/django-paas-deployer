@@ -13,6 +13,14 @@ app = Celery('config')
 
 app.config_from_object('django.conf:settings', namespace='CELERY')
 
+try:
+    from deployments.observability import configure
+    configure()
+    from opentelemetry.instrumentation.celery import CeleryInstrumentor
+    CeleryInstrumentor().instrument()
+except Exception:
+    logger.debug("Optional deployment tracing instrumentation is unavailable.", exc_info=True)
+
 # Explicit imports prevent deployment tasks from disappearing when Celery
 # autodiscovery is affected by package layout/import-order issues.
 app.conf.imports = tuple(dict.fromkeys((
