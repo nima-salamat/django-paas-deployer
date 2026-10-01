@@ -5,6 +5,7 @@ from core.base.BaseModel import BaseModel
 from services.models import Service
 from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
+import uuid
 
 
 def zip_file_path(instance, filename):
@@ -26,7 +27,22 @@ class RollbackStatusChoices(models.TextChoices):
     PENDING = "pending", _("Pending")
     SUCCEEDED = "succeeded", _("Succeeded")
     FAILED = "failed", _("Failed")
+class CleanupStatusChoices(models.TextChoices):
+    NOT_REQUIRED = "not_required", _("Not required")
+    PENDING = "pending", _("Pending")
+    CLEAN = "clean", _("Clean")
+    DEGRADED = "degraded", _("Degraded")
+    CRITICAL = "critical", _("Critical")
 
+class DeploymentResourceStateChoices(models.TextChoices):
+    PLANNED = "planned", _("Planned")
+    CREATED = "created", _("Created")
+    STARTED = "started", _("Started")
+    READY = "ready", _("Ready")
+    ACTIVE = "active", _("Active")
+    RETIRED = "retired", _("Retired")
+    FAILED = "failed", _("Failed")
+    CLEANUP_PENDING = "cleanup_pending", _("Cleanup pending")
 
 
 class Deploy(BaseModel):
@@ -51,6 +67,16 @@ class Deploy(BaseModel):
         help_text=_("User who uploaded this deploy (for share permission scoping)."),
     )
     version = models.DecimalField(_("Version"), max_digits=5, decimal_places=2, default=0.00, help_text=_("Deployment version, e.g., 1.0"))
+    release_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
+    source_revision = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    image_ref = models.CharField(max_length=384, blank=True, default="")
+    image_digest = models.CharField(max_length=255, blank=True, default="")
+    runtime_revision_id = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    runtime_spec = models.JSONField(blank=True, null=True)
+    runtime_spec_sha256 = models.CharField(max_length=64, blank=True, default="")
+    cleanup_status = models.CharField(max_length=24, choices=CleanupStatusChoices.choices, default=CleanupStatusChoices.NOT_REQUIRED)
+    cleanup_failures = models.JSONField(default=list, blank=True)
+    reconciliation_required = models.BooleanField(default=False, db_index=True)
     zip_file = models.FileField(verbose_name=_("ZIP File"), upload_to=zip_file_path, blank=True, null=True)
     config = models.JSONField(verbose_name=_("Configuration"), blank=True, null=True)
     started_at = models.DateTimeField(verbose_name=_("Start Time"), blank=True, null=True, editable=False)
@@ -220,6 +246,51 @@ class Deploy(BaseModel):
     def __str__(self):
         return f"{self.name} (v{self.version})"
 
+
+class DeploymentResource(BaseModel):
+    """Durable resource ownership journal for deployment lifecycle recovery."""
+
+    deployment = models.ForeignKey("deploy.Deploy", on_delete=models.CASCADE, related_name="resources")
+    kind = models.CharField(max_length=64)
+    name = models.CharField(max_length=255)
+    runtime_id = models.CharField(max_length=255, blank=True, default="")
+    state = models.CharField(max_length=32, choices=DeploymentResourceStateChoices.choices, default=DeploymentResourceStateChoices.PLANNED)
+    owned = models.BooleanField(default=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    last_error = models.TextField(blank=True, default="")
+    retired_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("deployment", "kind", "name"), name="uniq_deployment_resource"),
+        ]
+        indexes = [
+            models.Index(fields=("deployment", "state")),
+            models.Index(fields=("kind", "name")),
+        ]
+
+
+class DeploymentEventOutbox(BaseModel):
+    """Authoritative durable deployment event awaiting projection."""
+
+    event_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
+    deployment = models.ForeignKey("deploy.Deploy", on_delete=models.CASCADE, related_name="event_outbox")
+    service_id = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    event_type = models.CharField(max_length=128)
+    stage = models.CharField(max_length=64)
+    level = models.CharField(max_length=16, default="info")
+    occurred_at = models.DateTimeField(default=timezone.now, db_index=True)
+    payload = models.JSONField(default=dict)
+    dispatched_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    attempts = models.PositiveIntegerField(default=0)
+    last_error = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ("occurred_at", "id")
+        indexes = [
+            models.Index(fields=("dispatched_at", "occurred_at")),
+            models.Index(fields=("deployment", "occurred_at")),
+        ]
 
 class DeployLog(BaseModel):
     # The event store lives in a separate database, so these identifiers must
