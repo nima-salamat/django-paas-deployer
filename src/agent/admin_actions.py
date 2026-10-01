@@ -5,7 +5,6 @@ from django.contrib import messages
 from django.contrib.admin.views.decorators import staff_member_required
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect
-from django.template import engines
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
@@ -39,7 +38,7 @@ def _confirm_page(request, title, action_url, description, method="POST"):
         f"""<!doctype html><html><body>
 <h1>{safe_title}</h1><p>{body}</p>
 <form method="{method}" action="{action_url}">
-<input type="hidden" name="csrfmiddlewaretoken" value="">
+<input type="hidden" name="csrfmiddlewaretoken" value="{get_token(request)}">
 <button type="submit">Confirm</button>
 </form>
 </body></html>""",
