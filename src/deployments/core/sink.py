@@ -131,17 +131,34 @@ class DBAndChannelEventSink:
         level = payload.get("level") or "info"
         noisy = _is_noisy_build_line(stage, message, level)
 
-        # Always persist non-noise; for noise only persist errors/warnings
-        if not noisy or level in ("error", "warning"):
-            self._write_deploy_log(payload)
-
-        # Always keep Deploy row in sync for progress / stage transitions
+        # Deploy progress/stage are synchronous control-plane state. Event
+        # persistence and delivery are delegated to the durable outbox so
+        # DeployLog and WebSocket remain projections rather than authorities.
         self._update_deploy_row(payload, skip_message=noisy and level == "info")
 
-        # Broadcast: skip pure noise, throttle remaining build spam
-        if noisy:
+        # Pure Docker build noise is intentionally not journaled. Errors and
+        # warnings always enter the durable event stream.
+        if noisy and level not in ("error", "warning"):
             return
-        self._broadcast(payload)
+
+        try:
+            from deploy.event_pipeline import DeploymentEventPipeline as DurableEventPipeline
+            deploy = self._get_deploy()
+            DurableEventPipeline(deploy).record(
+                DeploymentEvent(
+                    stage=payload.get("stage") or "",
+                    message=payload.get("message") or "",
+                    level=payload.get("level") or "info",
+                    progress=payload.get("progress"),
+                    details=payload.get("details") or {},
+                )
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist durable deployment event for deploy %s stage=%s",
+                self.deployment_id,
+                payload.get("stage"),
+            )
 
     def record(self, event: DeploymentEvent | dict) -> None:
         self(event)
