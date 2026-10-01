@@ -137,13 +137,24 @@ class ApplicationStackExecutor:
                 deploy.save(update_fields=["cancel_requested", "updated_at"])
                 if deploy.status == DeploymentStatusChoices.PENDING:
                     try:
-                        StateManager.transition_deploy(
+                        StateManager.transition_deploy_system_terminal(
                             deploy.pk,
                             DeploymentStatusChoices.CANCELLED,
                             update_fields={
+                                "cancel_requested": True,
                                 "stage": "cancelled",
                                 "progress": 100,
                                 "status_message": "Service was not started because the application was cancelled.",
+                            },
+                            event_payload={
+                                "event_id": str(uuid.uuid4()),
+                                "trace_id": str(deploy.pk),
+                                "event_type": "deployment.cancelled.warning",
+                                "stage": "cancelled",
+                                "level": "warning",
+                                "message": "Service was not started because the application was cancelled.",
+                                "progress": 100,
+                                "details": {"controlled_by": "application_executor"},
                             },
                         )
                     except Exception:
@@ -175,13 +186,24 @@ class ApplicationStackExecutor:
                     }
                     for dep in spec.dependencies
                 ):
-                    StateManager.transition_deploy(
+                    StateManager.transition_deploy_system_terminal(
                         binding.deploy.pk,
                         DeploymentStatusChoices.CANCELLED,
                         update_fields={
+                            "cancel_requested": True,
                             "stage": "cancelled",
                             "progress": 100,
                             "status_message": "Service was not started because a dependency became unavailable.",
+                        },
+                        event_payload={
+                            "event_id": str(uuid.uuid4()),
+                            "trace_id": str(binding.deploy.pk),
+                            "event_type": "deployment.cancelled.warning",
+                            "stage": "cancelled",
+                            "level": "warning",
+                            "message": "Service was not started because a dependency became unavailable.",
+                            "progress": 100,
+                            "details": {"controlled_by": "application_executor", "dependency_blocked": True},
                         },
                     )
                     status_by_key[binding.service_key] = DeploymentStatusChoices.CANCELLED
@@ -223,13 +245,24 @@ class ApplicationStackExecutor:
                 locked.save(update_fields=["status", "stage", "error_code", "error_message", "updated_at"])
                 for binding in bindings:
                     if binding.deploy.status == DeploymentStatusChoices.PENDING:
-                        StateManager.transition_deploy(
+                        StateManager.transition_deploy_system_terminal(
                             binding.deploy.pk,
                             DeploymentStatusChoices.CANCELLED,
                             update_fields={
+                                "cancel_requested": True,
                                 "stage": "cancelled",
                                 "progress": 100,
                                 "status_message": "Service was not started because a required application service failed.",
+                            },
+                            event_payload={
+                                "event_id": str(uuid.uuid4()),
+                                "trace_id": str(binding.deploy.pk),
+                                "event_type": "deployment.cancelled.warning",
+                                "stage": "cancelled",
+                                "level": "warning",
+                                "message": "Service was not started because a required application service failed.",
+                                "progress": 100,
+                                "details": {"controlled_by": "application_executor", "dependency_failed": True},
                             },
                         )
                     elif binding.deploy.status in {
