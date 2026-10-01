@@ -96,12 +96,6 @@ class DeploymentEventPipeline:
         except Exception:
             logger.exception("Unable to persist deployment event for %s.", self.deploy.pk)
 
-        if broadcast:
-            self.publish_payload(payload)
-        return payload
-
-        if broadcast:
-            self.publish_payload(payload)
         return payload
 
     def _trace_id(self) -> str:
