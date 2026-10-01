@@ -170,9 +170,7 @@ class ServiceMetricsView(AgentSecuredAPIView):
                     else None
                 ),
                 "memory_limit_bytes": payload.get("memory_limit_bytes"),
-            },
-                "cpu_vcpu": float(plan.max_cpu) if plan is not None else None,
-                "memory_mb": int(float(plan.max_ram)) if plan is not None else None,
+                "cpu_limit_cores": payload.get("cpu_limit_cores"),
             },
         })
 
