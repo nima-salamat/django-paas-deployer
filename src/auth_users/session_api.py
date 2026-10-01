@@ -6,6 +6,7 @@ from rest_framework.views import APIView
 
 from .authentication import SessionJWTAuthentication
 from .models import Device, LoginSettings, UserSession
+from .device_metadata import device_descriptor
 from .session_auth import (
     ensure_session_can_revoke_others,
     session_management_min_age,
@@ -35,11 +36,7 @@ def _session_payload(session, current_id=None):
     return {
         "id": session.session_id,
         "device_id": str(session.device.public_id),
-        "device": {
-            "name": session.device.name,
-            "platform": session.device.platform,
-            "client": session.device.client,
-        },
+        "device": device_descriptor(session.device, session=session),
         "created_at": session.created_at,
         "last_seen_at": session.last_seen_at,
         "expires_at": session.expires_at,
@@ -164,10 +161,7 @@ class DeviceListAPIView(SessionAPIBase):
             {
                 "results": [
                     {
-                        "id": str(device.public_id),
-                        "name": device.name,
-                        "platform": device.platform,
-                        "client": device.client,
+                        **device_descriptor(device),
                         "last_seen_at": device.last_seen_at,
                         "revoked_at": device.revoked_at,
                         "active_sessions": device.active_session_count,
