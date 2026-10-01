@@ -282,6 +282,7 @@ class DeploymentEventOutbox(BaseModel):
     occurred_at = models.DateTimeField(default=timezone.now, db_index=True)
     payload = models.JSONField(default=dict)
     dispatched_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    next_attempt_at = models.DateTimeField(null=True, blank=True, db_index=True)
     attempts = models.PositiveIntegerField(default=0)
     last_error = models.TextField(blank=True, default="")
 
