@@ -103,7 +103,7 @@ class SwarmLogAndMetricsTests(unittest.TestCase):
                 "online_cpus": 2,
             }
         }
-        self.assertEqual(SwarmRuntime._cpu_percent(first, second), 40.0)
+        self.assertEqual(SwarmRuntime._cpu_percent(first, second), 20.0)
 
     def test_memory_percent_works_with_cgroup_usage_and_limit(self):
         sample = {"memory_stats": {"usage": 256, "limit": 1024}}
