@@ -32,11 +32,13 @@ Read the app README before changing that app. Follow its models/api/serializers/
 
 ## Deep deployments architecture
 
-[deployments/README.md](deployments/README.md) remains the canonical execution manual for the deployment engine. It covers planning, build/platform detection, runtime/Swarm, concurrency/state, recovery, base images, logs/health/rollback/cleanup, databases and architectural tests.
+[deployments/README.md](apps/deployments/README.md) remains the canonical execution manual for the deployment engine. It covers planning, build/platform detection, runtime/Swarm, concurrency/state, recovery, base images, logs/health/rollback/cleanup, databases and architectural tests.
 
 The per-app deployments README points here rather than duplicating that manual.
 
-- [Source-derived coverage manifest](apps/COVERAGE.md)\n\n## Cross-system operations
+- [Source-derived coverage manifest](apps/COVERAGE.md)
+
+## Cross-system operations
 
 - [Observability](observability.md)
 - [Testing and security](testing-and-security.md)
