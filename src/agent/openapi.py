@@ -170,6 +170,7 @@ def build_openapi(agent, *, request=None):
         },
         "/agent/v1/plans": {"get": {"summary": "List plans"}},
         "/agent/v1/plans/{plan_id}": {"get": {"summary": "Inspect plan"}},
+        "/agent/v1/plans/{plan_id}/apply": {"post": {"summary": "Create service from this plan", "parameters": [idempotency]}},
         "/agent/v1/plans/manage": {
             "post": {"summary": "Create plan; existing staff/admin permission required", "parameters": [idempotency]}
         },
