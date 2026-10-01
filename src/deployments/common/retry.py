@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import random
+from dataclasses import dataclass
 import time
 from typing import Any, Callable, Iterable, Tuple, Type
 
@@ -32,6 +33,7 @@ def retry_with_backoff(
     max_delay: float = 5.0,
     retry_on: Tuple[Type[BaseException], ...] = (Exception,),
     skip_on: Tuple[Type[BaseException], ...] = (),
+    retry_if: Callable[[BaseException], bool] | None = None,
     label: str | None = None,
     **kwargs: Any,
 ) -> Any:
@@ -65,6 +67,8 @@ def retry_with_backoff(
         except skip_on:
             raise
         except retry_on as exc:
+            if retry_if is not None and not retry_if(exc):
+                raise
             last_exc = exc
             if attempt >= retries:
                 break
@@ -124,4 +128,42 @@ def is_retryable_exception(
     return False
 
 
-__all__ = ["retry_with_backoff", "is_retryable_exception"]
+__all__ = ["DockerFailure", "classify_docker_exception", "docker_retry_predicate", "retry_with_backoff", "is_retryable_exception"]
+
+@dataclass(frozen=True)
+class DockerFailure:
+    """Normalized Docker failure semantics used by retrying callers."""
+
+    retryable: bool
+    reason_code: str
+    stage: str
+    http_status: int | None = None
+
+
+def classify_docker_exception(exc: BaseException, *, stage: str) -> DockerFailure:
+    """Classify Docker failures by semantics instead of exception class alone."""
+    status = getattr(exc, "status_code", None)
+    name = type(exc).__name__.lower()
+    message = str(exc).lower()
+    if status in {400, 401, 403, 404, 409, 422}:
+        if status == 404 or "not found" in message:
+            reason = "not_found"
+        elif status == 409 or "already in use" in message or "port is already allocated" in message:
+            reason = "resource_conflict"
+        else:
+            reason = "deterministic_api_error"
+        return DockerFailure(False, reason, stage, status)
+    if status in {408, 425, 429, 500, 502, 503, 504}:
+        return DockerFailure(True, "transient_http", stage, status)
+    transient_markers = (
+        "connection reset", "connection refused", "broken pipe",
+        "read timed out", "timed out", "temporarily unavailable",
+        "daemon is not responding", "service unavailable", "i/o timeout", "eof"
+    )
+    if name in {"timeouterror", "connectionerror"} or any(marker in message for marker in transient_markers):
+        return DockerFailure(True, "transient_transport", stage, status)
+    return DockerFailure(False, "unknown_docker_failure", stage, status)
+
+
+def docker_retry_predicate(*, stage: str) -> Callable[[BaseException], bool]:
+    return lambda exc: classify_docker_exception(exc, stage=stage).retryable
