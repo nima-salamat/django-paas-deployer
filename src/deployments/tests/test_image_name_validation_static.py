@@ -3,7 +3,7 @@ import re
 
 def _source():
     root = Path(__file__).resolve().parents[2]
-    return (root / "core" / "manager" / "image_manager.py").read_text()
+    return (root / "deployments" / "core" / "manager" / "image_manager.py").read_text()
 
 def test_repository_component_pattern_accepts_namespaced_repositories():
     text = _source()
