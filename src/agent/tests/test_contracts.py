@@ -31,6 +31,20 @@ class AgentContractTests(TestCase):
         _, self.raw = issue_access_credential(self.agent)
         self.client = APIClient()
 
+    def test_identity_root_does_not_require_resource_scope(self):
+        from agent.contracts import contract_for
+        contract = contract_for("/agent/v1/", "GET")
+        self.assertEqual(contract.scopes, ())
+
+        self.agent.scopes = []
+        self.agent.save(update_fields=["scopes", "updated_at"])
+        response = self.client.get(
+            "/agent/v1/",
+            HTTP_AUTHORIZATION=f"Bearer {self.raw}",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["agent"]["id"], str(self.agent.pk))
+
     def test_from_plan_requires_both_scopes_in_runtime_and_openapi(self):
         contract = contract_for("/agent/v1/services/from-plan", "POST")
         self.assertEqual(contract.scopes, ("services.create", "plans.apply"))
