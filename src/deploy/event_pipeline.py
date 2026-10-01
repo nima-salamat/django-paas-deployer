@@ -1,4 +1,4 @@
-"""Fault-tolerant persistence and delivery for deployment lifecycle events."""
+"""Fault-tolerant durable journaling and projection for deployment lifecycle events."""
 
 import logging
 import re
@@ -10,7 +10,7 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
 
-from .models import DeploymentEventOutbox, DeployLog
+from .models import DeploymentEventOutbox
 
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ def sanitize(value: Any) -> Any:
 
 
 class DeploymentEventPipeline:
-    """Persist events to the log DB and publish them without affecting deployment work."""
+    """Append sanitized lifecycle events to the durable outbox."""
 
     def __init__(self, deploy):
         self.deploy = deploy
