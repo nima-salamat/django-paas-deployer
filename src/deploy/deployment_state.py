@@ -202,7 +202,25 @@ class DjangoDeploymentState:
             )
         if stage == "rollback":
             update["rollback_status"] = RollbackStatusChoices.PENDING
-            update["status"] = DeploymentStatusChoices.ROLLING_BACK
+            try:
+                transitioned = StateManager.transition_deploy_if_owned(
+                    self.deploy.pk,
+                    DeploymentStatusChoices.ROLLING_BACK,
+                    task_id=self._owner_task_id,
+                    update_fields={
+                        "stage": "rollback",
+                        "status_message": update.get("status_message", "Rolling back deployment."),
+                    },
+                )
+                if not transitioned:
+                    return
+            except Exception:
+                logger.exception(
+                    "Failed to persist rollback transition for deploy %s",
+                    self.deploy.pk,
+                )
+                raise
+            update.pop("status", None)
 
         if stage in ("deployment_failed", "cancelled"):
             terminal_status = (
