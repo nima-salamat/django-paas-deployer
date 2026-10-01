@@ -2,7 +2,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from agent.application import issue_access_credential
-from agent.contracts import contract_for, contracts_for_agent
+from agent.contracts import CONTRACTS, contract_for, contracts_for_agent
 from agent.manifest import manifest_endpoints
 from agent.models import Agent
 from agent.openapi import build_openapi
@@ -29,18 +29,21 @@ class AgentContractTests(TestCase):
         contract = contract_for("/agent/v1/services/from-plan", "POST")
         self.assertEqual(contract.scopes, ("services.create", "plans.apply"))
 
+        self.agent.scopes = ["services.create"]
+        self.agent.save(update_fields=["scopes", "updated_at"])
         response = self.client.post(
             "/agent/v1/services/from-plan",
             {"plan": "00000000-0000-0000-0000-000000000001"},
             format="json",
             HTTP_AUTHORIZATION=f"Bearer {self.raw}",
         )
-        self.assertEqual(response.status_code, 500 if response.status_code == 500 else 409)
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "INSUFFICIENT_SCOPE")
 
         openapi = build_openapi(self.agent)
         operation = openapi["paths"]["/agent/v1/services/from-plan"]["post"]
         self.assertEqual(operation["x-required-scopes"], ["services.create", "plans.apply"])
-        self.assertTrue(operation["x-enabled-for-agent"])
+        self.assertFalse(operation["x-enabled-for-agent"])
 
     def test_shell_close_and_file_operations_use_contract_scopes(self):
         close = contract_for(
@@ -70,4 +73,4 @@ class AgentContractTests(TestCase):
             self.assertEqual(operation.get("x-required-scopes", []), list(contract.scopes))
             self.assertEqual(operation.get("x-required-any-scopes", []), list(contract.any_scopes))
 
-        self.assertEqual(openapi["x-agent"]["contract_operations"], len(contract_for.__globals__["CONTRACTS"]))
+        self.assertEqual(openapi["x-agent"]["contract_operations"], len(CONTRACTS))
