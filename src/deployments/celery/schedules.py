@@ -699,18 +699,21 @@ def _reconcile_active_deploy(deploy: Deploy) -> None:
         # 2. Pending deployment
         if locked.status == DeploymentStatusChoices.PENDING:
             if is_running:
-                locked.status = DeploymentStatusChoices.RUNNING
-                locked.stage = "running"
-                locked.progress = max(locked.progress, 50)
-                locked.status_message = "Container is running."
-                locked.save(
-                    update_fields=["status", "stage", "progress", "status_message"]
+                StateManager.transition_deploy(
+                    locked.pk,
+                    DeploymentStatusChoices.RUNNING,
+                    update_fields={
+                        "stage": "running",
+                        "progress": max(locked.progress, 50),
+                        "status_message": "Container is running.",
+                    },
                 )
+                refreshed = Deploy.objects.get(pk=locked.pk)
                 create_deploy_log(
-                    locked,
+                    refreshed,
                     stage="running",
                     message="Deployment container is running.",
-                    progress=locked.progress,
+                    progress=refreshed.progress,
                 )
             return
 
@@ -795,11 +798,11 @@ def _reconcile_active_deploy_swarm(deploy: Deploy) -> None:
         expected_release = str(getattr(locked, "release_id", "") or "")
         expected_revision = str(getattr(locked, "revision_id", "") or "")
         if expected_release and observed_release and observed_release != expected_release:
-            Deploy.objects.filter(pk=locked.pk).update(
-                reconciliation_required=True,
-                status_message="Runtime release identity differs from the authoritative deployment.",
-                updated_at=now,
-            )
+            current = {
+                "reconciliation_required": True,
+                "status_message": "Runtime release identity differs from the authoritative deployment.",
+            }
+            Deploy.objects.filter(pk=locked.pk).update(**current)
             logger.warning("Runtime release drift for deploy=%s expected=%s observed=%s", locked.pk, expected_release, observed_release)
             return
         if expected_revision and observed_revision and observed_revision != expected_revision:
