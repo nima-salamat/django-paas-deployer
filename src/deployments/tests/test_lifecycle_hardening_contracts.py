@@ -114,3 +114,11 @@ def test_monitor_terminal_paths_use_system_owned_terminal_transition():
     source = (__import__("pathlib").Path(__file__).resolve().parents[2] / "deployments/celery/monitoring/actions.py").read_text(encoding="utf-8")
     assert source.count("transition_deploy_system_terminal(") >= 3
     assert "DeploymentEventOutbox" not in source
+
+
+
+def test_event_sink_keeps_progress_projection_separate_from_terminal_state():
+    source = (__import__("pathlib").Path(__file__).resolve().parents[2] / "deployments/core/sink.py").read_text(encoding="utf-8")
+    assert "def _update_deploy_row" in source
+    assert "never mutates Deploy.status" in source
+    assert 'status__in=(' in source
