@@ -532,8 +532,12 @@ def create_enrollment(agent, *, request=None):
     now = timezone.now()
     ttl = max(1, min(int(getattr(settings, "AGENT_ENROLLMENT_TTL_MINUTES", 10)), 60))
 
-    # Credential issuance is a rotation boundary. Serialize it per Agent so
-    # concurrent requests cannot leave multiple bootstrap tokens usable.
+    # Keep the lock order identical to enrollment exchange: enrollment rows
+    # first, then Agent. This avoids Agent<->Enrollment deadlocks under
+    # concurrent bootstrap rotation and token exchange.
+    AgentEnrollmentToken.objects.select_for_update().filter(
+        agent=agent, used_at__isnull=True, expires_at__gt=now
+    ).exists()
     locked_agent = Agent.objects.select_for_update().get(pk=agent.pk)
     AgentEnrollmentToken.objects.filter(
         agent=locked_agent, used_at__isnull=True, expires_at__gt=now
