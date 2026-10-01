@@ -22,6 +22,8 @@ SESSION_CACHE_PREFIX = "auth:session:"
 SESSION_CACHE_VERSION = 3
 DEFAULT_SESSION_CACHE_TTL = 15 * 60
 DEFAULT_SESSION_DB_TOUCH_INTERVAL = 5 * 60
+DEFAULT_SESSION_ACTIVITY_WRITE_INTERVAL = 30
+
 
 
 @dataclass(frozen=True)
@@ -206,6 +208,86 @@ def cache_session(
     context = _context_from_session(session)
     _write_cached_context(context, now=now)
     return context
+
+
+def _activity_write_interval() -> int:
+    try:
+        return max(
+            5,
+            int(
+                getattr(
+                    settings,
+                    "AUTH_SESSION_ACTIVITY_WRITE_INTERVAL",
+                    DEFAULT_SESSION_ACTIVITY_WRITE_INTERVAL,
+                )
+            ),
+        )
+    except (TypeError, ValueError):
+        return DEFAULT_SESSION_ACTIVITY_WRITE_INTERVAL
+
+
+def _activity_throttle_key(session_id: str) -> str:
+    return f"{SESSION_CACHE_PREFIX}activity:{session_id}"
+
+
+def touch_session_activity(
+    session_id: str,
+    *,
+    user_id: int,
+    request=None,
+    force: bool = False,
+) -> datetime:
+    """Record authenticated session presence with a bounded database write rate.
+
+    The current session is resolved against the authoritative session state.
+    Redis throttles database writes so high-frequency browser heartbeats do not
+    turn into a write-per-request workload.
+    """
+    session = get_active_session_for_update(session_id, user_id=user_id)
+    now = timezone.now()
+    interval = _activity_write_interval()
+    throttle_key = _activity_throttle_key(str(session_id))
+
+    should_write = force
+    if not should_write:
+        try:
+            should_write = bool(cache.add(throttle_key, "1", interval))
+        except Exception:
+            should_write = True
+
+    if should_write:
+        metadata = {}
+        if request is not None:
+            from .device_metadata import collect_request_device_metadata
+
+            metadata = collect_request_device_metadata(
+                request,
+                client_signature=(request.data.get("client_signature", "") if hasattr(request, "data") else ""),
+                client_metadata=(request.data.get("client_metadata") if hasattr(request, "data") else None),
+            )
+        update_fields = ["last_seen_at"]
+        session_updates = {"last_seen_at": now}
+        if metadata.get("last_ip") is not None:
+            session_updates["last_ip"] = metadata["last_ip"]
+            update_fields.append("last_ip")
+        if metadata.get("user_agent"):
+            session_updates["user_agent"] = metadata["user_agent"]
+            update_fields.append("user_agent")
+        if metadata:
+            session_updates["metadata"] = {**(session.metadata or {}), **metadata}
+            update_fields.append("metadata")
+        UserSession.objects.filter(pk=session.pk).update(**session_updates)
+
+        device_updates = {"last_seen_at": now}
+        if metadata.get("last_ip") is not None:
+            device_updates["last_ip"] = metadata["last_ip"]
+        if metadata.get("user_agent"):
+            device_updates["user_agent"] = metadata["user_agent"]
+        if metadata:
+            device_updates["metadata"] = {**(session.device.metadata or {}), **metadata}
+        Device.objects.filter(pk=session.device_id).update(**device_updates)
+
+    return now
 
 
 def session_management_min_age() -> timedelta:
