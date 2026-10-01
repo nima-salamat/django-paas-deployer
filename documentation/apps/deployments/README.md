@@ -88,8 +88,7 @@ Runs the persistent runtime-log collector. It discovers managed containers or Sw
 ## Additional production modules
 
 Recent lifecycle hardening added these first-class production surfaces:
-
 - `src/deployments/common/deadline.py` — shared wall-clock deadline budgeting for blocking operations.
-- `src/deployments/common/event_outbox.py` — durable deployment-event projection and retry dispatcher.
+- `src/deployments/common/event_outbox.py` — durable deployment-event journaling, retry scheduling, and bounded retention of dispatched events.
 - `src/deployments/observability.py` — optional OpenTelemetry/Sentry tracing and secret-safe diagnostics.
 - `src/deployments/planning/runtime_spec.py` — immutable runtime/provenance snapshot with secret references rather than secret values.
