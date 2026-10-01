@@ -145,3 +145,12 @@ def test_db_success_fences_owner_before_revision_activation():
     assert "activate_revision_locked(service, revision_id)" in method
     assert '"status": sm.DEPLOY_SUCCEEDED' in method
     assert "DeploymentEventOutbox.objects.create" in method
+
+
+
+def test_system_terminal_transition_respects_cancellation_fence():
+    source = (__import__("pathlib").Path(__file__).resolve().parents[2] / "deployments/core/state/manager.py").read_text(encoding="utf-8")
+    method = source.split("def transition_deploy_system_terminal", 1)[1].split(
+        "def finalize_pending_cancellation", 1
+    )[0]
+    assert 'if target != sm.DEPLOY_CANCELLED and deploy.cancel_requested:' in method
