@@ -51,7 +51,7 @@ def test_image_none_and_empty_policy_are_resolved_before_build():
     import deployments.core.manager.client_manager as client_manager
     monkeypatch = __import__("pytest").MonkeyPatch()
     try:
-        monkeypatch.setattr(client_manager, "get_docker_client", lambda base_url=None: client)
+        monkeypatch.setattr(client_manager, "get_docker_client", lambda base_url=None, **kwargs: client)
         monkeypatch.setattr(image_manager, "BuildSlot", FakeSlot)
         image_none = image_manager.Image(
             "test/repo", "v1", "FROM alpine\nCMD [\"true\"]", _empty_tar(),
