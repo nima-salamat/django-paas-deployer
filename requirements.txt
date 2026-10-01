@@ -53,3 +53,11 @@ pytest-django>=4.10,<6
 PyYAML>=6.0,<7
 tomli>=2.0,<3.0
 cryptography>=43,<46
+
+# Deployment observability
+sentry-sdk>=2.20,<3
+opentelemetry-api>=1.28,<2
+opentelemetry-sdk>=1.28,<2
+opentelemetry-instrumentation-django>=0.49b0,<1
+opentelemetry-instrumentation-celery>=0.49b0,<1
+opentelemetry-exporter-otlp-proto-http>=1.28,<2
