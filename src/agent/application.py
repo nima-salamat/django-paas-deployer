@@ -131,18 +131,19 @@ def service_payload(service):
     plan = getattr(service, "plan", None)
     network = getattr(service, "network", None)
     processes = [{
-        "id": str(p.pk), "name": p.name, "type": p.process_type, "command": p.command,
-        "entrypoint": p.entrypoint, "replicas": p.replicas, "healthcheck": p.healthcheck,
-        "resources": p.resources,
+        "id": str(p.pk), "name": getattr(p, "name", ""), "type": getattr(p, "process_type", ""), "command": getattr(p, "command", None),
+        "entrypoint": getattr(p, "entrypoint", None), "replicas": getattr(p, "replicas", None), "healthcheck": getattr(p, "healthcheck", None),
+        "resources": getattr(p, "resources", None),
     } for p in service.processes.all()]
     endpoints = [{
-        "id": str(e.pk), "name": e.name, "target_port": e.target_port,
-        "published_port": e.published_port, "protocol": e.protocol, "exposure": e.exposure,
-        "hostname": e.hostname, "path": e.path, "tls": e.tls, "enabled": e.enabled,
+        "id": str(e.pk), "name": getattr(e, "name", ""), "target_port": getattr(e, "target_port", None),
+        "published_port": getattr(e, "published_port", None), "protocol": getattr(e, "protocol", None), "exposure": getattr(e, "exposure", None),
+        "hostname": getattr(e, "hostname", None), "path": getattr(e, "path", None), "tls": getattr(e, "tls", None), "enabled": getattr(e, "enabled", True),
     } for e in service.endpoints.all() if e.enabled]
     volumes = [{
-        "id": str(v.pk), "name": v.name, "size_mb": v.size_mb,
-        "mode": v.get_mode_for_service(service), "bind": v.get_bind_for_service(service),
+        "id": str(v.pk), "name": getattr(v, "name", ""), "size_mb": getattr(v, "size_mb", None),
+        "mode": v.get_mode_for_service(service) if hasattr(v, "get_mode_for_service") else getattr(v, "default_mode", None),
+        "bind": v.get_bind_for_service(service) if hasattr(v, "get_bind_for_service") else getattr(v, "default_bind", None),
         "released_at": getattr(v, "released_at", None),
     } for v in service.volumes.all()]
     return {
@@ -206,18 +207,18 @@ def deployment_queryset(user):
 
 def deployment_payload(deploy):
     return {
-        "id": str(deploy.pk), "release_id": str(deploy.release_id), "name": deploy.name,
-        "service_id": str(deploy.service_id), "revision_id": str(deploy.revision_id) if deploy.revision_id else None,
-        "version": str(deploy.version), "status": deploy.status, "stage": deploy.stage,
-        "progress": deploy.progress, "status_message": deploy.status_message, "error_message": deploy.error_message,
-        "rollback_status": deploy.rollback_status, "health_status": deploy.health_status,
-        "container_status": deploy.container_status, "image_status": deploy.image_status,
-        "volume_status": deploy.volume_status, "network_status": deploy.network_status,
-        "source_revision": deploy.source_revision, "image_ref": deploy.image_ref, "image_digest": deploy.image_digest,
-        "runtime_revision_id": str(deploy.runtime_revision_id) if deploy.runtime_revision_id else None,
-        "zip_file": bool(deploy.zip_file), "created_by": str(deploy.created_by_id) if deploy.created_by_id else None,
-        "execution_task_id": deploy.execution_task_id or None, "started_at": deploy.started_at,
-        "completed_at": deploy.completed_at, "created_at": deploy.created_at, "updated_at": deploy.updated_at,
+        "id": str(deploy.pk), "release_id": str(getattr(deploy, "release_id", "")), "name": getattr(deploy, "name", ""),
+        "service_id": str(getattr(deploy, "service_id", "")), "revision_id": str(deploy.revision_id) if getattr(deploy, "revision_id", None) else None,
+        "version": str(getattr(deploy, "version", "")), "status": getattr(deploy, "status", ""), "stage": getattr(deploy, "stage", ""),
+        "progress": getattr(deploy, "progress", 0), "status_message": getattr(deploy, "status_message", ""), "error_message": getattr(deploy, "error_message", ""),
+        "rollback_status": getattr(deploy, "rollback_status", ""), "health_status": getattr(deploy, "health_status", ""),
+        "container_status": getattr(deploy, "container_status", ""), "image_status": getattr(deploy, "image_status", ""),
+        "volume_status": getattr(deploy, "volume_status", ""), "network_status": getattr(deploy, "network_status", ""),
+        "source_revision": getattr(deploy, "source_revision", ""), "image_ref": getattr(deploy, "image_ref", ""), "image_digest": getattr(deploy, "image_digest", ""),
+        "runtime_revision_id": str(deploy.runtime_revision_id) if getattr(deploy, "runtime_revision_id", None) else None,
+        "zip_file": bool(getattr(deploy, "zip_file", None)), "created_by": str(getattr(deploy, "created_by_id", None)) if getattr(deploy, "created_by_id", None) else None,
+        "execution_task_id": deploy.execution_task_id or None, "started_at": getattr(deploy, "started_at", None),
+        "completed_at": getattr(deploy, "completed_at", None), "created_at": getattr(deploy, "created_at", None), "updated_at": getattr(deploy, "updated_at", None),
     }
 
 
