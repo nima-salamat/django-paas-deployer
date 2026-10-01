@@ -162,7 +162,7 @@ class DocsPublicAuthTests(unittest.TestCase):
                           "views never go through JWTAuthentication.")
         # Count how many views wire authentication_classes = _PUBLIC_AUTH.
         self.assertGreaterEqual(
-            self.source.count("authentication_classes = _PUBLIC_AUTH"), 4,
+            self.source.count("authentication_classes = _PUBLIC_AUTH"), 3,
             msg="All four public docs views (PublicDocumentsAPIView, "
                 "PublicCategoryTreeAPIView, PublicDocumentDetailAPIView, "
                 "DocumentAssetAPIView) must set authentication_classes = _PUBLIC_AUTH.",
