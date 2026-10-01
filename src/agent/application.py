@@ -1,5 +1,6 @@
 
 from __future__ import annotations
+import hmac
 
 import json
 import secrets
@@ -342,16 +343,41 @@ def create_enrollment(agent, *, request=None):
 
 @transaction.atomic
 def exchange_enrollment(raw_token, *, metadata=None):
-    raw=str(raw_token or "").strip()
-    if not raw.startswith("pd_enroll_"):
-        raise AgentError("INVALID_ENROLLMENT","Invalid enrollment credential.",status_code=401,failure_domain="authentication")
-    row=AgentEnrollmentToken.objects.select_for_update().select_related("agent","agent__user").filter(token_hash=token_hash(raw)).first()
-    if row is None:raise AgentError("INVALID_ENROLLMENT","Invalid enrollment credential.",status_code=401,failure_domain="authentication")
-    if not row.is_usable():raise AgentError("ENROLLMENT_EXPIRED","Enrollment credential is expired, already used, or inactive.",status_code=401,failure_domain="authentication")
-    now=timezone.now(); row.used_at=now; row.save(update_fields=["used_at","updated_at"])
-    cred,token=issue_access_credential(row.agent,metadata={"enrollment":True,**(metadata or {})})
-    return row.agent,cred,token
+    from django.db import transaction
+    from django.utils import timezone
+    from .models import AgentEnrollmentToken
 
+    raw = str(raw_token or "").strip()
+    if not raw:
+        raise AgentError("ENROLLMENT_EXPIRED", "The enrollment credential is missing or invalid.", status_code=401, failure_domain="authentication")
+
+    prefix = token_prefix(raw)
+    digest = token_hash(raw)
+    with transaction.atomic():
+        rows = (
+            AgentEnrollmentToken.objects
+            .select_for_update()
+            .select_related("agent", "agent__user")
+            .filter(token_prefix=prefix)
+        )
+        row = None
+        for candidate in rows:
+            if hmac.compare_digest(candidate.token_hash, digest):
+                row = candidate
+                break
+        if row is None:
+            raise AgentError("ENROLLMENT_EXPIRED", "The enrollment credential is missing, expired, or already used.", status_code=401, failure_domain="authentication")
+
+        now = timezone.now()
+        if row.used_at is not None or row.expires_at <= now:
+            raise AgentError("ENROLLMENT_EXPIRED", "The enrollment credential is missing, expired, or already used.", status_code=401, failure_domain="authentication")
+        if row.agent.status != row.agent.Status.ACTIVE or not row.agent.user.is_active:
+            raise AgentError("AGENT_DISABLED", "The Agent or owning user is inactive.", status_code=403, failure_domain="authorization")
+
+        row.used_at = now
+        row.save(update_fields=["used_at", "updated_at"])
+        credential, access_token = issue_access_credential(row.agent, metadata=metadata or {})
+        return row.agent, credential, access_token
 
 def begin_idempotency(agent,request):
     key=str(request.headers.get("Idempotency-Key") or "").strip()
