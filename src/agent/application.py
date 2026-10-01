@@ -65,6 +65,18 @@ def call_api_view_handler(api_view_function, request, method, *args, data=None, 
     return api_view_function(proxy, *args, **kwargs)
 
 
+def call_runtime_api(api_view_function, request, service_id, *, data=None):
+    """Adapt the Agent call to the existing runtime API's real Python signature."""
+    import inspect
+    try:
+        original = inspect.unwrap(api_view_function)
+        parameters = inspect.signature(original).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    if "service_id" in parameters:
+        return call_api_view_handler(api_view_function, request, "post", service_id, data=data)
+    return call_api_view_handler(api_view_function, request, "post", data=data)
+
 def call_viewset_action(viewset_cls, action_name, request, *, pk=None, data=None):
     proxy = RequestProxy(request, data=data)
     view = viewset_cls()
