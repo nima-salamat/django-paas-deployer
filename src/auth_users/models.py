@@ -259,6 +259,7 @@ class Device(models.Model):
     client = models.CharField(max_length=120, blank=True, default="")
     user_agent = models.CharField(max_length=500, blank=True, default="")
     last_ip = models.GenericIPAddressField(null=True, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     last_seen_at = models.DateTimeField(auto_now=True)
     revoked_at = models.DateTimeField(null=True, blank=True, db_index=True)
