@@ -8,8 +8,8 @@ Public login/recovery/invite operations use the authentication-free boundary req
 
 | Method | Route | Effect |
 |---|---|---|
-| GET | /api/sessions/ | Lists active sessions, including active_count, max_active_sessions, and session-management eligibility. |
-| POST | /api/sessions/logout-all/ | Revokes all eligible sessions for the caller. |
+| GET | /api/sessions/ | Lists active sessions, including active_count, max_active_sessions, server_now, rich device metadata, and session-management eligibility. |
+| POST | /api/sessions/activity/ | Records recent presence for the caller current session; server-side writes are rate-limited. |\n| POST | /api/sessions/logout-all/ | Revokes all eligible sessions for the caller. |
 | DELETE | /api/sessions/<session_id>/ | Revokes one session after verifying caller ownership. |
 | GET | /api/devices/ | Lists caller-owned devices. |
 | POST | /api/devices/<uuid:device_id>/sessions/ | Revokes sessions for a caller-owned device. |
@@ -100,3 +100,10 @@ The durable Device record stores the latest observed device metadata. UserSessio
 The REST session and device endpoints expose this information to the authenticated owner. Admin user-session endpoints expose the same descriptor subject to the existing auth_sessions.view / auth_sessions.manage permissions.
 
 Client metadata is diagnostic/audit context only. It is not a password, token, proof of possession, or replacement for the server-side sid session authority.
+
+
+## last_seen_at semantics
+
+last_seen_at is a server-observed presence timestamp, not the browser local clock. Authenticated requests and realtime transports remain fallback signals, while the React browser sends a dedicated heartbeat while a session tab is visible. The heartbeat is server-rate-limited by AUTH_SESSION_ACTIVITY_WRITE_INTERVAL (default 30 seconds), so the database is not written for every user interaction.
+
+The session list returns server_now. The frontend should use that timestamp as the reference clock when rendering relative activity times. A session being present in the active list does not by itself mean the user is currently looking at the application; the UI may treat recent last_seen_at as an active-now indicator within a bounded freshness window.
