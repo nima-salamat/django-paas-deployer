@@ -97,7 +97,8 @@ def test_deploy_service_syncs_service_only_from_committed_terminal_state():
     source = (ROOT / "deployments/celery/services/deploy_service.py").read_text(encoding="utf-8")
     assert 'final_status = final.get("status")' in source
     assert 'final_status == "succeeded"' in source
-    assert 'selected_id' in source
+    assert 'service__active_revision_id' in source
+    assert 'active_revision_id' in source
 
 def test_terminal_state_manager_rechecks_cancel_under_lock():
     source = (ROOT / "deployments/core/state/manager.py").read_text(encoding="utf-8")
