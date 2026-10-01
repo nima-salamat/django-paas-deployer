@@ -76,7 +76,7 @@ def test_incompatible_or_missing_local_base_image_is_not_usable():
 
 def test_local_base_image_resolution_checks_docker_fingerprint_even_when_rebuild_requested():
     text = (ROOT / "deploy/base_images.py").read_text(encoding="utf-8")
-    resolution = text.split("def resolve_base_runtime_image", 1)[1].split("def ", 1)[0]
+    resolution = text.split("def ensure_base_images", 1)[1].split("def ", 1)[0]
     assert "_local_image_matches_fingerprint(" in text
     assert "_can_use_compatible_local_base_image(" in text
     assert 'policy["auto_register_existing"]' in resolution
