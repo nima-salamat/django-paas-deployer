@@ -16,8 +16,18 @@ class ReadOnlyCredentialPolicy(ModelPermissionPolicy):
         return super().user_has_permission(user, action)
 
 
+class AgentManagementPolicy(ModelPermissionPolicy):
+    """Allow normal Wagtail edits but force deletion through Agent revocation."""
+
+    def user_has_permission(self, user, action):
+        if action == "delete":
+            return False
+        return super().user_has_permission(user, action)
+
+
 class AgentViewSet(SnippetViewSet):
     model = Agent
+    permission_policy = AgentManagementPolicy(Agent)
     icon = "user"
     menu_label = _("Agents")
     menu_order = 115
