@@ -43,13 +43,23 @@ def _is_sensitive_key(key) -> bool:
 
 
 def extract_sensitive_request_values(value):
-    """Collect client-supplied sensitive scalar values for response scrubbing."""
+    """Collect sensitive scalar values, including ``key``/``value`` secret pairs."""
     found = []
 
     def walk(node, sensitive=False):
         if isinstance(node, dict):
+            contextual_sensitive = sensitive or any(
+                _is_sensitive_key(key)
+                or (
+                    str(key).lower() in {"key", "name"}
+                    and isinstance(item, str)
+                    and _is_sensitive_key(item)
+                )
+                for key, item in node.items()
+            )
             for key, item in node.items():
-                walk(item, sensitive or _is_sensitive_key(key))
+                child_sensitive = contextual_sensitive and str(key).lower() == "value"
+                walk(item, sensitive or _is_sensitive_key(key) or child_sensitive)
             return
         if isinstance(node, (list, tuple)):
             for item in node:
@@ -60,7 +70,6 @@ def extract_sensitive_request_values(value):
 
     walk(value)
     return tuple(sorted(set(found), key=len, reverse=True))
-
 
 def sanitize_error_payload(value, *, secret_values=()):
     """Sanitize error fields and redact exact sensitive values supplied by the client."""
