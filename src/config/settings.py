@@ -430,6 +430,7 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_TASK_ACKS_LATE = True
 CELERY_IMPORTS = (
     "deployments.celery.tasks",
+    "agent.tasks",
     "app_catalog.tasks",
     "core.tasks.email",
     "custom_emails.tasks",
@@ -487,6 +488,10 @@ CELERY_BEAT_SCHEDULE = {
     "cleanup_expired_jwt_blacklist": {
         "task": "auth_users.tasks.cleanup_expired_jwt_blacklist",
         "schedule": 86400.0,
+    },
+    "cleanup_expired_agent_state": {
+        "task": "agent.tasks.cleanup_expired_state",
+        "schedule": 3600.0,
     },
     "logs_reconcile_usage": {
         "task": "logs.reconcile_usage",
