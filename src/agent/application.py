@@ -453,55 +453,27 @@ def issue_access_credential(agent, *, expires_at=None, metadata=None):
     return credential,raw
 
 
-def create_enrollment(agent, *, request=None):
-    raw=issue_raw_enrollment_token(); now=timezone.now()
-    ttl=max(1,min(int(getattr(settings,"AGENT_ENROLLMENT_TTL_MINUTES",10)),60))
-    # Only the newest bootstrap credential remains usable for this Agent.
-    AgentEnrollmentToken.objects.filter(
-        agent=agent, used_at__isnull=True, expires_at__gt=now
-    ).update(expires_at=now, updated_at=now)
-    row=AgentEnrollmentToken.objects.create(agent=agent,token_prefix=token_prefix(raw),token_hash=token_hash(raw),
-                                             expires_at=now+timedelta(minutes=ttl),issued_from_ip=client_ip(request) if request else None)
-    return raw,row
-
-
 @transaction.atomic
-def exchange_enrollment(raw_token, *, metadata=None):
-    from django.db import transaction
-    from django.utils import timezone
-    from .models import AgentEnrollmentToken
+def create_enrollment(agent, *, request=None):
+    raw = issue_raw_enrollment_token()
+    now = timezone.now()
+    ttl = max(1, min(int(getattr(settings, "AGENT_ENROLLMENT_TTL_MINUTES", 10)), 60))
 
-    raw = str(raw_token or "").strip()
-    if not raw:
-        raise AgentError("ENROLLMENT_EXPIRED", "The enrollment credential is missing or invalid.", status_code=401, failure_domain="authentication")
+    # Credential issuance is a rotation boundary. Serialize it per Agent so
+    # concurrent requests cannot leave multiple bootstrap tokens usable.
+    locked_agent = Agent.objects.select_for_update().get(pk=agent.pk)
+    AgentEnrollmentToken.objects.filter(
+        agent=locked_agent, used_at__isnull=True, expires_at__gt=now
+    ).update(expires_at=now, updated_at=now)
 
-    prefix = token_prefix(raw)
-    digest = token_hash(raw)
-    with transaction.atomic():
-        rows = (
-            AgentEnrollmentToken.objects
-            .select_for_update()
-            .select_related("agent", "agent__user")
-            .filter(token_prefix=prefix)
-        )
-        row = None
-        for candidate in rows:
-            if hmac.compare_digest(candidate.token_hash, digest):
-                row = candidate
-                break
-        if row is None:
-            raise AgentError("ENROLLMENT_EXPIRED", "The enrollment credential is missing, expired, or already used.", status_code=401, failure_domain="authentication")
-
-        now = timezone.now()
-        if row.used_at is not None or row.expires_at <= now:
-            raise AgentError("ENROLLMENT_EXPIRED", "The enrollment credential is missing, expired, or already used.", status_code=401, failure_domain="authentication")
-        if row.agent.status != row.agent.Status.ACTIVE or not row.agent.user.is_active:
-            raise AgentError("AGENT_DISABLED", "The Agent or owning user is inactive.", status_code=403, failure_domain="authorization")
-
-        row.used_at = now
-        row.save(update_fields=["used_at", "updated_at"])
-        credential, access_token = issue_access_credential(row.agent, metadata=metadata or {})
-        return row.agent, credential, access_token
+    row = AgentEnrollmentToken.objects.create(
+        agent=locked_agent,
+        token_prefix=token_prefix(raw),
+        token_hash=token_hash(raw),
+        expires_at=now + timedelta(minutes=ttl),
+        issued_from_ip=client_ip(request) if request else None,
+    )
+    return raw, row
 
 def begin_idempotency(agent, request):
     key = str(request.headers.get("Idempotency-Key") or "").strip()
