@@ -157,6 +157,7 @@ INSTALLED_APPS = [
     "messenger.apps.MessengerConfig",
     "custom_emails",
     "docs.apps.DocsConfig",
+    "agent",
 ]
 
 
@@ -632,6 +633,12 @@ if not DEBUG:
 
 # Hard server-side upload boundary for untrusted deployment archives.
 DEPLOY_MAX_ZIP_BYTES = int(os.getenv("DEPLOY_MAX_ZIP_BYTES", str(100 * 1024 * 1024)))
+
+# Dedicated Agent credential controls. These do not affect browser SessionJWT auth.
+AGENT_TOKEN_PEPPER = os.getenv("AGENT_TOKEN_PEPPER", SECRET_KEY)
+AGENT_ACCESS_TOKEN_DEFAULT_DAYS = int(os.getenv("AGENT_ACCESS_TOKEN_DEFAULT_DAYS", "30"))
+AGENT_ENROLLMENT_TTL_MINUTES = int(os.getenv("AGENT_ENROLLMENT_TTL_MINUTES", "10"))
+AGENT_API_BASE_URL = os.getenv("AGENT_API_BASE_URL", "").strip().rstrip("/")
 
 CATALOG_APPLICATION_TIMEOUT_MINUTES = 60
 CATALOG_DISPATCH_STALE_SECONDS = 300
