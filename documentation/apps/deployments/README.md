@@ -83,3 +83,13 @@ Long-running Docker Engine event reconciliation for the non-Swarm container runt
 Source: src/deployments/management/commands/run_log_collector.py.
 
 Runs the persistent runtime-log collector. It discovers managed containers or Swarm services, acquires per-stream leases, catches up recent output, follows live output, enforces logging policy/rate limits, persists sanitized entries when configured, and publishes realtime events. Lease loss stops a follower so a stale collector cannot continue publishing another collector's stream.
+
+
+## Additional production modules
+
+Recent lifecycle hardening added these first-class production surfaces:
+
+- `src/deployments/common/deadline.py` — shared wall-clock deadline budgeting for blocking operations.
+- `src/deployments/common/event_outbox.py` — durable deployment-event projection and retry dispatcher.
+- `src/deployments/observability.py` — optional OpenTelemetry/Sentry tracing and secret-safe diagnostics.
+- `src/deployments/planning/runtime_spec.py` — immutable runtime/provenance snapshot with secret references rather than secret values.
