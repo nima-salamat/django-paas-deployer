@@ -624,6 +624,19 @@ class SwarmRuntime:
             service = self.client.services.get(_validate_service_name(name))
         except docker.errors.NotFound:
             return None
+        except docker.errors.DockerException as exc:
+            raise DeploymentError(
+                f"Unable to inspect Swarm service {name!r}.",
+                stage="swarm_inspection",
+                code="SWARM_INSPECTION_UNKNOWN",
+                recoverable=True,
+                details={
+                    "service": name,
+                    "inspection": "UNKNOWN",
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                },
+            ) from exc
         attrs = service.attrs or {}
         spec = attrs.get("Spec") or {}
         task_template = spec.get("TaskTemplate") or {}
