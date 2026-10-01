@@ -18,6 +18,7 @@ keep working — but NEW code should call ``StateManager`` directly.
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Optional
 
 from django.db import transaction
@@ -188,6 +189,63 @@ class StateManager:
     # ------------------------------------------------------------------
     # Convenience helpers (used by deploy_service / stop_service)
     # ------------------------------------------------------------------
+
+    @classmethod
+    def transition_deploy_system_terminal(
+        cls,
+        deploy_id: int,
+        target: str,
+        *,
+        update_fields: Optional[dict] = None,
+        event_payload: Optional[dict] = None,
+    ) -> bool:
+        """Commit a monitor/operator terminal transition with a durable event."""
+        from deploy.models import Deploy, DeploymentEventOutbox  # type: ignore
+
+        with transaction.atomic():
+            deploy = Deploy.objects.select_for_update().filter(pk=deploy_id).first()
+            if deploy is None or sm.is_deploy_terminal(deploy.status):
+                return False
+            try:
+                sm.check_deploy_transition(deploy.status, target)
+            except sm.InvalidTransition as exc:
+                raise InvalidServiceStateError(
+                    str(exc),
+                    details={
+                        "entity": "Deploy",
+                        "deploy_id": deploy_id,
+                        "src": deploy.status,
+                        "target": target,
+                        "allowed": list(exc.allowed),
+                    },
+                ) from exc
+
+            now = timezone.now()
+            updates = {"status": target, **dict(update_fields or {}), "updated_at": now}
+            updates.setdefault("completed_at", now)
+            updates["worker_heartbeat_at"] = now
+            updates["execution_task_id"] = ""
+            Deploy.objects.filter(pk=deploy_id).update(**updates)
+
+            if event_payload is not None:
+                payload = dict(event_payload)
+                payload.setdefault("event_id", str(uuid.uuid4()))
+                payload.setdefault("deployment_id", str(deploy.pk))
+                payload.setdefault("service_id", str(deploy.service_id))
+                payload.setdefault("revision_id", str(getattr(deploy, "revision_id", "") or ""))
+                payload.setdefault("task_id", "system")
+                DeploymentEventOutbox.objects.create(
+                    deployment_id=deploy_id,
+                    service_id=str(deploy.service_id),
+                    event_id=payload["event_id"],
+                    event_type=str(payload.get("event_type") or f"deployment.{target}.info"),
+                    stage=str(payload.get("stage") or target)[:64],
+                    level=str(payload.get("level") or "info")[:16],
+                    occurred_at=now,
+                    payload=payload,
+                )
+            return True
+
 
     @classmethod
     def finalize_pending_cancellation(cls, deploy_id: int, *, message: str = "") -> bool:
