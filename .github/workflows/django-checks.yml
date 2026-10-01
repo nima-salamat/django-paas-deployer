@@ -73,3 +73,10 @@ jobs:
 
       - name: Regression tests
         run: pytest -q core/tests/test_wagtail_cache_admin.py deployments/tests/test_deploy_file_upload_regressions.py
+
+
+      - name: Agent application tests
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings
+          DJANGO_FULL_TESTS: "1"
+        run: pytest -q src/agent/tests
