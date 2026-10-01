@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.urls import resolve
 
 from agent.application import issue_access_credential
 from agent.contracts import CONTRACTS, contract_for, contracts_for_agent
@@ -97,6 +98,24 @@ class AgentContractTests(TestCase):
         self.assertEqual(body["errors"]["value"], "[REDACTED]")
         self.assertEqual(body["errors"]["token"], "[REDACTED]")
         self.assertIn("keep-this", str(body))
+
+
+    def test_every_contract_path_is_registered(self):
+        replacements = {
+            "{service_id}": "00000000-0000-0000-0000-000000000001",
+            "{deployment_id}": "00000000-0000-0000-0000-000000000002",
+            "{revision_id}": "00000000-0000-0000-0000-000000000003",
+            "{plan_id}": "00000000-0000-0000-0000-000000000004",
+            "{network_id}": "00000000-0000-0000-0000-000000000005",
+            "{volume_id}": "00000000-0000-0000-0000-000000000006",
+            "{session_id}": "00000000-0000-0000-0000-000000000007",
+        }
+        for contract in CONTRACTS:
+            path = contract.path
+            for token, value in replacements.items():
+                path = path.replace(token, value)
+            match = resolve(path)
+            self.assertIsNotNone(match, contract.path)
 
     def test_enabled_contract_projection_matches_openapi(self):
         contracts = contracts_for_agent(self.agent)
