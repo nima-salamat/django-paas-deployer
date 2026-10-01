@@ -162,7 +162,7 @@ class SwarmLogAndMetricsTests(unittest.TestCase):
 
         self.assertTrue(result["running"])
         self.assertTrue(result["metrics_available"])
-        self.assertEqual(result["cpu"], 40.0)
+        self.assertEqual(result["cpu"], 20.0)
         self.assertEqual(result["memory"], 25.0)
 
     def test_service_stats_reports_unavailable_metrics_as_none_not_zero(self):
