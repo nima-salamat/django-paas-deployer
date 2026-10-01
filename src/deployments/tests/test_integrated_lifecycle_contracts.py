@@ -13,7 +13,9 @@ class IntegratedLifecycleContractTests(unittest.TestCase):
         services = self.read("app_catalog/services.py")
         self.assertIn("definition_snapshot = models.JSONField", models)
         self.assertIn("network = models.OneToOneField", models)
-        self.assertIn("definition_snapshot=copy.deepcopy(definition.data)", services)
+        self.assertIn("definition_snapshot={", services)
+        self.assertIn("copy.deepcopy(definition.data)", services)
+        self.assertIn('" _application_orchestration"'.trim(), services)
         self.assertIn("network=network", services)
 
     def test_duplicate_application_start_does_not_reassign_owner(self):
