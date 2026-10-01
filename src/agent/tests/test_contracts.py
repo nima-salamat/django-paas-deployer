@@ -108,3 +108,54 @@ class AgentContractTests(TestCase):
             self.assertEqual(operation.get("x-required-any-scopes", []), list(contract.any_scopes))
 
         self.assertEqual(openapi["x-agent"]["contract_operations"], len(CONTRACTS))
+
+    def test_capabilities_projects_enabled_contracts(self):
+        response = self.client.get(
+            "/agent/v1/capabilities",
+            HTTP_AUTHORIZATION=f"Bearer {self.raw}",
+        )
+        self.assertEqual(response.status_code, 200)
+        enabled = {
+            (
+                row["method"],
+                row["path"],
+                tuple(row["required_scopes"]),
+                tuple(row["required_any_scopes"]),
+            )
+            for row in response.data["operations"]
+        }
+        expected = {
+            (
+                row.method,
+                row.path,
+                row.scopes,
+                row.any_scopes,
+            )
+            for row in contracts_for_agent(self.agent)
+        }
+        self.assertEqual(enabled, expected)
+
+    def test_plan_management_uses_existing_application_boundary(self):
+        from unittest.mock import patch
+        from plans.models import Plan
+        from plans.apis import PlanAdminViewSet
+        plan = Plan.objects.create(
+            name="contract-plan",
+            platform="docker",
+            plan_type="custom",
+        )
+        with patch("agent.application.call_viewset_action") as boundary:
+            from rest_framework.response import Response
+            boundary.return_value = Response(
+                {"data": {"id": str(plan.pk)}},
+                status=200,
+            )
+            from agent.application import manage_plan
+            result = manage_plan(
+                self.client._request.user if hasattr(self.client, "_request") else self.user,
+                "update",
+                plan_id=plan.pk,
+                data={"name": "contract-plan"},
+            )
+        self.assertEqual(result.pk, plan.pk)
+        self.assertIs(boundary.call_args.args[0], PlanAdminViewSet)
