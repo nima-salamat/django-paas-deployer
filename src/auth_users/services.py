@@ -16,6 +16,7 @@ import uuid
 
 from .models import Device, LoginSettings, AuthCode, InviteLink, UserSession
 from .session_auth import cache_session, schedule_session_cache_invalidation
+from .device_metadata import collect_request_device_metadata, device_display_name
 
 User = get_user_model()
 
@@ -27,12 +28,12 @@ class SessionLimitExceeded(AuthenticationFailed):
 def _request_metadata(request):
     if request is None:
         return {}
-    xff = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    ip = xff.split(",", 1)[0].strip() if xff else request.META.get("REMOTE_ADDR")
-    return {
-        "last_ip": ip or None,
-        "user_agent": (request.META.get("HTTP_USER_AGENT", "") or "")[:500],
-    }
+    data = request.data if hasattr(request, "data") else {}
+    return collect_request_device_metadata(
+        request,
+        client_signature=data.get("client_signature", ""),
+        client_metadata=data.get("client_metadata"),
+    )
 
 
 def _device_id(value):
@@ -92,20 +93,28 @@ def issue_tokens_for_user(user, *, request=None, device_id=None, device=None):
                 user=locked_user,
                 public_id=requested_device_id,
                 defaults={
-                    "platform": str((request.data.get("platform") if request else "") or "")[:64],
-                    "client": str((request.data.get("client") if request else "") or "")[:120],
-                    **metadata,
+                    "platform": str(metadata.get("platform") or "")[:64],
+                    "client": str(metadata.get("client") or "")[:120],
+                    "user_agent": metadata.get("user_agent", ""),
+                    "last_ip": metadata.get("last_ip"),
+                    "metadata": metadata,
                 },
             )
         else:
             device_obj.user = locked_user
         if device_obj.revoked_at is not None:
             raise AuthenticationFailed(_("error::device is revoked"))
-        Device.objects.filter(pk=device_obj.pk).update(
-            last_seen_at=now,
-            last_ip=metadata.get("last_ip"),
-            user_agent=metadata.get("user_agent", ""),
-        )
+        device_updates = {
+            "last_seen_at": now,
+            "last_ip": metadata.get("last_ip"),
+            "user_agent": metadata.get("user_agent", ""),
+            "platform": str(metadata.get("platform") or device_obj.platform or "")[:64],
+            "client": str(metadata.get("client") or device_obj.client or "")[:120],
+            "metadata": metadata,
+        }
+        if not device_obj.name:
+            device_updates["name"] = device_display_name(metadata)
+        Device.objects.filter(pk=device_obj.pk).update(**device_updates)
 
         refresh_text = str(refresh)
         session = UserSession.objects.create(
