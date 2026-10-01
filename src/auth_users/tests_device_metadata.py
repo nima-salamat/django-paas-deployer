@@ -107,3 +107,34 @@ class DeviceMetadataTests(TestCase):
         self.assertEqual(session.last_ip, "198.51.100.10")
         self.assertEqual(session.metadata["browser_version"], "151.0.0.0")
 
+
+
+    def test_session_api_exposes_rich_device_descriptor(self):
+        from rest_framework.test import APIClient
+        from .services import issue_tokens_for_user
+
+        user = User.objects.create_user(username="session-api-meta", password="pass12345")
+        request = SimpleNamespace(
+            META={
+                "REMOTE_ADDR": "203.0.113.7",
+                "HTTP_USER_AGENT": "Mozilla/5.0 X11 Linux x86_64 Firefox/145.0",
+            },
+            data={
+                "device_id": "22222222-2222-4222-8222-222222222222",
+                "client_metadata": {"timezone": "Asia/Baku", "locale": "en-US"},
+                "client_signature": "session-api-signature",
+            },
+        )
+        tokens = issue_tokens_for_user(user, request=request, device_id=request.data["device_id"])
+
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+        response = client.get("/auth/api/sessions/")
+
+        self.assertEqual(response.status_code, 200)
+        result = response.json()["results"][0]["device"]
+        self.assertEqual(result["browser"], "Firefox")
+        self.assertEqual(result["os"], "Linux")
+        self.assertEqual(result["ip"], "203.0.113.7")
+        self.assertEqual(result["client_signature"], "session-api-signature")
+        self.assertEqual(result["client_metadata"]["timezone"], "Asia/Baku")
