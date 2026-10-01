@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from django.db import transaction
-from django.db.models import F, Q
+from django.db.models import Q
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
