@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from rest_framework.response import Response
+from django.http import HttpResponse
+from django.utils import timezone
 from .base import AgentSecuredAPIView, AgentPage, idempotent
 from .helpers import _ServiceSerializer
 from ..application import (
     accessible_service_queryset, create_service, create_service_from_plan, get_service,
-    runtime_logs, service_payload, deployment_payload, update_service,
+    runtime_logs, service_payload, deployment_payload, update_service, call_viewset_action,
 )
+from ..errors import AgentError
 
 
 class ServiceListCreateView(AgentPage):
@@ -68,10 +71,16 @@ class ServiceActionView(AgentSecuredAPIView):
         from services.api.runtime import start_service_apiview, stop_service_apiview, restart_service_apiview
         from services.api.volume_files import purge_service_runtime_apiview
         from ..application import call_runtime_api
-        get_service(service_id,request.user,action="can_view")
-        fn={"start":start_service_apiview,"stop":stop_service_apiview,"restart":restart_service_apiview,"purge-runtime":purge_service_runtime_apiview}[action]
-        self.audit_action=f"services.{action.replace('-','_')}"
-        return call_runtime_api(fn, request, service_id, data={"service_id":str(service_id)})
+        share_action = {"start": "can_start", "stop": "can_stop", "restart": "can_restart", "purge-runtime": "can_purge", "rebuild": "can_rebuild"}[action]
+        get_service(service_id, request.user, action=share_action)
+        if action == "rebuild":
+            fn = start_service_apiview
+            data = {"service_id": str(service_id), "force_rebuild": True}
+        else:
+            fn = {"start": start_service_apiview, "stop": stop_service_apiview, "restart": restart_service_apiview, "purge-runtime": purge_service_runtime_apiview}[action]
+            data = {"service_id": str(service_id)}
+        self.audit_action = f"services.{action.replace('-', '_')}"
+        return call_runtime_api(fn, request, service_id, data=data)
 
 class ServiceStatusView(AgentSecuredAPIView):
     agent_contract_path = "/agent/v1/services/{service_id}/status"
