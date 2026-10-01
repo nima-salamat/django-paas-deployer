@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from typing import Any
 
 import docker
@@ -139,6 +140,28 @@ class Command(BaseCommand):
             locked = Deploy.objects.select_for_update().select_related("service").get(pk=deploy.pk)
             service = locked.service
 
+            def terminalize(target: str, *, stage: str, message: str, level: str, update_fields: dict[str, Any], details: dict[str, Any]) -> bool:
+                from deployments.core.state.manager import StateManager
+                return StateManager.transition_deploy_system_terminal(
+                    locked.pk,
+                    target,
+                    update_fields=update_fields,
+                    event_payload={
+                        "event_id": str(uuid.uuid4()),
+                        "trace_id": str(locked.pk),
+                        "deployment_id": str(locked.pk),
+                        "service_id": str(locked.service_id),
+                        "revision_id": str(getattr(locked, "revision_id", "") or ""),
+                        "task_id": "docker-events",
+                        "event_type": f"deployment.{stage}.{level}",
+                        "stage": stage,
+                        "level": level,
+                        "message": message,
+                        "progress": 100,
+                        "details": {"container_id": container_id, **details},
+                    },
+                )
+
             if action == "create":
                 if locked.status in ACTIVE:
                     Deploy.objects.filter(pk=locked.pk).update(
@@ -169,41 +192,52 @@ class Command(BaseCommand):
                     log_event("health_check", "Docker healthcheck reported healthy.", progress=max(int(locked.progress or 0), 92), details={"container_id": container_id, "health_status": hs})
                     return
                 if "unhealthy" in hs and locked.status in ACTIVE:
-                    from deployments.core.state.manager import StateManager
+                    message = "Docker healthcheck reported unhealthy."
                     try:
-                        StateManager.transition_deploy(
-                            locked.pk, DeploymentStatusChoices.FAILED,
+                        committed = terminalize(
+                            DeploymentStatusChoices.FAILED,
+                            stage="health_check",
+                            message=message,
+                            level="error",
                             update_fields={
                                 "stage": "health_check",
                                 "progress": 100,
-                                "status_message": "Docker healthcheck reported unhealthy.",
-                                "error_message": "Docker healthcheck reported unhealthy.",
+                                "status_message": message,
+                                "error_message": message,
                                 "health_status": "unhealthy",
                                 "container_status": "unhealthy",
                             },
+                            details={"health_status": hs},
                         )
                     except Exception:
                         logger.exception("Failed to transition deploy %s after unhealthy event", locked.pk)
                         return
-                    log_event("health_check", "Docker healthcheck reported unhealthy.", level="error", progress=100, details={"container_id": container_id, "health_status": hs})
+                    if not committed:
+                        return
                     return
 
             if action == "oom":
                 if locked.status in ACTIVE or locked.status == DeploymentStatusChoices.SUCCEEDED:
+                    message = "Container out-of-memory (OOM). Reduce worker count or memory usage, or increase the service plan."
                     try:
-                        from deployments.core.state.manager import StateManager
-                        StateManager.transition_deploy(
-                            locked.pk, DeploymentStatusChoices.FAILED,
+                        committed = terminalize(
+                            DeploymentStatusChoices.FAILED,
+                            stage="container_oom",
+                            message=message,
+                            level="error",
                             update_fields={
                                 "stage": "container_oom",
                                 "progress": 100,
                                 "status_message": "Deployment container was killed by the kernel due to OOM.",
-                                "error_message": "Container out-of-memory (OOM). Reduce worker count or memory usage, or increase the service plan.",
+                                "error_message": message,
                                 "container_status": "oom",
                             },
+                            details={},
                         )
                     except Exception:
                         logger.exception("Failed to transition deploy %s after OOM event", locked.pk)
+                        return
+                    if not committed:
                         return
                     try:
                         from deployments.core.state.manager import StateManager
@@ -226,19 +260,25 @@ class Command(BaseCommand):
                     return
 
                 if locked.cancel_requested or locked.status == DeploymentStatusChoices.CANCELLED:
+                    message = "Deployment container stopped after cancellation."
                     try:
-                        from deployments.core.state.manager import StateManager
-                        StateManager.transition_deploy(
-                            locked.pk, DeploymentStatusChoices.CANCELLED,
+                        committed = terminalize(
+                            DeploymentStatusChoices.CANCELLED,
+                            stage="cancelled",
+                            message=message,
+                            level="warning",
                             update_fields={
                                 "stage": "cancelled",
                                 "progress": 100,
-                                "status_message": "Deployment container stopped after cancellation.",
+                                "status_message": message,
                                 "container_status": "stopped",
                             },
+                            details={"action": action, "exit_code": exit_code},
                         )
                     except Exception:
                         logger.exception("Failed to transition deploy %s after cancellation stop", locked.pk)
+                        return
+                    if not committed:
                         return
                     try:
                         from deployments.core.state.manager import StateManager
@@ -251,9 +291,11 @@ class Command(BaseCommand):
                 if locked.status in ACTIVE or locked.status == DeploymentStatusChoices.SUCCEEDED:
                     detail = f"Deployment container exited (action={action}, exit_code={exit_code})."
                     try:
-                        from deployments.core.state.manager import StateManager
-                        StateManager.transition_deploy(
-                            locked.pk, DeploymentStatusChoices.FAILED,
+                        committed = terminalize(
+                            DeploymentStatusChoices.FAILED,
+                            stage="container_exit",
+                            message=detail,
+                            level="error",
                             update_fields={
                                 "stage": "container_exit",
                                 "progress": 100,
@@ -261,9 +303,12 @@ class Command(BaseCommand):
                                 "error_message": detail,
                                 "container_status": "stopped",
                             },
+                            details={"action": action, "exit_code": exit_code},
                         )
                     except Exception:
                         logger.exception("Failed to transition deploy %s after container exit", locked.pk)
+                        return
+                    if not committed:
                         return
                     try:
                         from deployments.core.state.manager import StateManager
