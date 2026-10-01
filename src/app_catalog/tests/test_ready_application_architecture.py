@@ -3,14 +3,14 @@ from __future__ import annotations
 import threading
 
 import pytest
-from django.db.models.deletion import ProtectedError
+from django.db.models.deletion import PROTECT, ProtectedError
 from django.db import IntegrityError, connection, close_old_connections
 from django.test import TestCase, TransactionTestCase
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from app_catalog.catalog import ApplicationCatalog, resolve_variant
 from app_catalog.executor import ApplicationStackExecutor
-from app_catalog.models import ApplicationInstance, ApplicationStatus
+from app_catalog.models import ApplicationInstance, ApplicationInstanceService, ApplicationStatus
 from app_catalog.services import create_application_installation
 from deploy.models import DeploymentStatusChoices
 from plans.models import Plan
@@ -62,6 +62,16 @@ class ReadyApplicationArchitectureTests(TestCase):
         assert keys['postgresql']
         assert keys['n8n']
         assert keys['n8n-worker']
+
+    def test_catalog_bindings_protect_service_and_deploy_deletion(self):
+        self.assertIs(
+            ApplicationInstanceService._meta.get_field("service").remote_field.on_delete,
+            PROTECT,
+        )
+        self.assertIs(
+            ApplicationInstanceService._meta.get_field("deploy").remote_field.on_delete,
+            PROTECT,
+        )
 
     def test_installation_snapshot_is_immutable(self):
         instance = self.install(name='immutable-intent')
