@@ -2,6 +2,7 @@
 
 import logging
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -9,7 +10,7 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
 
-from .models import DeployLog
+from .models import DeploymentEventOutbox, DeployLog
 
 
 logger = logging.getLogger(__name__)
@@ -52,12 +53,23 @@ class DeploymentEventPipeline:
     ) -> dict:
         timestamp = datetime.now(timezone.utc).isoformat()
         details = sanitize(event.details or {})
+        event_type = self._event_type(event)
         payload = {
+            "event_id": str(uuid.uuid4()),
+            "trace_id": self._trace_id(),
             "deployment_id": str(self.deploy.pk),
+            "service_id": str(self.deploy.service_id),
+            "revision_id": str(getattr(self.deploy, "revision_id", "") or ""),
+            "task_id": str(getattr(self.deploy, "execution_task_id", "") or ""),
+            "runtime": str(details.get("runtime") or ""),
+            "cluster": str(details.get("cluster") or ""),
+            "resource": sanitize(details.get("resource") or {}),
             "timestamp": timestamp,
+            "occurred_at": timestamp,
             "level": event.level.upper(),
             "stage": event.stage,
-            "event": self._event_type(event),
+            "event": event_type,
+            "event_type": event_type,
             "message": sanitize(event.message),
             "progress": event.progress,
             "details": details,
@@ -66,6 +78,24 @@ class DeploymentEventPipeline:
             payload["exception_type"] = type(exception).__name__
         if traceback_text:
             payload["traceback"] = sanitize(traceback_text)
+
+        if not self._is_terminal_event(event):
+            try:
+                DeploymentEventOutbox.objects.create(
+                    event_id=payload["event_id"],
+                    deployment_id=self.deploy.pk,
+                    service_id=str(self.deploy.service_id),
+                    event_type=event_type,
+                    stage=str(event.stage or "unknown")[:64],
+                    level=str(event.level or "info").lower()[:16],
+                    occurred_at=datetime.fromisoformat(timestamp),
+                    payload=payload,
+                )
+            except Exception:
+                logger.exception(
+                    "Unable to persist deployment event outbox for %s.",
+                    self.deploy.pk,
+                )
 
         try:
             log = DeployLog.objects.using(self.database).create(
@@ -89,15 +119,42 @@ class DeploymentEventPipeline:
         except Exception:
             logger.exception("Unable to persist deployment event for %s.", self.deploy.pk)
 
-        if broadcast and self.channel_layer:
-            try:
+        if broadcast:
+            self.publish_payload(payload)
+        return payload
+
+    def _trace_id(self) -> str:
+        try:
+            from opentelemetry import trace
+            context = trace.get_current_span().get_span_context()
+            if context and context.is_valid:
+                return format(context.trace_id, "032x")
+        except Exception:
+            pass
+        return str(self.deploy.pk)
+
+    @staticmethod
+    def _is_terminal_event(event) -> bool:
+        return str(getattr(event, "stage", "") or "") in {
+            "deployment_completed",
+            "deployment_failed",
+            "cancelled",
+            "rollback_completed",
+            "rollback_failed",
+        }
+
+    def publish_payload(self, payload: dict) -> None:
+        try:
+            if self.channel_layer:
                 async_to_sync(self.channel_layer.group_send)(
                     self.group_name,
                     {"type": "deployment.message", "payload": payload},
                 )
-            except Exception:
-                logger.exception("Unable to publish deployment event for %s.", self.deploy.pk)
-        return payload
+        except Exception:
+            logger.exception(
+                "Unable to publish deployment event for %s.",
+                self.deploy.pk,
+            )
 
     @staticmethod
     def _event_type(event) -> str:
