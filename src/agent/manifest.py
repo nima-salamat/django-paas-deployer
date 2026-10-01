@@ -8,5 +8,4 @@ def api_base_url(request=None):
     return "/agent/v1"
 
 def render_agent_manifest(agent,enrollment_token,*,request=None):
-    from .scopes import SCOPE_LABELS
-    return render_to_string("agent/AGENT.md",{"agent":agent,"agent_id":str(agent.pk),"api_base_url":api_base_url(request),"enrollment_token":enrollment_token,"scopes":[SCOPE_LABELS.get(s,s) for s in sorted(agent.scopes or [])]})
+    return render_to_string("agent/AGENT.md",{"agent":agent,"agent_id":str(agent.pk),"api_base_url":api_base_url(request),"enrollment_token":enrollment_token,"scopes":sorted(agent.scopes or [])})

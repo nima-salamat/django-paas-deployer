@@ -415,6 +415,8 @@ def build_openapi(agent, *, request=None):
         for method, scope_factory in methods.items():
             operation = paths.get(route, {}).get(method)
             if operation is not None:
-                operation["x-required-scopes"] = scope_factory()
+                required = scope_factory()
+                operation["x-required-scopes"] = required
+                operation["x-enabled-for-agent"] = all(scope in set(agent.scopes or []) for scope in required)
 
     return result

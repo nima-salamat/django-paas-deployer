@@ -27,7 +27,7 @@ The exchange invalidates the enrollment credential and returns a normal Bearer a
 Only capabilities issued to this Agent are listed:
 
 {% for scope in scopes %}
-- {{ scope }}
+- `{{ scope }}`
 {% empty %}
 - No operational scopes are enabled.
 {% endfor %}
