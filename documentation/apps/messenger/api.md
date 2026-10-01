@@ -31,7 +31,7 @@ Canonical mount: /api/messenger/. Routes and methods below are derived from src/
 | GET | /api/messenger/conversations/<int:pk>/messages/search/ | Participant-scoped message search. |
 | GET | /api/messenger/conversations/<int:pk>/scheduled/ | Caller-visible scheduled messages. |
 | POST | /api/messenger/messages/<int:pk>/cancel-schedule/ | Cancel pending sender-owned scheduled message. |
-| POST | /api/messenger/conversations/<int:pk>/read/ | Update caller read state. |
+| POST | /api/messenger/conversations/<int:pk>/read/ | Update caller read state; returns the authoritative `last_read_at` cursor and invalidates the caller's conversation-list projection when it advances. |
 | POST | /api/messenger/messages/<int:pk>/react/ | Reaction toggle. |
 | PATCH | /api/messenger/messages/<int:pk>/edit/ | Sender-authorized edit. |
 | DELETE | /api/messenger/messages/<int:pk>/ | Sender/role-constrained delete. |
