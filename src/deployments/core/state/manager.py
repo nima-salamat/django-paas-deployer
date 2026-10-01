@@ -452,13 +452,24 @@ class StateManager:
         cls, deploy_id: int, *, message: str = "",
     ) -> None:
         from deploy.models import DeploymentStatusChoices  # type: ignore
-        cls.transition_deploy(
-            deploy_id, DeploymentStatusChoices.SUCCEEDED,
+        cls.transition_deploy_system_terminal(
+            deploy_id,
+            DeploymentStatusChoices.SUCCEEDED,
             update_fields={
                 "stage": "finished",
                 "progress": 100,
                 "status_message": message or "Deployment completed successfully.",
                 "error_message": "",
+            },
+            event_payload={
+                "event_id": str(uuid.uuid4()),
+                "trace_id": str(deploy_id),
+                "event_type": "deployment.finished.info",
+                "stage": "finished",
+                "level": "info",
+                "message": message or "Deployment completed successfully.",
+                "progress": 100,
+                "details": {"controlled_by": "system_terminal_helper"},
             },
         )
 
@@ -469,23 +480,48 @@ class StateManager:
         details: Optional[dict] = None,
     ) -> None:
         from deploy.models import DeploymentStatusChoices  # type: ignore
-        cls.transition_deploy(
-            deploy_id, DeploymentStatusChoices.FAILED,
+        cls.transition_deploy_system_terminal(
+            deploy_id,
+            DeploymentStatusChoices.FAILED,
             update_fields={
                 "stage": stage,
                 "error_message": message,
                 "status_message": "Deployment failed.",
+            },
+            event_payload={
+                "event_id": str(uuid.uuid4()),
+                "trace_id": str(deploy_id),
+                "event_type": f"deployment.{stage}.error",
+                "stage": stage,
+                "level": "error",
+                "message": message,
+                "progress": 100,
+                "details": {
+                    "controlled_by": "system_terminal_helper",
+                    **dict(details or {}),
+                },
             },
         )
 
     @classmethod
     def mark_deploy_cancelled(cls, deploy_id: int, *, message: str = "") -> None:
         from deploy.models import DeploymentStatusChoices  # type: ignore
-        cls.transition_deploy(
-            deploy_id, DeploymentStatusChoices.CANCELLED,
+        cls.transition_deploy_system_terminal(
+            deploy_id,
+            DeploymentStatusChoices.CANCELLED,
             update_fields={
                 "stage": "cancelled",
                 "status_message": message or "Deployment cancelled.",
+            },
+            event_payload={
+                "event_id": str(uuid.uuid4()),
+                "trace_id": str(deploy_id),
+                "event_type": "deployment.cancelled.warning",
+                "stage": "cancelled",
+                "level": "warning",
+                "message": message or "Deployment cancelled.",
+                "progress": 100,
+                "details": {"controlled_by": "system_terminal_helper"},
             },
         )
 
