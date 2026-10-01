@@ -80,7 +80,7 @@ def prune_dispatched(*, older_than_days: int = 30, batch_size: int = 1000) -> in
     from datetime import timedelta
     from deploy.models import DeploymentEventOutbox
 
-    days = max(1, int(older_than_days))
+    days = max(1, min(int(older_than_days), 3650))
     limit = max(1, min(int(batch_size), 5000))
     cutoff = timezone.now() - timedelta(days=days)
     ids = list(
