@@ -2,7 +2,7 @@ from datetime import timedelta
 import hashlib
 import uuid
 
-from django.test import TestCase, override_settings
+from django.test import TransactionTestCase, override_settings
 from unittest.mock import AsyncMock, patch
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
@@ -49,7 +49,7 @@ from django.core.cache import cache
         "JTI_CLAIM": "jti",
     }
 )
-class UserSessionTests(TestCase):
+class UserSessionTests(TransactionTestCase):
     def setUp(self):
         # Django TestCase owns transaction/connection lifecycle. Do not close or
         # replace that connection here; doing so leaves the outer atomic block
