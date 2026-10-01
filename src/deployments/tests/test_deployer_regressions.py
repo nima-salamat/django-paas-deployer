@@ -29,9 +29,10 @@ class DeploymentContractRegressionTests(unittest.TestCase):
             slots._redis_client = old
 
 
-def test_orchestrator_has_no_free_deployment_id_reference():
+def test_orchestrator_accepts_explicit_deployment_id():
     from pathlib import Path
     source = Path(__file__).parents[1].joinpath("core", "orchestrator.py").read_text()
-    assert "deployment_id=deployment_id" not in source
-    assert " or deployment_id or " not in source
+    signature = source.split("def __init__(", 1)[1].split("def deploy(", 1)[0]
+    assert "deployment_id: Optional[str] = None" in signature
+    assert "DeploymentLogger(deployment_id=deployment_id" in signature
 
