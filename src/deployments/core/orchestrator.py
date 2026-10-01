@@ -49,7 +49,7 @@ from .types import DeploymentConfig, DeploymentResult, EventSink, EndpointSpec
 from .routing import public_http_endpoints, resolve_public_host
 from .validation import DeploymentValidator
 from .volumes import VolumeMountManager
-from .swarm import SwarmRuntime, swarm_enabled
+from .swarm import SwarmRuntime
 
 
 class DeploymentOrchestrator:
@@ -60,6 +60,8 @@ class DeploymentOrchestrator:
         deployment_id: Optional[str] = None,
         cancel_check: Optional[callable] = None,
         activation_callback: Optional[callable] = None,
+        runtime_backend: str = "legacy_docker",
+        swarm_runtime: SwarmRuntime | None = None,
     ):
         """
         Parameters
@@ -82,6 +84,9 @@ class DeploymentOrchestrator:
         self.cleanup_manager = CleanupManager(logger=self.logger)
         self._cancel_check = cancel_check
         self._activation_callback = activation_callback
+        self._runtime_backend = str(runtime_backend or "legacy_docker").strip().lower()
+        self._swarm_runtime_instance = swarm_runtime
+        self._created_process_containers: list[Container] = []
         self._base_image_refs: list[str] = []
         self._swarm_recovery_context: dict = {}
 
@@ -96,6 +101,7 @@ class DeploymentOrchestrator:
         inspect_temp_dir = None
         new_container_started = False
         renamed_old_name: str | None = None
+        self._created_process_containers = []
 
         self.logger.info(
             "deployment_started",
@@ -173,7 +179,7 @@ class DeploymentOrchestrator:
 
             # 5. Snapshot existing container for rollback (BEFORE any mutation)
             existing_container = Container(config.name)
-            if not swarm_enabled() and existing_container.exists():
+            if not self._runtime_backend == "swarm" and existing_container.exists():
                 snapshot = ContainerSnapshot.capture(existing_container)
                 self.logger.info(
                     "state_snapshot",
@@ -273,7 +279,7 @@ class DeploymentOrchestrator:
 
             self._check_cancelled()
 
-            if swarm_enabled():
+            if self._runtime_backend == "swarm":
                 return self._deploy_swarm_runtime(config, image_ref=config.image_ref)
             # 8. Container replacement — RENAME-OLD strategy
             # Rename the existing container out of the way BEFORE creating
@@ -396,6 +402,39 @@ class DeploymentOrchestrator:
                     volume_binds=volume_binds,
                 )
 
+            cleanup_failures = []
+            if renamed_old_name and not self._cleanup_old_container(renamed_old_name, config.stop_timeout):
+                cleanup_failures.append({
+                    "resource": renamed_old_name,
+                    "severity": "critical",
+                    "reason": "old_container_cleanup_failed",
+                })
+            cleanup_failures.extend(self._cleanup_previous_process_containers(config))
+            try:
+                self.cleanup_manager.prune_dangling_images()
+            except Exception as exc:
+                self.logger.warning(
+                    "cleanup",
+                    f"Failed to prune dangling images: {exc}",
+                    progress=99,
+                    details={
+                        "cleanup_severity": "best_effort",
+                        "reconciliation_required": True,
+                        "error": str(exc),
+                    },
+                )
+            if any(item.get("severity") == "critical" for item in cleanup_failures):
+                raise DeploymentError(
+                    "Required deployment cleanup could not be completed.",
+                    stage="cleanup",
+                    code="DEPLOYMENT_CRITICAL_CLEANUP_FAILED",
+                    user_message="Required resource cleanup failed; the deployment was not activated.",
+                    details={
+                        "cleanup_failures": cleanup_failures,
+                        "reconciliation_required": True,
+                    },
+                )
+
             # Activation boundary: database selection is changed only after
             # the replacement is actually ready. If the activation write fails,
             # raise so the normal rollback path restores the previous resource.
@@ -407,20 +446,6 @@ class DeploymentOrchestrator:
                     details={"container": config.name, "deployment_id": self.logger.deployment_id},
                 )
                 self._activation_callback()
-
-            # 10. Cleanup old container + prune dangling images
-            if renamed_old_name:
-                self._cleanup_old_container(renamed_old_name, config.stop_timeout)
-            self._cleanup_previous_process_containers(config)
-
-            try:
-                self.cleanup_manager.prune_dangling_images()
-            except Exception as exc:
-                self.logger.warning(
-                    "cleanup",
-                    f"Failed to prune dangling images: {exc}",
-                    progress=99,
-                )
 
             self.logger.info(
                 "deployment_completed",
@@ -495,7 +520,7 @@ class DeploymentOrchestrator:
             progress=40,
             details={"service": config.name},
         )
-        runtime = SwarmRuntime()
+        runtime = self._swarm_runtime()
         try:
             states = runtime.apply_processes(config, image_ref=image_ref)
             self._swarm_recovery_context = dict(runtime._last_apply_recovery or {})
@@ -711,7 +736,7 @@ class DeploymentOrchestrator:
         rollback_performed = False
         rollback_failed = False
 
-        if swarm_enabled():
+        if self._runtime_backend == "swarm":
             swarm_performed, swarm_failed = self._recover_swarm_mutations(
                 self._swarm_recovery_context,
                 rollback_progress=96,
@@ -723,6 +748,13 @@ class DeploymentOrchestrator:
             snapshot = ContainerSnapshot.empty(config.name)
 
         # Capture internal logs if a new container was started then cancelled.
+        for failure in self._cleanup_created_process_containers(config):
+            self.logger.warning(
+                "cleanup",
+                "Deployment-owned process cleanup failed during recovery.",
+                details=failure,
+            )
+
         if new_container_started:
             try:
                 from deployments.core.container_logs import capture_logs_for_deploy
@@ -882,7 +914,7 @@ class DeploymentOrchestrator:
         if renamed_old_name:
             self._cleanup_old_container(renamed_old_name, config.stop_timeout)
 
-        if swarm_enabled():
+        if self._runtime_backend == "swarm":
             recovery = dict(
                 (exc.details or {}).get("swarm_recovery")
                 or self._swarm_recovery_context
@@ -1059,33 +1091,63 @@ class DeploymentOrchestrator:
                         pass
                     raise
                 containers.append(container)
+                self._created_process_containers.append(container)
 
         return containers
 
-    def _cleanup_previous_process_containers(self, config: DeploymentConfig) -> None:
-        """Remove older managed process containers after activation."""
+    def _cleanup_previous_process_containers(self, config: DeploymentConfig) -> list[dict[str, object]]:
+        """Remove previous deployment process containers idempotently."""
         service_id = str((config.labels or {}).get("service.id") or "")
         current_deployment = str((config.labels or {}).get("deployment.id") or self.logger.deployment_id or "")
         if not service_id:
-            return
+            return []
         try:
-            for container in Container.find_owned(service_id=service_id, all=True):
-                labels = container.labels or {}
-                deployment_id = str(labels.get("deployment.id") or "")
-                if deployment_id == current_deployment:
-                    continue
-                if not labels.get("process.name"):
-                    continue
-                try:
-                    Container(container.name).stop(timeout=10)
-                    Container(container.name).remove()
-                except Exception as exc:
-                    self.logger.warning(
-                        "cleanup",
-                        f"Failed to remove previous process container '{container.name}': {exc}",
-                    )
+            owned = Container.find_owned(service_id=service_id, all=True)
         except Exception as exc:
-            self.logger.warning("cleanup", f"Could not enumerate previous process containers: {exc}")
+            return [{"resource": "process_containers", "severity": "critical", "reason": str(exc)}]
+        failures: list[dict[str, object]] = []
+        for resource in owned:
+            labels = resource.labels or {}
+            deployment_id = str(labels.get("deployment.id") or "")
+            if deployment_id == current_deployment or not labels.get("process.name"):
+                continue
+            try:
+                target = Container(resource.name)
+                if target.exists():
+                    target.stop(timeout=10)
+                    target.remove()
+            except Exception as exc:
+                failures.append({"resource": resource.name, "severity": "critical", "reason": str(exc)})
+        return failures
+
+    def _cleanup_created_process_containers(self, config: DeploymentConfig) -> list[dict[str, object]]:
+        """Remove process resources created by this deployment; safe to repeat."""
+        service_id = str((config.labels or {}).get("service.id") or "")
+        deployment_id = str((config.labels or {}).get("deployment.id") or self.logger.deployment_id or "")
+        if not service_id or not deployment_id:
+            return []
+        try:
+            owned = Container.find_owned(service_id=service_id, all=True)
+        except Exception as exc:
+            return [{"resource": "process_containers", "severity": "critical", "reason": str(exc)}]
+        failures: list[dict[str, object]] = []
+        for resource in owned:
+            labels = resource.labels or {}
+            if str(labels.get("deployment.id") or "") != deployment_id or not labels.get("process.name"):
+                continue
+            try:
+                target = Container(resource.name)
+                if target.exists():
+                    target.stop(timeout=10)
+                    target.remove()
+            except Exception as exc:
+                failures.append({"resource": resource.name, "severity": "critical", "reason": str(exc)})
+        return failures
+
+    def _swarm_runtime(self) -> SwarmRuntime:
+        if self._swarm_runtime_instance is None:
+            self._swarm_runtime_instance = SwarmRuntime()
+        return self._swarm_runtime_instance
 
     def _endpoint_labels(self, config: DeploymentConfig) -> dict[str, str]:
         """Generate Traefik routes for all public HTTP-family endpoints."""
@@ -1161,21 +1223,24 @@ class DeploymentOrchestrator:
         """Stop + remove the renamed-old container after the new one is healthy."""
         try:
             old = Container(renamed_old_name)
-            if old.exists():
-                old.stop(timeout=stop_timeout)
-                old.remove()
-                self.logger.info(
-                    "cleanup",
-                    f"Removed old container '{renamed_old_name}'.",
-                    progress=98,
-                )
+            if not old.exists():
+                return True
+            old.stop(timeout=stop_timeout)
+            old.remove()
+            self.logger.info(
+                "cleanup",
+                f"Removed old container '{renamed_old_name}'.",
+                progress=98,
+            )
+            return True
         except Exception as exc:
             self.logger.warning(
                 "cleanup",
                 f"Failed to remove old container '{renamed_old_name}': {exc}",
                 progress=99,
-                details={"renamed_old_name": renamed_old_name, "error": str(exc)},
+                details={"renamed_old_name": renamed_old_name, "error": str(exc), "cleanup_severity": "critical"},
             )
+            return False
 
     def _on_build_output(self, chunk):
         """Forward docker build stream to DeploymentLogger."""
