@@ -55,6 +55,18 @@ Legacy /api/login/ and /api/signup/ delegate into the same underlying flow.
 
 SessionTokenRefreshSerializer validates sid-bearing tokens against authoritative UserSession state, atomically rotates the stored refresh credential, rejects reuse of the previous refresh token, and refreshes the session cache after commit. The token verification endpoint applies the same session validity check for sid-bearing access tokens.
 
+## WebSocket authentication
+
+All first-party browser WebSockets authenticate with a session-bound access JWT supplied as the `token` query parameter. The handshake validates both the JWT and its `sid` against UserSession state. Live sockets revalidate that server-side session on heartbeat and close with application code `4401` after revocation. The browser is expected to refresh the access token and reconnect on `4401`; a temporary WebSocket close must not by itself clear a still-valid refresh session.
+
+Current first-party endpoints:
+- `/ws/messenger/`
+- `/ws/tickets/`
+- `/ws/tickets/notify/`
+- `/ws/services/logs/<service_id>/`
+- `/ws/services/shell/<service_id>/`
+- `/ws/deployments/<deploy_id>/`
+
 ## Contact-change boundary
 
 Contact-change routes are owned and registered by users.api_urls, not auth_users.urls:
