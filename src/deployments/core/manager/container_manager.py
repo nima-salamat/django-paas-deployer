@@ -101,7 +101,7 @@ class Container(Client):
         self.restart_policy = self._normalize_restart_policy(
             restart_policy or {"Name": "unless-stopped"}
         )
-        self.extra_host_config = {}
+        self.extra_host_config = dict(extra_host_config or {})
         self.resource_limits = dict(resource_limits or {})
 
     @staticmethod
@@ -239,7 +239,14 @@ class Container(Client):
         # Security hardening — no-new-privileges prevents the container
         # process from gaining additional capabilities via setuid binaries.
         # If the engine cannot accept this, the deployment fails closed.
-        kwargs["security_opt"] = ["no-new-privileges:true"]
+        kwargs["security_opt"] = list(
+            self.extra_host_config.get("security_opt")
+            or ["no-new-privileges:true"]
+        )
+        if self.extra_host_config.get("pids_limit") is not None:
+            kwargs["pids_limit"] = int(self.extra_host_config["pids_limit"])
+        if self.extra_host_config.get("tmpfs"):
+            kwargs["tmpfs"] = dict(self.extra_host_config["tmpfs"])
 
         # Deliberately do not merge arbitrary host config. Values such as
         # privileged, devices, binds, pid_mode, network_mode, cap_add and
