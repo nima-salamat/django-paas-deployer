@@ -131,6 +131,41 @@ class DBAndChannelEventSink:
     def record(self, event: DeploymentEvent | dict) -> None:
         self(event)
 
+    def _update_deploy_row(self, payload: dict, *, skip_message: bool = False) -> None:
+        try:
+            progress = payload.get("progress")
+            stage = payload.get("stage") or ""
+            message = payload.get("message") or ""
+
+            update_fields: dict[str, Any] = {}
+            if progress is not None:
+                try:
+                    update_fields["progress"] = max(0, min(100, int(progress)))
+                except (TypeError, ValueError):
+                    pass
+            if stage:
+                update_fields["stage"] = str(stage)[:64]
+            if message and not skip_message:
+                update_fields["status_message"] = str(message)[:500]
+
+            if not update_fields:
+                return
+
+            # This projection intentionally never mutates Deploy.status.
+            Deploy.objects.filter(pk=self.deployment_id).exclude(
+                status__in=(
+                    DeploymentStatusChoices.SUCCEEDED,
+                    DeploymentStatusChoices.FAILED,
+                    DeploymentStatusChoices.CANCELLED,
+                    DeploymentStatusChoices.ROLLED_BACK,
+                )
+            ).update(**update_fields)
+        except Exception:
+            logger.exception(
+                "Failed to update Deploy progress for %s",
+                self.deployment_id,
+            )
+
     def _get_deploy(self) -> Deploy:
         if self._deploy_cache is None:
             self._deploy_cache = Deploy.objects.select_related("service").get(
