@@ -301,9 +301,10 @@ def ensure_session_can_revoke_others(
     user_id: int,
 ) -> UserSession:
     """Require the caller's active session to be at least the configured minimum age."""
-    session = get_active_session_for_update(session_id, user_id=user_id)
-    minimum_age = session_management_min_age()
-    age = timezone.now() - session.created_at
+    with transaction.atomic():
+        session = get_active_session_for_update(session_id, user_id=user_id)
+        minimum_age = session_management_min_age()
+        age = timezone.now() - session.created_at
     if age < minimum_age:
         remaining = max(0, int((minimum_age - age).total_seconds()))
         raise PermissionDenied(
@@ -317,7 +318,7 @@ def ensure_session_can_revoke_others(
                 "remaining_seconds": remaining,
             }
         )
-    return session
+        return session
 
 
 def get_active_session_for_update(
