@@ -175,3 +175,13 @@ def test_outbox_retention_is_scheduled_and_operator_bounded():
     assert "prune_deployment_event_outbox" in task_source
     assert "DEPLOYMENT_EVENT_OUTBOX_RETENTION_DAYS" in task_source
     assert '"schedule": 3600.0' in settings_source
+
+
+def test_db_success_primitive_updates_service_to_running_atomically():
+    source = (__import__("pathlib").Path(__file__).resolve().parents[2] / "deployments/core/state/manager.py").read_text(encoding="utf-8")
+    method = source.split("def activate_revision_and_succeed", 1)[1].split(
+        "def transition_deploy_system_terminal", 1
+    )[0]
+    assert "sm.check_service_transition" in method
+    assert "status=sm.SERVICE_RUNNING" in method
+    assert "task_id=None" in method
