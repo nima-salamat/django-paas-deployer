@@ -76,18 +76,29 @@ def call_viewset_action(viewset_cls, action_name, request, *, pk=None, data=None
     return getattr(view, action_name)(proxy, pk=pk)
 
 
-def accessible_service_queryset(user):
-    from django.db.models import Q
-    from services.models import Service, ServiceShare
-    from services.share_cleanup import active_group_ids_for_user
+def _viewset_request(user):
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        user=user,
+        data={},
+        query_params={},
+        GET={},
+        method="GET",
+        META={},
+    )
 
-    groups = active_group_ids_for_user(user)
-    shared_ids = ServiceShare.objects.filter(is_active=True).filter(
-        Q(target_user=user) | Q(group_id__in=groups)
-    ).values_list("service_id", flat=True)
+
+def accessible_service_queryset(user):
+    # Reuse the established ServiceViewSet queryset so ServiceShare visibility
+    # rules stay identical to the browser/user API and do not create a second
+    # sharing model in Agent.
+    from services.api.user_services import ServiceViewSet
+    view = ServiceViewSet()
+    view.request = _viewset_request(user)
+    view.action = "list"
+    queryset = view.get_queryset()
     return (
-        Service.objects.filter(Q(user=user) | Q(pk__in=shared_ids))
-        .select_related("user", "plan", "network", "active_revision", "selected_deploy")
+        queryset.select_related("user", "plan", "network", "active_revision", "selected_deploy")
         .prefetch_related("processes", "endpoints", "volumes")
         .distinct()
         .order_by("-created_at")
@@ -173,18 +184,16 @@ def update_service(request, service_id, payload):
 
 
 def deployment_queryset(user):
-    from django.db.models import Q
-    from deploy.models import Deploy
-    from services.models import ServiceShare
-    from services.share_cleanup import active_group_ids_for_user
-    groups = active_group_ids_for_user(user)
-    shared_ids = ServiceShare.objects.filter(is_active=True).filter(
-        Q(target_user=user) | Q(group_id__in=groups)
-    ).values_list("service_id", flat=True)
+    # Reuse DeployViewSet's established ownership/share queryset.
+    from deploy.apis import DeployViewSet
+    view = DeployViewSet()
+    view.request = _viewset_request(user)
+    view.action = "list"
+    queryset = view.get_queryset()
     return (
-        Deploy.objects.filter(Q(service__user=user) | Q(service_id__in=shared_ids))
-        .select_related("service", "service__user", "service__plan", "created_by", "revision")
-        .distinct().order_by("-created_at")
+        queryset.select_related("service", "service__user", "service__plan", "created_by", "revision")
+        .distinct()
+        .order_by("-created_at")
     )
 
 
