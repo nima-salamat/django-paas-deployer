@@ -197,6 +197,7 @@ class AgentRootView(AgentSecuredAPIView):
 
 
 class AgentExchangeView(AgentPublicAPIView):
+    agent_contract_path = "/agent/v1/auth/exchange"
     audit_action = "credential.exchange"
     def post(self, request):
         from .application import exchange_enrollment, audit
