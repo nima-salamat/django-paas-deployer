@@ -297,8 +297,10 @@ class DeploymentEventOutbox(BaseModel):
 class DeployLog(BaseModel):
     # The event store lives in a separate database, so these identifiers must
     # not create cross-database foreign-key constraints.
-    deploy = models.ForeignKey(Deploy, verbose_name=_("Deploy"), related_name="logs", on_delete=models.CASCADE, db_constraint=False)
-    service = models.ForeignKey(Service, verbose_name=_("Service"), related_name="deployment_logs", on_delete=models.CASCADE, db_constraint=False)
+    # Cross-database log records use scalar ids only; no reverse ORM relation
+    # is exposed on lifecycle models because those queries would hit the wrong DB.
+    deploy = models.ForeignKey(Deploy, verbose_name=_("Deploy"), related_name="+", on_delete=models.CASCADE, db_constraint=False)
+    service = models.ForeignKey(Service, verbose_name=_("Service"), related_name="+", on_delete=models.CASCADE, db_constraint=False)
     stage = models.CharField(_("Stage"), max_length=64)
     event_type = models.CharField(_("Event Type"), max_length=96, default="deployment.event")
     level = models.CharField(_("Level"), max_length=16, default="info")
