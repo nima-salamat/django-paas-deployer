@@ -93,10 +93,44 @@ for application/container output. Do not merge the two streams.
 
 ### Shell
 
-Create a restricted service-container session, then execute commands using the
-shell token returned for that session. Destructive operations may require an
-explicit confirmation response from the underlying shell policy.
+The shell is intentionally a restricted service-container terminal, not a host
+shell and not an unrestricted Bash interpreter.
 
+There are two transports:
+
+1. **One-shot command API**
+   - Send one request to the shell command endpoint with a `command` string.
+   - Safe compound commands are supported with `|`, `&&`, `||`, and `;`.
+   - A sequence may contain at most 16 command segments.
+   - Redirection, background execution and command substitution are rejected:
+     `<`, `>`, `<<`, `<<<`, `&`, `&>`, `$()`, and backticks.
+   - Pipeline input is bounded to 256 KiB.
+   - Interactive commands are rejected here with `INTERACTIVE_REQUIRES_PTY`.
+
+2. **Interactive PTY WebSocket**
+   - Create a restricted shell session first.
+   - Connect to `/ws/services/shell/{service_id}/`.
+   - The PTY keeps the child process alive and supports stdin, Ctrl-C, Ctrl-D,
+     Ctrl-Z and terminal resize messages.
+   - Each top-level `command` message starts one validated process; compound
+     shell syntax is deliberately disabled in this transport.
+
+Use the PTY transport for commands that need a live prompt or REPL, for example:
+
+- `php artisan tinker` / `php artisan psysh`
+- `python manage.py shell` / `python manage.py shell_plus`
+- `python manage.py createsuperuser`
+- `python manage.py changepassword`
+
+`tinker` is the Laravel interactive REPL (not "tkinter"). It is available only
+when the underlying User/Service authorization allows advanced shell access.
+
+For multi-step non-interactive work, use a safe compound command such as
+`cd app && php artisan migrate && php artisan optimize`.
+
+Do not infer support for arbitrary shell syntax from the command catalog. The
+catalog is a list of suggestions; the runtime validator is the security boundary.
+Destructive operations still require explicit confirmation.
 ## Error handling
 
 Structured errors may include `code`, `detail`, `request_id`, `retryable`,
