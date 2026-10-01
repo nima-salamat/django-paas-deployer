@@ -118,17 +118,22 @@ class DeploymentError(Exception):
             self.recoverable = recoverable
         self.code = str(code or self.default_code)
         self.category = str(category or self.default_category)
-        self.failure_domain = str(failure_domain or _infer_failure_domain(
+        failure_domain_value = failure_domain or _infer_failure_domain(
             category=self.category,
             code=self.code,
             recoverable=self.recoverable,
-        ))
-        self.retryability = str(retryability or (
+        )
+        retryability_value = retryability or (
             Retryability.BACKOFF if self.recoverable else Retryability.NEVER
-        ))
-        self.visibility = str(visibility or FailureVisibility.USER)
-        self.resource_effect = str(resource_effect or ResourceEffect.NONE)
-        self.certainty = str(certainty or FailureCertainty.OBSERVED)
+        )
+        visibility_value = visibility or FailureVisibility.USER
+        resource_effect_value = resource_effect or ResourceEffect.NONE
+        certainty_value = certainty or FailureCertainty.OBSERVED
+        self.failure_domain = getattr(failure_domain_value, "value", str(failure_domain_value))
+        self.retryability = getattr(retryability_value, "value", str(retryability_value))
+        self.visibility = getattr(visibility_value, "value", str(visibility_value))
+        self.resource_effect = getattr(resource_effect_value, "value", str(resource_effect_value))
+        self.certainty = getattr(certainty_value, "value", str(certainty_value))
         self.details = dict(details or {})
 
     @property
