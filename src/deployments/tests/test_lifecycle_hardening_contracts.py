@@ -122,3 +122,11 @@ def test_event_sink_keeps_progress_projection_separate_from_terminal_state():
     assert "def _update_deploy_row" in source
     assert "never mutates Deploy.status" in source
     assert 'status__in=(' in source
+
+
+
+def test_deployment_consumer_deduplicates_retried_event_ids():
+    source = (__import__("pathlib").Path(__file__).resolve().parents[2] / "deployments/consumers.py").read_text(encoding="utf-8")
+    assert "_seen_event_ids" in source
+    assert "_seen_event_order = deque(maxlen=256)" in source
+    assert 'event_id = str(payload.get("event_id") or "").strip()' in source
