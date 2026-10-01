@@ -304,6 +304,23 @@ class DeployService:
                 translated.technical_message,
                 exc_info=True,
             )
+            try:
+                from deployments.observability import capture_exception
+                capture_exception(
+                    exc,
+                    tags={
+                        "deployment_id": str(deploy_item.pk),
+                        "service_id": str(service_id),
+                        "revision_id": str(getattr(deploy_item, "revision_id", "") or ""),
+                        "task_id": str(task_id or ""),
+                        "stage": translated.stage,
+                        "error_code": translated.code,
+                        "error_category": translated.category,
+                    },
+                    context={"failure": translated.failure_metadata},
+                )
+            except Exception:
+                logger.debug("Sentry deployment diagnostics unavailable.", exc_info=True)
 
             # A lower layer may already have produced a terminal result (for
             # example _process_deployment raises after orchestrator.finish()).
