@@ -455,27 +455,66 @@ def exchange_enrollment(raw_token, *, metadata=None):
         credential, access_token = issue_access_credential(row.agent, metadata=metadata or {})
         return row.agent, credential, access_token
 
-def begin_idempotency(agent,request):
-    key=str(request.headers.get("Idempotency-Key") or "").strip()
-    if not key:return None,None
-    if len(key)>255:raise AgentError("INVALID_IDEMPOTENCY_KEY","Idempotency-Key is too long.",status_code=400)
-    payload={}
-    try:
-        for k,v in request.data.items():
-            payload[str(k)]={"file_name":v.name,"size":int(v.size),"content_type":getattr(v,"content_type","")} if hasattr(v,"name") and hasattr(v,"size") else v
-    except Exception:payload={}
-    rh=stable_json_hash({"method":request.method,"path":request.path,"data":payload}); now=timezone.now()
-    try:
-        row=AgentIdempotencyRecord.objects.create(agent=agent,key=key,method=request.method,path=request.path,request_hash=rh,state="processing",expires_at=now+timedelta(hours=24))
-        return row,None
-    except IntegrityError:
-        row=AgentIdempotencyRecord.objects.filter(agent=agent,key=key,expires_at__gt=now).first()
-        if row is None:raise AgentError("IDEMPOTENCY_RETRY","Record expired; retry with a new key.",status_code=409)
-        if row.request_hash!=rh or row.method!=request.method or row.path!=request.path:raise AgentError("IDEMPOTENCY_KEY_REUSED","Idempotency-Key was reused for a different request.",status_code=409)
-        if row.state=="complete":
-            return None,row
-        raise AgentError("IDEMPOTENCY_IN_PROGRESS","The same operation is already being processed.",status_code=409,retryability=True,failure_domain="request")
+def begin_idempotency(agent, request):
+    key = str(request.headers.get("Idempotency-Key") or "").strip()
+    if not key:
+        return None, None
+    if len(key) > 255:
+        raise AgentError("INVALID_IDEMPOTENCY_KEY", "Idempotency-Key is too long.", status_code=400)
 
+    payload = {"query": request.META.get("QUERY_STRING", "")}
+    try:
+        normalized = {}
+        for field, value in request.data.items():
+            if hasattr(value, "name") and hasattr(value, "size"):
+                original_pos = None
+                try:
+                    original_pos = value.tell()
+                except Exception:
+                    original_pos = 0
+                digest = __import__("hashlib").sha256()
+                try:
+                    value.seek(0)
+                    for chunk in value.chunks() if hasattr(value, "chunks") else iter(lambda: value.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                finally:
+                    try:
+                        value.seek(original_pos or 0)
+                    except Exception:
+                        pass
+                normalized[str(field)] = {
+                    "file_name": str(value.name),
+                    "size": int(value.size),
+                    "content_type": getattr(value, "content_type", ""),
+                    "sha256": digest.hexdigest(),
+                }
+            else:
+                normalized[str(field)] = value
+        payload["data"] = normalized
+    except Exception:
+        payload["data"] = {}
+
+    rh = stable_json_hash(payload | {"method": request.method, "path": request.path})
+    now = timezone.now()
+    try:
+        row = AgentIdempotencyRecord.objects.create(
+            agent=agent, key=key, method=request.method, path=request.path, request_hash=rh,
+            state="processing", expires_at=now + timedelta(hours=24),
+        )
+        return row, None
+    except IntegrityError:
+        row = AgentIdempotencyRecord.objects.filter(agent=agent, key=key, expires_at__gt=now).first()
+        if row is None:
+            raise AgentError("IDEMPOTENCY_RETRY", "Record expired; retry with a new key.", status_code=409)
+        if row.request_hash != rh or row.method != request.method or row.path != request.path:
+            raise AgentError("IDEMPOTENCY_KEY_REUSED", "Idempotency-Key was reused for a different request.", status_code=409)
+        if row.state == "complete":
+            return None, row
+        raise AgentError(
+            "IDEMPOTENCY_IN_PROGRESS",
+            "The same operation is already being processed.",
+            status_code=409, retryability=True, failure_domain="request",
+        )
 
 def complete_idempotency(row, response, *, store_body=True):
     if row is None:
