@@ -183,7 +183,7 @@ class AgentSecuredAPIView(AgentAPIView):
 
 
 class AgentRootView(AgentSecuredAPIView):
-    agent_contract_path = "/agent/v1"
+    agent_contract_path = "/agent/v1/"
     audit_action = "agent.identity.read"
     def get(self, request):
         a = request.agent
