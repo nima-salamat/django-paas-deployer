@@ -22,7 +22,7 @@ class AgentTokenAuthentication(authentication.BaseAuthentication):
         if agent.status!=Agent.Status.ACTIVE: raise AuthenticationFailed("Agent is disabled or revoked.")
         user=agent.user
         if not user or not user.is_active: raise AuthenticationFailed("The underlying PassDeployer user is inactive.")
-        request.agent=agent; request.agent_credential=credential
+        request.agent=agent; request.agent_credential=credential; request.agent_token=credential
         if credential.last_used_at is None or (now-credential.last_used_at).total_seconds()>=60:
             AgentCredential.objects.filter(pk=credential.pk).update(last_used_at=now,last_used_ip=client_ip(request),updated_at=now)
             Agent.objects.filter(pk=agent.pk).update(last_used_at=now,updated_at=now)
