@@ -1,0 +1,87 @@
+"""Durable deployment event outbox dispatcher."""
+
+from __future__ import annotations
+
+import logging
+
+from django.db import transaction
+from django.utils import timezone
+
+logger = logging.getLogger(__name__)
+
+
+def dispatch_pending(*, batch_size: int = 100) -> dict[str, int]:
+    from deploy.models import DeploymentEventOutbox, DeployLog
+
+    dispatched = failed = 0
+    limit = max(1, min(int(batch_size), 500))
+    ids = list(
+        DeploymentEventOutbox.objects
+        .filter(dispatched_at__isnull=True)
+        .order_by("occurred_at", "id")
+        .values_list("pk", flat=True)[:limit]
+    )
+    for row_id in ids:
+        try:
+            with transaction.atomic():
+                row = (
+                    DeploymentEventOutbox.objects
+                    .select_for_update()
+                    .select_related("deployment")
+                    .filter(pk=row_id, dispatched_at__isnull=True)
+                    .first()
+                )
+                if row is None:
+                    continue
+                payload = dict(row.payload or {})
+                event_id = row.event_id
+                log_db = _log_db_alias()
+                if not DeployLog.objects.using(log_db).filter(event_id=event_id).exists():
+                    DeployLog.objects.using(log_db).create(
+                        event_id=event_id,
+                        deploy_id=row.deployment_id,
+                        service_id=row.service_id,
+                        stage=row.stage,
+                        event_type=row.event_type,
+                        level=row.level,
+                        message=str(payload.get("message") or "")[:4000],
+                        progress=payload.get("progress"),
+                        details=payload.get("details") or payload,
+                        exception_type=str(payload.get("exception_type") or ""),
+                        traceback=str(payload.get("traceback") or ""),
+                    )
+                _publish(row.deployment_id, payload)
+                row.dispatched_at = timezone.now()
+                row.attempts = int(row.attempts or 0) + 1
+                row.last_error = ""
+                row.save(update_fields=["dispatched_at", "attempts", "last_error", "updated_at"])
+                dispatched += 1
+        except Exception as exc:
+            failed += 1
+            DeploymentEventOutbox.objects.filter(pk=row_id).update(
+                attempts=__import__('django.db.models', fromlist=['F']).F('attempts') + 1,
+                last_error=str(exc)[:4000],
+                updated_at=timezone.now(),
+            )
+            logger.exception("Deployment event outbox dispatch failed for %s", row_id)
+    return {"dispatched": dispatched, "failed": failed}
+
+
+def _log_db_alias() -> str:
+    from django.conf import settings
+    return getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", None) or "default"
+
+
+def _publish(deployment_id, payload: dict) -> None:
+    from asgiref.sync import async_to_sync
+    from channels.layers import get_channel_layer
+    layer = get_channel_layer()
+    if layer is None:
+        return
+    async_to_sync(layer.group_send)(
+        f"deploy_{deployment_id}",
+        {"type": "deployment.message", "payload": payload},
+    )
+
+
+__all__ = ["dispatch_pending"]
