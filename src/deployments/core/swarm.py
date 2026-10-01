@@ -6,6 +6,7 @@ The supported replica states are 0 (stopped) and 1 (running).
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import time
@@ -20,6 +21,8 @@ from django.utils import timezone
 from deployments.common.exceptions import DeploymentError
 from deployments.core.manager.client_manager import get_docker_client
 from deployments.core.routing import public_http_endpoints, resolve_public_host
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
