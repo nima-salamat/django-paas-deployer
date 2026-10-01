@@ -127,10 +127,10 @@ def test_monitor_can_terminalize_a_failed_queued_service():
     assert "(SERVICE_QUEUED, SERVICE_FAILED)" in source
 
 
-def test_deploy_terminal_sink_preserves_uuid_deployment_ids():
+def test_deploy_terminal_sink_is_projection_only_and_preserves_uuid_ids():
     source = (ROOT / "src" / "deployments" / "core" / "sink.py").read_text(encoding="utf-8")
 
-    assert "self.deployment_id, terminal_transition[0]," in source
+    assert "StateManager.transition_deploy(" not in source
     assert "int(self.deployment_id)" not in source
 
 
