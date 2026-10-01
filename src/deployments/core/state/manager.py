@@ -257,7 +257,7 @@ class StateManager:
                 return False
             now = timezone.now()
             event_payload = {
-                "event_id": str(__import__("uuid").uuid4()),
+                "event_id": str(uuid.uuid4()),
                 "trace_id": str(deploy.pk),
                 "deployment_id": str(deploy.pk),
                 "service_id": str(deploy.service_id),
