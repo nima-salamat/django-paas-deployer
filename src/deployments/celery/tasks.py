@@ -838,48 +838,71 @@ def _create_deploy_log(
 
 def _mark_success(deploy: Deploy, service: Service, result_message: str, *, task_id: str | None = None) -> None:
     now = timezone.now()
-    committed = StateManager.transition_deploy_terminal_if_owned(
-        deploy.pk, DeploymentStatusChoices.SUCCEEDED, task_id=task_id,
-        update_fields={
-            "stage": "finished",
-            "progress": 100,
-            "status_message": result_message or "Database deployed successfully.",
-            "error_message": "",
-        },
-    ) if task_id else False
-    if task_id and not committed:
-        logger.info("Ignoring stale DB deploy success for deploy=%s", deploy.pk)
-        return
-    if not task_id:
-        StateManager.transition_deploy(
-            deploy.pk, DeploymentStatusChoices.SUCCEEDED,
-            update_fields={
-                "stage": "finished", "progress": 100,
-                "status_message": result_message or "Database deployed successfully.",
-                "error_message": "",
-            },
-        )
+    message = result_message or "Database deployed successfully."
+
     try:
         with transaction.atomic():
             locked_service = Service.objects.select_for_update().get(pk=service.pk)
             if deploy.revision_id:
                 activate_revision_locked(locked_service, deploy.revision_id)
             StateManager.transition_service(
-                locked_service.pk, SERVICE_STATUS_CHOICES.RUNNING,
+                locked_service.pk,
+                SERVICE_STATUS_CHOICES.RUNNING,
                 update_fields={
                     "deployed_at": now,
                     "deploy_started": None,
                     "task_id": None,
                 },
             )
+
+            event_payload = {
+                "event_id": str(uuid.uuid4()),
+                "trace_id": str(deploy.pk),
+                "deployment_id": str(deploy.pk),
+                "service_id": str(deploy.service_id),
+                "revision_id": str(getattr(deploy, "revision_id", "") or ""),
+                "task_id": str(task_id or "system"),
+                "event_type": "deployment.finished.info",
+                "stage": "finished",
+                "level": "info",
+                "message": message,
+                "progress": 100,
+                "details": {"runtime": "database", "controlled_by": "db_deployer"},
+            }
+
+            committed = (
+                StateManager.transition_deploy_terminal_if_owned(
+                    deploy.pk,
+                    DeploymentStatusChoices.SUCCEEDED,
+                    task_id=task_id,
+                    update_fields={
+                        "stage": "finished",
+                        "progress": 100,
+                        "status_message": message,
+                        "error_message": "",
+                    },
+                    event_payload=event_payload,
+                )
+                if task_id
+                else StateManager.transition_deploy_system_terminal(
+                    deploy.pk,
+                    DeploymentStatusChoices.SUCCEEDED,
+                    update_fields={
+                        "stage": "finished",
+                        "progress": 100,
+                        "status_message": message,
+                        "error_message": "",
+                    },
+                    event_payload=event_payload,
+                )
+            )
+            if not committed:
+                logger.info("Ignoring stale/unowned DB deploy success for deploy=%s", deploy.pk)
+                return
     except Exception:
         logger.exception("Failed to activate revision/service %s after successful DB deploy", service.pk)
         raise
-    _create_deploy_log(
-        deploy, stage="finished",
-        message=result_message or "Database deployed successfully.",
-        level="info", progress=100,
-    )
+
     logger.info("DB deploy succeeded: deploy=%s service=%s", deploy.pk, service.pk)
 
 
