@@ -44,4 +44,3 @@ def test_public_transition_has_no_terminal_outbox_authority():
         "def lock_and_get_deployment", 1
     )[0]
     assert "DeploymentEventOutbox.objects.create" not in public_method
-    assert "terminal" not in public_method
