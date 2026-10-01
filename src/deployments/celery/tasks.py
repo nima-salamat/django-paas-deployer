@@ -341,6 +341,16 @@ def dispatch_deployment_event_outbox(self, batch_size=100) -> dict[str, int]:
     from deployments.common.event_outbox import dispatch_pending
     return dispatch_pending(batch_size=batch_size)
 
+@shared_task(bind=True, max_retries=0, name="deployments.celery.tasks.prune_deployment_event_outbox")
+def prune_deployment_event_outbox(self, retention_days=None, batch_size=1000):
+    """Prune only already-dispatched deployment events past retention."""
+    from deployments.common.event_outbox import prune_dispatched
+
+    if retention_days is None:
+        import os
+        retention_days = int(os.environ.get("DEPLOYMENT_EVENT_OUTBOX_RETENTION_DAYS", "30"))
+    return {"deleted": prune_dispatched(older_than_days=retention_days, batch_size=batch_size)}
+
 @shared_task(bind=True, max_retries=0, name="deployments.celery.tasks.maintain_build_cache")
 def maintain_build_cache(self, force=False) -> dict[str, object]:
     """Reconcile tenant application-image retention and global BuildKit GC."""
