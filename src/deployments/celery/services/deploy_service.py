@@ -28,7 +28,6 @@ from core.global_settings.config import default_ports  # type: ignore
 from deployments.core.deploy import Deploy as DeployFacade
 from deployments.core.types import EndpointSpec, NetworkSpec, VolumeSpec
 from deployments.core.runtime_graph import ServiceRuntimeGraph
-from deployments.core.swarm import swarm_enabled
 from deployments.core.manager.container_manager import Container
 from deployments.core.state.locks import acquire_service_deployment_lock
 from deployments.core.state.manager import StateManager
@@ -57,7 +56,6 @@ from deployments.runtime.errors import RuntimeUnavailableError
 from ..service_status import ServiceStateManager
 from ..validators import DeploymentValidator
 from ..helpers import DeploymentHelper, MockOrchestratorResult
-from ..waiters import ContainerWaiter
 
 logger = logging.getLogger(__name__)
 
@@ -588,10 +586,6 @@ class DeployService:
                 cfg=cfg, activation_callback=activation_callback,
             )
 
-        if not swarm_enabled() and getattr(result, "status", None) != "cancelled":
-            use_celery = as_bool(cfg.get("celery"))
-            wait_timeout = 90 if use_celery or platform == "django" else 45
-            ContainerWaiter.wait_until_running(container_name, timeout=wait_timeout)
         return result
 
     def _execute_orchestrator(
