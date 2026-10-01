@@ -372,6 +372,11 @@ class DeploymentSecurityError(DeploymentValidationError):
 
 
 __all__ = [
+    "FailureDomain",
+    "Retryability",
+    "FailureVisibility",
+    "ResourceEffect",
+    "FailureCertainty",
     "DeploymentError",
     "InternalPlatformError",
     "to_deployment_error",
