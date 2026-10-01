@@ -369,6 +369,7 @@ class DeploymentOrchestrator:
             )
             try:
                 replacement_container.create()
+                self._journal_resource(config, kind="container", name=config.name, state="created")
             except DeploymentError:
                 # Rollback the rename so the old container resumes traffic.
                 if renamed_old_name:
@@ -381,6 +382,7 @@ class DeploymentOrchestrator:
             try:
                 replacement_container.start()
                 new_container_started = True
+                self._journal_resource(config, kind="container", name=config.name, state="started")
             except DeploymentError:
                 # New container was created but failed to start.  Remove
                 # it, then rename the old one back.
@@ -408,6 +410,8 @@ class DeploymentOrchestrator:
                 port=config.port,
                 cancel_check=self._cancel_check,
             )
+
+            self._journal_resource(config, kind="container", name=config.name, state="ready")
 
             process_specs = list((config.runtime_options or {}).get("processes") or [])
             if process_specs:
@@ -462,6 +466,7 @@ class DeploymentOrchestrator:
                     details={"container": config.name, "deployment_id": self.logger.deployment_id},
                 )
                 self._activation_callback()
+                self._journal_resource(config, kind="container", name=config.name, state="active")
 
             self.logger.info(
                 "deployment_completed",
@@ -1136,6 +1141,31 @@ class DeploymentOrchestrator:
                 failures.append({"resource": resource.name, "severity": "critical", "reason": str(exc)})
         return failures
 
+    def _journal_resource(self, config: DeploymentConfig, *, kind: str, name: str, state: str, runtime_id: str = "", error: str = "") -> None:
+        """Persist deployment ownership of a runtime resource best-effort."""
+        deployment_id = str(self.logger.deployment_id or "").strip()
+        if not deployment_id or not name:
+            return
+        try:
+            from deploy.models import DeploymentResource
+            DeploymentResource.objects.update_or_create(
+                deployment_id=deployment_id,
+                kind=str(kind)[:64],
+                name=str(name)[:255],
+                defaults={
+                    "runtime_id": str(runtime_id or "")[:255],
+                    "state": str(state)[:32],
+                    "owned": True,
+                    "last_error": str(error or "")[:4000],
+                },
+            )
+        except Exception as exc:
+            self.logger.warning(
+                "resource_journal",
+                "Failed to persist deployment resource journal entry.",
+                details={"kind": kind, "name": name, "state": state, "error": str(exc)},
+            )
+
     def _cleanup_created_process_containers(self, config: DeploymentConfig) -> list[dict[str, object]]:
         """Remove process resources created by this deployment; safe to repeat."""
         service_id = str((config.labels or {}).get("service.id") or "")
@@ -1245,6 +1275,7 @@ class DeploymentOrchestrator:
                 return True
             old.stop(timeout=stop_timeout)
             old.remove()
+            self._journal_resource(self._last_config_for_journal, kind="container", name=self._last_journal_old_name, state="retired")
             self.logger.info(
                 "cleanup",
                 f"Removed old container '{renamed_old_name}'.",
