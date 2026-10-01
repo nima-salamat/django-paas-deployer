@@ -84,6 +84,12 @@ def call_runtime_api(api_view_function, request, service_id, *, data=None):
     return call_api_view_handler(api_view_function, request, "post", data=data)
 
 def call_viewset_action(viewset_cls, action_name, request, *, pk=None, data=None):
+    """Invoke an existing ViewSet application boundary in-process.
+
+    CRUD methods do not all share the same Python signature: detail actions
+    accept ``pk`` while collection ``create`` generally does not. The adapter
+    therefore passes ``pk`` only when the target operation explicitly needs it.
+    """
     proxy = RequestProxy(request, data=data)
     view = viewset_cls()
     view.request = proxy
@@ -91,9 +97,10 @@ def call_viewset_action(viewset_cls, action_name, request, *, pk=None, data=None
     view.kwargs = {"pk": str(pk)} if pk is not None else {}
     view.action = action_name
     view.format_kwarg = None
-    return getattr(view, action_name)(proxy, pk=pk)
-
-
+    handler = getattr(view, action_name)
+    if pk is None:
+        return handler(proxy)
+    return handler(proxy, pk=pk)
 def _viewset_request(user):
     from types import SimpleNamespace
     return SimpleNamespace(
@@ -211,6 +218,45 @@ def create_service_from_plan(request, payload, *, plan_id=None):
     service = create_service(request, data)
     return service, workflow_network
 
+
+def manage_plan(request, action, plan_id=None, data=None):
+    """Mutate plans through the existing PlanAdminViewSet application boundary.
+
+    This preserves the canonical plan validation, cache invalidation, and
+    staff/rule authorization behavior instead of creating a second mutation
+    implementation inside the Agent facade.
+    """
+    from plans.apis import PlanAdminViewSet
+    from plans.models import Plan
+
+    response = call_viewset_action(
+        PlanAdminViewSet, action, request, pk=plan_id, data=data,
+    )
+    if response.status_code >= 400:
+        body = response.data if isinstance(response.data, dict) else {}
+        raise AgentError(
+            "PLAN_OPERATION_FAILED",
+            body.get("detail") or body.get("error") or body.get("message") or "Plan operation failed.",
+            status_code=response.status_code,
+            failure_domain="resource",
+            extra={"validation": sanitize_metadata(body)},
+        )
+
+    if action == "destroy":
+        return None
+
+    payload = response.data if isinstance(response.data, dict) else {}
+    nested = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    resolved_id = nested.get("id") or payload.get("id") or plan_id
+    plan = Plan.objects.filter(pk=resolved_id).first()
+    if plan is None:
+        raise AgentError(
+            "PLAN_OPERATION_FAILED",
+            "Plan operation succeeded but the plan could not be reloaded.",
+            status_code=500,
+            failure_domain="resource",
+        )
+    return plan
 
 def require_plan_management(user, action: str):
     """Reuse the existing plans.apis staff/rule model for Agent plan administration."""
