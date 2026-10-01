@@ -826,11 +826,15 @@ def _reconcile_active_deploy_swarm(deploy: Deploy) -> None:
                 )
                 return
         if locked.status == DeploymentStatusChoices.PENDING and running:
-            locked.status = DeploymentStatusChoices.RUNNING
-            locked.stage = "running"
-            locked.progress = max(locked.progress, 85)
-            locked.status_message = "Swarm service has a running task."
-            locked.save(update_fields=["status", "stage", "progress", "status_message"])
+            StateManager.transition_deploy(
+                locked.pk,
+                DeploymentStatusChoices.RUNNING,
+                update_fields={
+                    "stage": "running",
+                    "progress": max(locked.progress, 85),
+                    "status_message": "Swarm service has a running task.",
+                },
+            )
             return
         if locked.status == DeploymentStatusChoices.RUNNING and not running:
             stage = (locked.stage or "").strip().lower()
