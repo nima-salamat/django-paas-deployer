@@ -157,7 +157,7 @@ def test_force_cancel_runtime_imports_deployment_state_and_uses_state_manager():
     source = (ROOT / "src" / "services" / "api" / "runtime.py").read_text(encoding="utf-8")
 
     assert "from deploy.models import Deploy, DeploymentStatusChoices" in source
-    assert "StateManager.transition_deploy(" in source
+    assert "StateManager.transition_deploy_system_terminal(" in source
     assert "DeploymentStatusChoices.CANCELLED" in source
     assert 'active_states = {"pending", "queued", "running", "deploying", "stopping"}' not in source
 
