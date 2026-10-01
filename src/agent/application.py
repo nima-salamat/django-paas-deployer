@@ -141,6 +141,28 @@ def get_service(service_id, user, *, action="can_view", owner_only=False):
     return service
 
 
+def _endpoint_url(service, endpoint):
+    """Return the externally reachable URL without querying Docker."""
+    try:
+        from services.serializers import _service_host
+        host = str(getattr(endpoint, "hostname", "") or "").strip().rstrip(".") or _service_host(service)
+    except Exception:
+        host = str(getattr(endpoint, "hostname", "") or "").strip().rstrip(".")
+    if not host:
+        return None
+    protocol = str(getattr(endpoint, "protocol", "http") or "http").lower()
+    if protocol == "ws":
+        protocol = "wss" if bool(getattr(endpoint, "tls", False)) else "ws"
+    elif protocol == "https":
+        protocol = "https"
+    else:
+        protocol = "https" if bool(getattr(endpoint, "tls", False)) else "http"
+    path = str(getattr(endpoint, "path", "") or "")
+    if path and not path.startswith("/"):
+        path = "/" + path
+    return f"{protocol}://{host}{path}"
+
+
 def service_payload(service):
     revision = getattr(service, "active_revision", None)
     deploy = getattr(revision, "source_deploy", None) if revision else getattr(service, "selected_deploy", None)
@@ -155,6 +177,7 @@ def service_payload(service):
         "id": str(e.pk), "name": getattr(e, "name", ""), "target_port": getattr(e, "target_port", None),
         "published_port": getattr(e, "published_port", None), "protocol": getattr(e, "protocol", None), "exposure": getattr(e, "exposure", None),
         "hostname": getattr(e, "hostname", None), "path": getattr(e, "path", None), "tls": getattr(e, "tls", None), "enabled": getattr(e, "enabled", True),
+        "url": _endpoint_url(service, e),
     } for e in service.endpoints.all() if e.enabled]
     volumes = [{
         "id": str(v.pk), "name": getattr(v, "name", ""), "size_mb": getattr(v, "size_mb", None),
@@ -167,12 +190,17 @@ def service_payload(service):
         "owner": {"id": str(service.user_id), "username": getattr(service.user, "username", None)},
         "plan": ({"id": str(plan.pk), "name": plan.name, "platform": plan.platform, "plan_type": plan.plan_type} if plan else None),
         "platform": str(getattr(plan, "platform", "") or ""),
+        "service_host": _service_host(service),
         "source_kind": service.source_kind,
         "desired_state": service.desired_state, "status": service.status,
         "read_only": bool(service.read_only),
         "active_revision": ({"id": str(revision.pk), "revision": revision.revision_number, "state": revision.state} if revision else None),
         "deployment": (deployment_payload(deploy) if deploy else None),
         "network": ({"id": str(network.pk), "name": network.name, "description": network.description} if network else None),
+        "urls": {
+            "service_host": _service_host(service),
+            "endpoints": [item["url"] for item in endpoints if item.get("url")],
+        },
         "processes": processes, "endpoints": endpoints, "volumes": volumes,
         "timestamps": {
             "created_at": service.created_at, "updated_at": service.updated_at,
