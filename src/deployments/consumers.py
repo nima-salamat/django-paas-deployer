@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections import deque
 import urllib.parse
 
 from channels.db import database_sync_to_async
@@ -43,6 +44,10 @@ class DeploymentConsumer(AsyncJsonWebsocketConsumer):
             return
 
         self.user_id = int(self.user.id)
+        # Outbox delivery is at-least-once. Keep a small per-connection
+        # dedupe window so a retried event does not update the UI twice.
+        self._seen_event_ids = set()
+        self._seen_event_order = deque(maxlen=256)
         # Normalise to string so group name matches sink (deploy_<str(pk)>)
         raw_id = self.scope["url_route"]["kwargs"].get("deploy_id")
         self.deploy_id = str(raw_id) if raw_id is not None else None
@@ -99,8 +104,17 @@ class DeploymentConsumer(AsyncJsonWebsocketConsumer):
             return
 
     async def deployment_message(self, event):
-        """Channel-layer handler: type = \"deployment.message\"."""
+        """Channel-layer handler: type = "deployment.message"."""
         payload = event.get("payload") or {}
+        event_id = str(payload.get("event_id") or "").strip()
+        if event_id:
+            if event_id in self._seen_event_ids:
+                return
+            if len(self._seen_event_order) == self._seen_event_order.maxlen:
+                oldest = self._seen_event_order[0]
+                self._seen_event_ids.discard(oldest)
+            self._seen_event_order.append(event_id)
+            self._seen_event_ids.add(event_id)
         try:
             await self.send_json({"type": "deployment.event", "event": payload})
         except Exception:
