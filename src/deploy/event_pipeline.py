@@ -79,45 +79,26 @@ class DeploymentEventPipeline:
         if traceback_text:
             payload["traceback"] = sanitize(traceback_text)
 
-        if not self._is_terminal_event(event):
-            try:
-                DeploymentEventOutbox.objects.create(
-                    event_id=payload["event_id"],
-                    deployment_id=self.deploy.pk,
-                    service_id=str(self.deploy.service_id),
-                    event_type=event_type,
-                    stage=str(event.stage or "unknown")[:64],
-                    level=str(event.level or "info").lower()[:16],
-                    occurred_at=datetime.fromisoformat(timestamp),
-                    payload=payload,
-                )
-            except Exception:
-                logger.exception(
-                    "Unable to persist deployment event outbox for %s.",
-                    self.deploy.pk,
-                )
 
+        # Durable outbox is the authoritative event journal. Deployment logs
+        # and WebSocket delivery are projections handled by the dispatcher.
         try:
-            log = DeployLog.objects.using(self.database).create(
-                deploy_id=self.deploy.pk,
-                service_id=self.deploy.service_id,
-                stage=event.stage,
-                event_type=payload["event"],
-                level=event.level.lower(),
-                message=payload["message"],
-                progress=event.progress,
-                details=details,
-                exception_type=payload.get("exception_type", ""),
-                traceback=payload.get("traceback", ""),
+            DeploymentEventOutbox.objects.create(
+                event_id=payload["event_id"],
+                deployment_id=self.deploy.pk,
+                service_id=str(self.deploy.service_id),
+                event_type=event_type,
+                stage=str(event.stage or "unknown")[:64],
+                level=str(event.level or "info").lower()[:16],
+                occurred_at=datetime.fromisoformat(timestamp),
+                payload=payload,
             )
-            payload["id"] = str(log.pk)
-            try:
-                from .log_retention import trim_after_write
-                trim_after_write(self.deploy.service_id)
-            except Exception:
-                pass
         except Exception:
             logger.exception("Unable to persist deployment event for %s.", self.deploy.pk)
+
+        if broadcast:
+            self.publish_payload(payload)
+        return payload
 
         if broadcast:
             self.publish_payload(payload)
