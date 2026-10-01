@@ -1013,6 +1013,8 @@ class DeployService:
                 **dict(cfg.get("labels") or {}),
                 "deployment.id": str(deploy_item.pk),
                 "service.id": str(service.pk),
+                "release.id": str(getattr(deploy_item, "release_id", "") or ""),
+                "revision.id": str(getattr(deploy_item, "revision_id", "") or ""),
             },
             public_host=cfg.get("public_host") or cfg.get("domain"),
             endpoints=endpoint_specs,
