@@ -1720,6 +1720,25 @@ class SwarmRuntime:
             result["memory"] = self._memory_percent(
                 second, memory_limit_bytes=memory_limit_bytes
             )
+            cpu_used_cores = None
+            try:
+                first_cpu = first.get("cpu_stats") or {}
+                second_cpu = second.get("cpu_stats") or {}
+                first_usage = first_cpu.get("cpu_usage") or {}
+                second_usage = second_cpu.get("cpu_usage") or {}
+                cpu_delta = float(second_usage.get("total_usage") or 0) - float(first_usage.get("total_usage") or 0)
+                system_delta = float(second_cpu.get("system_cpu_usage") or 0) - float(first_cpu.get("system_cpu_usage") or 0)
+                online = float(second_cpu.get("online_cpus") or len(second_usage.get("percpu_usage") or []) or 1)
+                if cpu_delta > 0 and system_delta > 0:
+                    cpu_used_cores = round((cpu_delta / system_delta) * online, 4)
+            except (TypeError, ValueError):
+                cpu_used_cores = None
+            memory_stats = second.get("memory_stats") or {}
+            memory_usage = float(memory_stats.get("usage") or 0)
+            result["cpu_cores"] = cpu_used_cores
+            result["cpu_limit_cores"] = round(cpu_limit_cores, 4) if cpu_limit_cores is not None else None
+            result["memory_usage"] = memory_usage if memory_usage > 0 else None
+            result["memory_limit"] = memory_limit_bytes
             result["metrics_available"] = (
                 result["cpu"] is not None or result["memory"] is not None
             )
