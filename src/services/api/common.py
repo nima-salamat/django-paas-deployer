@@ -34,6 +34,7 @@ from deployments.core.manager.container_manager import Container
 from deployments.core.manager.client_manager import Client
 from docker.errors import NotFound as DockerNotFound
 from deployments.core.swarm import SwarmRuntime, swarm_enabled
+from deployments.core.state.manager import StateManager
 
 
 logger = logging.getLogger(__name__)
@@ -231,7 +232,7 @@ def _get_service_for_user_or_share(
 def _purge_service_runtime(service) -> dict:
     """Stop/remove the service runtime using the active Docker runtime backend."""
     name = service.get_docker_service_name()
-    report = {"runtime": "docker-swarm" if swarm_enabled() else "docker", "services": [], "container": None, "images": [], "errors": []}
+    report = {"runtime": "docker-swarm" if swarm_enabled() else "docker", "services": [], "container": None, "images": [], "errors": [], "runtime_converged": False}
 
     if swarm_enabled():
         try:
@@ -246,6 +247,7 @@ def _purge_service_runtime(service) -> dict:
                     report["errors"].append(f"swarm service {service_name}: {exc}")
             if not names:
                 report["services"] = [{"name": name, "result": "absent"}]
+            report["runtime_converged"] = not bool(report["errors"])
         except Exception as exc:
             report["errors"].append(f"swarm runtime: {exc}")
         try:
@@ -279,11 +281,13 @@ def _purge_service_runtime(service) -> dict:
             try:
                 c.remove(force=True)
                 report["container"] = "removed"
+                report["runtime_converged"] = True
             except Exception as exc:
                 report["errors"].append(f"remove container: {exc}")
                 report["container"] = "failed"
         except DockerNotFound:
             report["container"] = "absent"
+            report["runtime_converged"] = True
         except Exception as exc:
             report["errors"].append(f"container: {exc}")
             report["container"] = "error"
@@ -299,19 +303,24 @@ def _purge_service_runtime(service) -> dict:
                 if result.startswith("error"):
                     report["errors"].append(f"image {ref}: {exc}")
 
-    try:
-        from core.global_settings.config import SERVICE_STATUS_CHOICES as SSC
-        Service.objects.filter(pk=service.pk).update(
-            status=SSC.STOPPED,
-            desired_state="stopped",
-            task_id=None,
-            deploy_started=None,
-        )
-    except Exception:
+    if report["runtime_converged"]:
         try:
-            Service.objects.filter(pk=service.pk).update(status="stopped")
-        except Exception:
-            pass
+            StateManager.transition_service(
+                service.pk,
+                SERVICE_STATUS_CHOICES.STOPPED,
+                update_fields={
+                    "desired_state": "stopped",
+                    "task_id": None,
+                    "deploy_started": None,
+                },
+            )
+        except Exception as exc:
+            report["errors"].append(f"state transition: {exc}")
+            report["runtime_converged"] = False
+    else:
+        report["errors"].append(
+            "Runtime state could not be proven converged; service state was left unchanged."
+        )
 
     return report
 
