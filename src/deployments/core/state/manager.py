@@ -235,6 +235,27 @@ class StateManager:
             activate_revision_locked(service, revision_id)
 
             now = timezone.now()
+            if service.status != sm.SERVICE_RUNNING:
+                try:
+                    sm.check_service_transition(service.status, sm.SERVICE_RUNNING)
+                except sm.InvalidTransition as exc:
+                    raise InvalidServiceStateError(
+                        str(exc),
+                        details={
+                            "entity": "Service",
+                            "service_id": service.pk,
+                            "src": service.status,
+                            "target": sm.SERVICE_RUNNING,
+                            "allowed": list(exc.allowed),
+                        },
+                    ) from exc
+                Service.objects.filter(pk=service.pk).update(
+                    status=sm.SERVICE_RUNNING,
+                    deployed_at=now,
+                    deploy_started=None,
+                    task_id=None,
+                )
+
             updates = {
                 "status": sm.DEPLOY_SUCCEEDED,
                 **dict(update_fields or {}),
