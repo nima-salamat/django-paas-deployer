@@ -398,18 +398,11 @@ class DjangoDeploymentState:
             return
 
         try:
-            self.events.record(
-                DeploymentEvent(
-                    stage=final_stage,
-                    message=update.get("status_message") or result_message,
-                    level=final_level,
-                    progress=100,
-                    details=details,
-                )
-            )
+            self.events.publish_payload(event_payload)
         except Exception:
             logger.exception(
-                "Failed to record finish event for deploy %s", self.deploy.pk
+                "Failed to publish terminal deployment event for deploy %s",
+                self.deploy.pk,
             )
 
         if exception is not None or traceback_text:
