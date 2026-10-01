@@ -99,8 +99,13 @@ services:
 """,
         encoding="utf-8",
     )
-    with pytest.raises(DeploymentSecurityError, match="unsupported 'privileged'"):
-        inspect_docker_source(str(tmp_path))
+    result = inspect_docker_source(str(tmp_path))
+    assert result.blocked
+    assert any(
+        item.code == "compose_privileged"
+        and item.action == "deny"
+        for item in result.findings
+    )
 
 
 def test_compose_secret_reference_uses_passdeployer_environment(tmp_path: Path):
