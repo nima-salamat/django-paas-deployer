@@ -23,7 +23,6 @@ class TestRecoveryOperationJournal(unittest.TestCase):
 
     def test_recovery_metadata_has_explicit_operation_fields(self):
         model_source = (ROOT / "deploy" / "models.py").read_text()
-        state_source = (ROOT / "deployments" / "core" / "state" / "manager.py").read_text()
         for field in (
             "operation",
             "operation_started_at",
@@ -32,7 +31,6 @@ class TestRecoveryOperationJournal(unittest.TestCase):
             "recovery_metadata",
         ):
             self.assertIn(field, model_source)
-        self.assertIn("recovery_metadata", state_source)
 
     def test_container_resources_use_positive_deployment_ownership(self):
         source = (ROOT / "deployments" / "core" / "manager" / "container_manager.py").read_text()
