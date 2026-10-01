@@ -147,7 +147,9 @@ class AgentContractTests(TestCase):
             max_ram=512,
             max_storage=10,
         )
-        with patch("agent.application.call_viewset_action") as boundary:
+        with patch("agent.application.call_viewset_action") as boundary, patch(
+            "agent.application.require_plan_management"
+        ):
             from rest_framework.response import Response
             boundary.return_value = Response(
                 {"data": {"id": str(plan.pk)}},
