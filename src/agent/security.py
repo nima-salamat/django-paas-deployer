@@ -31,6 +31,60 @@ def sanitize_metadata(value):
     if isinstance(value,(int,float,bool)) or value is None: return value
     return str(value)
 
+SENSITIVE_KEY_MARKERS = (
+    "password", "secret", "token", "private_key", "authorization",
+    "api_key", "apikey", "ciphertext", "credential",
+)
+
+
+def _is_sensitive_key(key) -> bool:
+    lowered = str(key or "").lower()
+    return any(marker in lowered for marker in SENSITIVE_KEY_MARKERS)
+
+
+def extract_sensitive_request_values(value):
+    """Collect client-supplied sensitive scalar values for response scrubbing."""
+    found = []
+
+    def walk(node, sensitive=False):
+        if isinstance(node, dict):
+            for key, item in node.items():
+                walk(item, sensitive or _is_sensitive_key(key))
+            return
+        if isinstance(node, (list, tuple)):
+            for item in node:
+                walk(item, sensitive)
+            return
+        if sensitive and isinstance(node, (str, int, float)) and str(node):
+            found.append(str(node))
+
+    walk(value)
+    return tuple(sorted(set(found), key=len, reverse=True))
+
+
+def sanitize_error_payload(value, *, secret_values=()):
+    """Sanitize error fields and redact exact sensitive values supplied by the client."""
+    scrub_values = tuple(str(v) for v in secret_values if str(v))
+    sensitive_fields = SENSITIVE_KEY_MARKERS
+
+    def walk(node):
+        if isinstance(node, dict):
+            output = {}
+            for key, item in node.items():
+                if _is_sensitive_key(key):
+                    output[str(key)] = "[REDACTED]"
+                else:
+                    output[str(key)] = walk(item)
+            return output
+        if isinstance(node, (list, tuple)):
+            return [walk(item) for item in node]
+        if isinstance(node, str):
+            return scrub_text(node, scrub_values)
+        return node
+
+    return walk(value)
+
+
 def stable_json_hash(value):
     return hashlib.sha256(json.dumps(sanitize_metadata(value),sort_keys=True,separators=(",",":"),default=str).encode()).hexdigest()
 
