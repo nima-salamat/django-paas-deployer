@@ -782,7 +782,42 @@ class ShellInfoView(AgentSecuredAPIView):
         service=get_service(service_id,request.user,action="can_view")
         from services.shell import command_catalog,_platform_for_service,can_use_advanced_shell
         allowed=ensure_service_access(service,request.user,action="can_shell")
-        return Response({"result":"success","service_id":str(service.pk),"enabled":bool(allowed is not False and "shell.execute" in set(request.agent.scopes or [])),"platform":_platform_for_service(service),"advanced_interactive":bool(can_use_advanced_shell(service,request.user)),"commands":command_catalog(_platform_for_service(service)),"policy":{"host_shell":False,"shell_operators":False,"destructive_commands_require_confirmation":True,"path_confinement":True,"output_limits":True,"session_ttl":True}})
+        platform = _platform_for_service(service)
+        advanced = bool(can_use_advanced_shell(service, request.user))
+        return Response({
+            "result": "success",
+            "service_id": str(service.pk),
+            "enabled": bool(allowed is not False and "shell.execute" in set(request.agent.scopes or [])),
+            "platform": platform,
+            "advanced_interactive": advanced,
+            "commands": command_catalog(platform),
+            "transport": {
+                "command_api": {
+                    "mode": "one_shot",
+                    "compound": True,
+                    "operators": ["|", "&&", "||", ";"],
+                    "max_segments": 16,
+                    "max_pipeline_input_bytes": 256 * 1024,
+                    "blocked_syntax": ["<", ">", "<<", "<<<", "&", "&>", "$()", "backticks"],
+                },
+                "interactive_pty": {
+                    "mode": "persistent",
+                    "websocket_path": "/ws/services/shell/{service_id}/",
+                    "stdin": True,
+                    "signals": ["ctrl-c", "ctrl-d", "ctrl-z", "ctrl-l"],
+                    "compound": False,
+                    "requires_advanced_user_access_for_repl": True,
+                },
+            },
+            "policy": {
+                "host_shell": False,
+                "user_controlled_shell_interpreter": False,
+                "destructive_commands_require_confirmation": True,
+                "path_confinement": True,
+                "output_limits": True,
+                "session_ttl": True,
+            },
+        })
 
 
 class ShellSessionView(AgentSecuredAPIView):
