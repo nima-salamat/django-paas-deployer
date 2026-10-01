@@ -80,3 +80,7 @@ jobs:
           # Unit/regression suite only. Real Docker/Swarm tests are marked
           # deployment_integration and are not executed in this job.
           pytest -q -m "not deployment_integration" --ignore=scripts
+
+      - name: Run lifecycle hardening contracts
+        run: |
+          pytest -q deployments/tests/test_lifecycle_hardening_contracts.py
