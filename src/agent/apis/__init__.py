@@ -9,10 +9,9 @@ from .services import ServiceListCreateView, ServiceDetailView, ServiceFromPlanV
 from .plans import PlanListView, PlanDetailView, PlanManagementView, PlanApplyView
 from .networks import NetworkListCreateView, NetworkDetailView
 from .volumes import VolumeListCreateView, VolumeDetailView
-from .deployments import DeploymentListCreateView, DeploymentDetailView, DeploymentUploadView, DeploymentActionView, DeploymentRollbackView, DeploymentLogsView, DeploymentLogsExportView
-from .configuration import ConfigurationView, EnvironmentView, SecretsView, EndpointConfigView, NetworkAttachmentsView, RevisionListView, RevisionDetailView, RevisionRollbackView, DatabaseBindingsView
+from .deployments import DeploymentListCreateView, DeploymentDetailView, DeploymentUploadView, DeploymentActionView, DeploymentRollbackView, DeploymentLogsView, DeploymentLogsExportView, DeploymentHelpView, DeploymentInspectView
+from .configuration import ConfigurationView, EnvironmentView, SecretsView, EndpointConfigView, NetworkAttachmentsView, RevisionListView, RevisionDetailView, RevisionRollbackView, DatabaseBindingsView, DatabaseCredentialsView
 from .shell import ShellInfoView, ShellSessionView, ShellCommandView, ShellCloseView, ShellReplaceView, ShellFileView
-from .extended import DeploymentHelpView, DeploymentInspectView, DatabaseCredentialsView
 
 __all__ = [
     name for name in (
