@@ -125,6 +125,7 @@ def issue_tokens_for_user(user, *, request=None, device_id=None, device=None):
             expires_at=now + jwt_settings.REFRESH_TOKEN_LIFETIME,
             last_ip=metadata.get("last_ip"),
             user_agent=metadata.get("user_agent", ""),
+            metadata=metadata,
         )
 
     # Populate the Redis session cache immediately after the durable login
