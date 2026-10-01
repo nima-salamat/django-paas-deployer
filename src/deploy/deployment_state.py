@@ -342,6 +342,7 @@ class DjangoDeploymentState:
         if error_recoverable is not None:
             details["recoverable"] = bool(error_recoverable)
 
+        owner = self._owner_task_id or str((current or {}).get("execution_task_id") or "")
         event_payload = {
             "event_id": str(uuid.uuid4()),
             "trace_id": self.events._trace_id(),
