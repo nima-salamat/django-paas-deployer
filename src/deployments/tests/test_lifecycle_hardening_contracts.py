@@ -154,3 +154,10 @@ def test_system_terminal_transition_respects_cancellation_fence():
         "def finalize_pending_cancellation", 1
     )[0]
     assert 'if target != sm.DEPLOY_CANCELLED and deploy.cancel_requested:' in method
+
+
+
+def test_event_sink_sanitizes_message_before_state_projection():
+    source = (__import__("pathlib").Path(__file__).resolve().parents[2] / "deployments/core/sink.py").read_text(encoding="utf-8")
+    assert "from deploy.event_pipeline import sanitize" in source
+    assert 'message = sanitize(payload.get("message") or "")' in source
