@@ -312,15 +312,9 @@ def _finalize_pending_cancellations() -> None:
     )
     for deploy in candidates:
         try:
-            StateManager.transition_deploy(
+            StateManager.finalize_pending_cancellation(
                 deploy.pk,
-                DeploymentStatusChoices.CANCELLED,
-                update_fields={
-                    "stage": "cancelled",
-                    "progress": 100,
-                    "status_message": "Deployment cancelled before worker execution.",
-                    "error_message": deploy.error_message or "Deployment was cancelled before execution.",
-                },
+                message=deploy.error_message or "Deployment was cancelled before execution.",
             )
             service = deploy.service
             if service and service.status == SERVICE_STATUS_CHOICES.QUEUED:
