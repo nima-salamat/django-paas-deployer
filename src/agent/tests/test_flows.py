@@ -86,3 +86,44 @@ class AgentDeploymentAndShellTests(TestCase):
             )
         self.assertEqual(runtime.data["source"],"runtime")
         self.assertEqual(deployment.data["source"],"deployment")
+
+
+class AgentApiIntegrityTests(TestCase):
+    def setUp(self):
+        User=get_user_model()
+        self.user=User.objects.create_user(username="integrity_user",email="integrity@example.com",password="example-password")
+        self.agent=Agent.objects.create(
+            user=self.user,
+            name="integrity-agent",
+            scopes=["services.create","plans.apply","service_networks.write"],
+        )
+        _,self.raw=issue_access_credential(self.agent)
+        self.client=APIClient()
+
+    @patch("agent.views.create_service_from_plan")
+    def test_plan_apply_uses_application_boundary(self, create_from_plan):
+        service=Mock()
+        service.pk="00000000-0000-0000-0000-000000000021"
+        service.plan_id="00000000-0000-0000-0000-000000000022"
+        create_from_plan.return_value=(service,None)
+        with patch("agent.views.service_payload",return_value={"id":str(service.pk)}):
+            response=self.client.post(
+                f"/agent/v1/plans/{service.plan_id}/apply",
+                {"network":"00000000-0000-0000-0000-000000000023"},
+                format="json",
+                HTTP_AUTHORIZATION=f"Bearer {self.raw}",
+            )
+        self.assertEqual(response.status_code,201)
+        create_from_plan.assert_called_once()
+
+    def test_agent_error_redacts_sensitive_extra_fields(self):
+        from agent.errors import AgentError, agent_error_response
+        response=agent_error_response(
+            AgentError(
+                "TEST",
+                "failed",
+                extra={"password":"dont-return","nested":{"token":"also-dont-return"}},
+            )
+        )
+        self.assertEqual(response.data["password"],"[REDACTED]")
+        self.assertEqual(response.data["nested"]["token"],"[REDACTED]")
