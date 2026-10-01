@@ -1524,8 +1524,19 @@ class SwarmRuntime:
                 filters={"label": f"passdeployer.service={service_id}"}
             )
             names = [str(service.name) for service in services]
-        except docker.errors.DockerException:
-            return []
+        except docker.errors.DockerException as exc:
+            raise DeploymentError(
+                f"Unable to enumerate Swarm services for service {service_id!r}.",
+                stage="swarm_inspection",
+                code="SWARM_GROUP_INSPECTION_UNKNOWN",
+                recoverable=True,
+                details={
+                    "service_id": str(service_id),
+                    "inspection": "UNKNOWN",
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                },
+            ) from exc
         return names
 
     def restart_service_group(self, service_id: str, *, timeout: float = 60.0) -> dict[str, SwarmServiceState]:
