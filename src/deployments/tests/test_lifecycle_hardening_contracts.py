@@ -71,3 +71,20 @@ def test_terminal_outbox_authority_is_not_in_public_transition():
     assert "DeploymentEventOutbox.objects.create" not in public
     assert "terminal" not in public
     assert "DeploymentEventOutbox.objects.create" in source.split("def transition_deploy_if_owned", 1)[1]
+
+
+
+def test_owned_terminal_transition_rewrites_event_when_cancellation_wins():
+    source = ( __import__("pathlib").Path(__file__).resolve().parents[2] / "deployments/core/state/manager.py" ).read_text(encoding="utf-8")
+    method = source.split("def transition_deploy_if_owned", 1)[1].split(
+        "def transition_deploy_terminal_if_owned", 1
+    )[0]
+    assert '"cancellation_won_race": True' in method
+    assert '"deployment.cancelled.warning"' in method
+
+
+def test_pre_start_cancellation_does_not_directly_project_a_second_event():
+    source = ( __import__("pathlib").Path(__file__).resolve().parents[2] / "deploy/deployment_state.py" ).read_text(encoding="utf-8")
+    start = source.split("def start(self):", 1)[1].split("def event_sink", 1)[0]
+    assert "finalize_pending_cancellation" not in start
+    assert 'if not emit_cancelled:' in start
