@@ -54,7 +54,7 @@ Base: models.Model
 | platform | CharField | \\ | Stores the platform value for Device; preserve current writers, readers, null/default semantics and constraints when changing it. |
 | client | CharField | \\ | Stores the client value for Device; preserve current writers, readers, null/default semantics and constraints when changing it. |
 | user_agent | CharField | \\ | Client user-agent snapshot for security/audit context; not a device identity. |
-| last_ip | GenericIPAddressField | \\ | Stores the last ip value for Device; preserve current writers, readers, null/default semantics and constraints when changing it. |
+| last_ip | GenericIPAddressField | \\ | Last server-observed IP for the device; descriptive audit data, not authentication authority. |
 | created_at | DateTimeField | \\ | Historical creation timestamp; provenance rather than mutable lifecycle state. |
 | last_seen_at | DateTimeField | \\ | Most recent authenticated use observed for the device/session. |
 | revoked_at | DateTimeField | \\ | Revocation marker; null means the device/session has not been explicitly revoked. |
@@ -78,7 +78,7 @@ Base: models.Model
 | auth_generation | PositiveIntegerField | \\ | Monotonic authentication-generation fence used to invalidate older session credentials. |
 | last_ip | GenericIPAddressField | \\ | Stores the last ip value for UserSession; preserve current writers, readers, null/default semantics and constraints when changing it. |
 | user_agent | CharField | \\ | Client user-agent snapshot for security/audit context; not a device identity. |
-| metadata | JSONField | \\ | Auxiliary device/session context; not the source of authorization or session validity. |
+| metadata | JSONField | \\ | Login-time browser/device snapshot, including parsed UA details and bounded client hints; not the source of authorization or session validity. |
 
 ## UserContactChange
 
