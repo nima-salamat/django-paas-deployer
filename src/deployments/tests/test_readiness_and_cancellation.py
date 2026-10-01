@@ -47,7 +47,7 @@ class HealthCheckerTests(unittest.TestCase):
 
         with self.assertRaises(HealthCheckError) as ctx:
             DockerHealthChecker().wait_until_healthy(
-                'app', timeout=0, interval=0.01, healthcheck_path='/ready', port=8080
+                'app', timeout=0.05, interval=0.01, healthcheck_path='/ready', port=8080
             )
         exc = ctx.exception
         self.assertEqual(exc.code, 'APPLICATION_READINESS_FAILED')
@@ -70,7 +70,7 @@ class HealthCheckerTests(unittest.TestCase):
             'ok': False, 'failure_type': 'connection_error', 'error': 'connection refused'
         }):
             with self.assertRaises(HealthCheckError) as ctx:
-                checker.wait_until_healthy('app', timeout=0, healthcheck_path='/ready', port=8080)
+                checker.wait_until_healthy('app', timeout=0.05, interval=0.01, healthcheck_path='/ready', port=8080)
         self.assertIn('did not accept readiness connections', ctx.exception.message)
         self.assertEqual(ctx.exception.details['healthcheck_path'], '/ready')
 
