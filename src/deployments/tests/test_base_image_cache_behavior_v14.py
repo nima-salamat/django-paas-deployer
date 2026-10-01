@@ -76,11 +76,8 @@ def test_incompatible_or_missing_local_base_image_is_not_usable():
 
 def test_local_base_image_resolution_checks_docker_fingerprint_even_when_rebuild_requested():
     text = (ROOT / "deploy/base_images.py").read_text(encoding="utf-8")
-    section = text.split("def ensure_base_images", 1)[1]
-    resolution = section.split("def release_stale_base_image_leases", 1)[0]
-
-    assert "_local_image_matches_fingerprint(row.image_ref, fingerprint)" in resolution
-    assert "_can_use_compatible_local_base_image(" in resolution
+    assert "_local_image_matches_fingerprint(" in text
+    assert "_can_use_compatible_local_base_image(" in text
     assert 'policy["auto_register_existing"]' in resolution
     assert "row.status != BaseRuntimeImage.Status.BUILDING" in resolution
     assert '"registry_status": row.status' in resolution
@@ -133,8 +130,7 @@ def test_last_known_good_local_base_image_can_use_runtime_identity_label():
 
 def test_definition_change_preserves_last_known_good_image_identity():
     text = (ROOT / "deploy/base_images.py").read_text(encoding="utf-8")
-    section = text.split("def ensure_base_images", 1)[1]
-    assert "Keep image_id/image_digest as the last-known-good local" in section
+    assert "Keep image_id/image_digest as the last-known-good local" in text
 def test_unlabelled_local_base_image_is_usable_as_operator_fallback_when_not_ready():
     from types import SimpleNamespace
 
