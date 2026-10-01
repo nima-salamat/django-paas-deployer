@@ -26,15 +26,21 @@ A superuser flag never creates missing Agent scopes.
 
 ## API
 
-The resource-oriented API covers services, plans, networks, volumes, deployments, immutable revisions, deployment logs, runtime service logs and restricted service-container shell sessions.
+The resource-oriented API covers services, plans, networks, volumes, deployments, immutable revisions, deployment logs, runtime service logs and restricted service-container shell sessions. The HTTP implementation is split by domain under `agent/apis/`; `agent/views.py` and `agent/apis.py` remain compatibility import surfaces.
 
 Machine-readable discovery is available from:
 
 - `GET /agent/v1/capabilities`
 - `GET /agent/v1/openapi.json`
 - `GET /agent/v1/agent.md`
+- `GET /agent/v1/deployments/help` — complete deployment/config/platform/lifecycle contract
+- `POST /agent/v1/deployments/inspect` — ZIP project detection and configuration suggestions
+- `GET /agent/v1/services/{service_id}/metrics` — observed runtime CPU/RAM usage plus Plan limits
+- `POST /agent/v1/services/{service_id}/rebuild` — rebuild the service's active revision
 
 ## Enrollment
+
+Database connection credentials are intentionally not included in normal service/database reads. A dedicated owner-only `service_database_credentials.read` scope exposes connection credentials through `GET /agent/v1/services/{service_id}/database-credentials?reveal=true`; this scope is high-risk and is not part of the default scope set.
 
 The generated `AGENT.md` contains a temporary bootstrap credential only. The credential is single-use and short-lived. Exchanging it returns a normal access credential. Permanent credentials are never embedded in repository templates or URLs.
 
