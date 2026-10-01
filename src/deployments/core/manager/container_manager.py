@@ -324,19 +324,31 @@ class Container(Client):
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def _image_exists(self) -> bool:
-        """Return True if ``self.image_name`` resolves to a local image."""
+    def image_presence(self) -> str:
+        """Return PRESENT, ABSENT, or UNKNOWN for local image inspection."""
         if not self.image_name:
-            return False
+            return "ABSENT"
         try:
             self.client.images.get(self.image_name)
-            return True
+            return "PRESENT"
         except docker.errors.ImageNotFound:
-            return False
+            return "ABSENT"
         except docker.errors.DockerException:
-            # Don't crash on transient Docker errors; the create attempt
-            # itself will surface a clearer error if the image is missing.
+            return "UNKNOWN"
+
+    def _image_exists(self) -> bool:
+        presence = self.image_presence()
+        if presence == "PRESENT":
             return True
+        if presence == "UNKNOWN":
+            raise ContainerError(
+                f"Cannot determine whether image '{self.image_name}' exists.",
+                stage="image_lookup",
+                code="IMAGE_LOOKUP_UNKNOWN",
+                recoverable=True,
+                details={"image": self.image_name, "observation": "UNKNOWN"},
+            )
+        return False
 
     def _remove_stale_container_if_present(self) -> bool:
         """
