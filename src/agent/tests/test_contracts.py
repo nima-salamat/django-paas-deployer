@@ -6,6 +6,7 @@ from agent.application import create_enrollment, issue_access_credential
 from agent.contracts import CONTRACTS, contract_for, contracts_for_agent
 from agent.manifest import manifest_endpoints
 from agent.throttling import AgentRateThrottle
+from agent import urls as agent_urls
 from agent.models import Agent
 from agent.openapi import build_openapi
 from rest_framework.test import APIClient, APIRequestFactory
@@ -131,6 +132,34 @@ class AgentContractTests(TestCase):
                 path = path.replace(token, value)
             match = resolve(path)
             self.assertIsNotNone(match, contract.path)
+
+    def test_every_registered_agent_endpoint_has_a_contract(self):
+        from agent.contracts import contract_for
+
+        converters = {
+            "<uuid:service_id>": "{service_id}",
+            "<uuid:deployment_id>": "{deployment_id}",
+            "<uuid:revision_id>": "{revision_id}",
+            "<uuid:plan_id>": "{plan_id}",
+            "<uuid:network_id>": "{network_id}",
+            "<uuid:volume_id>": "{volume_id}",
+            "<uuid:session_id>": "{session_id}",
+            "<uuid:credential_id>": "{credential_id}",
+            "<uuid:agent_id>": "{agent_id}",
+        }
+        for pattern in agent_urls.urlpatterns:
+            route = "/agent/" + str(pattern.pattern._route)
+            for source, target in converters.items():
+                route = route.replace(source, target)
+            route = route if route.endswith("/") else route
+            view_class = getattr(getattr(pattern, "callback", None), "view_class", None)
+            self.assertIsNotNone(view_class, str(pattern.pattern))
+            for method in ("GET", "POST", "PATCH", "DELETE"):
+                if method.lower() in view_class.__dict__:
+                    self.assertIsNotNone(
+                        contract_for(route, method),
+                        f"Missing contract for {method} {route}",
+                    )
 
     def test_enabled_contract_projection_matches_openapi(self):
         contracts = contracts_for_agent(self.agent)
