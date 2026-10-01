@@ -346,8 +346,8 @@ class DjangoDeploymentState:
             "cleanup_failures": result_cleanup_failures,
             "reconciliation_required": bool(result_details.get("reconciliation_required") or result_cleanup_failures),
         }
+        update["cleanup_status"] = cleanup_status
         if result_cleanup_failures:
-            update["cleanup_status"] = cleanup_status
             update["cleanup_failures"] = result_cleanup_failures
             update["reconciliation_required"] = True
         if result_details.get("technical_message"):
