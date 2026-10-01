@@ -174,6 +174,43 @@ class AgentContractTests(TestCase):
 
         self.assertEqual(openapi["x-agent"]["contract_operations"], len(CONTRACTS))
 
+    def test_extended_agent_operational_contracts_are_registered(self):
+        metrics = contract_for(
+            "/agent/v1/services/{service_id}/metrics",
+            "GET",
+        )
+        self.assertEqual(metrics.scopes, ("services.read",))
+
+        rebuild = contract_for(
+            "/agent/v1/services/{service_id}/rebuild",
+            "POST",
+        )
+        self.assertEqual(rebuild.scopes, ("deployments.rebuild",))
+        self.assertTrue(rebuild.mutating)
+        self.assertTrue(rebuild.idempotent)
+
+        help_contract = contract_for("/agent/v1/deployments/help", "GET")
+        self.assertEqual(help_contract.scopes, ("deployments.read",))
+
+        inspect = contract_for("/agent/v1/deployments/inspect", "POST")
+        self.assertEqual(inspect.scopes, ("deployments.upload",))
+        self.assertFalse(inspect.mutating)
+
+    def test_sensitive_database_credentials_are_not_part_of_default_scope_set(self):
+        from agent.scopes import ALL_SCOPES, DEFAULT_SCOPES, HIGH_RISK_SCOPES
+
+        self.assertIn("service_database_credentials.read", ALL_SCOPES)
+        self.assertNotIn("service_database_credentials.read", DEFAULT_SCOPES)
+        self.assertIn("service_database_credentials.read", HIGH_RISK_SCOPES)
+
+    def test_openapi_publishes_operational_discovery_paths(self):
+        openapi = build_openapi(self.agent)
+        self.assertIn("/agent/v1/deployments/help", openapi["paths"])
+        self.assertIn("/agent/v1/deployments/inspect", openapi["paths"])
+        self.assertIn("/agent/v1/services/{service_id}/metrics", openapi["paths"])
+        self.assertIn("/agent/v1/services/{service_id}/rebuild", openapi["paths"])
+        self.assertIn("/agent/v1/services/{service_id}/database-credentials", openapi["paths"])
+
     def test_shell_protocol_distinguishes_compound_and_interactive_transports(self):
         protocol = shell_protocol_metadata("service-1")
         self.assertEqual(protocol["command_api"]["operators"], ["|", "&&", "||", ";"])
