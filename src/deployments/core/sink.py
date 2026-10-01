@@ -6,6 +6,7 @@ from typing import Any, Optional
 from django.utils import timezone
 
 from deploy.models import Deploy, DeploymentStatusChoices
+from deploy.event_pipeline import sanitize
 
 from .types import DeploymentEvent
 
@@ -135,7 +136,7 @@ class DBAndChannelEventSink:
         try:
             progress = payload.get("progress")
             stage = payload.get("stage") or ""
-            message = payload.get("message") or ""
+            message = sanitize(payload.get("message") or "")
 
             update_fields: dict[str, Any] = {}
             if progress is not None:
@@ -151,7 +152,8 @@ class DBAndChannelEventSink:
             if not update_fields:
                 return
 
-            # This projection intentionally never mutates Deploy.status.
+            # This projection never mutates Deploy.status and never persists
+            # secret-bearing event text into lifecycle state.
             Deploy.objects.filter(pk=self.deployment_id).exclude(
                 status__in=(
                     DeploymentStatusChoices.SUCCEEDED,
