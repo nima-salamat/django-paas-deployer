@@ -371,6 +371,14 @@ def build_openapi(agent, *, request=None):
             operation["x-required-scopes"] = list(contract.scopes)
         if contract.any_scopes:
             operation["x-required-any-scopes"] = list(contract.any_scopes)
+        if contract.idempotent:
+            parameters = operation.setdefault("parameters", [])
+            if not any(
+                item.get("name") == "Idempotency-Key"
+                for item in parameters
+                if isinstance(item, dict)
+            ):
+                parameters.append({"$ref": "#/components/parameters/IdempotencyKey"})
         operation["x-mutating"] = contract.mutating
         operation["x-idempotent"] = contract.idempotent
         operation["x-throttle-scope"] = contract.throttle_scope
