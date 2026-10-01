@@ -4,7 +4,6 @@ from django.conf import settings
 from django.db import migrations, models
 import django.db.models.deletion
 
-from agent.scopes import default_agent_scopes
 
 
 class Migration(migrations.Migration):
@@ -23,7 +22,7 @@ class Migration(migrations.Migration):
                 ("name", models.CharField(max_length=100)),
                 ("description", models.TextField(blank=True, default="")),
                 ("status", models.CharField(choices=[("active","Active"),("disabled","Disabled"),("revoked","Revoked")], db_index=True, default="active", max_length=16)),
-                ("scopes", models.JSONField(blank=True, default=default_agent_scopes)),
+                ("scopes", models.JSONField(blank=True, default=list)),
                 ("metadata", models.JSONField(blank=True, default=dict)),
                 ("last_used_at", models.DateTimeField(blank=True, db_index=True, null=True)),
                 ("disabled_at", models.DateTimeField(blank=True, null=True)),
