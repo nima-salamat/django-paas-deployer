@@ -8,10 +8,10 @@ from .session_auth import invalidate_device, revoke_session_queryset
 
 @admin.register(Device)
 class DeviceAdmin(admin.ModelAdmin):
-    list_display = ("public_id", "user", "client", "platform", "last_seen_at", "revoked_at")
+    list_display = ("public_id", "user", "client", "platform", "last_ip", "last_seen_at", "revoked_at")
     list_filter = ("platform", "revoked_at")
     search_fields = ("public_id", "user__username", "user__email", "client")
-    readonly_fields = ("public_id", "created_at", "last_seen_at")
+    readonly_fields = ("public_id", "created_at", "last_seen_at", "metadata")
     actions = ["revoke_devices"]
 
     @admin.action(description="Revoke selected devices")
