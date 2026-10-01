@@ -58,6 +58,7 @@ Base: models.Model
 | created_at | DateTimeField | \\ | Historical creation timestamp; provenance rather than mutable lifecycle state. |
 | last_seen_at | DateTimeField | \\ | Most recent authenticated use observed for the device/session. |
 | revoked_at | DateTimeField | \\ | Revocation marker; null means the device/session has not been explicitly revoked. |
+| metadata | JSONField | \\ | Latest normalized browser/device context observed for this durable device; descriptive only and not an auth credential. |
 
 ## UserSession
 
@@ -183,3 +184,10 @@ JSON fields are structured contracts. Do not introduce keys by observation from 
 **Compatibility behavior:** fields explicitly described as projections, legacy state, or migration bridges must not be interpreted as a second source of truth.
 
 **Do not assume:** a Django field being writable at the ORM level means any API or worker is allowed to mutate it. Workflow ownership and invariants in the app documentation control safe writes.
+
+
+## Activity timestamps
+
+Device/UserSession last_seen_at is a server-observed activity timestamp. Normal authenticated HTTP/WS traffic remains a fallback signal, while browser sessions also send a dedicated session-bound activity heartbeat when a tab is visible. The heartbeat is rate-limited server-side so the database is not written on every browser event.
+
+The session API exposes server_now with session listings. Consumers should calculate relative times from server_now rather than trusting the browser clock alone.
