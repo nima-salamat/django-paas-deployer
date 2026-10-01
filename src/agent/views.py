@@ -33,12 +33,11 @@ from .errors import AgentError, agent_error_response, normalize_exception
 from .models import Agent
 from .permissions import AgentScopePermission, IsAgentAuthenticated
 from .scopes import SERVICE_SCOPES, DESTRUCTIVE_SCOPES, HIGH_RISK_SCOPES, SCOPE_LABELS, scope_categories
-from .contracts import contract_for
 from .security import get_request_id, sanitize_metadata
 from .throttling import AgentRateThrottle
 
 
-def complete_error(response, request):
+def complete_error(response, request, *, suppress_sensitive_fields=False):
     status_code = int(getattr(response, "status_code", 500))
     data = getattr(response, "data", None)
     if status_code >= 400:
@@ -63,6 +62,12 @@ def complete_error(response, request):
                 for key in ("errors", "action", "missing_scopes", "supported_inputs"):
                     if key in data:
                         body[key] = sanitize_metadata(data[key])
+        if suppress_sensitive_fields:
+            from .security import extract_sensitive_request_values, sanitize_error_payload
+            body = sanitize_error_payload(
+                body,
+                secret_values=extract_sensitive_request_values(getattr(request, "data", {})),
+            )
         response.data = sanitize_metadata(body)
     return response
 
@@ -137,7 +142,7 @@ class AgentAPIView(APIView):
 
     def finalize_response(self, request, response, *args, **kwargs):
         from .application import audit
-        response = complete_error(response, request)
+        response = complete_error(response, request, suppress_sensitive_fields=bool(getattr(self, "suppress_error_fields", False)))
         try:
             response["X-Request-ID"] = str(request.agent_request_id)
             if isinstance(getattr(response, "data", None), dict) and response.data.get("result") == "error":
