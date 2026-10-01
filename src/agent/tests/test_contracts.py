@@ -6,7 +6,10 @@ from agent.contracts import CONTRACTS, contract_for, contracts_for_agent
 from agent.manifest import manifest_endpoints
 from agent.models import Agent
 from agent.openapi import build_openapi
-from rest_framework.test import APIClient
+from rest_framework.test import APIClient, APIRequestFactory
+from rest_framework.response import Response
+
+from agent.views import complete_error
 
 
 class AgentContractTests(TestCase):
@@ -62,6 +65,37 @@ class AgentContractTests(TestCase):
             ("POST", "/agent/v1/services/{service_id}/shell/sessions/{session_id}/close"),
             indexed,
         )
+
+
+    def test_sensitive_error_policy_redacts_client_values(self):
+        factory = APIRequestFactory()
+        request = factory.patch(
+            "/agent/v1/services/example/secrets",
+            {"key": "DATABASE_PASSWORD", "value": "super-secret-value"},
+            format="json",
+        )
+        request.agent_request_id = "00000000-0000-0000-0000-000000000001"
+        response = Response(
+            {
+                "error": "Validation failed for super-secret-value",
+                "errors": {
+                    "value": ["super-secret-value"],
+                    "token": ["another-secret"],
+                    "safe": ["keep-this"],
+                },
+            },
+            status=400,
+        )
+        sanitized = complete_error(
+            response,
+            request,
+            suppress_sensitive_fields=True,
+        )
+        body = sanitized.data
+        self.assertNotIn("super-secret-value", str(body))
+        self.assertEqual(body["errors"]["value"], "[REDACTED]")
+        self.assertEqual(body["errors"]["token"], "[REDACTED]")
+        self.assertIn("keep-this", str(body))
 
     def test_enabled_contract_projection_matches_openapi(self):
         contracts = contracts_for_agent(self.agent)
