@@ -41,7 +41,11 @@ class DeploymentEventPipelineTests(SimpleTestCase):
                 stage="validation",
                 message="validated token=secret-value",
                 progress=10,
-                details={"authorization": "Bearer secret-value", "safe": "ok"},
+                details={
+                    "authorization": "Bearer secret-value",
+                    "safe": "ok",
+                    "event_type": "deployment.validation.info",
+                },
             )
         )
 
@@ -53,6 +57,7 @@ class DeploymentEventPipelineTests(SimpleTestCase):
         self.assertEqual(event["deployment_id"], "deploy-1")
         self.assertEqual(event["stage"], "validation")
         self.assertEqual(event["payload"]["details"]["authorization"], "[REDACTED]")
+        self.assertEqual(event["event_type"], "deployment.validation.info")
 
     @patch("deploy.event_pipeline.DeploymentEventOutbox.objects")
     def test_record_does_not_raise_when_outbox_database_fails(self, objects):
