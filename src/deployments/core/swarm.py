@@ -36,6 +36,7 @@ class SwarmTaskState:
     message: str
     image: str | None = None
     status_timestamp: str | None = None
+    health_status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,7 @@ class SwarmServiceState:
     update_message: str | None = None
     restart_condition: str | None = None
     restart_max_attempts: int | None = None
+    healthcheck_configured: bool = False
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -606,6 +608,13 @@ class SwarmRuntime:
                     message=str(status.get("Message") or ""),
                     image=task_image,
                     status_timestamp=str(status.get("Timestamp") or "") or None,
+                    health_status=(
+                        str(
+                            ((status.get("ContainerStatus") or {}).get("Health") or {}).get("Status")
+                            or ""
+                        ).strip().lower()
+                        or None
+                    ),
                 )
             )
         return tuple(rows)
@@ -625,6 +634,12 @@ class SwarmRuntime:
         restart_policy = task_template.get("RestartPolicy") or {}
         restart_condition = str(restart_policy.get("Condition") or "").strip().lower() or None
         restart_max_attempts = int(restart_policy.get("MaxAttempts") or 0)
+        healthcheck = container_spec.get("Healthcheck") or {}
+        healthcheck_test = healthcheck.get("Test") if isinstance(healthcheck, dict) else None
+        healthcheck_configured = bool(
+            healthcheck_test
+            and [str(item).strip().upper() for item in healthcheck_test] != ["NONE"]
+        )
         tasks = self._task_states(service)
         running = sum(
             1 for task in tasks
@@ -646,6 +661,7 @@ class SwarmRuntime:
             update_message=str(update_status.get("Message") or "").strip() or None,
             restart_condition=restart_condition,
             restart_max_attempts=restart_max_attempts,
+            healthcheck_configured=healthcheck_configured,
         )
 
     def _service_logs_for_failure(self, name: str, *, tail: int = 200) -> str:
@@ -678,7 +694,7 @@ class SwarmRuntime:
         timeout: float = 60.0,
         expected_image: str | None = None,
     ) -> SwarmServiceState:
-        """Wait until a Swarm service has a running task for the expected spec."""
+        """Wait until a Swarm service is running and, when configured, healthy."""
         deadline = time.monotonic() + float(timeout)
         latest = None
         rollback_states = {
@@ -757,7 +773,36 @@ class SwarmRuntime:
                 and (not expected_image or task.image == expected_image)
             ]
             if latest.replicas_desired == 1 and len(running) == 1:
-                return latest
+                task = running[0]
+                if latest.healthcheck_configured:
+                    health_status = (task.health_status or "").lower()
+                    if health_status == "healthy":
+                        return latest
+                    if health_status == "unhealthy":
+                        service_logs = self._service_logs_for_failure(name)
+                        technical = (
+                            f"Swarm task is running but unhealthy: task_id={task.task_id}; "
+                            f"health_status={health_status!r}; expected_image={expected_image!r}; "
+                            f"service_image={latest.service_image!r}; "
+                            f"service_logs={service_logs[-12000:]}"
+                        )
+                        raise DeploymentError(
+                            technical,
+                            stage="swarm_startup",
+                            code="SWARM_TASK_UNHEALTHY",
+                            user_message="The Swarm task is running but its configured health check is unhealthy.",
+                            technical_message=technical,
+                            details={
+                                "task_id": task.task_id,
+                                "health_status": health_status,
+                                "healthcheck_configured": True,
+                                "expected_image": expected_image,
+                                "service_image": latest.service_image,
+                                "service_logs": service_logs[-12000:],
+                            },
+                        )
+                else:
+                    return latest
 
             failed = [
                 task for task in latest.tasks
@@ -811,6 +856,7 @@ class SwarmRuntime:
                 "update_message": latest.update_message if latest else None,
                 "replicas_desired": latest.replicas_desired if latest else None,
                 "replicas_running": latest.replicas_running if latest else None,
+                "healthcheck_configured": latest.healthcheck_configured if latest else False,
                 "tasks": [task.__dict__ for task in (latest.tasks if latest else ())],
             },
         )
