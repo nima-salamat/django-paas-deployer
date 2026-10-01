@@ -44,12 +44,17 @@ def register_agent_admin_urls():
     ]
 
 
-@hooks.register("register_snippet_listing_buttons")
-def agent_listing_buttons(snippet, user, next_url=None):
+@hooks.register("construct_snippet_listing_buttons")
+def agent_listing_buttons(buttons, snippet, user, context=None):
     if not getattr(user, "is_staff", False):
         return
     if not (getattr(user, "is_superuser", False) or user.has_perm("agent.change_agent")):
         return
+    next_url = None
+    try:
+        next_url = context.get("next_url") if context else None
+    except AttributeError:
+        pass
     query = urlencode({"next": next_url}) if next_url else ""
     suffix = f"?{query}" if query else ""
     if isinstance(snippet, Agent) and snippet.status == Agent.Status.ACTIVE:
@@ -60,12 +65,12 @@ def agent_listing_buttons(snippet, user, next_url=None):
             ("Disable", "wagtail_agent_disable_confirm", 40),
             ("Revoke", "wagtail_agent_revoke_confirm", 50),
         ):
-            yield wagtailsnippets_widgets.SnippetListingButton(
+            buttons.append(wagtailsnippets_widgets.SnippetListingButton(
                 label, reverse(route, kwargs={"agent_id": snippet.pk}) + suffix, priority=priority
-            )
+            ))
     elif isinstance(snippet, AgentCredential) and snippet.revoked_at is None:
-        yield wagtailsnippets_widgets.SnippetListingButton(
+        buttons.append(wagtailsnippets_widgets.SnippetListingButton(
             "Revoke credential",
             reverse("wagtail_agent_revoke_credential_confirm", kwargs={"credential_id": snippet.pk}) + suffix,
             priority=10,
-        )
+        ))
