@@ -84,8 +84,14 @@ def build_openapi(agent, *, request=None):
         "/agent/v1/services/{service_id}/start": {"post": {"summary": "Start service", "parameters": [idempotency]}},
         "/agent/v1/services/{service_id}/stop": {"post": {"summary": "Stop service", "parameters": [idempotency]}},
         "/agent/v1/services/{service_id}/restart": {"post": {"summary": "Restart service", "parameters": [idempotency]}},
+        "/agent/v1/services/{service_id}/rebuild": {"post": {"summary": "Rebuild service runtime from the active revision", "parameters": [idempotency]}},
         "/agent/v1/services/{service_id}/purge-runtime": {"post": {"summary": "Purge service runtime", "parameters": [idempotency]}},
         "/agent/v1/services/{service_id}/status": {"get": {"summary": "Read service status through existing runtime boundary"}},
+        "/agent/v1/services/{service_id}/metrics": {
+            "get": {
+                "summary": "Read observed runtime CPU/RAM usage and plan limits"
+            }
+        },
         "/agent/v1/services/{service_id}/logs": {
             "get": {
                 "summary": "Read runtime service logs",
@@ -124,6 +130,20 @@ def build_openapi(agent, *, request=None):
             "get": {"summary": "Read database bindings through the existing boundary"},
             "post": {"summary": "Create/update database binding", "parameters": [idempotency]},
             "delete": {"summary": "Remove database binding", "parameters": [idempotency]},
+        },
+        "/agent/v1/services/{service_id}/database-credentials": {
+            "get": {
+                "summary": "Read database connection credentials for the owning user only",
+                "parameters": [
+                    {
+                        "name": "reveal",
+                        "in": "query",
+                        "required": False,
+                        "schema": {"type": "boolean", "default": False},
+                        "description": "When true, return the decrypted database password. Requires the dedicated high-risk scope."
+                    }
+                ]
+            }
         },
         "/agent/v1/services/{service_id}/networks": {
             "get": {"summary": "Read network attachments"},
@@ -202,9 +222,48 @@ def build_openapi(agent, *, request=None):
             "patch": {"summary": "Update volume through existing protection rules", "parameters": [idempotency]},
             "delete": {"summary": "Delete volume through existing protection rules", "parameters": [idempotency]},
         },
+        "/agent/v1/deployments/help": {
+            "get": {"summary": "Get complete deployment configuration, platform and lifecycle help"}
+        },
+        "/agent/v1/deployments/inspect": {
+            "post": {
+                "summary": "Inspect a ZIP and return detected platform/configuration suggestions",
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["file"],
+                                "properties": {"file": {"type": "string", "format": "binary"}}
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/agent/v1/deployments": {
             "get": {"summary": "List accessible deployments"},
-            "post": {"summary": "Create deployment metadata", "parameters": [idempotency]},
+            "post": {
+                "summary": "Create deployment metadata",
+                "parameters": [idempotency],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["service"],
+                                "properties": {
+                                    "service": {"type": "string", "format": "uuid"},
+                                    "source": {"type": "string", "enum": ["archive", "zip", "database", "database_native"]},
+                                    "config": {"type": "object", "description": "Use GET /agent/v1/deployments/help for the complete contract and per-platform defaults/schema."}
+                                }
+                            }
+                        }
+                    }
+                }
+            },
         },
         "/agent/v1/deployments/{deployment_id}": {
             "get": {"summary": "Inspect deployment"},
