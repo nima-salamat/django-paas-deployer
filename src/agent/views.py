@@ -89,6 +89,22 @@ def idempotent(fn):
     return wrapped
 
 
+def _audit_resource_id(kwargs, data):
+    for key in ("service_id", "deployment_id", "revision_id", "volume_id", "network_id", "plan_id"):
+        value = kwargs.get(key)
+        if value:
+            return str(value)
+    if isinstance(data, dict):
+        if data.get("id"):
+            return str(data["id"])
+        for container_key in ("service", "deployment", "revision", "resource"):
+            value = data.get(container_key)
+            if isinstance(value, dict) and value.get("id"):
+                return str(value["id"])
+    return ""
+
+
+
 class AgentAPIView(APIView):
     authentication_classes = []
     permission_classes = []
@@ -131,19 +147,7 @@ class AgentAPIView(APIView):
                 success=success,
                 status_code=status_code,
                 resource_type=self.audit_resource_type,
-                resource_id=str(
-                    kwargs.get("service_id") or kwargs.get("deployment_id") or
-                    kwargs.get("revision_id") or kwargs.get("volume_id") or
-                    kwargs.get("network_id") or kwargs.get("plan_id")
-                    or data.get("id")
-                    or (data.get("service") or {}).get("id")
-                    if isinstance(data.get("service"), dict)
-                    else data.get("id")
-                    or (data.get("deployment") or {}).get("id")
-                    if isinstance(data.get("deployment"), dict)
-                    else data.get("id")
-                    or ""
-                ),
+                resource_id=_audit_resource_id(kwargs, data),
                 error_code=str(data.get("code") or ""),
                 failure_domain=str(data.get("failure_domain") or ""),
                 retryability=bool(data.get("retryable")),
