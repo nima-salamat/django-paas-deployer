@@ -35,6 +35,7 @@ from services.models import Volume  # type: ignore
 from services.revisioning import ensure_revision_for_deploy, activate_revision_locked, materialize_revision_config, mark_revision_failed
 
 from deployments.common import parse_config, as_bool, as_int
+from deployments.common.deadline import DeploymentDeadline
 from deployments.common.deployment_profile import normalize_profile
 from deployments.common.resource_policy import runtime_limits, worker_count as derive_worker_count, build_limits
 from deployments.common.config import (
@@ -970,6 +971,7 @@ class DeployService:
             platform_type=service.plan.plan_type,
             event_sink=state_tracker.event_sink,
             deployment_id=deploy_item.id,
+            deadline=DeploymentDeadline.from_deployment(deploy_item),
             environment=environment,
             server_type=server_type,
             celery=celery,
