@@ -3,6 +3,7 @@ from django.test import TestCase
 from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.response import Response
 from rest_framework.test import APIRequestFactory
+from unittest.mock import patch
 
 from agent.application import begin_idempotency, complete_idempotency
 from agent.errors import AgentError
@@ -123,6 +124,21 @@ class AgentIdempotencyTests(TestCase):
         with self.assertRaises(AgentError) as ctx:
             begin_idempotency(self.agent, second)
         self.assertEqual(ctx.exception.code, "IDEMPOTENCY_KEY_REUSED")
+
+    def test_fingerprint_failure_is_not_collapsed_to_an_empty_payload(self):
+        factory = APIRequestFactory()
+        request = factory.post(
+            "/agent/v1/deployments/example/upload",
+            {"file": SimpleUploadedFile("app.zip", b"content", content_type="application/zip")},
+            format="multipart",
+            HTTP_IDEMPOTENCY_KEY="fingerprint-failure",
+        )
+        request.user = self.user
+        with patch("hashlib.sha256", side_effect=RuntimeError("hash failure")):
+            with self.assertRaises(AgentError) as ctx:
+                begin_idempotency(self.agent, request)
+        self.assertEqual(ctx.exception.code, "IDEMPOTENCY_FINGERPRINT_FAILED")
+        self.assertTrue(ctx.exception.retryability)
 
     def test_query_string_is_part_of_idempotency_fingerprint(self):
         factory = APIRequestFactory()
