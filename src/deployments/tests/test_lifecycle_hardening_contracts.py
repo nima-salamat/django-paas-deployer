@@ -174,4 +174,4 @@ def test_outbox_retention_is_scheduled_and_operator_bounded():
     settings_source = (__import__("pathlib").Path(__file__).resolve().parents[2] / "config/settings.py").read_text(encoding="utf-8")
     assert "prune_deployment_event_outbox" in task_source
     assert "DEPLOYMENT_EVENT_OUTBOX_RETENTION_DAYS" in task_source
-    assert ""schedule": 3600.0" in settings_source
+    assert '"schedule": 3600.0' in settings_source
