@@ -719,13 +719,31 @@ class MarkReadAPIView(APIView):
             if latest_created is None or m["created_at"] > latest_created:
                 latest_created = m["created_at"]
 
+        read_state_changed = False
         if latest_created and (not part.last_read_at or latest_created > part.last_read_at):
             part.last_read_at = latest_created
             part.save(update_fields=["last_read_at"])
+            read_state_changed = True
         elif force_all:
             from django.utils import timezone as tz
             part.last_read_at = tz.now()
             part.save(update_fields=["last_read_at"])
+            read_state_changed = True
+
+        # The conversation list stores a per-user Redis projection of unread_count.
+        # Invalidate only this user's projection after the authoritative read cursor
+        # changes so the next list read is immediately consistent without touching
+        # every participant's cache or issuing a count query from this endpoint.
+        if read_state_changed:
+            try:
+                from ..message_cache import ConversationCacheService
+                ConversationCacheService.invalidate_user_conv_list(request.user.id)
+            except Exception:
+                logger.exception(
+                    "conversation-list cache invalidation after mark-read failed user=%s conversation=%s",
+                    request.user.id,
+                    pk,
+                )
 
         if new_receipts:
             try:
