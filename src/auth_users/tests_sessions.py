@@ -94,6 +94,41 @@ class UserSessionTests(TransactionTestCase):
         self.assertNotEqual(session.credential_hash, tokens["refresh"])
         self.assertTrue(session.is_active)
 
+    def test_activity_heartbeat_updates_session_and_device_presence(self):
+        tokens = issue_tokens_for_user(self.user)
+        session = UserSession.objects.get(session_id=tokens["session_id"])
+        device = Device.objects.get(pk=session.device_id)
+        old_time = timezone.now() - timedelta(minutes=10)
+        UserSession.objects.filter(pk=session.pk).update(last_seen_at=old_time)
+        Device.objects.filter(pk=device.pk).update(last_seen_at=old_time)
+
+        client = self._client_for(tokens["access"])
+        response = client.post("/auth/api/sessions/activity/", {}, format="json")
+
+        self.assertEqual(response.status_code, 200)
+        session.refresh_from_db()
+        device.refresh_from_db()
+        self.assertGreater(session.last_seen_at, old_time)
+        self.assertEqual(device.last_seen_at, session.last_seen_at)
+        self.assertIn("last_seen_at", response.json())
+
+    def test_activity_heartbeat_is_rate_limited_without_changing_auth_validity(self):
+        tokens = issue_tokens_for_user(self.user)
+        session = UserSession.objects.get(session_id=tokens["session_id"])
+        old_time = timezone.now() - timedelta(minutes=5)
+        UserSession.objects.filter(pk=session.pk).update(last_seen_at=old_time)
+
+        client = self._client_for(tokens["access"])
+        first = client.post("/auth/api/sessions/activity/", {}, format="json")
+        session.refresh_from_db()
+        first_seen = session.last_seen_at
+        second = client.post("/auth/api/sessions/activity/", {}, format="json")
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        session.refresh_from_db()
+        self.assertEqual(session.last_seen_at, first_seen)
+
     def test_limit_revokes_oldest_active_session_transactionally(self):
         first = issue_tokens_for_user(self.user)
         first_session = UserSession.objects.get(session_id=first["session_id"])
