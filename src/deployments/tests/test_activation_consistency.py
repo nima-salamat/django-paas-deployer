@@ -117,8 +117,7 @@ class DeploymentActivationConsistencyContractTests(unittest.TestCase):
         orchestrator = self.orchestrator.split("def _handle_failure", 1)[1].split(
             "def _deploy_process_containers", 1
         )[0]
-        self.assertIn("runtime.rollback_service(service_name)", orchestrator)
-        self.assertIn("runtime.remove(service_name)", orchestrator)
+        self.assertIn("self._recover_swarm_mutations(", orchestrator)
         self.assertIn("Swarm deployment failed; requesting Swarm service rollback.", orchestrator)
         self.assertNotIn(
             'if snapshot.image_ref:\n            try:\n                self.logger.warning("rollback", "Starting rollback.',
