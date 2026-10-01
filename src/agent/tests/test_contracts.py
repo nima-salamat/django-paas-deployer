@@ -10,6 +10,7 @@ from rest_framework.test import APIClient, APIRequestFactory
 from rest_framework.response import Response
 
 from agent.views import complete_error
+from types import SimpleNamespace
 
 
 class AgentContractTests(TestCase):
@@ -140,9 +141,11 @@ class AgentContractTests(TestCase):
         from plans.models import Plan
         from plans.apis import PlanAdminViewSet
         plan = Plan.objects.create(
-            name="contract-plan",
+            name="Bronze",
             platform="docker",
-            plan_type="custom",
+            max_cpu=1,
+            max_ram=512,
+            max_storage=10,
         )
         with patch("agent.application.call_viewset_action") as boundary:
             from rest_framework.response import Response
@@ -151,11 +154,19 @@ class AgentContractTests(TestCase):
                 status=200,
             )
             from agent.application import manage_plan
+            request = SimpleNamespace(
+                user=self.user,
+                data={},
+                query_params={},
+                GET={},
+                method="PATCH",
+                META={},
+            )
             result = manage_plan(
-                self.client._request.user if hasattr(self.client, "_request") else self.user,
+                request,
                 "update",
                 plan_id=plan.pk,
-                data={"name": "contract-plan"},
+                data={"name": "Bronze"},
             )
         self.assertEqual(result.pk, plan.pk)
         self.assertIs(boundary.call_args.args[0], PlanAdminViewSet)
