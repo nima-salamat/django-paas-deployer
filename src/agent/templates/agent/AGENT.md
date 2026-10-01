@@ -101,6 +101,17 @@ Service creation requires a valid user-owned Private Network. Inspect networks f
 
     GET {{ api_base_url }}/services/{service_id}/logs
 
+### Configuration
+
+Configuration, environment, secrets, endpoints, networks and database bindings are exposed only when their corresponding scopes and the existing user/service permissions allow them.
+
+    GET/PATCH {{ api_base_url }}/services/{service_id}/configuration
+    GET/POST/DELETE {{ api_base_url }}/services/{service_id}/environment
+    GET/POST/DELETE {{ api_base_url }}/services/{service_id}/secrets
+    GET/POST/DELETE {{ api_base_url }}/services/{service_id}/endpoints
+    GET/POST/DELETE {{ api_base_url }}/services/{service_id}/networks
+    GET/POST/DELETE {{ api_base_url }}/services/{service_id}/databases
+
 ### Revisions
 
     GET {{ api_base_url }}/services/{service_id}/revisions
