@@ -45,10 +45,9 @@ class TestServiceTransitions(unittest.TestCase):
         check_service_transition(SERVICE_RUNNING, SERVICE_RUNNING)
         check_service_transition(SERVICE_STOPPED, SERVICE_STOPPED)
 
-    def test_invalid_queued_to_stopped(self):
-        # Cannot go straight from QUEUED to STOPPED without deploying.
-        with self.assertRaises(InvalidTransition):
-            check_service_transition(SERVICE_QUEUED, SERVICE_STOPPED)
+    def test_queued_to_stopped_for_prestart_cancellation(self):
+        # A queued operation can be cancelled before its worker starts.
+        check_service_transition(SERVICE_QUEUED, SERVICE_STOPPED)
 
     def test_invalid_stopped_to_running(self):
         # Stopped services must go through QUEUED before RUNNING.
