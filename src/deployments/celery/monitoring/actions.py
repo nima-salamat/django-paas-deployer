@@ -217,7 +217,7 @@ def mark_deploy_failed(
         return False
 
     now = timezone.now()
-    StateManager.transition_deploy_system_terminal(
+    committed = StateManager.transition_deploy_system_terminal(
         deploy.pk,
         DeploymentStatusChoices.FAILED,
         update_fields={
@@ -244,6 +244,9 @@ def mark_deploy_failed(
             },
         },
     )
+    if not committed:
+        logger.info("Skipping monitor failure side effects for deploy=%s; another terminal outcome won.", deploy.pk)
+        return False
 
     logger.warning("Deploy %s → failed [%s]: %s", deploy.pk, stage, message)
 
@@ -364,7 +367,7 @@ def mark_rollback_complete(deploy: Deploy) -> bool:
     if locked is None or locked.status != DeploymentStatusChoices.ROLLING_BACK:
         return False
 
-    StateManager.transition_deploy_system_terminal(
+    committed = StateManager.transition_deploy_system_terminal(
         deploy.pk,
         DeploymentStatusChoices.ROLLED_BACK,
         update_fields={
@@ -374,7 +377,7 @@ def mark_rollback_complete(deploy: Deploy) -> bool:
             "status_message": "Rollback completed successfully.",
         },
         event_payload={
-            "event_id": str(__import__("uuid").uuid4()),
+            "event_id": str(uuid.uuid4()),
             "trace_id": str(deploy.pk),
             "deployment_id": str(deploy.pk),
             "service_id": str(locked.service_id),
@@ -388,6 +391,9 @@ def mark_rollback_complete(deploy: Deploy) -> bool:
             "details": {"deploy_status_before": locked.status},
         },
     )
+    if not committed:
+        logger.info("Skipping rollback completion side effects for deploy=%s; another terminal outcome won.", deploy.pk)
+        return False
 
     service = locked.service
     if service:
@@ -414,7 +420,7 @@ def mark_rollback_failed(deploy: Deploy) -> bool:
 
     message = "Rollback failed because the deployment container does not exist."
 
-    StateManager.transition_deploy_system_terminal(
+    committed = StateManager.transition_deploy_system_terminal(
         deploy.pk,
         DeploymentStatusChoices.FAILED,
         update_fields={
@@ -437,6 +443,9 @@ def mark_rollback_failed(deploy: Deploy) -> bool:
             "details": {"deploy_status_before": locked.status},
         },
     )
+    if not committed:
+        logger.info("Skipping rollback failure side effects for deploy=%s; another terminal outcome won.", deploy.pk)
+        return False
 
     service = locked.service
     if service and service.status not in (
