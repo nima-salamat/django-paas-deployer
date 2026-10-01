@@ -27,6 +27,15 @@ class Agent(BaseModel):
         except ValueError as exc:raise ValidationError({"scopes":str(exc)}) from exc
     def __str__(self): return f"{self.name} ({self.user})"
 
+    def save(self, *args, **kwargs):
+        from django.core.exceptions import ValidationError
+        try:
+            self.scopes = sorted(validate_scopes(self.scopes or []))
+        except ValueError as exc:
+            raise ValidationError({"scopes": str(exc)}) from exc
+        return super().save(*args, **kwargs)
+
+
 class AgentCredential(BaseModel):
     class TokenType(models.TextChoices): ACCESS="access","Access token"
     agent=models.ForeignKey(Agent,on_delete=models.CASCADE,related_name="credentials")
