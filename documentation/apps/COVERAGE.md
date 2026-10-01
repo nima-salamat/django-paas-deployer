@@ -560,3 +560,34 @@ A source change that adds a production surface must update its owning documentat
 ## Wagtail administration coverage
 
 The complete source-derived Wagtail ownership and coverage audit is maintained at [reference/wagtail-admin-audit.md](../reference/wagtail-admin-audit.md). It documents the intentional exposure decision for every concrete first-party model, editable versus read-only surfaces, domain actions, secrets handling, permissions, cross-app operator workflows and remaining dashboard candidates.
+
+## 2026-10-01 maintenance additions
+
+The source-derived validator excludes test modules (`tests.py`, `test_*.py`, `tests_*.py`) from production-surface coverage. The following production surfaces were added after the previous manifest baseline and are intentionally mapped to their owning app boundary:
+
+### users
+- `users.ProfileImagerSerializer`
+- `users.DeletePasswordSerializer`
+
+### auth_users
+- `src/auth_users/tasks.py`
+
+### services
+- `src/services/wagtail_admin/views.py`
+
+### deployments
+- `src/deployments/core/docker_source.py`
+- `src/deployments/core/routing.py`
+
+### app_catalog
+- `src/app_catalog/wagtail_admin/models.py`
+- `src/app_catalog/wagtail_admin/views.py`
+- `src/app_catalog/wagtail_hooks.py`
+
+### custom_emails
+- `custom_emails.EmailTemplateSerializer`
+- `custom_emails.EmailTemplatePreviewSerializer`
+- `custom_emails.EmailLogSerializer`
+
+### plans
+- Test modules are excluded by the validator and require no production-surface entry.
