@@ -356,6 +356,7 @@ class DeploymentOrchestrator:
             )
 
             if existing_container.exists():
+                self._assert_rolling_port_compatible(existing_container, config)
                 renamed_old_name = f"{config.name}-old-{int(__import__('time').time())}"
                 self.logger.info(
                     "container_replacement",
@@ -1172,6 +1173,44 @@ class DeploymentOrchestrator:
                 "resource_journal",
                 "Failed to persist deployment resource journal entry.",
                 details={"kind": kind, "name": name, "state": state, "error": str(exc)},
+            )
+
+    @staticmethod
+    def _assert_rolling_port_compatible(existing: Container, config: DeploymentConfig) -> None:
+        """Reject legacy start-first replacement when host ports would collide."""
+        desired = dict((config.runtime_options or {}).get("port_bindings") or {})
+        if not desired:
+            return
+        try:
+            info = existing.inspect() or {}
+        except Exception:
+            # Unknown inspection cannot prove a conflict; fail closed before
+            # mutation rather than risk a runtime create/rename race.
+            raise DeploymentError(
+                "The existing container port bindings could not be inspected before replacement.",
+                stage="validation",
+                code="LEGACY_PORT_INSPECTION_UNKNOWN",
+                recoverable=True,
+            )
+        current = ((info.get("HostConfig") or {}).get("PortBindings") or {})
+        collisions = []
+        for container_port, bindings in desired.items():
+            for binding in bindings or []:
+                host_port = str(binding.get("HostPort") or "")
+                protocol = str(container_port).rsplit("/", 1)[-1].lower()
+                if not host_port:
+                    continue
+                for old_binding in current.get(container_port, []) or []:
+                    old_port = str(old_binding.get("HostPort") or "")
+                    if old_port == host_port:
+                        collisions.append({"container_port": container_port, "host_port": host_port, "protocol": protocol})
+        if collisions:
+            raise DeploymentError(
+                "The legacy runtime cannot perform a start-first replacement with the same published host port.",
+                stage="validation",
+                code="LEGACY_START_FIRST_PORT_CONFLICT",
+                user_message="This deployment reuses a published host port that is still owned by the running version.",
+                details={"collisions": collisions, "routing_mode": "host_published"},
             )
 
     def _cleanup_created_process_containers(self, config: DeploymentConfig) -> list[dict[str, object]]:
