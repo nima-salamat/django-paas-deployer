@@ -77,7 +77,11 @@ def idempotent(fn):
                 self.audit_metadata = {"idempotent_replay": True}
                 return response
             response = fn(self, request, *args, **kwargs)
-            complete_idempotency(row, response)
+            complete_idempotency(
+                row,
+                response,
+                store_body=bool(getattr(self, "idempotency_store_response", True)),
+            )
             return response
         except Exception:
             abandon_idempotency(row)
@@ -96,6 +100,7 @@ class AgentAPIView(APIView):
     audit_action = "agent.request"
     audit_resource_type = ""
     audit_mutating = False
+    idempotency_store_response = True
 
     def initial(self, request, *args, **kwargs):
         request.agent_request_id = get_request_id(request)
@@ -312,7 +317,7 @@ class ServiceActionView(AgentSecuredAPIView):
         from services.api.volume_files import purge_service_runtime_apiview
         scope=self.action_scopes[action]
         if scope not in set(request.agent.scopes or []): raise AgentError("INSUFFICIENT_SCOPE",f"Missing {scope} scope.",status_code=403,failure_domain="authorization")
-        ensure_service_access(get_service(service_id,request.user,action=self.share_actions[action]),request.user,action=self.share_actions[action])
+        get_service(service_id,request.user,action="can_view")
         fn={"start":start_service_apiview,"stop":stop_service_apiview,"restart":restart_service_apiview,"purge-runtime":purge_service_runtime_apiview}[action]
         self.audit_action=f"services.{action.replace('-','_')}"
         return call_api_view_handler(fn,request,"post",data={"service_id":str(service_id)})
@@ -321,7 +326,7 @@ class ServiceActionView(AgentSecuredAPIView):
 class ServiceStatusView(AgentSecuredAPIView):
     required_scopes=("services.read",); audit_action="services.status"; audit_resource_type="service"
     def get(self,request,service_id):
-        get_service(service_id,request.user,action="can_view_metrics")
+        get_service(service_id,request.user,action="can_view")
         from services.api.runtime import service_status_apiview
         return call_api_view_handler(service_status_apiview,request,"post",data={"service_id":str(service_id)})
 
@@ -347,7 +352,8 @@ class PlanManagementView(AgentSecuredAPIView):
     @idempotent
     def post(self,request):
         from plans.serializers import PlanSerializer
-        if not (request.user.is_staff or request.user.is_superuser):raise AgentError("PERMISSION_DENIED","Plan management requires the existing staff/admin permission boundary.",status_code=403,failure_domain="authorization")
+        from .application import require_plan_management
+        require_plan_management(request.user, "create")
         ser=PlanSerializer(data=request.data)
         if not ser.is_valid():raise AgentError("INVALID_REQUEST","Plan validation failed.",status_code=400,extra={"errors":ser.errors})
         plan=ser.save(); self.audit_action="plans.create"; return Response({"result":"success","plan":_plan_payload(plan)},status=201)
@@ -355,7 +361,8 @@ class PlanManagementView(AgentSecuredAPIView):
     def patch(self,request,plan_id):
         from plans.models import Plan
         from plans.serializers import PlanSerializer
-        if not (request.user.is_staff or request.user.is_superuser):raise AgentError("PERMISSION_DENIED","Plan management requires the existing staff/admin permission boundary.",status_code=403,failure_domain="authorization")
+        from .application import require_plan_management
+        require_plan_management(request.user, "update")
         plan=Plan.objects.filter(pk=plan_id).first()
         if not plan:raise AgentError("PLAN_NOT_FOUND","Plan not found.",status_code=404)
         ser=PlanSerializer(plan,data=request.data,partial=True)
@@ -365,7 +372,8 @@ class PlanManagementView(AgentSecuredAPIView):
     def delete(self,request,plan_id):
         from plans.models import Plan
         from services.models import Service
-        if not (request.user.is_staff or request.user.is_superuser):raise AgentError("PERMISSION_DENIED","Plan management requires the existing staff/admin permission boundary.",status_code=403,failure_domain="authorization")
+        from .application import require_plan_management
+        require_plan_management(request.user, "delete")
         plan=Plan.objects.filter(pk=plan_id).first()
         if not plan:raise AgentError("PLAN_NOT_FOUND","Plan not found.",status_code=404)
         if Service.objects.filter(plan=plan).exists():raise AgentError("PLAN_IN_USE","Cannot delete a plan assigned to a service.",status_code=409,failure_domain="resource")
@@ -550,6 +558,7 @@ class ServiceLogsExportView(AgentSecuredAPIView):
 
 
 class ConfigurationView(AgentSecuredAPIView):
+    idempotency_store_response=False
     audit_resource_type="service"
     def get(self,request,service_id):
         if "service_config.read" not in set(request.agent.scopes or []):raise AgentError("INSUFFICIENT_SCOPE","Missing service_config.read scope.",status_code=403,failure_domain="authorization")
@@ -564,6 +573,7 @@ class ConfigurationView(AgentSecuredAPIView):
 
 
 class EnvironmentView(AgentSecuredAPIView):
+    idempotency_store_response=False
     audit_resource_type="service"
     def get(self,request,service_id):
         if "service_environment.read" not in set(request.agent.scopes or []):raise AgentError("INSUFFICIENT_SCOPE","Missing service_environment.read scope.",status_code=403,failure_domain="authorization")
@@ -582,6 +592,7 @@ class EnvironmentView(AgentSecuredAPIView):
 
 
 class SecretsView(AgentSecuredAPIView):
+    idempotency_store_response=False
     audit_resource_type="service"
     def get(self,request,service_id):
         if "service_secrets.read" not in set(request.agent.scopes or []):raise AgentError("INSUFFICIENT_SCOPE","Missing service_secrets.read scope.",status_code=403,failure_domain="authorization")
