@@ -143,9 +143,6 @@ class Client:
             cluster=cluster,
             endpoint=endpoint,
         )
-        # No per-instance client construction — share the singleton.
-        # We keep the ``base_url`` parameter for signature compatibility.
-        self._client = get_docker_client(base_url)
 
     @property
     def client(self) -> docker.DockerClient:
