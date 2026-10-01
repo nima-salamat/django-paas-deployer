@@ -6,7 +6,7 @@ SERVICE_SCOPES=("services.read","services.create","services.update","services.de
 PLAN_SCOPES=("plans.read","plans.manage","plans.apply")
 DEPLOYMENT_SCOPES=("deployments.read","deployments.create","deployments.upload","deployments.start","deployments.cancel","deployments.redeploy","deployments.rebuild","deployments.rollback","deployments.delete","deployments.logs.read","deployments.logs.export")
 RUNTIME_SCOPES=("service_logs.read","service_logs.export")
-CONFIG_SCOPES=("service_config.read","service_config.write","service_environment.read","service_environment.write","service_secrets.read","service_secrets.write","service_endpoints.read","service_endpoints.write","service_volumes.read","service_volumes.write","service_networks.read","service_networks.write")
+CONFIG_SCOPES=("service_config.read","service_config.write","service_environment.read","service_environment.write","service_secrets.read","service_secrets.write","service_endpoints.read","service_endpoints.write","service_volumes.read","service_volumes.write","service_networks.read","service_networks.write","service_database_credentials.read")
 AGENT_SCOPES=("agent.manifest.generate",)
 SHELL_SCOPES=("shell.read","shell.execute","shell.replace","shell.files.read","shell.files.write")
 ALL_SCOPES=frozenset(SERVICE_SCOPES+PLAN_SCOPES+DEPLOYMENT_SCOPES+RUNTIME_SCOPES+CONFIG_SCOPES+SHELL_SCOPES+AGENT_SCOPES)
@@ -18,7 +18,7 @@ DESTRUCTIVE_SCOPES=frozenset({
     "service_secrets.write","service_volumes.write","service_networks.write",
 })
 
-HIGH_RISK_SCOPES=frozenset({"agent.manifest.generate","services.delete","services.purge","deployments.cancel","deployments.rebuild","deployments.rollback","deployments.delete","service_secrets.write","service_volumes.write","service_networks.write","shell.execute","shell.replace","shell.files.write"})
+HIGH_RISK_SCOPES=frozenset({"agent.manifest.generate","service_database_credentials.read","services.delete","services.purge","deployments.cancel","deployments.rebuild","deployments.rollback","deployments.delete","service_secrets.write","service_volumes.write","service_networks.write","shell.execute","shell.replace","shell.files.write"})
 
 def validate_scopes(scopes):
     values=sorted({str(s).strip() for s in (scopes or []) if str(s).strip()})
