@@ -47,8 +47,8 @@ Binds one catalog service definition to its concrete Service and Deploy records.
 | Field | Type | Semantics |
 |---|---|---|
 | instance | FK ApplicationInstance, CASCADE | Coordinator ownership. |
-| service | OneToOne services.Service, CASCADE | Concrete child Service created from the catalog plan. |
-| deploy | OneToOne deploy.Deploy, CASCADE | Concrete execution/provenance record for that child. |
+| service | OneToOne services.Service, PROTECT | Concrete child Service created from the catalog plan; the application binding must be removed before the Service can be deleted. |
+| deploy | OneToOne deploy.Deploy, PROTECT | Concrete execution/provenance record for that child; deleting the binding must not silently delete the deployment record. |
 | service_key | CharField(64) | Stable definition key used to map catalog intent to the child resource. Unique within the installation. |
 | sequence | PositiveInteger, default 0 | Dispatch order. Coordinator uses it for deterministic one-at-a-time progression. |
 | dispatch_task_id | CharField(64), indexed | Child dispatch Celery task ownership/correlation. |
