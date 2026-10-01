@@ -54,7 +54,6 @@ from deployments.common.exceptions import (
 from deployments.common.retry import is_retryable_exception
 from deployments.core.state.locks import acquire_service_deployment_lock
 from deployments.core.state.manager import StateManager
-from deployments.core.swarm import SwarmRuntime, swarm_enabled
 from services.models import Service  # type: ignore
 from services.revisioning import ensure_revision_for_deploy, materialize_revision_config, activate_revision_locked, mark_revision_failed, get_active_deploy
 
@@ -173,8 +172,11 @@ def restart_service(self, service_id) -> None:
     """Restart a running application through the selected runtime backend."""
     try:
         service = Service.objects.get(pk=service_id)
-        if swarm_enabled():
-            SwarmRuntime().restart_service_group(str(service.pk))
+        from deployments.infrastructure.django_runtime import DjangoRuntimeSelectionResolver
+        selection = DjangoRuntimeSelectionResolver().resolve(service=service, probe=False)
+        if selection.backend == "swarm":
+            runtime = DjangoRuntimeSelectionResolver().registry.resolve_adapter(selection)
+            runtime.restart_service_group(str(service.pk))
             Service.objects.filter(pk=service.pk).update(
                 status=SERVICE_STATUS_CHOICES.RUNNING,
                 desired_state="running",
@@ -182,7 +184,7 @@ def restart_service(self, service_id) -> None:
                 deploy_started=None,
                 deployed_at=timezone.now(),
             )
-            logger.info("Restarted Swarm service group for service=%s", service_id)
+            logger.info("Restarted runtime service group for service=%s", service_id)
             return
 
         # Legacy fallback keeps the existing deploy semantics.
