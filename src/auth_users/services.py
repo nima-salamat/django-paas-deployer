@@ -99,7 +99,7 @@ def issue_tokens_for_user(user, *, request=None, device_id=None, device=None):
                     "last_ip": metadata.get("last_ip"),
                     "metadata": metadata,
                 },
-            )
+            )[0]
         else:
             device_obj.user = locked_user
         if device_obj.revoked_at is not None:
