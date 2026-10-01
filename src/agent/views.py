@@ -425,37 +425,27 @@ class PlanManagementView(AgentSecuredAPIView):
     def get_agent_contract_path(self, request):
         return "/agent/v1/plans/manage/{plan_id}" if self.kwargs.get("plan_id") else "/agent/v1/plans/manage"
     required_scopes=("plans.manage",); audit_resource_type="plan"; audit_mutating=True
+
     @idempotent
     def post(self,request):
-        from plans.serializers import PlanSerializer
-        from .application import require_plan_management
-        require_plan_management(request.user, "create")
-        ser=PlanSerializer(data=request.data)
-        if not ser.is_valid():raise AgentError("INVALID_REQUEST","Plan validation failed.",status_code=400,extra={"errors":ser.errors})
-        plan=ser.save(); self.audit_action="plans.create"; return Response({"result":"success","plan":_plan_payload(plan)},status=201)
+        from .application import manage_plan
+        plan=manage_plan(request,"create",data=dict(request.data))
+        self.audit_action="plans.create"
+        return Response({"result":"success","plan":_plan_payload(plan)},status=201)
+
     @idempotent
     def patch(self,request,plan_id):
-        from plans.models import Plan
-        from plans.serializers import PlanSerializer
-        from .application import require_plan_management
-        require_plan_management(request.user, "update")
-        plan=Plan.objects.filter(pk=plan_id).first()
-        if not plan:raise AgentError("PLAN_NOT_FOUND","Plan not found.",status_code=404)
-        ser=PlanSerializer(plan,data=request.data,partial=True)
-        if not ser.is_valid():raise AgentError("INVALID_REQUEST","Plan validation failed.",status_code=400,extra={"errors":ser.errors})
-        plan=ser.save(); self.audit_action="plans.update"; return Response({"result":"success","plan":_plan_payload(plan)})
+        from .application import manage_plan
+        plan=manage_plan(request,"update",plan_id=plan_id,data=dict(request.data))
+        self.audit_action="plans.update"
+        return Response({"result":"success","plan":_plan_payload(plan)})
+
     @idempotent
     def delete(self,request,plan_id):
-        from plans.models import Plan
-        from services.models import Service
-        from .application import require_plan_management
-        require_plan_management(request.user, "delete")
-        plan=Plan.objects.filter(pk=plan_id).first()
-        if not plan:raise AgentError("PLAN_NOT_FOUND","Plan not found.",status_code=404)
-        if Service.objects.filter(plan=plan).exists():raise AgentError("PLAN_IN_USE","Cannot delete a plan assigned to a service.",status_code=409,failure_domain="resource")
-        plan.delete(); self.audit_action="plans.delete"; return Response({"result":"success","plan_id":str(plan_id)},status=200)
-
-
+        from .application import manage_plan
+        manage_plan(request,"destroy",plan_id=plan_id)
+        self.audit_action="plans.delete"
+        return Response({"result":"success","plan_id":str(plan_id)},status=200)
 class NetworkListCreateView(AgentPage):
     agent_contract_path = "/agent/v1/networks"
     required_scopes_by_method={"GET":("service_networks.read",),"POST":("service_networks.write",)}
