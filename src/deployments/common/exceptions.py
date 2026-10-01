@@ -34,6 +34,36 @@ from __future__ import annotations
 from typing import Any
 
 
+class FailureDomain(str, Enum):
+    USER_INPUT = "USER_INPUT"
+    PLATFORM_CONFIG = "PLATFORM_CONFIG"
+    TRANSIENT_INFRA = "TRANSIENT_INFRA"
+    RUNTIME_APP = "RUNTIME_APP"
+    INTERNAL_BUG = "INTERNAL_BUG"
+
+class Retryability(str, Enum):
+    NEVER = "NEVER"
+    IMMEDIATE = "IMMEDIATE"
+    BACKOFF = "BACKOFF"
+    RECONCILIATION_ONLY = "RECONCILIATION_ONLY"
+
+class FailureVisibility(str, Enum):
+    USER = "USER"
+    OPERATOR = "OPERATOR"
+    DEBUG = "DEBUG"
+
+class ResourceEffect(str, Enum):
+    NONE = "NONE"
+    CREATED = "CREATED"
+    MUTATED = "MUTATED"
+    PARTIALLY_CLEANED = "PARTIALLY_CLEANED"
+    ORPHANED = "ORPHANED"
+
+class FailureCertainty(str, Enum):
+    OBSERVED = "OBSERVED"
+    INFERRED = "INFERRED"
+    UNKNOWN = "UNKNOWN"
+
 class DeploymentError(Exception):
     """Base error for all deployment failures.
 
