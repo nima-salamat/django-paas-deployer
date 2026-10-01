@@ -2,7 +2,7 @@
 
 TicketMessage.save() updates Ticket.last_message_at/updated_at, so message persistence has a synchronous model side effect.
 
-Ticket APIs broadcast committed ticket state through Channels consumers. WebSocket notification is not authoritative storage.
+Ticket APIs broadcast committed ticket state through Channels consumers. WebSocket notification is not authoritative storage. `TicketEventsConsumer` and `TicketNotifyConsumer` use the same session-bound JWT contract as the rest of the first-party WebSockets: handshake validation requires `sid`, and heartbeat revalidates the server-side session before continuing delivery.
 
 Attachment downloads are authorized before file streaming. File validation happens before persistence; filenames are normalized and executable signatures are rejected.
 
