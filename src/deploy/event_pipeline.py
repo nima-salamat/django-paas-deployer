@@ -76,6 +76,11 @@ class DeploymentEventPipeline:
         }
         if exception:
             payload["exception_type"] = type(exception).__name__
+            metadata = getattr(exception, "failure_metadata", None)
+            if metadata:
+                details = dict(payload.get("details") or {})
+                details["failure"] = dict(metadata)
+                payload["details"] = details
         if traceback_text:
             payload["traceback"] = sanitize(traceback_text)
 
