@@ -761,3 +761,41 @@ def _network_payload(n):
 
 def _volume_payload(v):
     return {"id":str(v.pk),"name":v.name,"service_id":str(v.service_id) if v.service_id else None,"user_id":str(v.user_id),"size_mb":v.size_mb,"default_bind":v.default_bind,"default_mode":v.default_mode,"released_at":getattr(v,"released_at",None),"reclaim_attempted_at":getattr(v,"reclaim_attempted_at",None),"reclaim_error":getattr(v,"reclaim_error","")}
+
+
+class DatabaseBindingsView(AgentSecuredAPIView):
+    required_scopes=()
+    audit_resource_type="service"
+
+    def _check(self, request, write=False):
+        from agent.application import get_service
+        scope="service_config.write" if write else "service_config.read"
+        if scope not in set(request.agent.scopes or []):
+            raise AgentError("INSUFFICIENT_SCOPE", f"Missing {scope} scope.", status_code=403, failure_domain="authorization")
+        return get_service(request.parser_context.get("kwargs", {}).get("service_id") if hasattr(request, "parser_context") else None, request.user)
+
+    def _call(self, request, service_id, method, write=False):
+        self._check_scope(request, write)
+        get_service(service_id, request.user, action="can_view")
+        from services.api.configuration import ServiceDatabaseBindingsAPIView
+        handler=ServiceDatabaseBindingsAPIView()
+        return getattr(handler, method)(request, service_id)
+
+    def _check_scope(self, request, write):
+        scope="service_config.write" if write else "service_config.read"
+        if scope not in set(request.agent.scopes or []):
+            raise AgentError("INSUFFICIENT_SCOPE", f"Missing {scope} scope.", status_code=403, failure_domain="authorization")
+
+    def get(self, request, service_id):
+        self.audit_action="service_database_bindings.read"
+        return self._call(request, service_id, "get", write=False)
+
+    def post(self, request, service_id):
+        self.audit_action="service_database_bindings.write"
+        self.audit_mutating=True
+        return self._call(request, service_id, "post", write=True)
+
+    def delete(self, request, service_id):
+        self.audit_action="service_database_bindings.delete"
+        self.audit_mutating=True
+        return self._call(request, service_id, "delete", write=True)
