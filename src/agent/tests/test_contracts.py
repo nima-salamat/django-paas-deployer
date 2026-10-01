@@ -33,6 +33,19 @@ class AgentContractTests(TestCase):
         _, self.raw = issue_access_credential(self.agent)
         self.client = APIClient()
 
+    def test_agent_api_implementations_are_modular_and_legacy_views_are_shims(self):
+        import agent.apis as api_package
+        import agent.views as legacy_views
+
+        self.assertTrue(api_package.__name__.startswith("agent.apis"))
+        self.assertEqual(
+            legacy_views.AgentRootView.__module__,
+            api_package.AgentRootView.__module__,
+        )
+        self.assertTrue(api_package.ServiceMetricsView.__module__.startswith("agent.apis."))
+        self.assertTrue(api_package.DeploymentHelpView.__module__.startswith("agent.apis."))
+        self.assertTrue(api_package.DatabaseCredentialsView.__module__.startswith("agent.apis."))
+
     def test_identity_root_does_not_require_resource_scope(self):
         from agent.contracts import contract_for
         contract = contract_for("/agent/v1/", "GET")
