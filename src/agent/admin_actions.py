@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from django.contrib import messages
 from django.contrib.admin.views.decorators import staff_member_required
+from django.middleware.csrf import get_token
 from django.http import HttpResponse
 from django.utils.html import escape
 from django.shortcuts import get_object_or_404, redirect
@@ -35,7 +36,7 @@ def _return_agent(request, agent):
 def _confirm_page(request, title, action_url, description, method="POST"):
     safe_title = title.replace("<", "&lt;").replace(">", "&gt;")
     body = description.replace("<", "&lt;").replace(">", "&gt;")
-    return HttpResponse(
+    response = HttpResponse(
         f"""<!doctype html><html><body>
 <h1>{safe_title}</h1><p>{body}</p>
 <form method="{method}" action="{action_url}">
@@ -45,6 +46,9 @@ def _confirm_page(request, title, action_url, description, method="POST"):
 </body></html>""",
         content_type="text/html; charset=utf-8",
     )
+    response["Cache-Control"] = "no-store"
+    response["Pragma"] = "no-cache"
+    return response
 
 
 @staff_member_required
@@ -79,7 +83,7 @@ def issue_credential(request, agent_id):
         resource_type="agent_credential", resource_id=credential.pk,
         resource_effect="changed",
     )
-    return HttpResponse(
+    response = HttpResponse(
         f"""<!doctype html><html><body>
 <h1>Agent credential issued</h1>
 <p>This credential is shown once. Store it in the external Agent secret store.</p>
@@ -89,6 +93,9 @@ def issue_credential(request, agent_id):
 </body></html>""",
         content_type="text/html; charset=utf-8",
     )
+    response["Cache-Control"] = "no-store"
+    response["Pragma"] = "no-cache"
+    return response
 
 
 @staff_member_required
@@ -127,7 +134,7 @@ def rotate_credential(request, agent_id):
         resource_type="agent", resource_id=agent.pk, resource_effect="changed",
         metadata={"revoked_previous_credentials": True},
     )
-    return HttpResponse(
+    response = HttpResponse(
         f"""<!doctype html><html><body>
 <h1>Agent credential rotated</h1>
 <p>All previous active Agent credentials were revoked.</p>
@@ -137,6 +144,9 @@ def rotate_credential(request, agent_id):
 </body></html>""",
         content_type="text/html; charset=utf-8",
     )
+    response["Cache-Control"] = "no-store"
+    response["Pragma"] = "no-cache"
+    return response
 
 
 @staff_member_required
