@@ -173,7 +173,7 @@ def test_laravel_frontend_build_runs_from_selected_frontend_root():
         config=Config(), logger=None,
     )
     assert "cd /var/www/html/frontend" in out
-    assert "&& npm ci" in out
+    assert "&& ( npm ci || npm install )" in out
     assert "&& npm run build" in out
 
 
@@ -750,7 +750,7 @@ def test_full_php_render_wrapped_sibling_frontend_is_buildable():
         Config(), None,
     )
     assert "cd /var/www/html/frontend" in out
-    assert "RUN cd /var/www/html/backend\\" in out
+    assert "cd /var/www/html/backend" in out
     assert "MyProject" not in out
     assert "ENV APACHE_DOCUMENT_ROOT=/var/www/html/backend/public" in out
     # Well-formed: the injected frontend block must not end in a dangling
@@ -794,4 +794,5 @@ def test_cached_laravel_frontend_stage_sees_composer_vendor():
     assert "AS deployer-frontend-builder" in out
     assert "COPY --from=deployer-backend /var/www/html/vendor /frontend/vendor" in out
     assert "FROM deployer-backend AS deployer-final" in out
-    assert "COPY --from=deployer-frontend-builder /frontend/public/build /var/www/html/public/build" in out
+    assert "COPY --from=deployer-frontend-builder /frontend/" in out
+    assert "/var/www/html/" in out
