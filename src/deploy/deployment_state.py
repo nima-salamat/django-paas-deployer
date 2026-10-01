@@ -81,6 +81,20 @@ class DjangoDeploymentState:
                         "progress": 100,
                         "status_message": "Deployment cancelled before execution.",
                     },
+                    event_payload={
+                        "event_id": str(uuid.uuid4()),
+                        "trace_id": self.events._trace_id(),
+                        "deployment_id": str(locked.pk),
+                        "service_id": str(locked.service_id),
+                        "revision_id": str(getattr(locked, "revision_id", "") or ""),
+                        "task_id": self._owner_task_id,
+                        "event_type": "deployment.cancelled.warning",
+                        "stage": "cancelled",
+                        "level": "warning",
+                        "message": "Deployment cancelled before execution.",
+                        "progress": 100,
+                        "details": {"cancelled_before_execution": True},
+                    },
                 )
                 self.deploy = locked
                 self._finished = True
