@@ -19,6 +19,7 @@ from deployments.common.exceptions import (
     to_deployment_error,
 )
 from deployments.runtime.contract import RuntimeContract, RuntimeHandle, RuntimeOperationResult
+from deployments.observability import deployment_span
 from deployments.runtime.errors import (
     RuntimeOperationError,
     RuntimeUnavailableError,
@@ -158,11 +159,13 @@ class DeploymentLifecycleExecutor:
             context.assert_can_continue()
             self._assert_runtime_selection(context)
             context.emit("planning", "Deployment plan is being prepared.", progress=10)
-            plan = strategy.plan(context)
+            with deployment_span("revision.snapshot", attributes={"deployment.id": context.deployment_id, "service.id": context.service_id, "revision.id": context.revision_id}):
+                plan = strategy.plan(context)
             context.assert_can_continue()
 
             context.emit("runtime_apply", "Applying the deployment plan.", progress=45)
-            applied = runtime.apply(plan, operation_key=context.operation("apply"))
+            with deployment_span("runtime.apply", attributes={"deployment.id": context.deployment_id, "runtime.backend": runtime.backend}):
+                applied = runtime.apply(plan, operation_key=context.operation("apply"))
             handle = applied.handle
             if handle is None:
                 raise RuntimeOperationError(
@@ -172,14 +175,16 @@ class DeploymentLifecycleExecutor:
             context.assert_can_continue()
 
             context.emit("readiness", "Waiting for runtime readiness.", progress=75)
-            ready = runtime.wait_ready(
+            with deployment_span("runtime.wait_ready", attributes={"deployment.id": context.deployment_id, "runtime.backend": runtime.backend}):
+                ready = runtime.wait_ready(
                 handle,
                 timeout=readiness_timeout,
                 cancel_check=context.cancellation_requested,
-            )
+                )
             context.assert_can_continue()
 
-            strategy.activate(context, plan, ready)
+            with deployment_span("activation.commit", attributes={"deployment.id": context.deployment_id, "revision.id": context.revision_id}):
+                strategy.activate(context, plan, ready)
             transitioned = self.store.transition(
                 context,
                 sm.DEPLOY_SUCCEEDED,
