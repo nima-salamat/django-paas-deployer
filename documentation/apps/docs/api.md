@@ -40,11 +40,11 @@ Deleting a category runs in a transaction, moving documents and direct child cat
 | Method | Route | Behavior |
 |---|---|---|
 | GET, POST | /admin/assets/ | List/create admin assets; upload parsing uses multipart/form data. |
-| GET | /assets/<uuid>/ | Public/capability asset delivery when the attachment/publication rules permit. |
+| GET, HEAD | /assets/<uuid>/ | Public/capability asset delivery by UUID; published-document assets are shared-cacheable, while draft/unattached assets remain private-cacheable. |
 | GET, HEAD | /admin/assets/<uuid>/ | Authenticated admin preview. |
 | PATCH, DELETE | /assets/<uuid>/ | Admin-only mutation path despite the public GET capability route. |
 
-Asset serving is public/cacheable only when attached to a published document; otherwise cache is private. Uploads are validated by DocumentAsset.clean.
+Asset GET/HEAD is public for all assets. The UUID is the capability URL; cache policy is public only for assets attached to published documents and private otherwise. PATCH/DELETE remain protected. Uploads are validated by DocumentAsset.clean.
 
 ## Request-to-model chain
 
