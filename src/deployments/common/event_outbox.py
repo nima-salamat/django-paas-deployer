@@ -75,6 +75,26 @@ def dispatch_pending(*, batch_size: int = 100) -> dict[str, int]:
     return {"dispatched": dispatched, "failed": failed}
 
 
+def prune_dispatched(*, older_than_days: int = 30, batch_size: int = 1000) -> int:
+    """Delete only dispatched outbox rows older than the retention window."""
+    from datetime import timedelta
+    from deploy.models import DeploymentEventOutbox
+
+    days = max(1, int(older_than_days))
+    limit = max(1, min(int(batch_size), 5000))
+    cutoff = timezone.now() - timedelta(days=days)
+    ids = list(
+        DeploymentEventOutbox.objects
+        .filter(dispatched_at__isnull=False, dispatched_at__lt=cutoff)
+        .order_by("dispatched_at", "id")
+        .values_list("pk", flat=True)[:limit]
+    )
+    if not ids:
+        return 0
+    deleted, _ = DeploymentEventOutbox.objects.filter(pk__in=ids).delete()
+    return int(deleted)
+
+
 def _log_db_alias() -> str:
     from django.conf import settings
     return getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", None) or "default"
@@ -94,4 +114,4 @@ def _publish(deployment_id, payload: dict) -> bool:
     return True
 
 
-__all__ = ["dispatch_pending"]
+__all__ = ["dispatch_pending", "prune_dispatched"]
