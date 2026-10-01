@@ -389,7 +389,7 @@ class PlanApplyView(AgentSecuredAPIView):
 
 class ServiceActionView(AgentSecuredAPIView):
     def get_agent_contract_path(self, request):
-        return f"/agent/v1/services/{{service_id}}/{self.kwargs.get("action")}"
+        return f'/agent/v1/services/{{service_id}}/{self.kwargs.get("action")}'
 
     audit_resource_type="service"; audit_mutating=True
     @idempotent
@@ -578,7 +578,7 @@ class DeploymentUploadView(AgentSecuredAPIView):
 
 class DeploymentActionView(AgentSecuredAPIView):
     def get_agent_contract_path(self, request):
-        return f"/agent/v1/deployments/{{deployment_id}}/{self.kwargs.get("action")}"
+        return f'/agent/v1/deployments/{{deployment_id}}/{self.kwargs.get("action")}'
 
     @idempotent
     def post(self,request,deployment_id,action):
@@ -816,6 +816,7 @@ class ShellCommandView(AgentSecuredAPIView):
 class ShellCloseView(AgentSecuredAPIView):
     agent_contract_path = "/agent/v1/services/{service_id}/shell/sessions/{session_id}/close"
 
+    @idempotent
     def post(self,request,service_id,session_id):
         service=get_service(service_id,request.user,action="can_shell")
         token=request.headers.get("X-Shell-Token") or request.data.get("token")
