@@ -23,6 +23,45 @@ jobs:
 
   unit-tests:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: paas_ci
+          POSTGRES_USER: paas_ci
+          POSTGRES_PASSWORD: paas_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U paas_ci -d paas_ci"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      DJANGO_SETTINGS_MODULE: config.settings
+      SECRET_KEY: test-secret-key-for-ci
+      DEBUG: "1"
+      SWARM_ENABLED: "0"
+      DB_NAME: paas_ci
+      DB_USER: paas_ci
+      DB_PASSWORD: paas_ci
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      DEPLOYMENT_LOG_DB_NAME: paas_ci
+      DEPLOYMENT_LOG_DB_USER: paas_ci
+      DEPLOYMENT_LOG_DB_PASSWORD: paas_ci
+      DEPLOYMENT_LOG_DB_HOST: 127.0.0.1
+      DEPLOYMENT_LOG_DB_PORT: "5432"
+      REDIS_URL: redis://127.0.0.1:6379
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -37,11 +76,6 @@ jobs:
         run: |
           python scripts/validate_documentation.py
       - name: Run unit and regression tests
-        env:
-          DJANGO_SETTINGS_MODULE: config.settings
-          SECRET_KEY: test-secret-key-for-ci
-          DEBUG: "1"
-          SWARM_ENABLED: "0"
         run: |
           # Unit/regression suite only. Real Docker/Swarm tests are marked
           # deployment_integration and are not executed in this job.
