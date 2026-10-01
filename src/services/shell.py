@@ -1516,6 +1516,38 @@ def execute_compound_command(session,command,*,confirm=False):
     return {'stdout':out[:MAX_OUTPUT_BYTES].decode('utf-8','replace'),'stderr':err[:MAX_OUTPUT_BYTES].decode('utf-8','replace'),'exit_code':previous_code,'cwd':session.workdir}
 
 
+def shell_protocol_metadata(service_id=None):
+    """Return the public protocol contract shared by Agent and Service APIs."""
+    websocket_path = "/ws/services/shell/{service_id}/"
+    if service_id is not None:
+        websocket_path = websocket_path.format(service_id=service_id)
+    return {
+        "command_api": {
+            "mode": "one_shot",
+            "compound": True,
+            "operators": ["|", "&&", "||", ";"],
+            "max_segments": MAX_COMPOUND_SEGMENTS,
+            "max_pipeline_input_bytes": MAX_PIPE_INPUT_BYTES,
+            "blocked_syntax": ["<", ">", "<<", "<<<", "&", "&>", "$()", "backticks"],
+        },
+        "interactive_pty": {
+            "mode": "persistent",
+            "websocket_path": websocket_path,
+            "stdin": True,
+            "signals": ["ctrl-c", "ctrl-d", "ctrl-z", "ctrl-l"],
+            "compound": False,
+        },
+        "policy": {
+            "host_shell": False,
+            "user_controlled_shell_interpreter": False,
+            "destructive_commands_require_confirmation": True,
+            "path_confinement": True,
+            "output_limits": True,
+            "session_ttl": True,
+        },
+    }
+
+
 def _catalog_item(command: str, label: str, *, risk: str = Risk.READ_ONLY, interactive: bool = False, advanced: bool = False) -> dict:
     return {
         "command": command,
