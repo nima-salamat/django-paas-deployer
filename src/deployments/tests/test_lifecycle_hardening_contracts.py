@@ -55,12 +55,12 @@ def test_runtime_spec_redacts_secret_environment_values_and_is_stable():
 
 def test_failure_taxonomy_distinguishes_user_input_from_transient_infrastructure():
     bad_config = DeploymentError("invalid configuration", code="deployment_validation_failed", recoverable=False)
-    assert bad_config.failure_domain == str(FailureDomain.USER_INPUT)
-    assert bad_config.retryability == str(Retryability.NEVER)
+    assert bad_config.failure_domain == FailureDomain.USER_INPUT.value
+    assert bad_config.retryability == Retryability.NEVER.value
 
     transient = DeploymentError("daemon unavailable", code="docker_daemon_unavailable", recoverable=True)
-    assert transient.failure_domain == str(FailureDomain.RUNTIME_APP)
-    assert transient.retryability == str(Retryability.BACKOFF)
+    assert transient.failure_domain == FailureDomain.RUNTIME_APP.value
+    assert transient.retryability == Retryability.BACKOFF.value
 
 
 def test_terminal_outbox_authority_is_not_in_public_transition():
