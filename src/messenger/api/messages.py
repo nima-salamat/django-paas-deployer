@@ -751,7 +751,13 @@ class MarkReadAPIView(APIView):
                 broadcast_read(pk, request.user.id, new_receipts)
             except Exception:
                 logger.exception("broadcast_read failed")
-        return ok("Read", data={"receipts": len(new_receipts)})
+        return ok(
+            "Read",
+            data={
+                "receipts": len(new_receipts),
+                "last_read_at": part.last_read_at.isoformat() if part.last_read_at else None,
+            },
+        )
 
 
 
