@@ -134,7 +134,15 @@ class AgentAPIView(APIView):
                 resource_id=str(
                     kwargs.get("service_id") or kwargs.get("deployment_id") or
                     kwargs.get("revision_id") or kwargs.get("volume_id") or
-                    kwargs.get("network_id") or kwargs.get("plan_id") or ""
+                    kwargs.get("network_id") or kwargs.get("plan_id")
+                    or data.get("id")
+                    or (data.get("service") or {}).get("id")
+                    if isinstance(data.get("service"), dict)
+                    else data.get("id")
+                    or (data.get("deployment") or {}).get("id")
+                    if isinstance(data.get("deployment"), dict)
+                    else data.get("id")
+                    or ""
                 ),
                 error_code=str(data.get("code") or ""),
                 failure_domain=str(data.get("failure_domain") or ""),
