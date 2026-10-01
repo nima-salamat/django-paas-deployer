@@ -177,12 +177,15 @@ def restart_service(self, service_id) -> None:
         if selection.backend == "swarm":
             runtime = DjangoRuntimeSelectionResolver().registry.resolve_adapter(selection)
             runtime.restart_service_group(str(service.pk))
-            Service.objects.filter(pk=service.pk).update(
-                status=SERVICE_STATUS_CHOICES.RUNNING,
-                desired_state="running",
-                task_id=None,
-                deploy_started=None,
-                deployed_at=timezone.now(),
+            StateManager.transition_service(
+                service.pk,
+                SERVICE_STATUS_CHOICES.RUNNING,
+                update_fields={
+                    "desired_state": "running",
+                    "task_id": None,
+                    "deploy_started": None,
+                    "deployed_at": timezone.now(),
+                },
             )
             logger.info("Restarted runtime service group for service=%s", service_id)
             return
@@ -193,11 +196,15 @@ def restart_service(self, service_id) -> None:
         deploy_item = get_active_deploy(service)
         if deploy_item is None:
             raise InvalidServiceStateError("Service has no active deployment.")
-        deploy_item.status = DeploymentStatusChoices.PENDING
-        deploy_item.stage = "queued"
-        deploy_item.progress = 0
-        deploy_item.status_message = "Restart queued."
-        deploy_item.save(update_fields=["status", "stage", "progress", "status_message", "updated_at"])
+        StateManager.transition_deploy(
+            deploy_item.pk,
+            DeploymentStatusChoices.PENDING,
+            update_fields={
+                "stage": "queued",
+                "progress": 0,
+                "status_message": "Restart queued.",
+            },
+        )
         DeployService().execute(str(deploy_item.pk), task_id=str(self.request.id))
     except Exception as exc:
         if self.request.retries < self.max_retries:
