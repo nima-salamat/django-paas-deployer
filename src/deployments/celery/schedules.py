@@ -795,6 +795,28 @@ def _reconcile_active_deploy_swarm(deploy: Deploy) -> None:
         locked = Deploy.objects.select_for_update().select_related("service").filter(pk=deploy.pk).first()
         if not locked or locked.status not in ACTIVE_DEPLOY_STATUSES or locked.cancel_requested:
             return
+        labels = dict(getattr(state, "labels", {}) or {})
+        observed_release = str(labels.get("release.id") or "")
+        observed_revision = str(labels.get("revision.id") or "")
+        expected_release = str(getattr(locked, "release_id", "") or "")
+        expected_revision = str(getattr(locked, "revision_id", "") or "")
+        if expected_release and observed_release and observed_release != expected_release:
+            Deploy.objects.filter(pk=locked.pk).update(
+                reconciliation_required=True,
+                status_message="Runtime release identity differs from the authoritative deployment.",
+                updated_at=now,
+            )
+            logger.warning("Runtime release drift for deploy=%s expected=%s observed=%s", locked.pk, expected_release, observed_release)
+            return
+        if expected_revision and observed_revision and observed_revision != expected_revision:
+            Deploy.objects.filter(pk=locked.pk).update(
+                reconciliation_required=True,
+                status_message="Runtime revision identity differs from the authoritative deployment.",
+                updated_at=now,
+            )
+            logger.warning("Runtime revision drift for deploy=%s expected=%s observed=%s", locked.pk, expected_revision, observed_revision)
+            return
+
         current_policies = runtime_policies()
         if locked.status == "running":
             from deploy.base_images import deployment_phase_remaining_seconds
