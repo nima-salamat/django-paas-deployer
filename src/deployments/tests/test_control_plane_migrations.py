@@ -29,3 +29,11 @@ def test_dockerfile_uses_base_image_codename_and_normalizes_linux_mirror():
     assert 'codename="$${VERSION_CODENAME}"' in dockerfile
     assert 'case "$mirror" in' in dockerfile
     assert '*) mirror="http://$mirror" ;;' in dockerfile
+
+
+
+def test_deployment_log_has_no_cross_database_reverse_relations():
+    models = (ROOT / "src" / "deploy" / "models.py").read_text(encoding="utf-8")
+    deploy_log = models.split("class DeployLog", 1)[1].split("class BuildCacheArtifact", 1)[0]
+    assert 'related_name="+"' in deploy_log
+    assert "db_constraint=False" in deploy_log
