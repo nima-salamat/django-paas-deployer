@@ -138,6 +138,10 @@ class DeploymentEventPipeline:
 
     @staticmethod
     def _event_type(event) -> str:
+        details = event.details if isinstance(getattr(event, "details", None), dict) else {}
+        explicit = str(details.get("event_type") or "").strip()
+        if explicit:
+            return explicit
         if event.stage == "image_build" and event.level in {"debug", "info"}:
             return "image.build.output"
         return f"deployment.{event.stage}.{event.level}"
