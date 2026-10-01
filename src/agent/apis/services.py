@@ -158,9 +158,19 @@ class ServiceMetricsView(AgentSecuredAPIView):
             },
             "usage": {
                 "cpu_percent": cpu,
+                "cpu_cores": payload.get("cpu_cores"),
                 "memory_percent": memory,
+                "memory_usage_bytes": payload.get("memory_usage_bytes"),
             },
             "limits": {
+                "cpu_vcpu": float(plan.max_cpu) if plan is not None else payload.get("cpu_limit_cores"),
+                "memory_mb": int(float(plan.max_ram)) if plan is not None else (
+                    int(float(payload["memory_limit_bytes"]) / (1024 * 1024))
+                    if payload.get("memory_limit_bytes") not in (None, "")
+                    else None
+                ),
+                "memory_limit_bytes": payload.get("memory_limit_bytes"),
+            },
                 "cpu_vcpu": float(plan.max_cpu) if plan is not None else None,
                 "memory_mb": int(float(plan.max_ram)) if plan is not None else None,
             },
