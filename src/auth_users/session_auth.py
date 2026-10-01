@@ -36,6 +36,7 @@ class AuthenticatedSessionContext:
 @dataclass(frozen=True)
 class _CachedSession:
     context: AuthenticatedSessionContext
+    cached_at: datetime | None = None
 
 
 def session_cache_key(session_id: str) -> str:
