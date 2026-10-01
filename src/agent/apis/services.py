@@ -88,6 +88,7 @@ class ServiceStatusView(AgentSecuredAPIView):
     def get(self,request,service_id):
         get_service(service_id,request.user,action="can_view")
         from services.api.runtime import service_status_apiview
+        from deployments.core.swarm import swarm_enabled
         from ..application import call_runtime_api
         return call_runtime_api(service_status_apiview, request, service_id, data={"service_id":str(service_id)})
 
@@ -150,7 +151,7 @@ class ServiceMetricsView(AgentSecuredAPIView):
             "service_id": str(service.pk),
             "observed_at": timezone.now(),
             "runtime": {
-                "backend": "docker-swarm" if __import__("deployments.core.swarm", fromlist=["swarm_enabled"]).swarm_enabled() else "docker",
+                "backend": "docker-swarm" if swarm_enabled() else "docker",
                 "running": bool(payload.get("running")),
                 "metrics_available": metrics_available,
                 "metrics_reason": payload.get("metrics_reason"),
