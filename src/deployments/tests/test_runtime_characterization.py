@@ -68,6 +68,8 @@ def _deployment_config(**overrides):
             "service.id": "service-1",
             "deployment.id": "deployment-1",
             "process.name": "web",
+            "release.id": "release-1",
+            "revision.id": "revision-1",
         },
         "endpoints": [
             EndpointSpec(
@@ -124,6 +126,8 @@ def test_swarm_compilation_preserves_current_runtime_identity_and_resources():
     assert service["volumes"] == ["demo-data:/data:rw"]
     assert service["deploy"]["labels"]["passdeployer.service"] == "service-1"
     assert service["deploy"]["labels"]["passdeployer.deployment"] == "deployment-1"
+    assert service["deploy"]["labels"]["release.id"] == "release-1"
+    assert service["deploy"]["labels"]["revision.id"] == "revision-1"
     assert service["deploy"]["replicas"] == 1
     assert service["ports"] == [
         {"target": 8000, "published": 8000, "protocol": "tcp", "mode": "ingress"}
