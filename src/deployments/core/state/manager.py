@@ -178,18 +178,6 @@ class StateManager:
                 updates["execution_task_id"] = ""
 
             Deploy.objects.filter(pk=deploy_id).update(**updates)
-            if terminal and event_payload:
-                from deploy.models import DeploymentEventOutbox  # type: ignore
-                DeploymentEventOutbox.objects.create(
-                    deployment_id=deploy_id,
-                    service_id=str(deploy.service_id),
-                    event_id=event_payload.get("event_id") or None,
-                    event_type=str(event_payload.get("event_type") or "deployment.terminal"),
-                    stage=str(event_payload.get("stage") or effective_target)[:64],
-                    level=str(event_payload.get("level") or "info")[:16],
-                    occurred_at=timezone.now(),
-                    payload=event_payload,
-                )
             logger.info(
                 "StateManager: deploy %s %s -> %s",
                 deploy_id, src, target,
@@ -511,6 +499,18 @@ class StateManager:
                 updates["execution_task_id"] = ""
 
             Deploy.objects.filter(pk=deploy_id).update(**updates)
+            if terminal and event_payload:
+                from deploy.models import DeploymentEventOutbox  # type: ignore
+                DeploymentEventOutbox.objects.create(
+                    deployment_id=deploy_id,
+                    service_id=str(deploy.service_id),
+                    event_id=event_payload.get("event_id") or None,
+                    event_type=str(event_payload.get("event_type") or "deployment.terminal"),
+                    stage=str(event_payload.get("stage") or effective_target)[:64],
+                    level=str(event_payload.get("level") or "info")[:16],
+                    occurred_at=timezone.now(),
+                    payload=event_payload,
+                )
             logger.info(
                 "StateManager: owned deploy %s %s -> %s",
                 deploy_id,
