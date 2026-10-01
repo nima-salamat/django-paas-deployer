@@ -89,7 +89,7 @@ def issue_tokens_for_user(user, *, request=None, device_id=None, device=None):
         device_obj = device
         if device_obj is None:
             requested_device_id = _device_id(device_id)
-            device_obj, _ = Device.objects.get_or_create(
+            device_obj, created_device = Device.objects.get_or_create(
                 user=locked_user,
                 public_id=requested_device_id,
                 defaults={
