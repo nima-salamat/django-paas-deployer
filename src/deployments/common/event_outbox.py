@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ def dispatch_pending(*, batch_size: int = 100) -> dict[str, int]:
         except Exception as exc:
             failed += 1
             DeploymentEventOutbox.objects.filter(pk=row_id).update(
-                attempts=__import__('django.db.models', fromlist=['F']).F('attempts') + 1,
+                attempts=F('attempts') + 1,
                 last_error=str(exc)[:4000],
                 updated_at=timezone.now(),
             )
