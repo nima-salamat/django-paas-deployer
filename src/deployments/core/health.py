@@ -156,16 +156,21 @@ class DockerHealthChecker:
 
     @staticmethod
     def _container_port(info: dict) -> int:
-        ports = ((info.get("NetworkSettings") or {}).get("Ports") or {})
-        for binding in ports.values():
-            if isinstance(binding, list) and binding:
-                try:
-                    return int(binding[0].get("HostPort"))
-                except (AttributeError, TypeError, ValueError):
-                    continue
+        """Return the in-container listening port, never the published host port."""
         config = info.get("Config") or {}
         exposed = config.get("ExposedPorts") or {}
         for raw in exposed:
+            try:
+                return int(str(raw).split("/")[0])
+            except (TypeError, ValueError):
+                continue
+
+        # NetworkSettings.Ports is keyed by the internal target port
+        # (for example "8080/tcp"). Its binding values contain HostPort,
+        # which is deliberately ignored here because the probe targets the
+        # container IP directly.
+        ports = ((info.get("NetworkSettings") or {}).get("Ports") or {})
+        for raw in ports:
             try:
                 return int(str(raw).split("/")[0])
             except (TypeError, ValueError):
