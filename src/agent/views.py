@@ -26,6 +26,7 @@ from .application import (
     upload_deployment_zip,
     accessible_service_queryset,
     ensure_service_access,
+    create_service_from_plan,
 )
 from .authentication import AgentTokenAuthentication
 from .errors import AgentError, agent_error_response, normalize_exception
@@ -231,7 +232,8 @@ class AgentCapabilitiesView(AgentSecuredAPIView):
                     "deployments.read","deployments.create","deployments.upload","deployments.start","deployments.cancel",
                     "deployments.redeploy","deployments.rebuild","deployments.rollback","deployments.delete")},
                 "logs": {"deployment_read":"deployments.logs.read" in s,"deployment_export":"deployments.logs.export" in s,"runtime_read":"service_logs.read" in s,"runtime_export":"service_logs.export" in s},
-                "shell": {"read":"shell.read" in s,"execute":"shell.execute" in s,"replace":"shell.replace" in s,"files_read":"shell.files.read" in s,"files_write":"shell.files.write" in s},\n            "agent": {"manifest_generate":"agent.manifest.generate" in s},
+                "shell": {"read":"shell.read" in s,"execute":"shell.execute" in s,"replace":"shell.replace" in s,"files_read":"shell.files.read" in s,"files_write":"shell.files.write" in s},
+                "agent": {"manifest_generate":"agent.manifest.generate" in s},
             },
             "deployment_inputs": {"archive_zip": True, "database_native": True, "git": False, "existing_image": False},
             "logs": {
@@ -315,19 +317,42 @@ class ServiceDetailView(AgentSecuredAPIView):
 class ServiceFromPlanView(AgentSecuredAPIView):
     required_scopes=("services.create","plans.apply")
     audit_action="services.create_from_plan"; audit_resource_type="service"; audit_mutating=True
+
     @idempotent
     def post(self,request):
-        data=dict(request.data)
-        if not data.get("plan"): raise AgentError("INVALID_REQUEST","plan is required.",status_code=400)
-        if not data.get("network") and data.get("create_network"):
-            if "service_networks.write" not in set(request.agent.scopes or []):
-                raise AgentError("INSUFFICIENT_SCOPE","Creating a network requires service_networks.write.",status_code=403,failure_domain="authorization")
-            from .application import create_network, network_payload
-            network=create_network(request,{"name":data.get("network_name") or f"{data.get('name') or 'service'}-network","description":"Created by Agent service-from-plan workflow"})
-            data["network"]=str(network.pk); self.audit_metadata={"network_id":str(network.pk)}
-        service=create_service(request,data)
-        self.audit_metadata={**getattr(self,"audit_metadata",{}),"service_id":str(service.pk),"plan_id":str(service.plan_id)}
+        service, network = create_service_from_plan(request, dict(request.data))
+        self.audit_metadata = {
+            **getattr(self, "audit_metadata", {}),
+            "service_id": str(service.pk),
+            "plan_id": str(service.plan_id),
+            **({"network_id": str(network.pk)} if network is not None else {}),
+        }
         return Response({"result":"success","service":service_payload(service)},status=201)
+
+
+class PlanApplyView(AgentSecuredAPIView):
+    """Create a Service from an existing Plan through the normal Service API boundary."""
+    required_scopes=("plans.apply","services.create")
+    audit_action="plans.apply"
+    audit_resource_type="plan"
+    audit_mutating=True
+
+    @idempotent
+    def post(self,request,plan_id):
+        service, network = create_service_from_plan(
+            request,
+            dict(request.data),
+            plan_id=plan_id,
+        )
+        self.audit_metadata = {
+            "plan_id": str(plan_id),
+            "service_id": str(service.pk),
+            **({"network_id": str(network.pk)} if network is not None else {}),
+        }
+        return Response(
+            {"result":"success","service":service_payload(service)},
+            status=201,
+        )
 
 
 class ServiceActionView(AgentSecuredAPIView):
@@ -432,7 +457,10 @@ class NetworkDetailView(AgentSecuredAPIView):
         from .application import network_queryset,update_network,network_payload
         network=network_queryset(request.user).filter(pk=network_id).first()
         if not network:raise AgentError("NETWORK_NOT_FOUND","Network not found.",status_code=404)
-        network=update_network(network,dict(request.data)); self.audit_action="networks.update"; self.audit_mutating=True
+        network=update_network(request,network.pk,dict(request.data))
+        if isinstance(network, Response):
+            return network
+        self.audit_action="networks.update"; self.audit_mutating=True
         return Response({"result":"success","network":network_payload(network)})
     @idempotent
     def delete(self,request,network_id):
