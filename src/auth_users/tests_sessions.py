@@ -27,6 +27,7 @@ from .session_auth import (
     invalidate_session,
     resolve_session,
     session_cache_key,
+    _deserialize_cache_value,
 )
 from .token_serializers import (
     SessionTokenRefreshSerializer,
@@ -60,6 +61,25 @@ class UserSessionTests(TestCase):
             max_active_sessions=2,
             session_eviction_policy=LoginSettings.SessionEvictionPolicy.REVOKE_OLDEST,
         )
+
+    def test_cached_session_accepts_legacy_cached_at_metadata(self):
+        now = timezone.now()
+        cached = _deserialize_cache_value(
+            {
+                "session": {
+                    "session_id": "legacy-session",
+                    "user_id": self.user.id,
+                    "device_id": "12345678-1234-5678-1234-567812345678",
+                    "auth_generation": 1,
+                    "expires_at": (now + timedelta(minutes=5)).isoformat(),
+                    "cached_at": now.isoformat(),
+                }
+            }
+        )
+
+        self.assertIsNotNone(cached)
+        self.assertEqual(cached.cached_at, now)
+        self.assertEqual(cached.context.session_id, "legacy-session")
 
     def test_issue_creates_device_session_and_binds_token_identity(self):
         tokens = issue_tokens_for_user(self.user, device_id="12345678-1234-5678-1234-567812345678")
