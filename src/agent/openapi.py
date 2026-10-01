@@ -89,7 +89,17 @@ def build_openapi(agent, *, request=None):
         "/agent/v1/services/{service_id}/status": {"get": {"summary": "Read service status through existing runtime boundary"}},
         "/agent/v1/services/{service_id}/metrics": {
             "get": {
-                "summary": "Read observed runtime CPU/RAM usage and plan limits"
+                "summary": "Read observed runtime CPU/RAM usage and plan limits",
+                "responses": {
+                    "200": {
+                        "description": "Observed runtime metrics",
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/ServiceMetrics"}
+                            }
+                        }
+                    }
+                }
             }
         },
         "/agent/v1/services/{service_id}/logs": {
@@ -383,6 +393,41 @@ def build_openapi(agent, *, request=None):
                         "deployment_id": {"type": "string", "nullable": True},
                         "cursor": {"type": "string", "nullable": True},
                     },
+                },
+                "ServiceMetrics": {
+                    "type": "object",
+                    "properties": {
+                        "result": {"type": "string"},
+                        "service_id": {"type": "string", "format": "uuid"},
+                        "observed_at": {"type": "string", "format": "date-time"},
+                        "runtime": {
+                            "type": "object",
+                            "properties": {
+                                "backend": {"type": "string"},
+                                "running": {"type": "boolean"},
+                                "metrics_available": {"type": "boolean", "nullable": true},
+                                "metrics_reason": {"type": "string", "nullable": true}
+                            }
+                        },
+                        "usage": {
+                            "type": "object",
+                            "properties": {
+                                "cpu_percent": {"type": "number", "nullable": true},
+                                "cpu_cores": {"type": "number", "nullable": true},
+                                "memory_percent": {"type": "number", "nullable": true},
+                                "memory_usage_bytes": {"type": "number", "nullable": true}
+                            }
+                        },
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "cpu_vcpu": {"type": "number", "nullable": true},
+                                "memory_mb": {"type": "integer", "nullable": true},
+                                "memory_limit_bytes": {"type": "number", "nullable": true},
+                                "cpu_limit_cores": {"type": "number", "nullable": true}
+                            }
+                        }
+                    }
                 },
                 "ShellCommandResult": {
                     "type": "object",
