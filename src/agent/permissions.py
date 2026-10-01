@@ -23,7 +23,10 @@ class AgentScopePermission(BasePermission):
 
         mapping = getattr(view, "required_scopes_by_method", None)
         if mapping:
-            required = set(mapping.get(request.method.upper(), ()))
+            method = request.method.upper()
+            if method == "HEAD" and "GET" in mapping:
+                method = "GET"
+            required = set(mapping.get(method, ()))
         else:
             required = set(getattr(view, "required_scopes", ()) or ())
 
