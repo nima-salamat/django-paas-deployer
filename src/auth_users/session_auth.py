@@ -237,27 +237,10 @@ def touch_session_activity(
     request=None,
     force: bool = False,
 ) -> datetime:
-    """Record authenticated session presence with a bounded database write rate.
-
-    The current session is resolved against the authoritative session state.
-    Redis throttles database writes so high-frequency browser heartbeats do not
-    turn into a write-per-request workload.
-    """
+    """Record authenticated session presence with bounded database writes."""
+    context = resolve_session(str(session_id), user_id=user_id)
     now = timezone.now()
     interval = _activity_write_interval()
-    session = (
-        UserSession.objects.select_related("device")
-        .filter(
-            session_id=str(session_id),
-            user_id=user_id,
-            revoked_at__isnull=True,
-            expires_at__gt=now,
-            device__revoked_at__isnull=True,
-        )
-        .first()
-    )
-    if session is None:
-        raise AuthenticationFailed("Authentication session is invalid or revoked.")
     throttle_key = _activity_throttle_key(str(session_id))
 
     should_write = force
@@ -268,39 +251,40 @@ def touch_session_activity(
             should_write = True
 
     if should_write:
-        metadata = {}
+        last_ip = None
+        user_agent = ""
         if request is not None:
-            from .device_metadata import collect_request_device_metadata
+            forwarded = (request.META.get("HTTP_X_FORWARDED_FOR", "") or "").strip()
+            last_ip = forwarded.split(",", 1)[0].strip() if forwarded else request.META.get("REMOTE_ADDR")
+            user_agent = (request.META.get("HTTP_USER_AGENT", "") or "")[:500]
 
-            metadata = collect_request_device_metadata(
-                request,
-                client_signature=(request.data.get("client_signature", "") if hasattr(request, "data") else ""),
-                client_metadata=(request.data.get("client_metadata") if hasattr(request, "data") else None),
-            )
-        update_fields = ["last_seen_at"]
         session_updates = {"last_seen_at": now}
-        if metadata.get("last_ip") is not None:
-            session_updates["last_ip"] = metadata["last_ip"]
-            update_fields.append("last_ip")
-        if metadata.get("user_agent"):
-            session_updates["user_agent"] = metadata["user_agent"]
-            update_fields.append("user_agent")
-        if metadata:
-            session_updates["metadata"] = {**(session.metadata or {}), **metadata}
-            update_fields.append("metadata")
-        UserSession.objects.filter(pk=session.pk).update(**session_updates)
+        if last_ip:
+            session_updates["last_ip"] = last_ip
+        if user_agent:
+            session_updates["user_agent"] = user_agent
+
+        UserSession.objects.filter(
+            session_id=context.session_id,
+            user_id=user_id,
+            revoked_at__isnull=True,
+            expires_at__gt=now,
+            device__revoked_at__isnull=True,
+        ).update(**session_updates)
 
         device_updates = {"last_seen_at": now}
-        if metadata.get("last_ip") is not None:
-            device_updates["last_ip"] = metadata["last_ip"]
-        if metadata.get("user_agent"):
-            device_updates["user_agent"] = metadata["user_agent"]
-        if metadata:
-            device_updates["metadata"] = {**(session.device.metadata or {}), **metadata}
-        Device.objects.filter(pk=session.device_id).update(**device_updates)
+        if last_ip:
+            device_updates["last_ip"] = last_ip
+        if user_agent:
+            device_updates["user_agent"] = user_agent
+
+        Device.objects.filter(
+            public_id=context.device_id,
+            user_id=user_id,
+            revoked_at__isnull=True,
+        ).update(**device_updates)
 
     return now
-
 
 def session_management_min_age() -> timedelta:
     """Minimum age required before a session can revoke other sessions."""
