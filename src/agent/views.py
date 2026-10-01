@@ -395,6 +395,7 @@ class ServiceActionView(AgentSecuredAPIView):
 
 
 class ServiceStatusView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/{service_id}/status"
     required_scopes=("services.read",); audit_action="services.status"; audit_resource_type="service"
     def get(self,request,service_id):
         get_service(service_id,request.user,action="can_view")
