@@ -799,3 +799,15 @@ class DatabaseBindingsView(AgentSecuredAPIView):
         self.audit_action="service_database_bindings.delete"
         self.audit_mutating=True
         return self._call(request, service_id, "delete", write=True)
+
+
+class PlanApplyView(ServiceFromPlanView):
+    """Alias the high-level plan application workflow at the documented plan endpoint."""
+    def post(self, request, plan_id):
+        from .application import require_scopes
+        require_scopes(request.agent, "plans.apply", "services.create")
+        data = dict(request.data)
+        data["plan"] = str(plan_id)
+        request._full_data = data if hasattr(request, "_full_data") else getattr(request, "_full_data", None)
+        # ServiceFromPlanView reads request.data, so use a small proxy with the merged payload.
+        return ServiceFromPlanView().post(RequestProxy(request, data=data))
