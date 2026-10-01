@@ -12,15 +12,16 @@ class DocsAssetSecurityContractTests(unittest.TestCase):
 
     def test_public_asset_get_uses_method_aware_jwt_and_allow_any(self):
         self.assertIn("class DocsAssetJWTAuthentication(JWTAuthentication):", self.apis)
-        self.assertIn('if request.method == "GET":', self.apis)
+        self.assertIn('if request.method in {"GET", "HEAD"}:', self.apis)
         self.assertIn("authentication_classes = [DocsAssetJWTAuthentication, SessionAuthentication]", self.apis)
         self.assertIn('if self.request.method == "GET":', self.apis)
         self.assertIn("return [AllowAny()]", self.apis)
 
     def test_public_asset_route_never_reads_draft_or_unattached_files(self):
         block = self.apis.split("class DocumentAssetAPIView", 1)[1].split("class DocumentAssetAdminPreviewAPIView", 1)[0]
-        self.assertIn('if not asset.document_id or asset.document.status != Document.Status.PUBLISHED:', block)
-        self.assertIn("raise Http404", block)
+        self.assertIn("is_publicly_cached = bool(", block)
+        self.assertIn('asset.document.status == Document.Status.PUBLISHED', block)
+        self.assertIn("return self._serve_asset(asset, public=is_publicly_cached)", block)
         self.assertNotIn('query_params.get("token")', block)
         self.assertNotIn("get_validated_token", block)
 
