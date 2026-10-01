@@ -588,8 +588,17 @@ def begin_idempotency(agent, request):
             else:
                 normalized[str(field)] = value
         payload["data"] = normalized
-    except Exception:
-        payload["data"] = {}
+    except Exception as exc:
+        # Idempotency is a safety boundary: if the complete request fingerprint
+        # cannot be established, fail closed instead of collapsing requests to
+        # the same empty fingerprint.
+        raise AgentError(
+            "IDEMPOTENCY_FINGERPRINT_FAILED",
+            "The request could not be safely fingerprinted for idempotency.",
+            status_code=503,
+            retryability=True,
+            failure_domain="runtime",
+        ) from exc
 
     rh = stable_json_hash(payload | {"method": request.method, "path": request.path})
     now = timezone.now()
