@@ -325,6 +325,12 @@ def build_base_runtime_image(self, base_image_id, force_rebuild=False, build_pol
         )
         raise
 
+@shared_task(bind=True, max_retries=0, name="deployments.celery.tasks.dispatch_deployment_event_outbox")
+def dispatch_deployment_event_outbox(self, batch_size=100) -> dict[str, int]:
+    """Project durable deployment events without making projection authoritative."""
+    from deployments.common.event_outbox import dispatch_pending
+    return dispatch_pending(batch_size=batch_size)
+
 @shared_task(bind=True, max_retries=0, name="deployments.celery.tasks.maintain_build_cache")
 def maintain_build_cache(self, force=False) -> dict[str, object]:
     """Reconcile tenant application-image retention and global BuildKit GC."""
