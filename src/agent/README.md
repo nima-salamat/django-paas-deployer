@@ -4,7 +4,7 @@ The `agent` app exposes a stable versioned control-plane API at `/agent/v1/`.
 
 ## Architecture
 
-Agent authentication, scopes, API contracts, rate limiting, idempotency and audit live in the Agent application. Resource operations delegate to the existing PassDeployer application/service boundaries.
+Agent authentication, scopes, API contracts, rate limiting, idempotency and audit live in the Agent application. Endpoint authorization metadata is defined once in `agent.contracts` and projected into runtime checks, capabilities, OpenAPI and `AGENT.md`. Resource operations delegate to the existing PassDeployer application/service boundaries.
 
 The Agent app does not become a Docker runtime owner, deployment orchestrator, second share/permission model, second log database, or second shell security system.
 
