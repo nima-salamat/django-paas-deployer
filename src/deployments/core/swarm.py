@@ -236,6 +236,8 @@ def _service_labels(config) -> dict[str, str]:
         "passdeployer.service": str(config.labels.get("service.id") or ""),
         "passdeployer.deployment": str(config.labels.get("deployment.id") or ""),
         "passdeployer.process": str(config.labels.get("process.name") or "web"),
+        "release.id": str(config.labels.get("release.id") or ""),
+        "revision.id": str(config.labels.get("revision.id") or ""),
     }
     labels.update({str(k): str(v) for k, v in (config.labels or {}).items()})
 
