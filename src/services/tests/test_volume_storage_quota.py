@@ -220,7 +220,9 @@ def test_bind_mount_is_not_reported_as_managed_volume_usage():
 def test_release_transition_is_centralized_and_reclaimable():
     source = __import__("inspect").getsource(Volume.save)
     assert "previous_service_id" in source
-    assert "self.released_at = self.released_at or timezone.now()" in source
+    assert "release_transition = bool(previous_service_id and self.service_id is None)" in source
+    assert "self.released_at = timezone.now()" in source
+    assert "Volume.objects.select_for_update()" in source
     assert "reclaim_attempted_at" in source
     tasks = (
         __import__("pathlib").Path(__file__).resolve().parents[2]
