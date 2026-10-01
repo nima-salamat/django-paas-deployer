@@ -198,7 +198,8 @@ class UserSessionTests(TransactionTestCase):
         tokens = issue_tokens_for_user(self.user)
         serializer = SessionTokenRefreshSerializer(data={"refresh": tokens["refresh"]})
 
-        first = serializer.is_valid(raise_exception=True)
+        self.assertTrue(serializer.is_valid(raise_exception=True))
+        first = serializer.validated_data
         self.assertIn("refresh", first)
 
         reused = SessionTokenRefreshSerializer(data={"refresh": tokens["refresh"]})
@@ -210,7 +211,8 @@ class UserSessionTests(TransactionTestCase):
         session_id = tokens["session_id"]
 
         serializer = SessionTokenRefreshSerializer(data={"refresh": tokens["refresh"]})
-        data = serializer.is_valid(raise_exception=True)
+        self.assertTrue(serializer.is_valid(raise_exception=True))
+        data = serializer.validated_data
 
         rotated = RefreshToken(data["refresh"])
         self.assertEqual(str(rotated["sid"]), session_id)
