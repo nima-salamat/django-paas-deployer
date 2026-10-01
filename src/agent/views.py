@@ -317,12 +317,13 @@ class ServiceActionView(AgentSecuredAPIView):
     def post(self,request,service_id,action):
         from services.api.runtime import start_service_apiview, stop_service_apiview, restart_service_apiview
         from services.api.volume_files import purge_service_runtime_apiview
+        from .application import call_runtime_api
         scope=self.action_scopes[action]
         if scope not in set(request.agent.scopes or []): raise AgentError("INSUFFICIENT_SCOPE",f"Missing {scope} scope.",status_code=403,failure_domain="authorization")
         get_service(service_id,request.user,action="can_view")
         fn={"start":start_service_apiview,"stop":stop_service_apiview,"restart":restart_service_apiview,"purge-runtime":purge_service_runtime_apiview}[action]
         self.audit_action=f"services.{action.replace('-','_')}"
-        return call_api_view_handler(fn,request,"post",data={"service_id":str(service_id)})
+        return call_runtime_api(fn, request, service_id, data={"service_id":str(service_id)})
 
 
 class ServiceStatusView(AgentSecuredAPIView):
@@ -330,7 +331,8 @@ class ServiceStatusView(AgentSecuredAPIView):
     def get(self,request,service_id):
         get_service(service_id,request.user,action="can_view")
         from services.api.runtime import service_status_apiview
-        return call_api_view_handler(service_status_apiview,request,"post",data={"service_id":str(service_id)})
+        from .application import call_runtime_api
+        return call_runtime_api(service_status_apiview, request, service_id, data={"service_id":str(service_id)})
 
 
 class PlanListView(AgentPage):
