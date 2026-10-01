@@ -443,15 +443,88 @@ def runtime_logs(service_id, request):
         raise AgentError("INVALID_CURSOR",str(exc),status_code=400)
 
 
-def issue_access_credential(agent, *, expires_at=None, metadata=None):
-    raw=issue_raw_access_token()
+def _issue_access_credential_locked(agent, *, expires_at=None, metadata=None):
+    raw = issue_raw_access_token()
     if expires_at is None:
-        expires_at=timezone.now()+timedelta(days=max(1,int(getattr(settings,"AGENT_ACCESS_TOKEN_DEFAULT_DAYS",30))))
-    credential=AgentCredential.objects.create(agent=agent,token_prefix=token_prefix(raw),token_hash=token_hash(raw),
-                                              token_type=AgentCredential.TokenType.ACCESS,expires_at=expires_at,
-                                              metadata=sanitize_metadata(metadata or {}))
-    return credential,raw
+        expires_at = timezone.now() + timedelta(
+            days=max(1, int(getattr(settings, "AGENT_ACCESS_TOKEN_DEFAULT_DAYS", 30)))
+        )
+    credential = AgentCredential.objects.create(
+        agent=agent,
+        token_prefix=token_prefix(raw),
+        token_hash=token_hash(raw),
+        token_type=AgentCredential.TokenType.ACCESS,
+        expires_at=expires_at,
+        metadata=sanitize_metadata(metadata or {}),
+    )
+    return credential, raw
 
+
+@transaction.atomic
+def issue_access_credential(agent, *, expires_at=None, metadata=None):
+    locked_agent = Agent.objects.select_for_update().select_related("user").get(pk=agent.pk)
+    if locked_agent.status != Agent.Status.ACTIVE or not locked_agent.user.is_active:
+        raise AgentError(
+            "AGENT_DISABLED",
+            "The Agent or owning user is inactive.",
+            status_code=409,
+            failure_domain="authorization",
+        )
+    return _issue_access_credential_locked(
+        locked_agent, expires_at=expires_at, metadata=metadata
+    )
+
+
+@transaction.atomic
+def rotate_access_credentials(agent, *, metadata=None):
+    locked_agent = Agent.objects.select_for_update().select_related("user").get(pk=agent.pk)
+    if locked_agent.status != Agent.Status.ACTIVE or not locked_agent.user.is_active:
+        raise AgentError(
+            "AGENT_DISABLED",
+            "The Agent or owning user is inactive.",
+            status_code=409,
+            failure_domain="authorization",
+        )
+    now = timezone.now()
+    AgentCredential.objects.filter(
+        agent=locked_agent, revoked_at__isnull=True
+    ).update(revoked_at=now, updated_at=now)
+    return _issue_access_credential_locked(
+        locked_agent, metadata=metadata
+    )
+
+
+@transaction.atomic
+def set_agent_status(agent, status):
+    locked_agent = Agent.objects.select_for_update().get(pk=agent.pk)
+    now = timezone.now()
+    if status == Agent.Status.ACTIVE:
+        if locked_agent.status == Agent.Status.REVOKED:
+            raise AgentError(
+                "AGENT_REVOKED",
+                "A revoked Agent cannot be re-enabled.",
+                status_code=409,
+                failure_domain="authorization",
+            )
+        locked_agent.status = Agent.Status.ACTIVE
+        locked_agent.disabled_at = None
+        locked_agent.save(update_fields=["status", "disabled_at", "updated_at"])
+        return locked_agent
+
+    if status == Agent.Status.DISABLED:
+        locked_agent.status = Agent.Status.DISABLED
+        locked_agent.disabled_at = locked_agent.disabled_at or now
+    elif status == Agent.Status.REVOKED:
+        locked_agent.status = Agent.Status.REVOKED
+        locked_agent.revoked_at = locked_agent.revoked_at or now
+    else:
+        raise AgentError("INVALID_AGENT_STATUS", "Unsupported Agent status.", status_code=400)
+
+    locked_agent.save(update_fields=["status", "disabled_at", "revoked_at", "updated_at"])
+    AgentCredential.objects.filter(
+        agent=locked_agent, revoked_at__isnull=True
+    ).update(revoked_at=now, updated_at=now)
+    return locked_agent
 
 @transaction.atomic
 def create_enrollment(agent, *, request=None):
