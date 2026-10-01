@@ -1145,9 +1145,11 @@ class DeploymentOrchestrator:
         return failures
 
     def _swarm_runtime(self) -> SwarmRuntime:
-        if self._swarm_runtime_instance is None:
-            self._swarm_runtime_instance = SwarmRuntime()
-        return self._swarm_runtime_instance
+        runtime = getattr(self, "_swarm_runtime_instance", None)
+        if runtime is None:
+            runtime = SwarmRuntime()
+            self._swarm_runtime_instance = runtime
+        return runtime
 
     def _endpoint_labels(self, config: DeploymentConfig) -> dict[str, str]:
         """Generate Traefik routes for all public HTTP-family endpoints."""
