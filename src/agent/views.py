@@ -33,6 +33,7 @@ from .errors import AgentError, agent_error_response, normalize_exception
 from .models import Agent
 from .permissions import AgentScopePermission, IsAgentAuthenticated
 from .scopes import SERVICE_SCOPES, DESTRUCTIVE_SCOPES, HIGH_RISK_SCOPES, SCOPE_LABELS, scope_categories
+from .contracts import contract_for
 from .security import get_request_id, sanitize_metadata
 from .throttling import AgentRateThrottle
 
@@ -119,6 +120,10 @@ class AgentAPIView(APIView):
     audit_mutating = False
     idempotency_store_response = True
     suppress_error_fields = False
+    agent_contract_path = None
+
+    def get_agent_contract_path(self, request):
+        return self.agent_contract_path
 
     def initial(self, request, *args, **kwargs):
         request.agent_request_id = get_request_id(request)
@@ -172,6 +177,7 @@ class AgentSecuredAPIView(AgentAPIView):
 
 
 class AgentRootView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1"
     audit_action = "agent.identity.read"
     def get(self, request):
         a = request.agent
@@ -207,6 +213,7 @@ class AgentExchangeView(AgentPublicAPIView):
 
 
 class AgentMeView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/auth/me"
     audit_action = "agent.identity.me"
     def get(self, request):
         c = request.agent_credential
@@ -219,6 +226,7 @@ class AgentMeView(AgentSecuredAPIView):
 
 
 class AgentCapabilitiesView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/capabilities"
     audit_action = "agent.capabilities.read"
     def get(self, request):
         s = set(request.agent.scopes or [])
@@ -249,6 +257,7 @@ class AgentCapabilitiesView(AgentSecuredAPIView):
 
 
 class AgentManifestView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/agent.md"
     required_scopes = ("agent.manifest.generate",)
     throttle_scope = "mutation"
     audit_action = "agent.manifest.generate"
@@ -266,6 +275,7 @@ class AgentManifestView(AgentSecuredAPIView):
 
 
 class AgentOpenAPIView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/openapi.json"
     audit_action = "agent.openapi.read"
     def get(self, request):
         from .openapi import build_openapi
@@ -282,6 +292,7 @@ class AgentPage(AgentSecuredAPIView):
 
 
 class ServiceListCreateView(AgentPage):
+    agent_contract_path = "/agent/v1/services"
     required_scopes_by_method = {"GET":("services.read",),"POST":("services.create",)}
     audit_resource_type = "service"
     def get(self, request):
@@ -295,6 +306,7 @@ class ServiceListCreateView(AgentPage):
 
 
 class ServiceDetailView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/{service_id}"
     required_scopes_by_method = {"GET":("services.read",),"PATCH":("services.update",),"DELETE":("services.delete",)}
     audit_resource_type = "service"
     def get(self, request, service_id):
@@ -315,6 +327,7 @@ class ServiceDetailView(AgentSecuredAPIView):
 
 
 class ServiceFromPlanView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/from-plan"
     required_scopes=("services.create","plans.apply")
     audit_action="services.create_from_plan"; audit_resource_type="service"; audit_mutating=True
 
@@ -331,6 +344,7 @@ class ServiceFromPlanView(AgentSecuredAPIView):
 
 
 class PlanApplyView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/plans/{plan_id}/apply"
     """Create a Service from an existing Plan through the normal Service API boundary."""
     required_scopes=("plans.apply","services.create")
     audit_action="plans.apply"
@@ -356,6 +370,8 @@ class PlanApplyView(AgentSecuredAPIView):
 
 
 class ServiceActionView(AgentSecuredAPIView):
+    def get_agent_contract_path(self, request):
+        return f"/agent/v1/services/{{service_id}}/{self.kwargs.get("action")}"
     action_scopes={"start":"services.start","stop":"services.stop","restart":"services.restart","purge-runtime":"services.purge"}
     share_actions={"start":"can_start","stop":"can_stop","restart":"can_restart","purge-runtime":"can_purge"}
     required_scopes=()
@@ -383,6 +399,7 @@ class ServiceStatusView(AgentSecuredAPIView):
 
 
 class PlanListView(AgentPage):
+    agent_contract_path = "/agent/v1/plans"
     required_scopes=("plans.read",); audit_action="plans.list"; audit_resource_type="plan"
     def get(self,request):
         from plans.models import Plan
@@ -390,6 +407,7 @@ class PlanListView(AgentPage):
 
 
 class PlanDetailView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/plans/{plan_id}"
     required_scopes=("plans.read",); audit_action="plans.retrieve"; audit_resource_type="plan"
     def get(self,request,plan_id):
         from plans.models import Plan
@@ -399,6 +417,8 @@ class PlanDetailView(AgentSecuredAPIView):
 
 
 class PlanManagementView(AgentSecuredAPIView):
+    def get_agent_contract_path(self, request):
+        return "/agent/v1/plans/manage/{plan_id}" if self.kwargs.get("plan_id") else "/agent/v1/plans/manage"
     required_scopes=("plans.manage",); audit_resource_type="plan"; audit_mutating=True
     @idempotent
     def post(self,request):
@@ -432,6 +452,7 @@ class PlanManagementView(AgentSecuredAPIView):
 
 
 class NetworkListCreateView(AgentPage):
+    agent_contract_path = "/agent/v1/networks"
     required_scopes_by_method={"GET":("service_networks.read",),"POST":("service_networks.write",)}
     audit_resource_type="network"
     def get(self,request):
@@ -445,6 +466,7 @@ class NetworkListCreateView(AgentPage):
 
 
 class NetworkDetailView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/networks/{network_id}"
     required_scopes_by_method={"GET":("service_networks.read",),"PATCH":("service_networks.write",),"DELETE":("service_networks.write",)}
     audit_resource_type="network"
     def get(self,request,network_id):
@@ -473,6 +495,7 @@ class NetworkDetailView(AgentSecuredAPIView):
 
 
 class VolumeListCreateView(AgentPage):
+    agent_contract_path = "/agent/v1/volumes"
     required_scopes_by_method={"GET":("service_volumes.read",),"POST":("service_volumes.write",)}
     audit_resource_type="volume"
     def get(self,request):
@@ -488,6 +511,7 @@ class VolumeListCreateView(AgentPage):
 
 
 class VolumeDetailView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/volumes/{volume_id}"
     required_scopes_by_method={"GET":("service_volumes.read",),"PATCH":("service_volumes.write",),"DELETE":("service_volumes.write",)}
     audit_resource_type="volume"
     def _get(self,request,volume_id):
@@ -514,6 +538,7 @@ class VolumeDetailView(AgentSecuredAPIView):
 
 
 class DeploymentListCreateView(AgentPage):
+    agent_contract_path = "/agent/v1/deployments"
     required_scopes_by_method={"GET":("deployments.read",),"POST":("deployments.create",)}
     audit_resource_type="deployment"
     def get(self,request): self.audit_action="deployments.list"; return self.paginate(request,deployment_queryset(request.user),_DeploymentSerializer)
@@ -525,6 +550,7 @@ class DeploymentListCreateView(AgentPage):
 
 
 class DeploymentDetailView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/deployments/{deployment_id}"
     required_scopes_by_method={"GET":("deployments.read",),"DELETE":("deployments.delete",)}
     audit_resource_type="deployment"
     def get(self,request,deployment_id): return Response({"result":"success","deployment":deployment_payload(get_deployment(deployment_id,request.user))})
@@ -537,6 +563,7 @@ class DeploymentDetailView(AgentSecuredAPIView):
 
 
 class DeploymentUploadView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/deployments/{deployment_id}/upload"
     required_scopes=("deployments.upload",); throttle_scope="upload"; audit_action="deployments.upload"; audit_resource_type="deployment"; audit_mutating=True
     @idempotent
     def post(self,request,deployment_id):
@@ -545,6 +572,8 @@ class DeploymentUploadView(AgentSecuredAPIView):
 
 
 class DeploymentActionView(AgentSecuredAPIView):
+    def get_agent_contract_path(self, request):
+        return f"/agent/v1/deployments/{{deployment_id}}/{self.kwargs.get("action")}"
     action_scopes={"start":"deployments.start","cancel":"deployments.cancel","redeploy":"deployments.redeploy","rebuild":"deployments.rebuild"}
     required_scopes=(); throttle_scope="deployment"; audit_resource_type="deployment"; audit_mutating=True
     @idempotent
@@ -554,6 +583,7 @@ class DeploymentActionView(AgentSecuredAPIView):
 
 
 class DeploymentRollbackView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/deployments/{deployment_id}/rollback"
     required_scopes=("deployments.rollback",); audit_action="deployments.rollback"; audit_resource_type="deployment"; audit_mutating=True; throttle_scope="deployment"
     @idempotent
     def post(self,request,deployment_id):
@@ -564,6 +594,7 @@ class DeploymentRollbackView(AgentSecuredAPIView):
 
 
 class DeploymentLogsView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/deployments/{deployment_id}/logs"
     required_scopes=("deployments.logs.read",); audit_action="deployments.logs.read"; audit_resource_type="deployment"
     def get(self,request,deployment_id):
         from deploy.apis import deploy_logs_apiview
@@ -578,6 +609,7 @@ class DeploymentLogsView(AgentSecuredAPIView):
 
 
 class DeploymentLogsExportView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/deployments/{deployment_id}/logs/export"
     required_scopes=("deployments.logs.export",); audit_action="deployments.logs.export"; audit_resource_type="deployment"
     def get(self,request,deployment_id):
         from deploy.apis import deploy_logs_export_apiview
@@ -586,6 +618,7 @@ class DeploymentLogsExportView(AgentSecuredAPIView):
 
 
 class ServiceLogsView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/{service_id}/logs"
     required_scopes=("service_logs.read",); audit_action="service_logs.read"; audit_resource_type="service"
     def get(self,request,service_id):
         service=get_service(service_id,request.user,action="can_view_logs")
@@ -595,6 +628,7 @@ class ServiceLogsView(AgentSecuredAPIView):
 
 
 class ServiceLogsExportView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/{service_id}/logs/export"
     required_scopes=("service_logs.export",); audit_action="service_logs.export"; audit_resource_type="service"
     def get(self,request,service_id):
         service=get_service(service_id,request.user,action="can_view_logs")
@@ -612,6 +646,7 @@ class ServiceLogsExportView(AgentSecuredAPIView):
 
 
 class ConfigurationView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/{service_id}/configuration"
     suppress_error_fields = True
     idempotency_store_response=False
     audit_resource_type="service"
@@ -628,6 +663,7 @@ class ConfigurationView(AgentSecuredAPIView):
 
 
 class EnvironmentView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/{service_id}/environment"
     suppress_error_fields = True
     idempotency_store_response=False
     audit_resource_type="service"
@@ -648,6 +684,7 @@ class EnvironmentView(AgentSecuredAPIView):
 
 
 class SecretsView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/{service_id}/secrets"
     suppress_error_fields = True
     idempotency_store_response=False
     audit_resource_type="service"
@@ -668,6 +705,7 @@ class SecretsView(AgentSecuredAPIView):
 
 
 class EndpointConfigView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/{service_id}/endpoints"
     audit_resource_type="service"
     def get(self,request,service_id):
         if "service_endpoints.read" not in set(request.agent.scopes or []):raise AgentError("INSUFFICIENT_SCOPE","Missing service_endpoints.read scope.",status_code=403,failure_domain="authorization")
@@ -686,6 +724,7 @@ class EndpointConfigView(AgentSecuredAPIView):
 
 
 class NetworkAttachmentsView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/{service_id}/networks"
     audit_resource_type="service"
     def get(self,request,service_id):
         if "service_networks.read" not in set(request.agent.scopes or []):raise AgentError("INSUFFICIENT_SCOPE","Missing service_networks.read scope.",status_code=403,failure_domain="authorization")
@@ -704,6 +743,7 @@ class NetworkAttachmentsView(AgentSecuredAPIView):
 
 
 class RevisionListView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/{service_id}/revisions"
     required_scopes=("services.read",); audit_action="revisions.list"; audit_resource_type="revision"
     def get(self,request,service_id):
         get_service(service_id,request.user)
@@ -712,6 +752,7 @@ class RevisionListView(AgentSecuredAPIView):
 
 
 class RevisionDetailView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/{service_id}/revisions/{revision_id}"
     required_scopes=("services.read",); audit_action="revisions.retrieve"; audit_resource_type="revision"
     def get(self,request,service_id,revision_id):
         get_service(service_id,request.user)
@@ -720,6 +761,7 @@ class RevisionDetailView(AgentSecuredAPIView):
 
 
 class RevisionRollbackView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/{service_id}/revisions/{revision_id}/rollback"
     required_scopes=("deployments.rollback",); audit_action="revisions.rollback"; audit_resource_type="revision"; audit_mutating=True
     @idempotent
     def post(self,request,service_id,revision_id):
@@ -729,6 +771,7 @@ class RevisionRollbackView(AgentSecuredAPIView):
 
 
 class ShellInfoView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/{service_id}/shell"
     required_scopes=("shell.read",); throttle_scope="shell"; audit_action="shell.info"; audit_resource_type="service"
     def get(self,request,service_id):
         service=get_service(service_id,request.user,action="can_view")
@@ -738,6 +781,7 @@ class ShellInfoView(AgentSecuredAPIView):
 
 
 class ShellSessionView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/{service_id}/shell/sessions"
     required_scopes=("shell.read","shell.execute"); throttle_scope="shell"; audit_action="shell.session.create"; audit_resource_type="service"; audit_mutating=True
     def post(self,request,service_id):
         service=get_service(service_id,request.user,action="can_shell")
@@ -748,6 +792,7 @@ class ShellSessionView(AgentSecuredAPIView):
 
 
 class ShellCommandView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/{service_id}/shell/sessions/{session_id}/commands"
     required_scopes=("shell.execute",); throttle_scope="shell"; audit_action="shell.command"; audit_resource_type="service"; audit_mutating=True
     def post(self,request,service_id,session_id):
         service=get_service(service_id,request.user,action="can_shell")
@@ -765,6 +810,7 @@ class ShellCommandView(AgentSecuredAPIView):
 
 
 class ShellCloseView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/{service_id}/shell/sessions/{session_id}/close"
     required_scopes=("shell.execute",); throttle_scope="shell"; audit_action="shell.session.close"; audit_resource_type="service"; audit_mutating=True
     def post(self,request,service_id,session_id):
         service=get_service(service_id,request.user,action="can_shell")
@@ -777,6 +823,7 @@ class ShellCloseView(AgentSecuredAPIView):
 
 
 class ShellReplaceView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/{service_id}/shell/replace"
     required_scopes=("shell.replace",); throttle_scope="shell"; audit_action="shell.session.replace"; audit_resource_type="service"; audit_mutating=True
     def post(self,request,service_id):
         service=get_service(service_id,request.user,action="can_shell")
@@ -788,6 +835,7 @@ class ShellReplaceView(AgentSecuredAPIView):
 
 
 class ShellFileView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/{service_id}/shell/files"
     throttle_scope="shell"; audit_resource_type="service"
     def post(self,request,service_id):
         action=str(request.data.get("action") or "read").lower()
@@ -821,6 +869,7 @@ def _volume_payload(v):
 
 
 class DatabaseBindingsView(AgentSecuredAPIView):
+    agent_contract_path = "/agent/v1/services/{service_id}/databases"
     suppress_error_fields = True
     idempotency_store_response = False
     audit_resource_type = "service"
