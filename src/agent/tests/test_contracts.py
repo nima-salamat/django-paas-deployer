@@ -6,6 +6,7 @@ from agent.application import create_enrollment, issue_access_credential
 from agent.contracts import CONTRACTS, contract_for, contracts_for_agent
 from agent.manifest import manifest_endpoints
 from agent.throttling import AgentRateThrottle
+from services.shell import is_interactive_command, parse_safe_command, shell_protocol_metadata
 from agent import urls as agent_urls
 from agent.models import Agent
 from agent.openapi import build_openapi
@@ -172,6 +173,32 @@ class AgentContractTests(TestCase):
             self.assertEqual(operation.get("x-required-any-scopes", []), list(contract.any_scopes))
 
         self.assertEqual(openapi["x-agent"]["contract_operations"], len(CONTRACTS))
+
+    def test_shell_protocol_distinguishes_compound_and_interactive_transports(self):
+        protocol = shell_protocol_metadata("service-1")
+        self.assertEqual(protocol["command_api"]["operators"], ["|", "&&", "||", ";"])
+        self.assertTrue(protocol["command_api"]["compound"])
+        self.assertFalse(protocol["interactive_pty"]["compound"])
+        self.assertTrue(protocol["interactive_pty"]["stdin"])
+        self.assertEqual(
+            protocol["interactive_pty"]["websocket_path"],
+            "/ws/services/shell/service-1/",
+        )
+
+    def test_compound_command_parser_supports_safe_operators(self):
+        parsed = parse_safe_command("cd app && php artisan migrate | grep done")
+        self.assertEqual(
+            [item[0] for item in parsed],
+            [["cd", "app"], ["php", "artisan", "migrate"], ["grep", "done"]],
+        )
+        self.assertEqual([item[1] for item in parsed], [None, "&&", "|"])
+
+    def test_interactive_commands_are_explicitly_marked_for_pty(self):
+        self.assertTrue(is_interactive_command(["php", "artisan", "tinker"]))
+        self.assertTrue(is_interactive_command(["python", "manage.py", "shell"]))
+        self.assertTrue(is_interactive_command(["python", "manage.py", "createsuperuser"]))
+        self.assertFalse(is_interactive_command(["php", "artisan", "migrate"]))
+        self.assertFalse(is_interactive_command(["git", "status"]))
 
     def test_shell_replace_never_uses_replay_storage(self):
         contract = contract_for(
