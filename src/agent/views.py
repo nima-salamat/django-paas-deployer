@@ -766,50 +766,38 @@ def _volume_payload(v):
 
 
 class DatabaseBindingsView(AgentSecuredAPIView):
-    required_scopes=()
-    audit_resource_type="service"
+    idempotency_store_response = False
+    audit_resource_type = "service"
 
-    def _check(self, request, write=False):
-        from agent.application import get_service
-        scope="service_config.write" if write else "service_config.read"
+    def _authorize(self, request, service_id, *, write=False):
+        scope = "service_config.write" if write else "service_config.read"
         if scope not in set(request.agent.scopes or []):
-            raise AgentError("INSUFFICIENT_SCOPE", f"Missing {scope} scope.", status_code=403, failure_domain="authorization")
-        return get_service(request.parser_context.get("kwargs", {}).get("service_id") if hasattr(request, "parser_context") else None, request.user)
-
-    def _call(self, request, service_id, method, write=False):
-        self._check_scope(request, write)
+            raise AgentError(
+                "INSUFFICIENT_SCOPE",
+                f"Missing {scope} scope.",
+                status_code=403,
+                failure_domain="authorization",
+            )
         get_service(service_id, request.user, action="can_view")
+
+    def _delegate(self, request, service_id, method, *, write=False):
+        self._authorize(request, service_id, write=write)
         from services.api.configuration import ServiceDatabaseBindingsAPIView
-        handler=ServiceDatabaseBindingsAPIView()
+        handler = ServiceDatabaseBindingsAPIView()
         return getattr(handler, method)(request, service_id)
 
-    def _check_scope(self, request, write):
-        scope="service_config.write" if write else "service_config.read"
-        if scope not in set(request.agent.scopes or []):
-            raise AgentError("INSUFFICIENT_SCOPE", f"Missing {scope} scope.", status_code=403, failure_domain="authorization")
-
     def get(self, request, service_id):
-        self.audit_action="service_database_bindings.read"
-        return self._call(request, service_id, "get", write=False)
+        self.audit_action = "service_database_bindings.read"
+        return self._delegate(request, service_id, "get")
 
+    @idempotent
     def post(self, request, service_id):
-        self.audit_action="service_database_bindings.write"
-        self.audit_mutating=True
-        return self._call(request, service_id, "post", write=True)
+        self.audit_action = "service_database_bindings.write"
+        self.audit_mutating = True
+        return self._delegate(request, service_id, "post", write=True)
 
+    @idempotent
     def delete(self, request, service_id):
-        self.audit_action="service_database_bindings.delete"
-        self.audit_mutating=True
-        return self._call(request, service_id, "delete", write=True)
-
-
-class PlanApplyView(ServiceFromPlanView):
-    """Alias the high-level plan application workflow at the documented plan endpoint."""
-    def post(self, request, plan_id):
-        from .application import require_scopes
-        require_scopes(request.agent, "plans.apply", "services.create")
-        data = dict(request.data)
-        data["plan"] = str(plan_id)
-        request._full_data = data if hasattr(request, "_full_data") else getattr(request, "_full_data", None)
-        # ServiceFromPlanView reads request.data, so use a small proxy with the merged payload.
-        return ServiceFromPlanView().post(RequestProxy(request, data=data))
+        self.audit_action = "service_database_bindings.delete"
+        self.audit_mutating = True
+        return self._delegate(request, service_id, "delete", write=True)
