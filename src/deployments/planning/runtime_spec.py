@@ -25,6 +25,7 @@ class RuntimeSpec:
     image_ref: str
     image_digest: str = ""
     environment: Mapping[str, str] = field(default_factory=dict)
+    secret_references: tuple[str, ...] = ()
     command: str | None = None
     entrypoint: str | None = None
     labels: Mapping[str, str] = field(default_factory=dict)
@@ -46,6 +47,7 @@ class RuntimeSpec:
             "image_ref": self.image_ref,
             "image_digest": self.image_digest,
             "environment": _json_value(dict(self.environment)),
+            "secret_references": list(self.secret_references),
             "command": self.command,
             "entrypoint": self.entrypoint,
             "labels": _json_value(dict(self.labels)),
@@ -82,10 +84,21 @@ class RuntimeSpec:
         volumes = tuple(_json_value(vars(v) if hasattr(v, "__dict__") else v) for v in (getattr(config, "volumes", ()) or ()))
         endpoints = tuple(_json_value(vars(v) if hasattr(v, "__dict__") else v) for v in (getattr(config, "endpoints", ()) or ()))
         runtime_options = dict(getattr(config, "runtime_options", {}) or {})
+        raw_environment = {
+            str(k): str(v)
+            for k, v in dict(getattr(config, "environment", {}) or {}).items()
+        }
+        secret_references = []
+        for key in list(raw_environment):
+            lowered = key.lower()
+            if any(token in lowered for token in ("password", "secret", "token", "private_key", "api_key", "apikey", "authorization", "credential")):
+                raw_environment[key] = "[SECRET_REF]"
+                secret_references.append(key)
         return cls(
             image_ref=str(image_ref or getattr(config, "image_ref", "") or ""),
             image_digest=str(image_digest or ""),
-            environment={str(k): str(v) for k, v in dict(getattr(config, "environment", {}) or {}).items()},
+            environment=raw_environment,
+            secret_references=tuple(sorted(secret_references)),
             command=getattr(config, "start_command", None),
             entrypoint=getattr(config, "entry_point", None),
             labels={str(k): str(v) for k, v in dict(getattr(config, "labels", {}) or {}).items()},
