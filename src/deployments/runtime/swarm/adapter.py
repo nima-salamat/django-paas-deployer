@@ -311,11 +311,28 @@ class SwarmRuntimeAdapter:
                 node_name=item.node_name,
                 error=item.error,
                 message=item.message,
+                health_status=item.health_status,
             )
             for item in state.tasks
         )
-        ready = state.replicas_desired == state.replicas_running and state.replicas_running > 0
-        status = RuntimeObservedStatus.READY if ready else RuntimeObservedStatus.DEGRADED
+        running_ready = state.replicas_desired == state.replicas_running and state.replicas_running > 0
+        if state.healthcheck_configured:
+            healthy_tasks = [
+                task for task in state.tasks
+                if str(task.health_status or "").lower() == "healthy"
+            ]
+            ready = running_ready and len(healthy_tasks) >= state.replicas_desired
+        else:
+            ready = running_ready
+
+        if ready:
+            status = RuntimeObservedStatus.READY
+        elif any(task.state.lower() in {"failed", "rejected"} for task in state.tasks):
+            status = RuntimeObservedStatus.FAILED
+        elif any(task.state.lower() == "running" for task in state.tasks):
+            status = RuntimeObservedStatus.DEGRADED
+        else:
+            status = RuntimeObservedStatus.PROVISIONING
         labels = dict(state.labels or {})
         observed_revision = (
             labels.get("revision.id")
