@@ -157,6 +157,9 @@ class ContainerCreateErrorSurfacingTests(unittest.TestCase):
         # ports + read_only so a deploy can never be blocked by a
         # host_config rejection.
         self.assertIn("bare", msg)
+        # The current hardened create path uses the full runtime config as the
+        # final attempt and reports that explicitly.
+        self.assertIn("full config", msg)
         # And details preserve the structured info for sinks/dashboards.
         self.assertEqual(ctx.exception.details.get("error_type"), "APIError")
         self.assertEqual(ctx.exception.details.get("status_code"), 400)
@@ -210,15 +213,24 @@ class ContainerCreateErrorSurfacingTests(unittest.TestCase):
                 MagicMock(id="new-container-id"),
             ]
 
-            # The stale container exists and is stopped.
+            # The stale container exists, is stopped, and is explicitly owned by
+        # the same deployment. Cleanup must never guess ownership by name.
             stale = MagicMock()
             stale.status = "exited"
+            stale.labels = {
+                "managed-by": "django-paas-deployer",
+                "deployment.id": "deploy-1",
+            }
             stale.remove = MagicMock(return_value=True)
             mock_client.containers.get.return_value = stale
 
             c = Container(
                 "app-4aac274e-abcd",
                 image_name="app-4aac274e-abcd:v1-00",
+                labels={
+                    "managed-by": "django-paas-deployer",
+                    "deployment.id": "deploy-1",
+                },
             )
 
             result = c.create()
