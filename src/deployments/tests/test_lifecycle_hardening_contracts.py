@@ -130,3 +130,18 @@ def test_deployment_consumer_deduplicates_retried_event_ids():
     assert "_seen_event_ids" in source
     assert "_seen_event_order = deque(maxlen=256)" in source
     assert 'event_id = str(payload.get("event_id") or "").strip()' in source
+
+
+
+def test_db_success_fences_owner_before_revision_activation():
+    source = (__import__("pathlib").Path(__file__).resolve().parents[2] / "deployments/core/state/manager.py").read_text(encoding="utf-8")
+    method = source.split("def activate_revision_and_succeed", 1)[1].split(
+        "def transition_deploy_system_terminal", 1
+    )[0]
+    assert "select_for_update" in method
+    assert 'str(deploy.execution_task_id or "") != str(task_id)' in method
+    assert "if deploy.cancel_requested" in method
+    assert "Service.objects.select_for_update()" in method
+    assert "activate_revision_locked(service, revision_id)" in method
+    assert '"status": sm.DEPLOY_SUCCEEDED' in method
+    assert "DeploymentEventOutbox.objects.create" in method
