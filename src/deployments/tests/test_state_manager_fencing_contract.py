@@ -15,6 +15,7 @@ def test_owned_transition_checks_fence_and_transition_under_one_lock():
     assert "cancel_requested" in method
     assert "check_deploy_transition" in method
     assert "Deploy.objects.filter(pk=deploy_id).update" in method
+    assert "DeploymentEventOutbox.objects.create" in method
 
 
 def test_terminal_compatibility_helper_delegates_to_owned_transition():
@@ -34,3 +35,13 @@ def test_django_lifecycle_store_does_not_continue_after_cancel_wins_start_race()
 
     assert "transitioned and self.status == sm.DEPLOY_RUNNING" in source
     assert "continue planning after that terminal decision" in source
+
+
+
+def test_public_transition_has_no_terminal_outbox_authority():
+    source = (ROOT / "deployments/core/state/manager.py").read_text(encoding="utf-8")
+    public_method = source.split("def transition_deploy(", 1)[1].split(
+        "def lock_and_get_deployment", 1
+    )[0]
+    assert "DeploymentEventOutbox.objects.create" not in public_method
+    assert "terminal" not in public_method
