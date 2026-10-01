@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Q
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -19,6 +19,7 @@ def dispatch_pending(*, batch_size: int = 100) -> dict[str, int]:
     ids = list(
         DeploymentEventOutbox.objects
         .filter(dispatched_at__isnull=True)
+        .filter(Q(next_attempt_at__isnull=True) | Q(next_attempt_at__lte=timezone.now()))
         .order_by("occurred_at", "id")
         .values_list("pk", flat=True)[:limit]
     )
@@ -53,14 +54,19 @@ def dispatch_pending(*, batch_size: int = 100) -> dict[str, int]:
                     )
                 _publish(row.deployment_id, payload)
                 row.dispatched_at = timezone.now()
+                row.next_attempt_at = None
                 row.attempts = int(row.attempts or 0) + 1
                 row.last_error = ""
-                row.save(update_fields=["dispatched_at", "attempts", "last_error", "updated_at"])
+                row.save(update_fields=["dispatched_at", "next_attempt_at", "attempts", "last_error", "updated_at"])
                 dispatched += 1
         except Exception as exc:
             failed += 1
+            current = DeploymentEventOutbox.objects.filter(pk=row_id).values("attempts").first() or {}
+            attempts = int(current.get("attempts") or 0) + 1
+            backoff_seconds = min(300, 2 ** min(attempts, 8))
             DeploymentEventOutbox.objects.filter(pk=row_id).update(
-                attempts=F('attempts') + 1,
+                attempts=attempts,
+                next_attempt_at=timezone.now() + __import__("datetime").timedelta(seconds=backoff_seconds),
                 last_error=str(exc)[:4000],
                 updated_at=timezone.now(),
             )
