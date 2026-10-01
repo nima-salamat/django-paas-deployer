@@ -14,7 +14,7 @@ user owns the network; name is the logical human name, description is presentati
 | user | Owner User FK; primary authorization scope. |
 | plan | Customer policy envelope; consumers enforce ceilings. |
 | network | Optional default network relation; runtime graph may include explicit attachments too. |
-| read_only | Compatibility/admin presentation flag; not runtime readiness. |
+| read_only | Compatibility/admin presentation flag; persisted default is true and must remain deterministic across environments; runtime overrides are explicit. |
 | selected_deploy | Compatibility projection of selected/current deploy. Never treat as replacement for active_revision. |
 | selected_deploy_at | Timestamp for projection change; derived audit state. |
 | active_revision | Authoritative currently active executable snapshot. Updated by fenced activation. |
