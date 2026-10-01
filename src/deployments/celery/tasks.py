@@ -911,44 +911,76 @@ def _mark_failure(
     stage: str = "deployment_failed",
     details: dict | None = None, tb: str = "", task_id: str | None = None,
 ) -> None:
+    event_details = {
+        "runtime": "database",
+        "controlled_by": "db_deployer",
+        **dict(details or {}),
+    }
+    if tb:
+        event_details["traceback"] = tb
+
+    event_payload = {
+        "event_id": str(uuid.uuid4()),
+        "trace_id": str(deploy.pk),
+        "deployment_id": str(deploy.pk),
+        "service_id": str(deploy.service_id),
+        "revision_id": str(getattr(deploy, "revision_id", "") or ""),
+        "task_id": str(task_id or "system"),
+        "event_type": f"deployment.{stage}.error",
+        "stage": stage,
+        "level": "error",
+        "message": message,
+        "progress": 100,
+        "details": event_details,
+    }
+
+    committed = (
+        StateManager.transition_deploy_terminal_if_owned(
+            deploy.pk,
+            DeploymentStatusChoices.FAILED,
+            task_id=task_id,
+            update_fields={
+                "stage": stage,
+                "error_message": message,
+                "status_message": "Database deployment failed.",
+            },
+            event_payload=event_payload,
+        )
+        if task_id
+        else StateManager.transition_deploy_system_terminal(
+            deploy.pk,
+            DeploymentStatusChoices.FAILED,
+            update_fields={
+                "stage": stage,
+                "error_message": message,
+                "status_message": "Database deployment failed.",
+            },
+            event_payload=event_payload,
+        )
+    )
+
+    if not committed:
+        logger.info("Ignoring stale/unowned DB deploy failure for deploy=%s", deploy.pk)
+        return
+
     if getattr(deploy, "revision_id", None):
         try:
             mark_revision_failed(deploy.revision_id)
         except Exception:
             logger.exception("Failed to mark DB revision %s as failed", deploy.revision_id)
 
-    committed = StateManager.transition_deploy_terminal_if_owned(
-        deploy.pk, DeploymentStatusChoices.FAILED, task_id=task_id,
-        update_fields={
-            "stage": stage,
-            "error_message": message,
-            "status_message": "Database deployment failed.",
-        },
-    ) if task_id else False
-    if task_id and not committed:
-        logger.info("Ignoring stale DB deploy failure for deploy=%s", deploy.pk)
-        return
-    if not task_id:
-        StateManager.transition_deploy(
-            deploy.pk, DeploymentStatusChoices.FAILED,
-            update_fields={
-                "stage": stage, "error_message": message,
-                "status_message": "Database deployment failed.",
-            },
-        )
     if service.status not in (SERVICE_STATUS_CHOICES.STOPPED, SERVICE_STATUS_CHOICES.FAILED):
         StateManager.transition_service(
-            service.pk, SERVICE_STATUS_CHOICES.FAILED,
+            service.pk,
+            SERVICE_STATUS_CHOICES.FAILED,
             update_fields={"deploy_started": None, "task_id": None},
         )
-    _create_deploy_log(
-        deploy, stage=stage, message=message, level="error",
-        details=details or {}, exception_type="DBDeployError", traceback_str=tb,
-    )
+
     logger.warning(
         "DB deploy failed: deploy=%s service=%s stage=%s msg=%s",
         deploy.pk, service.pk, stage, message,
     )
+
 
 
 def _lock_for_db_deploy(deploy_id: str | int, *, task_id: str | None = None) -> tuple[Deploy, Service] | None:
