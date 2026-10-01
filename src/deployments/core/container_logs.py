@@ -11,6 +11,7 @@ import logging
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+MAX_PERSISTED_LOG_BYTES = 128 * 1024
 
 
 def capture_logs_for_deploy(
@@ -64,6 +65,14 @@ def capture_logs_for_deploy(
                 pass
 
         text = redact_secrets(text)
+    encoded = text.encode("utf-8", "replace")
+    original_bytes = len(encoded)
+    truncated = original_bytes > MAX_PERSISTED_LOG_BYTES
+    if truncated:
+        encoded = encoded[-MAX_PERSISTED_LOG_BYTES:]
+        text = encoded.decode("utf-8", "replace")
+    import hashlib
+    log_sha256 = hashlib.sha256(encoded).hexdigest()
     except Exception as exc:
         logger.debug(
             "capture_logs_for_deploy: could not read logs for %s: %s",
@@ -97,6 +106,10 @@ def capture_logs_for_deploy(
                 "exit_code": exit_code,
                 "reason": reason or "",
                 "logs": text,
+                "captured_bytes": len(text.encode("utf-8", "replace")),
+                "original_bytes": original_bytes,
+                "truncated": truncated,
+                "sha256": log_sha256,
             },
         }
         if service_id is not None:
