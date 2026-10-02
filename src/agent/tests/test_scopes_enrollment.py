@@ -67,6 +67,18 @@ class AgentScopeAndEnrollmentTests(TestCase):
         self.assertEqual(me.data["agent_id"], str(self.agent.pk))
         self.assertNotEqual(response.data["token"], enrollment)
 
+    def test_access_credential_survives_runtime_secret_change(self):
+        from agent.application import issue_access_credential
+
+        with override_settings(AGENT_TOKEN_PEPPER="pepper-a"):
+            credential, access = issue_access_credential(self.agent)
+
+        with override_settings(AGENT_TOKEN_PEPPER="pepper-b"):
+            me = self.client.get("/agent/v1/auth/me", HTTP_AUTHORIZATION=f"Bearer {access}")
+
+        self.assertEqual(me.status_code, 200)
+        self.assertEqual(me.data["credential"]["id"], str(credential.pk))
+
     def test_enrollment_exchange_survives_runtime_secret_change(self):
         from agent.application import create_enrollment
 
@@ -116,13 +128,22 @@ class AgentScopeAndEnrollmentTests(TestCase):
             exchange_enrollment(enrollment)
         self.assertEqual(getattr(ctx.exception, "code", ""), "ENROLLMENT_EXPIRED")
 
-    def test_manifest_contains_short_lived_enrollment_but_not_permanent_access_token(self):
+    def test_manifest_contains_direct_access_credential_for_llm_use(self):
         response = self.client.get("/agent/v1/agent.md", HTTP_AUTHORIZATION=f"Bearer {self.raw}")
         self.assertEqual(response.status_code, 200)
         body = response.content.decode()
+        self.assertIn("PASSDEPLOYER_ACCESS_TOKEN", body)
         self.assertIn("PASSDEPLOYER_ENROLLMENT_TOKEN", body)
         self.assertIn(str(self.agent.pk), body)
         self.assertNotIn(self.raw, body)
+
+        import re
+        match = re.search(r'PASSDEPLOYER_ACCESS_TOKEN="(pd_agent_[^"]+)"', body)
+        self.assertIsNotNone(match)
+        manifest_token = match.group(1)
+        me = self.client.get("/agent/v1/auth/me", HTTP_AUTHORIZATION=f"Bearer {manifest_token}")
+        self.assertEqual(me.status_code, 200)
+        self.assertEqual(me.data["agent_id"], str(self.agent.pk))
 
     def test_agent_audit_records_are_sanitized(self):
         self.client.get(
