@@ -13,7 +13,7 @@ from ..application import audit
 from ..authentication import AgentTokenAuthentication
 from ..errors import AgentError, agent_error_response, normalize_exception
 from ..permissions import AgentScopePermission, IsAgentAuthenticated
-from ..security import extract_sensitive_request_values, get_request_id, sanitize_error_payload, sanitize_metadata
+from ..security import client_ip, extract_sensitive_request_values, get_request_id, sanitize_error_payload, sanitize_metadata
 from ..throttling import AgentRateThrottle
 
 
@@ -140,6 +140,14 @@ class AgentAPIView(APIView):
         try:
             status_code = int(response.status_code)
             data = response.data if isinstance(response.data, dict) else {}
+            audit_metadata = dict(getattr(self, "audit_metadata", {}) or {})
+            audit_metadata.update({
+                "method": str(getattr(request, "method", "") or ""),
+                "path": str(getattr(request, "path", "") or "")[:512],
+                "client_ip": client_ip(request),
+                "agent_id": str(getattr(getattr(request, "agent", None), "pk", "") or ""),
+                "credential_id": str(getattr(getattr(request, "agent_credential", None), "pk", "") or ""),
+            })
             audit(
                 request=request,
                 action=self.audit_action,
@@ -156,7 +164,7 @@ class AgentAPIView(APIView):
                     else "unchanged"
                 ),
                 duration_ms=int(max(0, (time.monotonic() - self._started_at) * 1000)),
-                metadata=getattr(self, "audit_metadata", {}),
+                metadata=audit_metadata,
             )
         except Exception:
             pass
