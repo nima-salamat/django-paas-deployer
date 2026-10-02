@@ -4,6 +4,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
+from django.test.utils import override_settings
 from rest_framework.test import APIClient
 
 from agent.application import exchange_enrollment, issue_access_credential
@@ -65,6 +66,25 @@ class AgentScopeAndEnrollmentTests(TestCase):
         self.assertEqual(me.status_code, 200)
         self.assertEqual(me.data["agent_id"], str(self.agent.pk))
         self.assertNotEqual(response.data["token"], enrollment)
+
+    def test_enrollment_exchange_survives_runtime_secret_change(self):
+        from agent.application import create_enrollment
+
+        with override_settings(AGENT_TOKEN_PEPPER="pepper-a"):
+            enrollment, row = create_enrollment(self.agent)
+
+        with override_settings(AGENT_TOKEN_PEPPER="pepper-b"):
+            response = self.client.post(
+                "/agent/v1/auth/exchange",
+                {"enrollment_token": enrollment, "client": "rotated-secret-test"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["result"], "success")
+        self.assertEqual(response.data["agent"]["id"], str(self.agent.pk))
+        row.refresh_from_db()
+        self.assertIsNotNone(row.used_at)
 
     def test_enrollment_exchange_is_one_time(self):
         enrollment = "pd_enroll_test-token"
