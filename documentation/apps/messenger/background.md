@@ -25,6 +25,10 @@ MessengerConsumer updates online state and broadcasts presence. Presence is ephe
 
 Member leave/removal/group deletion invokes services.share_cleanup so a Messenger membership change can revoke or update Service sharing. This is a deliberate cross-app side effect; it must not be replaced with a client-only permission change.
 
+## User deletion
+
+The Messenger User pre-delete signal applies the same durable leave semantics used by the conversation API. A deleted user leaves active group memberships; group ownership transfers to the oldest active admin/member or the group is removed when no active members remain. Private DMs are hard-deleted with their conversation media. User-specific conversation-list/presence caches are invalidated after deletion, while other users' message history survives where Message.sender uses `SET_NULL`.
+
 ## Tests as contracts
 
 tests_calls.py and tests_call_state.py protect call lifecycle; tests_message_cache.py protects cache invalidation and membership state. HTTP/event regressions should preserve durable state before broadcast ordering.
