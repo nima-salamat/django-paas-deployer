@@ -36,7 +36,11 @@ Machine-readable discovery is available from:
 
 ## Enrollment
 
-The generated `AGENT.md` contains a temporary bootstrap credential only. The credential is single-use and short-lived. Exchanging it returns a normal access credential. Permanent credentials are never embedded in repository templates or URLs.
+The generated `AGENT.md` contains a short-lived, single-use bootstrap credential intentionally issued for that specific Agent.
+
+The Agent is expected to use this credential to authenticate. Sensitivity does not mean the credential is unusable: the correct behavior is to use it internally and never disclose, echo, log, publish, or place it in URLs or source files.
+
+Exchanging the enrollment credential returns a normal Bearer access credential. Permanent credentials are never embedded in repository templates or URLs.
 
 ## Logs
 
