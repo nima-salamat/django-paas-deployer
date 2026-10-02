@@ -8,6 +8,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from rest_framework import status
+from django.db import IntegrityError, transaction
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -181,7 +182,14 @@ class AgentListCreateView(AgentManagementBase):
                 {"detail": "An Agent with this name already exists.", "code": "AGENT_NAME_EXISTS"},
                 status=status.HTTP_409_CONFLICT,
             )
-        agent = Agent.objects.create(user=request.user, **values)
+        try:
+            with transaction.atomic():
+                agent = Agent.objects.create(user=request.user, **values)
+        except IntegrityError:
+            return Response(
+                {"detail": "An Agent with this name already exists.", "code": "AGENT_NAME_EXISTS"},
+                status=status.HTTP_409_CONFLICT,
+            )
         audit(
             request=request, agent=agent, user=request.user, action="browser.agent.create",
             success=True, status_code=201, resource_type="agent", resource_id=agent.pk,
@@ -206,7 +214,14 @@ class AgentDetailView(AgentManagementBase):
             )
         for key, value in values.items():
             setattr(agent, key, value)
-        agent.save()
+        try:
+            with transaction.atomic():
+                agent.save()
+        except IntegrityError:
+            return Response(
+                {"detail": "An Agent with this name already exists.", "code": "AGENT_NAME_EXISTS"},
+                status=status.HTTP_409_CONFLICT,
+            )
         audit(
             request=request, agent=agent, user=request.user, action="browser.agent.update",
             success=True, status_code=200, resource_type="agent", resource_id=agent.pk,
@@ -253,11 +268,16 @@ class AgentCredentialListView(AgentManagementBase):
                 return Response({"errors": {"expires_in_days": ["Use a value between 1 and 3650."]}}, status=status.HTTP_400_BAD_REQUEST)
             expires_at = timezone.now() + timedelta(days=days)
 
-        credential, token = issue_access_credential(
-            agent,
-            expires_at=expires_at,
-            metadata={"issued_via": "browser_api", "issued_by_user": str(request.user.pk)},
-        )
+        try:
+            credential, token = issue_access_credential(
+                agent,
+                expires_at=expires_at,
+                metadata={"issued_via": "browser_api", "issued_by_user": str(request.user.pk)},
+            )
+        except Exception as exc:
+            code = getattr(exc, "code", "CREDENTIAL_ISSUE_FAILED")
+            detail = getattr(exc, "detail", "The Agent could not issue a credential.")
+            return Response({"detail": detail, "code": code}, status=getattr(exc, "status_code", status.HTTP_409_CONFLICT))
         audit(
             request=request, agent=agent, user=request.user, credential=credential,
             action="browser.credential.issue", success=True, status_code=201,
@@ -285,8 +305,9 @@ class AgentCredentialRotateView(AgentManagementBase):
                 metadata={"rotated_via": "browser_api", "rotated_by_user": str(request.user.pk)},
             )
         except Exception as exc:
+            detail = getattr(exc, "detail", "The Agent credentials could not be rotated.")
             return Response(
-                {"detail": str(exc), "code": getattr(exc, "code", "CREDENTIAL_ROTATION_FAILED")},
+                {"detail": detail, "code": getattr(exc, "code", "CREDENTIAL_ROTATION_FAILED")},
                 status=getattr(exc, "status_code", status.HTTP_409_CONFLICT),
             )
         audit(
@@ -338,8 +359,9 @@ class AgentStatusView(AgentManagementBase):
         try:
             agent = set_agent_status(agent, next_status)
         except Exception as exc:
+            detail = getattr(exc, "detail", "The Agent status could not be changed.")
             return Response(
-                {"detail": str(exc), "code": getattr(exc, "code", "AGENT_STATUS_FAILED")},
+                {"detail": detail, "code": getattr(exc, "code", "AGENT_STATUS_FAILED")},
                 status=getattr(exc, "status_code", status.HTTP_409_CONFLICT),
             )
         audit(
