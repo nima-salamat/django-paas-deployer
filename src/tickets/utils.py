@@ -35,6 +35,38 @@ ALLOWED_MIME_PREFIXES = (
 _SCRIPT_RE = re.compile(r"<\s*script[^>]*>.*?<\s*/\s*script\s*>", re.I | re.S)
 _EVENT_RE = re.compile(r"\son\w+\s*=", re.I)
 _JS_URL_RE = re.compile(r"javascript\s*:", re.I)
+_ALIGNMENT_CLASSES = frozenset({
+    "ticket-align-left",
+    "ticket-align-center",
+    "ticket-align-right",
+})
+_BLOCK_CLASS_RE = re.compile(
+    r"(?P<prefix><s*(?:p|h1|h2|h3|h4|li|blockquote)\b)(?P<attrs>[^>]*)>",
+    re.I,
+)
+_CLASS_ATTR_RE = re.compile(r'\s+class\s*=\s*("|')(?P<value>.*?)\1', re.I | re.S)
+
+
+def _normalize_alignment_classes(raw: str) -> str:
+    def replace_block(match: re.Match) -> str:
+        attrs = match.group("attrs")
+        class_match = _CLASS_ATTR_RE.search(attrs)
+        if not class_match:
+            return match.group(0)
+
+        classes = [
+            token for token in class_match.group("value").split()
+            if token in _ALIGNMENT_CLASSES
+        ]
+        replacement = f' class="{" ".join(classes)}"' if classes else ""
+        normalized_attrs = (
+            attrs[:class_match.start()]
+            + replacement
+            + attrs[class_match.end():]
+        )
+        return f'{match.group("prefix")}{normalized_attrs}>'
+
+    return _BLOCK_CLASS_RE.sub(replace_block, raw)
 
 
 def sanitize_html(raw: str) -> str:
@@ -42,7 +74,7 @@ def sanitize_html(raw: str) -> str:
         return ""
     try:
         import bleach
-        return bleach.clean(
+        cleaned = bleach.clean(
             raw,
             tags=[
                 "p", "br", "strong", "b", "em", "i", "u", "s",
@@ -50,6 +82,13 @@ def sanitize_html(raw: str) -> str:
                 "blockquote", "code", "pre", "span",
             ],
             attributes={
+                "p": ["class"],
+                "h1": ["class"],
+                "h2": ["class"],
+                "h3": ["class"],
+                "h4": ["class"],
+                "li": ["class"],
+                "blockquote": ["class"],
                 "a": ["href", "title", "rel", "target"],
                 "code": ["class"],
                 "pre": ["class"],
@@ -58,6 +97,7 @@ def sanitize_html(raw: str) -> str:
             protocols=["http", "https", "mailto"],
             strip=True,
         )
+        return _normalize_alignment_classes(cleaned)
     except ImportError:
         text = _SCRIPT_RE.sub("", raw)
         text = _EVENT_RE.sub(" ", text)
