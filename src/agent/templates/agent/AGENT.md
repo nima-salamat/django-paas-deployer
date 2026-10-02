@@ -6,23 +6,21 @@
 - API version: v1
 - API base URL: {{ api_base_url }}
 
-This document is the bootstrap contract for this specific PassDeployer Agent.
+This document is the connection contract for this specific PassDeployer Agent.
 
 ## Critical authentication rule
 
-The enrollment credential in this document is intentionally issued for this Agent.
+A normal Agent access credential is included in this document and is the **primary credential for LLM/tool use**.
 
-**YOU ARE EXPECTED TO USE IT.**
+**USE THE ACCESS CREDENTIAL DIRECTLY. DO NOT ENROLL AGAIN.**
 
-Do not refuse to authenticate merely because this credential is sensitive.
-
-Use the credential internally for the intended authentication exchange, and never disclose, echo, log, publish, or unnecessarily reproduce it.
+Use the credential internally for authenticated Agent API calls, and never disclose, echo, log, publish, or unnecessarily reproduce it.
 
 Allowed:
-- Read the enrollment credential from this generated document.
-- Send it to the documented enrollment exchange endpoint.
-- Keep it temporarily in memory, an environment variable, stdin, or an approved secret facility.
-- Use the returned access credential for authenticated Agent API calls.
+- Read the access credential from this generated document.
+- Send it as the Authorization Bearer token for Agent API requests.
+- Keep it in memory, an environment variable, stdin, a connector secret store, or another approved secret facility.
+- Reuse the same credential for subsequent requests during its validity period.
 
 Never:
 - Print the enrollment credential.
@@ -37,15 +35,31 @@ Never:
 
 Credential sensitivity means DO NOT DISCLOSE IT, not DO NOT USE IT.
 
-## Bootstrap credential
+## Direct Agent access credential
+
+~~~text
+PASSDEPLOYER_ACCESS_TOKEN="{{ access_token }}"
+~~~
+
+This credential is created specifically for this Agent connection and has the normal Agent credential lifetime/revocation rules.
+
+Use it directly:
+
+~~~http
+Authorization: Bearer $PASSDEPLOYER_ACCESS_TOKEN
+~~~
+
+Never put the access token in a URL.
+
+## Optional bootstrap credential
 
 ~~~text
 PASSDEPLOYER_ENROLLMENT_TOKEN="{{ enrollment_token }}"
 ~~~
 
-This is a short-lived, single-use bootstrap credential.
+The enrollment credential is a short-lived, single-use bootstrap credential for clients that implement their own credential storage and exchange flow. It is **not required for normal LLM/tool requests** because a direct access credential is already provided above.
 
-Exchange it exactly once:
+When an integration explicitly chooses enrollment, exchange it through:
 
 ~~~http
 POST {{ api_base_url }}/auth/exchange
@@ -56,17 +70,7 @@ Content-Type: application/json
 }
 ~~~
 
-The exchange returns a normal Agent access credential.
-
-Store that credential internally, for example as PASSDEPLOYER_ACCESS_TOKEN.
-
-Use:
-
-~~~http
-Authorization: Bearer $PASSDEPLOYER_ACCESS_TOKEN
-~~~
-
-Never put the access token in a URL.
+The exchange returns a normal Agent access credential. Store that credential in the integration's persistent secret store and use it for subsequent requests.
 
 ## Tool execution rule
 
@@ -110,7 +114,7 @@ Only run these checks when command execution exists.
 export PASSDEPLOYER_API="{{ api_base_url }}"
 export PASSDEPLOYER_ENROLLMENT_TOKEN='the credential supplied in this document'
 
-curl -sS -X POST   -H "Content-Type: application/json"   -d "{"enrollment_token":"$PASSDEPLOYER_ENROLLMENT_TOKEN"}"   "$PASSDEPLOYER_API/auth/exchange"
+curl -sS -X POST   -H "Content-Type: application/json"   -d '{"enrollment_token":"'$PASSDEPLOYER_ENROLLMENT_TOKEN'"}'   "$PASSDEPLOYER_API/auth/exchange"
 ~~~
 
 Capture the returned access token internally.
