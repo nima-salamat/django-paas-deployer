@@ -1,3 +1,4 @@
+import base64
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -6,7 +7,6 @@ from django.test import TestCase, override_settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 
 from users.models import Profile, Rule, User, Receipt
-from services.models import ServiceNetworkAttachment
 
 
 class UserDeletionTests(TestCase):
@@ -22,7 +22,13 @@ class UserDeletionTests(TestCase):
             profile = Profile.objects.create(
                 user=user,
                 order=1,
-                image=SimpleUploadedFile("profile.jpg", b"profile-bytes", content_type="image/jpeg"),
+                image=SimpleUploadedFile(
+                    "profile.png",
+                    base64.b64decode(
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+                    ),
+                    content_type="image/png",
+                ),
             )
             path = Path(profile.image.path)
             self.assertTrue(path.exists())
@@ -58,7 +64,6 @@ class UserDeletionTests(TestCase):
         )
         service = Service.objects.create(name="delete-fence", user=user, plan=plan)
 
-        with patch("services.lifecycle.mark_deleted") as mark_deleted,              patch("users.signals.ServiceNetworkAttachment.objects.filter") as attachment_filter:
-            attachment_filter.return_value.exclude.return_value.values_list.return_value = []
+        with patch("services.lifecycle.mark_deleted") as mark_deleted:
             cleanup_user_resources(User, user)
             mark_deleted.assert_called_once_with(service.pk)
