@@ -192,30 +192,122 @@ def cleanup_volume_on_delete(sender, instance: Volume, **kwargs):
 
 @receiver(pre_delete, sender=PrivateNetwork)
 def cleanup_network_on_delete(sender, instance: PrivateNetwork, **kwargs):
-    """Remove the owned Docker network when a PrivateNetwork row is deleted."""
+    """Remove an owned Docker network without deleting a still-used network."""
     logger.info(
         "pre_delete PrivateNetwork '%s' → removing owned Docker network",
         instance.name,
     )
-    try:
-        docker_name = instance.get_docker_network_name()
-        if not Network.network_exists(docker_name):
-            logger.info("Owned Docker network '%s' does not exist; nothing to remove", docker_name)
-            return
 
+    if ServiceNetworkAttachment.objects.filter(network_id=instance.pk).exists():
+        raise RuntimeError(
+            f"Cannot delete private network '{instance.name}': "
+            "one or more services still have an explicit network attachment."
+        )
+
+    docker_name = instance.get_docker_network_name()
+    if not Network.network_exists(docker_name):
+        logger.info(
+            "Owned Docker network '%s' does not exist; nothing to remove",
+            docker_name,
+        )
+        return
+
+    try:
         docker_network = Network(name=docker_name)
         raw = docker_network.client.networks.get(docker_name)
         labels = dict(getattr(raw, "attrs", {}).get("Labels") or {})
         if labels.get("managed-by") != "django-paas-deployer":
-            logger.error(
-                "Refusing to remove Docker network '%s': ownership label is missing or unexpected.",
-                docker_name,
+            raise RuntimeError(
+                f"Refusing to remove Docker network '{docker_name}': "
+                "ownership label is missing or unexpected."
             )
-            return
         docker_network.remove()
         logger.info("Owned Docker network '%s' removed successfully", docker_name)
-    except Exception:
+    except Exception as exc:
         logger.exception(
             "Failed to remove owned Docker network for PrivateNetwork '%s'",
             instance.name,
+        )
+        raise RuntimeError(
+            f"Failed to remove Docker network '{docker_name}'."
+        ) from exc
+
+
+@receiver(pre_delete, sender=ServiceRevision)
+def cleanup_revision_artifact_on_delete(sender, instance: ServiceRevision, **kwargs):
+    """Delete the revision-owned source artifact before its DB row disappears."""
+    artifact = getattr(instance, "artifact_file", None)
+    name = str(getattr(artifact, "name", "") or "")
+    if not name:
+        return
+
+    try:
+        artifact.delete(save=False)
+        logger.info(
+            "Deleted ServiceRevision artifact '%s' for revision %s.",
+            name,
+            instance.pk,
+        )
+    except Exception as exc:
+        logger.exception(
+            "Failed to delete ServiceRevision artifact '%s' for revision %s.",
+            name,
+            instance.pk,
+        )
+        raise RuntimeError(
+            f"Failed to remove revision artifact '{name}'."
+        ) from exc
+
+
+def _cleanup_service_log_records(service_id):
+    """Delete service-scoped logs stored in the separate deployment-log DB."""
+    from django.conf import settings
+    from django.db import transaction
+    from deploy.models import DeployLog
+    from logs.models import (
+        LogUsageDaily,
+        ServiceLogEntry,
+        ServiceLogStream,
+        ServiceLogUsage,
+    )
+
+    alias = getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", None) or "default"
+    sid = str(service_id)
+    deleted = {}
+
+    with transaction.atomic(using=alias):
+        for name, model in (
+            ("deployment_logs", DeployLog),
+            ("runtime_log_entries", ServiceLogEntry),
+            ("runtime_log_streams", ServiceLogStream),
+            ("runtime_log_usage", ServiceLogUsage),
+            ("runtime_log_daily_usage", LogUsageDaily),
+        ):
+            deleted[name] = int(
+                model.objects.using(alias).filter(service_id=sid).delete()[0]
+            )
+
+    return deleted
+
+
+@receiver(post_delete, sender=Service)
+def cleanup_service_external_state(sender, instance: Service, **kwargs):
+    """
+    Remove service-owned data that cannot be handled by the primary DB cascade.
+
+    DeployLog and runtime logs intentionally use scalar service ids because they
+    live on a separate database. Revision artifacts live in file storage and
+    are handled by ServiceRevision.pre_delete.
+    """
+    try:
+        deleted = _cleanup_service_log_records(instance.pk)
+        logger.info(
+            "Deleted service-owned log records for service %s: %s",
+            instance.pk,
+            deleted,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to delete service-owned log records after Service %s deletion.",
+            instance.pk,
         )
