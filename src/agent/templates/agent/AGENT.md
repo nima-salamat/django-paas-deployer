@@ -67,9 +67,9 @@ Only operations that satisfy this Agent's issued scopes are listed.
 
 | Method | Endpoint | Required scope(s) | Mutating | Idempotent | Throttle |
 | --- | --- | --- | --- | --- | --- |
-{% for endpoint in endpoints -%}
+{% for endpoint in endpoints %}
 | `{{ endpoint.method }}` | `{{ endpoint.path }}` | `{{ endpoint.requirements }}` | {{ endpoint.mutating|yesno:"yes,no" }} | {{ endpoint.idempotent|yesno:"yes,no" }} | `{{ endpoint.throttle }}` |
-{% empty -%}
+{% empty %}
 | — | — | none | no | no | — |
 {% endfor %}
 
