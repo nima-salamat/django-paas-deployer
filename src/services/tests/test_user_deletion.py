@@ -1,6 +1,8 @@
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.test import TestCase
+from django.utils import timezone
 
 from plans.models import Plan
 from services.models import (
@@ -51,11 +53,13 @@ class ServiceUserDeletionTests(TestCase):
             service=service,
             user=user,
             platform="docker",
-            expires_at="2099-01-01T00:00:00Z",
+            expires_at=timezone.now() + timedelta(days=3650),
         )
 
-        with patch("services.signals.Container.exists", return_value=False),              patch("services.signals.Image.remove_by_name"),              patch("services.signals._cleanup_service_cache_images"),              patch("services.signals._cleanup_service_log_records"):
-            user.delete()
+        with patch("services.signals.Container.exists", return_value=False), \
+             patch("services.signals.Image.remove_by_name"), \
+             patch("services.signals._cleanup_service_cache_images"), \
+             patch("services.signals._cleanup_service_log_records"):\n            user.delete()
 
         self.assertFalse(Service.objects.filter(pk=service.pk).exists())
         self.assertFalse(ServiceProcess.objects.filter(pk=process.pk).exists())
