@@ -72,9 +72,11 @@ Abstract base used by User. is_superuser is the Django permission flag, and has_
 
 ## Deletion semantics and implicit state
 
-User deletion cascades identity-owned rows but also triggers users.signals.cleanup_user_resources. That signal removes profile/deployment media and asks Service/Volume/PrivateNetwork ownership layers to clean runtime resources. Profile deletion separately removes the stored image.
+User deletion cascades identity-owned rows but also triggers `users.signals.cleanup_user_resources`. The signal fences owned Service lifecycle generations, prepares network attachment rows for safe collector ordering, and relies on Service/Volume/PrivateNetwork signals for Docker ownership cleanup. Messenger applies group/DM leave semantics separately, while catalog hard deletion removes protected child bindings before the User collector runs.
 
-Do not use direct raw SQL deletion of User without understanding those side effects.
+Audit/history records intentionally linked with `SET_NULL` survive account deletion where the owning app defines them as durable audit history (for example auth LoginLog and agent audit events). Cross-database service logs are removed by the Service deletion boundary rather than by the primary User FK cascade.
+
+Do not use direct raw SQL deletion of User without reproducing these side effects and their ordering contracts.
 
 ## Architecturally meaningful migrations
 
