@@ -296,6 +296,15 @@ class DeploymentEventOutbox(BaseModel):
 
 
 class DeployLog(BaseModel):
+    # Stable correlation key matching DeploymentEventOutbox.event_id. This
+    # field was introduced by migration 0027 and is used by the outbox
+    # projector for idempotent DeployLog writes.
+    event_id = models.UUIDField(
+        blank=True,
+        null=True,
+        unique=True,
+        db_index=True,
+    )
     # The event store lives in a separate database, so these identifiers must
     # not create cross-database foreign-key constraints.
     # Cross-database log records use scalar ids only; no reverse ORM relation
