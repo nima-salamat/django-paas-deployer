@@ -1,5 +1,5 @@
 """services API package."""
-from .user_services import ServiceViewSet, PrivateNetworkViewSet, VolumeViewSet
+from .user_services import ServiceViewSet, PrivateNetworkViewSet, VolumeViewSet, service_volume_capabilities_apiview
 from .volume_files import (
     volume_files_apiview, volume_download_apiview, purge_service_runtime_apiview,
 )
@@ -30,7 +30,7 @@ from .sharing import (
 )
 
 __all__ = [
-    "ServiceViewSet", "PrivateNetworkViewSet", "VolumeViewSet",
+    "ServiceViewSet", "PrivateNetworkViewSet", "VolumeViewSet", "service_volume_capabilities_apiview",
     "volume_files_apiview", "volume_download_apiview", "purge_service_runtime_apiview",
     "service_logs_apiview", "service_logs_export_apiview",
     "start_service_apiview", "stop_service_apiview",

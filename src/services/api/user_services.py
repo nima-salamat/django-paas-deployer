@@ -46,6 +46,7 @@ from .common import (
     ServiceAdminPagination,
     _service_is_mutable,
     _docker_volume_exists,
+    _get_service_for_user_or_share,
 )
 from .volume_files import _get_docker_volume
 
@@ -994,3 +995,43 @@ class VolumeViewSet(ModelViewSet):
 
 
 
+
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def service_volume_capabilities_apiview(request, service_id):
+    """Expose the backend volume mutation guard to the service-detail UI."""
+    try:
+        service, share = _get_service_for_user_or_share(request, service_id, action="can_view", for_update=False)
+        mutable, reason = _service_is_mutable(service)
+        owner = str(service.user_id) == str(request.user.id)
+        if owner:
+            can_attach = can_detach = can_add = True
+        else:
+            from services.share_permissions import assert_share_action, SharePermissionError
+            def allowed(action):
+                try:
+                    assert_share_action(service, request.user, action)
+                    return True
+                except SharePermissionError:
+                    return False
+            can_attach = allowed("can_volume_attach")
+            can_detach = allowed("can_volume_detach")
+            can_add = allowed("can_volume_add")
+        return Response({
+            "result": "success",
+            "service_id": str(service.pk),
+            "service_status": str(getattr(service, "status", "") or ""),
+            "mutable": bool(mutable),
+            "reason": reason or "",
+            "can_attach": bool(can_attach and mutable),
+            "can_detach": bool(can_detach and mutable),
+            "can_add": bool(can_add and mutable),
+            "metadata_edit_requires_unprovisioned_volume": True,
+            "shared": share is not None,
+        })
+    except PermissionError as exc:
+        return Response({"result": "error", "detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+    except Service.DoesNotExist:
+        return Response({"result": "error", "detail": "Service not found."}, status=status.HTTP_404_NOT_FOUND)
