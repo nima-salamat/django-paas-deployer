@@ -72,22 +72,14 @@ def cleanup_user_resources(sender, instance: User, **kwargs):
         "are retained if Docker storage cannot be removed.",
         user_id,
     )
-    networks = list(PrivateNetwork.objects.filter(user=instance))
-    for net in networks:
-        try:
-            docker_name = net.get_docker_network_name()
-            if DockerNetwork.network_exists(docker_name):
-                docker_net = DockerNetwork(name=docker_name)
-                docker_net.remove()
-                logger.info("Removed Docker network '%s'", docker_name)
-            elif DockerNetwork.network_exists(net.name):
-                docker_net = DockerNetwork(name=net.name)
-                docker_net.remove()
-                logger.info("Removed Docker network '%s'", net.name)
-        except Exception:
-            logger.exception(
-                "Failed to remove Docker network '%s'", net.name
-            )
+    # PrivateNetwork.pre_delete is the authoritative network cleanup path.
+    # Delegating to it preserves the same ownership-label and attachment checks
+    # used by direct network deletion and avoids deleting an unmanaged network
+    # from the User signal.
+    logger.info(
+        "User %s private-network cleanup is delegated to PrivateNetwork.pre_delete.",
+        user_id,
+    )
 
     profiles = list(Profile.objects.filter(user=instance))
     for profile in profiles:
