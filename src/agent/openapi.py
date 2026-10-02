@@ -557,6 +557,8 @@ def build_openapi(agent, *, request=None):
     from plans.serializers import PlanSerializer
     from deploy.serializers import DeploySerializer
     from services.models import Service, ServiceEnvironmentVariable, ServiceEndpoint
+    from agent.scopes import HIGH_RISK_SCOPES
+    from .throttling import AgentRateThrottle
 
     service_create = _serializer_schema(ServiceSerializer, exclude={"user"})
     service_create.setdefault("required", [])
@@ -1678,16 +1680,9 @@ def build_openapi(agent, *, request=None):
                 "existing_image": False,
             },
             "log_sources_are_separate": True,
-            "rate_limits": {"read":"120/min","mutation":"30/min","deployment":"10/min","upload":"5/min","shell":"10/min","exchange":"10/min"},
+            "rate_limits": dict(AgentRateThrottle.rate_map),
             "manifest_scope": "agent.manifest.generate",
-            "high_risk_scopes": [
-                "service_database_credentials.read",
-                "shell.execute",
-                "shell.replace",
-                "shell.files.write",
-                "deployments.rebuild",
-                "deployments.rollback",
-            ],
+            "high_risk_scopes": sorted(HIGH_RISK_SCOPES),
         },
     }
     result["components"]["schemas"].update(schemas)
