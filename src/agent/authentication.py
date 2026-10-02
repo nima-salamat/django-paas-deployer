@@ -4,7 +4,7 @@ from django.utils import timezone
 from rest_framework import authentication
 from rest_framework.exceptions import AuthenticationFailed
 from .models import Agent, AgentCredential
-from .security import client_ip,token_hash
+from .security import client_ip,stable_token_hash,token_hash
 
 class AgentTokenAuthentication(authentication.BaseAuthentication):
     keyword="Bearer"
@@ -13,9 +13,9 @@ class AgentTokenAuthentication(authentication.BaseAuthentication):
         if not header:return None
         parts=header.split()
         if len(parts)!=2 or parts[0].lower()!=self.keyword.lower(): raise AuthenticationFailed("Use Authorization: Bearer <agent-access-token>.")
-        raw=parts[1].strip(); digest=token_hash(raw); prefix=raw[:20]; now=timezone.now()
+        raw=parts[1].strip(); digest=stable_token_hash(raw); legacy_digest=token_hash(raw); prefix=raw[:20]; now=timezone.now()
         candidates=AgentCredential.objects.select_related("agent","agent__user").filter(token_prefix=prefix,token_type=AgentCredential.TokenType.ACCESS,revoked_at__isnull=True)
-        credential=next((c for c in candidates if hmac.compare_digest(c.token_hash,digest)),None)
+        credential=next((c for c in candidates if hmac.compare_digest(c.token_hash,digest) or hmac.compare_digest(c.token_hash,legacy_digest)),None)
         if credential is None: raise AuthenticationFailed("Invalid Agent credential.")
         if not credential.is_active(now): raise AuthenticationFailed("Agent credential is expired or revoked.")
         agent=credential.agent
