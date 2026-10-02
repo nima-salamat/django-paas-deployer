@@ -1,4 +1,7 @@
+from datetime import timedelta
+
 from django.test import TestCase
+from django.utils import timezone
 
 from auth_users.models import AuthCode, Device, InviteLink, InviteUsage, LoginLog, UserContactChange, UserSession
 from users.models import User
@@ -18,7 +21,7 @@ class AuthUserDeletionTests(TestCase):
             device=device,
             session_id="session-delete-1",
             credential_hash="hash",
-            expires_at="2099-01-01T00:00:00Z",
+            expires_at=timezone.now() + timedelta(days=3650),
         )
         contact = UserContactChange.objects.create(
             user=self.user,
