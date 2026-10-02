@@ -40,6 +40,9 @@ _ALIGNMENT_CLASSES = frozenset({
     "ticket-align-center",
     "ticket-align-right",
 })
+_DIRECTION_VALUES = frozenset({"auto", "ltr", "rtl"})
+_DIR_ATTR_RE = re.compile(r'\s+dir\s*=\s*("|')(?P<value>.*?)\1', re.I | re.S)
+
 _BLOCK_CLASS_RE = re.compile(
     r"(?P<prefix><s*(?:p|h1|h2|h3|h4|li|blockquote)\b)(?P<attrs>[^>]*)>",
     re.I,
@@ -69,6 +72,25 @@ def _normalize_alignment_classes(raw: str) -> str:
     return _BLOCK_CLASS_RE.sub(replace_block, raw)
 
 
+def _normalize_direction_attributes(raw: str) -> str:
+    def replace_block(match: re.Match) -> str:
+        attrs = match.group("attrs")
+        direction_match = _DIR_ATTR_RE.search(attrs)
+        if not direction_match:
+            return match.group(0)
+
+        value = direction_match.group("value").strip().lower()
+        replacement = f' dir="{value}"' if value in _DIRECTION_VALUES else ""
+        normalized_attrs = (
+            attrs[:direction_match.start()]
+            + replacement
+            + attrs[direction_match.end():]
+        )
+        return f'{match.group("prefix")}{normalized_attrs}>'
+
+    return _BLOCK_CLASS_RE.sub(replace_block, raw)
+
+
 def sanitize_html(raw: str) -> str:
     if not raw:
         return ""
@@ -82,13 +104,13 @@ def sanitize_html(raw: str) -> str:
                 "blockquote", "code", "pre", "span",
             ],
             attributes={
-                "p": ["class"],
-                "h1": ["class"],
-                "h2": ["class"],
-                "h3": ["class"],
-                "h4": ["class"],
-                "li": ["class"],
-                "blockquote": ["class"],
+                "p": ["class", "dir"],
+                "h1": ["class", "dir"],
+                "h2": ["class", "dir"],
+                "h3": ["class", "dir"],
+                "h4": ["class", "dir"],
+                "li": ["class", "dir"],
+                "blockquote": ["class", "dir"],
                 "a": ["href", "title", "rel", "target"],
                 "code": ["class"],
                 "pre": ["class"],
@@ -97,7 +119,7 @@ def sanitize_html(raw: str) -> str:
             protocols=["http", "https", "mailto"],
             strip=True,
         )
-        return _normalize_alignment_classes(cleaned)
+        return _normalize_direction_attributes(_normalize_alignment_classes(cleaned))
     except ImportError:
         text = _SCRIPT_RE.sub("", raw)
         text = _EVENT_RE.sub(" ", text)
