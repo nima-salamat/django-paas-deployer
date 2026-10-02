@@ -9,15 +9,14 @@ def token_hash(token):
     pepper=str(getattr(settings,"AGENT_TOKEN_PEPPER","") or settings.SECRET_KEY)
     return hmac.new(pepper.encode(),str(token).encode(),hashlib.sha256).hexdigest()
 
-def enrollment_token_hash(token):
-    """Hash high-entropy one-time enrollment tokens without runtime-secret coupling.
 
-    Enrollment credentials are generated from cryptographically random material
-    and are short-lived/single-use. A deterministic SHA-256 digest lets the
-    issuing and exchanging web processes share the database record even when a
-    deployment has inconsistent runtime secret configuration.
-    """
+def stable_token_hash(token):
+    """Hash high-entropy Agent credentials without per-process secret coupling."""
     return hashlib.sha256(str(token).encode()).hexdigest()
+
+def enrollment_token_hash(token):
+    """Hash high-entropy enrollment credentials without runtime-secret coupling."""
+    return stable_token_hash(token)
 
 def issue_raw_access_token(): return ACCESS_PREFIX+secrets.token_urlsafe(32)
 def issue_raw_enrollment_token(): return ENROLLMENT_PREFIX+secrets.token_urlsafe(32)
