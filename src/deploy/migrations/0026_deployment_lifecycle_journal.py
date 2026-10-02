@@ -35,7 +35,6 @@ class Migration(migrations.Migration):
             model_name="deploy",
             name="release_id",
             field=models.UUIDField(
-                db_index=True,
                 editable=False,
                 null=True,
             ),
