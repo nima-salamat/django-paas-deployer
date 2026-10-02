@@ -170,10 +170,10 @@ class AgentScopeCatalogView(AgentManagementBase):
 class AgentListCreateView(AgentManagementBase):
     def get(self, request):
         paginator = PageNumberPagination()
-        paginator.page_size = 25
+        paginator.page_size = 5
         paginator.page_size_query_param = "page_size"
-        paginator.max_page_size = 100
-        queryset = self._agent_queryset().order_by("name", "created_at")
+        paginator.max_page_size = 5
+        queryset = self._agent_queryset().order_by("created_at", "pk")
         page = paginator.paginate_queryset(queryset, request, view=self)
         return paginator.get_paginated_response([_agent_payload(agent) for agent in page])
 
@@ -260,10 +260,10 @@ class AgentCredentialListView(AgentManagementBase):
     def get(self, request, agent_id):
         agent = self._agent(agent_id)
         paginator = PageNumberPagination()
-        paginator.page_size = 25
+        paginator.page_size = 10
         paginator.page_size_query_param = "page_size"
-        paginator.max_page_size = 100
-        page = paginator.paginate_queryset(agent.credentials.all().order_by("-created_at"), request, view=self)
+        paginator.max_page_size = 10
+        page = paginator.paginate_queryset(agent.credentials.all().order_by("-created_at", "-pk"), request, view=self)
         return paginator.get_paginated_response([_credential_payload(c) for c in page])
 
     def post(self, request, agent_id):
@@ -418,9 +418,9 @@ class AgentAuditView(AgentManagementBase):
     def get(self, request, agent_id):
         agent = self._agent(agent_id)
         paginator = PageNumberPagination()
-        paginator.page_size = 50
+        paginator.page_size = 10
         paginator.page_size_query_param = "page_size"
-        paginator.max_page_size = 100
+        paginator.max_page_size = 10
         page = paginator.paginate_queryset(
             AgentAuditEvent.objects.filter(agent=agent).order_by("-occurred_at"), request, view=self
         )
