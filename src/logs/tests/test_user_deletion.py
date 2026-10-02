@@ -1,4 +1,5 @@
 from django.test import TestCase, override_settings
+from django.utils import timezone
 
 from deploy.models import DeployLog
 from logs.models import LogUsageDaily, ServiceLogEntry, ServiceLogStream, ServiceLogUsage
@@ -17,7 +18,7 @@ class LogUserDeletionTests(TestCase):
         ServiceLogEntry.objects.create(
             service_id=service_id,
             stream_id=stream.pk,
-            ts="2026-01-01T00:00:00Z",
+            ts=timezone.now(),
             seq=1,
             stream=ServiceLogEntry.StreamKind.STDOUT,
             message="line",
@@ -31,7 +32,7 @@ class LogUserDeletionTests(TestCase):
         )
         LogUsageDaily.objects.create(
             service_id=service_id,
-            date="2026-01-01",
+            date=timezone.now().date(),
             bytes_ingested=4,
             entries_ingested=1,
         )
