@@ -14,7 +14,7 @@ The current production deployment path remains the audited `Celery task -> Deplo
 
 Browser authentication remains `SessionJWTAuthentication`. Agent access uses separate Bearer credentials.
 
-Persistent Agent access credentials are stored as HMAC-SHA256 digests, expire and can be revoked independently. Enrollment credentials are stored hashed, expire quickly and become invalid after one exchange.
+Persistent Agent access credentials are stored as HMAC-SHA256 digests, expire and can be revoked independently. Enrollment credentials use deterministic SHA-256 digests because they are cryptographically random, short-lived, and single-use; this keeps bootstrap exchange stable across application processes even if runtime secret configuration differs. Enrollment credentials become invalid after one exchange.
 
 ## Authorization
 
