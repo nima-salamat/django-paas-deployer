@@ -201,7 +201,7 @@ def delete_credential(request, credential_id):
         return HttpResponse("Forbidden", status=403)
     credential = get_object_or_404(AgentCredential, pk=credential_id)
     agent = credential.agent
-    delete_credential_record(credential, request=request)
+    delete_credential_record(credential, request=request, audit_action="admin.credential.delete")
     messages.success(request, "Agent credential deleted permanently.")
     return _return_agent(request, agent)
 
