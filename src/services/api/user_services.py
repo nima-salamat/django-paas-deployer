@@ -47,7 +47,6 @@ from .common import (
     _service_is_mutable,
     _docker_volume_exists,
     _get_service_for_user_or_share,
-    _purge_service_runtime,
 )
 from .volume_files import _get_docker_volume
 
@@ -247,12 +246,10 @@ class ServiceViewSet(ModelViewSet):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        # Best-effort runtime cleanup so Docker resources are not orphaned
-        try:
-            _purge_service_runtime(service)
-        except Exception as exc:
-            logger.warning("purge before service delete failed: %s", exc)
-
+        # Service.pre_delete is the single ownership-aware runtime cleanup
+        # boundary. Do not pre-purge here: that helper is also used by an
+        # explicit destructive runtime endpoint and must not bypass the
+        # Service deletion signal's ownership checks.
         # Notify groups that had this service shared before CASCADE removes shares
         try:
             from services.models import ServiceShare
