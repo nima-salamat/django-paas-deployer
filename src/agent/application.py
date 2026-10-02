@@ -722,9 +722,12 @@ def exchange_enrollment(raw_token, *, metadata=None):
     row.used_at = now
     row.save(update_fields=["used_at", "updated_at"])
 
+    if row.agent.provisioning_source == Agent.ProvisioningSource.LEGACY:
+        row.agent.provisioning_source = Agent.ProvisioningSource.API_ENROLLMENT
+        row.agent.save(update_fields=["provisioning_source", "updated_at"])
     credential, access_token = issue_access_credential(
         row.agent,
-        metadata=metadata or {},
+        metadata={**(metadata or {}), "issued_via": "api_enrollment"},
     )
     return row.agent, credential, access_token
 
