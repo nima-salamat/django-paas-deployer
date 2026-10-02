@@ -236,7 +236,7 @@ def _add_operation_metadata(operation, contract, agent, *, response=None, respon
         if response_status != 204:
             response_entry["content"] = {
                 "application/json": {
-                    "schema": {"$ref": f"#/components/schemas/{response["schema"]}"}
+                    "schema": {"$ref": f"#/components/schemas/{response['schema']}"}
                 }
             }
         operation.setdefault("responses", {})[str(response_status)] = response_entry
