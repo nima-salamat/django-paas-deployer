@@ -24,6 +24,12 @@ Expired/old AuthCode cleanup is an admin operation. Rotated SimpleJWT refresh to
 
 Authentication success can create Device/UserSession/LoginLog state and issue JWTs. Contact confirmation mutates User and revokes sessions with transaction.on_commit. These are security-sensitive cross-app side effects.
 
+## Account deletion semantics
+
+Device, UserSession, AuthCode, InviteUsage and UserContactChange rows are user-owned and cascade with the User. LoginLog is audit history: its User FK is `SET_NULL`, while username/identifier snapshots preserve the historical record. InviteLink and other operator-created records keep historical ownership metadata with `SET_NULL` rather than disappearing with the account.
+
+Session Redis is acceleration-only; authentication still performs the authoritative User lookup, so a deleted User cannot authenticate even if an expired cache entry remains until its normal TTL. User deletion tests live under `auth_users/tests/test_user_deletion.py`.
+
 ## Tests as contracts
 
-auth_users/tests.py protects auth flow behavior; tests_sessions.py protects session-bound JWTs, logout/revocation and refresh behavior. When changing authentication, read both plus users.contact_api.
+Authentication/session tests remain separate from account-deletion tests. Changes to session revocation or user deletion should be checked against both suites.
