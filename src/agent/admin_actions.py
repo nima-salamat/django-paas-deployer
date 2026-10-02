@@ -298,12 +298,21 @@ def manifest(request, agent_id):
     if agent.status != Agent.Status.ACTIVE:
         return HttpResponse("Agent is not active.", status=409)
     enrollment, row = create_enrollment(agent, request=request)
-    content = render_agent_manifest(agent, enrollment, request=request)
+    credential, access = issue_access_credential(
+        agent,
+        metadata={"issued_via": "wagtail_agent_manifest", "issued_by_wagtail_user": str(request.user.pk)},
+    )
+    content = render_agent_manifest(agent, enrollment, access_token=access, request=request)
     audit(
         request=request, agent=agent, user=request.user,
         action="admin.agent_manifest.generate", success=True, status_code=200,
         resource_type="agent", resource_id=agent.pk, resource_effect="unchanged",
-        metadata={"enrollment_prefix": row.token_prefix, "enrollment_expires_at": row.expires_at.isoformat()},
+        metadata={
+            "enrollment_prefix": row.token_prefix,
+            "enrollment_expires_at": row.expires_at.isoformat(),
+            "credential_prefix": credential.token_prefix,
+            "credential_expires_at": credential.expires_at.isoformat(),
+        },
     )
     response = HttpResponse(
         content,
