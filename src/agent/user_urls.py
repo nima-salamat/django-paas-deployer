@@ -21,7 +21,7 @@ urlpatterns = [
     path("<uuid:agent_id>/credentials/", AgentCredentialListView.as_view(), name="credentials"),
     path("<uuid:agent_id>/credentials/rotate/", AgentCredentialRotateView.as_view(), name="credentials_rotate"),
     path("<uuid:agent_id>/credentials/<uuid:credential_id>/revoke/", AgentCredentialRevokeView.as_view(), name="credential_revoke"),
-    path("<uuid:agent_id>/<str:action>/", AgentStatusView.as_view(), name="status"),
     path("<uuid:agent_id>/audit/", AgentAuditView.as_view(), name="audit"),
     path("<uuid:agent_id>/manifest/", AgentManifestManagementView.as_view(), name="manifest"),
+    path("<uuid:agent_id>/<str:action>/", AgentStatusView.as_view(), name="status"),
 ]
