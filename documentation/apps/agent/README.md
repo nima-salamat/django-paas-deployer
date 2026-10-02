@@ -14,7 +14,7 @@ The current production deployment path remains the audited `Celery task -> Deplo
 
 Browser authentication remains `SessionJWTAuthentication`. Agent access uses separate Bearer credentials.
 
-Persistent Agent access credentials are stored as HMAC-SHA256 digests, expire and can be revoked independently. Enrollment credentials use deterministic SHA-256 digests because they are cryptographically random, short-lived, and single-use; this keeps bootstrap exchange stable across application processes even if runtime secret configuration differs. Enrollment credentials become invalid after one exchange.
+Persistent Agent access credentials are stored as deterministic SHA-256 digests, expire and can be revoked independently, and legacy HMAC-SHA256 credential rows remain accepted. Enrollment credentials use deterministic SHA-256 digests because they are cryptographically random, short-lived, and single-use; this keeps bootstrap exchange stable across application processes even if runtime secret configuration differs.
 
 ## Authorization
 
@@ -36,11 +36,9 @@ Machine-readable discovery is available from:
 
 ## Enrollment
 
-The generated `AGENT.md` contains a short-lived, single-use bootstrap credential intentionally issued for that specific Agent.
+The generated `AGENT.md` contains a normal Bearer access credential specifically issued for that Agent and intended for direct LLM/tool use. The credential is sensitive: use it internally, never disclose, echo, log, publish, or place it in URLs or source files, and reuse it for subsequent requests until it expires or is revoked.
 
-The Agent is expected to use this credential to authenticate. Sensitivity does not mean the credential is unusable: the correct behavior is to use it internally and never disclose, echo, log, publish, or place it in URLs or source files.
-
-Exchanging the enrollment credential returns a normal Bearer access credential. Permanent credentials are never embedded in repository templates or URLs.
+The manifest also contains a short-lived enrollment credential for integrations that implement their own bootstrap/exchange flow. It is optional for normal LLM/tool use. Enrollment credentials are intentionally not the primary credential in the generated manifest.
 
 ## Logs
 
