@@ -594,9 +594,19 @@ def list_services_unified(request):
       - shared: shared with me (received)
     Returns both lists so UI can show tabs.
     """
+    search = (
+        request.query_params.get("q_search")
+        or request.query_params.get("q")
+        or request.query_params.get("search")
+        or ""
+    ).strip()
     mine = Service.objects.filter(user=request.user).select_related(
         "user", "network", "plan", "selected_deploy"
     ).order_by("-created_at", "-id")
+    received = ServiceShare.objects.none()
+    created = ServiceShare.objects.none()
+    if search:
+        mine = mine.filter(Q(name__icontains=search) | Q(user__username__icontains=search))
     mine_data = GetServiceSerializer(mine, many=True, context={"request": request}).data
 
     from messenger.models import ConversationParticipant
@@ -615,6 +625,11 @@ def list_services_unified(request):
         )
         .order_by("-service__created_at", "-service_id", "-created_at", "-id")
     )
+    if search:
+        received = received.filter(
+            Q(service__name__icontains=search)
+            | Q(service__user__username__icontains=search)
+        )
     received_data = ServiceShareSerializer(
         received, many=True, context={"request": request}
     ).data
@@ -626,6 +641,11 @@ def list_services_unified(request):
         )
         .order_by("-service__created_at", "-service_id", "-created_at", "-id")
     )
+    if search:
+        created = created.filter(
+            Q(service__name__icontains=search)
+            | Q(service__user__username__icontains=search)
+        )
     created_data = ServiceShareSerializer(
         created, many=True, context={"request": request}
     ).data
