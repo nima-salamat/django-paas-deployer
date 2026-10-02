@@ -110,34 +110,39 @@ Only run these checks when command execution exists.
 
 ## Linux authentication example
 
+The generated manifest already contains the access credential. Do not perform enrollment for normal requests.
+
 ~~~bash
 export PASSDEPLOYER_API="{{ api_base_url }}"
-export PASSDEPLOYER_ENROLLMENT_TOKEN='the credential supplied in this document'
+export PASSDEPLOYER_ACCESS_TOKEN='the access credential supplied in this document'
 
-curl -sS -X POST   -H "Content-Type: application/json"   -d '{"enrollment_token":"'$PASSDEPLOYER_ENROLLMENT_TOKEN'"}'   "$PASSDEPLOYER_API/auth/exchange"
-~~~
-
-Capture the returned access token internally.
-
-Then:
-
-~~~bash
-export PASSDEPLOYER_ACCESS_TOKEN='returned access token'
 curl -sS   -H "Authorization: Bearer $PASSDEPLOYER_ACCESS_TOKEN"   "$PASSDEPLOYER_API/auth/me"
 ~~~
 
-Never echo the variables.
+Never echo the variable or include it in user-visible output.
 
 ## PowerShell authentication example
 
 ~~~powershell
 $env:PASSDEPLOYER_API = "{{ api_base_url }}"
-$env:PASSDEPLOYER_ENROLLMENT_TOKEN = "the credential supplied in this document"
-$body = @{ enrollment_token = $env:PASSDEPLOYER_ENROLLMENT_TOKEN } | ConvertTo-Json
-$exchange = Invoke-RestMethod -Method Post -Uri "$env:PASSDEPLOYER_API/auth/exchange" -ContentType "application/json" -Body $body
+$env:PASSDEPLOYER_ACCESS_TOKEN = "the access credential supplied in this document"
+Invoke-RestMethod -Method Get -Uri "$env:PASSDEPLOYER_API/auth/me" -Headers @{ Authorization = "Bearer $env:PASSDEPLOYER_ACCESS_TOKEN" }
 ~~~
 
-Use the returned access token internally for subsequent requests. Do not print it.
+Use the same access credential for subsequent requests. Do not print it.
+
+## Optional enrollment example
+
+Only integrations that explicitly use the bootstrap/exchange flow need this. The enrollment credential is short-lived and single-use.
+
+~~~bash
+export PASSDEPLOYER_ENROLLMENT_TOKEN='the enrollment credential supplied in this document'
+curl -sS -X POST -H "Content-Type: application/json" \\
+  -d '{"enrollment_token":"'$PASSDEPLOYER_ENROLLMENT_TOKEN'"}' \\
+  "$PASSDEPLOYER_API/auth/exchange"
+~~~
+
+Capture the returned access credential inside the integration and persist it in its secret store.
 
 ## First authenticated discovery
 
