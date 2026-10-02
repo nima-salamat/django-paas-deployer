@@ -19,6 +19,7 @@ from auth_users.authentication import SessionJWTAuthentication
 from .application import (
     audit,
     create_enrollment,
+    delete_agent,
     issue_access_credential,
     rotate_access_credentials,
     set_agent_status,
@@ -228,6 +229,24 @@ class AgentDetailView(AgentManagementBase):
             resource_effect="changed",
         )
         return Response({"result": "success", "agent": _agent_payload(agent)})
+
+
+
+    def delete(self, request, agent_id):
+        agent = self._agent(agent_id)
+        agent_pk = agent.pk
+        agent_name = agent.name
+        delete_agent(agent, request=request)
+        return Response(
+            {
+                "result": "success",
+                "deleted": True,
+                "agent_id": str(agent_pk),
+                "name": agent_name,
+                "credentials_deleted": True,
+            },
+            status=status.HTTP_204_NO_CONTENT,
+        )
 
 
 class AgentCredentialListView(AgentManagementBase):
