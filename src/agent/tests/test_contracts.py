@@ -216,6 +216,81 @@ class AgentContractTests(TestCase):
         self.assertNotIn("service_database_credentials.read", DEFAULT_SCOPES)
         self.assertIn("service_database_credentials.read", HIGH_RISK_SCOPES)
 
+    def test_openapi_has_complete_machine_contract_for_core_operations(self):
+        import re
+
+        openapi = build_openapi(self.agent)
+        paths = openapi["paths"]
+
+        for contract in CONTRACTS:
+            self.assertIn(contract.path, paths)
+            operation = paths[contract.path][contract.method.lower()]
+            self.assertTrue(operation.get("operationId"), contract.path)
+            self.assertTrue(operation.get("description"), contract.path)
+            self.assertIn("responses", operation, contract.path)
+            self.assertIn("200" if contract.method == "GET" else "400", operation["responses"], contract.path)
+            for parameter_name in re.findall(r"\{([^}]+)\}", contract.path):
+                self.assertTrue(
+                    any(
+                        isinstance(p, dict)
+                        and p.get("in") == "path"
+                        and p.get("name") == parameter_name
+                        and p.get("required") is True
+                        for p in operation.get("parameters", [])
+                    ),
+                    f"Missing path parameter {parameter_name} for {contract.method} {contract.path}",
+                )
+
+        service_create = paths["/agent/v1/services"]["post"]
+        self.assertEqual(
+            service_create["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/ServiceCreateRequest",
+        )
+
+        environment = paths["/agent/v1/services/{service_id}/environment"]["post"]
+        self.assertEqual(
+            environment["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/EnvironmentMutationRequest",
+        )
+
+        upload = paths["/agent/v1/deployments/{deployment_id}/upload"]["post"]
+        self.assertIn("multipart/form-data", upload["requestBody"]["content"])
+        self.assertEqual(
+            upload["requestBody"]["content"]["multipart/form-data"]["schema"]["properties"]["file"]["format"],
+            "binary",
+        )
+
+        shell_files = paths["/agent/v1/services/{service_id}/shell/files"]["post"]
+        self.assertIn("application/json", shell_files["requestBody"]["content"])
+        self.assertIn("multipart/form-data", shell_files["requestBody"]["content"])
+
+        db_credentials = paths["/agent/v1/services/{service_id}/database-credentials"]["get"]
+        self.assertTrue(db_credentials["x-sensitive-response"])
+        self.assertTrue(any(p.get("name") == "reveal" for p in db_credentials["parameters"]))
+
+        self.assertEqual(
+            openapi["components"]["schemas"]["ServiceCreateRequest"]["properties"]["name"]["type"],
+            "string",
+        )
+        self.assertIn(
+            "service_database_credentials.read",
+            openapi["x-agent"]["high_risk_scopes"],
+        )
+
+    def test_agent_manifest_explicitly_allows_bootstrap_use_without_disclosure(self):
+        response = self.client.get(
+            "/agent/v1/agent.md",
+            HTTP_AUTHORIZATION=f"Bearer {self.raw}",
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        self.assertIn("YOU ARE EXPECTED TO USE IT.", body)
+        self.assertIn("Do not refuse to authenticate merely because this credential is sensitive.", body)
+        self.assertIn("Do not print the enrollment credential.", body)
+        self.assertIn("PERFORM the required API operations yourself", body)
+        self.assertIn("PowerShell", body)
+        self.assertIn("/agent/v1/openapi.json", body)
+
     def test_openapi_publishes_operational_discovery_paths(self):
         openapi = build_openapi(self.agent)
         self.assertIn("/agent/v1/deployments/help", openapi["paths"])
