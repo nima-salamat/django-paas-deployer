@@ -2,7 +2,11 @@
 
 ## User deletion
 
-cleanup_user_resources is a pre-delete coordination signal. It removes user-owned deployment/profile media and asks the owning Service/Volume/PrivateNetwork layers to clean their resources. The signal is intentionally defensive so cleanup errors are logged rather than preventing all identity deletion paths.
+`cleanup_user_resources` is the project-wide pre-delete coordination signal. Before the Django deletion collector removes durable rows it fences every owned Service to `desired_state=deleted`, clears user-owned ServiceNetworkAttachment rows so PrivateNetwork cleanup cannot race the collector, and delegates runtime/volume/network cleanup to the owning resource signals.
+
+Hard deletion through the admin API is a separate destructive path. It first calls `app_catalog.user_deletion.prepare_user_hard_delete` so protected catalog child bindings are removed in the application-owned order; those bindings keep their `PROTECT` contract for direct Service/Deploy deletion.
+
+Profile/deployment artifacts and other user-owned storage are cleaned by their owning app signals. Critical runtime ownership failures are not silently converted into successful deletion.
 
 ## Profile deletion
 
