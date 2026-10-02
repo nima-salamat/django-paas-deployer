@@ -532,6 +532,39 @@ def rotate_access_credentials(agent, *, metadata=None):
 
 
 @transaction.atomic
+def delete_agent(agent, *, request=None):
+    """Permanently delete an Agent and its credential/bootstrap state.
+
+    AgentCredential, AgentEnrollmentToken and AgentIdempotencyRecord use
+    CASCADE, so all authentication material owned by the Agent is deleted
+    with it. AgentAuditEvent uses SET_NULL and is intentionally retained.
+    """
+    locked_agent = Agent.objects.select_for_update().get(pk=agent.pk)
+    agent_id = locked_agent.pk
+    agent_name = locked_agent.name
+
+    audit(
+        request=request,
+        agent=locked_agent,
+        user=getattr(request, "user", None) if request is not None else None,
+        action="browser.agent.delete",
+        success=True,
+        status_code=204,
+        resource_type="agent",
+        resource_id=agent_id,
+        resource_effect="deleted",
+        metadata={
+            "agent_name": agent_name,
+            "deleted_credential_count": locked_agent.credentials.count(),
+            "deleted_enrollment_count": locked_agent.enrollments.count(),
+        },
+    )
+
+    locked_agent.delete()
+    return agent_id, agent_name
+
+
+@transaction.atomic
 def set_agent_status(agent, status):
     locked_agent = Agent.objects.select_for_update().get(pk=agent.pk)
     now = timezone.now()
