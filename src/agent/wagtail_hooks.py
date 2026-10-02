@@ -9,6 +9,8 @@ from wagtail.snippets import widgets as wagtailsnippets_widgets
 from .wagtail_admin import register as _register_agent
 
 from .admin_actions import (
+    delete_credential,
+    delete_credential_confirm,
     disable_agent,
     disable_agent_confirm,
     enable_agent,
@@ -45,6 +47,8 @@ def register_agent_admin_urls():
         path("agent/<uuid:agent_id>/revoke/", revoke_agent, name="wagtail_agent_revoke"),
         path("agent/<uuid:agent_id>/agent-md/confirm/", manifest_confirm, name="wagtail_agent_manifest_confirm"),
         path("agent/<uuid:agent_id>/agent-md/", manifest, name="wagtail_agent_manifest"),
+        path("agent/credentials/<uuid:credential_id>/delete/confirm/", delete_credential_confirm, name="wagtail_agent_delete_credential_confirm"),
+        path("agent/credentials/<uuid:credential_id>/delete/", delete_credential, name="wagtail_agent_delete_credential"),
         path("agent/credentials/<uuid:credential_id>/revoke/confirm/", revoke_credential_confirm, name="wagtail_agent_revoke_credential_confirm"),
         path("agent/credentials/<uuid:credential_id>/revoke/", revoke_credential, name="wagtail_agent_revoke_credential"),
     ]
@@ -80,9 +84,15 @@ def agent_listing_buttons(buttons, snippet, user, context=None):
             reverse("wagtail_agent_enable_confirm", kwargs={"agent_id": snippet.pk}) + suffix,
             priority=10,
         ))
-    elif isinstance(snippet, AgentCredential) and snippet.revoked_at is None:
+    elif isinstance(snippet, AgentCredential):
+        if snippet.revoked_at is None:
+            buttons.append(wagtailsnippets_widgets.SnippetListingButton(
+                "Revoke credential",
+                reverse("wagtail_agent_revoke_credential_confirm", kwargs={"credential_id": snippet.pk}) + suffix,
+                priority=10,
+            ))
         buttons.append(wagtailsnippets_widgets.SnippetListingButton(
-            "Revoke credential",
-            reverse("wagtail_agent_revoke_credential_confirm", kwargs={"credential_id": snippet.pk}) + suffix,
-            priority=10,
+            "Delete credential",
+            reverse("wagtail_agent_delete_credential_confirm", kwargs={"credential_id": snippet.pk}) + suffix,
+            priority=20,
         ))
