@@ -3,7 +3,7 @@ from __future__ import annotations
 from django.http import HttpResponse, JsonResponse
 from rest_framework.response import Response
 from .base import AgentPublicAPIView, AgentSecuredAPIView
-from ..application import create_enrollment
+from ..application import create_enrollment, issue_access_credential
 from ..contracts import contracts_for_agent
 from ..scopes import SERVICE_SCOPES, HIGH_RISK_SCOPES, scope_categories
 
@@ -113,9 +113,23 @@ class AgentManifestView(AgentSecuredAPIView):
     def get(self, request):
         from ..manifest import render_agent_manifest
         enrollment, row = create_enrollment(request.agent, request=request)
-        self.audit_metadata = {"enrollment_prefix": row.token_prefix, "enrollment_expires_at": row.expires_at.isoformat()}
+        credential, access = issue_access_credential(
+            request.agent,
+            metadata={"issued_via": "agent_manifest"},
+        )
+        self.audit_metadata = {
+            "enrollment_prefix": row.token_prefix,
+            "enrollment_expires_at": row.expires_at.isoformat(),
+            "credential_prefix": credential.token_prefix,
+            "credential_expires_at": credential.expires_at.isoformat(),
+        }
         response = HttpResponse(
-            render_agent_manifest(request.agent, enrollment, request=request),
+            render_agent_manifest(
+                request.agent,
+                enrollment,
+                access_token=access,
+                request=request,
+            ),
             content_type="text/markdown; charset=utf-8",
         )
         response["Cache-Control"] = "no-store"
