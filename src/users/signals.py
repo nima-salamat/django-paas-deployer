@@ -10,7 +10,6 @@ from users.models import User, Profile
 from services.models import Service, Volume, PrivateNetwork
 from deployments.core.manager.container_manager import Container
 from deployments.core.manager.volume_manager import Volume as DockerVolume
-from deployments.core.manager.network_manager import Network as DockerNetwork
 from deployments.core.manager.image_manager import Image
 from deployments.core.deploy import Deploy as OrchestratorDeploy
 from deployments.core.db_deployer import DB_PLATFORMS, DBDeployer
