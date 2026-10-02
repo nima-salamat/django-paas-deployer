@@ -98,10 +98,13 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
             try:
                 Image.remove_by_name(service_name)
                 Image.remove_by_name(f"{service_name}:latest")
-            except Exception:
+            except Exception as exc:
                 logger.exception(
                     "Failed to remove image for service '%s'", service_name
                 )
+                raise RuntimeError(
+                    f"Failed to remove application image(s) for service '{service_name}'."
+                ) from exc
 
     except Exception:
         logger.exception(
@@ -109,6 +112,7 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
             service_name,
             instance.name,
         )
+        raise
 
     finally:
         # Volumes are exclusive to this service — delete them (Docker + DB)
