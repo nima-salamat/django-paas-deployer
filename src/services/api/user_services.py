@@ -438,6 +438,8 @@ class VolumeViewSet(ModelViewSet):
                 row["is_mounted"] = bool(att)
             row["service_attachments"] = atts
             row["service"] = str(instance.service_id) if instance.service_id else None
+            if service_id:
+                row["docker_exists"] = _docker_volume_exists(instance)
 
         if page is not None:
             return self.get_paginated_response(data)
