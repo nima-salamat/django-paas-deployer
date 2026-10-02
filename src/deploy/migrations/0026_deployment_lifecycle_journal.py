@@ -81,7 +81,7 @@ class Migration(migrations.Migration):
                 ("event_id", models.UUIDField(db_index=True, default=uuid.uuid4, editable=False, unique=True)),
                 ("service_id", models.CharField(blank=True, db_index=True, default="", max_length=255)),
                 ("event_type", models.CharField(max_length=128)),
-                ("stage", models.CharField(max_length=96)),
+                ("stage", models.CharField(max_length=64)),
                 ("level", models.CharField(default="info", max_length=16)),
                 ("occurred_at", models.DateTimeField(db_index=True, default=django.utils.timezone.now)),
                 ("payload", models.JSONField(default=dict)),
