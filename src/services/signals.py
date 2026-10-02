@@ -2,10 +2,10 @@ import logging
 
 import docker.errors
 
-from django.db.models.signals import pre_delete
+from django.db.models.signals import post_delete, pre_delete
 from django.dispatch import receiver
 
-from .models import Service, Volume, PrivateNetwork
+from .models import Service, ServiceRevision, ServiceNetworkAttachment, Volume, PrivateNetwork
 from deployments.core.manager.container_manager import Container
 from deployments.core.swarm import SwarmRuntime, swarm_enabled
 from deployments.core.manager.volume_manager import Volume as DockerVolume
@@ -40,11 +40,14 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
         if swarm_enabled():
             try:
                 SwarmRuntime().remove_service_group(str(service.pk))
-            except Exception:
+            except Exception as exc:
                 logger.exception(
                     "Failed cleaning Docker Swarm services for service '%s'.",
                     service.name,
                 )
+                raise RuntimeError(
+                    f"Failed to remove Swarm runtime for service '{service.name}'."
+                ) from exc
 
         container = Container(name=service_name)
 
@@ -61,6 +64,10 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
                     "Refusing to remove container '%s' during Service deletion: "
                     "Docker ownership labels do not match service=%s/deploy=%s.",
                     service_name, expected_service, expected_deploy or "<none>",
+                )
+                raise RuntimeError(
+                    f"Refusing to delete service '{service.name}': "
+                    f"container '{service_name}' exists but is not owned by PassDeployer."
                 )
             else:
                 if container.is_running():
