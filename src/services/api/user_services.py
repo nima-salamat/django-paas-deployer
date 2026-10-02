@@ -1021,6 +1021,7 @@ def service_volume_capabilities_apiview(request, service_id):
             can_attach = allowed("can_volume_attach")
             can_detach = allowed("can_volume_detach")
             can_add = allowed("can_volume_add")
+            can_delete = allowed("can_volume_delete")
         return Response({
             "result": "success",
             "service_id": str(service.pk),
@@ -1030,6 +1031,7 @@ def service_volume_capabilities_apiview(request, service_id):
             "can_attach": bool(can_attach and mutable),
             "can_detach": bool(can_detach and mutable),
             "can_add": bool(can_add and mutable),
+            "can_delete": bool(can_delete if not owner else True),
             "metadata_edit_requires_unprovisioned_volume": True,
             "shared": share is not None,
         })
