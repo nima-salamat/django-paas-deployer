@@ -9,10 +9,15 @@ from .scopes import default_agent_scopes, validate_scopes
 class Agent(BaseModel):
     class Status(models.TextChoices):
         ACTIVE="active","Active"; DISABLED="disabled","Disabled"; REVOKED="revoked","Revoked"
+    class ProvisioningSource(models.TextChoices):
+        DASHBOARD="dashboard","Dashboard"
+        API_ENROLLMENT="api_enrollment","API enrollment"
+        LEGACY="legacy","Legacy / unspecified"
     user=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.CASCADE,related_name="agents")
     name=models.CharField(max_length=100)
     description=models.TextField(blank=True,default="")
     status=models.CharField(max_length=16,choices=Status.choices,default=Status.ACTIVE,db_index=True)
+    provisioning_source=models.CharField(max_length=24,choices=ProvisioningSource.choices,default=ProvisioningSource.LEGACY,db_index=True)
     scopes=models.JSONField(default=default_agent_scopes,blank=True)
     metadata=models.JSONField(default=dict,blank=True)
     last_used_at=models.DateTimeField(null=True,blank=True,db_index=True)
