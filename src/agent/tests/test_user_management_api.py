@@ -3,7 +3,7 @@ from __future__ import annotations
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient, APITestCase
 
-from agent.models import Agent, AgentCredential
+from agent.models import Agent, AgentAuditEvent, AgentCredential
 from agent.scopes import DEFAULT_SCOPES
 
 
@@ -48,6 +48,43 @@ class AgentManagementAPITests(APITestCase):
         self.assertEqual(manifest_response.status_code, 200)
         self.assertIn("text/markdown", manifest_response["Content-Type"])
         self.assertEqual(manifest_response["Cache-Control"], "no-store")
+
+    def test_dashboard_created_agents_expose_provisioning_source(self):
+        response = self.client.post(
+            "/api/agents/",
+            {"name": "dashboard-created", "description": "", "scopes": ["services.read"]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            response.data["agent"]["provisioning_source"],
+            Agent.ProvisioningSource.DASHBOARD,
+        )
+
+
+    def test_credential_can_be_deleted_manually_and_audit_event_is_retained(self):
+        credential_response = self.client.post(
+            f"/api/agents/{self.agent.pk}/credentials/",
+            {"expires_in_days": 10},
+            format="json",
+        )
+        self.assertEqual(credential_response.status_code, 201)
+        credential_id = credential_response.data["credential"]["id"]
+        response = self.client.delete(
+            f"/api/agents/{self.agent.pk}/credentials/{credential_id}/"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["deleted"])
+        self.assertFalse(AgentCredential.objects.filter(pk=credential_id).exists())
+        self.assertTrue(
+            AgentAuditEvent.objects.filter(
+                agent=self.agent,
+                action="browser.credential.delete",
+                resource_id=credential_id,
+                success=True,
+            ).exists()
+        )
+
 
     def test_delete_removes_agent_and_all_authentication_material_even_when_revoked(self):
         credential_response = self.client.post(
