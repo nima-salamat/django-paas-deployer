@@ -48,6 +48,7 @@ _BLOCK_CLASS_RE = re.compile(
     re.I,
 )
 _CLASS_ATTR_RE = re.compile(r"""\s+class\s*=\s*("|')(?P<value>.*?)\1""", re.I | re.S)
+_DATA_ALIGN_ATTR_RE = re.compile(r"""\s+data-ticket-align\s*=\s*("|')(?P<value>.*?)\1""", re.I | re.S)
 
 
 def _normalize_alignment_classes(raw: str) -> str:
@@ -67,6 +68,44 @@ def _normalize_alignment_classes(raw: str) -> str:
             + replacement
             + attrs[class_match.end():]
         )
+        return f'{match.group("prefix")}{normalized_attrs}>'
+
+    return _BLOCK_CLASS_RE.sub(replace_block, raw)
+
+
+def _normalize_alignment_metadata(raw: str) -> str:
+    def replace_block(match: re.Match) -> str:
+        attrs = match.group("attrs")
+        class_match = _CLASS_ATTR_RE.search(attrs)
+        data_match = _DATA_ALIGN_ATTR_RE.search(attrs)
+
+        alignment = ""
+        if data_match:
+            candidate = data_match.group("value").strip().lower()
+            if candidate in {"left", "center", "right"}:
+                alignment = candidate
+
+        if not alignment and class_match:
+            for token in class_match.group("value").split():
+                if token.startswith("ticket-align-"):
+                    candidate = token.removeprefix("ticket-align-").lower()
+                    if candidate in {"left", "center", "right"}:
+                        alignment = candidate
+                        break
+
+        if not alignment:
+            return match.group(0)
+
+        replacement = f' data-ticket-align="{alignment}"'
+        if data_match:
+            normalized_attrs = (
+                attrs[:data_match.start()]
+                + replacement
+                + attrs[data_match.end():]
+            )
+        else:
+            normalized_attrs = attrs + replacement
+
         return f'{match.group("prefix")}{normalized_attrs}>'
 
     return _BLOCK_CLASS_RE.sub(replace_block, raw)
@@ -104,13 +143,13 @@ def sanitize_html(raw: str) -> str:
                 "blockquote", "code", "pre", "span",
             ],
             attributes={
-                "p": ["class", "dir"],
-                "h1": ["class", "dir"],
-                "h2": ["class", "dir"],
-                "h3": ["class", "dir"],
-                "h4": ["class", "dir"],
-                "li": ["class", "dir"],
-                "blockquote": ["class", "dir"],
+                "p": ["class", "dir", "data-ticket-align"],
+                "h1": ["class", "dir", "data-ticket-align"],
+                "h2": ["class", "dir", "data-ticket-align"],
+                "h3": ["class", "dir", "data-ticket-align"],
+                "h4": ["class", "dir", "data-ticket-align"],
+                "li": ["class", "dir", "data-ticket-align"],
+                "blockquote": ["class", "dir", "data-ticket-align"],
                 "a": ["href", "title", "rel", "target"],
                 "code": ["class"],
                 "pre": ["class"],
@@ -119,7 +158,9 @@ def sanitize_html(raw: str) -> str:
             protocols=["http", "https", "mailto"],
             strip=True,
         )
-        return _normalize_direction_attributes(_normalize_alignment_classes(cleaned))
+        normalized = _normalize_alignment_classes(cleaned)
+        normalized = _normalize_alignment_metadata(normalized)
+        return _normalize_direction_attributes(normalized)
     except ImportError:
         text = _SCRIPT_RE.sub("", raw)
         text = _EVENT_RE.sub(" ", text)
