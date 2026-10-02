@@ -2,7 +2,7 @@ from logs.admin_api import logging_health_apiview
 from django.urls import path
 from rest_framework.routers import DefaultRouter
 
-from .api.shell import shell_info_apiview, shell_catalog_apiview, shell_create_apiview, shell_replace_apiview, shell_command_apiview, shell_close_apiview, shell_file_apiview, shell_tree_apiview, shell_tree_meta_apiview, shell_audit_apiview, shell_audit_export_apiview, shell_history_apiview, shell_env_apiview, shell_health_apiview
+from .api.shell import shell_info_apiview, shell_catalog_apiview, shell_create_apiview, shell_replace_apiview, shell_command_apiview, shell_close_apiview, shell_file_apiview, shell_download_apiview, shell_tree_apiview, shell_tree_meta_apiview, shell_audit_apiview, shell_audit_export_apiview, shell_history_apiview, shell_env_apiview, shell_health_apiview
 
 from services.api.runtime import service_logs_apiview, service_logs_export_apiview
 from services.api.configuration import (
@@ -97,6 +97,7 @@ urlpatterns = (
         path("services/<uuid:service_id>/shell/command/", shell_command_apiview, name="service_shell_command"),
         path("services/<uuid:service_id>/shell/close/", shell_close_apiview, name="service_shell_close"),
         path("services/<uuid:service_id>/shell/file/", shell_file_apiview, name="service_shell_file"),
+        path("services/<uuid:service_id>/shell/download/", shell_download_apiview, name="service_shell_download"),
         path("services/<uuid:service_id>/shell/tree/", shell_tree_apiview, name="service_shell_tree"),
         path("services/<uuid:service_id>/shell/tree/meta/", shell_tree_meta_apiview, name="service_shell_tree_meta"),
         path("services/<uuid:service_id>/shell/audit/", shell_audit_apiview, name="service_shell_audit"),

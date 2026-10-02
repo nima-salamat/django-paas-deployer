@@ -42,3 +42,19 @@ def test_service_list_api_accepts_search_and_status_filters():
     assert 'request.query_params.get("search")' in source
     assert 'request.query_params.get("status")' in source
     assert 'query = query.filter(status=status_param)' in source
+
+def test_shell_download_is_dedicated_and_streams_single_files():
+    source = API
+    assert "def shell_download_apiview" in source
+    assert "container.get_archive(path)" in source
+    assert "FileResponse(output" in source
+    assert "content_type="application/zip"" in source
+
+
+def test_shell_upload_enforces_filename_collision_size_and_mount_policy():
+    source = API
+    assert 'if action == "upload":' in source
+    assert "16 * 1024 * 1024" in source
+    assert "FILE_EXISTS" in source
+    assert "_assert_managed_target_safe" in source
+    assert "Read-only Docker mount" in source

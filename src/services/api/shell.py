@@ -1,6 +1,14 @@
 from django.core.exceptions import ValidationError
+import io
+import mimetypes
+import os
 import posixpath
-from django.http import Http404
+import re
+import tarfile
+import tempfile
+import unicodedata
+import zipfile
+from django.http import FileResponse, Http404
 from django.utils import timezone
 from services.models import Service
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
@@ -546,6 +554,140 @@ def _exec_stdin_checked(container, argv, *, workdir, data: bytes, user=None, tim
     return int(inspect.get("ExitCode") if inspect.get("ExitCode") is not None else 1), b"".join(chunks)
 
 
+def _docker_archive_to_temp(container, path: str):
+    stream, _ = container.get_archive(path)
+    tmp = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
+    try:
+        for chunk in stream:
+            tmp.write(chunk)
+    except Exception:
+        tmp.close()
+        raise
+    tmp.seek(0)
+    return tmp
+
+def _safe_zip_member_name(name: str) -> str:
+    raw = str(name or "").replace("\\", "/").lstrip("/")
+    normalized = posixpath.normpath(raw)
+    if not normalized or normalized in {".", ".."} or normalized.startswith("../"):
+        raise DjangoValidationError("Unsafe archive member path.")
+    return normalized
+
+def _archive_member_name(member_name: str, selected_path: str, root_path: str) -> str:
+    base = posixpath.basename(selected_path.rstrip("/"))
+    root_relative = posixpath.relpath(selected_path, root_path)
+    member = _safe_zip_member_name(member_name)
+    if member == base:
+        candidate = root_relative
+    elif member.startswith(base + "/"):
+        candidate = posixpath.join(root_relative, member[len(base) + 1:])
+    else:
+        candidate = posixpath.join(root_relative, member)
+    return _safe_zip_member_name(candidate)
+
+def _download_single_docker_file(container, path: str, filename: str):
+    archive = _docker_archive_to_temp(container, path)
+    try:
+        with tarfile.open(fileobj=archive, mode="r:*") as tar:
+            member = next((item for item in tar.getmembers() if item.isfile()), None)
+            if member is None:
+                raise DjangoValidationError("Selected path is not a downloadable file.")
+            source = tar.extractfile(member)
+            if source is None:
+                raise DjangoValidationError("Selected file could not be read.")
+            output = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                output.write(chunk)
+            source.close()
+            size = output.tell()
+            output.seek(0)
+    finally:
+        archive.close()
+    response = FileResponse(output, as_attachment=True, filename=filename, content_type=mimetypes.guess_type(filename)[0] or "application/octet-stream")
+    response["Content-Length"] = str(size)
+    response["Cache-Control"] = "private, no-store"
+    response["X-Content-Type-Options"] = "nosniff"
+    return response
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def shell_download_apiview(request, service_id):
+    try:
+        service = _resolve(request, service_id, action="can_shell")
+        token = request.headers.get("X-Shell-Token") or request.data.get("token")
+        session = authenticate_session(service, request.user, token)
+        container = _resolve_container(service)
+        raw_paths = request.data.get("paths")
+        if isinstance(raw_paths, str):
+            raw_paths = [raw_paths]
+        if not isinstance(raw_paths, (list, tuple)):
+            raise ValidationError("paths must be a list.")
+        paths = []
+        seen = set()
+        for raw in raw_paths:
+            path = str(raw or "").strip()
+            if not path:
+                continue
+            safe = _assert_managed_target_safe(container, _safe_workdir(path, session.root_path), session.root_path)
+            safe = posixpath.normpath(safe)
+            if safe not in seen:
+                seen.add(safe)
+                paths.append(safe)
+        if not paths:
+            raise ValidationError("At least one path is required.")
+        if len(paths) > 100:
+            raise DjangoValidationError("A maximum of 100 selected paths may be downloaded at once.")
+        kinds = {}
+        for path in paths:
+            probe = container.exec_run(["/bin/sh", "-c", 'if [ -d "$1" ]; then printf dir; elif [ -f "$1" ]; then printf file; else printf other; fi', "kind", path], workdir=session.workdir, stdout=True, stderr=False, tty=False)
+            kind = probe.output.decode("utf-8", "replace").strip() if isinstance(probe.output, (bytes, bytearray)) else ""
+            if kind not in {"file", "dir"}:
+                raise DjangoValidationError(f"Path does not exist or is not accessible: {path}")
+            kinds[path] = kind
+        if len(paths) == 1 and kinds[paths[0]] == "file":
+            filename = posixpath.basename(paths[0]) or "download"
+            response = _download_single_docker_file(container, paths[0], filename)
+            record_shell_audit(service=service, user=request.user, session=session, action="file_read", path=paths[0], cwd=getattr(session, "workdir", "") or "", command=f"file:file_download {paths[0]}", success=True, detail="Direct file download.")
+            return response
+        output = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
+        with zipfile.ZipFile(output, mode="w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+            for selected in paths:
+                tar_tmp = _docker_archive_to_temp(container, selected)
+                try:
+                    with tarfile.open(fileobj=tar_tmp, mode="r:*") as tar:
+                        for member in tar.getmembers():
+                            try:
+                                member_name = _archive_member_name(member.name, selected, session.root_path)
+                            except DjangoValidationError:
+                                continue
+                            if member.isdir():
+                                archive.writestr(member_name.rstrip("/") + "/", b"")
+                                continue
+                            if not member.isfile():
+                                continue
+                            source = tar.extractfile(member)
+                            if source is None:
+                                continue
+                            with source:
+                                archive.writestr(member_name, source.read())
+                finally:
+                    tar_tmp.close()
+        output.seek(0)
+        filename = (posixpath.basename(paths[0]).strip() or "directory") + ".zip" if len(paths) == 1 else "selection.zip"
+        response = FileResponse(output, as_attachment=True, filename=filename, content_type="application/zip")
+        response["Cache-Control"] = "private, no-store"
+        response["X-Content-Type-Options"] = "nosniff"
+        record_shell_audit(service=service, user=request.user, session=session, action="file_read", path=paths[0] if len(paths) == 1 else "", cwd=getattr(session, "workdir", "") or "", command="file:file_download_archive", success=True, detail=f"Downloaded {len(paths)} selected path(s) as ZIP.", meta={"paths": paths[:100]})
+        return response
+    except (PermissionError, ValidationError) as exc:
+        return Response({"result":"error","code":"SHELL_DOWNLOAD_VALIDATION","detail":str(exc)}, status=403 if isinstance(exc, PermissionError) else 400)
+    except Service.DoesNotExist:
+        return Response({"result":"error","code":"SERVICE_NOT_FOUND","detail":"Service not found."}, status=404)
+
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -565,6 +707,59 @@ def shell_file_apiview(request, service_id):
             safe_path = _assert_managed_target_safe(container, safe_path, session.root_path)
         elif action in {"create", "create_folder"}:
             safe_path = _assert_managed_target_safe(container, safe_path, session.root_path, allow_missing=True)
+        if action == "upload":
+            upload = request.FILES.get("file")
+            if upload is None:
+                raise DjangoValidationError("file is required.")
+            target_dir = _assert_managed_target_safe(container, safe_path, session.root_path)
+            kind_probe = container.exec_run([
+                ["/bin/sh", "-c", 'if [ -d "$1" ]; then printf dir; else printf other; fi', "kind", target_dir],
+                workdir=session.workdir, stdout=True, stderr=False, tty=False
+            )
+            kind = kind_probe.output.decode("utf-8", "replace").strip() if isinstance(kind_probe.output, (bytes, bytearray)) else ""
+            if kind != "dir":
+                raise DjangoValidationError("Upload destination must be a directory.")
+            max_upload_bytes = 16 * 1024 * 1024
+            if int(getattr(upload, "size", 0) or 0) > max_upload_bytes:
+                raise DjangoValidationError("File is too large. Maximum upload size is 16 MiB.")
+            raw_name = unicodedata.normalize("NFC", os.path.basename(str(upload.name or ""))).strip()
+            raw_name = "".join("_" if (ord(ch) < 32 or ord(ch) == 127) else ch for ch in raw_name)
+            raw_name = re.sub(r"[\\/]+", "_", raw_name).strip(" .")
+            if not raw_name or raw_name in {".", ".."}:
+                raise DjangoValidationError("Invalid upload filename.")
+            raw_name = raw_name[:255].rstrip(" .")
+            target_path = _assert_managed_target_safe(container, posixpath.join(target_dir, raw_name), session.root_path, allow_missing=True)
+            from ..shell import _container_mount_policy
+            root_ro, mounts = _container_mount_policy(container)
+            mount_rw = not root_ro
+            for mount_path, rw in sorted(mounts, key=lambda x: len(x[0]), reverse=True):
+                if target_dir == mount_path or target_dir.startswith(mount_path.rstrip("/") + "/"):
+                    mount_rw = bool(rw)
+                    break
+            if not mount_rw:
+                raise DjangoValidationError("The upload destination is on a read-only Docker mount.")
+            exists = container.exec_run(["ls", "-ld", target_path], workdir=session.workdir, stdout=False, stderr=False, tty=False)
+            if int(exists.exit_code if exists.exit_code is not None else 1) == 0:
+                return Response({"result":"error","code":"FILE_EXISTS","detail":f"A file or directory named '{raw_name}' already exists.","path":target_path}, status=status.HTTP_409_CONFLICT)
+            uploaded_bytes = b"".join(upload.chunks())
+            if len(uploaded_bytes) > max_upload_bytes:
+                raise DjangoValidationError("File is too large. Maximum upload size is 16 MiB.")
+            last_detail = "permission denied"
+            for exec_user in (None, "0"):
+                try:
+                    code, output = _exec_stdin_checked(
+                        container, ["/bin/sh", "-c", 'cat > "$1"', "upload", target_path],
+                        workdir=session.workdir, data=uploaded_bytes, user=exec_user, timeout_seconds=120
+                    )
+                    if code == 0:
+                        if exec_user == "0":
+                            _reassign_to_runtime_user(container, target_path)
+                        record_shell_audit(service=service, user=request.user, session=session, action="file_write", path=target_path, cwd=getattr(session, "workdir", "") or "", command=f"file:file_upload {target_path}", success=True, detail=f"Uploaded {len(uploaded_bytes)} bytes.")
+                        return Response({"result":"success","action":"upload","path":target_path,"name":raw_name,"size":len(uploaded_bytes),"writable":True,"mount_writable":True,"effective_writable":exec_user is None,"managed_writable":True}, status=status.HTTP_201_CREATED)
+                    last_detail = output.decode("utf-8", "replace").strip() or last_detail
+                except Exception as exc:
+                    last_detail = str(exc) or last_detail
+            raise DjangoValidationError(f"Unable to upload file: {last_detail}")
         if action == "create":
             if safe_path == session.root_path:
                 raise DjangoValidationError("The workspace root cannot be created or replaced.")
