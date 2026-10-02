@@ -41,13 +41,13 @@ _ALIGNMENT_CLASSES = frozenset({
     "ticket-align-right",
 })
 _DIRECTION_VALUES = frozenset({"auto", "ltr", "rtl"})
-_DIR_ATTR_RE = re.compile(r'\s+dir\s*=\s*("|')(?P<value>.*?)\1', re.I | re.S)
+_DIR_ATTR_RE = re.compile(r"""\s+dir\s*=\s*("|')(?P<value>.*?)\1""", re.I | re.S)
 
 _BLOCK_CLASS_RE = re.compile(
     r"(?P<prefix><s*(?:p|h1|h2|h3|h4|li|blockquote)\b)(?P<attrs>[^>]*)>",
     re.I,
 )
-_CLASS_ATTR_RE = re.compile(r'\s+class\s*=\s*("|')(?P<value>.*?)\1', re.I | re.S)
+_CLASS_ATTR_RE = re.compile(r"""\s+class\s*=\s*("|')(?P<value>.*?)\1""", re.I | re.S)
 
 
 def _normalize_alignment_classes(raw: str) -> str:
