@@ -11,7 +11,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
 
-from .application import audit, create_enrollment, issue_access_credential, rotate_access_credentials, set_agent_status
+from .application import audit, create_enrollment, delete_credential as delete_credential_record, issue_access_credential, rotate_access_credentials, set_agent_status
 from .manifest import render_agent_manifest
 from .models import Agent, AgentCredential
 
@@ -178,6 +178,32 @@ def revoke_credential(request, credential_id):
     )
     messages.success(request, "Agent credential revoked.")
     return _return_agent(request, credential.agent)
+
+
+@staff_member_required
+@require_GET
+def delete_credential_confirm(request, credential_id):
+    if not can_manage(request.user):
+        return HttpResponse("Forbidden", status=403)
+    credential = get_object_or_404(AgentCredential, pk=credential_id)
+    return _confirm_page(
+        request,
+        "Delete Agent credential permanently",
+        reverse("wagtail_agent_delete_credential", kwargs={"credential_id": credential.pk}),
+        f"Delete credential {credential.token_prefix}? Active credentials stop working immediately. The audit event is retained without the credential record.",
+    )
+
+
+@staff_member_required
+@require_POST
+def delete_credential(request, credential_id):
+    if not can_manage(request.user):
+        return HttpResponse("Forbidden", status=403)
+    credential = get_object_or_404(AgentCredential, pk=credential_id)
+    agent = credential.agent
+    delete_credential_record(credential, request=request)
+    messages.success(request, "Agent credential deleted permanently.")
+    return _return_agent(request, agent)
 
 
 @staff_member_required
