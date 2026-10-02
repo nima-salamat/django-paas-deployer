@@ -31,13 +31,13 @@ class AgentViewSet(SnippetViewSet):
     icon = "user"
     menu_label = _("Agents")
     menu_order = 115
-    list_display = ["name", "user", "status", "last_used_at", "created_at"]
+    list_display = ["name", "user", "status", "provisioning_source", "last_used_at", "created_at"]
     list_filter = ["status", "user"]
     search_fields = ["name", "description", "user__username", "user__email"]
     panels = panels_for(
         editable=["user", "name", "description", "scopes", "metadata"],
         read_only=[
-            "id", "status", "last_used_at", "disabled_at", "revoked_at",
+            "id", "status", "provisioning_source", "last_used_at", "disabled_at", "revoked_at",
             "created_at", "updated_at",
         ],
     )
