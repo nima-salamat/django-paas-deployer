@@ -60,3 +60,14 @@ def test_shell_upload_enforces_filename_collision_size_and_mount_policy():
     assert "Read-only Docker mount" in source
     assert "container.exec_run(" in source
     assert '["/bin/sh", "-c"' in source
+
+def test_upload_uses_fixed_backend_probe_without_nested_exec_arguments():
+    source = API
+    assert 'kind_probe = container.exec_run(\n                ["/bin/sh", "-c"' in source
+    assert 'can_delete = True' in (ROOT / "api" / "user_services.py").read_text()
+
+
+def test_unified_services_search_is_server_side_for_all_scopes():
+    source = (ROOT / "api" / "sharing.py").read_text()
+    assert 'request.query_params.get("q_search")' in source
+    assert 'service__name__icontains=search' in source
