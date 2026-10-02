@@ -34,7 +34,7 @@ def manifest_endpoints(agent):
     return endpoints
 
 
-def render_agent_manifest(agent, enrollment_token, *, request=None):
+def render_agent_manifest(agent, enrollment_token=None, *, access_token=None, request=None):
     selected = set(agent.scopes or [])
     return render_to_string(
         "agent/AGENT.md",
@@ -43,6 +43,7 @@ def render_agent_manifest(agent, enrollment_token, *, request=None):
             "agent_id": str(agent.pk),
             "api_base_url": api_base_url(request),
             "enrollment_token": enrollment_token,
+            "access_token": access_token,
             "scopes": sorted(selected),
             "endpoints": manifest_endpoints(agent),
         },
