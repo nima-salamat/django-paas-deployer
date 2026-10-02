@@ -42,6 +42,30 @@ class AgentScopeAndEnrollmentTests(TestCase):
         self.assertNotIn("services.delete", DEFAULT_SCOPES)
         self.assertNotIn("shell.execute", DEFAULT_SCOPES)
 
+    def test_exchange_endpoint_bootstraps_agent_access(self):
+        from agent.application import create_enrollment
+        enrollment, row = create_enrollment(self.agent)
+        response = self.client.post(
+            "/agent/v1/auth/exchange",
+            {"enrollment_token": enrollment, "client": "test-client"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["result"], "success")
+        self.assertEqual(response.data["token_type"], "Bearer")
+        self.assertTrue(response.data["token"].startswith("pd_agent_"))
+        self.assertEqual(response.data["agent"]["id"], str(self.agent.pk))
+        row.refresh_from_db()
+        self.assertIsNotNone(row.used_at)
+
+        me = self.client.get(
+            "/agent/v1/auth/me",
+            HTTP_AUTHORIZATION=f"Bearer {response.data['token']}",
+        )
+        self.assertEqual(me.status_code, 200)
+        self.assertEqual(me.data["agent_id"], str(self.agent.pk))
+        self.assertNotEqual(response.data["token"], enrollment)
+
     def test_enrollment_exchange_is_one_time(self):
         enrollment = "pd_enroll_test-token"
         row = AgentEnrollmentToken.objects.create(
