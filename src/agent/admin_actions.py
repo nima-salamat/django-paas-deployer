@@ -274,6 +274,22 @@ def revoke_agent(request, agent_id):
 
 
 @staff_member_required
+@require_GET
+def manifest_confirm(request, agent_id):
+    if not can_manage(request.user):
+        return HttpResponse("Forbidden", status=403)
+    agent = get_object_or_404(Agent, pk=agent_id)
+    if agent.status != Agent.Status.ACTIVE:
+        return HttpResponse("Agent is not active.", status=409)
+    return _confirm_page(
+        request,
+        "Generate AGENT.md",
+        reverse("wagtail_agent_manifest", kwargs={"agent_id": agent.pk}),
+        f"Generate a fresh AGENT.md for Agent {agent.name}. It contains a short-lived, single-use enrollment credential.",
+    )
+
+
+@staff_member_required
 @require_POST
 def manifest(request, agent_id):
     if not can_manage(request.user):
