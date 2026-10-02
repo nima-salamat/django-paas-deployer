@@ -19,6 +19,7 @@ from .security import (
     enrollment_token_hash,
     issue_raw_access_token,
     issue_raw_enrollment_token,
+    stable_token_hash,
     sanitize_metadata,
     scrub_text,
     stable_json_hash,
@@ -499,7 +500,7 @@ def _issue_access_credential_locked(agent, *, expires_at=None, metadata=None):
     credential = AgentCredential.objects.create(
         agent=agent,
         token_prefix=token_prefix(raw),
-        token_hash=token_hash(raw),
+        token_hash=stable_token_hash(raw),
         token_type=AgentCredential.TokenType.ACCESS,
         expires_at=expires_at,
         metadata=sanitize_metadata(metadata or {}),
