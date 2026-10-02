@@ -86,7 +86,10 @@ def _field_schema(field):
     default = getattr(field, "default", None)
     from rest_framework.fields import empty
     if default is not empty and not callable(default):
-        schema["default"] = default
+        if isinstance(default, (str, int, float, bool)) or default is None:
+            schema["default"] = default
+        else:
+            schema["default"] = str(default)
 
     if nullable:
         schema["nullable"] = True
@@ -547,7 +550,7 @@ def build_openapi(agent, *, request=None):
     from services.serializers import ServiceSerializer, PrivateNetworkSerializer, VolumeSerializer
     from plans.serializers import PlanSerializer
     from deploy.serializers import DeploySerializer
-    from services.models import Service, ServiceEnvironmentVariable
+    from services.models import Service, ServiceEnvironmentVariable, ServiceEndpoint
 
     service_create = _serializer_schema(ServiceSerializer, exclude={"user"})
     service_create.setdefault("required", [])
@@ -722,7 +725,11 @@ def build_openapi(agent, *, request=None):
             "required": ["key"],
             "properties": {
                 "key": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
-                "scope": {"type": "string", "description": "Environment scope; use the value advertised by the API/model."},
+                "scope": {
+                    "type": "string",
+                    "enum": [value for value, _label in ServiceEnvironmentVariable.Scope.choices],
+                    "default": ServiceEnvironmentVariable.Scope.RUNTIME,
+                },
                 "is_secret": {"type": "boolean", "default": False},
                 "value": {"type": "string"},
             },
@@ -745,8 +752,16 @@ def build_openapi(agent, *, request=None):
                 "process": {"type": "string", "format": "uuid", "nullable": True},
                 "target_port": {"type": "integer", "minimum": 1, "maximum": 65535},
                 "published_port": {"type": "integer", "minimum": 1, "maximum": 65535, "nullable": True},
-                "protocol": {"type": "string", "description": "Must be one of the ServiceEndpoint protocol choices."},
-                "exposure": {"type": "string", "description": "Must be one of the ServiceEndpoint exposure choices."},
+                "protocol": {
+                    "type": "string",
+                    "enum": [value for value, _label in ServiceEndpoint.Protocol.choices],
+                    "default": ServiceEndpoint.Protocol.HTTP,
+                },
+                "exposure": {
+                    "type": "string",
+                    "enum": [value for value, _label in ServiceEndpoint.Exposure.choices],
+                    "default": ServiceEndpoint.Exposure.PUBLIC,
+                },
                 "hostname": {"type": "string"},
                 "path": {"type": "string"},
                 "tls": {"type": "boolean", "default": False},
@@ -1014,7 +1029,7 @@ def build_openapi(agent, *, request=None):
             "description": "Generate the Agent-specific bootstrap guide containing a short-lived enrollment credential.",
         },
         ("/agent/v1/services", "GET"): {
-            "schema": "ListResponse", "status": 200, "tags": ["Services"],
+            "schema": "ServiceListResponse", "status": 200, "tags": ["Services"],
             "queries": [
                 _parameter("q_search", "query", {"type": "string"}),
                 _parameter("q", "query", {"type": "string"}),
@@ -1182,7 +1197,7 @@ def build_openapi(agent, *, request=None):
             "sensitive_request": True,
         },
         ("/agent/v1/plans", "GET"): {
-            "schema": "ListResponse", "status": 200, "tags": ["Plans"],
+            "schema": "PlanListResponse", "status": 200, "tags": ["Plans"],
             "queries": [
                 _parameter("q", "query", {"type": "string"}),
                 _parameter("q_search", "query", {"type": "string"}),
@@ -1210,7 +1225,7 @@ def build_openapi(agent, *, request=None):
             "description": "Update a Plan. Requires existing staff/superuser authorization and the plans.manage rule.",
         },
         ("/agent/v1/plans/manage/{plan_id}", "DELETE"): {"schema": "ObjectResult", "status": 200, "tags": ["Plans"], "description": "Delete a Plan through the existing management boundary."},
-        ("/agent/v1/networks", "GET"): {"schema": "ListResponse", "status": 200, "tags": ["Networks"], "description": "List owned Private Networks."},
+        ("/agent/v1/networks", "GET"): {"schema": "NetworkListResponse", "status": 200, "tags": ["Networks"], "description": "List owned Private Networks."},
         ("/agent/v1/networks", "POST"): {
             "schema": "Network", "status": 201, "tags": ["Networks"],
             "body": _json_body({"$ref": "#/components/schemas/NetworkCreateRequest"}),
@@ -1224,7 +1239,7 @@ def build_openapi(agent, *, request=None):
         },
         ("/agent/v1/networks/{network_id}", "DELETE"): {"schema": "ObjectResult", "status": 200, "tags": ["Networks"], "description": "Delete a Private Network when existing service-attachment protections permit it."},
         ("/agent/v1/volumes", "GET"): {
-            "schema": "ListResponse", "status": 200, "tags": ["Volumes"],
+            "schema": "VolumeListResponse", "status": 200, "tags": ["Volumes"],
             "queries": [
                 _parameter("service", "query", {"type": "string", "format": "uuid"}),
                 _parameter("unused", "query", {"type": "boolean"}),
@@ -1252,7 +1267,7 @@ def build_openapi(agent, *, request=None):
             "description": "Inspect a ZIP archive before deployment. multipart/form-data field file is required.",
         },
         ("/agent/v1/deployments", "GET"): {
-            "schema": "ListResponse", "status": 200, "tags": ["Deployments"],
+            "schema": "DeploymentListResponse", "status": 200, "tags": ["Deployments"],
             "queries": [
                 _parameter("service_id", "query", {"type": "string", "format": "uuid"}),
                 _parameter("status", "query", {"type": "string"}),
@@ -1365,6 +1380,32 @@ def build_openapi(agent, *, request=None):
         if spec.get("sensitive_request"):
             operation["x-sensitive-request"] = True
 
+    # The shell file endpoint supports both JSON text/file-manager operations
+    # and multipart upload operations.
+    shell_files = paths["/agent/v1/services/{service_id}/shell/files"]["post"]
+    shell_files["requestBody"] = {
+        "required": True,
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/ShellFileRequest"},
+                "example": {"action": "read", "path": "app/settings.py"},
+            },
+            "multipart/form-data": {
+                "schema": {
+                    "type": "object",
+                    "required": ["action", "path", "file"],
+                    "properties": {
+                        "action": {"type": "string", "enum": ["upload"]},
+                        "path": {"type": "string"},
+                        "token": {"type": "string", "writeOnly": True},
+                        "file": {"type": "string", "format": "binary"},
+                    },
+                },
+            },
+        },
+        "description": "Use JSON for read/write/create/delete/rename operations. Use multipart/form-data with file for upload.",
+    }
+
     # Request header alternatives for shell-session authentication.
     shell_token = _parameter(
         "X-Shell-Token",
@@ -1406,6 +1447,51 @@ def build_openapi(agent, *, request=None):
 
     # Rich response schemas used by the operation specifications.
     schemas.update({
+        "ServiceListResponse": {
+            "type": "object",
+            "properties": {
+                "count": {"type": "integer"},
+                "next": {"type": "string", "format": "uri", "nullable": True},
+                "previous": {"type": "string", "format": "uri", "nullable": True},
+                "results": {"type": "array", "items": {"$ref": "#/components/schemas/Service"}},
+            },
+        },
+        "PlanListResponse": {
+            "type": "object",
+            "properties": {
+                "count": {"type": "integer"},
+                "next": {"type": "string", "format": "uri", "nullable": True},
+                "previous": {"type": "string", "format": "uri", "nullable": True},
+                "results": {"type": "array", "items": {"$ref": "#/components/schemas/Plan"}},
+            },
+        },
+        "NetworkListResponse": {
+            "type": "object",
+            "properties": {
+                "count": {"type": "integer"},
+                "next": {"type": "string", "format": "uri", "nullable": True},
+                "previous": {"type": "string", "format": "uri", "nullable": True},
+                "results": {"type": "array", "items": {"$ref": "#/components/schemas/Network"}},
+            },
+        },
+        "VolumeListResponse": {
+            "type": "object",
+            "properties": {
+                "count": {"type": "integer"},
+                "next": {"type": "string", "format": "uri", "nullable": True},
+                "previous": {"type": "string", "format": "uri", "nullable": True},
+                "results": {"type": "array", "items": {"$ref": "#/components/schemas/Volume"}},
+            },
+        },
+        "DeploymentListResponse": {
+            "type": "object",
+            "properties": {
+                "count": {"type": "integer"},
+                "next": {"type": "string", "format": "uri", "nullable": True},
+                "previous": {"type": "string", "format": "uri", "nullable": True},
+                "results": {"type": "array", "items": {"$ref": "#/components/schemas/Deployment"}},
+            },
+        },
         "AgentCapabilities": {"type": "object", "additionalProperties": True},
         "OpenAPI": {"type": "object", "additionalProperties": True},
         "Markdown": {"type": "string"},
