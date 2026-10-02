@@ -1,4 +1,7 @@
+from datetime import timedelta
+
 from django.test import TestCase
+from django.utils import timezone
 
 from agent.models import Agent, AgentAuditEvent, AgentCredential, AgentEnrollmentToken, AgentIdempotencyRecord
 from users.models import User
@@ -20,7 +23,7 @@ class AgentUserDeletionTests(TestCase):
             agent=agent,
             token_prefix="enroll",
             token_hash="b" * 64,
-            expires_at="2099-01-01T00:00:00Z",
+            expires_at=timezone.now() + timedelta(days=3650),
         )
         idem = AgentIdempotencyRecord.objects.create(
             agent=agent,
