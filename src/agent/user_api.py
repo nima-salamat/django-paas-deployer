@@ -245,7 +245,7 @@ class AgentDetailView(AgentManagementBase):
                 "name": agent_name,
                 "credentials_deleted": True,
             },
-            status=status.HTTP_204_NO_CONTENT,
+            status=status.HTTP_200_OK,
         )
 
 
