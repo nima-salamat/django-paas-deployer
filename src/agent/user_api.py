@@ -20,6 +20,7 @@ from .application import (
     audit,
     create_enrollment,
     delete_agent,
+    delete_credential,
     issue_access_credential,
     rotate_access_credentials,
     set_agent_status,
@@ -78,6 +79,7 @@ def _agent_payload(agent):
         "name": agent.name,
         "description": agent.description,
         "status": agent.status,
+        "provisioning_source": agent.provisioning_source,
         "scopes": sorted(agent.scopes or []),
         "scope_count": len(agent.scopes or []),
         "metadata": agent.metadata or {},
@@ -185,7 +187,11 @@ class AgentListCreateView(AgentManagementBase):
             )
         try:
             with transaction.atomic():
-                agent = Agent.objects.create(user=request.user, **values)
+                agent = Agent.objects.create(
+                    user=request.user,
+                    provisioning_source=Agent.ProvisioningSource.DASHBOARD,
+                    **values,
+                )
         except IntegrityError:
             return Response(
                 {"detail": "An Agent with this name already exists.", "code": "AGENT_NAME_EXISTS"},
@@ -346,6 +352,22 @@ class AgentCredentialRotateView(AgentManagementBase):
         response["Cache-Control"] = "no-store"
         response["Pragma"] = "no-cache"
         return response
+
+
+class AgentCredentialDeleteView(AgentManagementBase):
+    def delete(self, request, agent_id, credential_id):
+        agent = self._agent(agent_id)
+        credential = get_object_or_404(AgentCredential, pk=credential_id, agent=agent)
+        credential_id_value, prefix = delete_credential(credential, request=request)
+        return Response(
+            {
+                "result": "success",
+                "deleted": True,
+                "credential_id": str(credential_id_value),
+                "prefix": prefix,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class AgentCredentialRevokeView(AgentManagementBase):
