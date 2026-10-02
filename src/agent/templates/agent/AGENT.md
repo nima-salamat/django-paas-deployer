@@ -22,6 +22,39 @@ The exchange invalidates the enrollment credential and returns a normal Bearer
 access token. Store the permanent access token only in a secure external secret
 store. Never put a permanent token in a URL, repository, source file, or log.
 
+## AI / automation client guidance
+
+Use this file as the bootstrap contract for an automation client such as Claude,
+ChatGPT, a CI worker, or another tool-using Agent.
+
+1. Exchange the enrollment token exactly once, then use the returned Bearer access token.
+2. Call `GET {{ api_base_url }}/capabilities` before doing work. Use its
+   enabled operations and scopes instead of assuming that every endpoint is available.
+3. For exact request/response shapes, use `GET {{ api_base_url }}/openapi.json`.
+   Prefer the OpenAPI schema over guessed field names.
+4. Paginated collection responses use `results`, `count`, `next` and
+   `previous` when pagination is enabled. Follow `next` until it is null when
+   a complete collection is required.
+5. Runtime logs accept `limit` (1-500; the server default is 100), cursors,
+   time bounds, level, stream and text query filters. Increase the limit only
+   when the task actually needs more output.
+6. Send an `Idempotency-Key` for operations marked idempotent. Reuse the same
+   key only for an exact retry of the same request.
+7. Never put Bearer tokens, enrollment tokens, secret values or database
+   passwords into prompts, repository files, URLs, or logs.
+8. Do not invent host/Docker operations. This API intentionally exposes the
+   PassDeployer control plane, while Docker host access remains outside the
+   Agent trust boundary.
+9. For a failure, inspect `code`, `retryable`, `failure_domain` and
+   `resource_effect` before deciding whether a request should be retried.
+
+Recommended first calls after authentication:
+
+    GET {{ api_base_url }}/auth/me
+    GET {{ api_base_url }}/capabilities
+    GET {{ api_base_url }}/openapi.json
+    GET {{ api_base_url }}/deployments/help
+
 ## Issued scopes
 
 {% for scope in scopes %}- `{{ scope }}`
