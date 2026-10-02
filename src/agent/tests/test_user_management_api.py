@@ -49,6 +49,32 @@ class AgentManagementAPITests(APITestCase):
         self.assertIn("text/markdown", manifest_response["Content-Type"])
         self.assertEqual(manifest_response["Cache-Control"], "no-store")
 
+    def test_delete_removes_agent_and_all_authentication_material_even_when_revoked(self):
+        credential_response = self.client.post(
+            f"/api/agents/{self.agent.pk}/credentials/",
+            {"expires_in_days": 10},
+            format="json",
+        )
+        self.assertEqual(credential_response.status_code, 201)
+        credential = AgentCredential.objects.get(pk=credential_response.data["credential"]["id"])
+
+        self.client.post(f"/api/agents/{self.agent.pk}/revoke/")
+        response = self.client.delete(f"/api/agents/{self.agent.pk}/")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["deleted"])
+        self.assertTrue(response.data["credentials_deleted"])
+
+        self.assertFalse(Agent.objects.filter(pk=self.agent.pk).exists())
+        self.assertFalse(AgentCredential.objects.filter(pk=credential.pk).exists())
+        self.assertEqual(
+            self.client.get(f"/api/agents/{self.agent.pk}/").status_code,
+            404,
+        )
+
+    def test_delete_cannot_cross_owner_boundary(self):
+        response = self.client.delete(f"/api/agents/{self.other_agent.pk}/")
+        self.assertEqual(response.status_code, 404)
+
     def test_status_and_revoke(self):
         self.assertEqual(self.client.post(f"/api/agents/{self.agent.pk}/disable/").status_code, 200)
         self.assertEqual(self.client.post(f"/api/agents/{self.agent.pk}/enable/").status_code, 200)
