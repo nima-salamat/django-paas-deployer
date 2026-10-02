@@ -4,6 +4,22 @@ import django.utils.timezone
 import uuid
 
 
+def _backfill_release_ids(apps, schema_editor):
+    """
+    Populate a distinct release identity for every existing deployment.
+
+    A callable default on AddField is evaluated while Django backfills the
+    existing table, so adding a unique field in one step can assign the same
+    generated value to multiple existing rows. Add the column nullable first,
+    then generate one UUID per row before enforcing uniqueness and non-null.
+    """
+    Deploy = apps.get_model("deploy", "Deploy")
+    pending = Deploy.objects.filter(release_id__isnull=True).only("pk")
+
+    for deploy in pending.iterator():
+        Deploy.objects.filter(pk=deploy.pk).update(release_id=uuid.uuid4())
+
+
 class Migration(migrations.Migration):
     dependencies = [
         ("deploy", "0025_alter_buildcacheartifact_created_at_and_more"),
@@ -15,7 +31,26 @@ class Migration(migrations.Migration):
         migrations.AddField(model_name="deploy", name="image_digest", field=models.CharField(blank=True, default="", max_length=255)),
         migrations.AddField(model_name="deploy", name="image_ref", field=models.CharField(blank=True, default="", max_length=384)),
         migrations.AddField(model_name="deploy", name="reconciliation_required", field=models.BooleanField(db_index=True, default=False)),
-        migrations.AddField(model_name="deploy", name="release_id", field=models.UUIDField(default=uuid.uuid4, db_index=True, editable=False, unique=True)),
+        migrations.AddField(
+            model_name="deploy",
+            name="release_id",
+            field=models.UUIDField(
+                db_index=True,
+                editable=False,
+                null=True,
+            ),
+        ),
+        migrations.RunPython(_backfill_release_ids, migrations.RunPython.noop),
+        migrations.AlterField(
+            model_name="deploy",
+            name="release_id",
+            field=models.UUIDField(
+                default=uuid.uuid4,
+                db_index=True,
+                editable=False,
+                unique=True,
+            ),
+        ),
         migrations.AddField(model_name="deploy", name="runtime_revision_id", field=models.CharField(blank=True, db_index=True, default="", max_length=255)),
         migrations.AddField(model_name="deploy", name="runtime_spec", field=models.JSONField(blank=True, null=True)),
         migrations.AddField(model_name="deploy", name="runtime_spec_sha256", field=models.CharField(blank=True, default="", max_length=64)),
@@ -31,7 +66,7 @@ class Migration(migrations.Migration):
                 ("runtime_id", models.CharField(blank=True, default="", max_length=255)),
                 ("state", models.CharField(choices=[("planned","Planned"),("created","Created"),("started","Started"),("ready","Ready"),("active","Active"),("retired","Retired"),("failed","Failed"),("cleanup_pending","Cleanup pending")], default="planned", max_length=32)),
                 ("owned", models.BooleanField(default=True)),
-                ("metadata", models.JSONField(blank=True, default=dict)),
+                ("metadata", models.JSONField(default=dict, blank=True)),
                 ("last_error", models.TextField(blank=True, default="")),
                 ("retired_at", models.DateTimeField(blank=True, null=True)),
                 ("deployment", models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name="resources", to="deploy.deploy")),
@@ -46,7 +81,7 @@ class Migration(migrations.Migration):
                 ("event_id", models.UUIDField(db_index=True, default=uuid.uuid4, editable=False, unique=True)),
                 ("service_id", models.CharField(blank=True, db_index=True, default="", max_length=255)),
                 ("event_type", models.CharField(max_length=128)),
-                ("stage", models.CharField(max_length=64)),
+                ("stage", models.CharField(max_length=96)),
                 ("level", models.CharField(default="info", max_length=16)),
                 ("occurred_at", models.DateTimeField(db_index=True, default=django.utils.timezone.now)),
                 ("payload", models.JSONField(default=dict)),
