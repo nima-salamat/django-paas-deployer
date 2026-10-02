@@ -7,7 +7,7 @@ from django.db.models.signals import pre_delete
 from django.dispatch import receiver
 
 from users.models import User, Profile
-from services.models import Service, Volume, PrivateNetwork
+from services.models import Service, ServiceNetworkAttachment, Volume, PrivateNetwork
 from deployments.core.manager.container_manager import Container
 from deployments.core.manager.volume_manager import Volume as DockerVolume
 from deployments.core.manager.image_manager import Image
@@ -79,6 +79,40 @@ def cleanup_user_resources(sender, instance: User, **kwargs):
         "User %s private-network cleanup is delegated to PrivateNetwork.pre_delete.",
         user_id,
     )
+
+    # Fence every owned Service before the deletion collector reaches it.
+    # This invalidates in-flight deployment workers before the Service row is
+    # removed and is the project-wide delete intent for lifecycle state.
+    for service_id in Service.objects.filter(user_id=user_id).values_list("pk", flat=True).iterator():
+        try:
+            from services.lifecycle import mark_deleted
+            mark_deleted(service_id)
+        except Exception:
+            logger.exception(
+                "Failed to fence Service %s for User %s deletion.",
+                service_id,
+                user_id,
+            )
+            raise
+
+    # The database collector may otherwise reach a user-owned PrivateNetwork
+    # before ServiceNetworkAttachment rows are deleted. Remove those DB-only
+    # attachment rows here; Docker runtime cleanup remains owned by Service.
+    network_ids = list(
+        PrivateNetwork.objects.filter(user_id=user_id).values_list("pk", flat=True)
+    )
+    if network_ids:
+        other_service_ids = list(
+            ServiceNetworkAttachment.objects.filter(network_id__in=network_ids)
+            .exclude(service__user_id=user_id)
+            .values_list("service_id", flat=True)
+        )
+        if other_service_ids:
+            raise RuntimeError(
+                f"Cannot delete User {user_id}: one or more private networks are "
+                "attached to services owned by another user."
+            )
+        ServiceNetworkAttachment.objects.filter(network_id__in=network_ids).delete()
 
     profiles = list(Profile.objects.filter(user=instance))
     for profile in profiles:
