@@ -64,3 +64,14 @@ def test_service_api_delete_does_not_bypass_signal_ownership_checks():
     )[0]
     assert "_purge_service_runtime(service)" not in destroy
     assert "Service.pre_delete" in destroy
+
+
+def test_service_delete_reclaims_only_unshared_application_cache_images():
+    source = (ROOT / "services" / "signals.py").read_text(encoding="utf-8")
+
+    assert "def _cleanup_service_cache_images(service: Service)" in source
+    assert "BuildCacheArtifact.objects.filter(" in source
+    assert "BaseRuntimeImage.objects.filter(" in source
+    assert "client.containers.list()" in source
+    assert "image_ids - other_refs - protected_base_ids - running_ids" in source
+    assert "force=False" in source
