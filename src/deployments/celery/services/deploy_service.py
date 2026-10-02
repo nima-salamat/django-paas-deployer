@@ -29,6 +29,7 @@ from deployments.core.deploy import Deploy as DeployFacade
 from deployments.core.types import EndpointSpec, NetworkSpec, VolumeSpec
 from deployments.core.runtime_graph import ServiceRuntimeGraph
 from deployments.core.manager.container_manager import Container
+from deployments.core.swarm import swarm_enabled
 from deployments.core.state.locks import acquire_service_deployment_lock
 from deployments.core.state.manager import StateManager
 from services.models import Volume  # type: ignore
@@ -47,6 +48,7 @@ from deployments.common.exceptions import (
     InvalidServiceStateError,
     OrchestratorDeploymentError,
     DeploymentValidationError,
+    DeploymentCancelled,
     to_deployment_error,
 )
 from deployments.planning import ConfigurationResolver, DeploymentPlanCompiler
