@@ -683,6 +683,10 @@ class VolumeViewSet(ModelViewSet):
                 raise
 
         if touching_service:
+            if target_service is None and volume.service_id and str(volume.service.user_id) != str(request.user.id):
+                denied = self._assert_volume_service_action(request, volume.service, "can_volume_detach")
+                if denied is not None:
+                    return denied
             try:
                 if target_service is None:
                     # Soft-detach by default (keeps ownership + quota).

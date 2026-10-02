@@ -71,3 +71,7 @@ def test_unified_services_search_is_server_side_for_all_scopes():
     source = (ROOT / "api" / "sharing.py").read_text()
     assert 'request.query_params.get("q_search")' in source
     assert 'service__name__icontains=search' in source
+
+def test_volume_update_rechecks_shared_detach_permission():
+    source = (ROOT / "api" / "user_services.py").read_text()
+    assert 'volume.service, "can_volume_detach"' in source
