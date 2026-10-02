@@ -230,10 +230,16 @@ def _add_operation_metadata(operation, contract, agent, *, response=None, respon
     if confirmation:
         operation["x-confirmation-required"] = True
     if response_status is not None and response is not None:
-        operation.setdefault("responses", {})[str(response_status)] = {
+        response_entry = {
             "description": response.get("description", "Successful operation"),
-            "content": {"application/json": {"schema": {"$ref": f"#/components/schemas/{response['schema']}"}},
         }
+        if response_status != 204:
+            response_entry["content"] = {
+                "application/json": {
+                    "schema": {"$ref": f"#/components/schemas/{response["schema"]}"}
+                }
+            }
+        operation.setdefault("responses", {})[str(response_status)] = response_entry
     responses = operation.setdefault("responses", {})
     errors = _auth_error_responses({"$ref": "#/components/schemas/Error"})
     for status, value in errors.items():
@@ -1362,6 +1368,15 @@ def build_openapi(agent, *, request=None):
                     "application/x-ndjson": {"schema": {"type": "string"}},
                 },
             }
+        elif spec.get("schema") == "Markdown":
+            operation.setdefault("responses", {})[str(spec["status"])] = {
+                "description": spec.get("description", "Markdown document"),
+                "content": {"text/markdown": {"schema": {"type": "string"}}},
+            }
+        elif spec.get("status") == 204:
+            operation.setdefault("responses", {})["204"] = {
+                "description": spec.get("description", "No content"),
+            }
         else:
             _add_operation_metadata(
                 operation,
@@ -1439,11 +1454,6 @@ def build_openapi(agent, *, request=None):
                 "Use /capabilities and this OpenAPI document for the exact enabled contract."
             ),
         )
-        if contract.method in {"POST", "PATCH"} and "requestBody" not in operation:
-            operation["requestBody"] = _json_body(
-                {"type": "object", "additionalProperties": True},
-                description="Request body is operation-specific; consult the exact OpenAPI operation and /deployments/help where applicable.",
-            )
 
     # Rich response schemas used by the operation specifications.
     schemas.update({
@@ -1670,6 +1680,14 @@ def build_openapi(agent, *, request=None):
             "log_sources_are_separate": True,
             "rate_limits": {"read":"120/min","mutation":"30/min","deployment":"10/min","upload":"5/min","shell":"10/min","exchange":"10/min"},
             "manifest_scope": "agent.manifest.generate",
+            "high_risk_scopes": [
+                "service_database_credentials.read",
+                "shell.execute",
+                "shell.replace",
+                "shell.files.write",
+                "deployments.rebuild",
+                "deployments.rollback",
+            ],
         },
     }
     result["components"]["schemas"].update(schemas)
