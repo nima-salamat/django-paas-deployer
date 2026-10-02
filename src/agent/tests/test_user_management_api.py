@@ -17,10 +17,11 @@ class AgentManagementAPITests(APITestCase):
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
 
-    def test_list_is_owner_scoped(self):
-        response = self.client.get("/api/agents/")
+    def test_list_is_owner_scoped_and_oldest_first(self):
+        response = self.client.get("/api/agents/?page_size=5")
         self.assertEqual(response.status_code, 200)
         self.assertEqual({row["id"] for row in response.data["results"]}, {str(self.agent.pk)})
+        self.assertEqual(response.data["count"], 1)
 
     def test_create_and_duplicate_name(self):
         response = self.client.post("/api/agents/", {"name": "ci-bot", "description": "CI access"}, format="json")
@@ -40,6 +41,30 @@ class AgentManagementAPITests(APITestCase):
         self.assertTrue(token)
         credential = AgentCredential.objects.get(pk=response.data["credential"]["id"])
         self.assertNotEqual(credential.token_hash, token)
+
+    def test_agent_list_uses_created_order(self):
+        first = self.client.post("/api/agents/", {"name": "first-created"}, format="json")
+        second = self.client.post("/api/agents/", {"name": "second-created"}, format="json")
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 201)
+        page = self.client.get("/api/agents/?page_size=5")
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual([row["name"] for row in page.data["results"]][:2], ["deploy-bot", "first-created"])
+
+    def test_credentials_and_audit_pages_use_ten_item_limits(self):
+        for index in range(3):
+            response = self.client.post(
+                f"/api/agents/{self.agent.pk}/credentials/",
+                {"expires_in_days": 10},
+                format="json",
+            )
+            self.assertEqual(response.status_code, 201)
+        credentials = self.client.get(f"/api/agents/{self.agent.pk}/credentials/?page_size=10")
+        self.assertEqual(credentials.status_code, 200)
+        self.assertLessEqual(len(credentials.data["results"]), 10)
+        audit = self.client.get(f"/api/agents/{self.agent.pk}/audit/?page_size=10")
+        self.assertEqual(audit.status_code, 200)
+        self.assertLessEqual(len(audit.data["results"]), 10)
 
     def test_audit_and_manifest_routes_are_not_captured_by_generic_status_route(self):
         audit_response = self.client.get(f"/api/agents/{self.agent.pk}/audit/")
