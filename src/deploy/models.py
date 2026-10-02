@@ -309,8 +309,23 @@ class DeployLog(BaseModel):
     # not create cross-database foreign-key constraints.
     # Cross-database log records use scalar ids only; no reverse ORM relation
     # is exposed on lifecycle models because those queries would hit the wrong DB.
-    deploy = models.ForeignKey(Deploy, verbose_name=_("Deploy"), related_name="+", on_delete=models.CASCADE, db_constraint=False)
-    service = models.ForeignKey(Service, verbose_name=_("Service"), related_name="+", on_delete=models.CASCADE, db_constraint=False)
+    # DeployLog is a projection stored in the separate deployment log DB.
+    # Deleting the primary Deploy/Service must never trigger a cross-database
+    # cascade query against the log database; retention owns log lifecycle.
+    deploy = models.ForeignKey(
+        Deploy,
+        verbose_name=_("Deploy"),
+        related_name="+",
+        on_delete=models.DO_NOTHING,
+        db_constraint=False,
+    )
+    service = models.ForeignKey(
+        Service,
+        verbose_name=_("Service"),
+        related_name="+",
+        on_delete=models.DO_NOTHING,
+        db_constraint=False,
+    )
     stage = models.CharField(_("Stage"), max_length=64)
     event_type = models.CharField(_("Event Type"), max_length=96, default="deployment.event")
     level = models.CharField(_("Level"), max_length=16, default="info")
