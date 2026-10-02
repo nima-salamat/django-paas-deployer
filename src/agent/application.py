@@ -14,7 +14,17 @@ from rest_framework.exceptions import ValidationError
 
 from .errors import AgentError
 from .models import Agent, AgentAuditEvent, AgentCredential, AgentEnrollmentToken, AgentIdempotencyRecord
-from .security import client_ip, issue_raw_access_token, issue_raw_enrollment_token, sanitize_metadata, scrub_text, stable_json_hash, token_hash, token_prefix
+from .security import (
+    client_ip,
+    enrollment_token_hash,
+    issue_raw_access_token,
+    issue_raw_enrollment_token,
+    sanitize_metadata,
+    scrub_text,
+    stable_json_hash,
+    token_hash,
+    token_prefix,
+)
 
 
 class RequestProxy:
@@ -616,7 +626,7 @@ def create_enrollment(agent, *, request=None):
     row = AgentEnrollmentToken.objects.create(
         agent=locked_agent,
         token_prefix=token_prefix(raw),
-        token_hash=token_hash(raw),
+        token_hash=enrollment_token_hash(raw),
         expires_at=now + timedelta(minutes=ttl),
         issued_from_ip=client_ip(request) if request else None,
     )
@@ -639,7 +649,8 @@ def exchange_enrollment(raw_token, *, metadata=None):
         )
 
     prefix = token_prefix(raw)
-    digest = token_hash(raw)
+    digest = enrollment_token_hash(raw)
+    legacy_digest = token_hash(raw)
 
     rows = (
         AgentEnrollmentToken.objects
@@ -650,7 +661,7 @@ def exchange_enrollment(raw_token, *, metadata=None):
 
     row = None
     for candidate in rows:
-        if hmac.compare_digest(candidate.token_hash, digest):
+        if hmac.compare_digest(candidate.token_hash, digest) or hmac.compare_digest(candidate.token_hash, legacy_digest):
             row = candidate
             break
 
