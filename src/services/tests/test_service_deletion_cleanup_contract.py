@@ -54,3 +54,13 @@ def test_deploylog_relations_do_not_cascade_across_database():
 
     assert DeployLog._meta.get_field("service").remote_field.on_delete is DO_NOTHING
     assert DeployLog._meta.get_field("deploy").remote_field.on_delete is DO_NOTHING
+
+
+def test_service_api_delete_does_not_bypass_signal_ownership_checks():
+    source = (ROOT / "services" / "api" / "user_services.py").read_text(encoding="utf-8")
+
+    destroy = source.split("    def destroy(self, request, pk=None", 1)[1].split(
+        "    def retrieve(", 1
+    )[0]
+    assert "_purge_service_runtime(service)" not in destroy
+    assert "Service.pre_delete" in destroy
