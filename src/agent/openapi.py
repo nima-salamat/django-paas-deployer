@@ -1622,26 +1622,26 @@ def build_openapi(agent, *, request=None):
                             "properties": {
                                 "backend": {"type": "string"},
                                 "running": {"type": "boolean"},
-                                "metrics_available": {"type": "boolean", "nullable": true},
-                                "metrics_reason": {"type": "string", "nullable": true}
+                                "metrics_available": {"type": "boolean", "nullable": True},
+                                "metrics_reason": {"type": "string", "nullable": True}
                             }
                         },
                         "usage": {
                             "type": "object",
                             "properties": {
-                                "cpu_percent": {"type": "number", "nullable": true},
-                                "cpu_cores": {"type": "number", "nullable": true},
-                                "memory_percent": {"type": "number", "nullable": true},
-                                "memory_usage_bytes": {"type": "number", "nullable": true}
+                                "cpu_percent": {"type": "number", "nullable": True},
+                                "cpu_cores": {"type": "number", "nullable": True},
+                                "memory_percent": {"type": "number", "nullable": True},
+                                "memory_usage_bytes": {"type": "number", "nullable": True}
                             }
                         },
                         "limits": {
                             "type": "object",
                             "properties": {
-                                "cpu_vcpu": {"type": "number", "nullable": true},
-                                "memory_mb": {"type": "integer", "nullable": true},
-                                "memory_limit_bytes": {"type": "number", "nullable": true},
-                                "cpu_limit_cores": {"type": "number", "nullable": true}
+                                "cpu_vcpu": {"type": "number", "nullable": True},
+                                "memory_mb": {"type": "integer", "nullable": True},
+                                "memory_limit_bytes": {"type": "number", "nullable": True},
+                                "cpu_limit_cores": {"type": "number", "nullable": True}
                             }
                         }
                     }
