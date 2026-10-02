@@ -210,6 +210,12 @@ build
 
 Before activation, preserve the previous known-good release.
 
+## Service deletion and log ownership
+
+`Service` is the deletion boundary for service-scoped observability data. Because `DeployLog` and the runtime log models live in the separate deployment-log database and use scalar `service_id` references, they are explicitly removed by the Service deletion signal rather than by Django foreign-key cascade.
+
+Deployment deletion is different: it removes deployment-owned source artifacts and durable deployment execution records, but it does not define the Service lifecycle or stop an active runtime by itself.
+
 ## Persistent volume cleanup
 
 A failed application container is not sufficient reason to delete persistent data.
