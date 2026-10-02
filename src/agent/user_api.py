@@ -429,11 +429,15 @@ class AgentManifestManagementView(AgentManagementBase):
         agent = self._agent(agent_id)
         if agent.status != Agent.Status.ACTIVE:
             return Response(
-                {"detail": "Only active Agents can generate a bootstrap manifest.", "code": "AGENT_NOT_ACTIVE"},
+                {"detail": "Only active Agents can generate an Agent connection manifest.", "code": "AGENT_NOT_ACTIVE"},
                 status=status.HTTP_409_CONFLICT,
             )
         enrollment, row = create_enrollment(agent, request=request)
-        content = render_agent_manifest(agent, enrollment, request=request)
+        credential, access = issue_access_credential(
+            agent,
+            metadata={"issued_via": "browser_agent_manifest", "issued_by_user": str(request.user.pk)},
+        )
+        content = render_agent_manifest(agent, enrollment, access_token=access, request=request)
         audit(
             request=request, agent=agent, user=request.user, action="browser.agent_manifest.generate",
             success=True, status_code=200, resource_type="agent", resource_id=agent.pk,
