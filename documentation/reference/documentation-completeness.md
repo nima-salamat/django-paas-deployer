@@ -33,18 +33,18 @@ users, auth_users, services, plans, deploy, deployments, logs, app_catalog, mess
 ## Background/event inventory
 | App | Tasks/background | Signals | Consumers |
 |---|---|---|---|
-| app_catalog | start_application_installation, gate_application_service, advance_application_service, application_service_failed, cancel_application_installation, reconcile_application_installations | none | none |
+| app_catalog | start_application_installation, gate_application_service, advance_application_service, application_service_failed, cancel_application_installation, reconcile_application_installations, prepare_user_hard_delete | none; hard-delete coordinator | none |
 | auth_users | auth/session protocol, email helpers | auth/session hooks | none |
 | core | send_code_via_email, unzip_files | post_migrate setting seed, SystemSetting cache | none |
 | custom_emails | send_email_log_task, send_bulk_email_task | none | none |
 | deploy | execution helpers | Deploy cleanup | none |
 | deployments | deploy, stop, restart_service, build_base_runtime_image, reclaim_released_volumes, expire_idle_shell_sessions_task; Beat monitor_services/sync_swarm_infrastructure | lifecycle/runtime hooks | deployments consumer |
 | logs | retain_all_services, reconcile_usage | none | none |
-| messenger | finalize_unanswered_call, deliver_scheduled_messages, purge_view_once_if_complete | attachment/conversation/message cleanup | MessengerConsumer |
+| messenger | finalize_unanswered_call, deliver_scheduled_messages, purge_view_once_if_complete | attachment/conversation/message cleanup; User deletion leave/cache cleanup | MessengerConsumer |
 | plans | none | plan cache invalidation | none |
 | services | revisioning, shell expiry, share cleanup | Service/Volume/PrivateNetwork cleanup/cache | ServiceConsumer |
 | tickets | none | Ticket activity/cache | TicketConsumer |
-| users | none | user/session/cache/resource cleanup | none |
+| users | none | user/session/cache/resource cleanup; lifecycle fencing/network attachment preparation | none |
 
 ## Route source inventory
 app_catalog: src/app_catalog/urls.py  
