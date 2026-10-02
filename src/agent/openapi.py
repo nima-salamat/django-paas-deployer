@@ -103,22 +103,24 @@ def _field_schema(field):
     return schema
 
 
-def _serializer_schema(serializer_cls, *, instance=False, exclude=(), description=None):
+def _serializer_schema(serializer_cls, *, instance=False, exclude=(), description=None, writable=False):
     """Build an object schema from the real DRF serializer fields."""
     serializer = serializer_cls(instance=object()) if instance else serializer_cls()
     properties = {}
     required = []
     excluded = set(exclude)
     for name, field in serializer.fields.items():
-        if name in excluded or getattr(field, "write_only", False) and instance:
+        if name in excluded:
             continue
-        if not instance and getattr(field, "read_only", False):
+        if writable and getattr(field, "read_only", False):
+            continue
+        if writable and getattr(field, "write_only", False) and instance:
             continue
         schema = _field_schema(field)
         if instance:
             schema.pop("readOnly", None)
         properties[name] = schema
-        if not instance and getattr(field, "required", False) and not getattr(field, "read_only", False):
+        if writable and getattr(field, "required", False):
             required.append(name)
     result = {"type": "object", "properties": properties}
     if required:
@@ -560,7 +562,7 @@ def build_openapi(agent, *, request=None):
     from agent.scopes import HIGH_RISK_SCOPES
     from .throttling import AgentRateThrottle
 
-    service_create = _serializer_schema(ServiceSerializer, exclude={"user"})
+    service_create = _serializer_schema(ServiceSerializer, exclude={"user"}, writable=True)
     service_create.setdefault("required", [])
     service_create["required"] = sorted(set(service_create["required"]) | {"name", "plan", "network"})
     service_create["description"] = (
@@ -568,27 +570,27 @@ def build_openapi(agent, *, request=None):
         "service creation. User ownership is assigned from the authenticated Agent user. "
         "The Agent facade additionally requires a Private Network."
     )
-    service_update = _serializer_schema(ServiceSerializer, instance=True, exclude={"user"})
+    service_update = _serializer_schema(ServiceSerializer, instance=True, exclude={"user"}, writable=True)
     service_update["required"] = []
     service_update["description"] = "Writable service fields after applying the existing Service serializer read-only rules."
 
-    network_create = _serializer_schema(PrivateNetworkSerializer)
+    network_create = _serializer_schema(PrivateNetworkSerializer, writable=True)
     network_create["description"] = "Private network fields accepted by the existing user-facing network serializer."
-    network_update = _serializer_schema(PrivateNetworkSerializer, instance=True)
+    network_update = _serializer_schema(PrivateNetworkSerializer, instance=True, writable=True)
     network_update["required"] = []
 
-    volume_create = _serializer_schema(VolumeSerializer, exclude={"user"})
+    volume_create = _serializer_schema(VolumeSerializer, exclude={"user"}, writable=True)
     volume_create.setdefault("required", [])
     volume_create["required"] = sorted(set(volume_create["required"]) | {"service"})
     volume_create["description"] = "Volume fields accepted by the existing VolumeSerializer; the Agent facade requires a Service."
-    volume_update = _serializer_schema(VolumeSerializer, instance=True, exclude={"user"})
+    volume_update = _serializer_schema(VolumeSerializer, instance=True, exclude={"user"}, writable=True)
     volume_update["required"] = []
 
-    plan_create = _serializer_schema(PlanSerializer)
-    plan_update = _serializer_schema(PlanSerializer, instance=True)
+    plan_create = _serializer_schema(PlanSerializer, writable=True)
+    plan_update = _serializer_schema(PlanSerializer, instance=True, writable=True)
     plan_update["required"] = []
 
-    deployment_create = _serializer_schema(DeploySerializer, exclude={"zip_file"})
+    deployment_create = _serializer_schema(DeploySerializer, exclude={"zip_file"}, writable=True)
     deployment_create.setdefault("required", [])
     deployment_create["required"] = sorted(set(deployment_create["required"]) | {"service"})
     deployment_create["properties"]["source"] = {
