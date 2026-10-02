@@ -91,7 +91,9 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
                 service_name,
             )
 
-        # Application plans: remove image built for this service
+        # Application plans: remove only images owned by this service.
+        # Build-cache rows are cascaded with the Service, so collect their
+        # physical image identities before the row disappears.
         if getattr(instance, "plan", None) and getattr(
             instance.plan, "plan_type", None
         ) != PlanTypeChoices.DATABASE:
@@ -106,6 +108,8 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
                     f"Failed to remove application image(s) for service '{service_name}'."
                 ) from exc
 
+        _cleanup_service_cache_images(instance)
+
     except Exception:
         logger.exception(
             "Failed cleaning docker resources for service '%s' (name=%s).",
@@ -117,6 +121,75 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
     finally:
         # Volumes are exclusive to this service — delete them (Docker + DB)
         _cleanup_service_volumes(instance)
+
+
+def _cleanup_service_cache_images(service: Service) -> None:
+    """Remove unshared application images owned by a deleting Service."""
+    from deploy.build_cache import BuildCacheArtifact
+    from deploy.models import BaseRuntimeImage
+    from deployments.core.manager.client_manager import get_docker_client
+    from docker.errors import ImageNotFound
+
+    rows = list(
+        BuildCacheArtifact.objects.filter(
+            service_id=service.pk,
+            reclaimed_at__isnull=True,
+        ).values_list("image_id", "image_ref")
+    )
+    image_ids = {str(image_id) for image_id, _ref in rows if image_id}
+    if not image_ids:
+        return
+
+    other_refs = set(
+        str(value)
+        for value in BuildCacheArtifact.objects.filter(
+            image_id__in=image_ids,
+            reclaimed_at__isnull=True,
+        )
+        .exclude(service_id=service.pk)
+        .values_list("image_id", flat=True)
+        if value
+    )
+    protected_base_ids = set(
+        str(value)
+        for value in BaseRuntimeImage.objects.filter(
+            image_id__in=image_ids
+        ).values_list("image_id", flat=True)
+        if value
+    )
+
+    client = get_docker_client()
+    running_ids = set()
+    for container in client.containers.list():
+        image = getattr(container, "image", None)
+        image_id = str(getattr(image, "id", "") or "")
+        if image_id:
+            running_ids.add(image_id)
+
+    for image_id in sorted(image_ids - other_refs - protected_base_ids - running_ids):
+        try:
+            client.images.remove(image_id, force=False)
+            logger.info(
+                "Removed unshared application cache image '%s' for deleted service '%s'.",
+                image_id,
+                service.name,
+            )
+        except ImageNotFound:
+            logger.info(
+                "Application cache image '%s' for deleted service '%s' is already absent.",
+                image_id,
+                service.name,
+            )
+        except Exception as exc:
+            logger.exception(
+                "Failed to remove application cache image '%s' for deleted service '%s'.",
+                image_id,
+                service.name,
+            )
+            raise RuntimeError(
+                f"Failed to remove application cache image '{image_id}' "
+                f"for service '{service.name}'."
+            ) from exc
 
 
 def _cleanup_service_volumes(service: Service) -> None:
