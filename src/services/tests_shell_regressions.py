@@ -48,7 +48,7 @@ def test_shell_download_is_dedicated_and_streams_single_files():
     assert "def shell_download_apiview" in source
     assert "container.get_archive(path)" in source
     assert "FileResponse(output" in source
-    assert "content_type="application/zip"" in source
+    assert 'content_type="application/zip"' in source
 
 
 def test_shell_upload_enforces_filename_collision_size_and_mount_policy():
@@ -58,3 +58,5 @@ def test_shell_upload_enforces_filename_collision_size_and_mount_policy():
     assert "FILE_EXISTS" in source
     assert "_assert_managed_target_safe" in source
     assert "Read-only Docker mount" in source
+    assert "container.exec_run(" in source
+    assert '["/bin/sh", "-c"' in source

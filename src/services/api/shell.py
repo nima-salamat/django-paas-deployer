@@ -712,7 +712,7 @@ def shell_file_apiview(request, service_id):
             if upload is None:
                 raise DjangoValidationError("file is required.")
             target_dir = _assert_managed_target_safe(container, safe_path, session.root_path)
-            kind_probe = container.exec_run([
+            kind_probe = container.exec_run(
                 ["/bin/sh", "-c", 'if [ -d "$1" ]; then printf dir; else printf other; fi', "kind", target_dir],
                 workdir=session.workdir, stdout=True, stderr=False, tty=False
             )

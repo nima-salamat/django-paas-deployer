@@ -1008,6 +1008,7 @@ def service_volume_capabilities_apiview(request, service_id):
         service, share = _get_service_for_user_or_share(request, service_id, action="can_view", for_update=False)
         mutable, reason = _service_is_mutable(service)
         owner = str(service.user_id) == str(request.user.id)
+        can_delete = True
         if owner:
             can_attach = can_detach = can_add = True
         else:
