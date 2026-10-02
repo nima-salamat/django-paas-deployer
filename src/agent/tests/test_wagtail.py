@@ -38,6 +38,13 @@ class AgentWagtailTests(TestCase):
         self.assertNotIn("hash", str(AgentCredentialViewSet.search_fields).lower())
 
 
+    def test_wagtail_credential_manual_delete_route_exists(self):
+        from agent.wagtail_hooks import register_agent_admin_urls
+        names = {pattern.name for pattern in register_agent_admin_urls()}
+        self.assertIn("wagtail_agent_delete_credential", names)
+        self.assertIn("wagtail_agent_delete_credential_confirm", names)
+
+
     def test_agent_cannot_be_deleted_directly_from_wagtail(self):
         from django.contrib.auth import get_user_model
         User = get_user_model()
