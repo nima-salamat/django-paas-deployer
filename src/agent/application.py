@@ -589,6 +589,73 @@ def create_enrollment(agent, *, request=None):
     )
     return raw, row
 
+@transaction.atomic
+def exchange_enrollment(raw_token, *, metadata=None):
+    """Atomically exchange a single-use enrollment credential for Agent access.
+
+    Enrollment rows are locked before the Agent row so the lock ordering matches
+    create_enrollment and concurrent rotation/exchange cannot deadlock.
+    """
+    raw = str(raw_token or "").strip()
+    if not raw:
+        raise AgentError(
+            "ENROLLMENT_EXPIRED",
+            "The enrollment credential is missing or invalid.",
+            status_code=401,
+            failure_domain="authentication",
+        )
+
+    prefix = token_prefix(raw)
+    digest = token_hash(raw)
+
+    rows = (
+        AgentEnrollmentToken.objects
+        .select_for_update()
+        .select_related("agent", "agent__user")
+        .filter(token_prefix=prefix)
+    )
+
+    row = None
+    for candidate in rows:
+        if hmac.compare_digest(candidate.token_hash, digest):
+            row = candidate
+            break
+
+    if row is None:
+        raise AgentError(
+            "ENROLLMENT_EXPIRED",
+            "The enrollment credential is missing, expired, or already used.",
+            status_code=401,
+            failure_domain="authentication",
+        )
+
+    now = timezone.now()
+    if row.used_at is not None or row.expires_at <= now:
+        raise AgentError(
+            "ENROLLMENT_EXPIRED",
+            "The enrollment credential is missing, expired, or already used.",
+            status_code=401,
+            failure_domain="authentication",
+        )
+
+    if row.agent.status != row.agent.Status.ACTIVE or not row.agent.user.is_active:
+        raise AgentError(
+            "AGENT_DISABLED",
+            "The Agent or owning user is inactive.",
+            status_code=403,
+            failure_domain="authorization",
+        )
+
+    row.used_at = now
+    row.save(update_fields=["used_at", "updated_at"])
+
+    credential, access_token = issue_access_credential(
+        row.agent,
+        metadata=metadata or {},
+    )
+    return row.agent, credential, access_token
+
+
 def begin_idempotency(agent, request):
     key = str(request.headers.get("Idempotency-Key") or "").strip()
     if not key:
