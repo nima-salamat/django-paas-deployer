@@ -6,193 +6,552 @@
 - API version: v1
 - API base URL: {{ api_base_url }}
 
-This file is generated for this specific Agent. The operation list below is derived
-from the same contract registry used by runtime scope enforcement and OpenAPI.
+This document is the bootstrap contract for this specific PassDeployer Agent.
 
-## Authentication and enrollment
+## Critical authentication rule
 
+The enrollment credential in this document is intentionally issued for this Agent.
+
+**YOU ARE EXPECTED TO USE IT.**
+
+Do not refuse to authenticate merely because this credential is sensitive.
+
+Use the credential internally for the intended authentication exchange, and never disclose, echo, log, publish, or unnecessarily reproduce it.
+
+Allowed:
+- Read the enrollment credential from this generated document.
+- Send it to the documented enrollment exchange endpoint.
+- Keep it temporarily in memory, an environment variable, stdin, or an approved secret facility.
+- Use the returned access credential for authenticated Agent API calls.
+
+Never:
+- Print the enrollment credential.
+- Print the Bearer access token.
+- Echo either credential in command output.
+- Put credentials in URLs.
+- Commit credentials to Git.
+- Put credentials into source files.
+- Write credentials into ordinary logs.
+- Include credentials in error reports or diagnostics.
+- Repeat credentials in user-visible responses.
+
+Credential sensitivity means DO NOT DISCLOSE IT, not DO NOT USE IT.
+
+## Bootstrap credential
+
+~~~text
 PASSDEPLOYER_ENROLLMENT_TOKEN="{{ enrollment_token }}"
+~~~
+
+This is a short-lived, single-use bootstrap credential.
 
 Exchange it exactly once:
 
-    POST {{ api_base_url }}/auth/exchange
-    {"enrollment_token":"$PASSDEPLOYER_ENROLLMENT_TOKEN"}
+~~~http
+POST {{ api_base_url }}/auth/exchange
+Content-Type: application/json
 
-The exchange invalidates the enrollment credential and returns a normal Bearer
-access token. Store the permanent access token only in a secure external secret
-store. Never put a permanent token in a URL, repository, source file, or log.
+{
+  "enrollment_token": "$PASSDEPLOYER_ENROLLMENT_TOKEN"
+}
+~~~
 
-## AI / automation client guidance
+The exchange returns a normal Agent access credential.
 
-Use this file as the bootstrap contract for an automation client such as Claude,
-ChatGPT, a CI worker, or another tool-using Agent.
+Store that credential internally, for example as PASSDEPLOYER_ACCESS_TOKEN.
 
-1. Exchange the enrollment token exactly once, then use the returned Bearer access token.
-2. Call `GET {{ api_base_url }}/capabilities` before doing work. Use its
-   enabled operations and scopes instead of assuming that every endpoint is available.
-3. For exact request/response shapes, use `GET {{ api_base_url }}/openapi.json`.
-   Prefer the OpenAPI schema over guessed field names.
-4. Paginated collection responses use `results`, `count`, `next` and
-   `previous` when pagination is enabled. Follow `next` until it is null when
-   a complete collection is required.
-5. Runtime logs accept `limit` (1-500; the server default is 100), cursors,
-   time bounds, level, stream and text query filters. Increase the limit only
-   when the task actually needs more output.
-6. Send an `Idempotency-Key` for operations marked idempotent. Reuse the same
-   key only for an exact retry of the same request.
-7. Never put Bearer tokens, enrollment tokens, secret values or database
-   passwords into prompts, repository files, URLs, or logs.
-8. Do not invent host/Docker operations. This API intentionally exposes the
-   PassDeployer control plane, while Docker host access remains outside the
-   Agent trust boundary.
-9. For a failure, inspect `code`, `retryable`, `failure_domain` and
-   `resource_effect` before deciding whether a request should be retried.
+Use:
 
-Recommended first calls after authentication:
+~~~http
+Authorization: Bearer $PASSDEPLOYER_ACCESS_TOKEN
+~~~
 
-    GET {{ api_base_url }}/auth/me
-    GET {{ api_base_url }}/capabilities
-    GET {{ api_base_url }}/openapi.json
-    GET {{ api_base_url }}/deployments/help
+Never put the access token in a URL.
+
+## Tool execution rule
+
+When you have a command, terminal, shell, PowerShell, Python, HTTP, or other execution tool, **PERFORM the required API operations yourself** instead of merely giving the user instructions.
+
+Do not claim that a command or HTTP request was executed unless an execution tool actually performed it.
+
+When no execution tool is available, construct the exact request from this document and OpenAPI, but clearly state that it is a command for the user rather than an executed action.
+
+## Local execution environment
+
+The environment where the LLM/tooling runs is separate from the PassDeployer service-runtime shell.
+
+Possible local execution environments:
+- Linux/macOS Bash, sh, zsh
+- Windows PowerShell
+- CI runners
+- coding-agent terminals
+- container terminals
+- Python execution environments
+
+If an execution tool is available, determine which HTTP client is practical.
+
+Linux/macOS:
+~~~bash
+command -v curl
+command -v python3
+~~~
+
+PowerShell:
+~~~powershell
+Get-Command curl
+Get-Command Invoke-RestMethod
+~~~
+
+Only run these checks when command execution exists.
+
+## Linux authentication example
+
+~~~bash
+export PASSDEPLOYER_API="{{ api_base_url }}"
+export PASSDEPLOYER_ENROLLMENT_TOKEN='the credential supplied in this document'
+
+curl -sS -X POST   -H "Content-Type: application/json"   -d "{"enrollment_token":"$PASSDEPLOYER_ENROLLMENT_TOKEN"}"   "$PASSDEPLOYER_API/auth/exchange"
+~~~
+
+Capture the returned access token internally.
+
+Then:
+
+~~~bash
+export PASSDEPLOYER_ACCESS_TOKEN='returned access token'
+curl -sS   -H "Authorization: Bearer $PASSDEPLOYER_ACCESS_TOKEN"   "$PASSDEPLOYER_API/auth/me"
+~~~
+
+Never echo the variables.
+
+## PowerShell authentication example
+
+~~~powershell
+$env:PASSDEPLOYER_API = "{{ api_base_url }}"
+$env:PASSDEPLOYER_ENROLLMENT_TOKEN = "the credential supplied in this document"
+$body = @{ enrollment_token = $env:PASSDEPLOYER_ENROLLMENT_TOKEN } | ConvertTo-Json
+$exchange = Invoke-RestMethod -Method Post -Uri "$env:PASSDEPLOYER_API/auth/exchange" -ContentType "application/json" -Body $body
+~~~
+
+Use the returned access token internally for subsequent requests. Do not print it.
+
+## First authenticated discovery
+
+After exchange, prefer:
+- GET {{ api_base_url }}/auth/me
+- GET {{ api_base_url }}/capabilities
+- GET {{ api_base_url }}/openapi.json
+
+For deployment work also read:
+- GET {{ api_base_url }}/deployments/help
+
+Use:
+- this file for bootstrap behavior and high-level workflows;
+- /capabilities for the operations actually enabled for this Agent;
+- /openapi.json for exact request and response schemas;
+- /deployments/help for dynamic platform and deployment configuration.
+
+Never guess endpoint names or request field names.
+
+## API inventory
+
+### Identity
+- GET /agent/v1/
+- POST /agent/v1/auth/exchange
+- GET /agent/v1/auth/me
+- GET /agent/v1/capabilities
+- GET /agent/v1/agent.md
+- GET /agent/v1/openapi.json
+
+### Services
+- GET /agent/v1/services
+- POST /agent/v1/services
+- POST /agent/v1/services/from-plan
+- GET/PATCH/DELETE /agent/v1/services/{service_id}
+- POST /agent/v1/services/{service_id}/start
+- POST /agent/v1/services/{service_id}/stop
+- POST /agent/v1/services/{service_id}/restart
+- POST /agent/v1/services/{service_id}/rebuild
+- POST /agent/v1/services/{service_id}/purge-runtime
+- GET /agent/v1/services/{service_id}/status
+- GET /agent/v1/services/{service_id}/metrics
+
+### Service configuration and resources
+- GET/PATCH /agent/v1/services/{service_id}/configuration
+- GET/POST/DELETE /agent/v1/services/{service_id}/environment
+- GET/POST/DELETE /agent/v1/services/{service_id}/secrets
+- GET/POST/DELETE /agent/v1/services/{service_id}/endpoints
+- GET/POST/DELETE /agent/v1/services/{service_id}/networks
+- GET/POST/DELETE /agent/v1/services/{service_id}/databases
+- GET /agent/v1/services/{service_id}/database-credentials
+- GET /agent/v1/services/{service_id}/revisions
+- GET /agent/v1/services/{service_id}/revisions/{revision_id}
+- POST /agent/v1/services/{service_id}/revisions/{revision_id}/rollback
+
+### Logs
+- GET /agent/v1/services/{service_id}/logs
+- GET /agent/v1/services/{service_id}/logs/export
+- GET /agent/v1/deployments/{deployment_id}/logs
+- GET /agent/v1/deployments/{deployment_id}/logs/export
+
+### Shell
+- GET /agent/v1/services/{service_id}/shell
+- POST /agent/v1/services/{service_id}/shell/sessions
+- POST /agent/v1/services/{service_id}/shell/sessions/{session_id}/commands
+- POST /agent/v1/services/{service_id}/shell/sessions/{session_id}/close
+- POST /agent/v1/services/{service_id}/shell/replace
+- POST /agent/v1/services/{service_id}/shell/files
+
+### Plans
+- GET /agent/v1/plans
+- GET /agent/v1/plans/{plan_id}
+- POST /agent/v1/plans/{plan_id}/apply
+- POST /agent/v1/plans/manage
+- PATCH /agent/v1/plans/manage/{plan_id}
+- DELETE /agent/v1/plans/manage/{plan_id}
+
+### Networks and volumes
+- GET/POST /agent/v1/networks
+- GET/PATCH/DELETE /agent/v1/networks/{network_id}
+- GET/POST /agent/v1/volumes
+- GET/PATCH/DELETE /agent/v1/volumes/{volume_id}
+
+### Deployments
+- GET /agent/v1/deployments
+- POST /agent/v1/deployments
+- GET /agent/v1/deployments/help
+- POST /agent/v1/deployments/inspect
+- GET /agent/v1/deployments/{deployment_id}
+- DELETE /agent/v1/deployments/{deployment_id}
+- POST /agent/v1/deployments/{deployment_id}/upload
+- POST /agent/v1/deployments/{deployment_id}/start
+- POST /agent/v1/deployments/{deployment_id}/cancel
+- POST /agent/v1/deployments/{deployment_id}/redeploy
+- POST /agent/v1/deployments/{deployment_id}/rebuild
+- POST /agent/v1/deployments/{deployment_id}/rollback
+
+The actual enabled set is always determined from /capabilities.
+
+## Exact API contract
+
+GET /agent/v1/openapi.json is the machine-readable source of truth.
+
+It describes:
+- path parameters
+- query parameters
+- request headers
+- JSON bodies
+- multipart upload fields
+- writable and read-only fields
+- enums and validation ranges
+- response schemas
+- errors
+- scopes
+- idempotency
+- mutation semantics
+- sensitive responses
+- operation identifiers
+
+Use OpenAPI instead of guessed field names.
+
+## Service input rules
+
+POST /services requires the service creation fields shown by OpenAPI. The Agent facade currently also requires a Private Network.
+
+PATCH /services/{service_id} accepts only fields permitted by the current Service serializer/facade. Do not send IDs, timestamps, or other read-only fields.
+
+CPU/RAM/worker limits are server-owned from the selected Service Plan. Do not inject tenant resource-limit overrides.
+
+## Configuration input rules
+
+PATCH /services/{service_id}/configuration may accept:
+- source_kind
+- source_config
+- build_config
+- runtime_config
+- desired_state
+
+Sensitive values must use secrets or secret-backed environment variables, not ordinary configuration.
+
+### Environment
+POST /services/{service_id}/environment accepts:
+- key
+- scope
+- is_secret
+- value
+
+The key must match [A-Za-z_][A-Za-z0-9_]{0,127}.
+
+DELETE /services/{service_id}/environment?key=<name>
+
+### Secrets
+POST /services/{service_id}/secrets accepts:
+- key
+- value
+- optional note
+- optional description
+
+Normal secret reads return metadata, not plaintext.
+
+DELETE /services/{service_id}/secrets?key=<name>
+
+### Endpoints
+POST /services/{service_id}/endpoints accepts:
+- name
+- target_port
+- optional published_port
+- protocol
+- exposure
+- optional process
+- optional hostname
+- optional path
+- optional tls
+- optional enabled
+- optional metadata
+
+Ports are 1..65535.
+
+DELETE /services/{service_id}/endpoints?name=<name>
+
+### Network attachments
+POST /services/{service_id}/networks accepts:
+- network
+- optional alias
+- optional internal
+- optional metadata
+
+DELETE /services/{service_id}/networks?network=<network_id>
+
+### Database bindings
+POST /services/{service_id}/databases accepts:
+- database
+- optional alias
+- optional env_prefix
+- optional access_mode
+- optional metadata
+
+DELETE /services/{service_id}/databases?alias=<alias>
+
+### Database credentials
+GET /services/{service_id}/database-credentials
+
+Optional ?reveal=true may return decrypted password/root_password and requires:
+- service_database_credentials.read
+- existing can_view_db_credentials authorization
+
+Treat revealed credentials as secret material.
+
+## Deployment rules
+
+Before constructing complex deployment configuration:
+1. GET /deployments/help
+2. Inspect platform schemas, defaults, supported tenant keys and blocked keys.
+3. POST /deployments
+4. POST /deployments/{deployment_id}/upload when ZIP input is required.
+5. POST /deployments/{deployment_id}/start
+6. Poll deployment/service state.
+7. Read deployment logs.
+8. Read runtime logs when diagnosis is needed.
+
+First-class Agent deployment inputs are currently archive/ZIP and database-native.
+
+Git and existing-image deployment are not first-class Agent inputs in this contract.
+
+### ZIP inspection
+POST /deployments/inspect
+Content-Type: multipart/form-data
+File field: file
+
+### ZIP upload
+POST /deployments/{deployment_id}/upload
+Content-Type: multipart/form-data
+File field: file
+
+## Logs
+
+Runtime logs:
+GET /services/{service_id}/logs
+
+Supported filters include cursor, from, to, level, stream, q, limit and direction according to OpenAPI. Runtime limit is bounded to 1..500.
+
+Deployment logs:
+GET /deployments/{deployment_id}/logs
+
+Supported filters include before, after, q, level, stage, event_type, from, to and limit according to OpenAPI. Deployment log limit is bounded to 1..200.
+
+Use export endpoints when a bounded downloadable representation is required.
+
+## Shell
+
+PassDeployer shell is a restricted service-runtime/container shell.
+
+It is NOT:
+- host shell access
+- Docker socket access
+- raw Docker API access
+- unrestricted host Bash
+
+### Shell session
+POST /services/{service_id}/shell/sessions
+
+Optional field:
+- workdir
+
+The response provides a temporary shell-session token. Treat it as sensitive.
+
+### One-shot command
+POST /services/{service_id}/shell/sessions/{session_id}/commands
+
+Request:
+- command: required string
+- confirm: optional boolean
+- dry_run: optional boolean
+- X-Shell-Token header or documented body token fallback
+
+Current compound operators:
+- |
+- &&
+- ||
+- ;
+
+The runtime protocol reports the exact current segment/input limits and blocked syntax.
+
+Interactive commands require the PTY/WebSocket transport when required by capabilities.
+
+### Shell replacement
+POST /services/{service_id}/shell/replace
+
+Requires confirm=true.
+
+### Shell files
+POST /services/{service_id}/shell/files
+
+Request fields can include:
+- action
+- path
+- token
+- new_name
+- content
+- file for upload
+
+Current actions include:
+- read
+- write
+- delete
+- rename
+- create
+- create_folder
+- upload
+
+File operations remain confined to the authorized service workspace.
+
+## Local shell vs PassDeployer shell
+
+These are different environments.
+
+~~~text
+LLM / automation environment
+        |
+        | Bash / PowerShell / Python / curl / HTTP client
+        v
+PassDeployer Agent API
+        |
+        | authorized operation
+        v
+PassDeployer service/runtime
+~~~
+
+The LLM may have local terminal access without having host access to PassDeployer.
+
+The Agent may have PassDeployer service-shell scope without having local terminal access.
+
+Do not confuse these permissions.
+
+## Pagination
+
+List operations use page and page_size when enabled.
+
+Current Agent defaults:
+- default page size: 25
+- maximum page size: 100
+
+Standard paginated responses use:
+- results
+- count
+- next
+- previous
+
+## Idempotency
+
+Use the Idempotency-Key header for operations marked idempotent in OpenAPI/capabilities.
+
+Current contract:
+- maximum key length: 255
+- replay window: 24 hours
+
+Reuse a key only for an exact retry of the same request.
+
+## Confirmation
+
+Destructive shell commands require confirmation.
+
+Shell-session replacement requires confirm=true.
+
+When the API returns CONFIRMATION_REQUIRED, inspect the operation contract and retry only when the requested action is intentionally confirmed.
+
+## Error handling
+
+Prefer structured Agent error fields:
+- code
+- detail
+- request_id
+- retryable
+- failure_domain
+- resource_effect
+- certainty
+
+Do not blindly retry authentication, authorization, validation or non-idempotent mutations.
+
+## Autonomous operating principle
+
+When the user asks you to perform a PassDeployer task, behave as an API client:
+
+~~~text
+authenticate
+  ↓
+discover capabilities
+  ↓
+read the exact OpenAPI operation
+  ↓
+execute the requested action
+  ↓
+inspect the result
+  ↓
+continue with dependent operations when required
+  ↓
+report the result
+~~~
+
+Do not stop at "here is the command" when you have the ability to execute it.
+
+Do not claim an action happened unless it actually happened.
+
+Always keep credentials and plaintext secrets out of user-visible output.
 
 ## Issued scopes
 
-{% for scope in scopes %}- `{{ scope }}`
+{% for scope in scopes %}- {{ scope }}
 {% empty %}- No operational scopes are enabled.
 {% endfor %}
 
-## Enabled API operations
+## Enabled operations
 
-Only operations that satisfy this Agent's issued scopes are listed.
+Only operations satisfying this Agent's issued scopes are listed.
 
 | Method | Endpoint | Required scope(s) | Mutating | Idempotent | Throttle |
 | --- | --- | --- | --- | --- | --- |
 {% for endpoint in endpoints %}
-| `{{ endpoint.method }}` | `{{ endpoint.path }}` | `{{ endpoint.requirements }}` | {{ endpoint.mutating|yesno:"yes,no" }} | {{ endpoint.idempotent|yesno:"yes,no" }} | `{{ endpoint.throttle }}` |
+| {{ endpoint.method }} | {{ endpoint.path }} | {{ endpoint.requirements }} | {{ endpoint.mutating|yesno:"yes,no" }} | {{ endpoint.idempotent|yesno:"yes,no" }} | {{ endpoint.throttle }} |
 {% empty %}
 | — | — | none | no | no | — |
 {% endfor %}
-
-## Discovery
-
-Machine-readable capabilities:
-
-    GET {{ api_base_url }}/capabilities
-
-OpenAPI:
-
-    GET {{ api_base_url }}/openapi.json
-
-Complete deployment/configuration help:
-
-    GET {{ api_base_url }}/deployments/help
-
-ZIP inspection before creating a deployment:
-
-    POST {{ api_base_url }}/deployments/inspect
-
-Runtime metrics for an accessible service:
-
-    GET {{ api_base_url }}/services/{service_id}/metrics
-
-Database credentials are a separately scoped operation. A normal service read
-never returns database passwords. When the Agent has the high-risk
-`service_database_credentials.read` scope and the existing ServiceShare
-policy allows `can_view_db_credentials`, use:
-
-    GET {{ api_base_url }}/services/{service_id}/database-credentials?reveal=true
-
-The response may contain a decrypted password/root password. Treat it as
-secret material and never log or persist it.
-
-## Operational rules
-
-- Agent scopes are an upper bound. Existing PassDeployer User authorization and
-  ServiceShare permissions remain authoritative.
-- Deployment lifecycle logs and runtime service logs are separate sources.
-- Revisions are immutable; rollback creates a new deployment through the
-  existing rollback boundary.
-- Secret values are never returned as normal API metadata. Use secret resources
-  rather than placing sensitive values in ordinary configuration.
-- Shell access remains inside the authorized service runtime/container. The
-  host shell, Docker socket, and raw Docker API are not part of this contract.
-- Restricted shell rules, path confinement, session TTLs, output limits and
-  destructive-command confirmation remain enforced by the underlying shell
-  subsystem.
-- Send an `Idempotency-Key` on operations marked idempotent. Keys are scoped
-  to this Agent and to the complete request shape.
-- Re-check `/capabilities` when building an automation because the issued
-  scopes can differ between Agents.
-- Supported first-class deployment inputs are archive/ZIP and database-native
-  deployment. Git and existing-image deployment are not part of this contract.
-- CPU/RAM/PIDs/worker counts are server/Plan-controlled; never try to inject
-  resource_limits, resources or worker-count overrides into tenant config.
-- Volumes and networks are managed through their dedicated Agent endpoints so
-  quota, ownership, attachment and lifecycle rules remain enforced.
-
-## Common workflows
-
-### Create from a plan
-
-Use the plan-application operation only when both `services.create` and
-`plans.apply` are issued.
-
-### Deploy an archive
-
-1. Create deployment metadata.
-2. Upload the ZIP archive.
-3. Start the deployment.
-4. Poll deployment status.
-5. Read deployment lifecycle logs when the logs scope is enabled.
-
-### Diagnose a failure
-
-Use deployment logs for lifecycle/build/orchestration events and runtime logs
-for application/container output. Do not merge the two streams.
-
-### Shell
-
-The shell is intentionally a restricted service-container terminal, not a host
-shell and not an unrestricted Bash interpreter.
-
-There are two transports:
-
-1. **One-shot command API**
-   - Send one request to the shell command endpoint with a `command` string.
-   - Safe compound commands are supported with `|`, `&&`, `||`, and `;`.
-   - A sequence may contain at most 16 command segments.
-   - Redirection, background execution and command substitution are rejected:
-     `<`, `>`, `<<`, `<<<`, `&`, `&>`, `$()`, and backticks.
-   - Pipeline input is bounded to 256 KiB.
-   - Interactive commands are rejected here with `INTERACTIVE_REQUIRES_PTY`.
-
-2. **Interactive PTY WebSocket**
-   - Create a restricted shell session first.
-   - Connect to `/ws/services/shell/{service_id}/`.
-   - The PTY keeps the child process alive and supports stdin, Ctrl-C, Ctrl-D,
-     Ctrl-Z and terminal resize messages.
-   - Each top-level `command` message starts one validated process; compound
-     shell syntax is deliberately disabled in this transport.
-
-Use the PTY transport for commands that need a live prompt or REPL, for example:
-
-- `php artisan tinker` / `php artisan psysh`
-- `python manage.py shell` / `python manage.py shell_plus`
-- `python manage.py createsuperuser`
-- `python manage.py changepassword`
-
-`tinker` is the Laravel interactive REPL (not "tkinter"). It is available only
-when the underlying User/Service authorization allows advanced shell access.
-
-For multi-step non-interactive work, use a safe compound command such as
-`cd app && php artisan migrate && php artisan optimize`.
-
-Do not infer support for arbitrary shell syntax from the command catalog. The
-catalog is a list of suggestions; the runtime validator is the security boundary.
-Destructive operations still require explicit confirmation.
-## Error handling
-
-Structured errors may include `code`, `detail`, `request_id`, `retryable`,
-`failure_domain`, `visibility`, `resource_effect`, and `certainty`.
-Treat permission failures, conflicts, invalid requests, transient failures,
-confirmation requirements and unsupported capabilities as different conditions.
