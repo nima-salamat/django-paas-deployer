@@ -270,7 +270,7 @@ def list_my_services(request):
     """Only services owned by the current user."""
     qs = Service.objects.filter(user=request.user).select_related(
         "user", "network", "plan", "selected_deploy"
-    )
+    ).order_by("-created_at", "-id")
     data = GetServiceSerializer(qs, many=True, context={"request": request}).data
     return Response({"result": "success", "services": data, "scope": "mine"})
 
@@ -296,7 +296,7 @@ def list_shared_services(request):
 
     qs = ServiceShare.objects.filter(is_active=True).select_related(
         "service", "service__user", "service__plan", "shared_by", "group", "target_user"
-    )
+    ).order_by("-service__created_at", "-service_id", "-created_at", "-id")
 
     if scope == "received":
         qs = qs.filter(Q(target_user=request.user) | Q(group_id__in=group_ids)).exclude(
@@ -596,7 +596,7 @@ def list_services_unified(request):
     """
     mine = Service.objects.filter(user=request.user).select_related(
         "user", "network", "plan", "selected_deploy"
-    )
+    ).order_by("-created_at", "-id")
     mine_data = GetServiceSerializer(mine, many=True, context={"request": request}).data
 
     from messenger.models import ConversationParticipant
@@ -613,6 +613,7 @@ def list_services_unified(request):
         .select_related(
             "service", "service__user", "service__plan", "shared_by", "group", "target_user"
         )
+        .order_by("-service__created_at", "-service_id", "-created_at", "-id")
     )
     received_data = ServiceShareSerializer(
         received, many=True, context={"request": request}
@@ -623,6 +624,7 @@ def list_services_unified(request):
         .select_related(
             "service", "service__user", "service__plan", "shared_by", "group", "target_user"
         )
+        .order_by("-service__created_at", "-service_id", "-created_at", "-id")
     )
     created_data = ServiceShareSerializer(
         created, many=True, context={"request": request}

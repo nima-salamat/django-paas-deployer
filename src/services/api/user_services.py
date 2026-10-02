@@ -85,7 +85,13 @@ class ServiceViewSet(ModelViewSet):
             get_cache_ttl, SERVICE_USER_LIMIT,
         )
         params = {
-            "q": request.query_params.get("q_search") or request.query_params.get("q") or "",
+            "q": (
+                request.query_params.get("q_search")
+                or request.query_params.get("q")
+                or request.query_params.get("search")
+                or ""
+            ),
+            "status": request.query_params.get("status") or "",
             "page": request.query_params.get("page") or "1",
             "page_size": request.query_params.get("page_size") or "",
         }
@@ -94,14 +100,19 @@ class ServiceViewSet(ModelViewSet):
         if cached is not None:
             return Response(cached)
 
-        query = self.get_queryset()
-        q_search_param = params["q"]
+        query = self.get_queryset().order_by("-created_at", "-id")
+        q_search_param = params["q"].strip()
         if q_search_param:
             from django.db.models import Q
             query = query.filter(
                 Q(name__icontains=q_search_param)
                 | Q(user__username__icontains=q_search_param)
             )
+
+        status_param = params["status"].strip().lower()
+        if status_param:
+            valid_statuses = {str(value).lower() for value, _label in SERVICE_STATUS_CHOICES.choices}
+            query = query.filter(status=status_param) if status_param in valid_statuses else query.none()
 
         page = self.paginate_queryset(query)
         serializer = GetServiceSerializer(page if page is not None else query, many=True)

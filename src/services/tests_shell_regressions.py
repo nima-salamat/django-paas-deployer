@@ -28,3 +28,17 @@ def test_frontend_completion_uses_full_prefix_and_editor_parser():
 def test_frontend_run_command_declares_editor_parser_dependency():
     source = FRONT.read_text()
     assert "isInteractiveCommand, parseSingleEditorArgument, refreshDirectory" in source
+
+
+def test_service_list_api_declares_creation_order_before_pagination():
+    source = (ROOT / "api" / "user_services.py").read_text()
+    assert 'order_by("-created_at", "-id")' in source
+    assert 'page = self.paginate_queryset(query)' in source
+    assert source.index('order_by("-created_at", "-id")') < source.index('page = self.paginate_queryset(query)')
+
+
+def test_service_list_api_accepts_search_and_status_filters():
+    source = (ROOT / "api" / "user_services.py").read_text()
+    assert 'request.query_params.get("search")' in source
+    assert 'request.query_params.get("status")' in source
+    assert 'query = query.filter(status=status_param)' in source
