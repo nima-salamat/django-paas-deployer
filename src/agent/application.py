@@ -509,7 +509,7 @@ def _issue_access_credential_locked(agent, *, expires_at=None, metadata=None):
 
 
 @transaction.atomic
-def delete_credential(credential, *, request=None):
+def delete_credential(credential, *, request=None, audit_action="browser.credential.delete"):
     """Permanently remove one Agent credential while preserving the audit trail."""
     locked = (
         AgentCredential.objects.select_for_update()
@@ -524,7 +524,7 @@ def delete_credential(credential, *, request=None):
         agent=agent,
         user=getattr(request, "user", None) if request is not None else None,
         credential=locked,
-        action="browser.credential.delete" if request is not None else "admin.credential.delete",
+        action=audit_action,
         success=True,
         status_code=204,
         resource_type="agent_credential",
