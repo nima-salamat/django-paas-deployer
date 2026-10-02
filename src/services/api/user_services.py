@@ -5,7 +5,7 @@ import tarfile
 import tempfile
 from django.db import transaction
 from django.http import FileResponse
-from ..models import Service, PrivateNetwork, Volume
+from ..models import Service, PrivateNetwork, ServiceNetworkAttachment, Volume
 from deploy.models import Deploy
 from django.shortcuts import get_object_or_404
 from ..serializers import (
@@ -349,7 +349,7 @@ class PrivateNetworkViewSet(ModelViewSet):
     def destroy(self, request, pk=None, *args, **kwargs):
         network = get_object_or_404(self.get_queryset(), pk=pk)
 
-        if Service.objects.filter(network=network).exists():
+        if Service.objects.filter(network=network).exists() or ServiceNetworkAttachment.objects.filter(network=network).exists():
             return Response(
                 {
                     "result": "error",
