@@ -47,6 +47,7 @@ from .common import (
     _service_is_mutable,
     _docker_volume_exists,
     _get_service_for_user_or_share,
+    _purge_service_runtime,
 )
 from .volume_files import _get_docker_volume
 
