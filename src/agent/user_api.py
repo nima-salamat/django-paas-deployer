@@ -65,6 +65,7 @@ def _credential_payload(credential, *, include_token=None):
         "created_at": _dt(credential.created_at),
         "updated_at": _dt(credential.updated_at),
         "active": credential.is_active(),
+        "issued_via": str((credential.metadata or {}).get("issued_via") or ""),
     }
     if include_token is not None:
         payload["token"] = include_token
