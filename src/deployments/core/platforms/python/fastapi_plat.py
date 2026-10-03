@@ -202,6 +202,9 @@ class FastAPIPlatform(PythonPlatform):
         if entry:
             profile["entrypoint"] = str(entry.get("module") or "") + ":" + str(entry.get("callable") or "")
             profile["entrypoint_source"] = entry.get("source") or "source_scan"
+            context = resolve_python_runtime_context(file_index.keys(), entry.get("module"))
+            profile["source_root"] = context["source_root"]
+            profile["runtime_working_directory"] = context["working_directory"]
         else:
             profile["entrypoint"] = None
             profile["entrypoint_source"] = None
