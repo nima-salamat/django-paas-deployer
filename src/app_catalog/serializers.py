@@ -9,7 +9,12 @@ PUBLIC_VISIBILITY = "public"
 
 
 def is_public_definition(definition: CatalogDefinition) -> bool:
-    return str(definition.data.get("visibility") or "internal").strip().lower() == PUBLIC_VISIBILITY
+    source = definition.source.resolve()
+    first_party = (source.parent == (definition.source.parent.parent / "first_party")) if source.parent.parent else False
+    return (
+        str(definition.data.get("visibility") or "internal").strip().lower() == PUBLIC_VISIBILITY
+        and first_party
+    )
 
 
 def _display_component_label(value: str) -> str:
