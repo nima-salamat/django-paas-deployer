@@ -73,7 +73,7 @@ class UserAdmin(BaseUserAdmin):
     date_hierarchy = "date_joined"
     inlines = [ProfileInline, RuleInline]
     filter_horizontal = []
-    readonly_fields = ("uuid", "date_joined", "last_login")
+    readonly_fields = ("uuid", "date_joined", "last_login", "deletion_requested_at")
 
     fieldsets = (
         (
@@ -125,6 +125,13 @@ class UserAdmin(BaseUserAdmin):
             },
         ),
         (
+            "Deletion",
+            {
+                "fields": ("deletion_requested_at",),
+                "classes": ("collapse",),
+            },
+        ),
+        (
             "Important dates",
             {
                 "fields": ("last_login", "date_joined"),
@@ -146,7 +153,6 @@ class UserAdmin(BaseUserAdmin):
                     "is_staff",
                     "is_superuser",
                     "is_active",
-                    "deletion_requested_at",
                 ),
             },
         ),
