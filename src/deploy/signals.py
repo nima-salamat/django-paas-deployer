@@ -78,6 +78,17 @@ def cleanup_deploy_resources(sender, instance: Deploy, **kwargs):
     """
     _cleanup_zip_and_dirs(instance)
     try:
+        from deploy.base_images import release_base_image_leases
+        release_base_image_leases(str(instance.pk), remove_if_unretained=False)
+    except Exception as exc:
+        logger.exception(
+            "Failed releasing base-image leases for Deploy '%s'",
+            instance.name,
+        )
+        raise RuntimeError(
+            f"Failed to release base-image leases for deployment '{instance.name}'."
+        ) from exc
+    try:
         Service.objects.filter(selected_deploy=instance).update(
             selected_deploy=None,
             selected_deploy_at=None,
