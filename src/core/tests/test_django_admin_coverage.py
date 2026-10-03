@@ -45,3 +45,68 @@ class DjangoAdminModelCoverageTests(SimpleTestCase):
         model_admin = admin.site._registry[HomePage]
         self.assertFalse(model_admin.has_add_permission(None))
         self.assertFalse(model_admin.has_delete_permission(None))
+
+    
+    def test_resource_plan_admin_covers_logging_fields(self):
+        from plans.models import Plan
+
+        model_admin = admin.site._registry[Plan]
+        fields = {
+            field
+            for section in model_admin.fieldsets
+            for field in section[1].get("fields", ())
+        }
+        self.assertTrue(
+            {
+                "name",
+                "platform",
+                "plan_type",
+                "max_cpu",
+                "max_ram",
+                "max_storage",
+                "storage_type",
+                "price_per_hour",
+                "log_retention_days",
+                "log_storage_mb",
+                "log_ingest_bytes_per_sec",
+                "persistent_logging",
+                "realtime_logging",
+                "log_quota_behavior",
+            }.issubset(fields)
+        )
+
+    def test_resource_plan_wagtail_uses_product_rule_permissions(self):
+        from plans.wagtail_admin.models import PlansPermissionPolicy
+
+        policy = PlansPermissionPolicy(None)
+
+        def user(*, staff=False, superuser=False, rules=()):
+            return type(
+                "PolicyUser",
+                (),
+                {
+                    "is_authenticated": True,
+                    "is_staff": staff,
+                    "is_superuser": superuser,
+                    "rule": type("Rule", (), {"rules": list(rules)})(),
+                },
+            )()
+
+        viewer = user(staff=True, rules=("plans.view",))
+        manager = user(staff=True, rules=("plans.manage",))
+        outsider = user(staff=True, rules=())
+        superuser = user(staff=True, superuser=True)
+
+        self.assertTrue(policy.user_has_permission(viewer, "view"))
+        self.assertFalse(policy.user_has_permission(viewer, "change"))
+        self.assertFalse(policy.user_has_permission(viewer, "delete"))
+
+        self.assertTrue(policy.user_has_permission(manager, "view"))
+        self.assertTrue(policy.user_has_permission(manager, "add"))
+        self.assertTrue(policy.user_has_permission(manager, "change"))
+        self.assertTrue(policy.user_has_permission(manager, "delete"))
+
+        self.assertFalse(policy.user_has_permission(outsider, "view"))
+        self.assertFalse(policy.user_has_permission(outsider, "add"))
+        self.assertTrue(policy.user_has_permission(superuser, "change"))
+    
