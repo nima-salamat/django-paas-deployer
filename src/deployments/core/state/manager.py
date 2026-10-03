@@ -280,16 +280,28 @@ class StateManager:
                 payload.setdefault("level", "info")
                 payload.setdefault("message", "Deployment completed successfully.")
                 payload.setdefault("progress", 100)
-                DeploymentEventOutbox.objects.create(
-                    deployment_id=deploy_id,
-                    service_id=str(deploy.service_id),
-                    event_id=payload["event_id"],
-                    event_type=str(payload["event_type"])[:128],
-                    stage=str(payload["stage"])[:64],
-                    level=str(payload["level"])[:16],
-                    occurred_at=now,
-                    payload=payload,
-                )
+                # Activation + succeeded state must not depend on the
+                # availability of the event projection table. Use an inner
+                # savepoint so an outbox failure cannot abort the success
+                # transaction.
+                try:
+                    with transaction.atomic():
+                        DeploymentEventOutbox.objects.create(
+                            deployment_id=deploy_id,
+                            service_id=str(deploy.service_id),
+                            event_id=payload["event_id"],
+                            event_type=str(payload["event_type"])[:128],
+                            stage=str(payload["stage"])[:64],
+                            level=str(payload["level"])[:16],
+                            occurred_at=now,
+                            payload=payload,
+                        )
+                except Exception:
+                    logger.exception(
+                        "StateManager: unable to persist success event for deploy %s; "
+                        "keeping activation and succeeded state.",
+                        deploy_id,
+                    )
             return True
 
     @classmethod
@@ -338,16 +350,27 @@ class StateManager:
                 payload.setdefault("service_id", str(deploy.service_id))
                 payload.setdefault("revision_id", str(getattr(deploy, "revision_id", "") or ""))
                 payload.setdefault("task_id", "system")
-                DeploymentEventOutbox.objects.create(
-                    deployment_id=deploy_id,
-                    service_id=str(deploy.service_id),
-                    event_id=payload["event_id"],
-                    event_type=str(payload.get("event_type") or f"deployment.{target}.info"),
-                    stage=str(payload.get("stage") or target)[:64],
-                    level=str(payload.get("level") or "info")[:16],
-                    occurred_at=now,
-                    payload=payload,
-                )
+                # Lifecycle state is authoritative; the event outbox is a
+                # projection/journal. Never roll back a valid terminal state
+                # merely because the journal database/table is unavailable.
+                try:
+                    with transaction.atomic():
+                        DeploymentEventOutbox.objects.create(
+                            deployment_id=deploy_id,
+                            service_id=str(deploy.service_id),
+                            event_id=payload["event_id"],
+                            event_type=str(payload.get("event_type") or f"deployment.{target}.info"),
+                            stage=str(payload.get("stage") or target)[:64],
+                            level=str(payload.get("level") or "info")[:16],
+                            occurred_at=now,
+                            payload=payload,
+                        )
+                except Exception:
+                    logger.exception(
+                        "StateManager: unable to persist terminal event for deploy %s; "
+                        "keeping committed lifecycle state.",
+                        deploy_id,
+                    )
             return True
 
 
