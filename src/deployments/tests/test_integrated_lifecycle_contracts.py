@@ -56,7 +56,15 @@ class IntegratedLifecycleContractTests(unittest.TestCase):
         self.assertIn("active_revision_id", api)
         self.assertIn("activation_proves_success", api)
         self.assertIn("_repair_completed_deploy_state(deploy_item, service_item)", api)
+        self.assertIn("Unable to read deployment completion outbox", api)
         self.assertIn("Deployment completion state reconciled before active selection.", api)
+
+    def test_terminal_state_commit_does_not_depend_on_outbox_availability(self):
+        manager = self.read("deployments/core/state/manager.py")
+        self.assertIn("keeping committed lifecycle state.", manager)
+        self.assertIn("keeping activation and succeeded state.", manager)
+        self.assertIn("with transaction.atomic():", manager)
+        self.assertIn("except Exception:", manager)
 
     def test_catalog_duplicate_ids_are_rejected(self):
         catalog = self.read("app_catalog/catalog.py")
