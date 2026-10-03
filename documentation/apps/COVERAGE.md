@@ -304,6 +304,7 @@ Every production source surface must be mapped to its owning canonical document 
 - `src/logs/apps.py` → [logs](./logs/README.md)
 - `src/logs/exceptions.py` → [logs](./logs/README.md)
 - `src/logs/ingestion.py` → [logs](./logs/README.md)
+- `src/logs/admin.py` → [logs](./logs/README.md)
 - `src/logs/models.py` → [logs](./logs/README.md)
 - `src/logs/policy.py` → [logs](./logs/README.md)
 - `src/logs/query.py` → [logs](./logs/README.md)
