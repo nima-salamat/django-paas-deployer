@@ -167,3 +167,22 @@ def _patched_admin_get_urls():
 from django.contrib import admin as _admin_mod
 _ADMIN_GET_URLS_ORIG = _admin_mod.site.get_urls
 _admin_mod.site.get_urls = _patched_admin_get_urls
+
+from .models import CoreSettings
+from .django_admin import ProjectModelAdmin
+
+
+@admin.register(CoreSettings)
+class CoreSettingsAdmin(ProjectModelAdmin):
+    list_display = ("id", "base_images_enabled", "base_images_auto_build", "build_parallelism", "deploy_timeout_minutes", "monitor_enabled")
+    readonly_fields = ("id",)
+    fieldsets = (
+        ("Base images", {"fields": ("base_images_enabled", "base_images_auto_build", "base_images_auto_register_existing", "base_images_retain_after_deploy", "base_image_build_timeout_minutes")}),
+        ("Build resources", {"fields": ("build_resource_mode", "build_pids_limit", "build_shm_mb", "build_parallelism", "build_wait_minutes", "build_max_cpu", "build_max_ram_mb")}),
+        ("Storage", {"fields": ("volume_usage_warning_percent", "volume_release_retention_days")}),
+        ("Deployment", {"fields": ("deploy_timeout_minutes", "queued_timeout_minutes", "stop_timeout_minutes", "unexpected_death_grace_seconds")}),
+        ("Monitoring", {"fields": ("monitor_enabled", "monitor_interval_seconds", "monitor_batch_size", "monitor_recovery_enabled", "monitor_max_recovery_attempts", "monitor_stale_base_build_minutes", "monitor_stale_worker_seconds", "monitor_scheduler_lock_seconds")}),
+        ("Build cache", {"fields": ("build_cache_enabled", "build_cache_global_limit_mb", "build_cache_user_quota_mb", "build_cache_service_quota_mb", "build_cache_retention_days", "build_cache_keep_successful_deployments", "build_cache_cleanup_target_percent", "build_cache_batch_size")}),
+        ("Mirrors", {"fields": ("mirror_docker", "mirror_python", "mirror_npm", "mirror_composer", "mirror_apt", "mirror_go")}),
+        ("URLs / shell", {"fields": ("auto_public_url_handling", "default_public_url_prefix", "shell_idle_timeout_minutes")}),
+    )
