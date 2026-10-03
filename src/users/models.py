@@ -68,6 +68,13 @@ class User(AbstractBaseUser, PermissionsMixin):
         default=False,
         help_text=_("Designates whether the user can log into this admin site."),
     )
+    deletion_requested_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        editable=False,
+        db_index=True,
+        help_text=_("Account deletion has been requested and is awaiting runtime convergence."),
+    )
     is_active = models.BooleanField(
         _("active"),
         default=True,
