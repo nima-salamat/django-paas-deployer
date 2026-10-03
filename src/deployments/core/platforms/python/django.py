@@ -8,6 +8,7 @@ from typing import Any, Optional
 from ..base.platform import DetectionResult
 from ..registry import PlatformRegistry
 from .base_python import PythonPlatform
+from ...entrypoints import resolve_python_runtime_context
 
 
 @PlatformRegistry.register
@@ -46,9 +47,20 @@ class DjangoPlatform(PythonPlatform):
 
         entry = self._resolve_entrypoint(file_index)
         if entry:
-            result["entrypoint"] = entry["module"]
+            context = resolve_python_runtime_context(file_index.keys(), entry["module"])
+            runtime_module = context["module"]
+            result["entrypoint"] = runtime_module
             result["server_type"] = entry["type"]
-            result["start_command"] = self._build_start_cmd(entry)
+            result["working_directory"] = context["working_directory"]
+            result["start_command"] = self._build_start_cmd(
+                {**entry, "module": runtime_module, "source_root": context["source_root"]}
+            )
+            result["extra"] = {
+                **(result.get("extra") or {}),
+                "source_root": context["source_root"],
+                "runtime_module": runtime_module,
+                "runtime_working_directory": context["working_directory"],
+            }
 
         # settings module
         settings_mod = self._settings_module(file_index)
@@ -121,14 +133,17 @@ class DjangoPlatform(PythonPlatform):
 
     def _build_start_cmd(self, entry: dict) -> str:
         module = entry["module"]
+        source_root = str(entry.get("source_root") or "")
         if entry["type"] == "asgi":
+            app_dir_arg = f" --app-dir /app/{source_root}" if source_root else ""
             return (
                 f"uvicorn {module}:application "
-                f"--host 0.0.0.0 --port 8000 --workers 2"
+                f"--host 0.0.0.0 --port 8000 --workers 2{app_dir_arg}"
             )
+        chdir_arg = f" --chdir /app/{source_root}" if source_root else ""
         return (
             f"gunicorn {module}:application "
-            f"--bind 0.0.0.0:8000 --workers 3 --timeout 60"
+            f"--bind 0.0.0.0:8000 --workers 3 --timeout 60{chdir_arg}"
         )
 
     def _static_media(
