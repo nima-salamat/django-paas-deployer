@@ -1,23 +1,79 @@
 # documentation: https://grafana.com
 # slogan: Grafana is the open source analytics & monitoring solution for every database.
 # category: monitoring
-# tags: grafana,analytics,monitoring,dashboard
+# tags: grafana, analytics, monitoring, dashboard
 # logo: svgs/grafana.svg
 # port: 3000
 
+x-passdeployer:
+  id: grafana
+  name: Grafana
+  version: "13.2.3"
+  software_version: "13.2.3"
+  definition_version: "1.0"
+  visibility: public
+  featured: true
+  features:
+    - Managed Grafana application
+    - Managed PostgreSQL database
+    - Persistent dashboards and configuration
+    - HTTPS platform address
+  requirements:
+    - Choose an admin password for Grafana
+    - Use the platform-provided HTTPS address
+  outputs:
+    - url
+  managed_components:
+    - label: Grafana
+      role: application
+    - label: PostgreSQL
+      role: database
+  fields:
+    - id: domain
+      label: Platform address
+      type: domain
+      required: false
+      user_editable: false
+    - id: admin_password
+      label: Grafana admin password
+      type: secret
+      secret: true
+      required: true
+      user_editable: true
+      ui:
+        group: account
+        order: 10
+        placeholder: Enter the password you will use to sign in to Grafana
+    - id: service_user_postgres
+      label: PostgreSQL database user
+      type: string
+      default: app
+      user_editable: false
+    - id: service_password_postgres
+      label: PostgreSQL database password
+      type: secret
+      secret: true
+      generate: password:32
+      user_editable: false
+    - id: postgres_db
+      label: PostgreSQL database name
+      type: string
+      default: grafana
+      user_editable: false
+
 services:
   grafana:
-    image: grafana/grafana-oss
+    image: grafana/grafana-oss:13.2.3
     environment:
       - SERVICE_URL_GRAFANA_3000
-      - GF_SERVER_ROOT_URL=${SERVICE_URL_GRAFANA}
-      - GF_SERVER_DOMAIN=${SERVICE_FQDN_GRAFANA}
-      - GF_SECURITY_ADMIN_PASSWORD=${SERVICE_PASSWORD_GRAFANA}
+      - GF_SERVER_ROOT_URL=\${SERVICE_URL_GRAFANA}
+      - GF_SERVER_DOMAIN=\${SERVICE_FQDN_GRAFANA}
+      - GF_SECURITY_ADMIN_PASSWORD=\${secret.admin_password}
       - GF_DATABASE_TYPE=postgres
       - GF_DATABASE_HOST=postgresql
       - GF_DATABASE_USER=$SERVICE_USER_POSTGRES
       - GF_DATABASE_PASSWORD=$SERVICE_PASSWORD_POSTGRES
-      - GF_DATABASE_NAME=${POSTGRES_DB:-grafana}
+      - GF_DATABASE_NAME=\${POSTGRES_DB:-grafana}
     volumes:
       - grafana-data:/var/lib/grafana
     healthcheck:
@@ -28,15 +84,12 @@ services:
     depends_on:
       - postgresql
   postgresql:
-    image: postgres:16-alpine
+    image: postgres:16.15
     volumes:
       - postgresql-data:/var/lib/postgresql/data
     environment:
       - POSTGRES_USER=$SERVICE_USER_POSTGRES
       - POSTGRES_PASSWORD=$SERVICE_PASSWORD_POSTGRES
-      - POSTGRES_DB=${POSTGRES_DB:-grafana}
+      - POSTGRES_DB=\${POSTGRES_DB:-grafana}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 5s
-      timeout: 20s
-      retries: 10
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}", ""]
