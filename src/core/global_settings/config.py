@@ -11,7 +11,7 @@ DBS = ["mysql", "postgresql", "mariadb", "mongodb", "redis", "oracle"]
 
 PLATFORM_CHOICES = [
     ("php", "PHP"), ("laravel", "Laravel"), ("python", "Python"), ("django", "Django"),
-    ("nextjs", "Next.js"), ("nodejs", "Node.js"), ("flask", "Flask"),
+    ("nextjs", "Next.js"), ("nodejs", "Node.js"), ("flask", "Flask"), ("fastapi", "FastAPI"),
     ("docker", "Docker"), ("go", "Go"), ("statichtmlcss", "Static HTML/CSS"),
     ("vuejs", "Vue.js"), ("angular", "Angular"), ("react", "React"),
     ("dotnet", ".NET"), ("mysql", "MySQL"), ("postgresql", "PostgreSQL"),
@@ -22,7 +22,7 @@ PLATFORM_CHOICES = [
 # Fallback when DB settings are empty
 default_ports = {
     "php": 80, "laravel": 80, "python": None, "django": 8000, "nextjs": 3000, "nodejs": 3000,
-    "flask": 5000, "docker": None, "go": None, "statichtmlcss": 80,
+    "flask": 5000, "fastapi": 8000, "docker": None, "go": None, "statichtmlcss": 80,
     "vuejs": 80, "angular": 80, "react": 80, "dotnet": 5000,
     "mysql": 3306, "postgresql": 5432, "mariadb": 3306, "mongodb": 27017,
     "redis": 6379, "oracle": 1521,
