@@ -51,16 +51,16 @@ def ticket_message_saved(sender, instance, created, **kwargs):
         logger.exception("ticket_message_saved broadcast failed")
 
 
-def _delete_file_quietly(path: str) -> None:
-    """Remove a single media file if it exists; never raise."""
-    if not path:
+def _delete_file_quietly(file_field) -> None:
+    """Remove a Django storage object without making cleanup fatal."""
+    if not file_field:
         return
     try:
-        if os.path.isfile(path):
-            os.remove(path)
-            logger.debug("Deleted attachment file: %s", path)
-    except OSError as exc:
-        logger.warning("Could not delete file %s: %s", path, exc)
+        name = getattr(file_field, "name", "") or ""
+        file_field.delete(save=False)
+        logger.debug("Deleted attachment file: %s", name)
+    except Exception as exc:
+        logger.warning("Could not delete attachment file: %s", exc)
 
 
 def _ticket_media_dir(ticket_id) -> str:
@@ -76,7 +76,7 @@ def ticket_attachment_pre_delete(sender, instance, **kwargs):
     """Delete the physical file when an attachment row is removed."""
     try:
         if instance.file and getattr(instance.file, "path", None):
-            _delete_file_quietly(instance.file.path)
+            _delete_file_quietly(instance.file)
     except Exception:
         logger.exception(
             "ticket_attachment_pre_delete failed for attachment %s",
@@ -97,7 +97,7 @@ def ticket_pre_delete(sender, instance, **kwargs):
         for att in attachments:
             try:
                 if att.file and getattr(att.file, "path", None):
-                    _delete_file_quietly(att.file.path)
+                    _delete_file_quietly(att.file)
             except Exception:
                 logger.exception("Failed deleting file for attachment %s", att.pk)
 
