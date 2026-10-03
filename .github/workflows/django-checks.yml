@@ -80,6 +80,33 @@ jobs:
           DJANGO_FULL_TESTS: "1"
         run: pytest -q src/core/tests/test_backend_contract_matrix.py src/core/tests/test_cache_contracts.py
 
+      - name: Domain model API serializer permission cache tests
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings
+          DJANGO_FULL_TESTS: "1"
+        run: >-
+          pytest -q
+          src/plans/tests/test_models_serializers_api.py
+          src/users/tests/test_models_serializers_api.py
+          src/auth_users/tests/test_models_admin_api.py
+          src/auth_users/tests/test_token_serializers_contracts.py
+          src/tickets/tests/test_models_serializers_permissions.py
+          src/services/tests/test_model_serializer_cache_contracts.py
+          src/deploy/tests/test_model_serializer_contracts.py
+          src/app_catalog/tests/test_models_serializer_contracts.py
+          src/docs/tests/test_model_api_contracts.py
+          src/custom_emails/tests/test_api_serializers.py
+          src/logs/tests/test_health_api.py
+          src/messenger/tests/test_api_permission_boundary.py
+          src/core/tests/test_system_setting_contracts.py
+          src/cms/tests/test_models.py
+
+      - name: Full Django non-integration suite
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings
+          DJANGO_FULL_TESTS: "1"
+        run: pytest -q -m "not deployment_integration"
+
       - name: Regression tests
         run: pytest -q core/tests/test_wagtail_cache_admin.py deployments/tests/test_deploy_file_upload_regressions.py src/services/tests_shell_backend_regressions.py
       - name: Agent application tests
