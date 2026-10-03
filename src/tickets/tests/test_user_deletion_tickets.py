@@ -1,5 +1,6 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from django.test import TestCase, override_settings
 from django.core.files.uploadedfile import SimpleUploadedFile
