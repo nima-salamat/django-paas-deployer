@@ -1,13 +1,40 @@
-# documentation: https://github.com/louislam/uptime-kuma?tab=readme-ov-file
+# documentation: https://github.com/louislam/uptime-kuma
 # slogan: Uptime Kuma is a monitoring tool for tracking the status and performance of your applications in real-time.
 # category: monitoring
 # tags: monitoring, status, performance, web, services, applications, real-time
 # logo: svgs/uptime-kuma.svg
 # port: 3001
 
+x-passdeployer:
+  id: uptime-kuma
+  name: Uptime Kuma
+  version: "2.5.5"
+  software_version: "2.5.5"
+  definition_version: "1.0"
+  visibility: public
+  featured: true
+  features:
+    - Self-hosted uptime monitoring
+    - Persistent monitoring data
+    - HTTPS platform address
+  requirements:
+    - Persistent storage must remain on local POSIX-compatible storage
+    - Configure your monitored endpoints after deployment
+  outputs:
+    - url
+  managed_components:
+    - label: Uptime Kuma
+      role: application
+  fields:
+    - id: domain
+      label: Platform address
+      type: domain
+      required: false
+      user_editable: false
+
 services:
   uptime-kuma:
-    image: louislam/uptime-kuma:2
+    image: louislam/uptime-kuma:2.5.5
     environment:
       - SERVICE_URL_UPTIMEKUMA_3001
     volumes:
