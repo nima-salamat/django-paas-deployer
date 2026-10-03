@@ -1415,132 +1415,19 @@ def _lock_service_for_user(service_id, user):
     return svc
 
 
-def _repair_completed_deploy_state(deploy_item, service_item=None) -> bool:
-    """Reconcile a deployment whose durable completion proof exists but row status is stale."""
-    from deployments.core.state.manager import StateManager
-    from .models import DeploymentEventOutbox
+def _lock_service_for_user(service_id, user):
+    """Lock service row if user is owner or has any active share (view)."""
+    from services.api.sharing import user_can_access_service
+    svc = Service.objects.select_for_update().filter(pk=service_id).first()
+    if svc is None:
+        raise Service.DoesNotExist
+    if str(svc.user_id) == str(user.id):
+        return svc
+    allowed, _ = user_can_access_service(svc, user, action="can_view")
+    if not allowed:
+        raise Service.DoesNotExist
+    return svc
 
-    status_value = str(getattr(deploy_item, "status", "") or "").strip().lower()
-    if status_value == DeploymentStatusChoices.SUCCEEDED:
-        return True
-
-    # The outbox is the authoritative durable lifecycle journal. A completed
-    # event is emitted only after the replacement has passed readiness and the
-    # activation boundary has succeeded. Prefer this proof over UI/polling state.
-    try:
-        completion_event = (
-            DeploymentEventOutbox.objects
-            .filter(deployment_id=deploy_item.pk, stage__in=("deployment_completed", "finished"))
-            .order_by("-occurred_at", "-id")
-            .values("stage", "level", "payload")
-            .first()
-        )
-    except Exception:
-        # Selection must remain available even while the optional durable
-        # event projection is unavailable (for example during migration
-        # recovery). Row/activation proof below can still establish safety.
-        logger.exception(
-            "Unable to read deployment completion outbox for deploy %s.",
-            deploy_item.pk,
-        )
-        completion_event = None
-    completion_payload = dict((completion_event or {}).get("payload") or {})
-    completion_event_type = str(completion_payload.get("event_type") or "").lower()
-    completion_message = str(completion_payload.get("message") or "").lower()
-    outbox_proves_success = bool(
-        completion_event
-        and str((completion_event or {}).get("level") or "").lower() == "info"
-        and (
-            str((completion_event or {}).get("stage") or "").lower() == "deployment_completed"
-            or "deployment.finished" in completion_event_type
-            or "completed successfully" in completion_message
-        )
-    )
-
-    stage = str(getattr(deploy_item, "stage", "") or "").strip().lower()
-    try:
-        progress = int(getattr(deploy_item, "progress", 0) or 0)
-    except (TypeError, ValueError):
-        progress = 0
-    row_proves_success = (
-        stage in {"deployment_completed", "finished"}
-        and progress >= 100
-        and str(getattr(deploy_item, "health_status", "") or "").strip().lower() == "healthy"
-        and str(getattr(deploy_item, "container_status", "") or "").strip().lower() == "running"
-        and str(getattr(deploy_item, "image_status", "") or "").strip().lower() in {"built", "ready"}
-        and str(getattr(deploy_item, "network_status", "") or "").strip().lower() == "ready"
-    )
-
-    # The active revision pointer is the runtime authority. It is written by
-    # activate_revision_locked() only after the deployment has passed
-    # readiness/cleanup and the activation boundary. Therefore a stale
-    # Deploy.status can be safely reconciled when this exact revision is
-    # already authoritative for the service.
-    activation_proves_success = bool(
-        service_item is not None
-        and getattr(deploy_item, "revision_id", None)
-        and str(getattr(service_item, "active_revision_id", "") or "")
-        == str(deploy_item.revision_id)
-        and not bool(getattr(deploy_item, "cancel_requested", False))
-    )
-
-    if not (outbox_proves_success or row_proves_success or activation_proves_success):
-        return False
-
-    now = timezone.now()
-    proof = (
-        "activation_revision"
-        if activation_proves_success
-        else "outbox"
-        if outbox_proves_success
-        else "row_markers"
-    )
-    event_payload = {
-        "event_id": str(uuid4()),
-        "trace_id": str(deploy_item.pk),
-        "deployment_id": str(deploy_item.pk),
-        "service_id": str(deploy_item.service_id),
-        "revision_id": str(getattr(deploy_item, "revision_id", "") or ""),
-        "task_id": "active-deploy-repair",
-        "event_type": "deployment.finished.reconciled",
-        "stage": "deployment_completed",
-        "level": "info",
-        "message": "Deployment completion state reconciled before active selection.",
-        "progress": 100,
-        "details": {
-            "controlled_by": "set_deploy_state_repair",
-            "previous_status": status_value,
-            "proof": proof,
-        },
-    }
-    update_fields = {
-        "stage": "deployment_completed",
-        "progress": 100,
-        "completed_at": getattr(deploy_item, "completed_at", None) or now,
-        "status_message": getattr(deploy_item, "status_message", "") or "Deployment completed successfully.",
-        "error_message": "",
-        "health_status": "healthy",
-        "container_status": "running",
-        "image_status": "built",
-        "network_status": "ready",
-    }
-    if activation_proves_success:
-        committed = StateManager.reconcile_deploy_success_from_authority(
-            deploy_item.pk,
-            deploy_item.revision_id,
-            update_fields=update_fields,
-            event_payload=event_payload,
-        )
-    else:
-        committed = StateManager.transition_deploy_system_terminal(
-            deploy_item.pk,
-            DeploymentStatusChoices.SUCCEEDED,
-            update_fields=update_fields,
-            event_payload=event_payload,
-        )
-    if committed:
-        deploy_item.refresh_from_db()
-    return bool(committed or str(getattr(deploy_item, "status", "")).lower() == DeploymentStatusChoices.SUCCEEDED)
 
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
@@ -1574,39 +1461,6 @@ def set_deploy_apiview(request):
 
             deploy_item = Deploy.objects.select_related("service").get(id=deploy_id)
 
-            # The runtime writes deployment_completed only after readiness and
-            # activation. Reconcile a stale Deploy row before rejecting selection.
-            if deploy_item.status != DeploymentStatusChoices.SUCCEEDED:
-                _repair_completed_deploy_state(deploy_item, service_item)
-                deploy_item.refresh_from_db(
-                    fields=[
-                        "status",
-                        "stage",
-                        "progress",
-                        "status_message",
-                        "error_message",
-                        "revision_id",
-                        "cancel_requested",
-                    ]
-                )
-
-            if deploy_item.status != DeploymentStatusChoices.SUCCEEDED:
-                return Response(
-                    {
-                        "result": "error",
-                        "detail": _("Only a successfully completed deployment can be selected as active."),
-                        "code": "deploy_not_ready",
-                        "status": deploy_item.status,
-                        "stage": deploy_item.stage,
-                        "progress": deploy_item.progress,
-                        "status_message": deploy_item.status_message,
-                        "error_message": deploy_item.error_message,
-                        "deploy_revision_id": str(deploy_item.revision_id or ""),
-                        "active_revision_id": str(service_item.active_revision_id or ""),
-                    },
-                    status=status.HTTP_409_CONFLICT,
-                )
-
             if str(deploy_item.service_id) != str(service_item.id):
                 return Response(
                     {
@@ -1616,7 +1470,11 @@ def set_deploy_apiview(request):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # Owner / staff always allowed; share recipients need can_deploy_select.
+            # Selection is a configuration/activation operation, not a deployment
+            # result check. A deployment row may represent an older, failed, partial,
+            # or otherwise non-succeeded attempt and still carry the revision that the
+            # operator wants to make authoritative. Validate ownership and revision
+            # integrity here; do not gate selection on Deploy.status.
             is_owner = str(service_item.user_id) == str(request.user.id)
             is_staff = bool(
                 getattr(request.user, "is_staff", False)
@@ -1636,6 +1494,8 @@ def set_deploy_apiview(request):
                     )
 
             # Revision is runtime authority; selected_deploy is compatibility state.
+            # ensure_revision_for_deploy creates a snapshot for legacy deploy rows
+            # that pre-date the revision model, without consulting deployment status.
             deploy_item = ensure_revision_for_deploy(deploy_item)
             from services.revisioning import activate_revision_locked
             activate_revision_locked(service_item, deploy_item.revision_id)
