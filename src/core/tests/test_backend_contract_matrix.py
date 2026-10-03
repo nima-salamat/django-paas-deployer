@@ -203,3 +203,65 @@ def test_api_source_files_can_be_parsed_as_python():
             except SyntaxError as exc:
                 failures.append(f"{path}: {exc}")
     assert failures == [], "\n".join(failures)
+
+
+def test_every_project_model_viewset_declares_queryset_and_serializer_contract():
+    import config.urls as root_urls
+    from rest_framework.viewsets import ModelViewSet
+
+    failures = []
+    seen = set()
+
+    for route, pattern in _walk_patterns(root_urls.urlpatterns):
+        if not _is_project_api_route(route):
+            continue
+        _callback, cls = _drf_callback(pattern)
+        if cls is None or cls in seen:
+            continue
+        seen.add(cls)
+
+        try:
+            is_model_viewset = issubclass(cls, ModelViewSet)
+        except TypeError:
+            is_model_viewset = False
+        if not is_model_viewset:
+            continue
+
+        serializer_class = getattr(cls, "serializer_class", None)
+        has_serializer_override = getattr(cls, "get_serializer_class", None) is not ModelViewSet.get_serializer_class
+        queryset = getattr(cls, "queryset", None)
+        has_queryset_override = getattr(cls, "get_queryset", None) is not ModelViewSet.get_queryset
+
+        if serializer_class is None and not has_serializer_override:
+            failures.append(f"{cls.__name__}: missing serializer_class/get_serializer_class")
+        if queryset is None and not has_queryset_override:
+            failures.append(f"{cls.__name__}: missing queryset/get_queryset")
+
+    assert failures == [], "\n".join(sorted(failures))
+
+
+def test_registered_permission_codes_used_by_admin_surfaces_are_known():
+    import re
+    from users.admin_apis import KNOWN_PERMISSIONS
+
+    known = set(KNOWN_PERMISSIONS)
+    failures = []
+    for path in SOURCE_ROOT.rglob("*.py"):
+        if not any(
+            marker in str(path)
+            for marker in (
+                "/admin_apis.py",
+                "/admin_services.py",
+                "/admin_login_settings.py",
+                "/admin_tables_api.py",
+                "/admin_permissions.py",
+            )
+        ):
+            continue
+
+        source = path.read_text(encoding="utf-8")
+        for code in sorted(set(re.findall(r"['\"]([a-z_]+\.(?:view|manage|create|delete|write|read|apply|start|stop|restart|purge))['\"]", source))):
+            if code not in known:
+                failures.append(f"{path}: unknown permission code {code}")
+
+    assert failures == [], "\n".join(failures)
