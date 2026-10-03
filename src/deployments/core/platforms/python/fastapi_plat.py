@@ -87,18 +87,15 @@ class FastAPIPlatform(PythonPlatform):
 
     def validate(self, config: Any) -> list[str]:
         errors = list(super().validate(config) or [])
-        has_override = bool(
-            str(getattr(config, "entry_point", "") or "").strip()
+        has_target = bool(
+            str(getattr(config, "entrypoint", "") or "").strip()
             or str(getattr(config, "start_command", "") or "").strip()
         )
-        if not has_override:
-            project_cfg = getattr(config, "project_config", None)
-            detected = getattr(project_cfg, "entrypoint", None) if project_cfg else None
-            if not detected:
-                errors.append(
-                    "FastAPI entrypoint could not be detected. "
-                    "Add a FastAPI app such as 'app = FastAPI()' or set entry_point/start_command explicitly."
-                )
+        if not has_target:
+            errors.append(
+                "FastAPI entrypoint could not be detected. "
+                "Add a FastAPI app such as 'app = FastAPI()' or set entry_point/start_command explicitly."
+            )
         return errors
 
     def _find_app(self, file_index: dict[str, str]) -> Optional[dict[str, str]]:
