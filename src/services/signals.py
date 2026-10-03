@@ -18,19 +18,19 @@ logger = logging.getLogger(__name__)
 
 def _cancel_active_deployments_for_service(service: Service) -> None:
     """Request cancellation for every non-terminal deployment owned by a Service."""
-    from deploy.models import DeploymentStatusChoices
-
+    from deploy.models import Deploy, DeploymentStatusChoices
     from deployments.application.cancel import CancelDeploymentUseCase
     from deployments.infrastructure.django_cancellation import DjangoDeploymentCancellationGateway
 
     gateway = DjangoDeploymentCancellationGateway()
     deploys = list(
-        service.deployments.filter(
+        Deploy.objects.filter(
+            service_id=service.pk,
             status__in=(
                 DeploymentStatusChoices.PENDING,
                 DeploymentStatusChoices.RUNNING,
                 DeploymentStatusChoices.ROLLING_BACK,
-            )
+            ),
         ).only("pk", "status", "cancel_requested")
     )
     for deploy in deploys:
