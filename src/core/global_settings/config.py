@@ -204,10 +204,22 @@ ENV PYTHONDONTWRITEBYTECODE=1 \\
 
 WORKDIR /app
 COPY requirements.txt /app/
-RUN pip install -i {MIRROR_PYTHON} --trusted-host $(echo {MIRROR_PYTHON} | sed -E 's|https?://([^/]+).*|\\1|') \\
-        --no-cache-dir --upgrade pip \\
-    && pip install -i {MIRROR_PYTHON} --no-cache-dir -r requirements.txt \\
-    && pip install -i {MIRROR_PYTHON} --no-cache-dir gunicorn uvicorn[standard]
+RUN set -eux; \\
+    if ! pip install -i {MIRROR_PYTHON} --trusted-host $(echo {MIRROR_PYTHON} | sed -E 's|https?://([^/]+).*|\\1|') \\
+        --no-cache-dir --retries 2 --timeout {PIP_DEFAULT_TIMEOUT} --upgrade pip; then \\
+        echo "PassDeployer: configured PyPI mirror failed; retrying pip from https://pypi.org/simple" >&2; \\
+        pip install -i https://pypi.org/simple --no-cache-dir --retries 2 --timeout {PIP_DEFAULT_TIMEOUT} --upgrade pip; \\
+    fi; \\
+    if ! pip install -i {MIRROR_PYTHON} --trusted-host $(echo {MIRROR_PYTHON} | sed -E 's|https?://([^/]+).*|\\1|') \\
+        --no-cache-dir --retries 2 --timeout {PIP_DEFAULT_TIMEOUT} -r requirements.txt; then \\
+        echo "PassDeployer: configured PyPI mirror failed for requirements.txt; retrying from https://pypi.org/simple" >&2; \\
+        pip install -i https://pypi.org/simple --no-cache-dir --retries 2 --timeout {PIP_DEFAULT_TIMEOUT} -r requirements.txt; \\
+    fi; \\
+    if ! pip install -i {MIRROR_PYTHON} --trusted-host $(echo {MIRROR_PYTHON} | sed -E 's|https?://([^/]+).*|\\1|') \\
+        --no-cache-dir --retries 2 --timeout {PIP_DEFAULT_TIMEOUT} gunicorn uvicorn[standard]; then \\
+        echo "PassDeployer: configured PyPI mirror failed for runtime packages; retrying from https://pypi.org/simple" >&2; \\
+        pip install -i https://pypi.org/simple --no-cache-dir --retries 2 --timeout {PIP_DEFAULT_TIMEOUT} gunicorn uvicorn[standard]; \\
+    fi
 COPY . /app
 EXPOSE {port}
 CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8000", "--workers", "1", "--timeout", "60"]
@@ -234,9 +246,19 @@ RUN rm -f /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list \\
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /app/
-RUN pip install -i {MIRROR_PYTHON} --no-cache-dir --upgrade pip "setuptools<81" wheel \\
-    && pip install -i {MIRROR_PYTHON} --no-cache-dir -r requirements.txt \\
-    && pip install -i {MIRROR_PYTHON} --no-cache-dir gunicorn uvicorn[standard]
+RUN set -eux; \\
+    if ! pip install -i {MIRROR_PYTHON} --no-cache-dir --retries 2 --timeout {PIP_DEFAULT_TIMEOUT} --upgrade pip "setuptools<81" wheel; then \\
+        echo "PassDeployer: configured PyPI mirror failed; retrying pip from https://pypi.org/simple" >&2; \\
+        pip install -i https://pypi.org/simple --no-cache-dir --retries 2 --timeout {PIP_DEFAULT_TIMEOUT} --upgrade pip "setuptools<81" wheel; \\
+    fi; \\
+    if ! pip install -i {MIRROR_PYTHON} --no-cache-dir --retries 2 --timeout {PIP_DEFAULT_TIMEOUT} -r requirements.txt; then \\
+        echo "PassDeployer: configured PyPI mirror failed for requirements.txt; retrying from https://pypi.org/simple" >&2; \\
+        pip install -i https://pypi.org/simple --no-cache-dir --retries 2 --timeout {PIP_DEFAULT_TIMEOUT} -r requirements.txt; \\
+    fi; \\
+    if ! pip install -i {MIRROR_PYTHON} --no-cache-dir --retries 2 --timeout {PIP_DEFAULT_TIMEOUT} gunicorn uvicorn[standard]; then \\
+        echo "PassDeployer: configured PyPI mirror failed for runtime packages; retrying from https://pypi.org/simple" >&2; \\
+        pip install -i https://pypi.org/simple --no-cache-dir --retries 2 --timeout {PIP_DEFAULT_TIMEOUT} gunicorn uvicorn[standard]; \\
+    fi
 COPY . /app
 EXPOSE {port}
 CMD ["gunicorn", "{module}:application", "--bind", "0.0.0.0:8000", "--workers", "1", "--timeout", "60"]
@@ -253,9 +275,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \\
 
 WORKDIR /app
 COPY requirements.txt /app/
-RUN pip install -i {MIRROR_PYTHON} --no-cache-dir --upgrade pip \\
-    && pip install -i {MIRROR_PYTHON} --no-cache-dir -r requirements.txt \\
-    && pip install -i {MIRROR_PYTHON} --no-cache-dir gunicorn uvicorn[standard]
+RUN set -eux; \\
+    if ! pip install -i {MIRROR_PYTHON} --no-cache-dir --retries 2 --timeout {PIP_DEFAULT_TIMEOUT} --upgrade pip; then \\
+        echo "PassDeployer: configured PyPI mirror failed; retrying pip from https://pypi.org/simple" >&2; \\
+        pip install -i https://pypi.org/simple --no-cache-dir --retries 2 --timeout {PIP_DEFAULT_TIMEOUT} --upgrade pip; \\
+    fi; \\
+    if ! pip install -i {MIRROR_PYTHON} --no-cache-dir --retries 2 --timeout {PIP_DEFAULT_TIMEOUT} -r requirements.txt; then \\
+        echo "PassDeployer: configured PyPI mirror failed for requirements.txt; retrying from https://pypi.org/simple" >&2; \\
+        pip install -i https://pypi.org/simple --no-cache-dir --retries 2 --timeout {PIP_DEFAULT_TIMEOUT} -r requirements.txt; \\
+    fi; \\
+    if ! pip install -i {MIRROR_PYTHON} --no-cache-dir --retries 2 --timeout {PIP_DEFAULT_TIMEOUT} gunicorn uvicorn[standard]; then \\
+        echo "PassDeployer: configured PyPI mirror failed for runtime packages; retrying from https://pypi.org/simple" >&2; \\
+        pip install -i https://pypi.org/simple --no-cache-dir --retries 2 --timeout {PIP_DEFAULT_TIMEOUT} gunicorn uvicorn[standard]; \\
+    fi
 COPY . /app
 EXPOSE {port}
 CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8000", "--workers", "1", "--timeout", "60"]
