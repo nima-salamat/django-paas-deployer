@@ -3190,7 +3190,7 @@ class DockerfileGenerator:
             rendered = _render_django(dockerfile_template, tar_stream, config, logger)
         elif platform in ("flask", "python", "fastapi"):
             rendered = _render_flask_or_python(
-                platform if platform != "fastapi" else "python",
+                platform,
                 dockerfile_template, tar_stream, config, logger,
             )
         elif platform in (
