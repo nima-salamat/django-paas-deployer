@@ -67,3 +67,12 @@ class UserDeletionTests(TestCase):
         with patch("services.lifecycle.mark_deleted") as mark_deleted:
             cleanup_user_resources(User, user)
             mark_deleted.assert_called_once_with(service.pk)
+
+    def test_generic_table_browser_cannot_bypass_critical_deletion_boundaries(self):
+        from users.admin_tables_api import TABLE_REGISTRY
+
+        self.assertFalse(TABLE_REGISTRY["users.User"]["deletable"])
+        self.assertFalse(TABLE_REGISTRY["plans.Plan"]["deletable"])
+        self.assertFalse(TABLE_REGISTRY["deploy.Deploy"]["deletable"])
+        self.assertFalse(TABLE_REGISTRY["deploy.DeployLog"]["deletable"])
+        self.assertFalse(TABLE_REGISTRY["custom_emails.EmailTemplate"]["deletable"])
