@@ -61,8 +61,11 @@ class IntegratedLifecycleContractTests(unittest.TestCase):
 
     def test_terminal_state_commit_does_not_depend_on_outbox_availability(self):
         manager = self.read("deployments/core/state/manager.py")
+        self.assertIn("reconcile_deploy_success_from_authority", manager)
+        self.assertIn("active_revision_id", manager)
         self.assertIn("keeping committed lifecycle state.", manager)
         self.assertIn("keeping activation and succeeded state.", manager)
+        self.assertIn("keeping succeeded state.", manager)
         self.assertIn("with transaction.atomic():", manager)
         self.assertIn("except Exception:", manager)
 
