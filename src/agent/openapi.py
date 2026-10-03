@@ -283,7 +283,7 @@ def build_openapi(agent, *, request=None):
                     {
                         "name": "skill_name",
                         "in": "path",
-                        "required": true,
+                        "required": True,
                         "schema": {"type": "string"}
                     }
                 ],
