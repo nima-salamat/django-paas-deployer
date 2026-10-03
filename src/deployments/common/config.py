@@ -73,7 +73,7 @@ TENANT_CONFIG_KEYS: dict[str, dict[str, Any]] = {
         "description": "Target platform. Usually auto-detected from the zip "
                        "via /deploy/inspect_zip/. Examples: laravel, php, django, "
                        "flask, python, nodejs, nextjs, react, vuejs, angular, "
-                       "go, statichtmlcss, docker.",
+                       "go, statichtmlcss, fastapi, docker.",
     },
     "framework": {
         "type": "string",
@@ -279,6 +279,7 @@ PLATFORM_CONFIG_RULES: dict[str, dict[str, Any]] = {
     "django": {"static_dir": True, "media_dir": True, "url_handling": True, "public_url": True},
     "flask": {"static_dir": True, "media_dir": True, "url_handling": True, "public_url": True},
     "python": {"static_dir": True, "media_dir": True, "url_handling": True, "public_url": True},
+    "fastapi": {"static_dir": True, "media_dir": True, "url_handling": True, "public_url": True},
     "go": {"static_dir": True, "build_dir": True, "url_handling": True, "public_url": True},
 }
 
