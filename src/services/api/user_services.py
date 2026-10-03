@@ -928,25 +928,23 @@ class VolumeViewSet(ModelViewSet):
 
 
     def destroy(self, request, pk=None, *args, **kwargs):
-        """
-        Delete volume permanently.
-
-        - Soft-detached or orphan (not mounted): always allowed.
-        - Currently mounted on a service: only when that service is mutable
-          (idle + no container). Soft-detach first if you only want to unmount.
-        """
+        """Delete a Volume through its ownership-aware pre_delete boundary."""
         volume = get_object_or_404(self.get_queryset(), pk=pk)
+
         if volume.service_id:
-            denied = self._assert_volume_service_action(request, volume.service, "can_volume_delete")
+            denied = self._assert_volume_service_action(
+                request,
+                volume.service,
+                "can_volume_delete",
+            )
             if denied is not None:
                 return denied
-
 
         is_mounted = False
         try:
             is_mounted = bool(volume.is_mounted_on_service())
         except Exception:
-            is_mounted = bool(volume.service_attachments)
+            is_mounted = bool(volume.service_attachments.exists())
 
         if is_mounted and volume.service_id:
             ok, reason = _service_is_mutable(volume.service)
@@ -962,28 +960,26 @@ class VolumeViewSet(ModelViewSet):
                     status=status.HTTP_409_CONFLICT,
                 )
 
-        # Best-effort: remove Docker volume if present
-        try:
-            docker_vol = _get_docker_volume(volume)
-            try:
-                docker_vol.remove(force=True)
-            except Exception as exc:
-                logger.warning(
-                    "docker volume remove failed for %s: %s",
-                    getattr(volume, "name", "?"),
-                    exc,
-                )
-        except DockerNotFound:
-            pass
-        except Exception as exc:
-            logger.warning(
-                "docker volume lookup on delete for %s: %s",
-                getattr(volume, "name", "?"),
-                exc,
-            )
-
         owner = volume.service
-        volume.delete()
+
+        # Volume.pre_delete is the canonical physical-storage cleanup boundary.
+        # Do not perform a best-effort Docker delete here and then remove the DB
+        # row: that ordering could silently orphan physical storage.
+        try:
+            volume.delete()
+        except Exception as exc:
+            logger.exception(
+                "Volume deletion failed for %s; durable row retained.",
+                getattr(volume, "name", "?"),
+            )
+            return Response(
+                {
+                    "error": _("Volume could not be removed safely."),
+                    "code": "volume_cleanup_failed",
+                    "detail": str(exc),
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
 
         storage = None
         if owner is not None:
@@ -996,8 +992,6 @@ class VolumeViewSet(ModelViewSet):
             {"success": _("Volume deleted."), "storage": storage},
             status=status.HTTP_200_OK,
         )
-
-
 
 
 
