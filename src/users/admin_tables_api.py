@@ -201,7 +201,7 @@ TABLE_REGISTRY: Dict[str, dict] = {
     },
     "deploy.DeployLog": {
         "label": "Deploy logs",
-        "deletable": True,
+        "deletable": False,
         "per_page": 50,
     },
     "deploy.DeploymentState": {
