@@ -498,9 +498,6 @@ class AdminUserDetailAPIView(APIView):
                 from auth_users.session_auth import invalidate_all_sessions
                 invalidate_all_sessions(u.pk)
                 transaction.on_commit(
-                    lambda: request_user_deletion_convergence(u.pk)
-                )
-                transaction.on_commit(
                     lambda: finalize_user_deletion.delay(u.pk)
                 )
 
