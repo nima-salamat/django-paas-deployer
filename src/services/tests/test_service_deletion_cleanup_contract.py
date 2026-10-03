@@ -75,3 +75,15 @@ def test_service_delete_reclaims_only_unshared_application_cache_images():
     assert "client.containers.list()" in source
     assert "image_ids - other_refs - protected_base_ids - running_ids" in source
     assert "force=False" in source
+
+
+def test_service_swarm_cleanup_uses_pre_delete_instance():
+    source = (ROOT / "services" / "signals.py").read_text(encoding="utf-8")
+
+    handler = source.split(
+        "def delete_deploy_before_delete_service", 1
+    )[1].split("def _cleanup_service_cache_images", 1)[0]
+
+    assert "SwarmRuntime().remove_service_group(str(instance.pk))" in handler
+    assert "service.pk" not in handler
+    assert "service.name" not in handler
