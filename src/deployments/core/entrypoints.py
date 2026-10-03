@@ -106,6 +106,24 @@ def resolve_python_runtime_context(names, module: str | None) -> dict:
     }
     normalized.discard('')
 
+    # Match the image builder's single-wrapper flattening behavior. This keeps
+    # detection paths and runtime paths in the same post-flatten coordinate system.
+    wrapper = ''
+    try:
+        from .project_model import detect_archive_wrapper, strip_archive_prefix
+        wrapper = detect_archive_wrapper(normalized)
+        if wrapper:
+            normalized = {
+                stripped for item in normalized
+                for stripped in [strip_archive_prefix(item, wrapper)]
+                if stripped
+            }
+            if parts and parts[0] == wrapper:
+                module = '.'.join(parts[1:])
+                parts = [p for p in module.split('.') if p]
+    except Exception:
+        pass
+
     def exists_as_module(path_parts: list[str]) -> bool:
         path = '/'.join(path_parts)
         return (f'{path}.py' in normalized or f'{path}/__init__.py' in normalized)
