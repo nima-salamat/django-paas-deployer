@@ -1415,7 +1415,7 @@ def _lock_service_for_user(service_id, user):
     return svc
 
 
-def _repair_completed_deploy_state(deploy_item) -> bool:
+def _repair_completed_deploy_state(deploy_item, service_item=None) -> bool:
     """Reconcile a deployment whose durable completion proof exists but row status is stale."""
     from deployments.core.state.manager import StateManager
     from .models import DeploymentEventOutbox
@@ -1460,7 +1460,21 @@ def _repair_completed_deploy_state(deploy_item) -> bool:
         and str(getattr(deploy_item, "image_status", "") or "").strip().lower() in {"built", "ready"}
         and str(getattr(deploy_item, "network_status", "") or "").strip().lower() == "ready"
     )
-    if not (outbox_proves_success or row_proves_success):
+
+    # The active revision pointer is the runtime authority. It is written by
+    # activate_revision_locked() only after the deployment has passed
+    # readiness/cleanup and the activation boundary. Therefore a stale
+    # Deploy.status can be safely reconciled when this exact revision is
+    # already authoritative for the service.
+    activation_proves_success = bool(
+        service_item is not None
+        and getattr(deploy_item, "revision_id", None)
+        and str(getattr(service_item, "active_revision_id", "") or "")
+        == str(deploy_item.revision_id)
+        and not bool(getattr(deploy_item, "cancel_requested", False))
+    )
+
+    if not (outbox_proves_success or row_proves_success or activation_proves_success):
         return False
 
     now = timezone.now()
@@ -1532,7 +1546,18 @@ def set_deploy_apiview(request):
             # The runtime writes deployment_completed only after readiness and
             # activation. Reconcile a stale Deploy row before rejecting selection.
             if deploy_item.status != DeploymentStatusChoices.SUCCEEDED:
-                _repair_completed_deploy_state(deploy_item)
+                _repair_completed_deploy_state(deploy_item, service_item)
+                deploy_item.refresh_from_db(
+                    fields=[
+                        "status",
+                        "stage",
+                        "progress",
+                        "status_message",
+                        "error_message",
+                        "revision_id",
+                        "cancel_requested",
+                    ]
+                )
 
             if deploy_item.status != DeploymentStatusChoices.SUCCEEDED:
                 return Response(
@@ -1541,6 +1566,12 @@ def set_deploy_apiview(request):
                         "detail": _("Only a successfully completed deployment can be selected as active."),
                         "code": "deploy_not_ready",
                         "status": deploy_item.status,
+                        "stage": deploy_item.stage,
+                        "progress": deploy_item.progress,
+                        "status_message": deploy_item.status_message,
+                        "error_message": deploy_item.error_message,
+                        "deploy_revision_id": str(deploy_item.revision_id or ""),
+                        "active_revision_id": str(service_item.active_revision_id or ""),
                     },
                     status=status.HTTP_409_CONFLICT,
                 )
