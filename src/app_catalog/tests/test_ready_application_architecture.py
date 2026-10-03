@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 
 import pytest
-from django.db.models.deletion import PROTECT, ProtectedError
+from django.db.models.deletion import RESTRICT, RestrictedError
 from django.db import IntegrityError, connection, close_old_connections
 from django.test import TestCase, TransactionTestCase
 from rest_framework.test import APIRequestFactory, force_authenticate
@@ -63,10 +63,10 @@ class ReadyApplicationArchitectureTests(TestCase):
         assert keys['n8n']
         assert keys['n8n-worker']
 
-    def test_catalog_bindings_protect_service_and_deploy_deletion(self):
+    def test_catalog_bindings_restrict_direct_child_deletion(self):
         self.assertIs(
             ApplicationInstanceService._meta.get_field("service").remote_field.on_delete,
-            PROTECT,
+            RESTRICT,
         )
         self.assertIs(
             ApplicationInstanceService._meta.get_field("deploy").remote_field.on_delete,
@@ -149,7 +149,7 @@ class ReadyApplicationArchitectureTests(TestCase):
     def test_catalog_child_deploy_delete_is_protected(self):
         instance = self.install(name="protected-deploy")
         binding = instance.services.get(service_key="mattermost")
-        with pytest.raises(ProtectedError):
+        with pytest.raises(RestrictedError):
             binding.deploy.delete()
 
     def test_database_process_keeps_web_name_compatibility(self):
