@@ -129,7 +129,7 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
         # physical image identities before the row disappears.
         if getattr(instance, "plan", None) and getattr(
             instance.plan, "plan_type", None
-        ) != PlanTypeChoices.DATABASE:
+        ) != PlanTypeChoices.DB:
             try:
                 Image.remove_by_name(service_name)
                 Image.remove_by_name(f"{service_name}:latest")
