@@ -13,6 +13,7 @@ from typing import Any, Optional
 from ..base.platform import DetectionResult
 from ..registry import PlatformRegistry
 from .base_python import PythonPlatform
+from ...entrypoints import resolve_python_runtime_context
 
 
 _APP_ASSIGNMENT_RE = re.compile(
@@ -73,13 +74,26 @@ class FastAPIPlatform(PythonPlatform):
 
         entry = self._find_app(file_index)
         if entry:
-            target = f"{entry['module']}:{entry['callable']}"
+            context = resolve_python_runtime_context(file_index.keys(), entry["module"])
+            target = f"{context['module']}:{entry['callable']}"
             result["entrypoint"] = target
+            result["working_directory"] = context["working_directory"]
+            app_dir_arg = (
+                f" --app-dir {context['working_directory']}"
+                if context["source_root"]
+                else ""
+            )
             result["start_command"] = (
-                f"uvicorn {target} --host 0.0.0.0 --port 8000"
+                f"uvicorn {target} --host 0.0.0.0 --port 8000{app_dir_arg}"
             )
             result["fastapi_entrypoint_detected"] = True
             result["fastapi_entrypoint_source"] = entry["source"]
+            result["extra"] = {
+                **(result.get("extra") or {}),
+                "source_root": context["source_root"],
+                "runtime_module": context["module"],
+                "runtime_working_directory": context["working_directory"],
+            }
         else:
             result["fastapi_entrypoint_detected"] = False
             result["fastapi_entrypoint_source"] = None
