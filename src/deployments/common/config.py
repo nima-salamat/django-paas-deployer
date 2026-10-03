@@ -233,7 +233,7 @@ TENANT_CONFIG_KEYS: dict[str, dict[str, Any]] = {
         "description": (
             "FastAPI-specific runtime settings. The application is always exposed "
             "on 0.0.0.0 and worker count is controlled by the Service Plan. "
-            "Supported keys: entrypoint, app_dir, proxy_headers, forwarded_allow_ips, "
+            "Supported keys: entrypoint, app_dir, proxy_headers, factory, forwarded_allow_ips, "
             "root_path, log_level, access_log, limit_concurrency, limit_max_requests, "
             "limit_max_requests_jitter, backlog, timeout_keep_alive, "
             "timeout_graceful_shutdown, timeout_worker_healthcheck."
@@ -304,7 +304,7 @@ def _valid_rel_path(value: Any) -> bool:
     return bool(parts) and all(p not in {".", ".."} for p in parts) and bool(_SAFE_RELATIVE_PATH_RE.fullmatch(text))
 
 FASTAPI_CONFIG_DEFAULTS = {
-    "proxy_headers": True,
+    "proxy_headers": False,
     "access_log": True,
     "factory": False,
     "log_level": "info",
@@ -364,7 +364,7 @@ def normalize_fastapi_config(value: Any, *, warnings: list[str] | None = None) -
 
     app_dir = str(raw.get("app_dir") or "").strip().replace("\\", "/").strip("/")
     if app_dir:
-NaN
+        if app_dir.startswith("/") or ".." in app_dir.split("/") or not _FASTAPI_APP_DIR_RE.fullmatch(app_dir):
             raise ValueError("fastapi.app_dir must be a safe relative project directory.")
         out["app_dir"] = app_dir
 
@@ -420,7 +420,7 @@ NaN
         out[key] = number
 
     for key, default in FASTAPI_CONFIG_DEFAULTS.items():
-        if key in raw and key not in out:
+        if key not in out:
             out[key] = default
 
     known = {
