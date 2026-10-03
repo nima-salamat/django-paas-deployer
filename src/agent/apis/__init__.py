@@ -12,6 +12,7 @@ from .volumes import VolumeListCreateView, VolumeDetailView
 from .deployments import DeploymentListCreateView, DeploymentDetailView, DeploymentUploadView, DeploymentActionView, DeploymentRollbackView, DeploymentLogsView, DeploymentLogsExportView, DeploymentHelpView, DeploymentInspectView
 from .configuration import ConfigurationView, EnvironmentView, SecretsView, EndpointConfigView, NetworkAttachmentsView, RevisionListView, RevisionDetailView, RevisionRollbackView, DatabaseBindingsView, DatabaseCredentialsView
 from .shell import ShellInfoView, ShellSessionView, ShellCommandView, ShellCloseView, ShellReplaceView, ShellFileView
+from .skills import SkillIndexView, SkillDetailView
 
 __all__ = [
     name for name in (
@@ -22,7 +23,7 @@ __all__ = [
         "NetworkListCreateView", "NetworkDetailView", "VolumeListCreateView", "VolumeDetailView",
         "DeploymentListCreateView", "DeploymentDetailView", "DeploymentUploadView", "DeploymentActionView", "DeploymentRollbackView", "DeploymentLogsView", "DeploymentLogsExportView",
         "ConfigurationView", "EnvironmentView", "SecretsView", "EndpointConfigView", "NetworkAttachmentsView", "RevisionListView", "RevisionDetailView", "RevisionRollbackView", "DatabaseBindingsView",
-        "ShellInfoView", "ShellSessionView", "ShellCommandView", "ShellCloseView", "ShellReplaceView", "ShellFileView",
+        "ShellInfoView", "ShellSessionView", "ShellCommandView", "ShellCloseView", "ShellReplaceView", "ShellFileView", "SkillIndexView", "SkillDetailView",
         "DeploymentHelpView", "DeploymentInspectView", "DatabaseCredentialsView",
     )
 ]

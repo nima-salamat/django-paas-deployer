@@ -48,6 +48,8 @@ def _contract(
 
 CONTRACTS: tuple[EndpointContract, ...] = (
     _contract("/agent/v1/", "GET"),
+    _contract("/agent/v1/skills", "GET"),
+    _contract("/agent/v1/skills/{skill_name}", "GET"),
     _contract("/agent/v1/auth/exchange", "POST", throttle_scope="exchange"),
     _contract("/agent/v1/auth/me", "GET"),
     _contract("/agent/v1/capabilities", "GET"),

@@ -261,6 +261,42 @@ def build_openapi(agent, *, request=None):
         "/agent/v1/": {
             "get": {"summary": "Read Agent identity", "responses": {"200": {"description": "Identity"}}},
         },
+        "/agent/v1/skills": {
+            "get": {
+                "summary": "List Skill playbooks enabled for this Agent",
+                "responses": {
+                    "200": {
+                        "description": "Scope-filtered Skill index",
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/SkillIndex"}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/agent/v1/skills/{skill_name}": {
+            "get": {
+                "summary": "Get one scope-aware Skill playbook",
+                "parameters": [
+                    {
+                        "name": "skill_name",
+                        "in": "path",
+                        "required": true,
+                        "schema": {"type": "string"}
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Markdown Skill playbook",
+                        "content": {"text/markdown": {"schema": {"type": "string"}}}
+                    },
+                    "403": {"$ref": "#/components/responses/Error"},
+                    "404": {"$ref": "#/components/responses/Error"}
+                }
+            }
+        },
         "/agent/v1/auth/exchange": {
             "post": {
                 "security": [],
@@ -1528,6 +1564,25 @@ def build_openapi(agent, *, request=None):
         "DeploymentLogsResponse": {"type": "object", "properties": {"result": {"type": "string"}, "source": {"type": "string", "enum": ["deployment"]}, "deploy": {"$ref": "#/components/schemas/Deployment"}, "logs": {"type": "array", "items": {"$ref": "#/components/schemas/DeploymentLogEvent"}}, "next_before": {"type": "string", "nullable": True}, "next_after": {"type": "string", "nullable": True}, "latest_after": {"type": "string", "nullable": True}, "has_more_older": {"type": "boolean"}, "has_more_newer": {"type": "boolean"}, "direction": {"type": "string", "enum": ["backward", "forward"]}, "log_store_available": {"type": "boolean", "nullable": True}}},
         "FileDownload": {"type": "string", "format": "binary"},
         "ShellInfo": {"type": "object", "additionalProperties": True},
+        "Skill": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "title": {"type": "string"},
+                "summary": {"type": "string"},
+                "url": {"type": "string", "format": "uri"},
+                "required_scopes": {"type": "array", "items": {"type": "string"}},
+                "required_any_scopes": {"type": "array", "items": {"type": "string"}}
+            }
+        },
+        "SkillIndex": {
+            "type": "object",
+            "properties": {
+                "result": {"type": "string", "enum": ["success"]},
+                "api_version": {"type": "string"},
+                "skills": {"type": "array", "items": {"$ref": "#/components/schemas/Skill"}}
+            }
+        },
     })
 
 
@@ -1695,6 +1750,8 @@ def build_openapi(agent, *, request=None):
             "log_sources_are_separate": True,
             "rate_limits": dict(AgentRateThrottle.rate_map),
             "manifest_scope": "agent.manifest.generate",
+            "skills_endpoint": "/agent/v1/skills",
+            "skills_scope_filtered": True,
             "high_risk_scopes": sorted(HIGH_RISK_SCOPES),
         },
     }

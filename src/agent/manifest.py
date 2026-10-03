@@ -2,6 +2,7 @@ from django.conf import settings
 from django.template.loader import render_to_string
 
 from .contracts import contracts_for_agent
+from .skills import skills_for_agent, skill_url
 
 
 def api_base_url(request=None):
@@ -34,6 +35,21 @@ def manifest_endpoints(agent):
     return endpoints
 
 
+def manifest_skills(agent, request=None):
+    base = api_base_url(request)
+    return [
+        {
+            "name": skill.name,
+            "title": skill.title,
+            "summary": skill.summary,
+            "url": skill_url(base, skill),
+            "required_scopes": list(skill.scopes),
+            "required_any_scopes": list(skill.any_scopes),
+        }
+        for skill in skills_for_agent(agent)
+    ]
+
+
 def render_agent_manifest(agent, enrollment_token=None, *, access_token=None, request=None):
     selected = set(agent.scopes or [])
     return render_to_string(
@@ -46,5 +62,6 @@ def render_agent_manifest(agent, enrollment_token=None, *, access_token=None, re
             "access_token": access_token,
             "scopes": sorted(selected),
             "endpoints": manifest_endpoints(agent),
+            "skills": manifest_skills(agent, request),
         },
     )

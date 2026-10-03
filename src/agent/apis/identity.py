@@ -6,6 +6,8 @@ from .base import AgentPublicAPIView, AgentSecuredAPIView
 from ..application import create_enrollment, issue_access_credential
 from ..contracts import contracts_for_agent
 from ..scopes import SERVICE_SCOPES, HIGH_RISK_SCOPES, scope_categories
+from ..skills import skills_for_agent, skill_url
+from ..manifest import api_base_url
 
 
 class AgentRootView(AgentSecuredAPIView):
@@ -18,7 +20,7 @@ class AgentRootView(AgentSecuredAPIView):
             "agent": {"id": str(a.pk), "name": a.name, "description": a.description, "status": a.status},
             "user": {"id": str(a.user_id), "username": a.user.username},
             "scopes": sorted(a.scopes or []),
-            "links": {"capabilities": "/agent/v1/capabilities", "openapi": "/agent/v1/openapi.json", "agent_md": "/agent/v1/agent.md"},
+            "links": {"capabilities": "/agent/v1/capabilities", "openapi": "/agent/v1/openapi.json", "agent_md": "/agent/v1/agent.md", "skills": "/agent/v1/skills"},
         })
 
 class AgentExchangeView(AgentPublicAPIView):
@@ -82,6 +84,17 @@ class AgentCapabilitiesView(AgentSecuredAPIView):
                 "agent": {"manifest_generate":"agent.manifest.generate" in s},
             },
             "deployment_inputs": {"archive_zip": True, "database_native": True, "git": False, "existing_image": False},
+            "skills": [
+                {
+                    "name": skill.name,
+                    "title": skill.title,
+                    "summary": skill.summary,
+                    "url": skill_url(api_base_url(request), skill),
+                    "required_scopes": list(skill.scopes),
+                    "required_any_scopes": list(skill.any_scopes),
+                }
+                for skill in skills_for_agent(request.agent)
+            ],
             "logs": {
                 "deployment": {"model":"DeployLog","database_alias":"deployment_logs"},
                 "runtime": {"models":["ServiceLogStream","ServiceLogEntry"],"database_alias":"deployment_logs"},
