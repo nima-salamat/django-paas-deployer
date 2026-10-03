@@ -50,9 +50,19 @@ class MessengerUserDeletionTests(TestCase):
         message = Message.objects.create(conversation=group, sender=user, body="history")
         reaction = MessageReaction.objects.create(message=message, user=user, emoji=":thumbsup:")
 
-        user.delete()
+        with TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            attachment = MessageAttachment.objects.create(
+                conversation=group,
+                message=message,
+                uploaded_by=user,
+                file=SimpleUploadedFile("history.txt", b"group-history"),
+                original_filename="history.txt",
+            )
+            path = Path(attachment.file.path)
 
-        self.assertFalse(Contact.objects.filter(pk=contact.pk).exists())
+            user.delete()
+
+            self.assertFalse(Contact.objects.filter(pk=contact.pk).exists())
         self.assertFalse(ConversationParticipant.objects.filter(pk=owner.pk).exists())
         self.assertFalse(MessageReaction.objects.filter(pk=reaction.pk).exists())
 
@@ -61,6 +71,9 @@ class MessengerUserDeletionTests(TestCase):
         message.refresh_from_db()
         self.assertIsNone(message.sender_id)
         self.assertTrue(Conversation.objects.filter(pk=group.pk).exists())
+            attachment.refresh_from_db()
+            self.assertIsNone(attachment.uploaded_by_id)
+            self.assertTrue(path.exists())
 
     def test_all_user_scoped_messenger_metadata_is_cascaded_or_anonymized(self):
         user = User.objects.create_user(
