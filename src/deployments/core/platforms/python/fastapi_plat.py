@@ -301,8 +301,6 @@ def _is_fastapi_source(text: str) -> bool:
         )
     )
 
-)
-
 
 _APP_ASSIGNMENT_RE = re.compile(
     r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<factory>(?:fastapi\.)?FastAPI)\s*\(",
