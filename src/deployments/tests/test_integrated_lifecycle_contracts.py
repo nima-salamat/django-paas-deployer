@@ -48,11 +48,14 @@ class IntegratedLifecycleContractTests(unittest.TestCase):
 
     def test_completed_deploy_state_is_reconciled_before_active_selection(self):
         api = self.read("deploy/apis.py")
-        self.assertIn("def _repair_completed_deploy_state(deploy_item) -> bool:", api)
+        self.assertIn("def _repair_completed_deploy_state(deploy_item, service_item=None) -> bool:", api)
         self.assertIn('stage", "deployment_completed', api)
         self.assertIn("StateManager.transition_deploy_system_terminal(", api)
         self.assertIn("DeploymentEventOutbox.objects", api)
         self.assertIn("stage__in=(\"deployment_completed\", \"finished\")", api)
+        self.assertIn("active_revision_id", api)
+        self.assertIn("activation_proves_success", api)
+        self.assertIn("_repair_completed_deploy_state(deploy_item, service_item)", api)
         self.assertIn("Deployment completion state reconciled before active selection.", api)
 
     def test_catalog_duplicate_ids_are_rejected(self):
