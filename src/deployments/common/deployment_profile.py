@@ -13,6 +13,19 @@ def normalize_profile(raw: Any, *, plan_cpu=None, plan_ram_mb=None) -> dict[str,
     resources = {}
     build = dict(cfg.get("build_options") or cfg.get("build") or {})
     runtime = dict(cfg.get("runtime_options") or cfg.get("runtime") or {})
+
+    # FastAPI has a dedicated tenant-safe runtime profile. It is kept out of
+    # the generic runtime_options escape hatch so operator-only host/runtime
+    # controls remain blocked while Uvicorn-specific knobs stay configurable.
+    if isinstance(cfg.get("fastapi"), dict):
+        from .config import normalize_fastapi_config
+        fastapi_warnings: list[str] = []
+        runtime["fastapi"] = normalize_fastapi_config(
+            cfg.get("fastapi"),
+            warnings=fastapi_warnings,
+        )
+        if fastapi_warnings:
+            runtime.setdefault("_config_warnings", []).extend(fastapi_warnings)
     frontend = cfg.get("frontend")
     if isinstance(frontend, dict):
         frontend = dict(frontend)
