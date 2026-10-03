@@ -45,6 +45,23 @@ def request_user_deletion_convergence(user_id: int) -> int:
             user.is_active = False
             user.save(update_fields=["is_active"])
 
+        try:
+            from app_catalog.models import ApplicationInstance, ApplicationStatus
+            ApplicationInstance.objects.filter(
+                user_id=user.pk,
+                status=ApplicationStatus.DEPLOYING,
+            ).update(
+                cancel_requested=True,
+                stage="cancellation_requested",
+                updated_at=timezone.now(),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to fence catalog ApplicationInstances for deleted user=%s",
+                user.pk,
+            )
+            raise
+
         service_ids = list(
             user.services.values_list("pk", flat=True)
         )
