@@ -167,7 +167,7 @@ TABLE_REGISTRY: Dict[str, dict] = {
     # ---- Plans ----
     "plans.Plan": {
         "label": "Plans",
-        "deletable": True,
+        "deletable": False,
         "search_fields": ["name", "platform"],
         "per_page": 25,
     },
@@ -195,7 +195,7 @@ TABLE_REGISTRY: Dict[str, dict] = {
     # ---- Deploy ----
     "deploy.Deploy": {
         "label": "Deploys",
-        "deletable": True,
+        "deletable": False,
         "search_fields": ["name", "service__name"],
         "per_page": 25,
     },
@@ -213,7 +213,7 @@ TABLE_REGISTRY: Dict[str, dict] = {
     # ---- Emails ----
     "custom_emails.EmailTemplate": {
         "label": "Email templates",
-        "deletable": True,
+        "deletable": False,
         "search_fields": ["name", "code"],
         "per_page": 25,
     },
