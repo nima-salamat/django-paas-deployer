@@ -47,6 +47,32 @@ def cleanup_user_resources(sender, instance: User, **kwargs):
         user_id,
     )
 
+    from deploy.models import Deploy
+    from deployments.application.cancel import CancelDeploymentUseCase
+    from deployments.infrastructure.django_cancellation import DjangoDeploymentCancellationGateway
+
+    active_deploys = list(
+        Deploy.objects.filter(
+            service__user_id=instance.pk,
+            status__in={"pending", "running", "rolling_back"},
+        ).only("pk")
+    )
+    if active_deploys:
+        gateway = DjangoDeploymentCancellationGateway()
+        use_case = CancelDeploymentUseCase(gateway)
+        for deploy in active_deploys:
+            try:
+                use_case.execute(deploy.pk)
+            except Exception:
+                logger.exception(
+                    "Failed to request cancellation for deploy %s during direct user deletion.",
+                    deploy.pk,
+                )
+        raise RuntimeError(
+            "User deletion is blocked while owned deployments are still active; "
+            "cancellation has been requested and the deletion coordinator must finalize the account."
+        )
+
     services = list(Service.objects.filter(user=instance).values_list("pk", flat=True))
     logger.info(
         "User %s owns %s service(s); Service pre_delete handlers own their Swarm/container runtime cleanup.",
