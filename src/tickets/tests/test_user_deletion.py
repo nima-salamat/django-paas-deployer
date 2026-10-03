@@ -53,3 +53,27 @@ class TicketUserDeletionTests(TestCase):
         self.assertFalse(TicketReadState.objects.filter(pk=read_state.pk).exists())
         staff.refresh_from_db()
         self.assertTrue(User.objects.filter(pk=staff.pk).exists())
+
+    def test_attachment_storage_failure_blocks_ticket_deletion(self):
+        user = User.objects.create_user(
+            username="ticket-storage-failure",
+            email="ticket-storage-failure@example.invalid",
+        )
+        department = Department.objects.create(name="Storage Failure")
+        ticket = Ticket.objects.create(
+            user=user,
+            department=department,
+            subject="storage failure",
+        )
+        attachment = TicketAttachment.objects.create(
+            ticket=ticket,
+            file=SimpleUploadedFile("failure.txt", b"payload"),
+            original_filename="failure.txt",
+        )
+
+        with patch("tickets.signals.TicketAttachment.file.field.storage.delete", side_effect=OSError("storage down")):
+            with self.assertRaises(RuntimeError):
+                attachment.delete()
+
+        self.assertTrue(TicketAttachment.objects.filter(pk=attachment.pk).exists())
+        self.assertTrue(Ticket.objects.filter(pk=ticket.pk).exists())
