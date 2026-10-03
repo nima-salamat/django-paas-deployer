@@ -4,8 +4,9 @@ from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
+from rest_framework.test import APIRequestFactory, force_authenticate
 
-from deploy.models import BuildCacheArtifact, Deploy
+from deploy.models import BuildCacheArtifact, Deploy, DeploymentStatusChoices
 from plans.models import Plan
 from services.models import Service
 from users.models import User
@@ -53,3 +54,41 @@ class DeployUserDeletionTests(TestCase):
 
         self.assertFalse(Deploy.objects.filter(pk=deploy.pk).exists())
         self.assertFalse(BuildCacheArtifact.objects.filter(pk=artifact.pk).exists())
+
+    def test_active_deploy_cannot_be_deleted_directly(self):
+        user = User.objects.create_user(
+            username="deploy-active-delete",
+            email="deploy-active-delete@example.invalid",
+        )
+        plan = Plan.objects.create(
+            name=NameChoices.BRONZE,
+            platform="docker",
+            plan_type=PlanTypeChoices.APP,
+            max_cpu=1,
+            max_ram=512,
+            max_storage=10,
+            price_per_hour=0,
+            storage_type=StorageTypeChoices.SSD,
+        )
+        service = Service.objects.create(
+            name="deploy-active-delete-service",
+            user=user,
+            plan=plan,
+        )
+        deploy = Deploy.objects.create(
+            name="deploy-active-delete-1",
+            service=service,
+            created_by=user,
+            version=1.0,
+            status=DeploymentStatusChoices.RUNNING,
+        )
+
+        from deploy.apis import DeployViewSet
+
+        request = APIRequestFactory().delete(f"/deploy/{deploy.pk}/")
+        force_authenticate(request, user=user)
+        response = DeployViewSet.as_view({"delete": "destroy"})(request, pk=deploy.pk)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "deployment_active_requires_cancel")
+        self.assertTrue(Deploy.objects.filter(pk=deploy.pk).exists())
