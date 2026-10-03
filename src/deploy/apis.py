@@ -1877,10 +1877,10 @@ def inspect_deploy_zip_apiview(request):
 
                 is_python_family = detected_platform in _PYTHON_FAMILY
                 if is_python_family and detected_platform == "fastapi":
-                    runtime_options = getattr(enriched, "runtime_options", None) or {}
+                    enriched_extra = getattr(enriched, "extra", None) or {}
                     fastapi_profile = (
-                        runtime_options.get("fastapi_profile")
-                        if isinstance(runtime_options, dict)
+                        enriched_extra.get("fastapi_profile")
+                        if isinstance(enriched_extra, dict)
                         else None
                     )
                     fastapi_profile = dict(fastapi_profile or {})
@@ -2058,8 +2058,8 @@ def inspect_deploy_zip_apiview(request):
                 "entrypoint": suggested_config.get("entry_point"),
                 "start_command": suggested_config.get("start_command"),
                 "fastapi_profile": (
-                    (getattr(enriched, "runtime_options", None) or {}).get("fastapi_profile")
-                    if "enriched" in locals() and isinstance(getattr(enriched, "runtime_options", None), dict)
+                    (getattr(enriched, "extra", None) or {}).get("fastapi_profile")
+                    if "enriched" in locals() and isinstance(getattr(enriched, "extra", None), dict)
                     else None
                 ),
                 "django_settings_module": detection_raw.get("django_settings_module"),
