@@ -162,6 +162,131 @@ Use:
 
 Never guess endpoint names or request field names.
 
+## Operating model and boundaries
+
+Treat this document, /capabilities, and /openapi.json as the operating contract for PassDeployer. Do not guess how the platform works from endpoint names, framework conventions, or previous requests.
+
+### Authority order
+
+Use these sources in this order:
+1. This document for the stable operating model and safety boundaries.
+2. GET /capabilities for what this specific Agent is currently allowed to do.
+3. GET /openapi.json for exact request/response schemas, required scopes, mutation semantics, headers, idempotency, and error contracts.
+4. GET /deployments/help for dynamic deployment/platform rules when the task concerns deployment configuration.
+5. Actual endpoint responses and resource state as the final observed truth.
+
+A scope is a ceiling, not a bypass. Service-level authorization, sharing permissions, runtime policy, quotas, and server-owned fields still apply even when an Agent scope exists.
+
+### Choose the most specific operation
+
+When more than one mechanism could accomplish the user's goal, prefer the narrowest first-class Agent API that directly represents the requested resource. Use the service-runtime shell for runtime/process work that is not better represented by a dedicated endpoint.
+
+| User intent | Preferred authority |
+| --- | --- |
+| Inspect or change Service metadata/state | Service endpoints |
+| Start, stop, restart, rebuild, purge runtime | Service lifecycle endpoints |
+| Inspect or change desired deployment configuration | Configuration endpoints |
+| Manage environment variables | Environment endpoints |
+| Manage secret material | Secret endpoints |
+| Manage ports/hosts/exposure | Endpoint endpoints |
+| Attach/detach networks | Network attachment endpoints |
+| Attach/detach databases | Database binding endpoints |
+| Inspect database credentials | Database-credentials endpoint with its dedicated scope |
+| Inspect or rollback revisions | Revision endpoints |
+| Create/apply/manage Plans | Plan endpoints |
+| Create/upload/start/cancel/redeploy/rollback Deployments | Deployment endpoints |
+| Read runtime or deployment logs | Log endpoints |
+| Create/read/write/move/delete/upload workspace files | Shell file API |
+| Run application/runtime commands, inspect processes/files, or perform other runtime actions with no dedicated Agent operation | Restricted shell |
+| Interactive REPL/PTY work | Interactive PTY transport when capabilities require it |
+
+Do not use shell to emulate a first-class control-plane mutation. For example, do not modify configuration, environment, secrets, service lifecycle state, deployment state, network bindings, database bindings, or workspace files through an improvised shell command when the corresponding Agent endpoint exists and is enabled.
+
+### Control-plane state vs runtime state
+
+Keep desired state and runtime state conceptually separate.
+
+- A control-plane endpoint changes the Service/Deployment configuration that PassDeployer owns and can reconcile.
+- A shell operation changes the currently running service container/workspace and may be temporary or outside the desired-state model.
+- After a runtime-only mutation, do not assume the control-plane configuration changed.
+- After a control-plane mutation, verify the resulting resource/deployment state rather than assuming the live container changed immediately.
+
+### Generic execution loop
+
+For every non-trivial task:
+1. Identify the resource and the user's intended effect.
+2. Check /capabilities for the exact operation and scope.
+3. Read the relevant OpenAPI operation before constructing the request.
+4. Prefer a first-class resource endpoint over shell when one exists.
+5. Preflight only the state that matters to the operation.
+6. Execute the smallest mutation that achieves the goal.
+7. Inspect the response; never infer success from an HTTP request merely being accepted.
+8. Verify the resulting resource/runtime state when the operation has an observable postcondition.
+9. For dependent work, continue from the observed result instead of reconstructing state from memory.
+10. Stop and surface a precise authorization/policy/validation error instead of trying alternate paths that would bypass the declared boundary.
+
+### Mutations and destructive actions
+
+A normal user request is not permission to bypass a server-side safety boundary.
+
+- Never set confirmation flags merely because the server rejected an operation.
+- When an operation reports that explicit confirmation is required, determine exactly what action is being confirmed before retrying.
+- Only retry with confirmation when the requested mutation is intentionally the action the server classified as requiring confirmation.
+- Never replace a rejected first-class operation with a lower-level shell workaround just to avoid its confirmation or permission model.
+- Use Idempotency-Key only for the exact operation contract that declares it idempotent. Reuse the same key only for an exact retry.
+
+### Files and workspace changes
+
+Workspace files are resources, not a reason to invent shell pipelines.
+
+When a task is to create, read, update, rename, delete, or upload a file:
+1. Check whether `shell.files.read` or `shell.files.write` is enabled.
+2. Prefer POST /services/{service_id}/shell/files with the appropriate documented action.
+3. Keep paths inside the service workspace and use the API's returned writable/mount metadata where available.
+4. After a write-like operation, read the file back when correctness matters.
+5. Use the restricted command API only when the requested operation is genuinely command execution rather than file management.
+
+Do not assume a directory is writable just because it exists. Do not assume the shell runtime user has the same write permissions as the platform's managed file operation. The file API is the authoritative path for supported workspace mutations.
+
+### Error interpretation
+
+Treat the structured Agent error fields as data, not prose:
+- `code` identifies the failure class and should drive recovery.
+- `detail` explains the immediate condition.
+- `retryable` controls whether a retry is appropriate.
+- `failure_domain` distinguishes authentication, authorization, request, resource, storage, infrastructure, and runtime failures.
+- `resource_effect` indicates whether the requested resource changed.
+- `certainty` indicates how confidently the platform knows the effect.
+
+Never blindly retry a mutation after an unknown 5xx response. First inspect the request id and current resource state. A request that returned an error may still have reached the underlying system.
+
+### Runtime shell decision rule
+
+Use the restricted shell only for runtime/container work that is not represented by a more specific Agent operation.
+
+Before shell execution:
+- Read GET /services/{service_id}/shell.
+- Use the exact shell session/token flow from OpenAPI.
+- Check whether the task is one-shot or interactive.
+- Use dry-run when the command's risk is unclear and the operation supports it.
+- Respect the reported policy rather than guessing which binaries or syntax are accepted.
+- Keep shell work inside the service's authorized workspace.
+
+When a shell command is rejected, diagnose the returned structured policy/error code first. Do not rewrite the request repeatedly until it happens to pass.
+
+### Verification principle
+
+For every mutation, verify the postcondition appropriate to the resource:
+- file mutation -> file read/metadata
+- service mutation -> service detail/status
+- configuration mutation -> configuration read
+- environment/secret mutation -> metadata/read endpoint permitted by scope
+- endpoint/network/database mutation -> corresponding resource read
+- deployment mutation -> deployment state and logs
+- runtime shell mutation -> command exit code and, when important, an explicit follow-up inspection
+
+Prefer observed state over assumptions.
+
 ## API inventory
 
 ### Identity
@@ -204,195 +329,8 @@ Never guess endpoint names or request field names.
 - GET /agent/v1/deployments/{deployment_id}/logs/export
 
 ### Shell
-- GET /agent/v1/services/{service_id}/shell
-- POST /agent/v1/services/{service_id}/shell/sessions
-- POST /agent/v1/services/{service_id}/shell/sessions/{session_id}/commands
-- POST /agent/v1/services/{service_id}/shell/sessions/{session_id}/close
-- POST /agent/v1/services/{service_id}/shell/replace
-- POST /agent/v1/services/{service_id}/shell/files
 
-### Plans
-- GET /agent/v1/plans
-- GET /agent/v1/plans/{plan_id}
-- POST /agent/v1/plans/{plan_id}/apply
-- POST /agent/v1/plans/manage
-- PATCH /agent/v1/plans/manage/{plan_id}
-- DELETE /agent/v1/plans/manage/{plan_id}
-
-### Networks and volumes
-- GET/POST /agent/v1/networks
-- GET/PATCH/DELETE /agent/v1/networks/{network_id}
-- GET/POST /agent/v1/volumes
-- GET/PATCH/DELETE /agent/v1/volumes/{volume_id}
-
-### Deployments
-- GET /agent/v1/deployments
-- POST /agent/v1/deployments
-- GET /agent/v1/deployments/help
-- POST /agent/v1/deployments/inspect
-- GET /agent/v1/deployments/{deployment_id}
-- DELETE /agent/v1/deployments/{deployment_id}
-- POST /agent/v1/deployments/{deployment_id}/upload
-- POST /agent/v1/deployments/{deployment_id}/start
-- POST /agent/v1/deployments/{deployment_id}/cancel
-- POST /agent/v1/deployments/{deployment_id}/redeploy
-- POST /agent/v1/deployments/{deployment_id}/rebuild
-- POST /agent/v1/deployments/{deployment_id}/rollback
-
-The actual enabled set is always determined from /capabilities.
-
-## Exact API contract
-
-GET /agent/v1/openapi.json is the machine-readable source of truth.
-
-It describes:
-- path parameters
-- query parameters
-- request headers
-- JSON bodies
-- multipart upload fields
-- writable and read-only fields
-- enums and validation ranges
-- response schemas
-- errors
-- scopes
-- idempotency
-- mutation semantics
-- sensitive responses
-- operation identifiers
-
-Use OpenAPI instead of guessed field names.
-
-## Service input rules
-
-POST /services requires the service creation fields shown by OpenAPI. The Agent facade currently also requires a Private Network.
-
-PATCH /services/{service_id} accepts only fields permitted by the current Service serializer/facade. Do not send IDs, timestamps, or other read-only fields.
-
-CPU/RAM/worker limits are server-owned from the selected Service Plan. Do not inject tenant resource-limit overrides.
-
-## Configuration input rules
-
-PATCH /services/{service_id}/configuration may accept:
-- source_kind
-- source_config
-- build_config
-- runtime_config
-- desired_state
-
-Sensitive values must use secrets or secret-backed environment variables, not ordinary configuration.
-
-### Environment
-POST /services/{service_id}/environment accepts:
-- key
-- scope
-- is_secret
-- value
-
-The key must match [A-Za-z_][A-Za-z0-9_]{0,127}.
-
-DELETE /services/{service_id}/environment?key=<name>
-
-### Secrets
-POST /services/{service_id}/secrets accepts:
-- key
-- value
-- optional note
-- optional description
-
-Normal secret reads return metadata, not plaintext.
-
-DELETE /services/{service_id}/secrets?key=<name>
-
-### Endpoints
-POST /services/{service_id}/endpoints accepts:
-- name
-- target_port
-- optional published_port
-- protocol
-- exposure
-- optional process
-- optional hostname
-- optional path
-- optional tls
-- optional enabled
-- optional metadata
-
-Ports are 1..65535.
-
-DELETE /services/{service_id}/endpoints?name=<name>
-
-### Network attachments
-POST /services/{service_id}/networks accepts:
-- network
-- optional alias
-- optional internal
-- optional metadata
-
-DELETE /services/{service_id}/networks?network=<network_id>
-
-### Database bindings
-POST /services/{service_id}/databases accepts:
-- database
-- optional alias
-- optional env_prefix
-- optional access_mode
-- optional metadata
-
-DELETE /services/{service_id}/databases?alias=<alias>
-
-### Database credentials
-GET /services/{service_id}/database-credentials
-
-Optional ?reveal=true may return decrypted password/root_password and requires:
-- service_database_credentials.read
-- existing can_view_db_credentials authorization
-
-Treat revealed credentials as secret material.
-
-## Deployment rules
-
-Before constructing complex deployment configuration:
-1. GET /deployments/help
-2. Inspect platform schemas, defaults, supported tenant keys and blocked keys.
-3. POST /deployments
-4. POST /deployments/{deployment_id}/upload when ZIP input is required.
-5. POST /deployments/{deployment_id}/start
-6. Poll deployment/service state.
-7. Read deployment logs.
-8. Read runtime logs when diagnosis is needed.
-
-First-class Agent deployment inputs are currently archive/ZIP and database-native.
-
-Git and existing-image deployment are not first-class Agent inputs in this contract.
-
-### ZIP inspection
-POST /deployments/inspect
-Content-Type: multipart/form-data
-File field: file
-
-### ZIP upload
-POST /deployments/{deployment_id}/upload
-Content-Type: multipart/form-data
-File field: file
-
-## Logs
-
-Runtime logs:
-GET /services/{service_id}/logs
-
-Supported filters include cursor, from, to, level, stream, q, limit and direction according to OpenAPI. Runtime limit is bounded to 1..500.
-
-Deployment logs:
-GET /deployments/{deployment_id}/logs
-
-Supported filters include before, after, q, level, stage, event_type, from, to and limit according to OpenAPI. Deployment log limit is bounded to 1..200.
-
-Use export endpoints when a bounded downloadable representation is required.
-
-## Shell
-
-PassDeployer shell is a restricted service-runtime/container shell.
+PassDeployer shell is a restricted service-runtime/container facility.
 
 It is NOT:
 - host shell access
@@ -400,7 +338,25 @@ It is NOT:
 - raw Docker API access
 - unrestricted host Bash
 
+### Shell capabilities and transports
+
+Before using shell:
+1. GET /services/{service_id}/shell.
+2. Read the returned `enabled`, `platform`, `transport`, `policy`, and command catalog metadata.
+3. Check /capabilities for the scopes actually granted to this Agent.
+4. Read the relevant OpenAPI operation for the exact request shape.
+
+The shell service has separate concerns:
+- one-shot command execution
+- interactive PTY/WebSocket execution where required
+- workspace file operations
+- shell session replacement
+- shell audit/history information through the documented endpoints
+
+Do not infer that one shell transport can perform another transport's job.
+
 ### Shell session
+
 POST /services/{service_id}/shell/sessions
 
 Optional field:
@@ -408,7 +364,10 @@ Optional field:
 
 The response provides a temporary shell-session token. Treat it as sensitive.
 
+Use the returned session id and shell token for subsequent shell operations. Do not reuse an expired or closed session. If a new session is required because another active session blocks creation, use the documented replacement flow only when the operation is intentionally confirmed and the Agent has the required scope.
+
 ### One-shot command
+
 POST /services/{service_id}/shell/sessions/{session_id}/commands
 
 Request:
@@ -417,42 +376,96 @@ Request:
 - dry_run: optional boolean
 - X-Shell-Token header or documented body token fallback
 
-Current compound operators:
-- |
-- &&
-- ||
-- ;
+The runtime reports supported compound operators, blocked syntax, segment/input limits, and policy rules. Follow those exact runtime-provided constraints.
 
-The runtime protocol reports the exact current segment/input limits and blocked syntax.
+Use a command when the user's intent is command execution, runtime inspection, a framework CLI, or another operation that is not better represented by a dedicated Agent endpoint.
 
-Interactive commands require the PTY/WebSocket transport when required by capabilities.
+Do not use a shell pipeline as a generic file-management interface when the shell file API already supports the requested action.
 
-### Shell replacement
-POST /services/{service_id}/shell/replace
+### Workspace file operations
 
-Requires confirm=true.
-
-### Shell files
 POST /services/{service_id}/shell/files
 
-Request fields can include:
-- action
-- path
-- token
-- new_name
-- content
-- file for upload
-
-Current actions include:
+Use this endpoint for supported workspace file operations such as:
 - read
 - write
-- delete
-- rename
 - create
 - create_folder
+- rename
+- delete
 - upload
 
-File operations remain confined to the authorized service workspace.
+Check /capabilities for the required file scope and use the exact action/request schema from OpenAPI.
+
+The platform's restricted file manager can have filesystem-management behavior that differs from the service process UID. Therefore:
+- do not decide writability solely from the service process user's permissions;
+- do not replace a supported file operation with a shell command just because a path appears to be writable;
+- use the file API's effective/mount metadata and response as the authoritative result.
+
+For file correctness, verify the target after mutation when the operation's success matters.
+
+### Command risk and confirmation
+
+The shell policy classifies commands by risk. Risk classification is broader than a simple allow/deny list and may depend on the command family and arguments.
+
+Possible outcomes include normal execution, an interactive-transport requirement, a policy rejection, or a confirmation requirement.
+
+When a command requires confirmation:
+1. Read the structured error `code`, `detail`, and `resource_effect`.
+2. Determine exactly which requested action triggered the confirmation.
+3. Never set `confirm=true` merely to force execution.
+4. If the action is intentionally requested and the contract permits explicit confirmation, retry with `confirm=true`.
+5. If confirmation cannot be established, do not bypass the shell policy through another mechanism.
+
+When the API supports `dry_run=true`, use it for ambiguous or compound commands so the platform can report the risk before the mutation is attempted.
+
+### Compound commands
+
+Compound commands are validated segment-by-segment.
+
+For `|`, `&&`, `||`, and `;`:
+- understand the effect of every segment;
+- do not assume the whole request is read-only because one segment is read-only;
+- if any segment requires confirmation, treat the compound request as requiring that confirmation;
+- respect the maximum segment and pipeline limits from the current shell metadata.
+
+### Interactive commands
+
+Commands that require stdin/PTY must use the interactive transport when the runtime says so. Do not try to simulate a persistent interactive session with repeated one-shot calls.
+
+### Shell result handling
+
+For every command, inspect:
+- HTTP status
+- structured Agent error fields on failure
+- exit_code
+- stdout
+- stderr
+- cwd
+- risk/dry-run metadata when returned
+
+An HTTP 2xx only means the API request was processed; the command may still have a non-zero `exit_code`.
+
+After a successful mutation command, verify the expected state instead of assuming success from stdout.
+
+### Shell replacement
+
+POST /services/{service_id}/shell/replace
+
+Requires confirm=true and the documented replacement scope.
+
+### Shell error recovery
+
+Do not interpret a generic 5xx as evidence that the container is unavailable.
+
+Use this decision order:
+1. Read the Agent `code` and `failure_domain`.
+2. If retryable is false, do not blindly retry.
+3. If the error indicates confirmation, handle confirmation according to the command risk contract.
+4. If the error indicates an invalid request or policy rejection, correct the request rather than retrying unchanged.
+5. If the error is runtime/infrastructure related, inspect service status/runtime logs before retrying.
+6. Preserve the request id for diagnostics.
+
 
 ## Local shell vs PassDeployer shell
 
@@ -502,11 +515,15 @@ Reuse a key only for an exact retry of the same request.
 
 ## Confirmation
 
-Destructive shell commands require confirmation.
+Destructive shell commands require confirmation according to the runtime shell policy.
 
 Shell-session replacement requires confirm=true.
 
-When the API returns CONFIRMATION_REQUIRED, inspect the operation contract and retry only when the requested action is intentionally confirmed.
+Confirmation is a server-side safety boundary:
+- never invent confirmation;
+- never use confirmation to bypass an authorization or scope restriction;
+- never rewrite an operation solely to avoid confirmation;
+- only retry with confirmation when the intended action is clearly the action requiring confirmation.
 
 ## Error handling
 
@@ -519,7 +536,15 @@ Prefer structured Agent error fields:
 - resource_effect
 - certainty
 
-Do not blindly retry authentication, authorization, validation or non-idempotent mutations.
+Classify failures before taking recovery action. In particular:
+- authentication/authorization errors require fixing credentials or scopes, not retries;
+- validation/policy errors require changing the request within the contract;
+- resource errors require verifying the target resource and identifiers;
+- infrastructure/runtime errors require inspection before a mutation retry;
+- non-idempotent operations must not be blindly replayed.
+
+Never turn an unknown error into a guessed success. Preserve request ids and verify resource state when an operation's effect is uncertain.
+
 
 ## Autonomous operating principle
 
