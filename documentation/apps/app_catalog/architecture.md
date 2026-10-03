@@ -105,7 +105,7 @@ Reconciliation may clear a stale pending dispatch claim and retry it. It never r
 
 ## 13. Deletion
 
-Application deletion requires a terminal ApplicationInstance and no active child Deploys. Child bindings are removed before the protected child Service/Deploy rows are deleted. Catalog Deploy archives are explicitly removed from storage.
+Application deletion requires a terminal ApplicationInstance and no active child Deploys. Child bindings prevent direct child deletion, while compound User deletion is allowed to remove the installation graph together with its owned children. Catalog Deploy archives are explicitly removed from storage.
 
 Direct child Service deletion is rejected while an ApplicationInstanceService binding exists. Binding deletion is protected by the database.
 
