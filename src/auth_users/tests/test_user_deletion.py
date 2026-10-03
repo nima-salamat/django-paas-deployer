@@ -68,6 +68,7 @@ class AuthUserDeletionTests(TestCase):
         )
 
         with patch("auth_users.session_auth._delete_session_cache_keys") as delete_cache:
-            self.user.delete()
+            with self.captureOnCommitCallbacks(execute=True):
+                self.user.delete()
 
         delete_cache.assert_called_once_with([session.session_id])
