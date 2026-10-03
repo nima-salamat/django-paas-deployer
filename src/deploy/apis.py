@@ -1416,29 +1416,51 @@ def _lock_service_for_user(service_id, user):
 
 
 def _repair_completed_deploy_state(deploy_item) -> bool:
-    """Repair a deploy whose runtime already proved success but status was not finalized."""
+    """Reconcile a deployment whose durable completion proof exists but row status is stale."""
     from deployments.core.state.manager import StateManager
+    from .models import DeploymentEventOutbox
 
     status_value = str(getattr(deploy_item, "status", "") or "").strip().lower()
     if status_value == DeploymentStatusChoices.SUCCEEDED:
         return True
 
-    if str(getattr(deploy_item, "stage", "") or "").strip().lower() != "deployment_completed":
-        return False
+    # The outbox is the authoritative durable lifecycle journal. A completed
+    # event is emitted only after the replacement has passed readiness and the
+    # activation boundary has succeeded. Prefer this proof over UI/polling state.
+    completion_event = (
+        DeploymentEventOutbox.objects
+        .filter(deployment_id=deploy_item.pk, stage__in=("deployment_completed", "finished"))
+        .order_by("-occurred_at", "-id")
+        .values("stage", "level", "payload")
+        .first()
+    )
+    completion_payload = dict((completion_event or {}).get("payload") or {})
+    completion_event_type = str(completion_payload.get("event_type") or "").lower()
+    completion_message = str(completion_payload.get("message") or "").lower()
+    outbox_proves_success = bool(
+        completion_event
+        and str((completion_event or {}).get("level") or "").lower() == "info"
+        and (
+            str((completion_event or {}).get("stage") or "").lower() == "deployment_completed"
+            or "deployment.finished" in completion_event_type
+            or "completed successfully" in completion_message
+        )
+    )
 
+    stage = str(getattr(deploy_item, "stage", "") or "").strip().lower()
     try:
         progress = int(getattr(deploy_item, "progress", 0) or 0)
     except (TypeError, ValueError):
         progress = 0
-    if progress < 100:
-        return False
-    if str(getattr(deploy_item, "health_status", "") or "").strip().lower() != "healthy":
-        return False
-    if str(getattr(deploy_item, "container_status", "") or "").strip().lower() != "running":
-        return False
-    if str(getattr(deploy_item, "image_status", "") or "").strip().lower() not in {"built", "ready"}:
-        return False
-    if str(getattr(deploy_item, "network_status", "") or "").strip().lower() != "ready":
+    row_proves_success = (
+        stage in {"deployment_completed", "finished"}
+        and progress >= 100
+        and str(getattr(deploy_item, "health_status", "") or "").strip().lower() == "healthy"
+        and str(getattr(deploy_item, "container_status", "") or "").strip().lower() == "running"
+        and str(getattr(deploy_item, "image_status", "") or "").strip().lower() in {"built", "ready"}
+        and str(getattr(deploy_item, "network_status", "") or "").strip().lower() == "ready"
+    )
+    if not (outbox_proves_success or row_proves_success):
         return False
 
     now = timezone.now()
@@ -1468,7 +1490,7 @@ def _repair_completed_deploy_state(deploy_item) -> bool:
             "level": "info",
             "message": "Deployment completion state reconciled before active selection.",
             "progress": 100,
-            "details": {"controlled_by": "set_deploy_state_repair", "previous_status": status_value},
+            "details": {"controlled_by": "set_deploy_state_repair", "previous_status": status_value, "proof": "outbox" if outbox_proves_success else "row_markers"},
         },
     )
     if committed:
