@@ -462,6 +462,7 @@ Every production source surface must be mapped to its owning canonical document 
 - `src/cms/apps.py` → [cms](./cms/README.md)
 - `src/cms/forms.py` → [cms](./cms/README.md)
 - `src/cms/management/commands/setup_wagtail_site.py` → [cms](./cms/README.md)
+- `src/cms/admin.py` → [cms](./cms/README.md)
 - `src/cms/models.py` → [cms](./cms/README.md)
 - `src/cms/viewsets.py` → [cms](./cms/README.md)
 - `src/cms/wagtail_admin/__init__.py` → [cms](./cms/README.md)
