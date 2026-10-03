@@ -29,9 +29,44 @@ def user_pre_delete_cleanup(sender, instance, **kwargs):
     memberships = list(
         ConversationParticipant.objects
         .select_related("conversation")
-        .filter(user_id=user_id, left_at__isnull=True)
+        .filter(user_id=user_id)
     )
+    message_conversation_ids = list(
+        Message.objects.filter(sender_id=user_id)
+        .values_list("conversation_id", flat=True)
+        .distinct()
+    )
+    conversation_ids = {
+        int(value)
+        for value in list(
+            membership.conversation_id for membership in memberships
+        ) + message_conversation_ids
+        if value is not None
+    }
     affected_users = {user_id}
+    try:
+        for uid in ConversationParticipant.objects.filter(
+            conversation_id__in=conversation_ids,
+        ).values_list("user_id", flat=True):
+            affected_users.add(int(uid))
+    except Exception:
+        logger.exception(
+            "Could not collect Messenger cache peers for deleted user=%s",
+            user_id,
+        )
+
+    try:
+        from .message_cache import MessageCacheService, ConversationCacheService
+        for conv_id in sorted(conversation_ids):
+            MessageCacheService.invalidate_chat_cache(conv_id)
+            ConversationCacheService.invalidate_participants(conv_id)
+        for uid in affected_users:
+            ConversationCacheService.invalidate_user_conv_list(uid)
+        from .consumers import _broadcast_presence
+        if user_id:
+            _broadcast_presence(user_id, False)
+    except Exception:
+        logger.exception("Messenger cache/presence cleanup failed for deleted user=%s", user_id)
 
     for membership in memberships:
         conversation = membership.conversation
@@ -65,17 +100,6 @@ def user_pre_delete_cleanup(sender, instance, **kwargs):
             from .api.members import _auto_transfer_or_cleanup
             _auto_transfer_or_cleanup(conversation, membership)
 
-    try:
-        from .message_cache import MessageCacheService, ConversationCacheService
-        for membership in memberships:
-            conv_id = membership.conversation_id
-            MessageCacheService.invalidate_chat_cache(conv_id)
-            ConversationCacheService.invalidate_participants(conv_id)
-        for uid in affected_users:
-            ConversationCacheService.invalidate_user_conv_list(uid)
-    except Exception:
-        logger.exception("Messenger cache cleanup failed for deleted user=%s", user_id)
-
 
 @receiver(post_delete, sender=User)
 def user_post_delete_cleanup(sender, instance, **kwargs):
@@ -90,8 +114,6 @@ def user_post_delete_cleanup(sender, instance, **kwargs):
         from django.core.cache import cache
         cache.delete(f"messenger:online:{user_id}")
         cache.delete(f"messenger:online_conns:{user_id}")
-        from .consumers import _broadcast_presence
-        _broadcast_presence(user_id, False)
     except Exception:
         logger.exception("Messenger presence cache cleanup failed for deleted user=%s", user_id)
 
