@@ -42,6 +42,7 @@ class IntegratedLifecycleContractTests(unittest.TestCase):
 
     def test_manual_active_selection_requires_success(self):
         api = self.read("deploy/apis.py")
+        self.assertIn("from .models import Deploy, DeployLog, DeploymentStatusChoices", api)
         self.assertIn('deploy_item.status != DeploymentStatusChoices.SUCCEEDED', api)
         self.assertIn('"deploy_not_ready"', api)
 
