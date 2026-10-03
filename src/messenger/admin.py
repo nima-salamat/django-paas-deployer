@@ -71,7 +71,7 @@ class ConversationAdmin(admin.ModelAdmin):
 @admin.register(ConversationParticipant)
 class ConversationParticipantAdmin(admin.ModelAdmin):
     list_display = ("id", "conversation", "user", "role", "joined_at", "left_at", "is_muted")
-    list_filter = ("role",)
+    
     search_fields = ("user__username", "conversation__title")
     raw_id_fields = ("conversation", "user")
 
@@ -343,7 +343,7 @@ class MessengerEventAdmin(AuditReadOnlyAdmin):
 
 @admin.register(MessageReadReceipt)
 class MessageReadReceiptAdmin(AuditReadOnlyAdmin):
-    list_display = ("id", "message", "user", "read_at")
+    list_display = ("id", "message", "user", "seen_at")
     raw_id_fields = ("message", "user")
 
 
@@ -355,6 +355,6 @@ class AttachmentViewOnceOpenAdmin(AuditReadOnlyAdmin):
 
 @admin.register(CallSessionParticipant)
 class CallSessionParticipantAdmin(AuditReadOnlyAdmin):
-    list_display = ("id", "call", "user", "role", "joined_at", "left_at")
+    list_display = ("id", "call", "user", "joined_at", "left_at")
     list_filter = ("role",)
     raw_id_fields = ("call", "user")
