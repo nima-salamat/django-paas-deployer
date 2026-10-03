@@ -182,6 +182,11 @@ class PlanAdminViewSet(ViewSet):
 
 
 class PlatformPlansAPIView(APIView):
+    # Public catalog endpoint: make the anonymous policy explicit and do not
+    # attempt to parse an invalid bearer token before the AllowAny check.
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
     def get(self, request):
         return Response(data=config.PLATFORM_CHOICES, status=status.HTTP_200_OK)
 
@@ -206,6 +211,11 @@ class PlatformPlansAPIView(APIView):
         return Response(data=serializer.data, status=status.HTTP_200_OK)
 
 class PlansApiView(APIView):
+    # Public customer-facing plan catalog. Keep this explicitly anonymous so
+    # the endpoint cannot accidentally inherit a future global permission.
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
     def get(self, request):
         """
         GET /plans/ 
