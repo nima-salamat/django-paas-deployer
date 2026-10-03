@@ -7,14 +7,7 @@ from django.db.models.signals import pre_delete
 from django.dispatch import receiver
 
 from users.models import User, Profile
-from services.models import Service, Volume, PrivateNetwork
-from deployments.core.manager.container_manager import Container
-from deployments.core.manager.volume_manager import Volume as DockerVolume
-from deployments.core.manager.image_manager import Image
-from deployments.core.deploy import Deploy as OrchestratorDeploy
-from deployments.core.db_deployer import DB_PLATFORMS, DBDeployer
-from core.global_settings.config import PlanTypeChoices
-from services.revisioning import get_active_deploy
+from services.models import Service
 
 logger = logging.getLogger(__name__)
 
