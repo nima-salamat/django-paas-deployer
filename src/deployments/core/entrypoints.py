@@ -126,7 +126,10 @@ def resolve_fastapi_entrypoint(tar_stream) -> dict | None:
                 if not file_obj:
                     continue
                 text = file_obj.read().decode("utf-8", errors="ignore")
-                if not re.search(r"\b(?:from\s+fastapi\s+import\s+[^\n]*\bFastAPI\b|import\s+fastapi\b)", text):
+                if not (
+                    re.search(r"\bFastAPI\s*\(", text)
+                    or re.search(r"\bfastapi\.FastAPI\s*\(", text)
+                ):
                     continue
 
                 module = name.rsplit(".", 1)[0].lstrip("./").replace("/", ".")
