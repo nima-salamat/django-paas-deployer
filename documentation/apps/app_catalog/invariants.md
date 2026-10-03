@@ -14,7 +14,7 @@
 - **I12:** Application RUNNING means all child Deploys are terminal and all required children succeeded.
 - **I13:** A stale coordinator task cannot execute after its dispatch claim has been replaced.
 - **I14:** `(user, slug)` uniquely identifies an installed application; unrelated IntegrityErrors are not translated to name conflicts.
-- **I15:** Catalog child Service and Deploy deletion is protected while bound to an ApplicationInstance.
+- **I15:** Catalog child Service and Deploy direct deletion is restricted while bound to an ApplicationInstance; compound deletion of the owning User may remove the complete graph.
 - **I16:** Database transactions do not imply storage/Docker transactions; catalog deployment archives are explicitly compensated on failed installation.
 - **I17:** Published endpoint reservations remain owned by the normal Service endpoint subsystem.
 - **I18:** `ServiceProcess.name="web"` is a compatibility identifier; `process_type` carries service role semantics.
