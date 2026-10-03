@@ -1042,6 +1042,18 @@ class DeployViewSet(ModelViewSet):
                 },
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if deploy.status in {
+            DeploymentStatusChoices.PENDING,
+            DeploymentStatusChoices.RUNNING,
+            DeploymentStatusChoices.ROLLING_BACK,
+        }:
+            return Response(
+                {
+                    "error": _("Active deployments must be cancelled and converged before deletion."),
+                    "code": "deployment_active_requires_cancel",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         deploy.delete()
         return Response({"success": _("Deploy deleted.")}, status=status.HTTP_200_OK)
 
