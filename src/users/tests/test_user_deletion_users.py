@@ -76,3 +76,91 @@ class UserDeletionTests(TestCase):
         self.assertFalse(TABLE_REGISTRY["deploy.Deploy"]["deletable"])
         self.assertFalse(TABLE_REGISTRY["deploy.DeployLog"]["deletable"])
         self.assertFalse(TABLE_REGISTRY["custom_emails.EmailTemplate"]["deletable"])
+
+
+    def test_direct_user_delete_is_blocked_when_owned_deploy_is_active(self):
+        from deploy.models import Deploy, DeploymentStatusChoices
+        from plans.models import Plan
+        from services.models import Service
+        from core.global_settings.config import NameChoices, PlanTypeChoices, StorageTypeChoices
+
+        user = User.objects.create_user(
+            username="delete-live-deploy",
+            email="delete-live-deploy@example.invalid",
+        )
+        plan = Plan.objects.create(
+            name=NameChoices.BRONZE,
+            platform="docker",
+            plan_type=PlanTypeChoices.APP,
+            max_cpu=1,
+            max_ram=512,
+            max_storage=10,
+            price_per_hour=0,
+            storage_type=StorageTypeChoices.SSD,
+        )
+        service = Service.objects.create(name="live-delete-service", user=user, plan=plan)
+        deploy = Deploy.objects.create(
+            name="live-delete-deploy",
+            service=service,
+            created_by=user,
+            version=1,
+            status=DeploymentStatusChoices.RUNNING,
+        )
+
+        with self.assertRaises(RuntimeError):
+            user.delete()
+
+        self.assertTrue(User.objects.filter(pk=user.pk).exists())
+        deploy.refresh_from_db()
+        self.assertEqual(deploy.status, DeploymentStatusChoices.RUNNING)
+
+    def test_hard_delete_request_deactivates_and_queues_convergence(self):
+        from deploy.models import Deploy, DeploymentStatusChoices
+        from plans.models import Plan
+        from services.models import Service
+        from rest_framework.test import APIRequestFactory, force_authenticate
+        from core.global_settings.config import NameChoices, PlanTypeChoices, StorageTypeChoices
+
+        operator = User.objects.create_superuser(
+            username="deletion-operator",
+            email="deletion-operator@example.invalid",
+            password="operator-password",
+        )
+        user = User.objects.create_user(
+            username="delete-queued",
+            email="delete-queued@example.invalid",
+        )
+        plan = Plan.objects.create(
+            name=NameChoices.BRONZE,
+            platform="docker",
+            plan_type=PlanTypeChoices.APP,
+            max_cpu=1,
+            max_ram=512,
+            max_storage=10,
+            price_per_hour=0,
+            storage_type=StorageTypeChoices.SSD,
+        )
+        service = Service.objects.create(name="queued-delete-service", user=user, plan=plan)
+        Deploy.objects.create(
+            name="queued-delete-deploy",
+            service=service,
+            created_by=user,
+            version=1,
+            status=DeploymentStatusChoices.RUNNING,
+        )
+
+        from users.admin_apis import AdminUserDetailAPIView
+
+        request = APIRequestFactory().delete(
+            f"/api/users/admin/users/{user.pk}/?hard=1"
+        )
+        force_authenticate(request, user=operator)
+
+        with patch("users.tasks.request_user_deletion_convergence"),              patch("users.tasks.finalize_user_deletion.delay"):
+            response = AdminUserDetailAPIView.as_view()(request, pk=user.pk)
+
+        self.assertEqual(response.status_code, 202)
+        user.refresh_from_db()
+        self.assertFalse(user.is_active)
+        self.assertIsNotNone(user.deletion_requested_at)
+        self.assertTrue(User.objects.filter(pk=user.pk).exists())
