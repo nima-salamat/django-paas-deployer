@@ -77,3 +77,63 @@ class MessengerUserDeletionTests(TestCase):
             self.assertFalse(path.exists())
 
         self.assertFalse(Conversation.objects.filter(pk=dm.pk).exists())
+
+    def test_group_deletion_cleans_avatar_and_group_service_share(self):
+        from core.global_settings.config import NameChoices, PlanTypeChoices, StorageTypeChoices
+        from plans.models import Plan
+        from services.models import Service, ServiceShare
+
+        user = User.objects.create_user(
+            username="messenger-last-member",
+            email="messenger-last-member@example.invalid",
+        )
+        service_owner = User.objects.create_user(
+            username="messenger-service-owner",
+            email="messenger-service-owner@example.invalid",
+        )
+        plan = Plan.objects.create(
+            name=NameChoices.BRONZE,
+            platform="docker",
+            plan_type=PlanTypeChoices.APP,
+            max_cpu=1,
+            max_ram=512,
+            max_storage=10,
+            price_per_hour=0,
+            storage_type=StorageTypeChoices.SSD,
+        )
+        service = Service.objects.create(
+            name="shared-group-delete",
+            user=service_owner,
+            plan=plan,
+        )
+
+        with TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            group = Conversation.objects.create(
+                type=Conversation.Type.GROUP,
+                title="Disposable group",
+                created_by=user,
+                avatar=SimpleUploadedFile(
+                    "group-avatar.png",
+                    b"not-a-real-image-but-no-model-validator-runs-here",
+                    content_type="image/png",
+                ),
+            )
+            avatar_path = Path(group.avatar.path)
+            ConversationParticipant.objects.create(
+                conversation=group,
+                user=user,
+                role=ConversationParticipant.Role.OWNER,
+            )
+            share = ServiceShare.objects.create(
+                service=service,
+                group=group,
+                shared_by=service_owner,
+                rules={"can_view": True},
+            )
+
+            user.delete()
+
+            self.assertFalse(Path(avatar_path).exists())
+            self.assertFalse(Conversation.objects.filter(pk=group.pk).exists())
+            self.assertFalse(ServiceShare.objects.filter(pk=share.pk).exists())
+            self.assertTrue(Service.objects.filter(pk=service.pk).exists())
