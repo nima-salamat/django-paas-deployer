@@ -15,3 +15,7 @@ class EmailLogAdmin(admin.ModelAdmin):
     list_filter = ("status","is_test")
     search_fields = ("recipient_email","subject")
     readonly_fields = ("recipient","recipient_email","template","subject","body_preview","status","error_message","sent_by","is_test","created_at","sent_at","failed_at","celery_task_id")
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
