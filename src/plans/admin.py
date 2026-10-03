@@ -17,14 +17,31 @@ class PlanAdmin(admin.ModelAdmin):
         "formatted_price",
         "price_day",
         "price_month",
+        "log_retention_days",
+        "log_storage_mb",
+        "persistent_logging",
+        "realtime_logging",
         "created_at",
         "updated_at",
     )
-    list_filter = ("platform", "plan_type", "storage_type", "name")
-    search_fields = ("name", "platform")
+    list_filter = (
+        "platform",
+        "plan_type",
+        "storage_type",
+        "name",
+        "persistent_logging",
+        "realtime_logging",
+        "log_quota_behavior",
+    )
+    search_fields = ("name", "platform", "log_quota_behavior")
     ordering = ("name", "platform")
     list_per_page = 30
-    readonly_fields = ("created_at", "updated_at", "price_per_day_display", "price_per_month_display")
+    readonly_fields = (
+        "created_at",
+        "updated_at",
+        "price_per_day_display",
+        "price_per_month_display",
+    )
 
     fieldsets = (
         (
@@ -51,6 +68,23 @@ class PlanAdmin(admin.ModelAdmin):
                     "price_per_hour",
                     "price_per_day_display",
                     "price_per_month_display",
+                ),
+            },
+        ),
+        (
+            "Logging policy",
+            {
+                "fields": (
+                    "log_retention_days",
+                    "log_storage_mb",
+                    "log_ingest_bytes_per_sec",
+                    "persistent_logging",
+                    "realtime_logging",
+                    "log_quota_behavior",
+                ),
+                "description": (
+                    "Blank/empty nullable overrides inherit the platform default. "
+                    "These limits are separate from the service disk quota."
                 ),
             },
         ),
