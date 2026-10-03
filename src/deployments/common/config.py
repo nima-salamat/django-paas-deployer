@@ -303,6 +303,133 @@ def _valid_rel_path(value: Any) -> bool:
     parts = [p for p in text.split("/") if p]
     return bool(parts) and all(p not in {".", ".."} for p in parts) and bool(_SAFE_RELATIVE_PATH_RE.fullmatch(text))
 
+FASTAPI_CONFIG_DEFAULTS = {
+    "proxy_headers": True,
+    "access_log": True,
+    "log_level": "info",
+    "timeout_keep_alive": 5,
+    "timeout_graceful_shutdown": 30,
+    "timeout_worker_healthcheck": 5,
+    "backlog": 2048,
+}
+
+_FASTAPI_LOG_LEVELS = {"critical", "error", "warning", "info", "debug", "trace"}
+_FASTAPI_INT_LIMITS = {
+    "limit_concurrency": (1, 1_000_000),
+    "limit_max_requests": (1, 10_000_000),
+    "limit_max_requests_jitter": (0, 10_000_000),
+    "backlog": (1, 1_000_000),
+    "timeout_keep_alive": (0, 3600),
+    "timeout_graceful_shutdown": (0, 3600),
+    "timeout_worker_healthcheck": (1, 3600),
+}
+_FASTAPI_ENTRYPOINT_RE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*:"
+    r"[A-Za-z_][A-Za-z0-9_]*$"
+)
+_FASTAPI_ROOT_PATH_RE = re.compile(r"^/[A-Za-z0-9._/~%-]*$")
+_FASTAPI_APP_DIR_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+
+def normalize_fastapi_config(value: Any, *, warnings: list[str] | None = None) -> dict[str, Any]:
+    """Validate and normalize the tenant-facing FastAPI runtime profile.
+
+    The profile is intentionally narrow: it configures Uvicorn behavior while
+    keeping host binding and worker count server-owned. ``reload`` is never
+    accepted because production deployments must be deterministic.
+    """
+    warnings = warnings if warnings is not None else []
+    if value in (None, ""):
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("fastapi configuration must be an object.")
+
+    raw = dict(value)
+    out: dict[str, Any] = {}
+
+    blocked = {
+        "host": "Host is controlled by PassDeployer and remains 0.0.0.0.",
+        "workers": "Worker count is controlled by the service plan.",
+        "reload": "Hot reload is not supported in production deployments.",
+    }
+    for key, message in blocked.items():
+        if key in raw:
+            warnings.append(f"FastAPI setting '{key}' was ignored. {message}")
+
+    entrypoint = str(raw.get("entrypoint") or raw.get("entry_point") or "").strip()
+    if entrypoint:
+        if not _FASTAPI_ENTRYPOINT_RE.fullmatch(entrypoint):
+            raise ValueError("fastapi.entrypoint must be a Python import target such as 'app.main:app'.")
+        out["entrypoint"] = entrypoint
+
+    app_dir = str(raw.get("app_dir") or "").strip().replace("\\", "/").strip("/")
+    if app_dir:
+NaN
+            raise ValueError("fastapi.app_dir must be a safe relative project directory.")
+        out["app_dir"] = app_dir
+
+    proxy_headers = raw.get("proxy_headers")
+    if proxy_headers not in (None, ""):
+        out["proxy_headers"] = as_bool(proxy_headers)
+
+    forwarded = raw.get("forwarded_allow_ips")
+    if forwarded not in (None, ""):
+        if isinstance(forwarded, (list, tuple, set)):
+            items = [str(item).strip() for item in forwarded if str(item).strip()]
+            forwarded = ",".join(items)
+        forwarded = str(forwarded).strip()
+        if not forwarded:
+            raise ValueError("fastapi.forwarded_allow_ips cannot be empty.")
+        if len(forwarded) > 512 or not re.fullmatch(r"[A-Za-z0-9:./,_\-\s]+", forwarded):
+            raise ValueError("fastapi.forwarded_allow_ips contains invalid characters.")
+        if "*" in forwarded:
+            warnings.append("FastAPI forwarded_allow_ips='*' trusts forwarded headers from any source; use a restricted proxy IP/CIDR when possible.")
+        out["forwarded_allow_ips"] = forwarded
+
+    root_path = str(raw.get("root_path") or "").strip()
+    if root_path:
+        if not _FASTAPI_ROOT_PATH_RE.fullmatch(root_path):
+            raise ValueError("fastapi.root_path must be an HTTP path beginning with '/'.")
+        out["root_path"] = root_path.rstrip("/") or "/"
+
+    log_level = str(raw.get("log_level") or "").strip().lower()
+    if log_level:
+        if log_level not in _FASTAPI_LOG_LEVELS:
+            raise ValueError("fastapi.log_level must be one of: " + ", ".join(sorted(_FASTAPI_LOG_LEVELS)) + ".")
+        out["log_level"] = log_level
+
+    access_log = raw.get("access_log")
+    if access_log not in (None, ""):
+        out["access_log"] = as_bool(access_log)
+
+    for key, bounds in _FASTAPI_INT_LIMITS.items():
+        value_key = raw.get(key)
+        if value_key in (None, ""):
+            continue
+        low, high = bounds
+        try:
+            number = int(value_key)
+        except (TypeError, ValueError):
+            raise ValueError(f"fastapi.{key} must be an integer.")
+        if number < low or number > high:
+            raise ValueError(f"fastapi.{key} must be between {low} and {high}.")
+        out[key] = number
+
+    for key, default in FASTAPI_CONFIG_DEFAULTS.items():
+        if key in raw and key not in out:
+            out[key] = default
+
+    known = {
+        "entrypoint", "entry_point", "app_dir", "proxy_headers",
+        "forwarded_allow_ips", "root_path", "log_level", "access_log",
+        *(_FASTAPI_INT_LIMITS.keys()),
+        "host", "workers", "reload",
+    }
+    for key in raw:
+        if str(key) not in known:
+            warnings.append(f"Unknown FastAPI setting '{key}' was ignored.")
+
+    return out
+
 def validate_platform_config(raw: Any, platform: str, *, project_paths: set[str] | None = None) -> dict[str, Any]:
     """Validate scoped customizations without disabling unrelated auto detection.
 
@@ -346,6 +473,12 @@ def validate_platform_config(raw: Any, platform: str, *, project_paths: set[str]
             if v and not re.match(r"^https?://[^\s'\"`;&|<>]+/?$", v):
                 errors.append(f"Invalid {k}: must be an http(s) URL without shell metacharacters.")
         normalized["url_handling"] = dict(uh)
+
+    if p == "fastapi":
+        normalized["fastapi"] = normalize_fastapi_config(
+            cfg.get("fastapi"),
+            warnings=warnings,
+        )
 
     if errors:
         raise ValueError("Platform configuration validation failed: " + "; ".join(errors))
