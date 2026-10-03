@@ -6,7 +6,4 @@ class AuthUsersConfig(AppConfig):
     name = 'auth_users'
 
     def ready(self):
-        try:
-            from . import deletion_signals  # noqa: F401
-        except Exception:
-            pass
+        from . import deletion_signals  # noqa: F401
