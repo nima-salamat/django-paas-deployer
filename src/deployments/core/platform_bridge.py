@@ -209,6 +209,11 @@ def enrich_config_from_project(
     _NO_ENTRYPOINT_PROMOTE = {
         "react", "vue", "vuejs", "angular", "vite", "static", "statichtmlcss",
         "php", "laravel", "lumen", "symfony", "codeigniter",
+        # Python-family runtimes need the renderer to resolve source roots
+        # and generate the executable target. Promoting a detected
+        # "uvicorn src.app.main:app" into entry_point would bypass that
+        # normalization.
+        "python", "django", "flask", "fastapi",
     }
     _effective_platform = (
         (project_cfg.platform or config.platform or "")
