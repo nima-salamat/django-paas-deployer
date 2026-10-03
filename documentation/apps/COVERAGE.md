@@ -325,6 +325,7 @@ Every production source surface must be mapped to its owning canonical document 
 - `src/app_catalog/management/__init__.py` → [app_catalog](./app_catalog/README.md)
 - `src/app_catalog/management/commands/__init__.py` → [app_catalog](./app_catalog/README.md)
 - `src/app_catalog/management/commands/migrate_service_domain.py` → [app_catalog](./app_catalog/README.md)
+- `src/app_catalog/admin.py` → [app_catalog](./app_catalog/README.md)
 - `src/app_catalog/models.py` → [app_catalog](./app_catalog/README.md)
 - `src/app_catalog/plan.py` → [app_catalog](./app_catalog/README.md)
 - `src/app_catalog/serializers.py` → [app_catalog](./app_catalog/README.md)
