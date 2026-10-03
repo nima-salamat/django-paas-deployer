@@ -66,7 +66,7 @@ Regression: the PostgreSQL transaction-race test.
 
 Root cause: generic Service deletion had no application ownership boundary.
 
-Fix: ApplicationInstanceService now protects child Service/Deploy bindings at the database layer; user/admin Service APIs reject catalog-managed child deletion.
+Fix: ApplicationInstanceService now restricts direct child Service/Deploy deletion at the database layer while allowing compound User deletion; user/admin Service APIs reject catalog-managed child deletion.
 
 Regression: `test_catalog_child_service_delete_is_rejected`.
 
