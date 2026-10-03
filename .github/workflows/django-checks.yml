@@ -71,6 +71,9 @@ jobs:
       - name: Migration drift check
         run: python manage.py makemigrations --check --dry-run --verbosity 2
 
+      - name: Admin model coverage and Wagtail policy regression tests
+        run: pytest -q src/core/tests/test_django_admin_coverage.py
+
       - name: Regression tests
         run: pytest -q core/tests/test_wagtail_cache_admin.py deployments/tests/test_deploy_file_upload_regressions.py src/services/tests_shell_backend_regressions.py
       - name: Agent application tests
