@@ -486,7 +486,7 @@ def _render_django(dockerfile_template, tar_stream, config, logger):
     except Exception:
         pass
     rendered = _prepare_python_dependency_install(rendered, tar_stream, install_cmd)
-    rendered = _inject_python_import_path(rendered, tar_stream, runtime_module)
+    rendered = _inject_python_import_path(rendered, tar_stream, module)
 
     workers = _worker_count_from_config(config)
 
@@ -763,7 +763,7 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
     except Exception:
         pass
     rendered = _prepare_python_dependency_install(rendered, tar_stream, install_cmd)
-    rendered = _inject_python_import_path(rendered, tar_stream, runtime_module)
+    rendered = _inject_python_import_path(rendered, tar_stream, module)
 
     workers = _worker_count_from_config(config)
 
