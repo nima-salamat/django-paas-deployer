@@ -16,7 +16,7 @@ Account deletion is coordinated by `users.tasks.finalize_user_deletion`. `Applic
 
 Queue routing for these tasks is configured centrally in src/config/settings.py. Child deployment work remains subject to deployments ownership/retry/fencing rules.
 
-Tests: `tests/test_user_deletion.py`, test_application_plan.py, test_adversarial_contracts.py, test_compatibility.py and integration/test_ready_app_runtime.py protect deletion, planning, security and normal runtime integration.
+Tests: `users/tests/test_user_deletion_users.py`, test_application_plan.py, test_adversarial_contracts.py, test_compatibility.py and integration/test_ready_app_runtime.py protect deletion, planning, security and normal runtime integration.
 
 ## Management command: migrate_service_domain
 
