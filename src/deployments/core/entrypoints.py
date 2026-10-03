@@ -114,6 +114,8 @@ def resolve_python_runtime_context(names, module: str | None) -> dict:
         return {'module': module, 'source_root': '', 'working_directory': '/app'}
 
     if exists_as_module(parts):
+        best_source_root = None
+        best_module = module
         for cut in range(1, len(parts)):
             prefix_parts = parts[:cut]
             remainder = parts[cut:]
@@ -121,11 +123,14 @@ def resolve_python_runtime_context(names, module: str | None) -> dict:
             if f'{prefix_path}/__init__.py' in normalized:
                 break
             if exists_as_module(prefix_parts + remainder):
-                return {
-                    'module': '.'.join(remainder),
-                    'source_root': prefix_path,
-                    'working_directory': f'/app/{prefix_path}',
-                }
+                best_source_root = prefix_path
+                best_module = '.'.join(remainder)
+        if best_source_root:
+            return {
+                'module': best_module,
+                'source_root': best_source_root,
+                'working_directory': f'/app/{best_source_root}',
+            }
         return {'module': module, 'source_root': '', 'working_directory': '/app'}
 
     module_path = '/'.join(parts)
