@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from rest_framework import serializers
-from .catalog import ApplicationCatalog, CatalogDefinition
+from .catalog import ApplicationCatalog, CatalogDefinition, CATALOG_ROOT
 from .models import ApplicationInstance
 
 
@@ -10,7 +10,8 @@ PUBLIC_VISIBILITY = "public"
 
 def is_public_definition(definition: CatalogDefinition) -> bool:
     source = definition.source.resolve()
-    first_party = (source.parent == (definition.source.parent.parent / "first_party")) if source.parent.parent else False
+    first_party_root = (CATALOG_ROOT / "first_party").resolve()
+    first_party = source.parent == first_party_root
     return (
         str(definition.data.get("visibility") or "internal").strip().lower() == PUBLIC_VISIBILITY
         and first_party
