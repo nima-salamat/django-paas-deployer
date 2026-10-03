@@ -1230,7 +1230,7 @@ def shell_health_apiview(request, service_id):
                     (["php", "-v"], "php_version"),
                     (["php", "artisan", "about", "--only=environment"], "laravel_env"),
                 ]
-            elif platform in {"django", "python"}:
+            elif platform in {"django", "python", "fastapi"}:
                 probes = [(["python", "--version"], "python_version")]
             elif platform == "node":
                 probes = [(["node", "-v"], "node_version"), (["npm", "-v"], "npm_version")]
