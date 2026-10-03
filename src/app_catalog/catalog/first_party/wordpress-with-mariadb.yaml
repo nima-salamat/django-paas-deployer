@@ -5,9 +5,56 @@
 # logo: svgs/wordpress.svg
 # port: 80
 
+x-passdeployer:
+  id: wordpress
+  name: WordPress
+  version: "7.1.2"
+  software_version: "7.1.2"
+  definition_version: "1.0"
+  visibility: public
+  featured: true
+  features:
+    - Managed WordPress application
+    - Managed MariaDB database
+    - Persistent WordPress storage
+    - HTTPS platform address
+  requirements:
+    - Complete the WordPress setup wizard after deployment
+    - Use the platform-provided HTTPS address
+  outputs:
+    - url
+  managed_components:
+    - label: WordPress
+      role: application
+    - label: MariaDB
+      role: database
+  fields:
+    - id: domain
+      label: Platform address
+      type: domain
+      required: false
+      user_editable: false
+    - id: service_user_wordpress
+      label: WordPress database user
+      type: string
+      default: app
+      user_editable: false
+    - id: service_password_wordpress
+      label: WordPress database password
+      type: secret
+      secret: true
+      generate: password:32
+      user_editable: false
+    - id: service_password_root
+      label: MariaDB root password
+      type: secret
+      secret: true
+      generate: password:32
+      user_editable: false
+
 services:
   wordpress:
-    image: wordpress:latest
+    image: wordpress:7.1.2-php8.3-apache
     volumes:
       - wordpress-files:/var/www/html
     environment:
@@ -24,7 +71,7 @@ services:
       timeout: 10s
       retries: 10
   mariadb:
-    image: mariadb:11
+    image: mariadb:11.8.9
     volumes:
       - mariadb-data:/var/lib/mysql
     environment:
