@@ -12,8 +12,6 @@ from deployments.core.manager.volume_manager import Volume as DockerVolume
 from deployments.core.manager.image_manager import Image
 from deployments.core.manager.network_manager import Network
 from core.global_settings.config import PlanTypeChoices
-from deployments.application.cancel import CancelDeploymentUseCase
-from deployments.infrastructure.django_cancellation import DjangoDeploymentCancellationGateway
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +19,9 @@ logger = logging.getLogger(__name__)
 def _cancel_active_deployments_for_service(service: Service) -> None:
     """Request cancellation for every non-terminal deployment owned by a Service."""
     from deploy.models import DeploymentStatusChoices
+
+    from deployments.application.cancel import CancelDeploymentUseCase
+    from deployments.infrastructure.django_cancellation import DjangoDeploymentCancellationGateway
 
     gateway = DjangoDeploymentCancellationGateway()
     deploys = list(
