@@ -1415,20 +1415,6 @@ def _lock_service_for_user(service_id, user):
     return svc
 
 
-def _lock_service_for_user(service_id, user):
-    """Lock service row if user is owner or has any active share (view)."""
-    from services.api.sharing import user_can_access_service
-    svc = Service.objects.select_for_update().filter(pk=service_id).first()
-    if svc is None:
-        raise Service.DoesNotExist
-    if str(svc.user_id) == str(user.id):
-        return svc
-    allowed, _ = user_can_access_service(svc, user, action="can_view")
-    if not allowed:
-        raise Service.DoesNotExist
-    return svc
-
-
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
