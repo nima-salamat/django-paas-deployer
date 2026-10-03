@@ -1883,6 +1883,21 @@ def inspect_deploy_zip_apiview(request):
                     suggested_config["entry_point"] = enriched.entry_point
 
                 is_python_family = detected_platform in _PYTHON_FAMILY
+                if is_python_family:
+                    # Surface the detector's non-secret runtime settings so
+                    # the frontend can present a complete, reviewable FastAPI
+                    # configuration instead of only showing platform/entrypoint.
+                    for source_key, target_key in (
+                        ("runtime_version", "python_version"),
+                        ("install_command", "install_command"),
+                        ("package_manager", "package_manager"),
+                        ("working_directory", "working_directory"),
+                        ("port", "port"),
+                    ):
+                        value = getattr(enriched, source_key, None)
+                        if value not in (None, ""):
+                            suggested_config[target_key] = value
+
 
                 # server_type / celery / worker_count only for Python-family apps.
                 # Never surface them for PHP, Node, static, Go, etc.
