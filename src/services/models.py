@@ -43,7 +43,7 @@ class Service(BaseModel):
     network = models.ForeignKey(
         PrivateNetwork,
         verbose_name=_("Private Network"),
-        on_delete=models.SET_NULL,
+        on_delete=models.RESTRICT,
         null=True,
         related_name="Service",
     )
