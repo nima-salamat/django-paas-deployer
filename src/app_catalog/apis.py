@@ -4,10 +4,22 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from auth_users.authentication import SessionJWTAuthentication as JWTAuthentication
-from .catalog import ApplicationCatalog, CatalogValidationError, redact_resolved, redacted_definition, resolve_variant
+from .catalog import ApplicationCatalog, CatalogValidationError
 from .models import ApplicationInstance, ApplicationStatus
-from .serializers import ApplicationInstanceSerializer, catalog_listing
-from .services import ApplicationNameConflict, create_application_installation
+from .serializers import (
+    ApplicationInstanceSerializer,
+    catalog_listing,
+    is_public_definition,
+    public_catalog_definition,
+    public_resolution_payload,
+)
+from .services import (
+    ApplicationNameConflict,
+    create_application_installation,
+    prepare_application_resolution,
+    resource_summary_for_resolved,
+    safe_slug,
+)
 from .tasks import start_application_installation, cancel_application_installation
 
 
@@ -27,16 +39,43 @@ class CatalogDetailAPIView(CatalogPermissionMixin, APIView):
             definition = ApplicationCatalog.get(catalog_id)
         except KeyError:
             return Response({"error": "Catalog application not found."}, status=404)
-        return Response(redacted_definition(definition))
+        if not is_public_definition(definition):
+            return Response({"error": "Catalog application not found."}, status=404)
+        return Response(public_catalog_definition(definition))
 
 
 class CatalogResolveAPIView(CatalogPermissionMixin, APIView):
     def post(self, request, catalog_id):
         try:
             definition = ApplicationCatalog.get(catalog_id)
-            variant = str(request.data.get("variant") or "")
-            resolved = resolve_variant(definition, variant, request.data.get("config") or {})
-            return Response(redact_resolved(resolved))
+            if not is_public_definition(definition):
+                return Response({"error": "Catalog application not found."}, status=404)
+
+            name = str(request.data.get("name") or "").strip()
+            plan_id = request.data.get("plan_id")
+            variant = str(request.data.get("variant") or "").strip()
+            config = request.data.get("config") or {}
+
+            if not name or not plan_id or not variant:
+                raise CatalogValidationError("name, plan_id, variant, and config are required.")
+            if not isinstance(config, dict):
+                raise CatalogValidationError("config must be an object.")
+
+            resolved = prepare_application_resolution(
+                definition,
+                variant,
+                name,
+                config,
+                public=True,
+            )
+
+            from plans.models import Plan
+            plan = Plan.objects.filter(pk=plan_id).first()
+            if not plan or str(plan.platform) != "docker":
+                raise CatalogValidationError("Selected plan must be a Docker application/ready-made plan.")
+
+            resource_summary = resource_summary_for_resolved(resolved, plan)
+            return Response(public_resolution_payload(definition, resolved, resource_summary))
         except (KeyError, CatalogValidationError) as exc:
             return Response({"error": str(exc)}, status=400)
 
@@ -48,10 +87,30 @@ class ApplicationInstanceListCreateAPIView(CatalogPermissionMixin, APIView):
 
     def post(self, request):
         try:
-            instance = create_application_installation(request.user, request.data)
+            instance = create_application_installation(
+                request.user,
+                request.data,
+                require_public=True,
+            )
         except ApplicationNameConflict as exc:
+            existing_id = exc.existing_installation_id
+            if not existing_id:
+                try:
+                    requested_name = str(request.data.get("name") or "")
+                    existing_id = (
+                        ApplicationInstance.objects
+                        .filter(user=request.user, slug=safe_slug(requested_name))
+                        .values_list("pk", flat=True)
+                        .first()
+                    )
+                except Exception:
+                    existing_id = None
             return Response(
-                {"error": str(exc), "code": "application_name_conflict"},
+                {
+                    "error": str(exc),
+                    "code": "application_name_conflict",
+                    **({"existing_installation_id": str(existing_id)} if existing_id else {}),
+                },
                 status=status.HTTP_409_CONFLICT,
             )
         except (CatalogValidationError, ValueError) as exc:
