@@ -43,3 +43,24 @@ def _volume_changed(sender, instance, **kwargs):
             invalidate_all_services()
     except Exception:
         pass
+
+@receiver(post_save, sender="services.ServiceShare")
+@receiver(post_delete, sender="services.ServiceShare")
+def _service_share_changed(sender, instance, **kwargs):
+    """Invalidate service listings when sharing authorization changes."""
+    try:
+        from core.app_cache import invalidate_all_services
+        invalidate_all_services()
+    except Exception:
+        pass
+
+
+@receiver(post_save, sender="services.ServiceShareMember")
+@receiver(post_delete, sender="services.ServiceShareMember")
+def _service_share_member_changed(sender, instance, **kwargs):
+    """Invalidate service listings when member-specific sharing changes."""
+    try:
+        from core.app_cache import invalidate_all_services
+        invalidate_all_services()
+    except Exception:
+        pass
