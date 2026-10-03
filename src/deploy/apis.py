@@ -1881,8 +1881,25 @@ def inspect_deploy_zip_apiview(request):
                 }
                 if getattr(enriched, "entry_point", None):
                     suggested_config["entry_point"] = enriched.entry_point
+                if getattr(enriched, "start_command", None):
+                    suggested_config["start_command"] = enriched.start_command
 
                 is_python_family = detected_platform in _PYTHON_FAMILY
+                if is_python_family:
+                    # Surface the detector's non-secret runtime settings so
+                    # the frontend can present a complete, reviewable FastAPI
+                    # configuration instead of only showing platform/entrypoint.
+                    for source_key, target_key in (
+                        ("runtime_version", "python_version"),
+                        ("install_command", "install_command"),
+                        ("package_manager", "package_manager"),
+                        ("working_directory", "working_directory"),
+                        ("port", "port"),
+                    ):
+                        value = getattr(enriched, source_key, None)
+                        if value not in (None, ""):
+                            suggested_config[target_key] = value
+
 
                 # server_type / celery / worker_count only for Python-family apps.
                 # Never surface them for PHP, Node, static, Go, etc.
@@ -2023,6 +2040,7 @@ def inspect_deploy_zip_apiview(request):
                 "framework": detection_raw.get("framework"),
                 "server_type": suggested_config.get("server_type"),
                 "entrypoint": suggested_config.get("entry_point"),
+                "start_command": suggested_config.get("start_command"),
                 "django_settings_module": detection_raw.get("django_settings_module"),
                 "static_dir": detection_raw.get("static_dir"),
                 "media_dir": detection_raw.get("media_dir"),

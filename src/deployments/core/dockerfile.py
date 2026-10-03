@@ -8,6 +8,7 @@ from .entrypoints import (
     check_requirements_txt,
     resolve_django_entrypoint,
     resolve_flask_entrypoint,
+    resolve_fastapi_entrypoint,
     resolve_node_entrypoint,
 )
 from .exceptions import DeploymentValidationError
@@ -630,11 +631,29 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
             f"Detecting {platform} application entrypoint.",
             progress=12,
         )
-    entrypoint = resolve_flask_entrypoint(
-        tar_stream, server_type=server_type_override
-    )
-    module = entrypoint.get("module", "app")
-    callable_name = entrypoint.get("callable", "app")
+    if platform == "fastapi":
+        entrypoint = resolve_fastapi_entrypoint(tar_stream) or {
+            "type": "asgi",
+            "module": None,
+            "callable": None,
+            "detected": False,
+        }
+    else:
+        entrypoint = resolve_flask_entrypoint(
+            tar_stream, server_type=server_type_override
+        )
+
+    if platform == "fastapi" and not entrypoint.get("detected") and not entry_point_override:
+        raise DeploymentValidationError(
+            "FastAPI application entrypoint could not be detected. "
+            "Expected a FastAPI app such as 'app = FastAPI()'. "
+            "Set Deploy.config entry_point or start_command to override detection.",
+            stage="entrypoint_detection",
+            details={"platform": "fastapi", "detected": False},
+        )
+
+    module = entrypoint.get("module") or "app"
+    callable_name = entrypoint.get("callable") or "app"
     resolved_type = entrypoint.get("type", "wsgi")
 
     try:
@@ -673,11 +692,16 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
         rendered = _inject_pip_install(rendered, packages)
         return _replace_cmd(rendered, web_cmd)
 
-    web_cmd = (
-        _align_entry_point_workers(entry_point_override, workers)
-        if entry_point_override
-        else _flask_web_command(module, callable_name, resolved_type, workers=workers)
-    )
+    if entry_point_override:
+        web_cmd = _align_entry_point_workers(entry_point_override, workers)
+    elif platform == "fastapi":
+        target = f"{module}:{callable_name}"
+        web_cmd = _align_entry_point_workers(
+            f"uvicorn {target} --host 0.0.0.0 --port {getattr(config, 'port', None) or 8000}",
+            workers,
+        )
+    else:
+        web_cmd = _flask_web_command(module, callable_name, resolved_type, workers=workers)
 
     packages = _runtime_pip_packages(
         platform=platform,
@@ -3166,7 +3190,7 @@ class DockerfileGenerator:
             rendered = _render_django(dockerfile_template, tar_stream, config, logger)
         elif platform in ("flask", "python", "fastapi"):
             rendered = _render_flask_or_python(
-                platform if platform != "fastapi" else "python",
+                platform,
                 dockerfile_template, tar_stream, config, logger,
             )
         elif platform in (

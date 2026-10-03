@@ -90,6 +90,83 @@ def resolve_django_entrypoint(tar_stream, *, server_type: str | None = None) -> 
     return {"type": detected["type"], "module": detected["module"], "override": False}
 
 
+def resolve_fastapi_entrypoint(tar_stream) -> dict | None:
+    """Resolve a concrete FastAPI ASGI target from the deployment archive."""
+    candidates: list[dict] = []
+    tar_stream.seek(0)
+    try:
+        with tarfile.open(fileobj=tar_stream, mode="r:*") as tar:
+            members = [
+                m for m in tar.getmembers()
+                if m.isfile()
+                and m.name.replace("\\", "/").lower().endswith(".py")
+                and m.name.count("/") <= 5
+            ]
+            members.sort(
+                key=lambda m: (
+                    {
+                        "main.py": 0,
+                        "app.py": 1,
+                        "server.py": 2,
+                        "api.py": 3,
+                    }.get(m.name.rsplit("/", 1)[-1].lower(), 10),
+                    m.name.count("/"),
+                    m.name,
+                )
+            )
+            for member in members:
+                name = member.name.replace("\\", "/")
+                lower = name.lower()
+                if any(
+                    part in lower.split("/")
+                    for part in ("tests", "test", "__pycache__", "migrations")
+                ) or lower.rsplit("/", 1)[-1].startswith("test_"):
+                    continue
+                file_obj = tar.extractfile(member)
+                if not file_obj:
+                    continue
+                text = file_obj.read().decode("utf-8", errors="ignore")
+                if not (
+                    re.search(r"\bFastAPI\s*\(", text)
+                    or re.search(r"\bfastapi\.FastAPI\s*\(", text)
+                ):
+                    continue
+
+                module = name.rsplit(".", 1)[0].lstrip("./").replace("/", ".")
+                for match in re.finditer(
+                    r"(?P<callable>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:fastapi\.)?FastAPI\s*\(",
+                    text,
+                ):
+                    callable_name = match.group("callable")
+                    name_rank = {"app": 100, "application": 90, "api": 80}.get(callable_name, 70)
+                    file_rank = {
+                        "main.py": 30,
+                        "app.py": 24,
+                        "server.py": 18,
+                        "api.py": 16,
+                    }.get(name.rsplit("/", 1)[-1].lower(), 0)
+                    candidates.append({
+                        "type": "asgi",
+                        "module": module,
+                        "callable": callable_name,
+                        "priority": name_rank + file_rank - name.count("/"),
+                        "detected": True,
+                    })
+                    break
+    finally:
+        tar_stream.seek(0)
+
+    if not candidates:
+        return {
+            "type": "asgi",
+            "module": None,
+            "callable": None,
+            "detected": False,
+            "override": False,
+        }
+    return max(candidates, key=lambda c: c["priority"])
+
+
 def resolve_flask_entrypoint(tar_stream, *, server_type: str | None = None) -> dict:
     """Detect Flask / FastAPI / create_app entrypoint."""
     server_type_clean = (server_type or "").strip().lower() or None
