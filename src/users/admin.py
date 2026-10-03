@@ -51,6 +51,7 @@ class UserAdmin(BaseUserAdmin):
         "is_active_badge",
         "is_staff",
         "is_superuser",
+        "deletion_requested_at",
         "email_verified",
         "phone_number_verified",
         "date_joined",
