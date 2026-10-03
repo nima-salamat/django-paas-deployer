@@ -351,3 +351,126 @@ class ShellSessionAdmin(admin.ModelAdmin):
     list_filter = ("status", "platform")
     search_fields = ("service__name", "user__email", "user__username")
     readonly_fields = ("token_hash", "created_at", "updated_at", "last_used_at", "expires_at", "closed_at")
+
+from core.django_admin import AuditReadOnlyAdmin, ProjectModelAdmin, SensitiveReadOnlyAdmin
+from .models import (
+    ServiceProcess, ServiceRevision, ServiceEnvironmentVariable, ServiceSecret,
+    ServiceSecretVersion, ServiceEndpoint, ServicePortReservation,
+    ServiceNetworkAttachment, DatabaseResource, DatabaseCredential,
+    ServiceDatabaseBinding, ServiceShare, ServiceShareMember, ServiceShareEvent,
+    ShellAuditEvent,
+)
+
+
+@admin.register(ServiceProcess)
+class ServiceProcessAdmin(ProjectModelAdmin):
+    list_display = ("id", "service", "name", "process_type", "replicas", "enabled", "created_at")
+    list_filter = ("process_type", "enabled")
+    search_fields = ("name", "service__name")
+    raw_id_fields = ("service",)
+    readonly_fields = ("id", "created_at", "updated_at")
+
+
+@admin.register(ServiceRevision)
+class ServiceRevisionAdmin(SensitiveReadOnlyAdmin):
+    list_display = ("id", "service", "revision_number", "state", "created_by", "activated_at", "created_at")
+    list_filter = ("state",)
+    search_fields = ("service__name", "revision_number")
+    raw_id_fields = ("service", "source_deploy", "created_by")
+
+
+@admin.register(ServiceEnvironmentVariable)
+class ServiceEnvironmentVariableAdmin(SensitiveReadOnlyAdmin):
+    list_display = ("id", "service", "key", "scope", "enabled", "secret", "created_at")
+    list_filter = ("scope", "enabled")
+    search_fields = ("key", "service__name")
+    raw_id_fields = ("service", "secret")
+
+
+@admin.register(ServiceSecret)
+class ServiceSecretAdmin(SensitiveReadOnlyAdmin):
+    list_display = ("id", "service", "key", "current_version", "enabled", "created_at")
+    list_filter = ("enabled",)
+    search_fields = ("key", "service__name")
+    raw_id_fields = ("service",)
+
+
+@admin.register(ServiceSecretVersion)
+class ServiceSecretVersionAdmin(SensitiveReadOnlyAdmin):
+    list_display = ("id", "secret", "version", "created_at")
+    raw_id_fields = ("secret",)
+
+
+@admin.register(ServiceEndpoint)
+class ServiceEndpointAdmin(ProjectModelAdmin):
+    list_display = ("id", "service", "name", "host", "port", "protocol", "public", "created_at")
+    list_filter = ("protocol", "public")
+    search_fields = ("name", "host", "service__name")
+    raw_id_fields = ("service",)
+
+
+@admin.register(ServicePortReservation)
+class ServicePortReservationAdmin(AuditReadOnlyAdmin):
+    list_display = ("id", "service", "host_port", "protocol", "state", "created_at", "released_at")
+    list_filter = ("protocol", "state")
+    raw_id_fields = ("service",)
+
+
+@admin.register(ServiceNetworkAttachment)
+class ServiceNetworkAttachmentAdmin(AuditReadOnlyAdmin):
+    list_display = ("id", "service", "network", "scope", "created_at")
+    list_filter = ("scope",)
+    raw_id_fields = ("service", "network")
+
+
+@admin.register(DatabaseResource)
+class DatabaseResourceAdmin(ProjectModelAdmin):
+    list_display = ("id", "name", "engine", "status", "owner", "created_at", "updated_at")
+    list_filter = ("engine", "status")
+    search_fields = ("name", "host", "database_name", "username")
+    raw_id_fields = ("owner",)
+    readonly_fields = ("id", "created_at", "updated_at")
+
+
+@admin.register(DatabaseCredential)
+class DatabaseCredentialAdmin(SensitiveReadOnlyAdmin):
+    list_display = ("id", "database", "username", "created_at", "updated_at")
+    search_fields = ("username", "database__name")
+    raw_id_fields = ("database",)
+
+
+@admin.register(ServiceDatabaseBinding)
+class ServiceDatabaseBindingAdmin(AuditReadOnlyAdmin):
+    list_display = ("id", "service", "database", "alias", "created_at")
+    search_fields = ("alias",)
+    raw_id_fields = ("service", "database")
+
+
+@admin.register(ServiceShare)
+class ServiceShareAdmin(AuditReadOnlyAdmin):
+    list_display = ("id", "service", "target_user", "group", "shared_by", "created_at")
+    search_fields = ("service__name", "target_user__username", "shared_by__username")
+    raw_id_fields = ("service", "target_user", "group", "shared_by")
+
+
+@admin.register(ServiceShareMember)
+class ServiceShareMemberAdmin(AuditReadOnlyAdmin):
+    list_display = ("id", "share", "user", "created_at")
+    search_fields = ("user__username",)
+    raw_id_fields = ("share", "user")
+
+
+@admin.register(ServiceShareEvent)
+class ServiceShareEventAdmin(AuditReadOnlyAdmin):
+    list_display = ("id", "share", "event_type", "actor", "created_at")
+    list_filter = ("event_type",)
+    search_fields = ("event_type",)
+    raw_id_fields = ("share", "actor")
+
+
+@admin.register(ShellAuditEvent)
+class ShellAuditEventAdmin(AuditReadOnlyAdmin):
+    list_display = ("id", "service", "user", "action", "success", "created_at")
+    list_filter = ("action", "success")
+    search_fields = ("action", "command", "error_message")
+    raw_id_fields = ("service", "user")
