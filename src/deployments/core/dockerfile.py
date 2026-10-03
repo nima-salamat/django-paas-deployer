@@ -466,6 +466,7 @@ def _render_django(dockerfile_template, tar_stream, config, logger):
     except Exception:
         pass
     rendered = _prepare_python_dependency_install(rendered, tar_stream, install_cmd)
+    rendered = _inject_python_import_path(rendered, tar_stream, module)
 
     workers = _worker_count_from_config(config)
 
@@ -532,6 +533,61 @@ def _archive_names(tar_stream) -> set[str]:
         except Exception:
             pass
 
+
+def _python_import_path_from_archive(tar_stream, module: str | None) -> str | None:
+    """Return an extra Python import root for src-style project layouts.
+
+    A common layout is ``src/app/main.py``. The generated command correctly
+    imports ``src.app.main``, but that module may use absolute imports such as
+    ``from app.api import ...``. With ``WORKDIR /app`` only, ``app`` is not on
+    sys.path. In that case add ``/app/src`` while retaining ``/app``.
+    """
+    module = str(module or "").strip()
+    parts = [part for part in module.split(".") if part]
+    if len(parts) < 2:
+        return None
+
+    names = _archive_names(tar_stream)
+    first = parts[0]
+    second = parts[1]
+    first_prefix = first + "/"
+
+    if f"{first}/__init__.py" in names:
+        return None
+    if not any(name.startswith(first_prefix) for name in names):
+        return None
+    if not any(
+        name == f"{first}/{second}/__init__.py"
+        or name == f"{first}/{second}.py"
+        or name.startswith(f"{first}/{second}/")
+        for name in names
+    ):
+        return None
+    return f"/app/{first}"
+
+
+def _inject_python_import_path(dockerfile: str, tar_stream, module: str | None) -> str:
+    extra_root = _python_import_path_from_archive(tar_stream, module)
+    if not extra_root:
+        return dockerfile
+
+    pythonpath = f"{extra_root}:/app"
+    if re.search(r"^ENV\s+PYTHONPATH=", dockerfile, flags=re.MULTILINE):
+        return re.sub(
+            r"^ENV\s+PYTHONPATH=[^\n]*$",
+            f"ENV PYTHONPATH={pythonpath}",
+            dockerfile,
+            count=1,
+            flags=re.MULTILINE,
+        )
+
+    return re.sub(
+        r"^WORKDIR\s+/app\s*$",
+        f"WORKDIR /app\nENV PYTHONPATH={pythonpath}",
+        dockerfile,
+        count=1,
+        flags=re.MULTILINE,
+    )
 
 def _python_dependency_manifest(tar_stream) -> str:
     names = _archive_names(tar_stream)
@@ -677,6 +733,7 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
     except Exception:
         pass
     rendered = _prepare_python_dependency_install(rendered, tar_stream, install_cmd)
+    rendered = _inject_python_import_path(rendered, tar_stream, module)
 
     workers = _worker_count_from_config(config)
 
