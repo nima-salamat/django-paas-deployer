@@ -87,3 +87,34 @@ def test_service_swarm_cleanup_uses_pre_delete_instance():
     assert "SwarmRuntime().remove_service_group(str(instance.pk))" in handler
     assert "service.pk" not in handler
     assert "service.name" not in handler
+
+
+def test_service_swarm_cleanup_executes_with_signal_instance():
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from services import signals
+
+    service_id = "3bd97fea-22a7-4c8f-beae-7b7405ad2c74"
+    instance = SimpleNamespace(
+        pk=service_id,
+        name="asdf",
+        get_docker_service_name=lambda: "app-3bd97fea-asdf",
+        plan=SimpleNamespace(platform="python", plan_type="application"),
+        selected_deploy=None,
+    )
+
+    with (
+        patch.object(signals, "_cancel_active_deployments_for_service"),
+        patch.object(signals, "swarm_enabled", return_value=True),
+        patch.object(signals, "SwarmRuntime") as runtime_class,
+        patch.object(signals, "Container") as container_class,
+        patch.object(signals, "Image"),
+        patch.object(signals, "_cleanup_service_cache_images"),
+        patch.object(signals, "_cleanup_service_volumes"),
+    ):
+        container_class.return_value.exists.return_value = False
+
+        signals.delete_deploy_before_delete_service(None, instance)
+
+    runtime_class.return_value.remove_service_group.assert_called_once_with(service_id)
