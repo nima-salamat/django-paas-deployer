@@ -767,5 +767,35 @@ class SettingsServiceMirrorTests(unittest.TestCase):
                               "operator-configured npm/composer/etc. mirror.")
 
 
+# ---------------------------------------------------------------------------
+# Issue 6 — Python image builds must survive a package-mirror outage
+# ---------------------------------------------------------------------------
+
+
+class PythonDependencyMirrorFallbackTests(unittest.TestCase):
+    def test_python_templates_fall_back_to_public_pypi(self):
+        from pathlib import Path
+
+        source = Path(__file__).parents[2].joinpath(
+            "core", "global_settings", "config.py"
+        ).read_text(encoding="utf-8")
+
+        for template_name in ("python", "django", "flask"):
+            block = source.split(f"    {template_name} = \"\"\"", 1)[1]
+            block = block.split('    nextjs = """', 1)[0] if template_name == "flask" else block
+            if template_name != "flask":
+                next_name = {
+                    "python": "django",
+                    "django": "flask",
+                }[template_name]
+                block = block.split(f'    {next_name} = """', 1)[0]
+
+            self.assertIn("if ! pip install -i {MIRROR_PYTHON}", block)
+            self.assertIn("https://pypi.org/simple", block)
+            self.assertIn("retrying", block)
+            self.assertIn("--retries 2", block)
+            self.assertIn("--timeout {PIP_DEFAULT_TIMEOUT}", block)
+
+
 if __name__ == "__main__":
     unittest.main()
