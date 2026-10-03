@@ -85,7 +85,6 @@ class AuthModelInvariantTests(TestCase):
             user=user,
             purpose=AuthCode.PURPOSE_LOGIN,
         )
-        code.update_fields = None
         AuthCode.validate(user=user, code="wrong", purpose=AuthCode.PURPOSE_LOGIN)
         code.refresh_from_db()
         self.assertEqual(code.attempts, 1)
