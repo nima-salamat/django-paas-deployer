@@ -65,7 +65,12 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
     )
 
     try:
-        if swarm_enabled():
+        plan_platform = str(getattr(getattr(instance, "plan", None), "platform", "") or "").strip().lower()
+        from deployments.core.db_deployer import DB_PLATFORMS, DBDeployer
+
+        if plan_platform in DB_PLATFORMS:
+            DBDeployer().remove(service_name)
+        elif swarm_enabled():
             try:
                 SwarmRuntime().remove_service_group(str(service.pk))
             except Exception as exc:
