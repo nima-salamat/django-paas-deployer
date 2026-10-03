@@ -586,6 +586,9 @@ class LoginLogAdmin(admin.ModelAdmin):
     def has_change_permission(self, request, obj=None):
         return False
 
+    def has_delete_permission(self, request, obj=None):
+        return False
+
     @admin.display(description="User", ordering="username")
     def user_display(self, obj):
         if obj.user_id:
