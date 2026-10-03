@@ -70,7 +70,7 @@ class ReadyApplicationArchitectureTests(TestCase):
         )
         self.assertIs(
             ApplicationInstanceService._meta.get_field("deploy").remote_field.on_delete,
-            PROTECT,
+            RESTRICT,
         )
 
     def test_installation_snapshot_is_immutable(self):
@@ -145,6 +145,75 @@ class ReadyApplicationArchitectureTests(TestCase):
         assert response.status_code == 409
         assert response.data['code'] == 'catalog_service_managed'
         assert Service.objects.filter(pk=service.pk).exists()
+
+    def test_user_delete_with_catalog_binding_uses_compound_cascade(self):
+        user = User.objects.create_user(
+            username="catalog-user-compound-delete",
+            email="catalog-user-compound-delete@example.invalid",
+        )
+        common = dict(
+            max_cpu=1.0,
+            max_ram=512,
+            max_storage=10,
+            price_per_hour=0,
+            storage_type=StorageTypeChoices.SSD,
+        )
+        plan = Plan.objects.create(
+            name=NameChoices.BRONZE,
+            platform="docker",
+            plan_type=PlanTypeChoices.APP,
+            **common,
+        )
+        from services.models import PrivateNetwork
+        network = PrivateNetwork.objects.create(user=user, name="compound-delete-net")
+        instance = ApplicationInstance.objects.create(
+            user=user,
+            name="compound-delete",
+            slug="compound-delete",
+            catalog_id="mattermost",
+            definition_version="1",
+            software_version="1",
+            variant_id="default",
+            definition_snapshot={"_application_orchestration": {"services": [{"key": "app"}]}},
+            network=network,
+            status=ApplicationStatus.FAILED,
+        )
+        service = Service.objects.create(
+            name="compound-delete-service",
+            user=user,
+            plan=plan,
+            network=network,
+            source_kind=Service.SourceKind.CATALOG,
+            source_config={"application_instance": str(instance.pk)},
+        )
+        deploy = __import__("deploy.models", fromlist=["Deploy"]).Deploy.objects.create(
+            name="compound-delete-deploy",
+            service=service,
+            created_by=user,
+            version=1.0,
+        )
+        binding = ApplicationInstanceService.objects.create(
+            instance=instance,
+            service=service,
+            deploy=deploy,
+            service_key="app",
+        )
+
+        from unittest.mock import patch
+        with patch("services.signals._cancel_active_deployments_for_service"), \
+             patch("services.signals.Container.exists", return_value=False), \
+             patch("services.signals.Image.remove_by_name"), \
+             patch("services.signals._cleanup_service_cache_images"), \
+             patch("services.signals._cleanup_service_volumes"), \
+             patch("services.signals._cleanup_service_log_records"):
+            user.delete()
+
+        self.assertFalse(User.objects.filter(pk=user.pk).exists())
+        self.assertFalse(Service.objects.filter(pk=service.pk).exists())
+        self.assertFalse(__import__("deploy.models", fromlist=["Deploy"]).Deploy.objects.filter(pk=deploy.pk).exists())
+        self.assertFalse(ApplicationInstanceService.objects.filter(pk=binding.pk).exists())
+        self.assertFalse(ApplicationInstance.objects.filter(pk=instance.pk).exists())
+        self.assertFalse(PrivateNetwork.objects.filter(pk=network.pk).exists())
 
     def test_catalog_child_deploy_delete_is_protected(self):
         instance = self.install(name="protected-deploy")
