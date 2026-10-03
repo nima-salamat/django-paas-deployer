@@ -196,7 +196,7 @@ class ServiceUserDeletionTests(TestCase):
         )
 
         with patch("services.signals._cancel_active_deployments_for_service"), \
-             patch("services.signals.DBDeployer") as db_deployer_cls, \
+             patch("deployments.core.db_deployer.DBDeployer") as db_deployer_cls, \
              patch("services.signals.Container.exists", return_value=False), \
              patch("services.signals._cleanup_service_cache_images"), \
              patch("services.signals._cleanup_service_volumes"), \
