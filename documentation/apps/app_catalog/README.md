@@ -23,10 +23,13 @@ Docker/Swarm runtime execution belongs to deployments. Long-term Service configu
 - [serializers.md](serializers.md) — representation and secret masking.
 - [background.md](background.md) — coordinator tasks, dispatch and recovery.
 - [tests.md](tests.md) — planning/security/runtime contract tests.
+- [ready-apps.md](ready-apps.md) — canonical Ready Apps publication, API, frontend contract, recipes and extension guide.
 
 ## Security boundary
 
 Catalog definitions are validated before child creation. Unsupported privileged/host-escape semantics fail closed. secret_config is sensitive and never returned raw.
+
+Ready Apps add a second publication boundary: an application is public only when its definition declares `visibility: public` and its source is directly under `src/app_catalog/catalog/first_party/`. Public serializers expose only safe product metadata and user-editable configuration fields.
 
 ## Main lifecycle
 
@@ -47,11 +50,14 @@ catalog source
 3. Coordinator state and child Deploy state are separate.
 4. Cancellation cannot silently continue dispatching children.
 5. Generated secret material is never exposed by normal serializers.
+6. Public Ready Apps never accept arbitrary tenant Compose authoring.
+7. Ready App resource previews are produced by backend resolution rather than frontend calculations.
 
 ## Reading order
 
 Read models.md -> api.md -> serializers.md -> background.md. For child runtime behavior also read ../services/README.md and ../deployments/README.md, then ../../deployments/execution/02-request-to-plan.md.
 
+For the public application product, read ready-apps.md after api.md and serializers.md.
 
 ## Wagtail administration
 
