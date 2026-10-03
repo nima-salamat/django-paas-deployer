@@ -67,7 +67,9 @@ def prepare_application_resolution(definition, variant_id: str, name: str, confi
             (field for field in (variant.get("fields") or []) if str(field.get("id")) == "domain"),
             None,
         )
-        if domain_field and domain_field.get("user_editable", True) is False:
+        if domain_field is None:
+            raise CatalogValidationError("Public Ready Apps must define a platform-managed domain field.")
+        if domain_field.get("user_editable", True) is False:
             supplied_domain = requested.get("domain")
             if supplied_domain not in (None, ""):
                 raise CatalogValidationError("The platform hostname is managed automatically and cannot be customized.")
