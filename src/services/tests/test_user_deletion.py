@@ -218,3 +218,20 @@ class ServiceUserDeletionTests(TestCase):
         with self.assertRaises(RuntimeError):
             cleanup_network_on_delete(PrivateNetwork, network)
 
+    def test_service_network_fk_restricts_direct_network_delete(self):
+        from django.db.models.deletion import RESTRICT
+        from services.models import PrivateNetwork
+
+        self.assertIs(
+            Service._meta.get_field("network").remote_field.on_delete,
+            RESTRICT,
+        )
+        network = PrivateNetwork.objects.create(
+            user=self.user,
+            name="restricted-network",
+        )
+        self.service.network = network
+        self.service.save(update_fields=["network", "updated_at"])
+
+        with self.assertRaises(Exception):
+            network.delete()
