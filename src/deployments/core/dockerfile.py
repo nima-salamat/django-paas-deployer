@@ -34,6 +34,71 @@ from deployments.common.security import (
 # Web commands
 # ---------------------------------------------------------------------------
 
+def _fastapi_uvicorn_command(
+    module: str,
+    callable_name: str,
+    *,
+    port: int,
+    workers: int,
+    source_root: str = "",
+    profile: dict | None = None,
+) -> str:
+    """Build a production-safe Uvicorn command from detected/runtime settings."""
+    profile = dict(profile or {})
+    explicit_target = str(profile.get("entrypoint") or "").strip()
+    if explicit_target and ":" in explicit_target:
+        module, callable_name = explicit_target.rsplit(":", 1)
+
+    target = f"{module}:{callable_name}"
+    args = [
+        "uvicorn",
+        target,
+        "--host", "0.0.0.0",
+        "--port", str(int(port or 8000)),
+        "--workers", str(max(1, int(workers or 1))),
+    ]
+
+    app_dir = str(profile.get("app_dir") or "").strip().strip("/")
+    if app_dir:
+        args.extend(["--app-dir", f"/app/{app_dir}"])
+    elif source_root:
+        args.extend(["--app-dir", f"/app/{source_root}"])
+
+    if bool(profile.get("proxy_headers", False)):
+        args.append("--proxy-headers")
+    if profile.get("forwarded_allow_ips") not in (None, ""):
+        args.extend(["--forwarded-allow-ips", str(profile["forwarded_allow_ips"])])
+    if profile.get("root_path") not in (None, ""):
+        args.extend(["--root-path", str(profile["root_path"])])
+    if profile.get("log_level") not in (None, ""):
+        args.extend(["--log-level", str(profile["log_level"])])
+    if profile.get("access_log") is False:
+        args.append("--no-access-log")
+    if profile.get("factory") is True:
+        args.append("--factory")
+
+    for key, flag in (
+        ("limit_concurrency", "--limit-concurrency"),
+        ("limit_max_requests", "--limit-max-requests"),
+        ("limit_max_requests_jitter", "--limit-max-requests-jitter"),
+        ("backlog", "--backlog"),
+        ("timeout_keep_alive", "--timeout-keep-alive"),
+        ("timeout_graceful_shutdown", "--timeout-graceful-shutdown"),
+        ("timeout_worker_healthcheck", "--timeout-worker-healthcheck"),
+    ):
+        value = profile.get(key)
+        if value not in (None, ""):
+            args.extend([flag, str(value)])
+
+    return " ".join(_shell_quote(part) for part in args)
+
+
+def _shell_quote(value: str) -> str:
+    """Quote a generated CLI token without allowing shell interpretation."""
+    import shlex
+    return shlex.quote(str(value))
+
+
 def _worker_count_from_config(config) -> int:
     """Always at least 1; read DeploymentConfig.worker_count when present."""
     if config is None:
@@ -782,10 +847,21 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
     if entry_point_override:
         web_cmd = _align_entry_point_workers(entry_point_override, workers)
     elif platform == "fastapi":
-        target = f"{runtime_module}:{callable_name}"
+        fastapi_profile = {}
+        if config is not None:
+            runtime_options = getattr(config, "runtime_options", None) or {}
+            if isinstance(runtime_options, dict):
+                fastapi_profile = dict(runtime_options.get("fastapi") or {})
+        port_value = int(getattr(config, "port", None) or 8000)
         web_cmd = _align_entry_point_workers(
-            f"uvicorn {target} --host 0.0.0.0 --port {getattr(config, 'port', None) or 8000}"
-            f"{f' --app-dir /app/{source_root}' if source_root else ''}",
+            _fastapi_uvicorn_command(
+                runtime_module,
+                callable_name,
+                port=port_value,
+                workers=workers,
+                source_root=source_root,
+                profile=fastapi_profile,
+            ),
             workers,
         )
     else:
