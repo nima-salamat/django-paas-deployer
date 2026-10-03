@@ -11,6 +11,14 @@ from messenger.models import (
     Message,
     MessageAttachment,
     MessageReaction,
+    MessageReadReceipt,
+    AttachmentViewOnceOpen,
+    Block,
+    UserBio,
+    ProfilePhotoPrivacy,
+    ProfilePhotoAllowed,
+    CallSession,
+    CallSessionParticipant,
 )
 from users.models import User
 
@@ -53,6 +61,79 @@ class MessengerUserDeletionTests(TestCase):
         message.refresh_from_db()
         self.assertIsNone(message.sender_id)
         self.assertTrue(Conversation.objects.filter(pk=group.pk).exists())
+
+    def test_all_user_scoped_messenger_metadata_is_cascaded_or_anonymized(self):
+        user = User.objects.create_user(
+            username="messenger-metadata-delete",
+            email="messenger-metadata-delete@example.invalid",
+        )
+        other = User.objects.create_user(
+            username="messenger-metadata-keep",
+            email="messenger-metadata-keep@example.invalid",
+        )
+        group = Conversation.objects.create(
+            type=Conversation.Type.GROUP,
+            title="Metadata group",
+            created_by=other,
+        )
+        user_part = ConversationParticipant.objects.create(
+            conversation=group,
+            user=user,
+        )
+        other_part = ConversationParticipant.objects.create(
+            conversation=group,
+            user=other,
+        )
+        Block.objects.create(blocker=user, blocked=other)
+        bio = UserBio.objects.create(user=user, text="temporary bio")
+        privacy = ProfilePhotoPrivacy.objects.create(user=user, scope=ProfilePhotoPrivacy.Scope.SPECIFIC)
+        allowed = ProfilePhotoAllowed.objects.create(privacy=privacy, user=other)
+        message = Message.objects.create(
+            conversation=group,
+            sender=user,
+            body="history with media",
+        )
+        receipt = MessageReadReceipt.objects.create(message=message, user=user)
+        call = CallSession.objects.create(
+            conversation=group,
+            initiator=user,
+            status=CallSession.Status.ENDED,
+            room_name="room-delete",
+        )
+        call_part = CallSessionParticipant.objects.create(call=call, user=user)
+
+        with TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            attachment = MessageAttachment.objects.create(
+                conversation=group,
+                message=message,
+                uploaded_by=user,
+                file=SimpleUploadedFile("group-history.txt", b"group-history"),
+                original_filename="group-history.txt",
+            )
+            path = Path(attachment.file.path)
+            view_once = AttachmentViewOnceOpen.objects.create(
+                attachment=attachment,
+                user=user,
+            )
+
+            user.delete()
+
+            self.assertFalse(UserBio.objects.filter(pk=bio.pk).exists())
+            self.assertFalse(ProfilePhotoPrivacy.objects.filter(pk=privacy.pk).exists())
+            self.assertFalse(ProfilePhotoAllowed.objects.filter(pk=allowed.pk).exists())
+            self.assertFalse(Block.objects.filter(blocker=user).exists())
+            self.assertFalse(ConversationParticipant.objects.filter(pk=user_part.pk).exists())
+            self.assertTrue(ConversationParticipant.objects.filter(pk=other_part.pk).exists())
+            self.assertFalse(MessageReadReceipt.objects.filter(pk=receipt.pk).exists())
+            self.assertFalse(AttachmentViewOnceOpen.objects.filter(pk=view_once.pk).exists())
+            call.refresh_from_db()
+            self.assertIsNone(call.initiator_id)
+            self.assertFalse(CallSessionParticipant.objects.filter(pk=call_part.pk).exists())
+            message.refresh_from_db()
+            self.assertIsNone(message.sender_id)
+            attachment.refresh_from_db()
+            self.assertIsNone(attachment.uploaded_by_id)
+            self.assertTrue(path.exists())
 
     def test_private_dm_is_deleted_with_its_media_when_a_participant_account_is_deleted(self):
         user = User.objects.create_user(username="dm-delete", email="dm-delete@example.invalid")
