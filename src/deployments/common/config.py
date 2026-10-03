@@ -73,7 +73,7 @@ TENANT_CONFIG_KEYS: dict[str, dict[str, Any]] = {
         "description": "Target platform. Usually auto-detected from the zip "
                        "via /deploy/inspect_zip/. Examples: laravel, php, django, "
                        "flask, python, fastapi, nodejs, nextjs, react, vuejs, angular, "
-                       "go, statichtmlcss, fastapi, docker.",
+                       "go, statichtmlcss, docker.",
     },
     "framework": {
         "type": "string",
