@@ -1488,35 +1488,56 @@ def _repair_completed_deploy_state(deploy_item, service_item=None) -> bool:
         return False
 
     now = timezone.now()
-    committed = StateManager.transition_deploy_system_terminal(
-        deploy_item.pk,
-        DeploymentStatusChoices.SUCCEEDED,
-        update_fields={
-            "stage": "deployment_completed",
-            "progress": 100,
-            "completed_at": getattr(deploy_item, "completed_at", None) or now,
-            "status_message": getattr(deploy_item, "status_message", "") or "Deployment completed successfully.",
-            "error_message": "",
-            "health_status": "healthy",
-            "container_status": "running",
-            "image_status": "built",
-            "network_status": "ready",
-        },
-        event_payload={
-            "event_id": str(uuid4()),
-            "trace_id": str(deploy_item.pk),
-            "deployment_id": str(deploy_item.pk),
-            "service_id": str(deploy_item.service_id),
-            "revision_id": str(getattr(deploy_item, "revision_id", "") or ""),
-            "task_id": "active-deploy-repair",
-            "event_type": "deployment.finished.reconciled",
-            "stage": "deployment_completed",
-            "level": "info",
-            "message": "Deployment completion state reconciled before active selection.",
-            "progress": 100,
-            "details": {"controlled_by": "set_deploy_state_repair", "previous_status": status_value, "proof": "outbox" if outbox_proves_success else "row_markers"},
-        },
+    proof = (
+        "activation_revision"
+        if activation_proves_success
+        else "outbox"
+        if outbox_proves_success
+        else "row_markers"
     )
+    event_payload = {
+        "event_id": str(uuid4()),
+        "trace_id": str(deploy_item.pk),
+        "deployment_id": str(deploy_item.pk),
+        "service_id": str(deploy_item.service_id),
+        "revision_id": str(getattr(deploy_item, "revision_id", "") or ""),
+        "task_id": "active-deploy-repair",
+        "event_type": "deployment.finished.reconciled",
+        "stage": "deployment_completed",
+        "level": "info",
+        "message": "Deployment completion state reconciled before active selection.",
+        "progress": 100,
+        "details": {
+            "controlled_by": "set_deploy_state_repair",
+            "previous_status": status_value,
+            "proof": proof,
+        },
+    }
+    update_fields = {
+        "stage": "deployment_completed",
+        "progress": 100,
+        "completed_at": getattr(deploy_item, "completed_at", None) or now,
+        "status_message": getattr(deploy_item, "status_message", "") or "Deployment completed successfully.",
+        "error_message": "",
+        "health_status": "healthy",
+        "container_status": "running",
+        "image_status": "built",
+        "network_status": "ready",
+    }
+    if activation_proves_success:
+        committed = StateManager.reconcile_deploy_success_from_authority(
+            deploy_item.pk,
+            deploy_item.revision_id,
+            update_fields=update_fields,
+            event_payload=event_payload,
+        )
+    else:
+        committed = StateManager.transition_deploy_system_terminal(
+            deploy_item.pk,
+            DeploymentStatusChoices.SUCCEEDED,
+            update_fields=update_fields,
+            event_payload=event_payload,
+        )
     if committed:
         deploy_item.refresh_from_db()
     return bool(committed or str(getattr(deploy_item, "status", "")).lower() == DeploymentStatusChoices.SUCCEEDED)
