@@ -150,7 +150,7 @@ class UserAdmin(BaseUserAdmin):
         ),
     )
 
-    actions = ["activate_users", "deactivate_users"]
+    actions = ["activate_users", "deactivate_users", "request_deletion"]
 
     @admin.display(description="Balance", ordering="balance")
     def balance_display(self, obj):
@@ -177,6 +177,50 @@ class UserAdmin(BaseUserAdmin):
     def deactivate_users(self, request, queryset):
         updated = queryset.update(is_active=False)
         self.message_user(request, f"{updated} user(s) deactivated.")
+
+    def has_delete_permission(self, request, obj=None):
+        # Do not allow Django's raw delete collector to bypass deployment
+        # cancellation and account-deletion convergence.
+        return False
+
+    @admin.action(description="Request permanent deletion (cancel deployments first)")
+    def request_deletion(self, request, queryset):
+        from django.db import transaction
+        from django.utils import timezone
+
+        count = 0
+        for user in queryset:
+            if user.pk == request.user.pk:
+                self.message_user(request, "You cannot delete your own account.", level=messages.ERROR)
+                continue
+            if user.is_superuser and not request.user.is_superuser:
+                self.message_user(
+                    request,
+                    f"Cannot delete superuser {user.username}.",
+                    level=messages.ERROR,
+                )
+                continue
+            with transaction.atomic():
+                changed = user.deletion_requested_at is None
+                user.deletion_requested_at = user.deletion_requested_at or timezone.now()
+                user.is_active = False
+                fields = ["is_active"]
+                if changed:
+                    fields.append("deletion_requested_at")
+                user.save(update_fields=fields)
+                from auth_users.session_auth import invalidate_all_sessions
+                invalidate_all_sessions(user.pk)
+                transaction.on_commit(
+                    lambda uid=user.pk: finalize_user_deletion.delay(uid)
+                )
+            count += 1
+        if count:
+            self.message_user(
+                request,
+                f"Queued deletion convergence for {count} user(s).",
+                level=messages.SUCCESS,
+            )
+
 
 
 # ─────────────────────────────────────────────────────────────
