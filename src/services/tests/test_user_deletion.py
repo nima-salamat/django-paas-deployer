@@ -174,3 +174,47 @@ class ServiceUserDeletionTests(TestCase):
         self.assertFalse(DatabaseResource.objects.filter(pk=database.pk).exists())
         self.assertFalse(DatabaseCredential.objects.filter(pk=credential.pk).exists())
         self.assertFalse(ServiceDatabaseBinding.objects.filter(pk=binding.pk).exists())
+
+    def test_database_service_deletion_uses_db_deployer(self):
+        from deployments.core.db_deployer import DB_PLATFORMS
+        from services.signals import delete_deploy_before_delete_service
+
+        db_plan = Plan.objects.create(
+            name=NameChoices.SILVER,
+            platform=sorted(DB_PLATFORMS)[0],
+            plan_type=PlanTypeChoices.DB,
+            max_cpu=1,
+            max_ram=512,
+            max_storage=10,
+            price_per_hour=0,
+            storage_type=StorageTypeChoices.SSD,
+        )
+        service = Service.objects.create(
+            name="database-delete-service",
+            user=self.user,
+            plan=db_plan,
+        )
+
+        with patch("services.signals._cancel_active_deployments_for_service"), \
+             patch("services.signals.DBDeployer") as db_deployer_cls, \
+             patch("services.signals.Container.exists", return_value=False), \
+             patch("services.signals._cleanup_service_cache_images"), \
+             patch("services.signals._cleanup_service_volumes"), \
+             patch("services.signals._cleanup_service_log_records"):
+            delete_deploy_before_delete_service(Service, service)
+
+        db_deployer_cls.return_value.remove.assert_called_once_with(
+            service.get_docker_service_name()
+        )
+
+    def test_private_network_delete_is_blocked_by_primary_service_reference(self):
+        from services.models import PrivateNetwork
+        from services.signals import cleanup_network_on_delete
+
+        network = PrivateNetwork.objects.create(user=self.user, name="attached-network")
+        self.service.network = network
+        self.service.save(update_fields=["network", "updated_at"])
+
+        with self.assertRaises(RuntimeError):
+            cleanup_network_on_delete(PrivateNetwork, network)
+
