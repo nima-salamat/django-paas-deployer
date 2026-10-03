@@ -30,6 +30,10 @@ Every first-party Django application has a canonical architectural entry point u
 
 Read the app README before changing that app. Follow its models/api/serializers/background/tests links according to the task.
 
+### Ready Apps
+
+The user-facing curated application product is documented in [app_catalog/ready-apps.md](apps/app_catalog/ready-apps.md). It is the authority for publication policy, public API behavior, product metadata, resource preview, hostname/secret rules, current MVP recipes and how to add another supported application.
+
 ## Deep deployments architecture
 
 [deployments/README.md](apps/deployments/README.md) remains the canonical execution manual for the deployment engine. It covers planning, build/platform detection, runtime/Swarm, concurrency/state, recovery, base images, logs/health/rollback/cleanup, databases and architectural tests.
@@ -57,6 +61,8 @@ One architectural fact has one canonical home:
 - app background/realtime behavior: apps/<app>/background.md when present
 - app contract tests: apps/<app>/tests.md when present
 - deep deployment execution: deployments/
+
+For Ready Apps, use apps/app_catalog/ready-apps.md as the product/engineering contract and apps/app_catalog/api.md as the endpoint-level contract.
 
 When implementation changes, update the owning canonical document and then repair dependent links/claims. Do not restore deleted historical audits as competing sources of truth.
 
