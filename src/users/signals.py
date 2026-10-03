@@ -103,7 +103,11 @@ def cleanup_user_resources(sender, instance: User, **kwargs):
                 media_root, "deployments", str(user_id)
             )
             if os.path.isdir(user_deploy_dir):
-                shutil.rmtree(user_deploy_dir, ignore_errors=True)
+                shutil.rmtree(user_deploy_dir, ignore_errors=False)
+                if os.path.isdir(user_deploy_dir):
+                    raise RuntimeError(
+                        f"User deployment directory still exists after cleanup: {user_deploy_dir}"
+                    )
                 logger.info(
                     "Removed user deployment directory: %s", user_deploy_dir
                 )
