@@ -494,7 +494,7 @@ class AdminUserDetailAPIView(APIView):
             with transaction.atomic():
                 u.deletion_requested_at = timezone.now()
                 u.is_active = False
-                u.save(update_fields=["deletion_requested_at", "is_active", "updated_at"])
+                u.save(update_fields=["deletion_requested_at", "is_active"])
                 from auth_users.session_auth import invalidate_all_sessions
                 invalidate_all_sessions(u.pk)
                 transaction.on_commit(
