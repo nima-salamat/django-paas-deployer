@@ -18,7 +18,7 @@ class SystemSettingAdmin(admin.ModelAdmin):
         "updated_at",
     )
     list_filter = ("category", "value_type", "is_editable", "is_secret")
-    search_fields = ("key", "label", "description", "value")
+    search_fields = ("key", "label", "description")
     readonly_fields = ("created_at", "updated_at", "key")
     ordering = ("category", "key")
     list_per_page = 50
