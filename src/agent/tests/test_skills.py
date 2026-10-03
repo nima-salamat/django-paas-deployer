@@ -50,6 +50,15 @@ class AgentSkillTests(TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.data["code"], "SKILL_NOT_FOUND")
 
+
+    def test_openapi_document_builds_successfully(self):
+        response = self.client.get("/agent/v1/openapi.json", **self._auth())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"].split(";")[0], "application/json")
+        self.assertEqual(response.data["openapi"], "3.0.3")
+        self.assertIn("/agent/v1/skills", response.data["paths"])
+        self.assertIn("/agent/v1/skills/{skill_name}", response.data["paths"])
+
     def test_manifest_contains_skill_links(self):
         self.agent.scopes.append("agent.manifest.generate")
         self.agent.save(update_fields=["scopes", "updated_at"])
