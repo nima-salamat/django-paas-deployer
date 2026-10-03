@@ -59,3 +59,5 @@ One architectural fact has one canonical home:
 - deep deployment execution: deployments/
 
 When implementation changes, update the owning canonical document and then repair dependent links/claims. Do not restore deleted historical audits as competing sources of truth.
+
+- [Django Admin model coverage](./reference/django-admin-coverage.md)
