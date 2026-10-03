@@ -11,7 +11,7 @@ Service deletion is the ownership boundary for service runtime cleanup. Before d
 
 Service deletion also removes service-scoped deployment/runtime log records stored in `DEPLOYMENT_LOG_DB_ALIAS`. Those models intentionally use scalar service ids, so this cleanup cannot be provided by the primary database cascade.
 
-ServiceRevision deletion removes its revision-owned source artifact from file storage before the durable row disappears. PrivateNetwork deletion requires that no service references the network through either the primary Service.network relation or ServiceNetworkAttachment and removes only a Docker network carrying the PassDeployer ownership label. Runtime/cache cleanup tolerates already-absent resources but does not silently delete unmanaged resources.
+ServiceRevision deletion removes its revision-owned source artifact from file storage before the durable row disappears. PrivateNetwork deletion is DB-restricted while either the primary Service.network relation or ServiceNetworkAttachment exists; Django's compound deletion semantics allow a User deletion to remove the Service and network together, preserving Service-before-network cleanup ordering. and removes only a Docker network carrying the PassDeployer ownership label. Runtime/cache cleanup tolerates already-absent resources but does not silently delete unmanaged resources.
 
 cache_signals invalidates service/network/volume namespaces after ORM changes.
 
