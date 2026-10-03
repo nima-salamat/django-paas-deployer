@@ -961,6 +961,20 @@ class FastAPIProfileRegressionTests(unittest.TestCase):
         self.assertEqual(result["working_directory"], "/app/src")
         self.assertEqual(result["source"], "pyproject.toml")
 
+    def test_wrapped_zip_layout_matches_image_builder_flattening(self):
+        from deployments.core.entrypoints import resolve_python_runtime_context
+
+        result = resolve_python_runtime_context(
+            {
+                "my-api/src/app/__init__.py",
+                "my-api/src/app/main.py",
+            },
+            "my-api.src.app.main",
+        )
+        self.assertEqual(result["module"], "app.main")
+        self.assertEqual(result["source_root"], "src")
+        self.assertEqual(result["working_directory"], "/app/src")
+
     def test_nested_backend_src_layout_is_resolved(self):
         from deployments.core.entrypoints import resolve_python_runtime_context
 
