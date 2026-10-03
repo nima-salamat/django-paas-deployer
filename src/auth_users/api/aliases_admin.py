@@ -2,7 +2,7 @@ import logging
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.contrib.auth import get_user_model
 from django.utils.translation import gettext as _
 from django.db.models import Q
@@ -11,6 +11,7 @@ from django.utils import timezone
 
 from users.serializers import CreateUserSerializer
 from ..models import LoginSettings, AuthCode, InviteLink, InviteUsage
+from ..admin_permissions import HasAuthCodesViewRule, HasAuthCodesManageRule
 from ..services import (
     get_tokens_for_user,
     resolve_user_from_identifiers,
@@ -92,7 +93,7 @@ class ValidateAPIView(ValidateOTPAPIView):
 # ---------------------------------------------------------------------------
 class AdminAuthCodeListAPIView(APIView):
     """GET /auth/api/admin/auth-codes/ – list OTP codes (staff with permission / admin)."""
-    permission_classes = [IsAuthenticated, IsAdminUser]
+    permission_classes = [IsAuthenticated, HasAuthCodesViewRule]
 
     def get(self, request):
         from django.utils import timezone as tz
@@ -138,7 +139,7 @@ class AdminAuthCodeListAPIView(APIView):
 
 
 class AdminAuthCodeDeleteAPIView(APIView):
-    permission_classes = [IsAuthenticated, IsAdminUser]
+    permission_classes = [IsAuthenticated, HasAuthCodesManageRule]
 
     def delete(self, request, pk):
         deleted, _ = AuthCode.objects.filter(pk=pk).delete()
