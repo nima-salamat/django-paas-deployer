@@ -60,6 +60,7 @@ Every production source surface must be mapped to its owning canonical document 
 - `src/users/models.py` → [users](./users/README.md)
 - `src/users/serializers.py` → [users](./users/README.md)
 - `src/users/signals.py` → [users](./users/README.md)
+- `src/users/tasks.py` → [users](./users/README.md)
 - `src/users/urls.py` → [users](./users/README.md)
 - `src/users/validators.py` → [users](./users/README.md)
 - `src/users/views.py` → [users](./users/README.md)
