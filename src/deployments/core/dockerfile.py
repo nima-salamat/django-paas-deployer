@@ -59,32 +59,46 @@ def _align_entry_point_workers(entry_point: str | None, workers: int) -> str | N
         return entry_point
 
 
-def _django_web_command(module: str, server_type: str, workers: int = 1) -> str:
+def _django_web_command(
+    module: str,
+    server_type: str,
+    workers: int = 1,
+    source_root: str = "",
+) -> str:
     workers = max(1, int(workers or 1))
+    app_dir = f"/app/{source_root}" if source_root else ""
     if server_type == "asgi":
+        app_dir_arg = f" --app-dir {app_dir}" if app_dir else ""
         return (
             f"uvicorn {module}:application "
-            f"--host 0.0.0.0 --port 8000 --workers {workers}"
+            f"--host 0.0.0.0 --port 8000 --workers {workers}{app_dir_arg}"
         )
+    chdir_arg = f" --chdir {app_dir}" if app_dir else ""
     return (
         f"gunicorn {module}:application "
-        f"--bind 0.0.0.0:8000 --workers {workers} --timeout 60"
+        f"--bind 0.0.0.0:8000 --workers {workers} --timeout 60{chdir_arg}"
     )
 
 
 def _flask_web_command(
-    module: str, callable_name: str, server_type: str, workers: int = 1
+    module: str,
+    callable_name: str,
+    server_type: str,
+    workers: int = 1,
+    source_root: str = "",
 ) -> str:
     workers = max(1, int(workers or 1))
     target = f"{module}:{callable_name.rstrip('()')}"
+    chdir_arg = f" --chdir /app/{source_root}" if source_root else ""
     if server_type == "asgi" or "fastapi" in module.lower():
         return (
             f"gunicorn {target} "
             f"--worker-class uvicorn.workers.UvicornWorker "
-            f"--bind 0.0.0.0:8000 --workers {workers} --timeout 60"
+            f"--bind 0.0.0.0:8000 --workers {workers} --timeout 60{chdir_arg}"
         )
     return (
-        f"gunicorn {target} --bind 0.0.0.0:8000 --workers {workers} --timeout 60"
+        f"gunicorn {target} --bind 0.0.0.0:8000 "
+        f"--workers {workers} --timeout 60{chdir_arg}"
     )
 
 
@@ -442,7 +456,7 @@ def _render_django(dockerfile_template, tar_stream, config, logger):
 
     try:
         rendered = dockerfile_template.format(
-            module=module, MIRROR_DOCKER=MIRROR_DOCKER
+            module=runtime_module, MIRROR_DOCKER=MIRROR_DOCKER
         )
     except KeyError as exc:
         raise DeploymentValidationError(
@@ -466,7 +480,7 @@ def _render_django(dockerfile_template, tar_stream, config, logger):
     except Exception:
         pass
     rendered = _prepare_python_dependency_install(rendered, tar_stream, install_cmd)
-    rendered = _inject_python_import_path(rendered, tar_stream, module)
+    rendered = _inject_python_import_path(rendered, tar_stream, runtime_module)
 
     workers = _worker_count_from_config(config)
 
@@ -498,7 +512,7 @@ def _render_django(dockerfile_template, tar_stream, config, logger):
     rendered = _inject_pip_install(rendered, packages)
 
     if use_celery:
-        celery_app = _celery_app_name(module, _celery_override_from_config(config))
+        celery_app = _celery_app_name(runtime_module, _celery_override_from_config(config))
         if logger:
             logger.info(
                 "celery_setup",
@@ -711,10 +725,15 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
     module = entrypoint.get("module") or "app"
     callable_name = entrypoint.get("callable") or "app"
     resolved_type = entrypoint.get("type", "wsgi")
+    runtime_context = resolve_python_runtime_context(
+        _archive_names(tar_stream), module
+    )
+    runtime_module = runtime_context["module"]
+    source_root = runtime_context["source_root"]
 
     try:
         rendered = dockerfile_template.format(
-            module=module, MIRROR_DOCKER=MIRROR_DOCKER
+            module=runtime_module, MIRROR_DOCKER=MIRROR_DOCKER
         )
     except Exception:
         rendered = dockerfile_template.replace("{MIRROR_DOCKER}", MIRROR_DOCKER)
@@ -733,7 +752,12 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
     except Exception:
         pass
     rendered = _prepare_python_dependency_install(rendered, tar_stream, install_cmd)
-    rendered = _inject_python_import_path(rendered, tar_stream, module)
+    runtime_context = resolve_python_runtime_context(
+        _archive_names(tar_stream), module
+    )
+    runtime_module = runtime_context["module"]
+    source_root = runtime_context["source_root"]
+    rendered = _inject_python_import_path(rendered, tar_stream, runtime_module)
 
     workers = _worker_count_from_config(config)
 
@@ -752,13 +776,20 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
     if entry_point_override:
         web_cmd = _align_entry_point_workers(entry_point_override, workers)
     elif platform == "fastapi":
-        target = f"{module}:{callable_name}"
+        target = f"{runtime_module}:{callable_name}"
         web_cmd = _align_entry_point_workers(
-            f"uvicorn {target} --host 0.0.0.0 --port {getattr(config, 'port', None) or 8000}",
+            f"uvicorn {target} --host 0.0.0.0 --port {getattr(config, 'port', None) or 8000}"
+            f"{f' --app-dir /app/{source_root}' if source_root else ''}",
             workers,
         )
     else:
-        web_cmd = _flask_web_command(module, callable_name, resolved_type, workers=workers)
+        web_cmd = _flask_web_command(
+            runtime_module,
+            callable_name,
+            resolved_type,
+            workers=workers,
+            source_root=source_root,
+        )
 
     packages = _runtime_pip_packages(
         platform=platform,
