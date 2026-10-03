@@ -7,11 +7,11 @@ services.revisioning.ensure_revision_for_deploy reads durable Service desired st
 lifecycle_generation is a monotonic compare-and-set fence. A worker holding an old generation must stop rather than overwrite newer desired intent. task_id is correlation/compatibility data, not sufficient ownership proof.
 
 ## Signals and cache
-Service deletion is the ownership boundary for service runtime cleanup. Its delete signal stops/removes only the service-owned runtime, removes exclusive service volumes through the Volume signal, and fails closed when an owned runtime resource cannot be removed or an ownership label does not match.
+Service deletion is the ownership boundary for service runtime cleanup. Before deleting the Service row, its signal requests canonical deployment cancellation for every PENDING/RUNNING/ROLLING_BACK Deploy owned by the service, then removes only service-owned runtime resources. Database-plan services use DBDeployer teardown; ordinary services use the Swarm/container ownership path. Exclusive service volumes are removed only after runtime cleanup succeeds, so a failed Docker volume deletion keeps the durable ownership row.
 
 Service deletion also removes service-scoped deployment/runtime log records stored in `DEPLOYMENT_LOG_DB_ALIAS`. Those models intentionally use scalar service ids, so this cleanup cannot be provided by the primary database cascade.
 
-ServiceRevision deletion removes its revision-owned source artifact from file storage before the durable row disappears. PrivateNetwork deletion requires that no service has an explicit network attachment and removes only a Docker network carrying the PassDeployer ownership label. Runtime/cache cleanup tolerates already-absent resources but does not silently delete unmanaged resources.
+ServiceRevision deletion removes its revision-owned source artifact from file storage before the durable row disappears. PrivateNetwork deletion requires that no service references the network through either the primary Service.network relation or ServiceNetworkAttachment and removes only a Docker network carrying the PassDeployer ownership label. Runtime/cache cleanup tolerates already-absent resources but does not silently delete unmanaged resources.
 
 cache_signals invalidates service/network/volume namespaces after ORM changes.
 
