@@ -95,22 +95,6 @@ def cleanup_user_resources(sender, instance: User, **kwargs):
             )
             raise
 
-    profiles = list(Profile.objects.filter(user=instance))
-    for profile in profiles:
-        if profile.image:
-            try:
-                profile.image.delete(save=False)
-                logger.info(
-                    "Deleted profile image for user %s (profile id=%s)",
-                    user_id,
-                    profile.pk,
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to delete profile image for user %s (profile id=%s)",
-                    user_id,
-                    profile.pk,
-                )
 
     try:
         media_root = getattr(settings, "MEDIA_ROOT", None)
@@ -135,11 +119,12 @@ def cleanup_user_resources(sender, instance: User, **kwargs):
 @receiver(pre_delete, sender=Profile)
 def cleanup_profile_image(sender, instance: Profile, **kwargs):
     if instance.image:
+        name = str(getattr(instance.image, "name", "") or "")
         try:
             instance.image.delete(save=False)
-            logger.info("Deleted profile image: %s", instance.image.name)
-        except Exception:
-            logger.exception(
-                "Failed to delete profile image: %s",
-                getattr(instance.image, "name", None),
-            )
+            logger.info("Deleted profile image: %s", name)
+        except Exception as exc:
+            logger.exception("Failed to delete profile image: %s", name)
+            raise RuntimeError(
+                f"Failed to remove profile image '{name}'."
+            ) from exc
