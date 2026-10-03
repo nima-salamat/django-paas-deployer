@@ -31,6 +31,7 @@ app.conf.imports = tuple(dict.fromkeys((
     'custom_emails.tasks',
     'messenger.tasks',
     'logs.tasks',
+    'users.tasks',
 )))
 
 app.autodiscover_tasks(['deployments.celery', 'app_catalog', 'logs', 'core.tasks.email', 'custom_emails.tasks', 'messenger.tasks'])
