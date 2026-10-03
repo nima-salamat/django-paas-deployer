@@ -92,48 +92,64 @@ def resolve_django_entrypoint(tar_stream, *, server_type: str | None = None) -> 
 
 
 def resolve_python_runtime_context(names, module: str | None) -> dict:
-    """Resolve the runtime import target for a detected Python module.
+    """Resolve a Python module and its actual source root inside the archive.
 
-    Handles src-style and nested layouts without changing a user-provided
-    entrypoint. For example src/app/main.py becomes app.main with
-    source_root=src so the runtime can execute with /app/src as an import
-    root. Package-root layouts such as app/main.py stay unchanged.
+    The detector may return either ``src.app.main`` or ``app.main`` depending
+    on which inspection path discovered the file. This resolver canonicalizes
+    both forms and also supports deeper layouts such as ``backend/src/app``.
     """
     module = str(module or "").strip().strip(".")
-    parts = [p for p in module.split(".") if p]
+    parts = [p for p in module.split('.') if p]
     normalized = {
-        str(n or "").replace("\\", "/").lstrip("./").rstrip("/")
+        str(n or '').replace('\\', '/').lstrip('./').rstrip('/')
         for n in (names or [])
     }
-    normalized.discard("")
+    normalized.discard('')
+
+    def exists_as_module(path_parts: list[str]) -> bool:
+        path = '/'.join(path_parts)
+        return (f'{path}.py' in normalized or f'{path}/__init__.py' in normalized)
+
     if not parts:
-        return {"module": module, "source_root": "", "working_directory": "/app"}
+        return {'module': module, 'source_root': '', 'working_directory': '/app'}
 
-    module_file = "/".join(parts) + ".py"
-    package_file = "/".join(parts) + "/__init__.py"
-    if module_file not in normalized and package_file not in normalized:
-        return {"module": module, "source_root": "", "working_directory": "/app"}
+    if exists_as_module(parts):
+        for cut in range(1, len(parts)):
+            prefix_parts = parts[:cut]
+            remainder = parts[cut:]
+            prefix_path = '/'.join(prefix_parts)
+            if f'{prefix_path}/__init__.py' in normalized:
+                break
+            if exists_as_module(prefix_parts + remainder):
+                return {
+                    'module': '.'.join(remainder),
+                    'source_root': prefix_path,
+                    'working_directory': f'/app/{prefix_path}',
+                }
+        return {'module': module, 'source_root': '', 'working_directory': '/app'}
 
-    for cut in range(1, len(parts)):
-        prefix = "/".join(parts[:cut])
-        if f"{prefix}/__init__.py" in normalized:
-            break
-        next_part = parts[cut]
-        package_dir = f"{prefix}/{next_part}"
-        package_init = f"{package_dir}/__init__.py"
-        package_module = f"{prefix}/{next_part}.py"
-        namespace_package = any(
-            n.startswith(package_dir + "/") for n in normalized
-        )
-        if package_init in normalized or package_module in normalized or namespace_package:
-            runtime_module = ".".join(parts[cut:])
-            return {
-                "module": runtime_module,
-                "source_root": prefix,
-                "working_directory": f"/app/{prefix}",
-            }
+    module_path = '/'.join(parts)
+    roots: set[str] = set()
+    for name in normalized:
+        if not name.endswith('.py') and not name.endswith('/__init__.py'):
+            continue
+        parent = name.rsplit('/', 1)[0] if '/' in name else ''
+        components = parent.split('/') if parent else []
+        for cut in range(1, len(components) + 1):
+            roots.add('/'.join(components[:cut]))
+    candidates: list[str] = []
+    for root in roots:
+        if f'{root}/{module_path}.py' in normalized or f'{root}/{module_path}/__init__.py' in normalized:
+            candidates.append(root)
+    if candidates:
+        source_root = sorted(candidates, key=lambda value: (value.count('/'), len(value), value))[0]
+        return {
+            'module': module,
+            'source_root': source_root,
+            'working_directory': f'/app/{source_root}',
+        }
 
-    return {"module": module, "source_root": "", "working_directory": "/app"}
+    return {'module': module, 'source_root': '', 'working_directory': '/app'}
 
 
 def resolve_fastapi_entrypoint(tar_stream) -> dict | None:
