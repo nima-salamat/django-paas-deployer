@@ -228,6 +228,17 @@ TENANT_CONFIG_KEYS: dict[str, dict[str, Any]] = {
         "type": "string",
         "description": "Custom Laravel asset URL/prefix. Leave empty for automatic same-origin HTTPS handling.",
     },
+    "fastapi": {
+        "type": "object",
+        "description": (
+            "FastAPI-specific runtime settings. The application is always exposed "
+            "on 0.0.0.0 and worker count is controlled by the Service Plan. "
+            "Supported keys: entrypoint, app_dir, proxy_headers, forwarded_allow_ips, "
+            "root_path, log_level, access_log, limit_concurrency, limit_max_requests, "
+            "limit_max_requests_jitter, backlog, timeout_keep_alive, "
+            "timeout_graceful_shutdown, timeout_worker_healthcheck."
+        ),
+    },
     "frontend": {
         "type": "object",
         "description": "Frontend build options for full-stack PHP/Laravel. "
