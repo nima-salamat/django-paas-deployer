@@ -51,18 +51,6 @@ def ticket_message_saved(sender, instance, created, **kwargs):
         logger.exception("ticket_message_saved broadcast failed")
 
 
-def _delete_file_quietly(file_field) -> None:
-    """Remove a Django storage object without making cleanup fatal."""
-    if not file_field:
-        return
-    try:
-        name = getattr(file_field, "name", "") or ""
-        file_field.delete(save=False)
-        logger.debug("Deleted attachment file: %s", name)
-    except Exception as exc:
-        logger.warning("Could not delete attachment file: %s", exc)
-
-
 def _ticket_media_dir(ticket_id) -> str:
     """Absolute path of tickets/<ticket_id>/ under MEDIA_ROOT."""
     media_root = getattr(settings, "MEDIA_ROOT", None)
@@ -91,45 +79,12 @@ def ticket_attachment_pre_delete(sender, instance, **kwargs):
 
 @receiver(pre_delete, sender=Ticket)
 def ticket_pre_delete(sender, instance, **kwargs):
+    """Leave attachment storage cleanup to TicketAttachment.pre_delete.
+
+    Keeping directory cleanup in post_delete avoids touching the filesystem
+    before the collector has successfully removed every attachment row.
     """
-    Before a ticket is deleted:
-    - Delete every attachment file on disk
-    - Remove the tickets/<ticket_id>/ directory entirely
-    """
-    ticket_id = instance.pk
-    try:
-        attachments = TicketAttachment.objects.filter(ticket_id=ticket_id)
-        for att in attachments:
-            try:
-                if att.file and getattr(att.file, "path", None):
-                    _delete_file_quietly(att.file)
-            except Exception:
-                logger.exception("Failed deleting file for attachment %s", att.pk)
-
-        dir_path = _ticket_media_dir(ticket_id)
-        if dir_path and os.path.isdir(dir_path):
-            try:
-                shutil.rmtree(dir_path, ignore_errors=False)
-                logger.info("Removed ticket media directory: %s", dir_path)
-            except OSError as exc:
-                logger.warning("Could not rmtree %s: %s", dir_path, exc)
-                try:
-                    for root, dirs, files in os.walk(dir_path, topdown=False):
-                        for name in files:
-                            _delete_file_quietly(os.path.join(root, name))
-                        for name in dirs:
-                            try:
-                                os.rmdir(os.path.join(root, name))
-                            except OSError:
-                                pass
-                    if os.path.isdir(dir_path):
-                        os.rmdir(dir_path)
-                except Exception:
-                    logger.exception("Fallback cleanup of %s failed", dir_path)
-    except Exception:
-        logger.exception("ticket_pre_delete cleanup failed for ticket %s", ticket_id)
-
-
+    return
 @receiver(post_delete, sender=Ticket)
 def ticket_post_delete(sender, instance, **kwargs):
     """Safety net: ensure the media folder is gone after cascade."""
