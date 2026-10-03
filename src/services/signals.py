@@ -79,7 +79,7 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
                     instance.name,
                 )
                 raise RuntimeError(
-                    f"Failed to remove Swarm runtime for service '{service.name}'."
+                    f"Failed to remove Swarm runtime for service '{instance.name}'."
                 ) from exc
 
         container = Container(name=service_name)
