@@ -77,3 +77,47 @@ class TicketUserDeletionTests(TestCase):
 
         self.assertTrue(TicketAttachment.objects.filter(pk=attachment.pk).exists())
         self.assertTrue(Ticket.objects.filter(pk=ticket.pk).exists())
+
+    def test_deleting_staff_author_preserves_user_ticket_but_nulls_staff_links(self):
+        owner = User.objects.create_user(
+            username="ticket-owner-preserve",
+            email="ticket-owner-preserve@example.invalid",
+        )
+        staff = User.objects.create_user(
+            username="ticket-staff-delete",
+            email="ticket-staff-delete@example.invalid",
+        )
+        department = Department.objects.create(name="Cross-user deletion")
+        ticket = Ticket.objects.create(
+            user=owner,
+            assigned_to=staff,
+            department=department,
+            subject="Keep ticket",
+        )
+        message = TicketMessage.objects.create(
+            ticket=ticket,
+            author=staff,
+            body="Staff audit message",
+            is_staff_reply=True,
+        )
+        with TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            attachment = TicketAttachment.objects.create(
+                ticket=ticket,
+                message=message,
+                uploaded_by=staff,
+                file=SimpleUploadedFile("staff.txt", b"keep-ticket-media"),
+                original_filename="staff.txt",
+            )
+            path = Path(attachment.file.path)
+
+            staff.delete()
+
+            ticket.refresh_from_db()
+            message.refresh_from_db()
+            attachment.refresh_from_db()
+            self.assertTrue(Ticket.objects.filter(pk=ticket.pk).exists())
+            self.assertIsNone(ticket.assigned_to_id)
+            self.assertIsNone(message.author_id)
+            self.assertIsNone(attachment.uploaded_by_id)
+            self.assertTrue(path.exists())
+            self.assertTrue(User.objects.filter(pk=owner.pk).exists())
