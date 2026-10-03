@@ -305,6 +305,87 @@ class StateManager:
             return True
 
     @classmethod
+    def reconcile_deploy_success_from_authority(
+        cls,
+        deploy_id: int,
+        revision_id,
+        *,
+        update_fields: Optional[dict] = None,
+        event_payload: Optional[dict] = None,
+    ) -> bool:
+        """Reconcile stale Deploy state when the same revision is already authoritative."""
+        from deploy.models import Deploy, DeploymentEventOutbox  # type: ignore
+        from services.models import Service  # type: ignore
+
+        with transaction.atomic():
+            deploy = Deploy.objects.select_for_update().filter(pk=deploy_id).first()
+            if deploy is None:
+                return False
+            if deploy.cancel_requested:
+                return False
+
+            service = Service.objects.select_for_update().filter(pk=deploy.service_id).first()
+            if service is None:
+                return False
+
+            # active_revision is the runtime authority and is committed only
+            # after readiness/cleanup reaches the activation boundary. This
+            # makes it a stronger proof than a stale Deploy.status value.
+            if (
+                not revision_id
+                or str(getattr(service, "active_revision_id", "") or "")
+                != str(revision_id)
+            ):
+                return False
+
+            now = timezone.now()
+            updates = {
+                "status": sm.DEPLOY_SUCCEEDED,
+                **dict(update_fields or {}),
+                "updated_at": now,
+            }
+            updates.setdefault("stage", "deployment_completed")
+            updates.setdefault("progress", 100)
+            updates.setdefault("completed_at", getattr(deploy, "completed_at", None) or now)
+            updates.setdefault("status_message", "Deployment completed successfully.")
+            updates["error_message"] = ""
+            updates["worker_heartbeat_at"] = now
+            updates["execution_task_id"] = ""
+            Deploy.objects.filter(pk=deploy_id).update(**updates)
+
+            if event_payload is not None:
+                payload = dict(event_payload)
+                payload.setdefault("event_id", str(uuid.uuid4()))
+                payload.setdefault("deployment_id", str(deploy.pk))
+                payload.setdefault("service_id", str(deploy.service_id))
+                payload.setdefault("revision_id", str(revision_id))
+                payload.setdefault("task_id", "system-reconciliation")
+                payload.setdefault("event_type", "deployment.finished.reconciled")
+                payload.setdefault("stage", "deployment_completed")
+                payload.setdefault("level", "info")
+                payload.setdefault("message", "Deployment completion state reconciled from active revision.")
+                payload.setdefault("progress", 100)
+                try:
+                    with transaction.atomic():
+                        DeploymentEventOutbox.objects.create(
+                            deployment_id=deploy_id,
+                            service_id=str(deploy.service_id),
+                            event_id=payload["event_id"],
+                            event_type=str(payload["event_type"])[:128],
+                            stage=str(payload["stage"])[:64],
+                            level=str(payload["level"])[:16],
+                            occurred_at=now,
+                            payload=payload,
+                        )
+                except Exception:
+                    logger.exception(
+                        "StateManager: unable to persist authority reconciliation event "
+                        "for deploy %s; keeping succeeded state.",
+                        deploy_id,
+                    )
+            return True
+
+    @classmethod
     def transition_deploy_system_terminal(
         cls,
         deploy_id: int,
