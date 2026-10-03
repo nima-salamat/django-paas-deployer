@@ -55,6 +55,15 @@ class CatalogDefinition:
         return str(self.data.get("format") or "toml")
 
 
+def is_public_definition(definition: CatalogDefinition) -> bool:
+    source = definition.source.resolve()
+    first_party_root = (CATALOG_ROOT / "first_party").resolve()
+    return (
+        str(definition.data.get("visibility") or "internal").strip().lower() == "public"
+        and source.parent == first_party_root
+    )
+
+
 class ApplicationCatalog:
     @classmethod
     def definitions(cls) -> list[CatalogDefinition]:
