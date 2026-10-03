@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 from django.test import TestCase
+from unittest.mock import patch
 from django.utils import timezone
 
 from auth_users.models import AuthCode, Device, InviteLink, InviteUsage, LoginLog, UserContactChange, UserSession
@@ -55,3 +56,18 @@ class AuthUserDeletionTests(TestCase):
         self.assertIsNone(log.user_id)
         self.assertEqual(log.username, "auth-delete")
         self.assertFalse(User.objects.filter(pk=uid).exists())
+
+    def test_user_delete_invalidates_session_cache_after_commit(self):
+        device = Device.objects.create(user=self.user, name="cache-browser")
+        session = UserSession.objects.create(
+            user=self.user,
+            device=device,
+            session_id="session-cache-delete",
+            credential_hash="hash",
+            expires_at=timezone.now() + timedelta(days=3650),
+        )
+
+        with patch("auth_users.session_auth._delete_session_cache_keys") as delete_cache:
+            self.user.delete()
+
+        delete_cache.assert_called_once_with([session.session_id])
