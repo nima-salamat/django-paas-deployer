@@ -65,3 +65,12 @@ class DepartmentMembershipAdmin(admin.ModelAdmin):
     list_display = ("user", "department", "is_manager", "created_at")
     list_filter = ("is_manager", "department")
     autocomplete_fields = ("user", "department")
+
+from core.django_admin import AuditReadOnlyAdmin
+from .models import TicketReadState
+
+
+@admin.register(TicketReadState)
+class TicketReadStateAdmin(AuditReadOnlyAdmin):
+    list_display = ("id", "ticket", "user", "last_read_at", "updated_at")
+    raw_id_fields = ("ticket", "user")
