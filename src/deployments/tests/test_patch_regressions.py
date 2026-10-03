@@ -797,5 +797,45 @@ class PythonDependencyMirrorFallbackTests(unittest.TestCase):
             self.assertIn("--timeout {PIP_DEFAULT_TIMEOUT}", block)
 
 
+# ---------------------------------------------------------------------------
+# Issue 7 — Python src-layout applications need their source root on sys.path
+# ---------------------------------------------------------------------------
+
+
+class PythonSrcLayoutImportPathTests(unittest.TestCase):
+    def test_fastapi_src_layout_adds_src_to_pythonpath(self):
+        d = load_dockerfile_module()
+
+        class Config:
+            server_type = None
+            entry_point = None
+            celery = False
+            celery_beat = False
+            worker_count = 1
+            port = 8000
+            environment = {}
+            frontend = {}
+            package_manager = None
+            install_command = None
+            build_command = None
+            runtime_version = None
+            build_options = {}
+
+        out = d._render_flask_or_python(
+            "fastapi",
+            "FROM mirror.test/python:3.11-slim\nWORKDIR /app\nCOPY . /app\n\n",
+            make_tar({
+                "requirements.txt": "fastapi\nuvicorn\n",
+                "src/app/__init__.py": "",
+                "src/app/main.py": "from fastapi import FastAPI\\nfrom app.api import router\\napp = FastAPI()\\n",
+                "src/app/api.py": "router = object()\\n",
+            }),
+            Config(),
+            None,
+        )
+        self.assertIn("ENV PYTHONPATH=/app/src:/app", out)
+
+
+
 if __name__ == "__main__":
     unittest.main()
