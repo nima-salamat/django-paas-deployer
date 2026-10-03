@@ -30,9 +30,19 @@ class IsStaffUser(IsAuthenticated):
 
 
 class IsAdminUser(IsAuthenticated):
-    """Email management is admin-only (superuser)."""
+    """Email management: superuser or staff holding the canonical emails.manage rule."""
     def has_permission(self, request, view):
-        return bool(super().has_permission(request, view) and request.user.is_superuser)
+        if not super().has_permission(request, view):
+            return False
+        user = request.user
+        if user.is_superuser:
+            return True
+        if not user.is_staff:
+            return False
+        try:
+            return "emails.manage" in (user.rule.rules or [])
+        except Exception:
+            return False
 
 class StandardPagination(PageNumberPagination):
     page_size = 20
