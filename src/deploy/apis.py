@@ -1415,6 +1415,66 @@ def _lock_service_for_user(service_id, user):
     return svc
 
 
+def _repair_completed_deploy_state(deploy_item) -> bool:
+    """Repair a deploy whose runtime already proved success but status was not finalized."""
+    from deployments.core.state.manager import StateManager
+
+    status_value = str(getattr(deploy_item, "status", "") or "").strip().lower()
+    if status_value == DeploymentStatusChoices.SUCCEEDED:
+        return True
+
+    if str(getattr(deploy_item, "stage", "") or "").strip().lower() != "deployment_completed":
+        return False
+
+    try:
+        progress = int(getattr(deploy_item, "progress", 0) or 0)
+    except (TypeError, ValueError):
+        progress = 0
+    if progress < 100:
+        return False
+    if str(getattr(deploy_item, "health_status", "") or "").strip().lower() != "healthy":
+        return False
+    if str(getattr(deploy_item, "container_status", "") or "").strip().lower() != "running":
+        return False
+    if str(getattr(deploy_item, "image_status", "") or "").strip().lower() not in {"built", "ready"}:
+        return False
+    if str(getattr(deploy_item, "network_status", "") or "").strip().lower() != "ready":
+        return False
+
+    now = timezone.now()
+    committed = StateManager.transition_deploy_system_terminal(
+        deploy_item.pk,
+        DeploymentStatusChoices.SUCCEEDED,
+        update_fields={
+            "stage": "deployment_completed",
+            "progress": 100,
+            "completed_at": getattr(deploy_item, "completed_at", None) or now,
+            "status_message": getattr(deploy_item, "status_message", "") or "Deployment completed successfully.",
+            "error_message": "",
+            "health_status": "healthy",
+            "container_status": "running",
+            "image_status": "built",
+            "network_status": "ready",
+        },
+        event_payload={
+            "event_id": str(uuid4()),
+            "trace_id": str(deploy_item.pk),
+            "deployment_id": str(deploy_item.pk),
+            "service_id": str(deploy_item.service_id),
+            "revision_id": str(getattr(deploy_item, "revision_id", "") or ""),
+            "task_id": "active-deploy-repair",
+            "event_type": "deployment.finished.reconciled",
+            "stage": "deployment_completed",
+            "level": "info",
+            "message": "Deployment completion state reconciled before active selection.",
+            "progress": 100,
+            "details": {"controlled_by": "set_deploy_state_repair", "previous_status": status_value},
+        },
+    )
+    if committed:
+        deploy_item.refresh_from_db()
+    return bool(committed or str(getattr(deploy_item, "status", "")).lower() == DeploymentStatusChoices.SUCCEEDED)
+
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -1446,6 +1506,11 @@ def set_deploy_apiview(request):
                 )
 
             deploy_item = Deploy.objects.select_related("service").get(id=deploy_id)
+
+            # The runtime writes deployment_completed only after readiness and
+            # activation. Reconcile a stale Deploy row before rejecting selection.
+            if deploy_item.status != DeploymentStatusChoices.SUCCEEDED:
+                _repair_completed_deploy_state(deploy_item)
 
             if deploy_item.status != DeploymentStatusChoices.SUCCEEDED:
                 return Response(
