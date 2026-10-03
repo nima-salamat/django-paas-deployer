@@ -92,119 +92,6 @@ def resolve_django_entrypoint(tar_stream, *, server_type: str | None = None) -> 
 
 
 def resolve_python_runtime_context(names, module: str | None) -> dict:
-    """Resolve a Python module and its actual source root inside the archive.
-
-    The detector may return either ``src.app.main`` or ``app.main`` depending
-    on which inspection path discovered the file. This resolver canonicalizes
-    both forms and also supports deeper layouts such as ``backend/src/app``.
-    """
-    module = str(module or "").strip().strip(".")
-    parts = [p for p in module.split('.') if p]
-    normalized = {
-        str(n or '').replace('\\', '/').lstrip('./').rstrip('/')
-        for n in (names or [])
-    }
-    normalized.discard('')
-
-    # Match the image builder's single-wrapper flattening behavior. This keeps
-    # detection paths and runtime paths in the same post-flatten coordinate system.
-    wrapper = ''
-    try:
-        from .project_model import detect_archive_wrapper, strip_archive_prefix
-        wrapper = detect_archive_wrapper(normalized)
-        if wrapper:
-            normalized = {
-                stripped for item in normalized
-                for stripped in [strip_archive_prefix(item, wrapper)]
-                if stripped
-            }
-            if parts and parts[0] == wrapper:
-                module = '.'.join(parts[1:])
-                parts = [p for p in module.split('.') if p]
-    except Exception:
-        pass
-
-    def exists_as_module(path_parts: list[str]) -> bool:
-        path = '/'.join(path_parts)
-        return (f'{path}.py' in normalized or f'{path}/__init__.py' in normalized)
-
-    if not parts:
-        return {'module': module, 'source_root': '', 'working_directory': '/app'}
-
-    if exists_as_module(parts):
-        best_source_root = None
-        best_module = module
-        for cut in range(1, len(parts)):
-            prefix_parts = parts[:cut]
-            remainder = parts[cut:]
-            prefix_path = '/'.join(prefix_parts)
-            if f'{prefix_path}/__init__.py' in normalized:
-                break
-            if exists_as_module(prefix_parts + remainder):
-                best_source_root = prefix_path
-                best_module = '.'.join(remainder)
-        if best_source_root:
-            return {
-                'module': best_module,
-                'source_root': best_source_root,
-                'working_directory': f'/app/{best_source_root}',
-            }
-        return {'module': module, 'source_root': '', 'working_directory': '/app'}
-
-    module_path = '/'.join(parts)
-    roots: set[str] = set()
-    for name in normalized:
-        if not name.endswith('.py') and not name.endswith('/__init__.py'):
-            continue
-        parent = name.rsplit('/', 1)[0] if '/' in name else ''
-        components = parent.split('/') if parent else []
-        for cut in range(1, len(components) + 1):
-            roots.add('/'.join(components[:cut]))
-    candidates: list[str] = []
-    for root in roots:
-        if f'{root}/{module_path}.py' in normalized or f'{root}/{module_path}/__init__.py' in normalized:
-            candidates.append(root)
-    if candidates:
-        source_root = sorted(candidates, key=lambda value: (value.count('/'), len(value), value))[0]
-        return {
-            'module': module,
-            'source_root': source_root,
-            'working_directory': f'/app/{source_root}',
-        }
-
-    return {'module': module, 'source_root': '', 'working_directory': '/app'}
-
-
-_FASTAPI_IMPORT_TARGET_RE = re.compile(
-    r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*:"
-    r"[A-Za-z_][A-Za-z0-9_]*$"
-)
-
-
-def _archive_names_from_sequence(names) -> set[str]:
-    return {
-        str(name or '').replace('\\', '/').lstrip('./').rstrip('/')
-        for name in (names or [])
-        if str(name or '').strip()
-    }
-
-
-def _flatten_runtime_names(names: set[str]) -> tuple[set[str], str]:
-    try:
-        from .project_model import detect_archive_wrapper, strip_archive_prefix
-        wrapper = detect_archive_wrapper(names)
-    except Exception:
-        wrapper = ''
-    if not wrapper:
-        return names, ''
-    return {
-        stripped for item in names
-        for stripped in [strip_archive_prefix(item, wrapper)]
-        if stripped
-    }, wrapper
-
-
-def resolve_python_runtime_context(names, module: str | None) -> dict:
     """Resolve a Python import target and source root consistently for runtime.
 
     The build context is post-flatten. This handles:
@@ -281,7 +168,10 @@ def _fastapi_pyproject_entrypoint(tar_stream) -> dict | None:
     """Read [tool.fastapi].entrypoint from pyproject.toml when configured."""
     tar_stream.seek(0)
     try:
-        import tomllib
+        try:
+            import tomllib
+        except ModuleNotFoundError:
+            import tomli as tomllib
         with tarfile.open(fileobj=tar_stream, mode='r:*') as tar:
             names = [m.name.replace('\\', '/').lstrip('./') for m in tar.getmembers()]
             for member in tar.getmembers():
