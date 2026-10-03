@@ -941,5 +941,106 @@ class PythonBridgeRuntimeOwnershipTests(unittest.TestCase):
         self.assertIn("_PYTHON_AUTO_START_PLATFORMS", source)
 
 
+# ---------------------------------------------------------------------------
+# FastAPI runtime/profile regressions
+# ---------------------------------------------------------------------------
+
+
+class FastAPIProfileRegressionTests(unittest.TestCase):
+    def test_pyproject_entrypoint_is_authoritative(self):
+        from deployments.core.entrypoints import resolve_fastapi_entrypoint
+
+        result = resolve_fastapi_entrypoint(make_tar({
+            "pyproject.toml": "[tool.fastapi]\\nentrypoint = \\\"app.main:application\\\"\\n",
+            "src/app/__init__.py": "",
+            "src/app/main.py": "from fastapi import FastAPI\\napplication = FastAPI()\\n",
+        }))
+        self.assertEqual(result["entrypoint"], "app.main:application")
+        self.assertEqual(result["module"], "app.main")
+        self.assertEqual(result["source_root"], "src")
+        self.assertEqual(result["working_directory"], "/app/src")
+        self.assertEqual(result["source"], "pyproject.toml")
+
+    def test_nested_backend_src_layout_is_resolved(self):
+        from deployments.core.entrypoints import resolve_python_runtime_context
+
+        result = resolve_python_runtime_context(
+            {
+                "backend/src/app/__init__.py",
+                "backend/src/app/main.py",
+            },
+            "app.main",
+        )
+        self.assertEqual(result["module"], "app.main")
+        self.assertEqual(result["source_root"], "backend/src")
+        self.assertEqual(result["working_directory"], "/app/backend/src")
+
+    def test_fastapi_command_contains_runtime_safety_and_limits(self):
+        d = load_dockerfile_module()
+        command = d._fastapi_uvicorn_command(
+            "app.main",
+            "app",
+            port=8000,
+            workers=2,
+            source_root="src",
+            profile={
+                "proxy_headers": True,
+                "forwarded_allow_ips": "10.0.0.2",
+                "root_path": "/api",
+                "log_level": "info",
+                "access_log": False,
+                "limit_concurrency": 200,
+                "limit_max_requests": 10000,
+                "limit_max_requests_jitter": 100,
+                "backlog": 4096,
+                "timeout_keep_alive": 10,
+                "timeout_graceful_shutdown": 30,
+                "timeout_worker_healthcheck": 5,
+            },
+        )
+        self.assertIn("uvicorn app.main:app", command)
+        self.assertIn("--app-dir /app/src", command)
+        self.assertIn("--proxy-headers", command)
+        self.assertIn("--forwarded-allow-ips 10.0.0.2", command)
+        self.assertIn("--root-path /api", command)
+        self.assertIn("--no-access-log", command)
+        self.assertIn("--limit-concurrency 200", command)
+        self.assertIn("--limit-max-requests 10000", command)
+        self.assertIn("--limit-max-requests-jitter 100", command)
+        self.assertIn("--timeout-graceful-shutdown 30", command)
+
+    def test_fastapi_config_rejects_host_workers_reload(self):
+        from deployments.common.config import normalize_fastapi_config
+
+        warnings = []
+        result = normalize_fastapi_config(
+            {
+                "host": "127.0.0.1",
+                "workers": 99,
+                "reload": True,
+                "proxy_headers": True,
+                "log_level": "debug",
+            },
+            warnings=warnings,
+        )
+        self.assertNotIn("host", result)
+        self.assertNotIn("workers", result)
+        self.assertNotIn("reload", result)
+        self.assertTrue(result["proxy_headers"])
+        self.assertEqual(result["log_level"], "debug")
+        self.assertEqual(len(warnings), 3)
+
+    def test_fastapi_config_warns_about_wildcard_forwarded_ips(self):
+        from deployments.common.config import normalize_fastapi_config
+        warnings = []
+        result = normalize_fastapi_config(
+            {"forwarded_allow_ips": "*"},
+            warnings=warnings,
+        )
+        self.assertEqual(result["forwarded_allow_ips"], "*")
+        self.assertTrue(any("forwarded_allow_ips='*'" in warning for warning in warnings))
+
+
+
 if __name__ == "__main__":
     unittest.main()
