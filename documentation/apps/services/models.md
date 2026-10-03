@@ -83,7 +83,7 @@ ShellSession and ShellAuditEvent store restricted shell capability/audit state. 
 
 ## Deletion/authority
 
-Foreign-key cascades remove subordinate durable state according to the declarations above. Signals coordinate runtime cleanup for Services/Volumes/PrivateNetworks. Runtime resources are not the Service database source of truth.
+Foreign-key cascades remove subordinate durable state according to the declarations above. Signals coordinate deployment cancellation and runtime cleanup for Services/Volumes/PrivateNetworks; Service deletion is fail-closed for persistent volumes. Runtime resources are not the Service database source of truth.
 
 Source: src/services/models.py.
 
