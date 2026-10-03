@@ -47,7 +47,7 @@ from deployments.core.manager.container_manager import Container
 from deployments.core.manager.image_manager import Image
 from docker.errors import APIError, NotFound as DockerNotFound
 
-from .models import Deploy, DeployLog
+from .models import Deploy, DeployLog, DeploymentStatusChoices
 from deployments.common.config import sanitize_tenant_config
 from deployments.application.cancel import CancelDeploymentUseCase
 from deployments.infrastructure.django_cancellation import (
