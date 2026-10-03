@@ -313,6 +313,11 @@ Every production source surface must be mapped to its owning canonical document 
 - `src/logs/tasks.py` → [logs](./logs/README.md)
 - `src/logs/usage.py` → [logs](./logs/README.md)
 
+#### agent
+
+- `src/agent/admin.py` → [agent](./agent/README.md)
+- `src/agent/models.py` → [agent](./agent/README.md)
+
 #### app_catalog
 
 - `src/app_catalog/__init__.py` → [app_catalog](./app_catalog/README.md)
