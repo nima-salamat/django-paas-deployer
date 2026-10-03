@@ -71,9 +71,9 @@ class MessengerUserDeletionTests(TestCase):
         message.refresh_from_db()
         self.assertIsNone(message.sender_id)
         self.assertTrue(Conversation.objects.filter(pk=group.pk).exists())
-            attachment.refresh_from_db()
-            self.assertIsNone(attachment.uploaded_by_id)
-            self.assertTrue(path.exists())
+        attachment.refresh_from_db()
+        self.assertIsNone(attachment.uploaded_by_id)
+        self.assertTrue(path.exists())
 
     def test_all_user_scoped_messenger_metadata_is_cascaded_or_anonymized(self):
         user = User.objects.create_user(
