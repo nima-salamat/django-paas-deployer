@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import re
 from typing import Any, Optional
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 from ..base.platform import DetectionResult
 from ..registry import PlatformRegistry
@@ -300,12 +303,6 @@ def _is_fastapi_source(text: str) -> bool:
             or re.search(r"\bfastapi\.FastAPI\s*\(", text)
         )
     )
-
-
-_APP_ASSIGNMENT_RE = re.compile(
-    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<factory>(?:fastapi\.)?FastAPI)\s*\(",
-    re.MULTILINE,
-)
 
 
 @PlatformRegistry.register
