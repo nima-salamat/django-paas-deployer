@@ -28,7 +28,7 @@ Authentication success can create Device/UserSession/LoginLog state and issue JW
 
 Device, UserSession, AuthCode, InviteUsage and UserContactChange rows are user-owned and cascade with the User. LoginLog is audit history: its User FK is `SET_NULL`, while username/identifier snapshots preserve the historical record. InviteLink and other operator-created records keep historical ownership metadata with `SET_NULL` rather than disappearing with the account.
 
-Session Redis is acceleration-only; authentication still performs the authoritative User lookup, so a deleted User cannot authenticate even if an expired cache entry remains until its normal TTL. User deletion tests live under `auth_users/tests/test_user_deletion.py`.
+Session Redis is acceleration-only; authentication still performs the authoritative User lookup, so a deleted User cannot authenticate even if an expired cache entry remains until its normal TTL. User deletion tests live under `auth_users/tests/test_user_deletion_auth_users.py`.
 
 ## Tests as contracts
 
