@@ -40,11 +40,16 @@ class IntegratedLifecycleContractTests(unittest.TestCase):
         self.assertIn("ownership mismatch", container)
         self.assertIn('labels.get("managed-by")', container)
 
-    def test_manual_active_selection_requires_success(self):
+    def test_manual_active_selection_does_not_gate_on_deploy_status(self):
         api = self.read("deploy/apis.py")
-        self.assertIn("from .models import Deploy, DeployLog, DeploymentStatusChoices", api)
-        self.assertIn('deploy_item.status != DeploymentStatusChoices.SUCCEEDED', api)
-        self.assertIn('"deploy_not_ready"', api)
+        selection = api.split("def set_deploy_apiview", 1)[1].split(
+            'def unset_deploy_apiview', 1
+        )[0]
+        self.assertIn("ensure_revision_for_deploy(deploy_item)", selection)
+        self.assertIn("activate_revision_locked(service_item, deploy_item.revision_id)", selection)
+        self.assertNotIn("DeploymentStatusChoices.SUCCEEDED", selection)
+        self.assertNotIn("Only a successfully completed deployment", selection)
+        self.assertNotIn('"deploy_not_ready"', selection)
 
     def test_catalog_duplicate_ids_are_rejected(self):
         catalog = self.read("app_catalog/catalog.py")
