@@ -1427,13 +1427,23 @@ def _repair_completed_deploy_state(deploy_item, service_item=None) -> bool:
     # The outbox is the authoritative durable lifecycle journal. A completed
     # event is emitted only after the replacement has passed readiness and the
     # activation boundary has succeeded. Prefer this proof over UI/polling state.
-    completion_event = (
-        DeploymentEventOutbox.objects
-        .filter(deployment_id=deploy_item.pk, stage__in=("deployment_completed", "finished"))
-        .order_by("-occurred_at", "-id")
-        .values("stage", "level", "payload")
-        .first()
-    )
+    try:
+        completion_event = (
+            DeploymentEventOutbox.objects
+            .filter(deployment_id=deploy_item.pk, stage__in=("deployment_completed", "finished"))
+            .order_by("-occurred_at", "-id")
+            .values("stage", "level", "payload")
+            .first()
+        )
+    except Exception:
+        # Selection must remain available even while the optional durable
+        # event projection is unavailable (for example during migration
+        # recovery). Row/activation proof below can still establish safety.
+        logger.exception(
+            "Unable to read deployment completion outbox for deploy %s.",
+            deploy_item.pk,
+        )
+        completion_event = None
     completion_payload = dict((completion_event or {}).get("payload") or {})
     completion_event_type = str(completion_payload.get("event_type") or "").lower()
     completion_message = str(completion_payload.get("message") or "").lower()
