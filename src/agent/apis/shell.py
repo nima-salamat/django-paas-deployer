@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from rest_framework.response import Response
 from .base import AgentSecuredAPIView, idempotent
-from ..application import ensure_service_access, get_service, redact_shell_result
+from ..application import call_api_view_handler, ensure_service_access, get_service, redact_shell_result
 from ..errors import AgentError
 
 
@@ -58,7 +58,20 @@ class ShellCommandView(AgentSecuredAPIView):
         result=execute_command(session,command,confirm=bool(request.data.get("confirm",False)),dry_run=bool(request.data.get("dry_run",False)))
         safe=redact_shell_result(service,result)
         self.audit_metadata={"session_id":str(session.pk),"command_length":len(command),"exit_code":safe.get("exit_code"),"risk":safe.get("risk")}
-        return Response({"result":"success","command":safe.get("command") or command,"exit_code":safe.get("exit_code"),"stdout":safe.get("stdout"),"stderr":safe.get("stderr"),"duration_ms":safe.get("duration_ms"),"cwd":safe.get("cwd") or session.workdir,"session_id":str(session.pk)})
+        payload = {
+            "result": "success",
+            "command": safe.get("command") or command,
+            "exit_code": safe.get("exit_code"),
+            "stdout": safe.get("stdout"),
+            "stderr": safe.get("stderr"),
+            "duration_ms": safe.get("duration_ms"),
+            "cwd": safe.get("cwd") or session.workdir,
+            "session_id": str(session.pk),
+        }
+        for key in ("dry_run", "risk", "requires_confirmation", "plan"):
+            if key in safe:
+                payload[key] = safe[key]
+        return Response(payload)
 
 class ShellCloseView(AgentSecuredAPIView):
     agent_contract_path = "/agent/v1/services/{service_id}/shell/sessions/{session_id}/close"
@@ -89,7 +102,7 @@ class ShellFileView(AgentSecuredAPIView):
 
     def post(self,request,service_id):
         action=str(request.data.get("action") or "read").lower()
-        scope="shell.files.write" if action in {"write","delete","rename","create","create_folder"} else "shell.files.read"
+        scope="shell.files.write" if action in {"write","delete","rename","create","create_folder","upload"} else "shell.files.read"
         if scope not in set(request.agent.scopes or []):raise AgentError("INSUFFICIENT_SCOPE",f"Missing {scope} scope.",status_code=403,failure_domain="authorization")
         get_service(service_id,request.user,action="can_shell")
         from services.api.shell import shell_file_apiview
