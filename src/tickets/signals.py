@@ -73,15 +73,20 @@ def _ticket_media_dir(ticket_id) -> str:
 
 @receiver(pre_delete, sender=TicketAttachment)
 def ticket_attachment_pre_delete(sender, instance, **kwargs):
-    """Delete the physical file when an attachment row is removed."""
+    """Delete the stored file before its attachment row disappears."""
+    if not instance.file:
+        return
+    name = str(getattr(instance.file, "name", "") or "")
     try:
-        if instance.file and getattr(instance.file, "path", None):
-            _delete_file_quietly(instance.file)
-    except Exception:
+        instance.file.delete(save=False)
+    except Exception as exc:
         logger.exception(
             "ticket_attachment_pre_delete failed for attachment %s",
             getattr(instance, "pk", None),
         )
+        raise RuntimeError(
+            f"Failed to remove ticket attachment '{name}'."
+        ) from exc
 
 
 @receiver(pre_delete, sender=Ticket)
