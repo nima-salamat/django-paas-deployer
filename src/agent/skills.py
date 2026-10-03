@@ -271,6 +271,62 @@ errors.
         any_scopes=("service_logs.read", "service_logs.export", "deployments.logs.read", "deployments.logs.export"),
     ),
     _skill(
+        "endpoints",
+        "Service Endpoints",
+        "Manage service ports, hostnames, paths, exposure and endpoint configuration.",
+        """
+# Service Endpoints
+
+Use this skill for service ingress/exposure configuration. Prefer the endpoint
+resource API over shell or web-server edits.
+
+## Endpoints
+
+- GET {{base}}/services/{service_id}/endpoints
+- POST {{base}}/services/{service_id}/endpoints
+- DELETE {{base}}/services/{service_id}/endpoints?name={name}
+
+## Rules
+
+Read the current endpoints before making dependent changes. Use OpenAPI for the
+exact fields and enums for target_port, published_port, protocol, exposure,
+process, hostname, path, tls and enabled. Ports are server-validated.
+
+Treat platform-managed hostnames and other server-owned fields as authoritative.
+After a mutation, read the endpoint configuration back and verify any resulting
+service/deployment state.
+        """,
+        any_scopes=("service_endpoints.read", "service_endpoints.write"),
+    ),
+    _skill(
+        "volumes",
+        "Volumes",
+        "Manage service volumes and inspect their bindings and lifecycle state.",
+        """
+# Volumes
+
+Use this skill for persistent storage resources. Do not emulate volume
+configuration by mounting paths manually from inside the runtime shell.
+
+## Endpoints
+
+- GET/POST {{base}}/volumes
+- GET/PATCH/DELETE {{base}}/volumes/{volume_id}
+
+## Rules
+
+Use the volume API for resource creation and lifecycle changes. Respect plan,
+quota and server-owned volume constraints. Use the returned volume id and
+binding metadata when connecting storage to a service.
+
+A runtime path being writable does not imply a volume exists, and a volume
+being attached does not imply every path under it is writable by the service
+process UID. Verify the actual resource and runtime state after important
+storage changes.
+        """,
+        any_scopes=("service_volumes.read", "service_volumes.write"),
+    ),
+    _skill(
         "shell",
         "Restricted Runtime Shell",
         "Run authorized non-interactive or interactive commands inside a service runtime.",
