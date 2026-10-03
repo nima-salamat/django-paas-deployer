@@ -403,27 +403,13 @@ class DjangoDeploymentState:
             "progress": 100,
             "details": details,
         }
-        if success and self.deploy.revision_id:
-            # Successful application deployments must atomically keep the
-            # revision activation and Deploy.succeeded state consistent. The
-            # activation callback normally runs immediately before finish(),
-            # but this helper is idempotent and repairs the final state if the
-            # worker reaches this boundary after that write.
-            committed = bool(owner) and StateManager.activate_revision_and_succeed(
-                self.deploy.pk,
-                self.deploy.revision_id,
-                task_id=owner,
-                update_fields=update,
-                event_payload=event_payload,
-            )
-        else:
-            committed = bool(owner) and StateManager.transition_deploy_terminal_if_owned(
-                self.deploy.pk,
-                terminal_target,
-                task_id=owner,
-                update_fields=update,
-                event_payload=event_payload,
-            )
+        committed = bool(owner) and StateManager.transition_deploy_terminal_if_owned(
+            self.deploy.pk,
+            terminal_target,
+            task_id=owner,
+            update_fields=update,
+            event_payload=event_payload,
+        )
 
         if not committed:
             logger.info(
