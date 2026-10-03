@@ -12,7 +12,7 @@ cancel_application_installation stops future dispatch and performs safe terminal
 
 reconcile_application_installations is the recovery scheduler: it inspects persisted execution_task_id/deadline and child bindings to requeue or fail stale coordinator work. It must not infer a missing child from a transient query result and blindly duplicate it.
 
-Hard deletion is coordinated by `app_catalog.user_deletion.prepare_user_hard_delete`. `ApplicationInstanceService.service` and `ApplicationInstanceService.deploy` remain `PROTECT` for direct child deletion; the user hard-delete coordinator explicitly removes those bindings first, fences each child Service lifecycle generation, deletes the child Service through the normal Service cleanup boundary, and then removes the installation-owned network.
+Hard deletion is coordinated by `app_catalog.user_deletion.Django User deletion uses database RESTRICT semantics so the owned ApplicationInstance graph and its child Service/Deploy rows are deleted together; direct child deletion remains restricted.`. `ApplicationInstanceService.service` and `ApplicationInstanceService.deploy` remain `PROTECT` for direct child deletion; the user hard-delete coordinator explicitly removes those bindings first, fences each child Service lifecycle generation, deletes the child Service through the normal Service cleanup boundary, and then removes the installation-owned network.
 
 Queue routing for these tasks is configured centrally in src/config/settings.py. Child deployment work remains subject to deployments ownership/retry/fencing rules.
 
