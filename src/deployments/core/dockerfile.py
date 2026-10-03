@@ -9,6 +9,7 @@ from .entrypoints import (
     resolve_django_entrypoint,
     resolve_flask_entrypoint,
     resolve_fastapi_entrypoint,
+    resolve_python_runtime_context,
     resolve_node_entrypoint,
 )
 from .exceptions import DeploymentValidationError
@@ -445,6 +446,11 @@ def _render_django(dockerfile_template, tar_stream, config, logger):
 
     module = entrypoint["module"]
     resolved_server_type = entrypoint["type"]
+    runtime_context = resolve_python_runtime_context(
+        _archive_names(tar_stream), module
+    )
+    runtime_module = runtime_context["module"]
+    source_root = runtime_context["source_root"]
 
     if logger and entrypoint.get("override"):
         logger.info(
@@ -499,7 +505,12 @@ def _render_django(dockerfile_template, tar_stream, config, logger):
     web_cmd = (
         _align_entry_point_workers(entry_point_override, workers)
         if entry_point_override
-        else _django_web_command(module, resolved_server_type, workers=workers)
+        else _django_web_command(
+            runtime_module,
+            resolved_server_type,
+            workers=workers,
+            source_root=source_root,
+        )
     )
 
     packages = _runtime_pip_packages(
@@ -752,11 +763,6 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
     except Exception:
         pass
     rendered = _prepare_python_dependency_install(rendered, tar_stream, install_cmd)
-    runtime_context = resolve_python_runtime_context(
-        _archive_names(tar_stream), module
-    )
-    runtime_module = runtime_context["module"]
-    source_root = runtime_context["source_root"]
     rendered = _inject_python_import_path(rendered, tar_stream, runtime_module)
 
     workers = _worker_count_from_config(config)
