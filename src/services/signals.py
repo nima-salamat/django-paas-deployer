@@ -12,8 +12,34 @@ from deployments.core.manager.volume_manager import Volume as DockerVolume
 from deployments.core.manager.image_manager import Image
 from deployments.core.manager.network_manager import Network
 from core.global_settings.config import PlanTypeChoices
+from deployments.application.cancel import CancelDeploymentUseCase
+from deployments.infrastructure.django_cancellation import DjangoDeploymentCancellationGateway
 
 logger = logging.getLogger(__name__)
+
+
+def _cancel_active_deployments_for_service(service: Service) -> None:
+    """Request cancellation for every non-terminal deployment owned by a Service."""
+    from deploy.models import DeploymentStatusChoices
+
+    gateway = DjangoDeploymentCancellationGateway()
+    deploys = list(
+        service.deployments.filter(
+            status__in=(
+                DeploymentStatusChoices.PENDING,
+                DeploymentStatusChoices.RUNNING,
+                DeploymentStatusChoices.ROLLING_BACK,
+            )
+        ).only("pk", "status", "cancel_requested")
+    )
+    for deploy in deploys:
+        result = CancelDeploymentUseCase(gateway).execute(deploy.pk)
+        logger.info(
+            "Requested cancellation for deploy %s before Service %s deletion: %s",
+            deploy.pk,
+            service.pk,
+            result.decision.action.value,
+        )
 
 
 @receiver(pre_delete, sender=Service)
@@ -30,6 +56,7 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
         - Remove image associated with this service name.
     """
     service_name = instance.get_docker_service_name()
+    _cancel_active_deployments_for_service(instance)
     logger.info(
         "pre_delete Service '%s' → cleaning Docker resources for '%s'",
         instance.name,
@@ -118,10 +145,7 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
         )
         raise
 
-    finally:
-        # Volumes are exclusive to this service — delete them (Docker + DB)
-        _cleanup_service_volumes(instance)
-
+    _cleanup_service_volumes(instance)
 
 def _cleanup_service_cache_images(service: Service) -> None:
     """Remove unshared application images owned by a deleting Service."""
