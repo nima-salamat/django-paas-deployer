@@ -90,6 +90,52 @@ def resolve_django_entrypoint(tar_stream, *, server_type: str | None = None) -> 
     return {"type": detected["type"], "module": detected["module"], "override": False}
 
 
+
+def resolve_python_runtime_context(names, module: str | None) -> dict:
+    """Resolve the runtime import target for a detected Python module.
+
+    Handles src-style and nested layouts without changing a user-provided
+    entrypoint. For example src/app/main.py becomes app.main with
+    source_root=src so the runtime can execute with /app/src as an import
+    root. Package-root layouts such as app/main.py stay unchanged.
+    """
+    module = str(module or "").strip().strip(".")
+    parts = [p for p in module.split(".") if p]
+    normalized = {
+        str(n or "").replace("\\", "/").lstrip("./").rstrip("/")
+        for n in (names or [])
+    }
+    normalized.discard("")
+    if not parts:
+        return {"module": module, "source_root": "", "working_directory": "/app"}
+
+    module_file = "/".join(parts) + ".py"
+    package_file = "/".join(parts) + "/__init__.py"
+    if module_file not in normalized and package_file not in normalized:
+        return {"module": module, "source_root": "", "working_directory": "/app"}
+
+    for cut in range(1, len(parts)):
+        prefix = "/".join(parts[:cut])
+        if f"{prefix}/__init__.py" in normalized:
+            break
+        next_part = parts[cut]
+        package_dir = f"{prefix}/{next_part}"
+        package_init = f"{package_dir}/__init__.py"
+        package_module = f"{prefix}/{next_part}.py"
+        namespace_package = any(
+            n.startswith(package_dir + "/") for n in normalized
+        )
+        if package_init in normalized or package_module in normalized or namespace_package:
+            runtime_module = ".".join(parts[cut:])
+            return {
+                "module": runtime_module,
+                "source_root": prefix,
+                "working_directory": f"/app/{prefix}",
+            }
+
+    return {"module": module, "source_root": "", "working_directory": "/app"}
+
+
 def resolve_fastapi_entrypoint(tar_stream) -> dict | None:
     """Resolve a concrete FastAPI ASGI target from the deployment archive."""
     candidates: list[dict] = []
