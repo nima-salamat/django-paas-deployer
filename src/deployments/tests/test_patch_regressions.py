@@ -837,5 +837,91 @@ class PythonSrcLayoutImportPathTests(unittest.TestCase):
 
 
 
+# ---------------------------------------------------------------------------
+# Issue 8 — Python runtime target must follow the detected source root
+# ---------------------------------------------------------------------------
+
+
+class PythonRuntimeLayoutTests(unittest.TestCase):
+    def test_src_layout_resolves_to_runtime_package_and_app_dir(self):
+        from deployments.core.entrypoints import resolve_python_runtime_context
+
+        context = resolve_python_runtime_context(
+            {
+                "requirements.txt",
+                "src/app/__init__.py",
+                "src/app/main.py",
+                "src/app/api.py",
+            },
+            "src.app.main",
+        )
+
+        self.assertEqual(context["module"], "app.main")
+        self.assertEqual(context["source_root"], "src")
+        self.assertEqual(context["working_directory"], "/app/src")
+
+    def test_package_root_layout_is_not_rewritten(self):
+        from deployments.core.entrypoints import resolve_python_runtime_context
+
+        context = resolve_python_runtime_context(
+            {
+                "requirements.txt",
+                "app/__init__.py",
+                "app/main.py",
+                "app/api.py",
+            },
+            "app.main",
+        )
+
+        self.assertEqual(context["module"], "app.main")
+        self.assertEqual(context["source_root"], "")
+        self.assertEqual(context["working_directory"], "/app")
+
+    def test_fastapi_renderer_emits_app_dir_for_src_layout(self):
+        d = load_dockerfile_module()
+
+        class Config:
+            server_type = None
+            entry_point = None
+            celery = False
+            celery_beat = False
+            worker_count = 1
+            port = 8000
+            environment = {}
+            frontend = {}
+            package_manager = None
+            install_command = None
+            build_command = None
+            runtime_version = None
+            build_options = {}
+
+        out = d._render_flask_or_python(
+            "fastapi",
+            "FROM mirror.test/python:3.11-slim\nWORKDIR /app\nCOPY . /app/\n",
+            make_tar(
+                {
+                    "requirements.txt": "fastapi\nuvicorn\n",
+                    "src/app/__init__.py": "",
+                    "src/app/main.py": (
+                        "from fastapi import FastAPI\n"
+                        "from app.api import health_router, tasks_router\n"
+                        "app = FastAPI()\n"
+                    ),
+                    "src/app/api.py": (
+                        "health_router = object()\n"
+                        "tasks_router = object()\n"
+                    ),
+                }
+            ),
+            Config(),
+            None,
+        )
+
+        self.assertIn("uvicorn app.main:app", out)
+        self.assertIn("--app-dir /app/src", out)
+        self.assertNotIn("uvicorn src.app.main:app", out)
+        self.assertIn("ENV PYTHONPATH=/app/src:/app", out)
+
+
 if __name__ == "__main__":
     unittest.main()
