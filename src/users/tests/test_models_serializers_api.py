@@ -80,7 +80,7 @@ class UserModelAndSerializerTests(TestCase):
 
     def test_update_user_serializer_blocks_direct_contact_changes(self):
         serializer = UpdateUserSerializer(
-            data={"email": "new@example.com", "theme": "light", "color": 1}
+            data={"email": "new@example.com", "theme": "light", "color": 5}
         )
         self.assertFalse(serializer.is_valid())
 
