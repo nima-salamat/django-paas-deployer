@@ -6,7 +6,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from rest_framework.test import APIRequestFactory, force_authenticate
 
-from deploy.models import BuildCacheArtifact, Deploy, DeploymentStatusChoices
+from deploy.models import BuildCacheArtifact, Deploy, DeploymentStatusChoices, BaseRuntimeImage, BaseRuntimeImageLease
 from plans.models import Plan
 from services.models import Service
 from users.models import User
