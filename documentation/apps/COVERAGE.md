@@ -436,6 +436,7 @@ Every production source surface must be mapped to its owning canonical document 
 - `src/core/global_settings/__init__.py` → [core](./core/README.md)
 - `src/core/global_settings/config.py` → [core](./core/README.md)
 - `src/core/initial_config.py` → [core](./core/README.md)
+- `src/core/django_admin.py` → [core](./core/README.md)
 - `src/core/models.py` → [core](./core/README.md)
 - `src/core/production_errors.py` → [core](./core/README.md)
 - `src/core/settings_service.py` → [core](./core/README.md)
