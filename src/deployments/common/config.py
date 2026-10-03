@@ -306,6 +306,7 @@ def _valid_rel_path(value: Any) -> bool:
 FASTAPI_CONFIG_DEFAULTS = {
     "proxy_headers": True,
     "access_log": True,
+    "factory": False,
     "log_level": "info",
     "timeout_keep_alive": 5,
     "timeout_graceful_shutdown": 30,
@@ -398,6 +399,10 @@ NaN
         out["log_level"] = log_level
 
     access_log = raw.get("access_log")
+    factory = raw.get("factory")
+    if factory not in (None, ""):
+        out["factory"] = as_bool(factory)
+
     if access_log not in (None, ""):
         out["access_log"] = as_bool(access_log)
 
@@ -419,7 +424,7 @@ NaN
             out[key] = default
 
     known = {
-        "entrypoint", "entry_point", "app_dir", "proxy_headers",
+        "entrypoint", "entry_point", "app_dir", "proxy_headers", "factory",
         "forwarded_allow_ips", "root_path", "log_level", "access_log",
         *(_FASTAPI_INT_LIMITS.keys()),
         "host", "workers", "reload",
