@@ -403,23 +403,23 @@ class ServiceSecretVersionAdmin(SensitiveReadOnlyAdmin):
 
 @admin.register(ServiceEndpoint)
 class ServiceEndpointAdmin(ProjectModelAdmin):
-    list_display = ("id", "service", "name", "host", "port", "protocol", "public", "created_at")
-    list_filter = ("protocol", "public")
+    list_display = ("id", "service", "name", "target_port", "published_port", "protocol", "exposure", "created_at")
+    list_filter = ("protocol", "exposure")
     search_fields = ("name", "host", "service__name")
     raw_id_fields = ("service",)
 
 
 @admin.register(ServicePortReservation)
 class ServicePortReservationAdmin(AuditReadOnlyAdmin):
-    list_display = ("id", "service", "host_port", "protocol", "state", "created_at", "released_at")
+    list_display = ("id", "service", "endpoint", "host_port", "protocol", "state", "created_at")
     list_filter = ("protocol", "state")
     raw_id_fields = ("service",)
 
 
 @admin.register(ServiceNetworkAttachment)
 class ServiceNetworkAttachmentAdmin(AuditReadOnlyAdmin):
-    list_display = ("id", "service", "network", "scope", "created_at")
-    list_filter = ("scope",)
+    list_display = ("id", "service", "network", "alias", "internal", "created_at")
+    list_filter = ("internal",)
     raw_id_fields = ("service", "network")
 
 
@@ -462,9 +462,9 @@ class ServiceShareMemberAdmin(AuditReadOnlyAdmin):
 
 @admin.register(ServiceShareEvent)
 class ServiceShareEventAdmin(AuditReadOnlyAdmin):
-    list_display = ("id", "share", "event_type", "actor", "created_at")
-    list_filter = ("event_type",)
-    search_fields = ("event_type",)
+    list_display = ("id", "share", "action", "actor", "created_at")
+    list_filter = ("action",)
+    search_fields = ("action", "message")
     raw_id_fields = ("share", "actor")
 
 
