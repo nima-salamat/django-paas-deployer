@@ -109,6 +109,7 @@ def cleanup_user_resources(sender, instance: User, **kwargs):
             "Failed to remove user deployment directory for user_id=%s",
             user_id,
         )
+        raise
 
     logger.info("=== pre_delete User %s finished ===", user_id)
 
