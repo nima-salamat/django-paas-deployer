@@ -1881,6 +1881,8 @@ def inspect_deploy_zip_apiview(request):
                 }
                 if getattr(enriched, "entry_point", None):
                     suggested_config["entry_point"] = enriched.entry_point
+                if getattr(enriched, "start_command", None):
+                    suggested_config["start_command"] = enriched.start_command
 
                 is_python_family = detected_platform in _PYTHON_FAMILY
                 if is_python_family:
@@ -2038,6 +2040,7 @@ def inspect_deploy_zip_apiview(request):
                 "framework": detection_raw.get("framework"),
                 "server_type": suggested_config.get("server_type"),
                 "entrypoint": suggested_config.get("entry_point"),
+                "start_command": suggested_config.get("start_command"),
                 "django_settings_module": detection_raw.get("django_settings_module"),
                 "static_dir": detection_raw.get("static_dir"),
                 "media_dir": detection_raw.get("media_dir"),
