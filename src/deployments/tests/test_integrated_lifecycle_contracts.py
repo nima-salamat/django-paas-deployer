@@ -51,6 +51,8 @@ class IntegratedLifecycleContractTests(unittest.TestCase):
         self.assertIn("def _repair_completed_deploy_state(deploy_item) -> bool:", api)
         self.assertIn('stage", "deployment_completed', api)
         self.assertIn("StateManager.transition_deploy_system_terminal(", api)
+        self.assertIn("DeploymentEventOutbox.objects", api)
+        self.assertIn("stage__in=(\"deployment_completed\", \"finished\")", api)
         self.assertIn("Deployment completion state reconciled before active selection.", api)
 
     def test_catalog_duplicate_ids_are_rejected(self):
