@@ -144,6 +144,14 @@ TENANT_CONFIG_KEYS: dict[str, dict[str, Any]] = {
                        "(e.g. ``/health`` or ``/``). Informational for most "
                        "platforms; platforms that emit a HEALTHCHECK may use it.",
     },
+    "healthcheck_expected_status": {
+        "type": "array<int>",
+        "description": "HTTP status codes accepted by the deployment readiness probe. Defaults to 200 and 204.",
+    },
+    "healthcheck_timeout": {
+        "type": "number",
+        "description": "Per-request timeout, in seconds, for the deployment readiness probe.",
+    },
     "celery_module": {
         "type": "string",
         "description": "Alias for ``celery_app``.",
