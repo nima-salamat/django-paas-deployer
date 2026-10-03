@@ -1874,12 +1874,33 @@ def inspect_deploy_zip_apiview(request):
                 suggested_config = {
                     "platform": detected_platform or "docker",
                 }
-                if getattr(enriched, "entry_point", None):
-                    suggested_config["entry_point"] = enriched.entry_point
-                if getattr(enriched, "start_command", None):
-                    suggested_config["start_command"] = enriched.start_command
 
                 is_python_family = detected_platform in _PYTHON_FAMILY
+                if is_python_family and detected_platform == "fastapi":
+                    runtime_options = getattr(enriched, "runtime_options", None) or {}
+                    fastapi_profile = (
+                        runtime_options.get("fastapi_profile")
+                        if isinstance(runtime_options, dict)
+                        else None
+                    )
+                    fastapi_profile = dict(fastapi_profile or {})
+                    if fastapi_profile:
+                        suggested_config["fastapi"] = {
+                            "entrypoint": fastapi_profile.get("entrypoint"),
+                            "app_dir": (
+                                str(fastapi_profile.get("runtime_working_directory") or "")
+                                .replace("/app/", "", 1)
+                                .strip("/")
+                                or None
+                            ),
+                        }
+                        if fastapi_profile.get("healthcheck_path"):
+                            suggested_config["healthcheck_path"] = fastapi_profile["healthcheck_path"]
+                else:
+                    if getattr(enriched, "entry_point", None):
+                        suggested_config["entry_point"] = enriched.entry_point
+                    if getattr(enriched, "start_command", None):
+                        suggested_config["start_command"] = enriched.start_command
                 if is_python_family:
                     # Surface the detector's non-secret runtime settings so
                     # the frontend can present a complete, reviewable FastAPI
