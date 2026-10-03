@@ -32,6 +32,15 @@ class CustomEmailAPIAndSerializerTests(TestCase):
         response = self.client.get("/api/emails/templates/")
         self.assertEqual(response.status_code, 403)
 
+    def test_staff_with_emails_manage_can_access_email_admin_api(self):
+        from users.models import Rule
+
+        Rule.objects.create(user=self.staff, rules=["emails.manage"])
+        self.client.force_authenticate(user=self.staff)
+
+        response = self.client.get("/api/emails/templates/")
+        self.assertEqual(response.status_code, 200)
+
     def test_superuser_can_create_and_list_email_templates(self):
         self.client.force_authenticate(user=self.admin)
         created = self.client.post(
