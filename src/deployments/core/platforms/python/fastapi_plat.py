@@ -139,6 +139,11 @@ class FastAPIPlatform(PythonPlatform):
             "database_drivers": [],
             "cache_drivers": [],
             "task_queues": [],
+            "migration_tools": [],
+            "auth_libraries": [],
+            "http_clients": [],
+            "observability": [],
+            "storage_libraries": [],
             "middleware": [],
             "websockets": False,
             "lifespan": False,
@@ -147,9 +152,19 @@ class FastAPIPlatform(PythonPlatform):
         db_deps = {"sqlalchemy", "sqlmodel", "databases", "asyncpg", "psycopg", "psycopg2", "aiomysql", "pymysql", "motor", "pymongo", "oracledb", "cx-oracle"}
         cache_deps = {"redis", "aioredis", "hiredis"}
         queue_deps = {"celery", "arq", "dramatiq", "rq"}
+        migration_deps = {"alembic", "yoyo-migrations", "sqlalchemy-migrate"}
+        auth_deps = {"fastapi-users", "python-jose", "pyjwt", "authlib", "passlib", "bcrypt", "argon2-cffi"}
+        http_deps = {"httpx", "aiohttp", "requests"}
+        observability_deps = {"sentry-sdk", "opentelemetry-api", "opentelemetry-sdk", "prometheus-fastapi-instrumentator"}
+        storage_deps = {"boto3", "aioboto3", "minio", "aiofiles"}
         profile["database_drivers"] = sorted(deps & db_deps)
         profile["cache_drivers"] = sorted(deps & cache_deps)
         profile["task_queues"] = sorted(deps & queue_deps)
+        profile["migration_tools"] = sorted(deps & migration_deps)
+        profile["auth_libraries"] = sorted(deps & auth_deps)
+        profile["http_clients"] = sorted(deps & http_deps)
+        profile["observability"] = sorted(deps & observability_deps)
+        profile["storage_libraries"] = sorted(deps & storage_deps)
 
         health_hits: list[str] = []
         for rel, abs_p in file_index.items():
