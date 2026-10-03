@@ -72,7 +72,7 @@ TENANT_CONFIG_KEYS: dict[str, dict[str, Any]] = {
         "type": "string",
         "description": "Target platform. Usually auto-detected from the zip "
                        "via /deploy/inspect_zip/. Examples: laravel, php, django, "
-                       "flask, python, nodejs, nextjs, react, vuejs, angular, "
+                       "flask, python, fastapi, nodejs, nextjs, react, vuejs, angular, "
                        "go, statichtmlcss, fastapi, docker.",
     },
     "framework": {
@@ -174,7 +174,7 @@ TENANT_CONFIG_KEYS: dict[str, dict[str, Any]] = {
     },
     "server_type": {
         "type": "string",
-        "description": "ASGI/WSGI selector for Django (``asgi`` or ``wsgi``). "
+        "description": "ASGI/WSGI selector for Python web runtimes (``asgi`` or ``wsgi``). "
                        "Auto-detected when not set.",
     },
     "celery": {
