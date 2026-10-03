@@ -154,6 +154,7 @@ def serialize_user(u: User, include_rules=True) -> dict:
         "is_active": bool(u.is_active),
         "date_joined": u.date_joined.isoformat() if u.date_joined else None,
         "balance": str(getattr(u, "balance", "0")),
+        "deletion_requested_at": u.deletion_requested_at.isoformat() if getattr(u, "deletion_requested_at", None) else None,
     }
     # Profile images (ordered by `order` then id)
     try:
@@ -476,8 +477,38 @@ class AdminUserDetailAPIView(APIView):
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
         hard = request.query_params.get("hard") in ("1", "true")
         if hard and is_su:
-            u.delete()
-            return ok("User permanently deleted")
+            from django.db import transaction
+            from .tasks import request_user_deletion_convergence, finalize_user_deletion
+
+            if u.deletion_requested_at is not None:
+                # Idempotent repeated delete requests should only re-drive convergence.
+                transaction.on_commit(
+                    lambda: finalize_user_deletion.delay(u.pk)
+                )
+                return ok(
+                    "User deletion is already in progress; active deployments are being converged.",
+                    data={"deletion_pending": True},
+                    http_status=status.HTTP_202_ACCEPTED,
+                )
+
+            with transaction.atomic():
+                u.deletion_requested_at = timezone.now()
+                u.is_active = False
+                u.save(update_fields=["deletion_requested_at", "is_active", "updated_at"])
+                from auth_users.session_auth import invalidate_all_sessions
+                invalidate_all_sessions(u.pk)
+                transaction.on_commit(
+                    lambda: request_user_deletion_convergence(u.pk)
+                )
+                transaction.on_commit(
+                    lambda: finalize_user_deletion.delay(u.pk)
+                )
+
+            return ok(
+                "User deletion requested; active deployments are being cancelled before final cleanup.",
+                data={"deletion_pending": True},
+                http_status=status.HTTP_202_ACCEPTED,
+            )
         u.is_active = False
         u.save(update_fields=["is_active"])
         return ok("User deactivated")
