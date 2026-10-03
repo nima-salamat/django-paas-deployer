@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings
+from django.contrib import admin
 from django.core.files.uploadedfile import SimpleUploadedFile
 
 from users.models import Profile, Rule, User, Receipt
@@ -164,3 +165,32 @@ class UserDeletionTests(TestCase):
         self.assertFalse(user.is_active)
         self.assertIsNotNone(user.deletion_requested_at)
         self.assertTrue(User.objects.filter(pk=user.pk).exists())
+
+    def test_django_admin_user_delete_is_disabled_and_action_queues_convergence(self):
+        from unittest.mock import patch
+        from users.admin import UserAdmin
+
+        operator = User.objects.create_superuser(
+            username="admin-delete-operator",
+            email="admin-delete-operator@example.invalid",
+            password="operator-password",
+        )
+        user = User.objects.create_user(
+            username="admin-action-delete",
+            email="admin-action-delete@example.invalid",
+        )
+
+        model_admin = UserAdmin(User, admin.site)
+        self.assertFalse(model_admin.has_delete_permission(operator, user))
+
+        from django.test import RequestFactory
+        request = RequestFactory().post("/admin/users/user/")
+        request.user = operator
+
+        with patch("users.admin.finalize_user_deletion.delay") as queue:
+            model_admin.request_deletion(request, User.objects.filter(pk=user.pk))
+
+        user.refresh_from_db()
+        self.assertFalse(user.is_active)
+        self.assertIsNotNone(user.deletion_requested_at)
+        queue.assert_called_once_with(user.pk)
