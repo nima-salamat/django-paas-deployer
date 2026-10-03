@@ -43,7 +43,7 @@ def request_user_deletion_convergence(user_id: int) -> int:
 
         if user.is_active:
             user.is_active = False
-            user.save(update_fields=["is_active", "updated_at"])
+            user.save(update_fields=["is_active"])
 
         service_ids = list(
             user.services.values_list("pk", flat=True)
