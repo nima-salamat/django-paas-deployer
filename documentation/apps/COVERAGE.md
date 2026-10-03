@@ -81,6 +81,7 @@ Every production source surface must be mapped to its owning canonical document 
 - `src/auth_users/apis.py` → [auth_users](./auth_users/README.md)
 - `src/auth_users/apps.py` → [auth_users](./auth_users/README.md)
 - `src/auth_users/authentication.py` → [auth_users](./auth_users/README.md)
+- `src/auth_users/deletion_signals.py` → [auth_users](./auth_users/README.md)
 - `src/auth_users/models.py` → [auth_users](./auth_users/README.md)
 - `src/auth_users/services.py` → [auth_users](./auth_users/README.md)
 - `src/auth_users/session_api.py` → [auth_users](./auth_users/README.md)
