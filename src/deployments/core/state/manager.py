@@ -280,109 +280,16 @@ class StateManager:
                 payload.setdefault("level", "info")
                 payload.setdefault("message", "Deployment completed successfully.")
                 payload.setdefault("progress", 100)
-                # Activation + succeeded state must not depend on the
-                # availability of the event projection table. Use an inner
-                # savepoint so an outbox failure cannot abort the success
-                # transaction.
-                try:
-                    with transaction.atomic():
-                        DeploymentEventOutbox.objects.create(
-                            deployment_id=deploy_id,
-                            service_id=str(deploy.service_id),
-                            event_id=payload["event_id"],
-                            event_type=str(payload["event_type"])[:128],
-                            stage=str(payload["stage"])[:64],
-                            level=str(payload["level"])[:16],
-                            occurred_at=now,
-                            payload=payload,
-                        )
-                except Exception:
-                    logger.exception(
-                        "StateManager: unable to persist success event for deploy %s; "
-                        "keeping activation and succeeded state.",
-                        deploy_id,
-                    )
-            return True
-
-    @classmethod
-    def reconcile_deploy_success_from_authority(
-        cls,
-        deploy_id: int,
-        revision_id,
-        *,
-        update_fields: Optional[dict] = None,
-        event_payload: Optional[dict] = None,
-    ) -> bool:
-        """Reconcile stale Deploy state when the same revision is already authoritative."""
-        from deploy.models import Deploy, DeploymentEventOutbox  # type: ignore
-        from services.models import Service  # type: ignore
-
-        with transaction.atomic():
-            deploy = Deploy.objects.select_for_update().filter(pk=deploy_id).first()
-            if deploy is None:
-                return False
-            if deploy.cancel_requested:
-                return False
-
-            service = Service.objects.select_for_update().filter(pk=deploy.service_id).first()
-            if service is None:
-                return False
-
-            # active_revision is the runtime authority and is committed only
-            # after readiness/cleanup reaches the activation boundary. This
-            # makes it a stronger proof than a stale Deploy.status value.
-            if (
-                not revision_id
-                or str(getattr(service, "active_revision_id", "") or "")
-                != str(revision_id)
-            ):
-                return False
-
-            now = timezone.now()
-            updates = {
-                "status": sm.DEPLOY_SUCCEEDED,
-                **dict(update_fields or {}),
-                "updated_at": now,
-            }
-            updates.setdefault("stage", "deployment_completed")
-            updates.setdefault("progress", 100)
-            updates.setdefault("completed_at", getattr(deploy, "completed_at", None) or now)
-            updates.setdefault("status_message", "Deployment completed successfully.")
-            updates["error_message"] = ""
-            updates["worker_heartbeat_at"] = now
-            updates["execution_task_id"] = ""
-            Deploy.objects.filter(pk=deploy_id).update(**updates)
-
-            if event_payload is not None:
-                payload = dict(event_payload)
-                payload.setdefault("event_id", str(uuid.uuid4()))
-                payload.setdefault("deployment_id", str(deploy.pk))
-                payload.setdefault("service_id", str(deploy.service_id))
-                payload.setdefault("revision_id", str(revision_id))
-                payload.setdefault("task_id", "system-reconciliation")
-                payload.setdefault("event_type", "deployment.finished.reconciled")
-                payload.setdefault("stage", "deployment_completed")
-                payload.setdefault("level", "info")
-                payload.setdefault("message", "Deployment completion state reconciled from active revision.")
-                payload.setdefault("progress", 100)
-                try:
-                    with transaction.atomic():
-                        DeploymentEventOutbox.objects.create(
-                            deployment_id=deploy_id,
-                            service_id=str(deploy.service_id),
-                            event_id=payload["event_id"],
-                            event_type=str(payload["event_type"])[:128],
-                            stage=str(payload["stage"])[:64],
-                            level=str(payload["level"])[:16],
-                            occurred_at=now,
-                            payload=payload,
-                        )
-                except Exception:
-                    logger.exception(
-                        "StateManager: unable to persist authority reconciliation event "
-                        "for deploy %s; keeping succeeded state.",
-                        deploy_id,
-                    )
+                DeploymentEventOutbox.objects.create(
+                    deployment_id=deploy_id,
+                    service_id=str(deploy.service_id),
+                    event_id=payload["event_id"],
+                    event_type=str(payload["event_type"])[:128],
+                    stage=str(payload["stage"])[:64],
+                    level=str(payload["level"])[:16],
+                    occurred_at=now,
+                    payload=payload,
+                )
             return True
 
     @classmethod
@@ -431,27 +338,16 @@ class StateManager:
                 payload.setdefault("service_id", str(deploy.service_id))
                 payload.setdefault("revision_id", str(getattr(deploy, "revision_id", "") or ""))
                 payload.setdefault("task_id", "system")
-                # Lifecycle state is authoritative; the event outbox is a
-                # projection/journal. Never roll back a valid terminal state
-                # merely because the journal database/table is unavailable.
-                try:
-                    with transaction.atomic():
-                        DeploymentEventOutbox.objects.create(
-                            deployment_id=deploy_id,
-                            service_id=str(deploy.service_id),
-                            event_id=payload["event_id"],
-                            event_type=str(payload.get("event_type") or f"deployment.{target}.info"),
-                            stage=str(payload.get("stage") or target)[:64],
-                            level=str(payload.get("level") or "info")[:16],
-                            occurred_at=now,
-                            payload=payload,
-                        )
-                except Exception:
-                    logger.exception(
-                        "StateManager: unable to persist terminal event for deploy %s; "
-                        "keeping committed lifecycle state.",
-                        deploy_id,
-                    )
+                DeploymentEventOutbox.objects.create(
+                    deployment_id=deploy_id,
+                    service_id=str(deploy.service_id),
+                    event_id=payload["event_id"],
+                    event_type=str(payload.get("event_type") or f"deployment.{target}.info"),
+                    stage=str(payload.get("stage") or target)[:64],
+                    level=str(payload.get("level") or "info")[:16],
+                    occurred_at=now,
+                    payload=payload,
+                )
             return True
 
 
