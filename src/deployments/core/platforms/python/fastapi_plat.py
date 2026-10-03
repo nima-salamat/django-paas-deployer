@@ -166,6 +166,12 @@ def _preferred_module_rank(path: str) -> int:
 
 
 def _is_fastapi_source(text: str) -> bool:
-    if re.search(r"\b(?:from\s+fastapi\s+import\s+[^\n]*\bFastAPI\b|import\s+fastapi\b)", text):
-        return bool(_APP_ASSIGNMENT_RE.search(text) or re.search(r"\bfastapi\.FastAPI\s*\(", text))
-    return bool(re.search(r"\bFastAPI\s*\(", text) and _APP_ASSIGNMENT_RE.search(text))
+    # The constructor is the strongest source-level signal and also handles
+    # multiline imports / aliased imports that a single-line import regex misses.
+    return bool(
+        _APP_ASSIGNMENT_RE.search(text)
+        and (
+            re.search(r"\bFastAPI\s*\(", text)
+            or re.search(r"\bfastapi\.FastAPI\s*\(", text)
+        )
+    )
