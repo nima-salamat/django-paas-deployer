@@ -96,10 +96,13 @@ def user_post_delete_cleanup(sender, instance, **kwargs):
 @receiver(pre_delete, sender=MessageAttachment)
 def attachment_pre_delete(sender, instance, **kwargs):
     try:
-        if instance.file and getattr(instance.file, "path", None):
-            _delete_quietly(instance.file)
-    except Exception:
+        if instance.file:
+            instance.file.delete(save=False)
+    except Exception as exc:
         logger.exception("attachment file delete failed")
+        raise RuntimeError(
+            f"Failed to remove messenger attachment '{getattr(instance.file, 'name', '')}'."
+        ) from exc
 
 
 @receiver(pre_delete, sender=Conversation)
