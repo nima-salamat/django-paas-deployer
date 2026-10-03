@@ -20,7 +20,7 @@ The custom AUTH_USER_MODEL. It is the durable identity referenced by all user-ow
 | birthdate | DateField, nullable/blank | Optional account profile data. |
 | balance | DecimalField(11,3), default 0 | Account credit balance. Receipt.change_balance() is the transactional mutation path. |
 | is_staff | Boolean, default false | Wagtail/Django operator access flag; protected by admin/permission layers. |
-| is_active | Boolean, default true | Account usability. Deactivation is preferred over deletion for ordinary account disabling. |
+| is_active | Boolean, default true | Account usability. Deactivation is preferred over ordinary account deletion. |
 | deletion_requested_at | DateTime, nullable, indexed, non-editable | Durable destructive-operation intent. Non-null means account deletion has been requested and must converge through the user deletion worker before final User.delete(). |
 | date_joined | DateTimeField, default timezone.now | Account creation timestamp. |
 | national_id | CharField(11), nullable/blank | Optional regulated identity data. Sensitive; do not expose casually. |
