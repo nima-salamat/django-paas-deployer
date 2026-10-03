@@ -304,7 +304,7 @@ def _valid_rel_path(value: Any) -> bool:
     return bool(parts) and all(p not in {".", ".."} for p in parts) and bool(_SAFE_RELATIVE_PATH_RE.fullmatch(text))
 
 FASTAPI_CONFIG_DEFAULTS = {
-    "proxy_headers": False,
+    "proxy_headers": True,
     "access_log": True,
     "factory": False,
     "log_level": "info",
