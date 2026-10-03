@@ -150,7 +150,7 @@ class AdminAuthCodeDeleteAPIView(APIView):
 
 class AdminAuthCodePurgeAPIView(APIView):
     """DELETE expired/used codes."""
-    permission_classes = [IsAuthenticated, IsAdminUser]
+    permission_classes = [IsAuthenticated, HasAuthCodesManageRule]
 
     def post(self, request):
         # OTP expiry is computed from updated_at + LoginSettings.otp_expire_minutes
