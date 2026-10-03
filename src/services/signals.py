@@ -87,7 +87,7 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
         if container.exists():
             raw = container.client.containers.get(service_name)
             labels = dict(getattr(raw, "labels", {}) or {})
-            expected_service = str(service.pk)
+            expected_service = str(instance.pk)
             expected_deploy = str(getattr(instance.selected_deploy, "pk", "") or "")
             managed = labels.get("managed-by") in {"django-paas-deployer", "passdeployer"}
             owns_service = managed and labels.get("service.id") == expected_service
@@ -99,7 +99,7 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
                     service_name, expected_service, expected_deploy or "<none>",
                 )
                 raise RuntimeError(
-                    f"Refusing to delete service '{service.name}': "
+                    f"Refusing to delete service '{instance.name}': "
                     f"container '{service_name}' exists but is not owned by PassDeployer."
                 )
             else:
