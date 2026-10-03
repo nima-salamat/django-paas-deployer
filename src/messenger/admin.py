@@ -328,3 +328,33 @@ def cache_dashboard_view(request):
             "message": message,
         },
     )
+
+from core.django_admin import AuditReadOnlyAdmin
+from .models import MessengerEvent, MessageReadReceipt, AttachmentViewOnceOpen, CallSessionParticipant
+
+
+@admin.register(MessengerEvent)
+class MessengerEventAdmin(AuditReadOnlyAdmin):
+    list_display = ("id", "event_type", "conversation", "actor", "created_at")
+    list_filter = ("event_type",)
+    search_fields = ("event_type", "event_id")
+    raw_id_fields = ("conversation", "actor")
+
+
+@admin.register(MessageReadReceipt)
+class MessageReadReceiptAdmin(AuditReadOnlyAdmin):
+    list_display = ("id", "message", "user", "read_at")
+    raw_id_fields = ("message", "user")
+
+
+@admin.register(AttachmentViewOnceOpen)
+class AttachmentViewOnceOpenAdmin(AuditReadOnlyAdmin):
+    list_display = ("id", "attachment", "user", "opened_at")
+    raw_id_fields = ("attachment", "user")
+
+
+@admin.register(CallSessionParticipant)
+class CallSessionParticipantAdmin(AuditReadOnlyAdmin):
+    list_display = ("id", "call", "user", "role", "joined_at", "left_at")
+    list_filter = ("role",)
+    raw_id_fields = ("call", "user")
