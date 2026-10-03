@@ -13,13 +13,13 @@ logger = logging.getLogger("messenger.signals")
 User = get_user_model()
 
 
-def _delete_quietly(path):
+def _delete_quietly(file_field):
+    """Delete a Django storage object without making cleanup fatal."""
     try:
-        if path and os.path.isfile(path):
-            os.remove(path)
-    except OSError:
-        pass
-
+        if file_field:
+            file_field.delete(save=False)
+    except Exception:
+        logger.exception("media object cleanup failed")
 
 
 @receiver(pre_delete, sender=User)
@@ -49,7 +49,11 @@ def user_pre_delete_cleanup(sender, instance, **kwargs):
 
         try:
             from services.share_cleanup import on_user_left_or_removed_from_group
-            on_user_left_or_removed_from_group(user_id, conversation.pk, reason="user_deleted")
+            result = on_user_left_or_removed_from_group(user_id, conversation.pk, reason="user_deleted")
+            if result.get("error"):
+                raise RuntimeError(
+                    f"Failed to clean service shares for deleted user={user_id} group={conversation.pk}"
+                )
         except Exception:
             logger.exception(
                 "Service-share cleanup failed for deleted user=%s group=%s",
@@ -93,13 +97,41 @@ def user_post_delete_cleanup(sender, instance, **kwargs):
 def attachment_pre_delete(sender, instance, **kwargs):
     try:
         if instance.file and getattr(instance.file, "path", None):
-            _delete_quietly(instance.file.path)
+            _delete_quietly(instance.file)
     except Exception:
         logger.exception("attachment file delete failed")
 
 
 @receiver(pre_delete, sender=Conversation)
 def conversation_pre_delete(sender, instance, **kwargs):
+    # Deleting a group must revoke all service shares targeting it before the
+    # Conversation row disappears. Share rows later CASCADE, but this preserves
+    # the authorization/audit side-effect contract.
+    if instance.type == Conversation.Type.GROUP:
+        try:
+            from services.share_cleanup import on_group_deleted
+            result = on_group_deleted(instance.pk)
+            if result.get("error"):
+                raise RuntimeError(
+                    f"Failed to clean service shares for deleted group={instance.pk}"
+                )
+        except Exception:
+            logger.exception(
+                "service share cleanup failed before conversation delete group=%s",
+                instance.pk,
+            )
+            raise
+
+    try:
+        if instance.avatar:
+            instance.avatar.delete(save=False)
+    except Exception:
+        logger.exception(
+            "conversation avatar cleanup failed conv=%s",
+            instance.pk,
+        )
+        raise
+
     media_root = getattr(settings, "MEDIA_ROOT", None)
     if not media_root:
         return
@@ -142,7 +174,7 @@ def soft_delete_message_side_effects(message):
         for att in MessageAttachment.objects.filter(message_id=message.pk):
             try:
                 if att.file and getattr(att.file, "path", None):
-                    _delete_quietly(att.file.path)
+                    _delete_quietly(att.file)
             except Exception:
                 logger.exception("soft attachment file cleanup failed")
             try:
