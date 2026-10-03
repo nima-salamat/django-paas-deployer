@@ -16,7 +16,7 @@ from services.models import PrivateNetwork, Service, ServiceProcess, ServiceEnvi
 from deploy.models import Deploy
 from deploy.naming import allocate_deploy_name
 from core.global_settings.config import PlanTypeChoices
-from .catalog import ApplicationCatalog, CatalogValidationError, resolve_variant
+from .catalog import ApplicationCatalog, CatalogValidationError, is_public_definition, resolve_variant
 from .models import ApplicationInstance, ApplicationInstanceService, ApplicationStatus
 from services.ports import sync_endpoint_reservation
 from .plan import plan_from_resolved
@@ -303,7 +303,7 @@ def validate_install_request(user, payload: dict, *, require_public: bool = Fals
     if not isinstance(config, dict):
         raise CatalogValidationError("config must be an object.")
     definition = ApplicationCatalog.get(catalog_id)
-    if require_public and str(definition.data.get("visibility") or "internal").strip().lower() != "public":
+    if require_public and not is_public_definition(definition):
         raise CatalogValidationError("This application is not available in the Ready Apps catalog.")
     resolved = prepare_application_resolution(definition, variant_id, name, config, public=require_public)
     plan = Plan.objects.filter(pk=plan_id).first()
