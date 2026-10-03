@@ -476,15 +476,6 @@ class AdminUserDetailAPIView(APIView):
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
         hard = request.query_params.get("hard") in ("1", "true")
         if hard and is_su:
-            try:
-                from app_catalog.user_deletion import prepare_user_hard_delete
-                prepare_user_hard_delete(u)
-            except Exception as exc:
-                return err(
-                    "User cleanup could not be completed; account was not deleted.",
-                    status.HTTP_409_CONFLICT,
-                    extra={"detail": str(exc)},
-                )
             u.delete()
             return ok("User permanently deleted")
         u.is_active = False
