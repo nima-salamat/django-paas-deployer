@@ -75,6 +75,55 @@ class MessengerUserDeletionTests(TestCase):
         self.assertIsNone(attachment.uploaded_by_id)
         self.assertTrue(path.exists())
 
+    def test_user_deletion_invalidates_group_and_dm_message_caches(self):
+        user = User.objects.create_user(
+            username="messenger-cache-delete",
+            email="messenger-cache-delete@example.invalid",
+        )
+        other = User.objects.create_user(
+            username="messenger-cache-peer",
+            email="messenger-cache-peer@example.invalid",
+        )
+        group = Conversation.objects.create(
+            type=Conversation.Type.GROUP,
+            title="Cache group",
+            created_by=other,
+        )
+        ConversationParticipant.objects.create(
+            conversation=group,
+            user=user,
+            role=ConversationParticipant.Role.MEMBER,
+        )
+        ConversationParticipant.objects.create(
+            conversation=group,
+            user=other,
+            role=ConversationParticipant.Role.MEMBER,
+        )
+        group_message = Message.objects.create(
+            conversation=group,
+            sender=user,
+            body="cached group history",
+        )
+        dm = Conversation.objects.create(
+            type=Conversation.Type.PRIVATE,
+            created_by=user,
+        )
+        ConversationParticipant.objects.create(conversation=dm, user=user)
+        ConversationParticipant.objects.create(conversation=dm, user=other)
+        dm_message = Message.objects.create(
+            conversation=dm,
+            sender=user,
+            body="cached private history",
+        )
+
+        with patch("messenger.message_cache.MessageCacheService.invalidate_chat_cache") as invalidate_chat,              patch("messenger.message_cache.ConversationCacheService.invalidate_participants") as invalidate_participants,              patch("messenger.message_cache.ConversationCacheService.invalidate_user_conv_list"),              patch("messenger.consumers._broadcast_presence"):
+            user.delete()
+
+        invalidated = {call.args[0] for call in invalidate_chat.call_args_list}
+        self.assertIn(group_message.conversation_id, invalidated)
+        self.assertIn(dm_message.conversation_id, invalidated)
+        self.assertEqual(invalidate_participants.call_count, 2)
+
     def test_all_user_scoped_messenger_metadata_is_cascaded_or_anonymized(self):
         user = User.objects.create_user(
             username="messenger-metadata-delete",
