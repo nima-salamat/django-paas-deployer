@@ -20,6 +20,7 @@ from .catalog import ApplicationCatalog, CatalogValidationError, resolve_variant
 from .models import ApplicationInstance, ApplicationInstanceService, ApplicationStatus
 from services.ports import sync_endpoint_reservation
 from .plan import plan_from_resolved
+from deployments.core.routing import deployment_domain
 import shlex
 
 
@@ -28,6 +29,10 @@ _NAME_RE = re.compile(r"[^a-z0-9-]+")
 
 class ApplicationNameConflict(CatalogValidationError):
     """Raised when a user concurrently claims an existing application slug."""
+
+    def __init__(self, message: str, existing_installation_id: str | None = None):
+        super().__init__(message)
+        self.existing_installation_id = existing_installation_id
 
 
 @dataclass(frozen=True)
@@ -40,6 +45,101 @@ class InstalledApplicationPlan:
 def safe_slug(value: str) -> str:
     s = slugify(value or "app")[:42].strip("-") or "app"
     return s
+
+
+def platform_application_host(name: str) -> str:
+    """Return the platform-controlled HTTPS hostname for a Ready App."""
+    slug = safe_slug(name)
+    domain = deployment_domain()
+    if not domain:
+        raise CatalogValidationError("The platform deployment domain is not configured.")
+    return f"{slug}.{domain}"
+
+
+def prepare_application_resolution(definition, variant_id: str, name: str, config: dict | None = None, *, public: bool = False) -> dict:
+    """Resolve an app from user inputs while applying platform-owned controls."""
+    requested = dict(config or {})
+    if len(str(name or "").strip()) > 50:
+        raise CatalogValidationError("Application name must be 50 characters or fewer.")
+    if public:
+        variant = definition.variants.get(str(variant_id)) or {}
+        domain_field = next(
+            (field for field in (variant.get("fields") or []) if str(field.get("id")) == "domain"),
+            None,
+        )
+        if domain_field and domain_field.get("user_editable", True) is False:
+            supplied_domain = requested.get("domain")
+            if supplied_domain not in (None, ""):
+                raise CatalogValidationError("The platform hostname is managed automatically and cannot be customized.")
+        requested["domain"] = platform_application_host(name)
+    resolved = resolve_variant(definition, str(variant_id), requested)
+    resolved["config"]["slug"] = safe_slug(name)
+    if public:
+        resolved["config"]["domain"] = platform_application_host(name)
+        resolved["config"]["https"] = True
+    return resolved
+
+
+def resource_summary_for_resolved(resolved: dict, base_plan: Plan) -> dict:
+    """Validate child-plan allocation and return a server-authoritative preview."""
+    application_plan = plan_from_resolved(resolved)
+    services = []
+    total_storage = 0
+    total_cpu = 0.0
+    total_ram = 0.0
+    total_price = 0.0
+
+    for spec in application_plan.services:
+        assigned = _find_plan(
+            base_plan=base_plan,
+            platform=spec.platform,
+            plan_type=spec.plan_type,
+        )
+        storage_mb = sum(
+            _render_volume_size(volume.size_mb, config=resolved.get("config") or {}, secrets=resolved.get("secrets") or {})
+            for volume in spec.volumes
+        )
+        limit_mb = int(float(assigned.max_storage or 0) * 1024)
+        if storage_mb > limit_mb:
+            raise CatalogValidationError(
+                f"Service {spec.key!r} requires {storage_mb} MB of persistent storage, "
+                f"but its selected plan allows {limit_mb} MB."
+            )
+        total_storage += storage_mb
+        total_cpu += float(assigned.max_cpu or 0)
+        total_ram += float(assigned.max_ram or 0)
+        total_price += float(assigned.price_per_hour or 0)
+        services.append({
+            "name": _display_catalog_component_name(spec.key),
+            "role": "database" if spec.role == "database" or spec.plan_type == str(PlanTypeChoices.DB) else "application",
+            "platform": spec.platform,
+            "plan": {
+                "name": str(assigned.name),
+                "plan_type": str(assigned.plan_type),
+                "storage_type": str(assigned.storage_type),
+            },
+            "cpu_vcpu": float(assigned.max_cpu or 0),
+            "ram_mb": float(assigned.max_ram or 0),
+            "storage_mb": storage_mb,
+            "storage_limit_mb": limit_mb,
+            "volume_count": len(spec.volumes),
+        })
+
+    return {
+        "service_count": len(services),
+        "volume_count": sum(item["volume_count"] for item in services),
+        "storage_mb": total_storage,
+        "cpu_vcpu": total_cpu,
+        "ram_mb": total_ram,
+        "hourly_price": total_price,
+        "services": services,
+        "allocation_kind": "plan_limits",
+    }
+
+
+def _display_catalog_component_name(value: str) -> str:
+    text = str(value or "").replace("_", " ").replace("-", " ").strip()
+    return text.title() or "Managed component"
 
 
 def _unique_service_name(user, base: str) -> str:
@@ -190,7 +290,7 @@ def _dockerfile_healthcheck(healthcheck: dict | None) -> str:
     raise CatalogValidationError("Unsupported catalog healthcheck test format.")
 
 
-def validate_install_request(user, payload: dict) -> tuple[object, dict, Plan]:
+def validate_install_request(user, payload: dict, *, require_public: bool = False) -> tuple[object, dict, Plan]:
     catalog_id = str(payload.get("catalog_id") or "").strip()
     variant_id = str(payload.get("variant") or "").strip()
     name = str(payload.get("name") or "").strip()
@@ -203,21 +303,32 @@ def validate_install_request(user, payload: dict) -> tuple[object, dict, Plan]:
     if not isinstance(config, dict):
         raise CatalogValidationError("config must be an object.")
     definition = ApplicationCatalog.get(catalog_id)
-    resolved = resolve_variant(definition, variant_id, config)
-    plan_from_resolved(resolved)
-    resolved["config"]["slug"] = safe_slug(name)
+    if require_public and str(definition.data.get("visibility") or "internal").strip().lower() != "public":
+        raise CatalogValidationError("This application is not available in the Ready Apps catalog.")
+    resolved = prepare_application_resolution(definition, variant_id, name, config, public=require_public)
     plan = Plan.objects.filter(pk=plan_id).first()
     if not plan or str(plan.platform) != "docker":
         raise CatalogValidationError("Selected plan must be a Docker application/ready-made plan.")
+    resource_summary_for_resolved(resolved, plan)
     return definition, resolved, plan
 
 
-def _create_application_installation(user, payload: dict, storage_artifacts: list[tuple[object, str]]) -> ApplicationInstance:
-    definition, resolved, base_plan = validate_install_request(user, payload)
+def _create_application_installation(
+    user,
+    payload: dict,
+    storage_artifacts: list[tuple[object, str]],
+    *,
+    require_public: bool = False,
+) -> ApplicationInstance:
+    definition, resolved, base_plan = validate_install_request(user, payload, require_public=require_public)
     requested_name = str(payload["name"]).strip()
     slug = safe_slug(requested_name)
-    if ApplicationInstance.objects.filter(user=user, slug=slug).exists():
-        raise CatalogValidationError("An application with this name already exists.")
+    existing = ApplicationInstance.objects.filter(user=user, slug=slug).only("pk").first()
+    if existing is not None:
+        raise ApplicationNameConflict(
+            "An application with this name already exists.",
+            existing_installation_id=str(existing.pk),
+        )
 
     network = PrivateNetwork.objects.create(
         user=user,
@@ -602,10 +713,20 @@ def _create_application_installation(user, payload: dict, storage_artifacts: lis
 
 
 @transaction.atomic
-def create_application_installation(user, payload: dict) -> ApplicationInstance:
+def create_application_installation(
+    user,
+    payload: dict,
+    *,
+    require_public: bool = False,
+) -> ApplicationInstance:
     storage_artifacts: list[tuple[object, str]] = []
     try:
-        return _create_application_installation(user, payload, storage_artifacts)
+        return _create_application_installation(
+            user,
+            payload,
+            storage_artifacts,
+            require_public=require_public,
+        )
     except Exception:
         for storage, name in storage_artifacts:
             try:
