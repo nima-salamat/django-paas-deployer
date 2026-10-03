@@ -235,3 +235,18 @@ class ServiceUserDeletionTests(TestCase):
 
         with self.assertRaises(Exception):
             network.delete()
+
+    def test_deleting_share_recipient_removes_share_but_preserves_owner_service(self):
+        share = ServiceShare.objects.create(
+            service=self.service,
+            target_user=self.target_user,
+            shared_by=self.user,
+            rules={"can_view": True},
+        )
+
+        self.target_user.delete()
+
+        self.assertFalse(ServiceShare.objects.filter(pk=share.pk).exists())
+        self.assertTrue(Service.objects.filter(pk=self.service.pk).exists())
+        self.assertTrue(User.objects.filter(pk=self.user.pk).exists())
+
