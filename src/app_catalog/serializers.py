@@ -123,6 +123,59 @@ def public_catalog_definitions() -> list[CatalogDefinition]:
     return [definition for definition in ApplicationCatalog.definitions() if is_public_definition(definition)]
 
 
+def public_resolution_payload(definition: CatalogDefinition, resolved: dict, resource_summary: dict) -> dict:
+    """Project a resolved Ready App into a frontend-safe review payload."""
+    variant = definition.variants.get(str(resolved.get("variant_id"))) or {}
+    editable_ids = {
+        str(field.get("id"))
+        for field in (variant.get("fields") or [])
+        if field.get("user_editable", True) is not False
+    }
+    normalized_config = {
+        str(key): value
+        for key, value in (resolved.get("config") or {}).items()
+        if str(key) in editable_ids and key != "slug"
+    }
+
+    public_endpoints = []
+    domain = str((resolved.get("config") or {}).get("domain") or "").strip()
+    scheme = "https" if bool((resolved.get("config") or {}).get("https", True)) else "http"
+    for raw_service in resolved.get("services") or []:
+        if not raw_service.get("public"):
+            continue
+        public_endpoints.append({
+            "name": _display_component_label(raw_service.get("key")),
+            "url": f"{scheme}://{domain}" if domain else "",
+        })
+
+    generated_fields = [
+        str(field.get("id"))
+        for field in (variant.get("fields") or [])
+        if field.get("generate") and (
+            field.get("type") != "secret"
+            and field.get("user_editable", True) is not False
+        )
+    ]
+
+    return {
+        "valid": True,
+        "application": {
+            "id": definition.id,
+            "name": definition.name,
+            "software_version": definition.software_version,
+            "definition_version": definition.definition_version,
+            "variant": str(resolved.get("variant_id") or ""),
+        },
+        "config": normalized_config,
+        "generated_fields": generated_fields,
+        "managed_components": public_catalog_definition(definition)["managed_components"],
+        "resource_summary": resource_summary,
+        "public_endpoints": public_endpoints,
+        "outputs": _safe_string_list(definition.data.get("outputs")),
+        "warnings": [],
+    }
+
+
 class ApplicationInstanceSerializer(serializers.ModelSerializer):
     services = serializers.SerializerMethodField()
     config = serializers.SerializerMethodField()
