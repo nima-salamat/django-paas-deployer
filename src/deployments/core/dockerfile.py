@@ -697,7 +697,7 @@ def _render_flask_or_python(platform, dockerfile_template, tar_stream, config, l
     elif platform == "fastapi":
         target = f"{module}:{callable_name}"
         web_cmd = _align_entry_point_workers(
-            f"uvicorn {target} --host 0.0.0.0 --port {getattr(config, "port", None) or 8000}",
+            f"uvicorn {target} --host 0.0.0.0 --port {getattr(config, 'port', None) or 8000}",
             workers,
         )
     else:
