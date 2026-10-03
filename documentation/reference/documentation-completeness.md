@@ -33,7 +33,7 @@ users, auth_users, services, plans, deploy, deployments, logs, app_catalog, mess
 ## Background/event inventory
 | App | Tasks/background | Signals | Consumers |
 |---|---|---|---|
-| app_catalog | start_application_installation, gate_application_service, advance_application_service, application_service_failed, cancel_application_installation, reconcile_application_installations, prepare_user_hard_delete | none; hard-delete coordinator | none |
+| app_catalog | start_application_installation, gate_application_service, advance_application_service, application_service_failed, cancel_application_installation, reconcile_application_installations | none; User deletion uses model RESTRICT semantics for compound application graphs | none |
 | auth_users | auth/session protocol, email helpers | auth/session hooks | none |
 | core | send_code_via_email, unzip_files | post_migrate setting seed, SystemSetting cache | none |
 | custom_emails | send_email_log_task, send_bulk_email_task | none | none |
