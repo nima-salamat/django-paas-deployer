@@ -175,12 +175,115 @@ def resolve_python_runtime_context(names, module: str | None) -> dict:
     return {'module': module, 'source_root': '', 'working_directory': '/app'}
 
 
+_FASTAPI_IMPORT_TARGET_RE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*:"
+    r"[A-Za-z_][A-Za-z0-9_]*$"
+)
+
+
+def _archive_names_from_sequence(names) -> set[str]:
+    return {
+        str(name or '').replace('\\', '/').lstrip('./').rstrip('/')
+        for name in (names or [])
+        if str(name or '').strip()
+    }
+
+
+def _flatten_runtime_names(names: set[str]) -> tuple[set[str], str]:
+    try:
+        from .project_model import detect_archive_wrapper, strip_archive_prefix
+        wrapper = detect_archive_wrapper(names)
+    except Exception:
+        wrapper = ''
+    if not wrapper:
+        return names, ''
+    return {
+        stripped for item in names
+        for stripped in [strip_archive_prefix(item, wrapper)]
+        if stripped
+    }, wrapper
+
+
+def resolve_python_runtime_context(names, module: str | None) -> dict:
+    """Resolve a Python import target and source root consistently for runtime.
+
+    The build context is post-flatten. This handles:
+      src/app/main.py              -> app.main + source_root=src
+      backend/src/app/main.py      -> app.main + source_root=backend/src
+      app/main.py                  -> app.main + source_root=''
+      Repo/src/app/main.py         -> app.main + source_root=src
+    """
+    original_names = _archive_names_from_sequence(names)
+    normalized, wrapper = _flatten_runtime_names(original_names)
+    module = str(module or '').strip().strip('.')
+    parts = [part for part in module.split('.') if part]
+
+    if wrapper and parts and parts[0] == wrapper:
+        parts = parts[1:]
+        module = '.'.join(parts)
+
+    def exists(path_parts: list[str]) -> bool:
+        if not path_parts:
+            return False
+        path = '/'.join(path_parts)
+        return f'{path}.py' in normalized or f'{path}/__init__.py' in normalized
+
+    if not parts:
+        return {'module': '', 'source_root': '', 'working_directory': '/app'}
+
+    # Detector returned a full filesystem path as a dotted module.
+    if exists(parts):
+        best = None
+        for cut in range(1, len(parts)):
+            prefix = '/'.join(parts[:cut])
+            remainder = parts[cut:]
+            if f'{prefix}/__init__.py' in normalized:
+                break
+            if exists(parts):
+                best = (prefix, '.'.join(remainder))
+        if best:
+            source_root, runtime_module = best
+            return {
+                'module': runtime_module,
+                'source_root': source_root,
+                'working_directory': f'/app/{source_root}',
+            }
+
+    # Detector returned an import package without its filesystem source root.
+    module_path = '/'.join(parts)
+    candidates: list[str] = []
+    for name in normalized:
+        if not (name.endswith('.py') or name.endswith('/__init__.py')):
+            continue
+        parent = name.rsplit('/', 1)[0] if '/' in name else ''
+        comps = parent.split('/') if parent else []
+        for cut in range(1, len(comps) + 1):
+            root = '/'.join(comps[:cut])
+            if (f'{root}/{module_path}.py' in normalized or
+                    f'{root}/{module_path}/__init__.py' in normalized):
+                candidates.append(root)
+    if candidates:
+        source_root = sorted(candidates, key=lambda x: (x.count('/'), len(x), x))[0]
+        return {
+            'module': module,
+            'source_root': source_root,
+            'working_directory': f'/app/{source_root}',
+        }
+
+    return {
+        'module': module,
+        'source_root': '',
+        'working_directory': '/app',
+    }
+
+
 def _fastapi_pyproject_entrypoint(tar_stream) -> dict | None:
-    """Read FastAPI's official pyproject entrypoint convention when present."""
+    """Read [tool.fastapi].entrypoint from pyproject.toml when configured."""
     tar_stream.seek(0)
     try:
         import tomllib
         with tarfile.open(fileobj=tar_stream, mode='r:*') as tar:
+            names = [m.name.replace('\\', '/').lstrip('./') for m in tar.getmembers()]
             for member in tar.getmembers():
                 if not member.isfile() or member.name.replace('\\', '/').split('/')[-1].lower() != 'pyproject.toml':
                     continue
@@ -189,10 +292,10 @@ def _fastapi_pyproject_entrypoint(tar_stream) -> dict | None:
                     continue
                 try:
                     data = tomllib.loads(file_obj.read().decode('utf-8', errors='ignore'))
-                except Exception:
+                except (tomllib.TOMLDecodeError, UnicodeDecodeError):
                     continue
                 value = ((data.get('tool') or {}).get('fastapi') or {}).get('entrypoint')
-                if not isinstance(value, str) or not value.strip():
+                if not isinstance(value, str):
                     continue
                 raw = value.strip()
                 if not _FASTAPI_IMPORT_TARGET_RE.fullmatch(raw):
@@ -210,77 +313,79 @@ def _fastapi_pyproject_entrypoint(tar_stream) -> dict | None:
     return None
 
 
-_FASTAPI_IMPORT_TARGET_RE = re.compile(
-    r'^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*:'
-    r'[A-Za-z_][A-Za-z0-9_]*    """Resolve a concrete FastAPI ASGI target from the deployment archive."""
+def resolve_fastapi_entrypoint(tar_stream) -> dict | None:
+    """Resolve a concrete FastAPI ASGI target from the deployment archive."""
+    configured = _fastapi_pyproject_entrypoint(tar_stream)
+    if configured:
+        tar_stream.seek(0)
+        with tarfile.open(fileobj=tar_stream, mode='r:*') as tar:
+            names = [m.name.replace('\\', '/').lstrip('./') for m in tar.getmembers()]
+        context = resolve_python_runtime_context(names, configured['module'])
+        return {
+            'type': 'asgi',
+            'module': context['module'],
+            'callable': configured['callable'],
+            'priority': 1000,
+            'detected': True,
+            'source': configured['source'],
+            'source_root': context['source_root'],
+            'working_directory': context['working_directory'],
+            'entrypoint': f"{context['module']}:{configured['callable']}",
+            'pyproject_path': configured['pyproject_path'],
+        }
+
     candidates: list[dict] = []
     tar_stream.seek(0)
     try:
-        with tarfile.open(fileobj=tar_stream, mode="r:*") as tar:
+        with tarfile.open(fileobj=tar_stream, mode='r:*') as tar:
+            archive_names = [m.name.replace('\\', '/').lstrip('./') for m in tar.getmembers()]
             members = [
                 m for m in tar.getmembers()
                 if m.isfile()
-                and m.name.replace("\\", "/").lower().endswith(".py")
-                and m.name.count("/") <= 5
+                and m.name.replace('\\', '/').lower().endswith('.py')
+                and m.name.count('/') <= 8
             ]
-            members.sort(
-                key=lambda m: (
-                    {
-                        "main.py": 0,
-                        "app.py": 1,
-                        "server.py": 2,
-                        "api.py": 3,
-                    }.get(m.name.rsplit("/", 1)[-1].lower(), 10),
-                    m.name.count("/"),
-                    m.name,
-                )
-            )
+            members.sort(key=lambda m: (
+                {'main.py': 0, 'app.py': 1, 'server.py': 2, 'api.py': 3}.get(
+                    m.name.rsplit('/', 1)[-1].lower(), 10
+                ),
+                m.name.count('/'),
+                m.name,
+            ))
             for member in members:
-                name = member.name.replace("\\", "/")
+                name = member.name.replace('\\', '/')
                 lower = name.lower()
-                if any(
-                    part in lower.split("/")
-                    for part in ("tests", "test", "__pycache__", "migrations")
-                ) or lower.rsplit("/", 1)[-1].startswith("test_"):
+                if any(part in lower.split('/') for part in ('tests', 'test', '__pycache__', 'migrations')):
+                    continue
+                if lower.rsplit('/', 1)[-1].startswith('test_'):
                     continue
                 file_obj = tar.extractfile(member)
                 if not file_obj:
                     continue
-                text = file_obj.read().decode("utf-8", errors="ignore")
-                if not (
-                    re.search(r"\bFastAPI\s*\(", text)
-                    or re.search(r"\bfastapi\.FastAPI\s*\(", text)
-                ):
+                text = file_obj.read().decode('utf-8', errors='ignore')
+                if not (re.search(r'\bFastAPI\s*\(', text) or re.search(r'\bfastapi\.FastAPI\s*\(', text)):
                     continue
-
-                module = name.rsplit(".", 1)[0].lstrip("./").replace("/", ".")
-                archive_names = [
-                    item.name.replace("\\", "/").lstrip("./")
-                    for item in tar.getmembers()
-                ]
+                module = name.rsplit('.', 1)[0].lstrip('./').replace('/', '.')
                 context = resolve_python_runtime_context(archive_names, module)
                 for match in re.finditer(
-                    r"(?P<callable>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:fastapi\.)?FastAPI\s*\(",
+                    r'(?P<callable>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:fastapi\.)?FastAPI\s*\(',
                     text,
                 ):
-                    callable_name = match.group("callable")
-                    name_rank = {"app": 100, "application": 90, "api": 80}.get(callable_name, 70)
-                    file_rank = {
-                        "main.py": 30,
-                        "app.py": 24,
-                        "server.py": 18,
-                        "api.py": 16,
-                    }.get(name.rsplit("/", 1)[-1].lower(), 0)
+                    callable_name = match.group('callable')
+                    name_rank = {'app': 100, 'application': 90, 'api': 80}.get(callable_name, 70)
+                    file_rank = {'main.py': 30, 'app.py': 24, 'server.py': 18, 'api.py': 16}.get(
+                        name.rsplit('/', 1)[-1].lower(), 0
+                    )
                     candidates.append({
-                        "type": "asgi",
-                        "module": context["module"],
-                        "callable": callable_name,
-                        "priority": name_rank + file_rank - name.count("/"),
-                        "detected": True,
-                        "source": "source_scan",
-                        "source_root": context["source_root"],
-                        "working_directory": context["working_directory"],
-                        "entrypoint": f'{context["module"]}:{callable_name}',
+                        'type': 'asgi',
+                        'module': context['module'],
+                        'callable': callable_name,
+                        'priority': name_rank + file_rank - name.count('/'),
+                        'detected': True,
+                        'source': 'source_scan',
+                        'source_root': context['source_root'],
+                        'working_directory': context['working_directory'],
+                        'entrypoint': f"{context['module']}:{callable_name}",
                     })
                     break
     finally:
@@ -288,14 +393,13 @@ _FASTAPI_IMPORT_TARGET_RE = re.compile(
 
     if not candidates:
         return {
-            "type": "asgi",
-            "module": None,
-            "callable": None,
-            "detected": False,
-            "override": False,
+            'type': 'asgi',
+            'module': None,
+            'callable': None,
+            'detected': False,
+            'override': False,
         }
-    return max(candidates, key=lambda c: c["priority"])
-
+    return max(candidates, key=lambda c: c['priority'])
 
 def resolve_flask_entrypoint(tar_stream, *, server_type: str | None = None) -> dict:
     """Detect Flask / FastAPI / create_app entrypoint."""
