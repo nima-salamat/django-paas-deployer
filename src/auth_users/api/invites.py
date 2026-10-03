@@ -2,12 +2,13 @@ import logging
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.contrib.auth import get_user_model
 from django.utils.translation import gettext as _
 from django.db.models import Q
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+from ..admin_permissions import HasInviteManageRule
 
 from users.serializers import CreateUserSerializer
 from ..models import LoginSettings, AuthCode, InviteLink, InviteUsage
@@ -76,7 +77,7 @@ class InviteCreateAPIView(APIView):
         "base_url": "https://echonode.website" // optional, for full URL in response
       }
     """
-    permission_classes = [IsAdminUser]
+    permission_classes = [HasInviteManageRule]
 
     def post(self, request):
         label = (request.data.get("label") or "").strip()
