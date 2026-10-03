@@ -428,3 +428,60 @@ class BaseRuntimeImageAdmin(admin.ModelAdmin):
     def delete_queryset(self, request, queryset):
         for obj in queryset:
             self.delete_model(request, obj)
+
+from core.django_admin import AuditReadOnlyAdmin, ProjectModelAdmin, SensitiveReadOnlyAdmin
+from .models import DeploymentResource, DeploymentEventOutbox, BuildCacheArtifact, BuildCacheQuota, BaseRuntimeImageLease, SwarmCluster, SwarmNode
+
+
+@admin.register(DeploymentResource)
+class DeploymentResourceAdmin(AuditReadOnlyAdmin):
+    list_display = ("id", "deployment", "kind", "name", "state", "owned", "retired_at")
+    list_filter = ("kind", "state", "owned")
+    search_fields = ("kind", "name", "runtime_id")
+    raw_id_fields = ("deployment",)
+
+
+@admin.register(DeploymentEventOutbox)
+class DeploymentEventOutboxAdmin(AuditReadOnlyAdmin):
+    list_display = ("id", "event_id", "deployment", "event_type", "stage", "level", "dispatched_at", "attempts")
+    list_filter = ("stage", "level")
+    search_fields = ("service_id", "event_type", "last_error")
+    raw_id_fields = ("deployment",)
+
+
+@admin.register(BuildCacheArtifact)
+class BuildCacheArtifactAdmin(AuditReadOnlyAdmin):
+    list_display = ("id", "service", "deployment", "image_ref", "size_bytes", "pinned", "reclaimed_at", "last_used_at")
+    list_filter = ("pinned", "reclaimed_at")
+    search_fields = ("image_ref", "image_id", "image_digest")
+    raw_id_fields = ("deployment", "user", "service")
+
+
+@admin.register(BuildCacheQuota)
+class BuildCacheQuotaAdmin(ProjectModelAdmin):
+    list_display = ("id", "user", "service", "quota_mb", "retention_days", "keep_successful_deployments")
+    raw_id_fields = ("user", "service")
+    readonly_fields = ("id", "created_at", "updated_at")
+
+
+@admin.register(BaseRuntimeImageLease)
+class BaseRuntimeImageLeaseAdmin(AuditReadOnlyAdmin):
+    list_display = ("id", "base_image", "deployment_id", "acquired_at", "released_at")
+    search_fields = ("deployment_id",)
+    raw_id_fields = ("base_image",)
+
+
+@admin.register(SwarmCluster)
+class SwarmClusterAdmin(ProjectModelAdmin):
+    list_display = ("id", "name", "enabled", "manager_endpoint", "last_synced_at")
+    list_filter = ("enabled",)
+    search_fields = ("name", "manager_endpoint")
+    readonly_fields = ("id", "last_synced_at")
+
+
+@admin.register(SwarmNode)
+class SwarmNodeAdmin(AuditReadOnlyAdmin):
+    list_display = ("id", "hostname", "role", "desired_availability", "observed_availability", "observed_state", "manager_reachable", "last_synced_at")
+    list_filter = ("role", "desired_availability", "observed_availability", "observed_state", "manager_reachable")
+    search_fields = ("docker_id", "hostname", "address")
+    raw_id_fields = ("cluster",)
