@@ -90,6 +90,8 @@ def user_post_delete_cleanup(sender, instance, **kwargs):
         from django.core.cache import cache
         cache.delete(f"messenger:online:{user_id}")
         cache.delete(f"messenger:online_conns:{user_id}")
+        from .consumers import _broadcast_presence
+        _broadcast_presence(user_id, False)
     except Exception:
         logger.exception("Messenger presence cache cleanup failed for deleted user=%s", user_id)
 
