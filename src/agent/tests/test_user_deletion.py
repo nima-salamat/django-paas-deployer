@@ -31,7 +31,7 @@ class AgentUserDeletionTests(TestCase):
             method="POST",
             path="/agent/v1/test",
             request_hash="c" * 64,
-            expires_at="2099-01-01T00:00:00Z",
+            expires_at=timezone.now() + timedelta(days=3650),
         )
         audit = AgentAuditEvent.objects.create(
             agent=agent,
