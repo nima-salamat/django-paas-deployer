@@ -2057,6 +2057,11 @@ def inspect_deploy_zip_apiview(request):
                 "server_type": suggested_config.get("server_type"),
                 "entrypoint": suggested_config.get("entry_point"),
                 "start_command": suggested_config.get("start_command"),
+                "fastapi_profile": (
+                    (getattr(enriched, "runtime_options", None) or {}).get("fastapi_profile")
+                    if "enriched" in locals() and isinstance(getattr(enriched, "runtime_options", None), dict)
+                    else None
+                ),
                 "django_settings_module": detection_raw.get("django_settings_module"),
                 "static_dir": detection_raw.get("static_dir"),
                 "media_dir": detection_raw.get("media_dir"),
