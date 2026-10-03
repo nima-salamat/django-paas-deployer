@@ -5,7 +5,7 @@ from .models import ApplicationInstance, ApplicationInstanceService
 
 
 @admin.register(ApplicationInstance)
-class ApplicationInstanceAdmin(ReadOnlyProjectModelAdmin):
+class ApplicationInstanceAdmin(SensitiveReadOnlyAdmin):
     list_display = ("id", "name", "catalog_id", "software_version", "variant_id", "status", "stage", "created_at")
     list_filter = ("status",)
     search_fields = ("name", "slug", "catalog_id", "software_version", "variant_id", "error_code")
