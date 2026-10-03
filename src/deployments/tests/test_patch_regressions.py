@@ -803,7 +803,7 @@ class PythonDependencyMirrorFallbackTests(unittest.TestCase):
 
 
 class PythonSrcLayoutImportPathTests(unittest.TestCase):
-    def test_fastapi_src_layout_adds_src_to_pythonpath(self):
+    def test_fastapi_src_layout_uses_source_root_app_dir(self):
         d = load_dockerfile_module()
 
         class Config:
@@ -833,8 +833,9 @@ class PythonSrcLayoutImportPathTests(unittest.TestCase):
             Config(),
             None,
         )
-        self.assertIn("ENV PYTHONPATH=/app/src:/app", out)
-
+        self.assertIn("uvicorn app.main:app", out)
+        self.assertIn("--app-dir /app/src", out)
+        self.assertNotIn("uvicorn src.app.main:app", out)
 
 
 # ---------------------------------------------------------------------------
@@ -920,7 +921,7 @@ class PythonRuntimeLayoutTests(unittest.TestCase):
         self.assertIn("uvicorn app.main:app", out)
         self.assertIn("--app-dir /app/src", out)
         self.assertNotIn("uvicorn src.app.main:app", out)
-        self.assertIn("ENV PYTHONPATH=/app/src:/app", out)
+        self.assertNotIn("uvicorn src.app.main:app", out)
 
 
 # ---------------------------------------------------------------------------
