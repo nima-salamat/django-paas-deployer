@@ -19,7 +19,12 @@ from ...entrypoints import resolve_python_runtime_context
 
 _FASTAPI_IMPORT_TARGET_RE = re.compile(
     r'^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*:'
-    r'[A-Za-z_][A-Za-z0-9_]*    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<factory>(?:fastapi\.)?FastAPI)\s*\(",
+    r'[A-Za-z_][A-Za-z0-9_]*$'
+)
+
+
+_APP_ASSIGNMENT_RE = re.compile(
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<factory>(?:fastapi\.)?FastAPI)\s*\(",
     re.MULTILINE,
 )
 
@@ -180,7 +185,14 @@ class FastAPIPlatform(PythonPlatform):
             if "websocket" in lowered or "websocketroute" in lowered: profile["websockets"] = True
             if "lifespan=" in lowered or "@asynccontextmanager" in lowered: profile["lifespan"] = True
             for route in ("/health", "/healthz", "/ready", "/readyz", "/live", "/liveness", "/readiness"):
-                route_re = re.compile(r"(?:(?:\\.|^)(?:get|post|put|delete|api_route)\\s*\\(\\s*[\'\"]" + re.escape(route) + r"[\'\"]|add_api_route\\s*\\(\\s*[\'\"]" + re.escape(route) + r"[\'\"])", re.IGNORECASE)
+                                route_re = re.compile(
+                    r"(?:(?:\.|^)(?:get|post|put|delete|api_route)\s*\(\s*['\"]"
+                    + re.escape(route)
+                    + r"['\"])|(?:add_api_route)\s*\(\s*['\"]"
+                    + re.escape(route)
+                    + r"['\"])",
+                    re.IGNORECASE,
+                )
                 if route_re.search(text):
                     health_hits.append(route)
 
