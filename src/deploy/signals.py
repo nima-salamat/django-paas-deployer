@@ -41,18 +41,17 @@ def _cleanup_zip_and_dirs(instance: Deploy):
     try:
         file_path = instance.zip_file.path
     except Exception:
-        logger.exception(
-            "Could not resolve zip file path for Deploy '%s'", instance.name
-        )
-        return
+        file_path = None
 
-    if os.path.isfile(file_path):
-        try:
-            os.remove(file_path)
-            logger.info("Removed zip file: %s", file_path)
-        except Exception:
-            logger.exception("Failed to remove zip file: %s", file_path)
-            return
+    try:
+        name = instance.zip_file.name
+        instance.zip_file.delete(save=False)
+        logger.info("Removed deploy archive: %s", name)
+    except Exception as exc:
+        logger.exception("Failed to remove deploy archive for '%s'", instance.name)
+        raise RuntimeError(
+            f"Failed to remove deployment archive for '{instance.name}'."
+        ) from exc
     try:
         deploy_dir = os.path.dirname(file_path)
         user_dir = os.path.dirname(deploy_dir)
