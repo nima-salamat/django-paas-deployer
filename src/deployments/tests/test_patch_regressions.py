@@ -923,5 +923,23 @@ class PythonRuntimeLayoutTests(unittest.TestCase):
         self.assertIn("ENV PYTHONPATH=/app/src:/app", out)
 
 
+# ---------------------------------------------------------------------------
+# Issue 9 — Python auto-detected commands must not bypass runtime resolution
+# ---------------------------------------------------------------------------
+
+
+class PythonBridgeRuntimeOwnershipTests(unittest.TestCase):
+    def test_python_platforms_are_not_promoted_to_entry_point(self):
+        from pathlib import Path
+
+        source = Path(__file__).parents[2].joinpath(
+            "core", "platform_bridge.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('"python", "django", "flask", "fastapi"', source)
+        self.assertIn("_NO_ENTRYPOINT_PROMOTE", source)
+        self.assertIn("_PYTHON_AUTO_START_PLATFORMS", source)
+
+
 if __name__ == "__main__":
     unittest.main()
