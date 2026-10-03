@@ -356,5 +356,4 @@ class AttachmentViewOnceOpenAdmin(AuditReadOnlyAdmin):
 @admin.register(CallSessionParticipant)
 class CallSessionParticipantAdmin(AuditReadOnlyAdmin):
     list_display = ("id", "call", "user", "joined_at", "left_at")
-    list_filter = ("role",)
     raw_id_fields = ("call", "user")
