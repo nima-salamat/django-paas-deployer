@@ -305,7 +305,7 @@ def cleanup_network_on_delete(sender, instance: PrivateNetwork, **kwargs):
         instance.name,
     )
 
-    if ServiceNetworkAttachment.objects.filter(network_id=instance.pk).exists():
+    if Service.objects.filter(network_id=instance.pk).exists() or ServiceNetworkAttachment.objects.filter(network_id=instance.pk).exists():
         raise RuntimeError(
             f"Cannot delete private network '{instance.name}': "
             "one or more services still have an explicit network attachment."
