@@ -97,7 +97,65 @@ class FastAPIPlatform(PythonPlatform):
         else:
             result["fastapi_entrypoint_detected"] = False
             result["fastapi_entrypoint_source"] = None
+
+        profile = self._inspect_runtime_profile(file_index, entry)
+        result["fastapi_profile"] = profile
+        if profile.get("healthcheck_path"):
+            result["healthcheck_path"] = profile["healthcheck_path"]
+        result["extra"] = {
+            **(result.get("extra") or {}),
+            "fastapi_profile": profile,
+        }
         return result
+
+
+    def _inspect_runtime_profile(self, file_index: dict[str, str], entry: Optional[dict[str, str]]) -> dict[str, Any]:
+        """Detect common FastAPI integrations for UI guidance only."""
+        deps = self._collect_deps(file_index)
+        profile = {
+            "database_drivers": [],
+            "cache_drivers": [],
+            "task_queues": [],
+            "middleware": [],
+            "websockets": False,
+            "lifespan": False,
+            "healthcheck_path": None,
+        }
+        db_deps = {"sqlalchemy", "sqlmodel", "databases", "asyncpg", "psycopg", "psycopg2", "aiomysql", "pymysql", "motor", "pymongo", "oracledb", "cx-oracle"}
+        cache_deps = {"redis", "aioredis", "hiredis"}
+        queue_deps = {"celery", "arq", "dramatiq", "rq"}
+        profile["database_drivers"] = sorted(deps & db_deps)
+        profile["cache_drivers"] = sorted(deps & cache_deps)
+        profile["task_queues"] = sorted(deps & queue_deps)
+
+        health_hits: list[str] = []
+        for rel, abs_p in file_index.items():
+            if not rel.endswith(".py"):
+                continue
+            text = self._read_text(abs_p, max_bytes=180_000)
+            lowered = text.lower()
+            middleware = []
+            if "corsmiddleware" in lowered: middleware.append("CORS")
+            if "trustedhostmiddleware" in lowered: middleware.append("TrustedHost")
+            if "staticfiles" in lowered: middleware.append("StaticFiles")
+            profile["middleware"].extend(middleware)
+            if "websocket" in lowered or "websocketroute" in lowered: profile["websockets"] = True
+            if "lifespan=" in lowered or "@asynccontextmanager" in lowered: profile["lifespan"] = True
+            for route in ("/health", "/healthz", "/ready", "/readyz", "/live", "/liveness", "/readiness"):
+                route_re = re.compile(r"(?:(?:\\.|^)(?:get|post|put|delete|api_route)\\s*\\(\\s*[\'\"]" + re.escape(route) + r"[\'\"]|add_api_route\\s*\\(\\s*[\'\"]" + re.escape(route) + r"[\'\"])", re.IGNORECASE)
+                if route_re.search(text):
+                    health_hits.append(route)
+
+        profile["middleware"] = sorted(set(profile["middleware"]))
+        if health_hits:
+            profile["healthcheck_path"] = sorted(set(health_hits), key=lambda v: (v != "/health", v))[0]
+        if entry:
+            profile["entrypoint"] = str(entry.get("module") or "") + ":" + str(entry.get("callable") or "")
+            profile["entrypoint_source"] = entry.get("source") or "source_scan"
+        else:
+            profile["entrypoint"] = None
+            profile["entrypoint_source"] = None
+        return profile
 
     def validate(self, config: Any) -> list[str]:
         errors = list(super().validate(config) or [])
