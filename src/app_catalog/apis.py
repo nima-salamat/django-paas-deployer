@@ -20,7 +20,29 @@ from .services import (
     resource_summary_for_resolved,
     safe_slug,
 )
-from .tasks import start_application_installation, cancel_application_installation
+from .tasks import (
+    start_application_installation,
+    cancel_application_installation,
+    delete_application_installation,
+)
+
+
+def _queue_ready_app_deletion(instance_id: str) -> None:
+    """Persist deletion intent and hand cleanup to the durable Celery worker."""
+    from django.utils import timezone
+
+    ApplicationInstance.objects.filter(pk=instance_id).update(
+        stage="deletion_pending",
+        error_code="APPLICATION_DELETION_PENDING",
+        updated_at=timezone.now(),
+    )
+    try:
+        delete_application_installation.delay(str(instance_id))
+    except Exception:
+        # The reconciliation scheduler retries stale deletion_pending rows, so
+        # a temporary broker outage must not strand the installation.
+        logger = __import__("logging").getLogger(__name__)
+        logger.exception("Unable to queue Ready App deletion %s", instance_id)
 
 
 class CatalogPermissionMixin:
@@ -196,22 +218,18 @@ class ApplicationInstanceDetailAPIView(CatalogPermissionMixin, APIView):
                 )
 
         if active_children:
-            if instance.status == ApplicationStatus.CANCELLED:
-                return Response(
-                    {
-                        "error": "Cleanup is still in progress.",
-                        "code": "application_cleanup_pending",
-                        "detail": "The app has been cancelled. PassDeployer is still stopping its services and will remove them when they are safe to delete.",
-                        "active_service_count": len(active_children),
-                    },
-                    status=status.HTTP_202_ACCEPTED,
-                )
+            _queue_ready_app_deletion(instance.pk)
             return Response(
                 {
-                    "error": "Application still has active service deployments.",
-                    "code": "application_children_active",
+                    "error": "Cleanup is still in progress.",
+                    "code": "application_cleanup_pending",
+                    "detail": (
+                        "The application has been marked for deletion. PassDeployer is "
+                        "stopping active child deployments and will retry cleanup automatically."
+                    ),
+                    "active_service_count": len(active_children),
                 },
-                status=status.HTTP_409_CONFLICT,
+                status=status.HTTP_202_ACCEPTED,
             )
 
         # A cancelled installation may reach this endpoint before its
@@ -225,13 +243,14 @@ class ApplicationInstanceDetailAPIView(CatalogPermissionMixin, APIView):
             except Exception as exc:
                 logger = __import__("logging").getLogger(__name__)
                 logger.exception("Ready App deletion cleanup failed for %s", instance.pk)
+                _queue_ready_app_deletion(instance.pk)
                 return Response(
                     {
-                        "error": "The installation still has resources that could not be cleaned up.",
-                        "code": "application_cleanup_failed",
+                        "error": "The installation is queued for cleanup.",
+                        "code": "application_cleanup_pending",
                         "detail": str(exc),
                     },
-                    status=status.HTTP_409_CONFLICT,
+                    status=status.HTTP_202_ACCEPTED,
                 )
 
         # Preflight every Service that belongs to this application's private
@@ -267,9 +286,10 @@ class ApplicationInstanceDetailAPIView(CatalogPermissionMixin, APIView):
         except Exception as exc:
             logger = __import__("logging").getLogger(__name__)
             logger.exception("Ready App resource preflight failed for %s", instance.pk)
+            _queue_ready_app_deletion(instance.pk)
             return Response(
                 {
-                    "error": "The installation still has resources that could not be cleaned up.",
+                    "error": "The installation is queued for cleanup.",
                     "code": "application_cleanup_pending",
                     "detail": str(exc),
                 },
@@ -356,9 +376,10 @@ class ApplicationInstanceDetailAPIView(CatalogPermissionMixin, APIView):
         except Exception as exc:
             logger = __import__("logging").getLogger(__name__)
             logger.exception("Ready App database deletion failed for %s", instance.pk)
+            _queue_ready_app_deletion(instance.pk)
             return Response(
                 {
-                    "error": "The installation could not be deleted safely yet.",
+                    "error": "The installation is queued for cleanup.",
                     "code": "application_cleanup_pending",
                     "detail": str(exc),
                 },
