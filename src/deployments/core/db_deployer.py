@@ -923,33 +923,28 @@ def _reconcile_mysql_credentials(
     )
 
     if not root_password_works:
-        # --------------------------------------------------------------------
-        # Managed MariaDB instances can be recovered through root's privileged
-        # local Unix socket. Run the Docker exec as OS root explicitly so the
-        # unix_socket authentication plugin can authenticate root@localhost.
-        # The SQL is intentionally one connection: changing root@localhost must
-        # not invalidate the following statements mid-reconciliation.
-        # --------------------------------------------------------------------
-        socket_ok, socket_output = _mysql_exec(
-            container,
-            "SELECT 1;",
-            platform=platform,
-            username="root",
-            protocol="socket",
-            exec_user="root",
-        )
-
-        if not socket_ok:
-            return False, (
-                "Cannot authenticate to MySQL as root. "
-                "The configured root password does not work over TCP and "
-                "privileged socket authentication also failed. "
-                f"TCP authentication output: {root_auth_output[-500:]}; "
-                f"socket authentication output: {socket_output[-500:]}"
-            )
-
-        root_q = _mysql_string(root_password)
+        # MariaDB 10.4+ / 11 may authenticate root@localhost through the
+        # unix_socket plugin. In that case a passworded socket login can
+        # appear successful without proving the password. Bootstrap MariaDB
+        # through an explicit OS-root socket connection instead.
         if platform == "mariadb":
+            socket_ok, socket_output = _mysql_exec(
+                container,
+                "SELECT 1;",
+                platform=platform,
+                username="root",
+                protocol="socket",
+                exec_user="root",
+            )
+            if not socket_ok:
+                return False, (
+                    "Cannot authenticate to MariaDB root through the privileged "
+                    "local socket. "
+                    f"TCP authentication output: {root_auth_output[-500:]}; "
+                    f"socket authentication output: {socket_output[-500:]}"
+                )
+
+            root_q = _mysql_string(root_password)
             root_bootstrap_sql = ";\n".join([
                 f"CREATE USER IF NOT EXISTS 'root'@'localhost' IDENTIFIED BY '{root_q}'",
                 f"SET PASSWORD FOR 'root'@'localhost' = PASSWORD('{root_q}')",
@@ -959,7 +954,37 @@ def _reconcile_mysql_credentials(
                 "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION",
                 "FLUSH PRIVILEGES",
             ])
+            ok, output = _mysql_exec(
+                container,
+                root_bootstrap_sql,
+                platform=platform,
+                username="root",
+                protocol="socket",
+                exec_user="root",
+            )
         else:
+            # MySQL images commonly expose root@localhost with password
+            # authentication but do not create root@% unless configured with
+            # MYSQL_ROOT_HOST. Use the configured password over the local
+            # socket as the valid MySQL fallback, then create root@%.
+            socket_ok, socket_output = _mysql_exec(
+                container,
+                "SELECT 1;",
+                password=root_password,
+                platform=platform,
+                username="root",
+                protocol="socket",
+            )
+            if not socket_ok:
+                return False, (
+                    "Cannot authenticate to MySQL as root. "
+                    "The configured root password does not work over TCP or "
+                    "the local socket. "
+                    f"TCP authentication output: {root_auth_output[-500:]}; "
+                    f"socket authentication output: {socket_output[-500:]}"
+                )
+
+            root_q = _mysql_string(root_password)
             root_auth = _mysql_password_auth_clause(platform, root_q)
             root_bootstrap_sql = ";\n".join([
                 f"ALTER USER 'root'@'localhost' {root_auth}",
@@ -968,18 +993,18 @@ def _reconcile_mysql_credentials(
                 "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION",
                 "FLUSH PRIVILEGES",
             ])
+            ok, output = _mysql_exec(
+                container,
+                root_bootstrap_sql,
+                password=root_password,
+                platform=platform,
+                username="root",
+                protocol="socket",
+            )
 
-        ok, output = _mysql_exec(
-            container,
-            root_bootstrap_sql,
-            platform=platform,
-            username="root",
-            protocol="socket",
-            exec_user="root",
-        )
         if not ok:
             return False, (
-                "Failed to initialize root credentials. "
+                "Failed to bootstrap root credentials. "
                 f"SQL error: {output[-1000:]}"
             )
 
@@ -1139,10 +1164,10 @@ def _reconcile_mysql_credentials(
                     grant_sql,
                     password=root_password,
                     platform=platform,
-                username="root",
-                protocol="tcp",
-                host="127.0.0.1",
-                port=3306,
+                    username="root",
+                    protocol="tcp",
+                    host="127.0.0.1",
+                    port=3306,
                 )
                 if not ok:
                     return False, (
@@ -1160,10 +1185,10 @@ def _reconcile_mysql_credentials(
             "FLUSH PRIVILEGES",
             password=root_password,
             platform=platform,
-                username="root",
-                protocol="tcp",
-                host="127.0.0.1",
-                port=3306,
+            username="root",
+            protocol="tcp",
+            host="127.0.0.1",
+            port=3306,
         )
 
         if not ok:
@@ -1181,10 +1206,10 @@ def _reconcile_mysql_credentials(
         "SELECT 1;",
         password=root_password,
         platform=platform,
-                username="root",
-                protocol="tcp",
-                host="127.0.0.1",
-                port=3306,
+        username="root",
+        protocol="tcp",
+        host="127.0.0.1",
+        port=3306,
     )
     if not final_root_ok:
         return False, (
