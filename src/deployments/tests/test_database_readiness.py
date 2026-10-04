@@ -265,3 +265,60 @@ def test_mariadb_root_bootstrap_uses_set_password_and_privileged_socket():
     assert "SET PASSWORD FOR 'root'@'localhost'" in reconciliation
     assert "SET PASSWORD FOR 'root'@'%'" in reconciliation
     assert 'exec_user="root"' in reconciliation
+
+
+class FakeMariaDBTransportContainer:
+    def __init__(self):
+        self.calls = []
+
+    def exec_run(self, command, environment=None, user=None):
+        self.calls.append((command, environment, user))
+        if command[0] != "mariadb":
+            return 127, b'exec: "mariadb": executable file not found in $PATH'
+        if "--protocol=tcp" in command:
+            if len([call for call in self.calls if "--protocol=tcp" in call[0]]) < 3:
+                return 2002, b"ERROR 2002 (HY000): Can\'t connect to server on \'127.0.0.1\' (115)"
+            return 1045, b"ERROR 1045 (28000): Access denied for user \'root\'@\'localhost\' (using password: YES)"
+        return 0, b"1"
+
+
+def test_mariadb_sql_transport_wait_distinguishes_startup_from_auth_failure():
+    from deployments.core.db_deployer import _mysql_sql_transport_probe
+
+    container = FakeMariaDBTransportContainer()
+
+    reachable, authenticated, output = _mysql_sql_transport_probe(
+        container,
+        platform="mariadb",
+        password="secret",
+    )
+    assert reachable is False
+    assert authenticated is False
+    assert "(115)" in output
+
+    for _ in range(2):
+        reachable, authenticated, output = _mysql_sql_transport_probe(
+            container,
+            platform="mariadb",
+            password="secret",
+        )
+
+    assert reachable is True
+    assert authenticated is False
+    assert "1045" in output
+
+
+def test_swarm_database_deploy_requires_sql_transport_after_admin_ping():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1] / "core" / "db_deployer.py"
+    ).read_text(encoding="utf-8")
+    swarm_block = source.split(
+        "def _deploy_swarm_database(", 1
+    )[1].split(
+        "    def deploy(", 1
+    )[0]
+    assert "_mysql_admin_ping(" in swarm_block
+    assert "_mysql_sql_transport_probe(" in swarm_block
+    assert "SQL transport is not ready yet." in swarm_block
