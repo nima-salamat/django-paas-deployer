@@ -636,12 +636,19 @@ def _mysql_wait_until_ready(
                         password=root_password,
                     )
                     if ready:
-                        return (
-                            True,
-                            "MySQL/MariaDB official initialization completed "
-                            "and the final server is ready.",
+                        reachable, authenticated, transport_output = _mysql_sql_transport_probe(
+                            container,
+                            platform=platform,
+                            password=root_password,
+                            username="root",
                         )
-                    last_logs = probe_output
+                        if reachable:
+                            return (
+                                True,
+                                "MySQL/MariaDB official initialization completed "
+                                "and the final SQL server is accepting TCP connections.",
+                            )
+                        last_logs = transport_output or probe_output
 
                 except Exception as exc:
 
