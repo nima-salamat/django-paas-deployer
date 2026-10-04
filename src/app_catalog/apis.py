@@ -175,6 +175,27 @@ class ApplicationInstanceDetailAPIView(CatalogPermissionMixin, APIView):
                 },
                 status=status.HTTP_409_CONFLICT,
             )
+
+        # A cancelled installation may reach this endpoint before its
+        # asynchronous cleanup callback. Make deletion self-healing by running
+        # the same normal Service/resource cleanup synchronously.
+        if instance.status == ApplicationStatus.CANCELLED and instance.cancel_requested:
+            from .executor import ApplicationStackExecutor
+            try:
+                ApplicationStackExecutor(str(instance.pk))._cleanup_cancelled_children()
+                instance.refresh_from_db()
+            except Exception as exc:
+                logger = __import__("logging").getLogger(__name__)
+                logger.exception("Ready App deletion cleanup failed for %s", instance.pk)
+                return Response(
+                    {
+                        "error": "The installation still has resources that could not be cleaned up.",
+                        "code": "application_cleanup_failed",
+                        "detail": str(exc),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
         # Delete child services first. Their pre_delete handlers remove
         # containers/volumes before the application-owned Docker network is
         # deleted; relying on Django CASCADE ordering could otherwise attempt
