@@ -8,6 +8,7 @@ from app_catalog.apis import (
     CatalogDetailAPIView,
     CatalogListAPIView,
     CatalogResolveAPIView,
+    ApplicationInstanceDetailAPIView,
 )
 from app_catalog.models import ApplicationInstance
 from plans.models import Plan
@@ -128,6 +129,77 @@ class ReadyAppPublicApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("managed automatically", response.data["error"])
+
+    def test_cancelled_delete_requests_remaining_child_cleanup_instead_of_blocking(self):
+        from deploy.models import DeploymentStatusChoices
+        from app_catalog.services import create_application_installation
+
+        instance = create_application_installation(
+            self.user,
+            {
+                "catalog_id": "wordpress",
+                "variant": "default",
+                "name": "cancel-delete-pending",
+                "plan_id": str(self.app_plan.pk),
+                "config": {},
+            },
+            require_public=True,
+        )
+        instance.status = ApplicationStatus.CANCELLED
+        instance.cancel_requested = True
+        instance.save(update_fields=["status", "cancel_requested", "updated_at"])
+
+        binding = instance.services.select_related("deploy").first()
+        binding.deploy.status = DeploymentStatusChoices.RUNNING
+        binding.deploy.save(update_fields=["status", "updated_at"])
+
+        response = ApplicationInstanceDetailAPIView.as_view()(
+            self.request("DELETE", f"/api/application-catalog/installations/{instance.pk}/"),
+            pk=instance.pk,
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data["code"], "application_cleanup_pending")
+        binding.deploy.refresh_from_db()
+        self.assertTrue(binding.deploy.cancel_requested)
+        self.assertTrue(ApplicationInstance.objects.filter(pk=instance.pk).exists())
+
+    def test_cancelled_delete_finishes_after_child_deploys_are_terminal(self):
+        from unittest.mock import patch
+        from deploy.models import DeploymentStatusChoices
+        from app_catalog.services import create_application_installation
+
+        instance = create_application_installation(
+            self.user,
+            {
+                "catalog_id": "wordpress",
+                "variant": "default",
+                "name": "cancel-delete-finish",
+                "plan_id": str(self.app_plan.pk),
+                "config": {},
+            },
+            require_public=True,
+        )
+        instance.status = ApplicationStatus.CANCELLED
+        instance.cancel_requested = True
+        instance.save(update_fields=["status", "cancel_requested", "updated_at"])
+
+        bindings = list(instance.services.select_related("service", "deploy"))
+        for binding in bindings:
+            binding.deploy.status = DeploymentStatusChoices.CANCELLED
+            binding.deploy.save(update_fields=["status", "updated_at"])
+
+        network = instance.network
+        with patch("services.models.Service.delete") as service_delete, patch.object(network, "delete") as network_delete:
+            response = ApplicationInstanceDetailAPIView.as_view()(
+                self.request("DELETE", f"/api/application-catalog/installations/{instance.pk}/"),
+                pk=instance.pk,
+            )
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(ApplicationInstance.objects.filter(pk=instance.pk).exists())
+        self.assertEqual(service_delete.call_count, len(bindings))
+        network_delete.assert_called()
 
     def test_non_public_installation_is_rejected_at_api_boundary(self):
         response = ApplicationInstanceListCreateAPIView.as_view()(
