@@ -39,6 +39,22 @@ class ReadyApplicationArchitectureTests(TestCase):
         assert '${secret.postgres_password}' in env['MM_SQLSETTINGS_DATASOURCE']
         assert resolved['secrets']['postgres_password']
 
+    def test_queued_child_deploy_is_accepted_by_deployment_worker_boundary(self):
+        instance = self.install(catalog_id="wordpress", variant="default", name="worker-boundary")
+        binding = instance.services.get(service_key="wordpress")
+        from deployments.core.state.manager import StateManager
+
+        acquired = StateManager.lock_and_get_deployment(
+            binding.deploy_id,
+            task_id="ready-app-child-worker",
+        )
+
+        assert acquired.pk == binding.deploy_id
+        binding.service.refresh_from_db()
+        binding.deploy.refresh_from_db()
+        assert binding.service.status == "deploying"
+        assert binding.deploy.status == DeploymentStatusChoices.RUNNING
+
     def test_installation_queues_children_and_keeps_selected_deploy_empty(self):
         instance = self.install(name="queued-child-lifecycle")
         rows = {row.service_key: row for row in instance.services.select_related("service", "deploy")}
