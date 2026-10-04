@@ -145,7 +145,16 @@ class ApplicationStackExecutor:
                 DeploymentStatusChoices.ROLLING_BACK,
             }:
                 deploy.cancel_requested = True
-                deploy.save(update_fields=["cancel_requested", "updated_at"])
+                deploy.status_message = reason[:500]
+                deploy.error_message = ""
+                deploy.save(
+                    update_fields=[
+                        "cancel_requested",
+                        "status_message",
+                        "error_message",
+                        "updated_at",
+                    ]
+                )
                 if deploy.status == DeploymentStatusChoices.PENDING:
                     try:
                         StateManager.transition_deploy_system_terminal(
@@ -327,7 +336,11 @@ class ApplicationStackExecutor:
                                 "cancel_requested": True,
                                 "stage": "cancelled",
                                 "progress": 100,
-                                "status_message": "Service was not started because a required application service failed.",
+                                "status_message": (
+                                    f"Service was not started because required application service "
+                                    f"'{first.service_key}' failed."
+                                ),
+                                "error_message": "",
                             },
                             event_payload={
                                 "event_id": str(uuid.uuid4()),
@@ -345,7 +358,19 @@ class ApplicationStackExecutor:
                         DeploymentStatusChoices.ROLLING_BACK,
                     }:
                         binding.deploy.cancel_requested = True
-                        binding.deploy.save(update_fields=["cancel_requested", "updated_at"])
+                        binding.deploy.status_message = (
+                            f"Deployment stopped because required application service "
+                            f"'{first.service_key}' failed."
+                        )
+                        binding.deploy.error_message = ""
+                        binding.deploy.save(
+                            update_fields=[
+                                "cancel_requested",
+                                "status_message",
+                                "error_message",
+                                "updated_at",
+                            ]
+                        )
                 return True
             required_bindings = [b for b in bindings if required.get(b.service_key, True)]
             all_terminal = all(
