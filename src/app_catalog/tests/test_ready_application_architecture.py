@@ -26,6 +26,7 @@ class ReadyApplicationArchitectureTests(TestCase):
         common = dict(max_cpu=2.0, max_ram=4096, max_storage=64, price_per_hour=0, storage_type=StorageTypeChoices.SSD)
         cls.app_plan = Plan.objects.create(name=NameChoices.BRONZE, platform='docker', plan_type=PlanTypeChoices.APP, **common)
         cls.db_plan = Plan.objects.create(name=NameChoices.BRONZE, platform='postgresql', plan_type=PlanTypeChoices.DB, **common)
+        cls.mariadb_plan = Plan.objects.create(name=NameChoices.BRONZE, platform='mariadb', plan_type=PlanTypeChoices.DB, **common)
 
     def install(self, catalog_id='mattermost', variant='postgresql', name='catalog-architecture'):
         config = {'domain': f'{name}.example.invalid'}
