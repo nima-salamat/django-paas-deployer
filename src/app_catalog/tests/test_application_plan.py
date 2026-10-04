@@ -168,3 +168,24 @@ def test_database_plan_type_requires_database_role_and_platform():
         plan_from_resolved(_resolved([
             {"key": "db", "role": "app", "platform": "postgresql", "plan_type": "DB"},
         ]))
+def test_public_compose_service_rejects_multiple_ports():
+    from app_catalog.compose_catalog import compose_to_resolved
+    import pytest
+
+    with pytest.raises(ApplicationPlanError, match="multiple ports"):
+        compose_to_resolved(
+            document={
+                "services": {
+                    "web": {
+                        "image": "example/web:1.2.3",
+                        "ports": ["8080:8080", "9090:9090"],
+                    },
+                },
+            },
+            metadata={"public_services": ["web"]},
+            config={},
+            secrets={},
+            catalog_id="public-port-fixture",
+            version="1.0",
+        )
+
