@@ -1118,7 +1118,6 @@ class SwarmRuntime:
                         [str(application_service)]
                         if (
                             application_service
-                            and process_name == "web"
                             and str(network_name) != "proxy_net"
                         )
                         else []
