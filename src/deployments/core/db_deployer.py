@@ -2408,7 +2408,7 @@ class DBDeployer:
 
             log.info(
                 "health_check",
-                "Waiting for MySQL server to become ready.",
+                "Waiting for MySQL/MariaDB server to become ready.",
                 progress=85,
             )
 
@@ -2449,7 +2449,7 @@ class DBDeployer:
                     pass
 
                 message = (
-                    "MySQL did not become ready within 180 seconds.\n\n"
+                    f"{platform.upper()} did not become ready within 180 seconds.\n\n"
                     f"Readiness details:\n{ready_details[-1500:]}\n\n"
                     f"Container logs:\n{log_tail[-3000:]}"
                 )
