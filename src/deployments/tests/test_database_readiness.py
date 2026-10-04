@@ -1,6 +1,10 @@
 """Regression tests for MySQL/MariaDB readiness probing."""
 
-from deployments.core.db_deployer import _mysql_admin_ping
+from deployments.core.db_deployer import (
+    _mysql_admin_ping,
+    _mysql_exec,
+    _mysql_password_auth_clause,
+)
 
 
 class FakeContainer:
@@ -73,3 +77,75 @@ def test_mysql_falls_back_to_mariadb_admin_when_mysqladmin_is_missing():
     assert output == "mysqld is alive"
     assert executable == "mariadb-admin"
     assert [call[0] for call in container.calls] == ["mysqladmin", "mariadb-admin"]
+
+
+def test_mariadb_sql_exec_prefers_mariadb_client():
+    container = FakeContainer({
+        "mariadb": (0, b"1"),
+        "mysql": (0, b"1"),
+    })
+
+    ok, output = _mysql_exec(
+        container,
+        "SELECT 1;",
+        password="secret",
+        platform="mariadb",
+    )
+
+    assert ok is True
+    assert output == "1"
+    assert [call[0] for call in container.calls] == ["mariadb"]
+    assert container.calls[0][1][1] == "-uroot"
+
+
+def test_mariadb_sql_exec_falls_back_to_mysql_when_mariadb_client_is_missing():
+    container = FakeContainer({
+        "mariadb": (
+            127,
+            b'exec: "mariadb": executable file not found in $PATH',
+        ),
+        "mysql": (0, b"1"),
+    })
+
+    ok, output = _mysql_exec(
+        container,
+        "SELECT 1;",
+        password="secret",
+        platform="mariadb",
+    )
+
+    assert ok is True
+    assert output == "1"
+    assert [call[0] for call in container.calls] == ["mariadb", "mysql"]
+
+
+def test_mysql_sql_exec_prefers_mysql_client():
+    container = FakeContainer({
+        "mysql": (0, b"1"),
+        "mariadb": (0, b"1"),
+    })
+
+    ok, output = _mysql_exec(
+        container,
+        "SELECT 1;",
+        password="secret",
+        platform="mysql",
+    )
+
+    assert ok is True
+    assert output == "1"
+    assert [call[0] for call in container.calls] == ["mysql"]
+
+
+def test_mariadb_password_auth_uses_native_compatible_identified_by_syntax():
+    assert (
+        _mysql_password_auth_clause("mariadb", "escaped")
+        == "IDENTIFIED BY 'escaped'"
+    )
+
+
+def test_mysql_password_auth_keeps_mysql_native_password_syntax():
+    assert (
+        _mysql_password_auth_clause("mysql", "escaped")
+        == "IDENTIFIED WITH mysql_native_password BY 'escaped'"
+    )
