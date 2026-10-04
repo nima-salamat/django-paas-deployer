@@ -64,6 +64,9 @@ class ServiceSerializer(serializers.ModelSerializer):
     # Full public host: <service_name>.<DEPLOYMENT_DOMAIN>
     service_host = serializers.SerializerMethodField(read_only=True)
     storage = serializers.SerializerMethodField(read_only=True)
+    application_instance_id = serializers.SerializerMethodField(read_only=True)
+    application_instance_name = serializers.SerializerMethodField(read_only=True)
+    application_instance_catalog_id = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Service
@@ -87,6 +90,45 @@ class ServiceSerializer(serializers.ModelSerializer):
 
     def get_service_host(self, obj):
         return _service_host(obj)
+
+    def get_application_instance_id(self, obj):
+        if obj.source_kind != Service.SourceKind.CATALOG:
+            return None
+        try:
+            return str(obj.network.application_instance.pk)
+        except Exception:
+            try:
+                from app_catalog.models import ApplicationInstanceService
+                binding = ApplicationInstanceService.objects.filter(service=obj).values_list("instance_id", flat=True).first()
+                return str(binding) if binding else None
+            except Exception:
+                return None
+
+    def get_application_instance_name(self, obj):
+        if obj.source_kind != Service.SourceKind.CATALOG:
+            return None
+        try:
+            return obj.network.application_instance.name
+        except Exception:
+            try:
+                from app_catalog.models import ApplicationInstanceService
+                binding = ApplicationInstanceService.objects.select_related("instance").filter(service=obj).first()
+                return binding.instance.name if binding else None
+            except Exception:
+                return None
+
+    def get_application_instance_catalog_id(self, obj):
+        if obj.source_kind != Service.SourceKind.CATALOG:
+            return None
+        try:
+            return obj.network.application_instance.catalog_id
+        except Exception:
+            try:
+                from app_catalog.models import ApplicationInstanceService
+                binding = ApplicationInstanceService.objects.select_related("instance").filter(service=obj).first()
+                return binding.instance.catalog_id if binding else None
+            except Exception:
+                return None
 
     def get_storage(self, obj):
         try:
