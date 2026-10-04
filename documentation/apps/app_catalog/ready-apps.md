@@ -199,7 +199,7 @@ Request:
 
 The endpoint repeats definition, variant, resource and hostname validation. Resolve is a preview, not a trust boundary.
 
-Successful creation returns HTTP 202 and a durable `ApplicationInstance`. The coordinator creates ordinary child `Service` and `Deploy` rows; the existing deployments engine performs build, runtime, readiness, activation, rollback and cleanup.
+Successful creation returns HTTP 202 and a durable `ApplicationInstance`. The coordinator creates ordinary child `Service` and `Deploy` rows. Child Services start in `queued` state so the normal deployment worker can acquire them; child Deploys start `pending`. The existing deployments engine performs build, runtime, readiness, activation, rollback and cleanup.
 
 ### Installation detail
 
@@ -207,7 +207,7 @@ Successful creation returns HTTP 202 and a durable `ApplicationInstance`. The co
 
 Installation records are owner-scoped.
 
-The response includes catalog/software provenance, coordinator status/stage, non-secret config, `secrets_configured`, errors, timestamps, managed child service summaries, application URL when available, and resource allocation.
+The response includes catalog/software provenance, coordinator status/stage, non-secret config, `secrets_configured`, errors, timestamps, managed child service summaries, the application URL only after the installation is `running`, and resource allocation.
 
 A child summary includes catalog service key, concrete Service id/name, Deploy id, Deploy status/stage and safe status/error messages.
 
@@ -218,6 +218,10 @@ A child summary includes catalog service key, concrete Service id/name, Deploy i
 Cancellation is available only for non-terminal installations. The endpoint records cancellation intent under a row lock and delegates to the existing application coordinator. If Celery delivery fails, the established synchronous cancellation path is used.
 
 ### Delete
+Cancellation cleanup is idempotent and recoverable. After all child Deploys reach terminal states, the coordinator removes the managed child Services through the normal Service deletion boundary, which owns runtime/container/image/volume/log cleanup, then removes the application-owned network. The `ApplicationInstance` is retained as cancellation history until explicitly deleted.
+
+The owner-scoped DELETE endpoint is also self-healing for cancelled installations: if asynchronous cleanup was missed, deletion performs the same cleanup synchronously before removing the parent record.
+ 
 
 `DELETE /api/application-catalog/installations/<uuid>/`
 
@@ -251,10 +255,29 @@ Ready Apps currently expose only platform-owned HTTPS hostnames:
 
 A public definition must declare a `domain` field, but it must be `user_editable: false`.
 
+The resolver computes the deterministic hostname during planning so endpoint/routing configuration can be compiled before containers exist. That hostname is not exposed as a live `application_url` until the installation reaches `running`.
+
 A client-supplied custom `domain` is not accepted by the public Ready Apps API. The resolver forces HTTPS for public Ready App output.
 
 The restriction exists because the platform does not yet implement domain ownership verification.
 
+## Deployment selection and activation
+
+A newly-created Ready App child `Deploy` is intentionally **not** written into `Service.selected_deploy`. The runtime authority is the immutable `ServiceRevision` activated by the deployment engine. `selected_deploy` is a compatibility projection written when activation succeeds.
+
+Therefore the execution prerequisite is:
+
+```text
+Service QUEUED + Deploy PENDING
+  -> deployment worker
+  -> Service DEPLOYING + Deploy RUNNING
+  -> runtime readiness
+  -> ServiceRevision ACTIVE
+  -> Service.selected_deploy projection
+```
+
+Database child services are dispatched directly to the dedicated database deployment task so application-level success/failure callbacks remain attached to the actual execution task.
+ 
 ## Secrets
 
 Ready Apps use the existing `ServiceSecret`/`ServiceSecretVersion` infrastructure:
@@ -285,6 +308,23 @@ Preview values describe plan limits, not current runtime usage:
 
 Each service's storage is checked against its assigned plan allowance.
 
+## Managed service naming
+
+Concrete Service rows created for a Ready App are named from the user-selected application name and the catalog service key, with the execution platform appended as the final component:
+
+```text
+<application-slug>-<service-key>-<platform>
+```
+
+For example, an installation named `my-deploy` from the WordPress + MariaDB recipe produces:
+
+```text
+my-deploy-wordpress-docker
+my-deploy-mariadb-mariadb
+```
+
+Service names remain globally unique and are limited to 30 characters. When a name already exists, an ordinal is inserted before the final platform suffix rather than replacing the application identity entirely.
+ 
 ## Installation state model
 
 | State | Meaning |
