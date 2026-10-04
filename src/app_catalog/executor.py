@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class ServiceDispatch:
     binding_id: int
+    deploy_id: int
     instance_id: str
     service_key: str
     task_id: str
@@ -367,6 +368,7 @@ class ApplicationStackExecutor:
                 binding.save(update_fields=["dispatch_task_id", "dispatched_at"])
                 dispatches.append(ServiceDispatch(
                     binding_id=binding.pk,
+                    deploy_id=binding.deploy_id,
                     instance_id=self.instance_id,
                     service_key=binding.service_key,
                     task_id=token,
