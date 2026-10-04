@@ -491,32 +491,49 @@ def _create_application_installation(
         platform = str(spec["platform"])
         plan_type = str(spec.get("plan_type") or PlanTypeChoices.APP)
         plan = _find_plan(base_plan=base_plan, platform=platform, plan_type=plan_type)
-        service_name = _catalog_service_name(
-            user,
-            slug,
-            key,
-            platform,
-        )
-        service = Service.objects.create(
-            name=service_name,
-            user=user,
-            plan=plan,
-            network=network,
-            read_only=False,
-            status=SERVICE_STATUS_CHOICES.QUEUED,
-            source_kind=Service.SourceKind.CATALOG,
-            source_config={
-                "application_instance": str(instance.pk),
-                "catalog_id": definition.id,
-                "definition_version": definition.definition_version,
-                "software_version": definition.software_version,
-                "variant": str(payload["variant"]),
-                "service_key": key,
-            },
-            build_config={},
-            runtime_config={},
-            desired_state="running",
-        )
+
+        # Service.name is globally unique. The existence check in
+        # _catalog_service_name() cannot by itself prevent two concurrent
+        # transactions from selecting the same candidate, so retry only when
+        # the database confirms the candidate lost a uniqueness race.
+        service = None
+        for _attempt in range(5):
+            service_name = _catalog_service_name(user, slug, key, platform)
+            try:
+                with transaction.atomic():
+                    service = Service.objects.create(
+                        name=service_name,
+                        user=user,
+                        plan=plan,
+                        network=network,
+                        read_only=False,
+                        status=SERVICE_STATUS_CHOICES.QUEUED,
+                        source_kind=Service.SourceKind.CATALOG,
+                        source_config={
+                            "application_instance": str(instance.pk),
+                            "catalog_id": definition.id,
+                            "definition_version": definition.definition_version,
+                            "software_version": definition.software_version,
+                            "variant": str(payload["variant"]),
+                            "service_key": key,
+                        },
+                        build_config={},
+                        runtime_config={},
+                        desired_state="running",
+                    )
+            except IntegrityError:
+                # Only retry when this exact name now exists, which identifies
+                # the concurrent global Service.name race. Other integrity
+                # failures must remain visible to the caller.
+                if Service.objects.filter(name=service_name).exists():
+                    continue
+                raise
+            break
+
+        if service is None:
+            raise CatalogValidationError(
+                f"Unable to allocate a unique Service name for catalog service {key!r}."
+            )
         service_rows.append((sequence, spec, service, plan))
 
     service_hosts = {key: service.get_docker_service_name() for (_, spec, service, _) in service_rows for key in [str(spec["key"])]}
