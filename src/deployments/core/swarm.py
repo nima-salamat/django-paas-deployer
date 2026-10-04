@@ -939,8 +939,38 @@ class SwarmRuntime:
                 )
             time.sleep(1)
 
+        task_summary = [
+            {
+                "task_id": task.task_id,
+                "desired_state": task.desired_state,
+                "state": task.state,
+                "node_name": task.node_name,
+                "error": task.error,
+                "message": task.message,
+                "image": task.image,
+                "health_status": task.health_status,
+                "status_timestamp": task.status_timestamp,
+            }
+            for task in (latest.tasks if latest else ())
+        ]
+        concise_tasks = "; ".join(
+            (
+                f"{item['state']}/{item['desired_state']}"
+                f" node={item['node_name'] or item['node_id'] if 'node_id' in item else item['node_name'] or '-'}"
+                f" error={item['error'] or item['message'] or '-'}"
+            )
+            for item in task_summary
+        )
+        technical = (
+            f"Swarm service {name!r} did not reach a running task within {timeout:.0f}s. "
+            f"expected_image={expected_image!r}; "
+            f"service_image={latest.service_image if latest else None!r}; "
+            f"update_state={latest.update_state if latest else None!r}; "
+            f"update_message={latest.update_message if latest else None!r}; "
+            f"tasks={concise_tasks or 'none'}"
+        )
         raise DeploymentError(
-            f"Swarm service {name!r} did not reach the expected running task within {timeout:.0f}s.",
+            technical,
             stage="swarm_startup",
             code="SWARM_START_TIMEOUT",
             recoverable=True,
@@ -952,12 +982,22 @@ class SwarmRuntime:
                 "replicas_desired": latest.replicas_desired if latest else None,
                 "replicas_running": latest.replicas_running if latest else None,
                 "healthcheck_configured": latest.healthcheck_configured if latest else False,
-                "tasks": [task.__dict__ for task in (latest.tasks if latest else ())],
+                "tasks": task_summary,
             },
         )
 
     def _create_kwargs(self, config, *, image_ref: str, compose_spec: dict[str, Any]):
-        from docker.types import EndpointSpec, Healthcheck, Mount, Resources, RestartPolicy, RollbackConfig, ServiceMode, UpdateConfig
+        from docker.types import (
+            EndpointSpec,
+            Healthcheck,
+            Mount,
+            NetworkAttachmentConfig,
+            Resources,
+            RestartPolicy,
+            RollbackConfig,
+            ServiceMode,
+            UpdateConfig,
+        )
 
         name = _validate_service_name(config.name)
         service_doc = compose_spec["services"][name]
@@ -1037,6 +1077,13 @@ class SwarmRuntime:
 
         labels = dict(deploy_doc.get("labels") or {})
 
+        # Ready App manifests use logical service names such as "mariadb" or
+        # "postgresql" inside application environment variables. Swarm service
+        # names are globally qualified (for example app-<id>-mariadb-mariadb),
+        # so expose the logical key as a network alias on the shared overlay.
+        application_service = str(labels.get("application.service") or "").strip().lower()
+        process_name = str(labels.get("passdeployer.process") or "web").strip().lower()
+
         # Docker SDK service APIs model the Swarm ContainerSpec using
         # command + args. "entrypoint" is NOT a valid top-level keyword for
         # Service.create() or Service.update().
@@ -1063,7 +1110,17 @@ class SwarmRuntime:
             "labels": labels,
             "container_labels": labels,
             "mode": ServiceMode(mode="replicated", replicas=1),
-            "networks": list(service_doc.get("networks") or []),
+            "networks": [
+                NetworkAttachmentConfig(
+                    target=str(network_name),
+                    aliases=(
+                        [str(application_service)]
+                        if application_service and process_name == "web"
+                        else []
+                    ),
+                )
+                for network_name in (service_doc.get("networks") or [])
+            ],
             "mounts": mounts,
             "resources": resources,
             "restart_policy": restart_policy,
@@ -1533,9 +1590,18 @@ class SwarmRuntime:
         finally:
             self._last_apply_operation = dict(operation)
 
+        # Starting a Swarm task includes image distribution, volume/network
+        # attachment and container startup. This is a different clock from the
+        # application healthcheck and must not be cut off at 60s simply because
+        # health_timeout is 60s.
+        startup_timeout = max(
+            180.0,
+            float(getattr(config, "start_timeout", 45) or 45),
+            float(getattr(config, "health_timeout", 60) or 60),
+        )
         return self.wait_ready(
             name,
-            timeout=getattr(config, "health_timeout", 60) or 60,
+            timeout=startup_timeout,
             expected_image=expected_image,
         )
 
