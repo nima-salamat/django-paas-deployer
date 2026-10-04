@@ -322,3 +322,29 @@ def test_swarm_database_deploy_requires_sql_transport_after_admin_ping():
     assert "_mysql_admin_ping(" in swarm_block
     assert "_mysql_sql_transport_probe(" in swarm_block
     assert "SQL transport is not ready yet." in swarm_block
+
+
+def test_mysql_exec_retries_transient_connection_115_before_failing():
+    class FlakyContainer:
+        def __init__(self):
+            self.calls = 0
+
+        def exec_run(self, command, environment=None, user=None):
+            self.calls += 1
+            if self.calls < 4:
+                return 2002, b"ERROR 2002 (HY000): Can't connect to server on '127.0.0.1' (115)"
+            return 0, b"1"
+
+    container = FlakyContainer()
+    ok, output = _mysql_exec(
+        container,
+        "SELECT 1;",
+        password="secret",
+        platform="mariadb",
+        protocol="tcp",
+        host="127.0.0.1",
+        port=3306,
+    )
+    assert ok is True
+    assert output == "1"
+    assert container.calls == 4
