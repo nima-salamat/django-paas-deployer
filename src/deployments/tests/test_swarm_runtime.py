@@ -235,6 +235,31 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         self.assertEqual(attachment["Target"], "net-demo")
         self.assertEqual(attachment["Aliases"], ["mariadb"])
 
+    def test_create_kwargs_adds_ready_app_database_dns_alias(self):
+        config = _config(
+            labels={
+                "service.id": "svc-1",
+                "deployment.id": "dep-1",
+                "process.name": "database",
+                "application.id": "app-1",
+                "application.service": "mariadb",
+            }
+        )
+        spec = compile_compose_service(config, image_ref="mariadb:11.8.9")
+        runtime = SwarmRuntime.__new__(SwarmRuntime)
+
+        with patch.object(runtime, "_apply_local_volume_pin", return_value=[]):
+            kwargs = runtime._create_kwargs(
+                config,
+                image_ref="mariadb:11.8.9",
+                compose_spec=spec,
+            )
+
+        self.assertEqual(len(kwargs["networks"]), 1)
+        attachment = kwargs["networks"][0]
+        self.assertEqual(attachment["Target"], "net-demo")
+        self.assertEqual(attachment["Aliases"], ["mariadb"])
+
     def test_create_kwargs_keeps_ready_app_alias_off_proxy_network(self):
         config = _config(
             labels={
