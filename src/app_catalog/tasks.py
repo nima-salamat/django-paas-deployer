@@ -35,14 +35,36 @@ def _schedule_next(instance_id: str, current_key: str | None = None):
     dispatches = executor.reconcile()
     for dispatch in dispatches:
         try:
-            gate_application_service.apply_async(
-                args=[dispatch.instance_id, dispatch.service_key],
+            callback = advance_application_service.si(
+                dispatch.instance_id,
+                dispatch.service_key,
+                dispatch.task_id,
+            )
+            failure = application_service_failed.si(
+                dispatch.instance_id,
+                dispatch.service_key,
+                dispatch.task_id,
+            )
+            deploy_task.apply_async(
+                args=[str(dispatch.deploy_id)],
+                link=callback,
+                link_error=failure,
                 task_id=dispatch.task_id,
+                queue="deployments",
+            )
+            logger.info(
+                "Dispatched application child service %s/%s deploy=%s task=%s",
+                dispatch.instance_id,
+                dispatch.service_key,
+                dispatch.deploy_id,
+                dispatch.task_id,
             )
         except Exception:
             logger.exception(
-                "Unable to queue application service %s/%s",
-                dispatch.instance_id, dispatch.service_key,
+                "Unable to queue application child service %s/%s deploy=%s",
+                dispatch.instance_id,
+                dispatch.service_key,
+                dispatch.deploy_id,
             )
             # Clear the dispatch claim so the periodic reconciler can safely
             # retry this service without creating a duplicate task.
