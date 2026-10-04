@@ -358,6 +358,21 @@ class ApplicationStackExecutor:
             return False
 
     def reconcile(self) -> list[ServiceDispatch]:
+        # Cancellation cleanup removes ApplicationInstanceService bindings.
+        # Handle terminal cancellation before _load(), which requires the
+        # complete immutable binding graph to still exist.
+        current = ApplicationInstance.objects.filter(pk=self.instance_id).first()
+        if current is None:
+            return []
+        if current.status == ApplicationStatus.CANCELLED and current.cancel_requested:
+            self._cleanup_cancelled_children()
+            return []
+        if current.status in {
+            ApplicationStatus.FAILED,
+            ApplicationStatus.RUNNING,
+        }:
+            return []
+
         instance, plan = self._load()
         bindings = list(
             ApplicationInstanceService.objects.select_related("deploy")
