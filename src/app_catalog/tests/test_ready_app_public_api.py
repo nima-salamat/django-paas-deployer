@@ -10,7 +10,7 @@ from app_catalog.apis import (
     CatalogResolveAPIView,
     ApplicationInstanceDetailAPIView,
 )
-from app_catalog.models import ApplicationInstance
+from app_catalog.models import ApplicationInstance, ApplicationStatus
 from plans.models import Plan
 from users.models import User
 from core.global_settings.config import NameChoices, PlanTypeChoices, StorageTypeChoices
