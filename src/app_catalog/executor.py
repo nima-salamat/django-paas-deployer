@@ -303,7 +303,15 @@ class ApplicationStackExecutor:
                 DeploymentStatusChoices.RUNNING,
                 DeploymentStatusChoices.ROLLING_BACK,
             }
-            if any(binding.deploy.status in active_statuses for binding in bindings):
+            active_bindings = [
+                binding for binding in bindings
+                if binding.deploy.status in active_statuses
+            ]
+            if active_bindings:
+                from services.signals import _cancel_active_deployments_for_service
+
+                for binding in active_bindings:
+                    _cancel_active_deployments_for_service(binding.service)
                 return False
 
             network = locked.network
