@@ -130,17 +130,6 @@ def public_resolution_payload(definition: CatalogDefinition, resolved: dict, res
         if str(key) in editable_ids and key != "slug"
     }
 
-    public_endpoints = []
-    domain = str((resolved.get("config") or {}).get("domain") or "").strip()
-    scheme = "https" if bool((resolved.get("config") or {}).get("https", True)) else "http"
-    for raw_service in resolved.get("services") or []:
-        if not raw_service.get("public"):
-            continue
-        public_endpoints.append({
-            "name": _display_component_label(raw_service.get("key")),
-            "url": f"{scheme}://{domain}" if domain else "",
-        })
-
     generated_fields = [
         str(field.get("id"))
         for field in (variant.get("fields") or [])
@@ -163,7 +152,6 @@ def public_resolution_payload(definition: CatalogDefinition, resolved: dict, res
         "generated_fields": generated_fields,
         "managed_components": public_catalog_definition(definition)["managed_components"],
         "resource_summary": resource_summary,
-        "public_endpoints": public_endpoints,
         "outputs": _safe_string_list(definition.data.get("outputs")),
         "warnings": [],
     }
