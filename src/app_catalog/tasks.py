@@ -8,7 +8,8 @@ from django.db import transaction
 from django.utils import timezone
 from datetime import timedelta
 
-from deployments.celery.tasks import deploy as deploy_task
+from deployments.celery.tasks import deploy as deploy_task, run_db_deploy
+from deployments.core.db_deployer import DB_PLATFORMS
 from deployments.common.exceptions import to_deployment_error
 from deploy.models import DeploymentStatusChoices
 from .models import ApplicationInstance, ApplicationInstanceService, ApplicationStatus
@@ -46,7 +47,22 @@ def _schedule_next(instance_id: str, current_key: str | None = None):
                 dispatch.service_key,
                 dispatch.task_id,
             )
-            deploy_task.apply_async(
+            # Database services have a dedicated deployment worker.
+            # Dispatch them directly so the application callback/errback stays
+            # attached to the actual execution task instead of being lost by
+            # the generic deploy wrapper.
+            row = (
+                ApplicationInstanceService.objects
+                .select_related("service", "service__plan")
+                .filter(pk=dispatch.binding_id, deploy_id=dispatch.deploy_id)
+                .first()
+            )
+            platform = str(
+                getattr(getattr(getattr(row, "service", None), "plan", None), "platform", "")
+                or ""
+            ).strip().lower()
+            task = run_db_deploy if platform in DB_PLATFORMS else deploy_task
+            task.apply_async(
                 args=[str(dispatch.deploy_id)],
                 link=callback,
                 link_error=failure,
