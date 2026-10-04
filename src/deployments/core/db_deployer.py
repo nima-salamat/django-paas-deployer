@@ -1432,6 +1432,21 @@ class DBDeployer:
             "platform-type": "DB",
         }
 
+        # Ready App database services participate in the same private
+        # application network as their dependent application services.
+        # Preserve the catalog identity labels so SwarmRuntime can expose the
+        # logical service key (for example "mariadb") as a network alias.
+        application_id = _clean(
+            cfg.get("application_instance") or cfg.get("application_id")
+        )
+        application_service = _clean(
+            cfg.get("catalog_service_key") or cfg.get("service_key")
+        ).lower()
+        if application_id:
+            labels["application.id"] = application_id
+        if application_service:
+            labels["application.service"] = application_service
+
         if force_reinit:
             for source in list(volume_binds):
                 if str(source).startswith("/"):
