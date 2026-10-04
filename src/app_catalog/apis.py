@@ -28,48 +28,55 @@ from .tasks import (
 
 
 def _queue_ready_app_deletion(instance_id: str) -> bool:
-    """Converge deletion immediately, then persist a durable retry.
-
-    Returns True when the installation was deleted during the immediate attempt.
-    """
-
+    """Request deletion once and let durable reconciliation own subsequent retries."""
     from django.utils import timezone
 
     instance = ApplicationInstance.objects.filter(pk=instance_id).first()
     if instance is None:
-        return
+        return True
 
-    ApplicationInstance.objects.filter(pk=instance_id).update(
-        stage="deletion_pending",
-        error_code="APPLICATION_DELETION_PENDING",
-        updated_at=timezone.now(),
+    already_pending = (
+        instance.stage == "deletion_pending"
+        and instance.error_code == "APPLICATION_DELETION_PENDING"
     )
+    if not already_pending:
+        ApplicationInstance.objects.filter(pk=instance_id).update(
+            stage="deletion_pending",
+            error_code="APPLICATION_DELETION_PENDING",
+            updated_at=timezone.now(),
+        )
+        instance.stage = "deletion_pending"
+        instance.error_code = "APPLICATION_DELETION_PENDING"
 
-    # Do not make cancellation dependent on Celery availability. This bounded
-    # coordinator attempt cancels active child Deploys and performs any safe
-    # synchronous cleanup; the durable task remains responsible for retries.
+    # Always make one bounded synchronous attempt. If the service is still
+    # active, cleanup_terminal_application requests cancellation and returns
+    # False; the periodic reconciliation task will continue from there.
     try:
         from .executor import ApplicationStackExecutor
 
-        ApplicationStackExecutor(str(instance_id)).cleanup_terminal_application()
+        deleted = ApplicationStackExecutor(str(instance_id)).cleanup_terminal_application()
+        if deleted:
+            return True
     except Exception:
         logger = __import__("logging").getLogger(__name__)
         logger.exception(
-            "Immediate Ready App deletion convergence failed for %s; keeping durable retry.",
+            "Immediate Ready App deletion convergence failed for %s; "
+            "durable reconciliation remains responsible for retrying.",
             instance_id,
         )
 
-    if not ApplicationInstance.objects.filter(pk=instance_id).exists():
-        return True
+    # Only enqueue the durable task on the first request. Repeated frontend
+    # polling/DELETE calls must not flood the operations queue.
+    if already_pending:
+        return False
 
     try:
         delete_application_installation.delay(str(instance_id))
     except Exception:
-        # The reconciliation scheduler retries stale deletion_pending rows, so
-        # a temporary broker outage must not strand the installation.
         logger = __import__("logging").getLogger(__name__)
         logger.exception("Unable to queue Ready App deletion %s", instance_id)
     return False
+
 
 
 class CatalogPermissionMixin:
