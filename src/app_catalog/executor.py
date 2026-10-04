@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class ServiceDispatch:
     binding_id: int
-    deploy_id: int
+    deploy_id: str
     instance_id: str
     service_key: str
     task_id: str
