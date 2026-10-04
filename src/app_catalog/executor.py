@@ -283,10 +283,14 @@ class ApplicationStackExecutor:
                 .select_for_update()
                 .get(pk=self.instance_id)
             )
+            deletion_requested = locked.stage == "deletion_pending"
             if locked.status not in {
                 ApplicationStatus.FAILED,
                 ApplicationStatus.CANCELLED,
-            }:
+            } and not (
+                deletion_requested
+                and locked.status == ApplicationStatus.RUNNING
+            ):
                 return False
 
             bindings, service_rows, unexpected = application_services_for_cleanup(locked)
