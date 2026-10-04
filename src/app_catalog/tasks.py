@@ -238,39 +238,34 @@ def reconcile_application_installations():
     instances = ApplicationInstance.objects.filter(
         Q(status=ApplicationStatus.DEPLOYING)
         | Q(status=ApplicationStatus.CANCELLED, cancel_requested=True)
-        | Q(
-            status__in=(
-                ApplicationStatus.RUNNING,
-                ApplicationStatus.FAILED,
-                ApplicationStatus.CANCELLED,
-            ),
-            stage="deletion_pending",
-            updated_at__lt=cutoff,
-        )
     ).only("pk")
     recovered = 0
-    for instance in instances.iterator():
-        pending = ApplicationInstance.objects.filter(
-            pk=instance.pk,
-            stage="deletion_pending",
-            status__in=(
-                ApplicationStatus.RUNNING,
-                ApplicationStatus.FAILED,
-                ApplicationStatus.CANCELLED,
-            ),
-        ).first()
-        if pending is not None:
-            try:
-                delete_application_installation.delay(str(pending.pk))
-                recovered += 1
-            except Exception:
-                logger.exception("Unable to requeue Ready App deletion %s", pending.pk)
-            continue
 
+    # Deletion intent is durable state, not a stale-cache condition. Process
+    # every deletion_pending installation on every reconciliation tick so the
+    # deployments worker remains a fallback executor even when the operations
+    # queue is unavailable.
+    pending_deletions = ApplicationInstance.objects.filter(
+        stage="deletion_pending",
+        status__in=(
+            ApplicationStatus.RUNNING,
+            ApplicationStatus.FAILED,
+            ApplicationStatus.CANCELLED,
+        ),
+    ).only("pk")
+    for pending in pending_deletions.iterator():
+        try:
+            if ApplicationStackExecutor(str(pending.pk)).cleanup_terminal_application():
+                recovered += 1
+        except ApplicationInstance.DoesNotExist:
+            recovered += 1
+        except Exception:
+            logger.exception("Ready App deletion reconciliation failed for %s", pending.pk)
+
+    for instance in instances.iterator():
         # A cancellation task can be lost after the API commits the flag.
         # Re-apply cancellation from the periodic reconciler so child
-        # deployments cannot remain active forever. RUNNING applications that
-        # are deletion_pending are handled by the durable deletion task above.
+        # deployments cannot remain active forever.
         try:
             fresh = ApplicationInstance.objects.only("status", "cancel_requested").get(pk=instance.pk)
             if fresh.cancel_requested:
@@ -292,6 +287,7 @@ def reconcile_application_installations():
             _schedule_next(str(instance.pk))
         except Exception:
             logger.exception("Application reconciliation failed for %s", instance.pk)
+
 
     # Recover application coordinators whose creation transaction committed
     # but whose start task was lost before a worker claimed execution.
