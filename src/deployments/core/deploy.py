@@ -340,6 +340,7 @@ class Deploy:
             cancel_check=getattr(self, '_cancel_check', None),
             activation_callback=self.activation_callback,
             runtime_backend=self._runtime_backend(),
+            deadline=self.deadline,
         )
         self.result = orchestrator.deploy(self._config())
         return self.result
