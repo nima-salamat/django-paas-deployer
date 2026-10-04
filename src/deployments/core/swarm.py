@@ -1712,9 +1712,98 @@ class SwarmRuntime:
         for name in self.service_names_for_service(service_id):
             self.stop(name)
 
-    def remove_service_group(self, service_id: str) -> None:
-        for name in self.service_names_for_service(service_id):
+    def remove_service_group(self, service_id: str, *, timeout: float = 30.0) -> None:
+        """Remove every managed Swarm service and wait for its task containers to stop.
+
+        Swarm service deletion is asynchronous. Ready App cleanup may need to
+        remove node-local Docker volumes immediately afterwards, so returning
+        as soon as Service.remove() accepts the request is not sufficient:
+        the old task can still hold the volume open and make cleanup fail.
+        """
+        names = self.service_names_for_service(service_id)
+        if not names:
+            return
+
+        # Capture task container IDs before removing the Swarm services.
+        # Service objects may disappear from the manager API immediately
+        # while their task containers are still draining.
+        task_container_ids: set[str] = set()
+        for name in names:
+            try:
+                service = self.client.services.get(_validate_service_name(name))
+                for task in service.tasks() or ():
+                    status = task.get("Status") or {}
+                    container_id = str(
+                        (status.get("ContainerStatus") or {}).get("ContainerID") or ""
+                    ).strip()
+                    if container_id:
+                        task_container_ids.add(container_id)
+            except docker.errors.NotFound:
+                continue
+            except docker.errors.DockerException as exc:
+                raise DeploymentError(
+                    f"Unable to inspect Swarm tasks for service {name!r} before deletion.",
+                    stage="swarm_cleanup",
+                    code="SWARM_TASK_INSPECTION_UNKNOWN",
+                    recoverable=True,
+                    details={
+                        "service": name,
+                        "service_id": str(service_id),
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                    },
+                ) from exc
+
+        for name in names:
             self.remove(name)
+
+        if not task_container_ids:
+            return
+
+        deadline = time.monotonic() + max(float(timeout), 1.0)
+        while True:
+            active_containers: list[str] = []
+            for container_id in sorted(task_container_ids):
+                try:
+                    container = self.client.containers.get(container_id)
+                    container.reload()
+                except docker.errors.NotFound:
+                    continue
+                except docker.errors.DockerException as exc:
+                    raise DeploymentError(
+                        f"Unable to inspect Swarm task container '{container_id}' during deletion.",
+                        stage="swarm_cleanup",
+                        code="SWARM_TASK_CONTAINER_INSPECTION_UNKNOWN",
+                        recoverable=True,
+                        details={
+                            "service_id": str(service_id),
+                            "container_id": container_id,
+                            "error": str(exc),
+                            "error_type": type(exc).__name__,
+                        },
+                    ) from exc
+
+                status = str(getattr(container, "status", "") or "").strip().lower()
+                if status in {"created", "running", "restarting", "paused"}:
+                    active_containers.append(container_id)
+
+            if not active_containers:
+                return
+
+            if time.monotonic() >= deadline:
+                raise DeploymentError(
+                    f"Swarm task containers for service group {service_id!r} did not stop before the cleanup deadline.",
+                    stage="swarm_cleanup",
+                    code="SWARM_TASK_STOP_TIMEOUT",
+                    recoverable=True,
+                    details={
+                        "service_id": str(service_id),
+                        "container_ids": active_containers,
+                        "timeout_seconds": float(timeout),
+                    },
+                )
+
+            time.sleep(0.25)
 
     def remove(self, name: str) -> None:
         try:
