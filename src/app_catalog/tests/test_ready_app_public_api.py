@@ -514,7 +514,7 @@ class ReadyAppDeletionConcurrencyTests(TransactionTestCase):
                 close_old_connections()
 
         with (
-            patch("app_catalog.apis.ApplicationStackExecutor.cleanup_terminal_application", side_effect=cleanup),
+            patch("app_catalog.executor.ApplicationStackExecutor.cleanup_terminal_application", side_effect=cleanup),
             patch("app_catalog.apis.delete_application_installation.delay") as queued,
         ):
             threads = [threading.Thread(target=worker) for _ in range(2)]
