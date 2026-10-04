@@ -1,6 +1,16 @@
 from pathlib import Path
 
-from app_catalog.catalog import ApplicationCatalog, CatalogValidationError, catalog_cache_key, redact_resolved, redacted_definition, resolve_variant
+from app_catalog.catalog import (
+    ApplicationCatalog,
+    CatalogDefinition,
+    CatalogValidationError,
+    CATALOG_ROOT,
+    catalog_cache_key,
+    is_public_definition,
+    redact_resolved,
+    redacted_definition,
+    resolve_variant,
+)
 
 
 def test_all_curated_catalog_definitions_validate_and_are_versioned():
@@ -108,3 +118,37 @@ def test_every_advertised_variant_resolves_to_a_valid_application_plan():
             except Exception as exc:
                 failures.append(f"{definition.id}:{variant_id}: {type(exc).__name__}: {exc}")
     assert not failures, "\n".join(failures)
+
+
+def test_public_catalog_rejects_unpinned_executable_images():
+    source = CATALOG_ROOT / "first_party" / "synthetic-public.yaml"
+    base = {
+        "id": "synthetic-public",
+        "name": "Synthetic Public",
+        "version": "1",
+        "description": "test",
+        "category": "test",
+        "visibility": "public",
+        "variants": {
+            "default": {
+                "compose_document": {
+                    "services": {
+                        "web": {"image": "example/web:latest"},
+                    },
+                },
+                "services": [],
+            },
+        },
+    }
+
+    definition = CatalogDefinition(data=base, source=source)
+    assert not is_public_definition(definition)
+
+    base["variants"]["default"]["compose_document"]["services"]["web"]["image"] = "example/web:1.2.3"
+    assert is_public_definition(CatalogDefinition(data=base, source=source))
+
+    base["variants"]["default"]["compose_document"]["services"]["web"]["image"] = "example/web"
+    assert not is_public_definition(CatalogDefinition(data=base, source=source))
+
+    base["variants"]["default"]["compose_document"]["services"]["web"]["image"] = "example/web:${config.version}"
+    assert not is_public_definition(CatalogDefinition(data=base, source=source))
