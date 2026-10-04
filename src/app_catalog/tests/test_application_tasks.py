@@ -14,6 +14,7 @@ class ApplicationTaskDispatchTests(SimpleTestCase):
             instance_id="instance-1",
             service_key="mariadb",
             task_id="child-task-1",
+            platform="docker",
         )
 
         with patch("app_catalog.tasks.ApplicationStackExecutor") as executor_cls,              patch("app_catalog.tasks.deploy_task.apply_async") as apply_async:
@@ -37,6 +38,7 @@ class ApplicationTaskDispatchTests(SimpleTestCase):
             instance_id="instance-1",
             service_key="mariadb",
             task_id="child-db-task-1",
+            platform="mariadb",
         )
 
         plan = SimpleNamespace(platform="mariadb")
