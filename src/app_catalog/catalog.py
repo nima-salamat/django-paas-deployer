@@ -55,13 +55,63 @@ class CatalogDefinition:
         return str(self.data.get("format") or "toml")
 
 
+_MUTABLE_IMAGE_TAGS = {
+    "latest",
+    "edge",
+    "nightly",
+    "dev",
+    "development",
+    "main",
+    "master",
+    "stable",
+}
+
+
+def _iter_definition_image_refs(data: dict):
+    """Yield executable image references from all catalog variants."""
+    for variant in (data.get("variants") or {}).values():
+        compose = variant.get("compose_document")
+        if isinstance(compose, dict):
+            for service in (compose.get("services") or {}).values():
+                if isinstance(service, dict) and service.get("image"):
+                    yield str(service["image"])
+        for service in (variant.get("services") or []):
+            if isinstance(service, dict):
+                for key in ("image", "image_template", "image_ref"):
+                    if service.get(key):
+                        yield str(service[key])
+
+
+def _is_pinned_image_ref(image_ref: str) -> bool:
+    """Accept immutable digests or explicit non-mutable image tags."""
+    value = str(image_ref or "").strip()
+    if not value or "${" in value or "$" in value:
+        return False
+    if "@sha256:" in value:
+        return bool(re.fullmatch(r".+@sha256:[0-9a-fA-F]{64}", value))
+    last_component = value.rsplit("/", 1)[-1]
+    if ":" not in last_component:
+        return False
+    tag = last_component.rsplit(":", 1)[-1].strip().lower()
+    return bool(tag) and tag not in _MUTABLE_IMAGE_TAGS
+
+
+def _public_images_are_pinned(data: dict) -> bool:
+    return all(_is_pinned_image_ref(image_ref) for image_ref in _iter_definition_image_refs(data))
+
+
 def is_public_definition(definition: CatalogDefinition) -> bool:
     source = definition.source.resolve()
     first_party_root = (CATALOG_ROOT / "first_party").resolve()
-    return (
-        str(definition.data.get("visibility") or "internal").strip().lower() == "public"
-        and source.parent == first_party_root
-    )
+    if (
+        str(definition.data.get("visibility") or "internal").strip().lower() != "public"
+        or source.parent != first_party_root
+    ):
+        return False
+    # A public Ready App must not publish mutable or dynamically templated
+    # executable images. Internal recipes may retain compatibility with
+    # looser image references.
+    return _public_images_are_pinned(definition.data)
 
 
 class ApplicationCatalog:
