@@ -167,7 +167,45 @@ class ApplicationInstanceDetailAPIView(CatalogPermissionMixin, APIView):
             row for row in instance.services.select_related("deploy").all()
             if row.deploy.status in {"pending", "running", "rolling_back"}
         ]
+
+        if instance.status == ApplicationStatus.CANCELLED and instance.cancel_requested:
+            # DELETE on a cancelled installation is allowed to finish its own
+            # cancellation/cleanup flow. Propagate the cancellation again in
+            # case a child deployment was slow or the original cancel worker
+            # was lost. We never delete a live child runtime.
+            from .executor import ApplicationStackExecutor
+            try:
+                ApplicationStackExecutor(str(instance.pk)).cancel(
+                    reason=instance.error_message or "Application deployment cancelled."
+                )
+                instance.refresh_from_db()
+                active_children = [
+                    row for row in instance.services.select_related("deploy").all()
+                    if row.deploy.status in {"pending", "running", "rolling_back"}
+                ]
+            except Exception as exc:
+                logger = __import__("logging").getLogger(__name__)
+                logger.exception("Ready App cancellation propagation failed for %s", instance.pk)
+                return Response(
+                    {
+                        "error": "Cancellation cleanup could not be continued safely.",
+                        "code": "application_cleanup_failed",
+                        "detail": str(exc),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
         if active_children:
+            if instance.status == ApplicationStatus.CANCELLED:
+                return Response(
+                    {
+                        "error": "Cleanup is still in progress.",
+                        "code": "application_cleanup_pending",
+                        "detail": "The app has been cancelled. PassDeployer is still stopping its services and will remove them when they are safe to delete.",
+                        "active_service_count": len(active_children),
+                    },
+                    status=status.HTTP_202_ACCEPTED,
+                )
             return Response(
                 {
                     "error": "Application still has active service deployments.",
