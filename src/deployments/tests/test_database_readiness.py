@@ -149,3 +149,20 @@ def test_mysql_password_auth_keeps_mysql_native_password_syntax():
         _mysql_password_auth_clause("mysql", "escaped")
         == "IDENTIFIED WITH mysql_native_password BY 'escaped'"
     )
+
+
+def test_db_deployer_reconciliation_has_no_direct_hardcoded_mysql_exec():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1] / "core" / "db_deployer.py"
+    ).read_text(encoding="utf-8")
+    reconciliation = source.split(
+        "def _reconcile_mysql_credentials(", 1
+    )[1].split(
+        "# ============================================================================",
+        1,
+    )[0]
+    assert 'container.exec_run(' not in reconciliation
+    assert "_mysql_exec(" in reconciliation
+    assert "platform=platform" in reconciliation
