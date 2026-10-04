@@ -50,17 +50,10 @@ def _schedule_next(instance_id: str, current_key: str | None = None):
             # Database services have a dedicated deployment worker.
             # Dispatch them directly so the application callback/errback stays
             # attached to the actual execution task instead of being lost by
-            # the generic deploy wrapper.
-            row = (
-                ApplicationInstanceService.objects
-                .select_related("service", "service__plan")
-                .filter(pk=dispatch.binding_id, deploy_id=dispatch.deploy_id)
-                .first()
-            )
-            platform = str(
-                getattr(getattr(getattr(row, "service", None), "plan", None), "platform", "")
-                or ""
-            ).strip().lower()
+            # the generic deploy wrapper. The platform is captured by the
+            # locked coordinator dispatch, so the scheduler does not need a
+            # second database lookup for every child.
+            platform = str(getattr(dispatch, "platform", "") or "").strip().lower()
             task = run_db_deploy if platform in DB_PLATFORMS else deploy_task
             task.apply_async(
                 args=[str(dispatch.deploy_id)],
