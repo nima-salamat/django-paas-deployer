@@ -918,7 +918,7 @@ def _reconcile_mysql_credentials(
 
         # --------------------------------------------------------------------
         # Root currently has no password / socket authentication.
-        # Set it now with mysql_native_password.
+        # Configure the platform-compatible password authentication method.
         # --------------------------------------------------------------------
         root_q = _mysql_string(root_password)
         root_auth = _mysql_password_auth_clause(platform, root_q)
@@ -972,8 +972,8 @@ def _reconcile_mysql_credentials(
         # so the application user verification step doesn't fail later.
         # --------------------------------------------------------------------
         logger.info(
-            "MySQL root credentials already valid for '%s'; "
-            "forcing mysql_native_password and continuing with user/db reconciliation.",
+            "MySQL-compatible root credentials already valid for '%s'; "
+            "normalizing password authentication and continuing with user/db reconciliation.",
             container_name,
         )
 
@@ -1030,7 +1030,7 @@ def _reconcile_mysql_credentials(
         user_auth = _mysql_password_auth_clause(platform, password_q)
 
         # --------------------------------------------------------------------
-        # Create user if missing (with mysql_native_password).
+        # Create user if missing using the platform-compatible password authentication method.
         # --------------------------------------------------------------------
         # Create + password for both '%' (TCP from other containers)
         # and 'localhost' (Unix socket — used by our verification and
