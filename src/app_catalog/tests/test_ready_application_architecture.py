@@ -15,6 +15,7 @@ from app_catalog.services import create_application_installation
 from deploy.models import DeploymentStatusChoices
 from plans.models import Plan
 from services.models import Service, ServiceEnvironmentVariable
+from services.revisioning import ensure_revision_for_deploy, materialize_revision_config
 from users.models import User
 from core.global_settings.config import NameChoices, PlanTypeChoices, StorageTypeChoices
 
@@ -76,6 +77,22 @@ class ReadyApplicationArchitectureTests(TestCase):
         assert rows["wordpress"] == "my-deploy-wordpress-docker"
         assert rows["mariadb"] == "my-deploy-mariadb-mariadb"
 
+    def test_ready_app_mariadb_root_secret_reference_materializes_to_real_value(self):
+        instance = self.install(catalog_id="wordpress", variant="default", name="mariadb-secret-materialization")
+        binding = instance.services.get(service_key="mariadb")
+        service = binding.service
+        root_secret = service.secrets.get(key="service_password_root")
+        expected = root_secret.get_current_value()
+
+        deploy = ensure_revision_for_deploy(binding.deploy, force_new=True)
+        materialized = materialize_revision_config(deploy.revision)
+
+        assert materialized["root_password"] == expected
+        assert materialized["root_password"] != "${secret.service_password_root}"
+        refs = [ref for ref in (deploy.revision.secret_refs or []) if ref.get("path") == "root_password"]
+        assert refs
+        assert refs[0]["key"] == "service_password_root"
+        assert refs[0]["version"] == root_secret.current_version
     def test_real_installation_materializes_db_child_and_composite_secret(self):
         instance = self.install(name='mattermost-real-materialization')
         bindings = {row.service_key: row for row in instance.services.select_related('service', 'deploy')}
