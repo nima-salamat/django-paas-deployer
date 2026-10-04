@@ -380,10 +380,10 @@ These are repository-pinned versions, not a claim that they are the latest upstr
 ## Adding a new Ready App
 
 1. Place a trusted recipe under `src/app_catalog/catalog/first_party/<recipe>.yaml`.
-2. Pin executable image versions; avoid `latest`.
+2. Pin executable image versions; avoid mutable tags such as `latest`, `edge`, `nightly`, `dev`, `main`, `master` and `stable`. Public Ready App publication fails closed when an executable image is unpinned or templated.
 3. Declare `id`, `name`, `version`, `software_version`, `definition_version`, `visibility`, product metadata and managed components.
 4. Expose only legitimate tenant controls. Keep platform-owned/generated values non-editable.
-5. Use a non-editable `domain` field for a public web endpoint; do not expose DB/cache services publicly.
+5. Use a non-editable `domain` field for a public web endpoint; do not expose DB/cache services publicly. A public Ready App service must currently resolve to one public port; ambiguous multi-port public services are rejected.
 6. Add health checks, persistence and dependency relationships.
 7. Map each service to a supported plan type; DB services must declare the database platform.
 8. Add definition, security, resolve, resource, installation/runtime, failure, cancellation and persistence tests.
