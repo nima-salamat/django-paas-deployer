@@ -756,23 +756,6 @@ def _mysql_wait_until_ready(
 
 
 def _mysql_client_candidates(platform: str) -> tuple[str, ...]:
-    """Return MySQL-compatible CLI candidates in platform-specific preference order."""
-    normalized = str(platform or "mysql").strip().lower()
-    if normalized == "mariadb":
-        return ("mariadb", "mysql")
-    return ("mysql", "mariadb")
-
-
-def _mysql_cli_missing(output: str) -> bool:
-    lowered = str(output or "").lower()
-    return (
-        "executable file not found" in lowered
-        or "no such file or directory" in lowered
-        or ("not found" in lowered and "exec" in lowered)
-    )
-
-
-def _mysql_client_candidates(platform: str) -> tuple[str, ...]:
     """Return MySQL-compatible SQL client candidates for the target image."""
     normalized = str(platform or "mysql").strip().lower()
     if normalized == "mariadb":
