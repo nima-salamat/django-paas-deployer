@@ -145,6 +145,78 @@ def resource_summary_for_resolved(resolved: dict, base_plan: Plan) -> dict:
     }
 
 
+def application_services_for_cleanup(instance: ApplicationInstance):
+    """Return application-owned Services and any unexpected network attachments.
+
+    Bindings are the primary ownership source. The network plus immutable
+    catalog metadata provide a legacy recovery path for installations that were
+    partially deleted before child bindings could be removed.
+    """
+    bindings = list(
+        instance.services.select_related("service", "deploy").all()
+    )
+    bound_service_ids = {str(binding.service_id) for binding in bindings}
+    expected_keys = {
+        str(spec.get("key"))
+        for spec in ((instance.definition_snapshot or {}).get("_application_orchestration", {}).get("services") or [])
+        if spec.get("key")
+    }
+
+    if instance.network_id:
+        candidates = list(
+            Service.objects.filter(
+                user_id=instance.user_id,
+                network_id=instance.network_id,
+            ).order_by("created_at", "pk")
+        )
+    else:
+        candidates = list(
+            Service.objects.filter(
+                user_id=instance.user_id,
+                pk__in=[binding.service_id for binding in bindings],
+            ).order_by("created_at", "pk")
+        )
+
+    owned = []
+    unexpected = []
+    seen = set()
+    for service in candidates:
+        service_id = str(service.pk)
+        source = dict(service.source_config or {})
+        application_owner = str(
+            source.get("application_instance")
+            or source.get("application_id")
+            or ""
+        )
+        service_key = str(source.get("service_key") or "")
+        catalog_id = str(source.get("catalog_id") or "")
+        legacy_catalog_match = (
+            str(service.source_kind) == str(Service.SourceKind.CATALOG)
+            and catalog_id == str(instance.catalog_id)
+            and service_key in expected_keys
+        )
+        if (
+            service_id in bound_service_ids
+            or application_owner == str(instance.pk)
+            or legacy_catalog_match
+        ):
+            if service_id not in seen:
+                owned.append(service)
+                seen.add(service_id)
+        else:
+            unexpected.append(service)
+
+    # A binding is authoritative even if a legacy/manual record temporarily
+    # lacks the network relationship expected from the installed graph.
+    for binding in bindings:
+        service = binding.service
+        if str(service.pk) not in seen:
+            owned.append(service)
+            seen.add(str(service.pk))
+
+    return bindings, owned, unexpected
+
+
 def _display_catalog_component_name(value: str) -> str:
     text = str(value or "").replace("_", " ").replace("-", " ").strip()
     return text.title() or "Managed component"
@@ -434,6 +506,7 @@ def _create_application_installation(
             status=SERVICE_STATUS_CHOICES.QUEUED,
             source_kind=Service.SourceKind.CATALOG,
             source_config={
+                "application_instance": str(instance.pk),
                 "catalog_id": definition.id,
                 "definition_version": definition.definition_version,
                 "software_version": definition.software_version,
