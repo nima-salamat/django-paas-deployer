@@ -34,6 +34,8 @@ _SENSITIVE_KEY_TOKENS = (
     "credential",
 )
 
+_SECRET_REFERENCE_RE = re.compile(r"^\$\{secret\.([A-Za-z0-9_]+)\}$")
+
 
 def _is_sensitive_key(key: object) -> bool:
     lowered = str(key).strip().lower()
@@ -233,11 +235,33 @@ def _extract_and_store_secrets(
             for key, value in node.items():
                 key_path = f"{path}.{key}" if path else str(key)
                 if _is_sensitive_key(key) and value not in (None, "") and not isinstance(value, (dict, list)):
+                    value_text = str(value)
+                    reference = _SECRET_REFERENCE_RE.fullmatch(value_text)
+                    if reference:
+                        referenced_key = reference.group(1)
+                        existing_secret = (
+                            ServiceSecret.objects
+                            .filter(service=service, key=referenced_key)
+                            .first()
+                        )
+                        if existing_secret is None or not existing_secret.current_version:
+                            raise ValueError(
+                                f"Secret reference {value_text!r} at {key_path} does not resolve "
+                                f"to a current secret for service {service.pk}."
+                            )
+                        refs.append({
+                            "path": key_path,
+                            "key": existing_secret.key,
+                            "version": existing_secret.current_version,
+                        })
+                        output[key] = "[SECRET_REF]"
+                        continue
+
                     secret_key = _secret_name(key_path)
                     secret, version = _get_or_create_secret(
                         service,
                         secret_key,
-                        str(value),
+                        value_text,
                         created_by=created_by,
                         note=f"Imported from legacy deployment path {key_path}",
                     )
