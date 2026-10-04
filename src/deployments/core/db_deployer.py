@@ -1851,71 +1851,64 @@ class DBDeployer:
         networks: list[str] = []
 
         for network in cfg.get("networks") or []:
-
             if isinstance(network, str):
-
                 name = network
-
             elif isinstance(network, dict):
-
                 name = network.get("name")
-
             else:
-
                 name = ""
 
             if name:
                 safe_name = validate_docker_name(str(name), field="network_name")
-                networks.append(safe_name)
+                if safe_name not in networks:
+                    networks.append(safe_name)
 
-        for network_name in networks:
-
+        # Swarm services require overlay networks. Route network creation
+        # through SwarmRuntime so DB deployments cannot accidentally create a
+        # bridge network while the rest of the platform is Swarm-first.
+        if swarm_enabled():
             try:
-
-                client.networks.get(
-                    network_name
-                )
-
-            except NotFound:
-
+                swarm_runtime = SwarmRuntime(client)
+                swarm_runtime.assert_active()
+                for network_name in networks:
+                    swarm_runtime.ensure_network(network_name, attachable=True)
+            except DeploymentError:
+                raise
+        else:
+            for network_name in networks:
                 try:
-
-                    validate_docker_name(network_name, field="network_name")
-                    client.networks.create(
-                        network_name,
-                        driver="bridge",
-                        internal=True,
-                        attachable=True,
-                        check_duplicate=True,
-                        labels={"managed-by": "django-paas-deployer"},
-                    )
-
-                except (
-                    APIError,
-                    docker.errors.DockerException,
-                ) as exc:
-
-                    logger.warning(
-                        "Could not create network '%s': %s",
-                        network_name,
-                        exc,
-                    )
+                    client.networks.get(network_name)
+                except NotFound:
+                    try:
+                        validate_docker_name(network_name, field="network_name")
+                        client.networks.create(
+                            network_name,
+                            driver="bridge",
+                            internal=True,
+                            attachable=True,
+                            check_duplicate=True,
+                            labels={"managed-by": "django-paas-deployer"},
+                        )
+                    except (
+                        APIError,
+                        docker.errors.DockerException,
+                    ) as exc:
+                        logger.warning(
+                            "Could not create network '%s': %s",
+                            network_name,
+                            exc,
+                        )
 
         networking_config = None
 
         if networks:
-
             endpoints = {
                 network_name:
                     client.api.create_endpoint_config()
                 for network_name in networks
             }
 
-            networking_config = (
-                client.api.create_networking_config(
-                    endpoints
-                )
-            )
+            networking_config = client.api.create_networking_config(endpoints)
 
         # ====================================================================
         # 9. Volumes
