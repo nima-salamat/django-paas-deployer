@@ -2418,6 +2418,7 @@ class DBDeployer:
                     container_name,
                     timeout=180,
                     root_password=root_password,
+                    platform=platform,
                 )
             )
 
