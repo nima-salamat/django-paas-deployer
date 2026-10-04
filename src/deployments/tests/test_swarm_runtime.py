@@ -235,6 +235,40 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         self.assertEqual(attachment["Target"], "net-demo")
         self.assertEqual(attachment["Aliases"], ["mariadb"])
 
+    def test_create_kwargs_keeps_ready_app_alias_off_proxy_network(self):
+        config = _config(
+            labels={
+                "service.id": "svc-1",
+                "deployment.id": "dep-1",
+                "process.name": "web",
+                "application.id": "app-1",
+                "application.service": "wordpress",
+            },
+        )
+        config = replace(
+            config,
+            networks=[
+                NetworkSpec(name="net-demo", driver="overlay", internal=True, attachable=True),
+                NetworkSpec(name="proxy_net", driver="overlay", internal=False, attachable=True),
+            ],
+        )
+        spec = compile_compose_service(config, image_ref="demo:r1")
+        runtime = SwarmRuntime.__new__(SwarmRuntime)
+
+        with patch.object(runtime, "_apply_local_volume_pin", return_value=[]):
+            kwargs = runtime._create_kwargs(
+                config,
+                image_ref="demo:r1",
+                compose_spec=spec,
+            )
+
+        aliases_by_network = {
+            attachment["Target"]: attachment["Aliases"]
+            for attachment in kwargs["networks"]
+        }
+        self.assertEqual(aliases_by_network["net-demo"], ["wordpress"])
+        self.assertEqual(aliases_by_network["proxy_net"], [])
+
     def test_create_kwargs_preserve_effective_start_command(self):
         config = _config(
             entry_point="python app.py --port 8000",
