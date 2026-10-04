@@ -213,7 +213,7 @@ class ReadyAppPublicApiTests(TestCase):
             binding.deploy.save(update_fields=["status", "updated_at"])
 
         network = instance.network
-        with patch("services.models.Service.delete") as service_delete, patch.object(network, "delete") as network_delete:
+        with patch("services.models.Service.delete") as service_delete, patch("services.models.PrivateNetwork.delete") as network_delete:
             response = ApplicationInstanceDetailAPIView.as_view()(
                 self.request("DELETE", f"/api/application-catalog/installations/{instance.pk}/"),
                 pk=instance.pk,
