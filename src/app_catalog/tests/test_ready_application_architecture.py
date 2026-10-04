@@ -39,6 +39,26 @@ class ReadyApplicationArchitectureTests(TestCase):
         assert '${secret.postgres_password}' in env['MM_SQLSETTINGS_DATASOURCE']
         assert resolved['secrets']['postgres_password']
 
+    def test_installation_queues_children_and_keeps_selected_deploy_empty(self):
+        instance = self.install(name="queued-child-lifecycle")
+        rows = {row.service_key: row for row in instance.services.select_related("service", "deploy")}
+
+        assert rows["mattermost"].service.status == "queued"
+        assert rows["postgres"].service.status == "queued"
+        assert rows["mattermost"].deploy.status == DeploymentStatusChoices.PENDING
+        assert rows["postgres"].deploy.status == DeploymentStatusChoices.PENDING
+        # selected_deploy is a post-activation compatibility projection; the
+        # new deployment is eligible for execution without preselecting it.
+        assert rows["mattermost"].service.selected_deploy_id is None
+        assert rows["postgres"].service.selected_deploy_id is None
+
+    def test_service_names_are_application_scoped_and_platform_suffixed(self):
+        instance = self.install(name="my-deploy")
+        rows = {row.service_key: row.service.name for row in instance.services.select_related("service")}
+
+        assert rows["mattermost"] == "my-deploy-mattermost-docker"
+        assert rows["postgres"] == "my-deploy-postgres-postgresql"
+
     def test_real_installation_materializes_db_child_and_composite_secret(self):
         instance = self.install(name='mattermost-real-materialization')
         bindings = {row.service_key: row for row in instance.services.select_related('service', 'deploy')}
@@ -260,6 +280,27 @@ class ReadyApplicationArchitectureTests(TestCase):
         instance.refresh_from_db()
         assert instance.status == ApplicationStatus.CANCELLED
         assert instance.stage == "cancelled"
+        assert instance.network_id is None
+        assert not ApplicationInstanceService.objects.filter(instance_id=instance.pk).exists()
+
+    def test_reconcile_cleans_already_cancelled_children(self):
+        from unittest.mock import patch
+
+        instance = self.install(name="already-cancelled")
+        bindings = list(instance.services.select_related("service", "deploy"))
+        instance.status = ApplicationStatus.CANCELLED
+        instance.cancel_requested = True
+        instance.save(update_fields=["status", "cancel_requested", "updated_at"])
+        for binding in bindings:
+            binding.deploy.status = DeploymentStatusChoices.CANCELLED
+            binding.deploy.save(update_fields=["status", "updated_at"])
+
+        network = instance.network
+        with patch.object(network, "delete", autospec=True),              patch.object(bindings[0].service, "delete", autospec=True),              patch.object(bindings[1].service, "delete", autospec=True):
+            result = ApplicationStackExecutor(str(instance.pk)).reconcile()
+
+        assert result == []
+        instance.refresh_from_db()
         assert instance.network_id is None
         assert not ApplicationInstanceService.objects.filter(instance_id=instance.pk).exists()
 
