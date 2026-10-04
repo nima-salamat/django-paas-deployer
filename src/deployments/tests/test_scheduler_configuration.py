@@ -186,6 +186,17 @@ def test_mariadb_readiness_uses_image_compatible_admin_client_with_fallback():
     assert "_mysql_admin_ping(" in source
 
 
+
+def test_ready_app_deletion_task_is_routed_and_reconciled():
+    settings = (ROOT / "src" / "config" / "settings.py").read_text(encoding="utf-8")
+    tasks = (ROOT / "src" / "app_catalog" / "tasks.py").read_text(encoding="utf-8")
+    assert '"app_catalog.delete_application_installation": {"queue": "operations"}' in settings
+    assert 'name="app_catalog.delete_application_installation"' in tasks
+    assert 'max_retries=None' in tasks
+    assert 'stage="deletion_pending"' in tasks
+    assert 'delete_application_installation.delay(str(pending.pk))' in tasks
+
+
 def test_service_state_manager_invalidates_cache_after_direct_service_updates():
     source = (ROOT / "src" / "deployments" / "core" / "state" / "manager.py").read_text(encoding="utf-8")
 
