@@ -784,54 +784,82 @@ def _mysql_exec(
     port: int = 3306,
     exec_user: str | int | None = None,
 ) -> tuple[bool, str]:
-    """Execute SQL using the client shipped by the target database image."""
+    """Execute SQL using the client shipped by the target database image.
+
+    Missing clients and transient server-startup transport errors are retried
+    or fail over to the compatible executable. SQL/authentication errors are
+    returned immediately so credential reconciliation cannot mask real failures.
+    """
+    import time
+
     env = {"MYSQL_PWD": password} if password else None
     last_output = ""
 
     for executable in _mysql_client_candidates(platform):
-        try:
-            command = [
-                executable,
-                f"-u{username}",
-                f"--protocol={protocol}",
-            ]
-            if host:
-                command.extend(["--host", host])
-            if port and str(protocol).strip().lower() == "tcp":
-                command.extend(["--port", str(int(port))])
-            command.extend([
-                "--batch",
-                "--skip-column-names",
-                "-e",
-                statement,
-            ])
+        for attempt in range(4):
+            try:
+                command = [
+                    executable,
+                    f"-u{username}",
+                    f"--protocol={protocol}",
+                ]
+                if host:
+                    command.extend(["--host", host])
+                if port and str(protocol).strip().lower() == "tcp":
+                    command.extend(["--port", str(int(port))])
+                command.extend([
+                    "--batch",
+                    "--skip-column-names",
+                    "-e",
+                    statement,
+                ])
 
-            exec_kwargs = {"environment": env}
-            if exec_user is not None:
-                exec_kwargs["user"] = exec_user
+                exec_kwargs = {"environment": env}
+                if exec_user is not None:
+                    exec_kwargs["user"] = exec_user
 
-            exit_code, output = container.exec_run(
-                command,
-                **exec_kwargs,
+                exit_code, output = container.exec_run(
+                    command,
+                    **exec_kwargs,
+                )
+            except Exception as exc:
+                last_output = str(exc)
+                if attempt < 3:
+                    time.sleep(0.5)
+                    continue
+                break
+
+            output_text = (
+                output.decode("utf-8", "replace")
+                if isinstance(output, (bytes, bytearray))
+                else str(output or "")
             )
-        except Exception as exc:
-            last_output = str(exc)
-            continue
+            last_output = output_text.strip()
 
-        output_text = (
-            output.decode("utf-8", "replace")
-            if isinstance(output, (bytes, bytearray))
-            else str(output or "")
-        )
-        last_output = output_text.strip()
+            if int(exit_code) == 0:
+                return True, last_output
 
-        if int(exit_code) == 0:
-            return True, last_output
+            if _mysql_cli_missing(last_output):
+                break
 
-        if _mysql_cli_missing(last_output):
-            continue
+            lowered = last_output.lower()
+            transient_transport = any(
+                marker in lowered
+                for marker in (
+                    "error 2002",
+                    "error 2003",
+                    "(115)",
+                    "can't connect to server",
+                    "connection refused",
+                    "connection timed out",
+                    "operation now in progress",
+                )
+            )
+            if transient_transport and attempt < 3:
+                time.sleep(0.5)
+                continue
 
-        return False, last_output
+            return False, last_output
 
     return False, last_output
 
