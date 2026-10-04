@@ -42,7 +42,7 @@ class ApplicationInstance(models.Model):
     cancel_requested = models.BooleanField(default=False)
     network = models.OneToOneField(
         "services.PrivateNetwork",
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         related_name="application_instance",
         null=True,
         blank=True,
