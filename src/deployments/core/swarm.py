@@ -945,6 +945,7 @@ class SwarmRuntime:
                 "desired_state": task.desired_state,
                 "state": task.state,
                 "node_name": task.node_name,
+                "node_id": task.node_id,
                 "error": task.error,
                 "message": task.message,
                 "image": task.image,
@@ -956,7 +957,7 @@ class SwarmRuntime:
         concise_tasks = "; ".join(
             (
                 f"{item['state']}/{item['desired_state']}"
-                f" node={item['node_name'] or item['node_id'] if 'node_id' in item else item['node_name'] or '-'}"
+                f" node={item['node_name'] or item['node_id'] or '-'}"
                 f" error={item['error'] or item['message'] or '-'}"
             )
             for item in task_summary
