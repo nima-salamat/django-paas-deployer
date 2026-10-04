@@ -53,11 +53,11 @@ class ReadyApplicationArchitectureTests(TestCase):
         assert rows["postgres"].service.selected_deploy_id is None
 
     def test_service_names_are_application_scoped_and_platform_suffixed(self):
-        instance = self.install(name="my-deploy")
+        instance = self.install(catalog_id="wordpress", variant="default", name="my-deploy")
         rows = {row.service_key: row.service.name for row in instance.services.select_related("service")}
 
-        assert rows["mattermost"] == "my-deploy-mattermost-docker"
-        assert rows["postgres"] == "my-deploy-postgres-postgresql"
+        assert rows["wordpress"] == "my-deploy-wordpress-docker"
+        assert rows["mariadb"] == "my-deploy-mariadb-mariadb"
 
     def test_real_installation_materializes_db_child_and_composite_secret(self):
         instance = self.install(name='mattermost-real-materialization')
