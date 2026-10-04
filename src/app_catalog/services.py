@@ -15,7 +15,7 @@ from plans.models import Plan
 from services.models import PrivateNetwork, Service, ServiceProcess, ServiceEnvironmentVariable, ServiceSecret, Volume, ServiceEndpoint
 from deploy.models import Deploy
 from deploy.naming import allocate_deploy_name
-from core.global_settings.config import PlanTypeChoices
+from core.global_settings.config import PlanTypeChoices, SERVICE_STATUS_CHOICES
 from .catalog import ApplicationCatalog, CatalogValidationError, is_public_definition, resolve_variant
 from .models import ApplicationInstance, ApplicationInstanceService, ApplicationStatus
 from services.ports import sync_endpoint_reservation
@@ -145,14 +145,33 @@ def _display_catalog_component_name(value: str) -> str:
     return text.title() or "Managed component"
 
 
-def _unique_service_name(user, base: str) -> str:
-    base = safe_slug(base)[:30]
-    candidate = base
-    i = 2
+def _catalog_service_name(user, application_slug: str, service_key: str, platform: str) -> str:
+    """Build a readable, application-owned service name with platform suffix.
+
+    Examples:
+      my-deploy + wordpress + docker -> my-deploy-wordpress-docker
+      my-deploy + mariadb + mariadb -> my-deploy-mariadb-mariadb
+
+    Service.name is globally unique and limited to 30 characters, so any
+    generated ordinal is inserted before the platform suffix to keep the
+    platform visible at the end.
+    """
+    app_part = safe_slug(application_slug)
+    component_part = safe_slug(service_key)
+    platform_part = safe_slug(platform or "docker")
+    suffix = f"-{platform_part}"
+    prefix = f"{app_part}-{component_part}".strip("-")
+    max_prefix = max(1, 30 - len(suffix))
+    prefix = prefix[:max_prefix].rstrip("-") or "app"
+    candidate = f"{prefix}{suffix}"[:30].rstrip("-")
+
+    ordinal = 2
     while Service.objects.filter(name=candidate).exists():
-        suffix = f"-{i}"
-        candidate = (base[: 30 - len(suffix)] + suffix).strip("-")
-        i += 1
+        marker = f"-{ordinal}"
+        available = max(1, 30 - len(suffix) - len(marker))
+        base = prefix[:available].rstrip("-") or "app"
+        candidate = f"{base}{marker}{suffix}"[:30].rstrip("-")
+        ordinal += 1
     return candidate
 
 
@@ -389,13 +408,19 @@ def _create_application_installation(
         platform = str(spec["platform"])
         plan_type = str(spec.get("plan_type") or PlanTypeChoices.APP)
         plan = _find_plan(base_plan=base_plan, platform=platform, plan_type=plan_type)
-        service_name = _unique_service_name(user, _render_service_value(spec.get("name_template", key), config=resolved["config"], secrets=resolved["secrets"], service_hosts={}))
+        service_name = _catalog_service_name(
+            user,
+            slug,
+            key,
+            platform,
+        )
         service = Service.objects.create(
             name=service_name,
             user=user,
             plan=plan,
             network=network,
             read_only=False,
+            status=SERVICE_STATUS_CHOICES.QUEUED,
             source_kind=Service.SourceKind.CATALOG,
             source_config={
                 "catalog_id": definition.id,
