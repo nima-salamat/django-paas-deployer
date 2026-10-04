@@ -139,3 +139,48 @@ def test_ready_app_delete_preflights_all_child_resources_before_deleting_rows():
     assert "cleanup_service_resources" in delete_section
     assert "for row in service_rows:" in delete_section
     assert "application_cleanup_pending" in delete_section
+
+
+
+def test_in_use_managed_volume_cleanup_removes_owned_task_container_then_retries():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from services import signals
+
+    class VolumeInUseError(Exception):
+        pass
+
+    service = SimpleNamespace(pk="svc-1", name="mariadb")
+    attached = SimpleNamespace(
+        id="task-container-1",
+        name="app-svc-1-mariadb",
+        status="running",
+        labels={"managed-by": "django-paas-deployer", "passdeployer.service": "svc-1"},
+    )
+    attached.reload = Mock()
+    attached.stop = Mock()
+    attached.remove = Mock()
+
+    client = SimpleNamespace(
+        containers=SimpleNamespace(
+            list=Mock(return_value=[attached]),
+        )
+    )
+
+    docker_volume = SimpleNamespace(client=client)
+    remove_calls = {"count": 0}
+
+    def remove_volume():
+        remove_calls["count"] += 1
+        if remove_calls["count"] == 1:
+            raise VolumeInUseError("409 Conflict: volume is in use")
+        return True
+
+    docker_volume.remove = remove_volume
+
+    signals._remove_owned_docker_volume(service, docker_volume, "cat-mariadb")
+
+    assert remove_calls["count"] == 2
+    attached.stop.assert_called_once_with(timeout=10)
+    attached.remove.assert_called_once_with(force=True)
