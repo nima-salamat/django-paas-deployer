@@ -832,6 +832,18 @@ def _mysql_ping_with_password(
     return ready
 
 
+
+def _mysql_password_auth_clause(platform: str, password_sql: str) -> str:
+    """Return password authentication syntax accepted by the target server."""
+    if str(platform or "mysql").strip().lower() == "mariadb":
+        return f"IDENTIFIED BY '{password_sql}'"
+    return (
+        "IDENTIFIED WITH mysql_native_password BY "
+        f"'{password_sql}'"
+    )
+
+
+
 # ============================================================================
 # MySQL credential reconciliation
 # ============================================================================
@@ -909,22 +921,20 @@ def _reconcile_mysql_credentials(
         # Set it now with mysql_native_password.
         # --------------------------------------------------------------------
         root_q = _mysql_string(root_password)
+        root_auth = _mysql_password_auth_clause(platform, root_q)
 
         statements = [
             (
                 "ALTER USER 'root'@'localhost' "
-                "IDENTIFIED WITH mysql_native_password BY "
-                f"'{root_q}'"
+                f"{root_auth}"
             ),
             (
                 "CREATE USER IF NOT EXISTS 'root'@'%' "
-                "IDENTIFIED WITH mysql_native_password BY "
-                f"'{root_q}'"
+                f"{root_auth}"
             ),
             (
                 "ALTER USER 'root'@'%' "
-                "IDENTIFIED WITH mysql_native_password BY "
-                f"'{root_q}'"
+                f"{root_auth}"
             ),
             (
                 "GRANT ALL PRIVILEGES ON *.* "
@@ -968,6 +978,7 @@ def _reconcile_mysql_credentials(
         )
 
         root_q = _mysql_string(root_password)
+        root_auth = _mysql_password_auth_clause(platform, root_q)
 
         statements = [
             (
@@ -1019,6 +1030,7 @@ def _reconcile_mysql_credentials(
 
         username_q = _mysql_string(username)
         password_q = _mysql_string(user_password)
+        user_auth = _mysql_password_auth_clause(platform, password_q)
 
         # --------------------------------------------------------------------
         # Create user if missing (with mysql_native_password).
@@ -1031,7 +1043,7 @@ def _reconcile_mysql_credentials(
             create_user_sql = (
                 f"CREATE USER IF NOT EXISTS "
                 f"'{username_q}'@'{host}' "
-                f"IDENTIFIED WITH mysql_native_password BY '{password_q}'"
+                f"{user_auth}"
             )
             ok, output = _mysql_exec(
                 container,
@@ -1048,7 +1060,7 @@ def _reconcile_mysql_credentials(
             alter_user_sql = (
                 f"ALTER USER "
                 f"'{username_q}'@'{host}' "
-                f"IDENTIFIED WITH mysql_native_password BY '{password_q}'"
+                f"{user_auth}"
             )
             ok, output = _mysql_exec(
                 container,
@@ -2492,6 +2504,7 @@ class DBDeployer:
                     container_name,
                     root_password=root_password,
                     username=username,
+                    platform=platform,
                     user_password=user_password,
                     database=database,
                 )
