@@ -507,6 +507,7 @@ def _mysql_wait_until_ready(
     timeout: int = 240,
     *,
     root_password: str = "",
+    platform: str = "mysql",
 ) -> tuple[bool, str]:
     """
     Wait until the OFFICIAL MySQL Docker entrypoint has completely
@@ -627,7 +628,7 @@ def _mysql_wait_until_ready(
                 try:
                     ready, probe_output, _admin = _mysql_admin_ping(
                         container,
-                        platform="mysql",
+                        platform=platform,
                         password=root_password,
                     )
                     if ready:
