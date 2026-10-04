@@ -182,8 +182,7 @@ class ApplicationStackExecutor:
             locked = (
                 ApplicationInstance.objects
                 .select_for_update()
-                .select_related("network")
-                .get(pk=self.instance_id)
+                # Keep the application row lock independent from the nullable network FK.\n                # select_related("network") would emit a LEFT OUTER JOIN and PostgreSQL\n                # rejects FOR UPDATE when the nullable side is joined.\n                .get(pk=self.instance_id)
             )
             if locked.status != ApplicationStatus.CANCELLED or not locked.cancel_requested:
                 return False
