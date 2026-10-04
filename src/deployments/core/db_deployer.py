@@ -589,10 +589,14 @@ def _mysql_wait_until_ready(
             # Detect official initialization completion
             # ------------------------------------------------------------
 
-            init_done = (
-                "mysql init process done" in logs_lower
-                or
-                "mysql init process done." in logs_lower
+            init_done = any(
+                marker in logs_lower
+                for marker in (
+                    "mysql init process done",
+                    "mariadb init process done",
+                    "[entrypoint]: mysql init process done",
+                    "[entrypoint]: mariadb init process done",
+                )
             )
 
             if init_done:
