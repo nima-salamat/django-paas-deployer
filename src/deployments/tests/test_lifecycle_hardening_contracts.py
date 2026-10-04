@@ -185,3 +185,30 @@ def test_db_success_primitive_updates_service_to_running_atomically():
     assert "sm.check_service_transition" in method
     assert "status=sm.SERVICE_RUNNING" in method
     assert "task_id=None" in method
+def test_deploy_result_preserves_explicit_deadline():
+    from unittest.mock import patch
+    from deployments.core.deploy import Deploy
+
+    deadline = object()
+    facade = Deploy(
+        name="deadline-contract",
+        tag="1.0",
+        zip_filename="/tmp/deadline-contract.zip",
+        dockerfile_text="FROM example/web:1",
+        max_cpu=1,
+        max_ram=256,
+        networks=[],
+        volumes=[],
+        port=8080,
+        read_only=True,
+        platform="docker",
+        platform_type="APP",
+    )
+    facade.deadline = deadline
+
+    with patch("deployments.core.deploy.DeploymentOrchestrator") as orchestrator:
+        orchestrator.return_value.deploy.return_value = object()
+        facade.deploy_result()
+
+    assert orchestrator.call_args.kwargs["deadline"] is deadline
+
