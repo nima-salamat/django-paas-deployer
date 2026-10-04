@@ -4,6 +4,7 @@ from deployments.core.db_deployer import (
     _mysql_admin_ping,
     _mysql_exec,
     _mysql_password_auth_clause,
+    _reconcile_mysql_credentials,
 )
 
 
@@ -171,15 +172,32 @@ def test_db_deployer_reconciliation_has_no_direct_hardcoded_mysql_exec():
 class FakeMariaDBCredentialContainer:
     def __init__(self):
         self.calls = []
+        self.password_configured = False
 
     def exec_run(self, command, environment=None):
         self.calls.append((command, environment))
         executable = command[0]
-        if executable == "mariadb":
-            if command[-1] == "SELECT 1;" and environment == {"MYSQL_PWD": "new-secret"}:
-                return 1045, b"ERROR 1045 (28000): Access denied for user 'root'@'localhost' (using password: YES)"
+        if executable != "mariadb":
+            return 127, b'exec: "mariadb": executable file not found in $PATH'
+
+        protocol = "socket"
+        if "--protocol=tcp" in command:
+            protocol = "tcp"
+
+        sql = command[-1]
+        if protocol == "tcp" and sql == "SELECT 1;" and environment == {"MYSQL_PWD": "new-secret"}:
+            if self.password_configured:
+                return 0, b"1"
+            return 1045, b"ERROR 1045 (28000): Access denied for user 'root'@'localhost' (using password: YES)"
+
+        if protocol == "socket" and sql == "SELECT 1;" and environment is None:
             return 0, b"1"
-        return 127, b'exec: "mariadb": executable file not found in $PATH'
+
+        if protocol == "socket" and "ALTER USER 'root'@'localhost'" in sql:
+            self.password_configured = True
+            return 0, b""
+
+        return 0, b"1"
 
 
 def test_mariadb_reconcile_uses_socket_auth_when_configured_password_is_rejected():
@@ -197,12 +215,26 @@ def test_mariadb_reconcile_uses_socket_auth_when_configured_password_is_rejected
     first_command, first_env = container.calls[0]
     assert first_command[0] == "mariadb"
     assert first_command[1] == "-uroot"
+    assert "--protocol=tcp" in first_command
     assert first_env == {"MYSQL_PWD": "new-secret"}
     assert any(
         command[0] == "mariadb"
+        and "--protocol=socket" in command
         and command[-1] == "SELECT 1;"
         and environment is None
         for command, environment in container.calls
+    )
+    assert any(
+        "--protocol=socket" in command
+        and "ALTER USER 'root'@'localhost'" in command[-1]
+        and environment is None
+        for command, environment in container.calls
+    )
+    assert any(
+        "--protocol=tcp" in command
+        and command[-1] == "SELECT 1;"
+        and environment == {"MYSQL_PWD": "new-secret"}
+        for command, environment in container.calls[1:]
     )
 
 
