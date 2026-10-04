@@ -899,6 +899,70 @@ class SwarmRuntime:
                 else:
                     return latest
 
+            desired_running = [
+                task for task in latest.tasks
+                if task.desired_state.lower() == "running"
+            ]
+            terminal = [
+                task for task in desired_running
+                if task.state.lower() in {"complete", "shutdown", "dead", "orphaned"}
+            ]
+            active = [
+                task for task in desired_running
+                if task.state.lower() in {
+                    "new",
+                    "pending",
+                    "assigned",
+                    "accepted",
+                    "preparing",
+                    "ready",
+                    "starting",
+                    "running",
+                }
+            ]
+            if terminal and not active and not running:
+                task = terminal[-1]
+                service_logs = self._service_logs_for_failure(name)
+                exit_code = None
+                status_attrs = {}
+                try:
+                    service = self.client.services.get(_validate_service_name(name))
+                    raw_tasks = service.tasks(filters={"desired-state": "running"}) or []
+                    for raw in raw_tasks:
+                        raw_status = raw.get("Status") or {}
+                        if str(raw.get("ID") or "") == str(task.task_id):
+                            status_attrs = raw_status
+                            break
+                    exit_code = status_attrs.get("ContainerStatus", {}).get("ExitCode")
+                except Exception:
+                    pass
+                technical = (
+                    f"Swarm task terminated before reaching running state: "
+                    f"task_id={task.task_id}; state={task.state}; desired_state={task.desired_state}; "
+                    f"exit_code={exit_code!r}; node={task.node_name or task.node_id or ''}; "
+                    f"expected_image={expected_image!r}; task_image={task.image!r}; "
+                    f"service_image={latest.service_image!r}; "
+                    f"service_logs={service_logs[-12000:]}"
+                )
+                raise DeploymentError(
+                    technical,
+                    stage="swarm_startup",
+                    code="SWARM_TASK_TERMINATED",
+                    user_message="The Swarm task terminated before the service became ready.",
+                    technical_message=technical,
+                    details={
+                        "task_id": task.task_id,
+                        "state": task.state,
+                        "desired_state": task.desired_state,
+                        "exit_code": exit_code,
+                        "node_id": task.node_id,
+                        "node_name": task.node_name,
+                        "expected_image": expected_image,
+                        "service_image": latest.service_image,
+                        "service_logs": service_logs[-12000:],
+                    },
+                )
+
             failed = [
                 task for task in latest.tasks
                 if task.state.lower() in {"failed", "rejected"}
