@@ -733,7 +733,12 @@ class StateManager:
                 effective_updates.update(
                     {
                         "stage": "cancelled",
-                        "status_message": "Deployment cancelled by the user.",
+                        "status_message": (
+                            str(effective_updates.get("status_message") or "").strip()
+                            or str(deploy.status_message or "").strip()
+                            or "Deployment cancelled by the user."
+                        ),
+                        "error_message": "",
                     }
                 )
 
@@ -758,7 +763,10 @@ class StateManager:
                     "event_type": "deployment.cancelled.warning",
                     "stage": "cancelled",
                     "level": "warning",
-                    "message": "Deployment cancelled by the user.",
+                    "message": (
+                        str(effective_updates.get("status_message") or "").strip()
+                        or "Deployment cancelled by the user."
+                    ),
                     "progress": 100,
                     "details": {
                         **dict(event_payload.get("details") or {}),
