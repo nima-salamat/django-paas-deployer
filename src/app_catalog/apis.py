@@ -27,8 +27,12 @@ from .tasks import (
 )
 
 
-def _queue_ready_app_deletion(instance_id: str) -> None:
-    """Converge deletion immediately, then persist a durable retry."""
+def _queue_ready_app_deletion(instance_id: str) -> bool:
+    """Converge deletion immediately, then persist a durable retry.
+
+    Returns True when the installation was deleted during the immediate attempt.
+    """
+
     from django.utils import timezone
 
     instance = ApplicationInstance.objects.filter(pk=instance_id).first()
@@ -56,7 +60,7 @@ def _queue_ready_app_deletion(instance_id: str) -> None:
         )
 
     if not ApplicationInstance.objects.filter(pk=instance_id).exists():
-        return
+        return True
 
     try:
         delete_application_installation.delay(str(instance_id))
@@ -65,6 +69,7 @@ def _queue_ready_app_deletion(instance_id: str) -> None:
         # a temporary broker outage must not strand the installation.
         logger = __import__("logging").getLogger(__name__)
         logger.exception("Unable to queue Ready App deletion %s", instance_id)
+    return False
 
 
 class CatalogPermissionMixin:
@@ -240,7 +245,9 @@ class ApplicationInstanceDetailAPIView(CatalogPermissionMixin, APIView):
                 )
 
         if active_children:
-            _queue_ready_app_deletion(instance.pk)
+            deleted_now = _queue_ready_app_deletion(instance.pk)
+            if deleted_now:
+                return Response(status=status.HTTP_204_NO_CONTENT)
             return Response(
                 {
                     "error": "Cleanup is still in progress.",
@@ -265,7 +272,9 @@ class ApplicationInstanceDetailAPIView(CatalogPermissionMixin, APIView):
             except Exception as exc:
                 logger = __import__("logging").getLogger(__name__)
                 logger.exception("Ready App deletion cleanup failed for %s", instance.pk)
-                _queue_ready_app_deletion(instance.pk)
+                deleted_now = _queue_ready_app_deletion(instance.pk)
+                if deleted_now:
+                    return Response(status=status.HTTP_204_NO_CONTENT)
                 return Response(
                     {
                         "error": "The installation is queued for cleanup.",
@@ -308,7 +317,9 @@ class ApplicationInstanceDetailAPIView(CatalogPermissionMixin, APIView):
         except Exception as exc:
             logger = __import__("logging").getLogger(__name__)
             logger.exception("Ready App resource preflight failed for %s", instance.pk)
-            _queue_ready_app_deletion(instance.pk)
+            deleted_now = _queue_ready_app_deletion(instance.pk)
+            if deleted_now:
+                return Response(status=status.HTTP_204_NO_CONTENT)
             return Response(
                 {
                     "error": "The installation is queued for cleanup.",
@@ -398,7 +409,9 @@ class ApplicationInstanceDetailAPIView(CatalogPermissionMixin, APIView):
         except Exception as exc:
             logger = __import__("logging").getLogger(__name__)
             logger.exception("Ready App database deletion failed for %s", instance.pk)
-            _queue_ready_app_deletion(instance.pk)
+            deleted_now = _queue_ready_app_deletion(instance.pk)
+            if deleted_now:
+                return Response(status=status.HTTP_204_NO_CONTENT)
             return Response(
                 {
                     "error": "The installation is queued for cleanup.",
