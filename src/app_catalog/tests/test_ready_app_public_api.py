@@ -127,6 +127,10 @@ class ReadyAppPublicApiTests(TestCase):
             require_public=True,
         )
         wordpress = instance.services.get(service_key="wordpress").service
+        self.assertEqual(
+            (wordpress.source_config or {}).get("application_instance"),
+            str(instance.pk),
+        )
         endpoint = wordpress.endpoints.get(exposure="public")
 
         expected = (
@@ -212,12 +216,11 @@ class ReadyAppPublicApiTests(TestCase):
             binding.deploy.status = DeploymentStatusChoices.CANCELLED
             binding.deploy.save(update_fields=["status", "updated_at"])
 
-        network = instance.network
         with (
             patch("app_catalog.executor.ApplicationStackExecutor._cleanup_cancelled_children") as cleanup_children,
             patch("services.signals.cleanup_service_resources"),
-            patch("services.models.Service.delete") as service_delete,
-            patch("services.models.PrivateNetwork.delete") as network_delete,
+            patch("services.signals._cleanup_service_log_records"),
+            patch("services.signals.Network.network_exists", return_value=False),
         ):
             response = ApplicationInstanceDetailAPIView.as_view()(
                 self.request("DELETE", f"/api/application-catalog/installations/{instance.pk}/"),
@@ -226,9 +229,75 @@ class ReadyAppPublicApiTests(TestCase):
 
         self.assertEqual(response.status_code, 204)
         self.assertFalse(ApplicationInstance.objects.filter(pk=instance.pk).exists())
-        self.assertEqual(service_delete.call_count, len(bindings))
-        network_delete.assert_called()
+        self.assertEqual(
+            list(instance.services.values_list("pk", flat=True)),
+            [],
+        )
         cleanup_children.assert_called_once()
+
+    def test_failed_delete_recovers_legacy_orphan_service_before_private_network(self):
+        from unittest.mock import patch
+        from deploy.models import DeploymentStatusChoices
+        from app_catalog.services import create_application_installation
+
+        instance = create_application_installation(
+            self.user,
+            {
+                "catalog_id": "wordpress",
+                "variant": "default",
+                "name": "legacy-orphan-delete",
+                "plan_id": str(self.app_plan.pk),
+                "config": {},
+            },
+            require_public=True,
+        )
+        instance.status = ApplicationStatus.FAILED
+        instance.save(update_fields=["status", "updated_at"])
+
+        orphan = instance.services.get(service_key="mariadb")
+        orphan_service = orphan.service
+
+        orphan.delete()
+        orphan_service.source_config = {
+            key: value
+            for key, value in dict(orphan_service.source_config or {}).items()
+            if key != "application_instance"
+        }
+        orphan_service.save(update_fields=["source_config", "updated_at"])
+
+        network_id = instance.network_id
+        self.assertFalse(
+            instance.services.filter(service_id=orphan_service.pk).exists()
+        )
+        self.assertTrue(
+            __import__("services.models", fromlist=["Service"]).Service.objects.filter(
+                pk=orphan_service.pk,
+                network_id=network_id,
+            ).exists()
+        )
+
+        with (
+            patch("services.signals.cleanup_service_resources"),
+            patch("services.signals._cleanup_service_log_records"),
+            patch("services.signals.Network.network_exists", return_value=False),
+        ):
+            response = ApplicationInstanceDetailAPIView.as_view()(
+                self.request("DELETE", f"/api/application-catalog/installations/{instance.pk}/"),
+                pk=instance.pk,
+            )
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(
+            ApplicationInstance.objects.filter(pk=instance.pk).exists()
+        )
+        self.assertFalse(
+            __import__("services.models", fromlist=["Service"]).Service.objects.filter(
+                pk=orphan_service.pk,
+            ).exists()
+        )
+        self.assertFalse(
+            PrivateNetwork.objects.filter(pk=network_id).exists()
+        )
 
     def test_non_public_installation_is_rejected_at_api_boundary(self):
         response = ApplicationInstanceListCreateAPIView.as_view()(
