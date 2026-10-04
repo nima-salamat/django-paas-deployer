@@ -926,8 +926,9 @@ def _reconcile_mysql_credentials(
         ok, output = _mysql_exec(
             container,
             "SELECT 1;",
-                platform=platform,
-            )
+            platform=platform,
+            username="root",
+        )
 
         if not ok:
             return False, (
@@ -978,13 +979,17 @@ def _reconcile_mysql_credentials(
                 )
 
         # Verify
-        if not _mysql_ping_with_password(
+        root_verified, verify_output = _mysql_exec(
             container,
-            root_password,
+            "SELECT 1;",
+            password=root_password,
             platform=platform,
-        ):
+            username="root",
+        )
+        if not root_verified:
             return False, (
-                "Root password was configured but verification failed."
+                "Root password was configured but SQL authentication verification failed. "
+                f"SQL error: {verify_output[-1000:]}"
             )
 
     else:
@@ -1133,8 +1138,8 @@ def _reconcile_mysql_credentials(
                     container,
                     grant_sql,
                     password=root_password,
-                platform=platform,
-            )
+                    platform=platform,
+                )
                 if not ok:
                     return False, (
                         f"Failed to grant database '{database}' "
@@ -1150,8 +1155,8 @@ def _reconcile_mysql_credentials(
             container,
             "FLUSH PRIVILEGES",
             password=root_password,
-                platform=platform,
-            )
+            platform=platform,
+        )
 
         if not ok:
             return False, (
@@ -1163,15 +1168,17 @@ def _reconcile_mysql_credentials(
     # Final root verification
     # =========================================================================
 
-    if not _mysql_exec(
+    final_root_ok, final_root_output = _mysql_exec(
         container,
         "SELECT 1;",
         password=root_password,
         platform=platform,
         username="root",
-    )[0]:
+    )
+    if not final_root_ok:
         return False, (
-            "Final root password verification failed."
+            "Final root password verification failed. "
+            f"SQL error: {final_root_output[-1000:]}"
         )
 
     # =========================================================================
