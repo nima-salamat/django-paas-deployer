@@ -141,7 +141,11 @@ class DjangoDeploymentState:
             "cancel_requested", "execution_task_id", "status"
         ).first()
         if current and current.get("cancel_requested"):
-            raise DeploymentCancelled("Deployment was cancelled by the user.")
+            raise DeploymentCancelled(
+                current.get("status_message")
+                or current.get("error_message")
+                or "Deployment was cancelled by the user."
+            )
         owner = getattr(self.deploy, "execution_task_id", "") or ""
         if owner and current and current.get("execution_task_id") != owner:
             raise DeploymentCancelled(
@@ -268,7 +272,13 @@ class DjangoDeploymentState:
         # stale worker must never be able to overwrite a newer deployment,
         # and cancellation must win over a late success/failure result.
         current = Deploy.objects.filter(pk=self.deploy.pk).values(
-            "status", "cancel_requested", "rollback_status", "progress", "execution_task_id"
+            "status",
+            "cancel_requested",
+            "rollback_status",
+            "progress",
+            "execution_task_id",
+            "status_message",
+            "error_message",
         ).first()
         cancelled_by_operator = bool(
             current and (
@@ -318,14 +328,18 @@ class DjangoDeploymentState:
             final_stage = "deployment_completed"
             final_level = "info"
         elif cancelled_by_operator or result_status == "cancelled" or result_stage == "cancelled":
+            cancellation_message = (
+                str((current or {}).get("status_message") or "").strip()
+                or str((current or {}).get("error_message") or "").strip()
+                or ("Deployment cancelled by the user." if cancelled_by_operator else "")
+                or result_message
+                or "Deployment cancelled."
+            )
             update.update(
                 {
                     "stage": "cancelled",
-                    "status_message": (
-                        "Deployment cancelled by the user." if cancelled_by_operator
-                        else result_message or "Deployment cancelled."
-                    ),
-                    "error_message": result_error or result_message or "",
+                    "status_message": cancellation_message[:500],
+                    "error_message": "",
                 }
             )
             terminal_target = DeploymentStatusChoices.CANCELLED
@@ -445,7 +459,7 @@ class DjangoDeploymentState:
 
         # The terminal event is already durable in the transactionally written outbox.
 
-        if exception is not None or traceback_text:
+        if (exception is not None or traceback_text) and not isinstance(exception, DeploymentCancelled):
             technical_stage = (getattr(exception, "stage", None) or final_stage)[:64]
             technical_message = (
                 getattr(exception, "technical_message", None)
