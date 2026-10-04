@@ -873,11 +873,11 @@ def _reconcile_mysql_credentials(
 ) -> tuple[bool, str]:
 
     """
-    Reconcile MySQL credentials against the ACTUAL database state.
-    
-    CRITICAL FIX: We explicitly use 'mysql_native_password' because MySQL 8.0's
-    default 'caching_sha2_password' blocks authentication via Unix Socket
-    when using MYSQL_PWD, causing false "Access Denied" errors during verification.
+    Reconcile MySQL-compatible credentials against the actual database state.
+
+    Root password validity is always proven over TCP. MariaDB can authenticate
+    root through Unix socket credentials, so a successful socket query with
+    MYSQL_PWD does not prove that the configured password is actually valid.
     """
 
     platform = str(platform or "mysql").strip().lower()
@@ -1014,10 +1014,10 @@ def _reconcile_mysql_credentials(
         # --------------------------------------------------------------------
         # Create user if missing using the platform-compatible password authentication method.
         # --------------------------------------------------------------------
-        # Create + password for both '%' (TCP from other containers)
-        # and 'localhost' (Unix socket — used by our verification and
-        # local tooling).  Without localhost the socket verify fails
-        # even when the user is correctly set up for remote access.
+        # Create credentials for both '%' (network connections from other
+        # containers) and 'localhost' (local tooling). Application
+        # verification below deliberately uses TCP to prove the network user
+        # credentials that the dependent service will actually use.
         for host in ("%", "localhost"):
             create_user_sql = (
                 f"CREATE USER IF NOT EXISTS "
@@ -1106,10 +1106,10 @@ def _reconcile_mysql_credentials(
                     grant_sql,
                     password=root_password,
                     platform=platform,
-                username="root",
-                protocol="tcp",
-                host="127.0.0.1",
-                port=3306,
+                    username="root",
+                    protocol="tcp",
+                    host="127.0.0.1",
+                    port=3306,
                 )
                 if not ok:
                     return False, (
@@ -1127,10 +1127,10 @@ def _reconcile_mysql_credentials(
             "FLUSH PRIVILEGES",
             password=root_password,
             platform=platform,
-                username="root",
-                protocol="tcp",
-                host="127.0.0.1",
-                port=3306,
+            username="root",
+            protocol="tcp",
+            host="127.0.0.1",
+            port=3306,
         )
 
         if not ok:
@@ -1173,6 +1173,9 @@ def _reconcile_mysql_credentials(
                 password=user_password,
                 platform=platform,
                 username=username,
+                protocol="tcp",
+                host="127.0.0.1",
+                port=3306,
             )
             if not ok:
                 return False, (
