@@ -44,3 +44,23 @@ def test_public_transition_has_no_terminal_outbox_authority():
         "def transition_deploy_system_terminal", 1
     )[0]
     assert "DeploymentEventOutbox.objects.create" not in public_method
+
+
+
+def test_service_state_projection_invalidates_user_cache_after_commit():
+    source = (ROOT / "deployments/core/state/manager.py").read_text(encoding="utf-8")
+    method = source.split("def transition_service(", 1)[1].split(
+        "def transition_deploy(", 1
+    )[0]
+
+    assert "transaction.on_commit" in method
+    assert "_invalidate_service_cache" in method
+    assert "user_id = service.user_id" in method
+
+
+def test_deployment_cancellation_preserves_reason_without_second_error_event():
+    source = (ROOT / "deploy/deployment_state.py").read_text(encoding="utf-8")
+
+    assert 'current.get("status_message")' in source
+    assert 'current.get("error_message")' in source
+    assert 'not isinstance(exception, DeploymentCancelled)' in source
