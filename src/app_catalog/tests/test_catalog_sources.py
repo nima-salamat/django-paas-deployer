@@ -114,6 +114,14 @@ networks:
                 version="1",
             )
 
+    def test_wordpress_official_image_uses_apache_document_root_as_working_dir(self):
+        definition = ApplicationCatalog.get("wordpress")
+        resolved = resolve_variant(definition, "default", {})
+        wordpress = resolved["services"][0]
+        self.assertEqual(wordpress["key"], "wordpress")
+        self.assertEqual(wordpress["working_directory"], "/var/www/html")
+        self.assertEqual(wordpress["volumes"][0]["target"], "/var/www/html")
+
     def test_external_env_interpolation_is_safe_and_generated(self):
         definition = load_yaml_definition(Path(ApplicationCatalog.get("n8n-with-postgres-and-worker").source))
         self.assertIsNotNone(definition)
