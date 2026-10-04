@@ -77,6 +77,47 @@ def test_service_delete_reclaims_only_unshared_application_cache_images():
     assert "force=False" in source
 
 
+def test_cache_cleanup_reads_container_image_id_without_inspecting_image():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock, patch
+
+    from services import signals
+
+    class ContainerWithMissingImage:
+        attrs = {"Image": "sha256:missing"}
+
+        @property
+        def image(self):
+            raise AssertionError("cache cleanup must not inspect a possibly missing image")
+
+    first_qs = MagicMock()
+    first_qs.values_list.return_value = [("sha256:missing", "cache-ref")]
+    second_qs = MagicMock()
+    second_qs.exclude.return_value.values_list.return_value = []
+    base_qs = MagicMock()
+    base_qs.values_list.return_value = []
+
+    artifact_manager = MagicMock()
+    artifact_manager.filter.side_effect = [first_qs, second_qs]
+    base_manager = MagicMock()
+    base_manager.filter.return_value = base_qs
+
+    client = SimpleNamespace(
+        containers=SimpleNamespace(list=MagicMock(return_value=[ContainerWithMissingImage()])),
+        images=SimpleNamespace(remove=MagicMock()),
+    )
+    service = SimpleNamespace(pk="svc-1", name="wordpress")
+
+    with (
+        patch("deploy.build_cache.BuildCacheArtifact.objects", artifact_manager),
+        patch("deploy.models.BaseRuntimeImage.objects", base_manager),
+        patch("deployments.core.manager.client_manager.get_docker_client", return_value=client),
+    ):
+        signals._cleanup_service_cache_images(service)
+
+    client.images.remove.assert_not_called()
+
+
 def test_service_swarm_cleanup_uses_pre_delete_instance():
     source = (ROOT / "services" / "signals.py").read_text(encoding="utf-8")
 
