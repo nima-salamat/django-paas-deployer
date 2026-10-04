@@ -193,7 +193,10 @@ class FakeMariaDBCredentialContainer:
         if protocol == "socket" and sql == "SELECT 1;" and environment is None:
             return 0, b"1"
 
-        if protocol == "socket" and "ALTER USER 'root'@'localhost'" in sql:
+        if protocol == "socket" and (
+            "SET PASSWORD FOR 'root'@'localhost'" in sql
+            or "ALTER USER 'root'@'localhost'" in sql
+        ):
             self.password_configured = True
             return 0, b""
 
