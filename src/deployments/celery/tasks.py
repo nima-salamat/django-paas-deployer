@@ -1183,9 +1183,26 @@ def run_db_deploy(self, deploy_id: str | int, force_reinit: bool = False) -> Non
     if result.success:
         _mark_success(deploy, service, result.message, task_id=str(self.request.id))
     else:
+        failure_message = (
+            result.message
+            or result.error
+            or "Database deployment failed."
+        )
         _mark_failure(
-            deploy, service,
-            result.message or result.error or "Database deployment failed.",
+            deploy,
+            service,
+            failure_message,
             stage="deployment_failed",
+            details=result.details or {},
+        )
+        # Celery's success callback is the coordinator's "dependency succeeded"
+        # signal. A DB deployment that returned a terminal failure result must
+        # therefore fail at the task boundary so link_error invokes
+        # application_service_failed instead of advance_application_service.
+        raise DeploymentError(
+            failure_message,
+            stage="deployment_failed",
+            code="DATABASE_DEPLOYMENT_FAILED",
+            user_message=failure_message,
             details=result.details or {},
         )
