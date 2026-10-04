@@ -83,7 +83,7 @@ class ReadyAppPublicApiTests(TestCase):
         self.assertNotIn("image", response.data)
 
     @override_settings(DEPLOYMENT_DOMAIN="apps.example.test")
-    def test_resolve_is_plan_aware_and_returns_resource_and_url_preview_only(self):
+    def test_resolve_is_plan_aware_without_exposing_pre_deployment_hostname(self):
         response = CatalogResolveAPIView.as_view()(
             self.request(
                 "POST",
@@ -99,10 +99,6 @@ class ReadyAppPublicApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.data["valid"])
-        self.assertEqual(
-            response.data["public_endpoints"][0]["url"],
-            "https://my-wordpress.apps.example.test",
-        )
         self.assertEqual(response.data["resource_summary"]["service_count"], 2)
         self.assertEqual(response.data["resource_summary"]["volume_count"], 2)
         self.assertEqual(response.data["resource_summary"]["storage_mb"], 2048)
@@ -110,7 +106,34 @@ class ReadyAppPublicApiTests(TestCase):
         self.assertEqual(response.data["resource_summary"]["ram_mb"], 8192.0)
         self.assertNotIn("services", response.data)
         self.assertNotIn("secrets", response.data)
+        self.assertNotIn("public_endpoints", response.data)
+        self.assertNotIn("my-wordpress.apps.example.test", str(response.data))
+        self.assertNotIn("apps.example.test", str(response.data))
         self.assertNotIn("image", str(response.data).lower())
+
+    @override_settings(DEPLOYMENT_DOMAIN="apps.example.test")
+    def test_ready_app_public_hostname_uses_created_service_id(self):
+        from app_catalog.services import create_application_installation
+
+        instance = create_application_installation(
+            self.user,
+            {
+                "catalog_id": "wordpress",
+                "variant": "default",
+                "name": "friendly-wordpress-name",
+                "plan_id": str(self.app_plan.pk),
+                "config": {},
+            },
+            require_public=True,
+        )
+        wordpress = instance.services.get(service_key="wordpress").service
+        endpoint = wordpress.endpoints.get(exposure="public")
+
+        expected = (
+            f"{wordpress.get_docker_service_name()}.apps.example.test"
+        )
+        self.assertEqual(endpoint.hostname, expected)
+        self.assertNotEqual(endpoint.hostname, "friendly-wordpress-name.apps.example.test")
 
     @override_settings(DEPLOYMENT_DOMAIN="apps.example.test")
     def test_custom_domain_is_rejected_for_managed_hostname_recipe(self):
