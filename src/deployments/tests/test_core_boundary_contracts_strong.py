@@ -12,7 +12,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from deployments.common.exceptions import DeploymentSecurityError, DeploymentValidationError, HealthCheckError, VolumeError
+from deployments.common.exceptions import DeploymentCancelled, DeploymentSecurityError, DeploymentValidationError, HealthCheckError, VolumeError
 from deployments.core.types import DeploymentConfig, EndpointSpec, NetworkSpec, VolumeSpec
 
 
@@ -129,7 +129,7 @@ class HealthCheckerContracts(unittest.TestCase):
         from deployments.core.health import DockerHealthChecker
 
         with patch("deployments.core.health.Container") as container:
-            with self.assertRaises(Exception) as ctx:
+            with self.assertRaises(DeploymentCancelled) as ctx:
                 DockerHealthChecker().wait_until_healthy(
                     "web",
                     timeout=10,
