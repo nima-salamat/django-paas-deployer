@@ -390,3 +390,64 @@ class ApplicationInstallationConcurrencyTests(TransactionTestCase):
         instances = ApplicationInstance.objects.filter(user=user, slug='same-race-name')
         assert instances.count() == 1
         assert instances.get().services.count() == 2
+
+    def test_concurrent_distinct_installations_retry_global_service_name_collision(self):
+        user_a = User.objects.create_user(
+            username="catalog-service-name-race-a",
+            email="catalog-service-name-race-a@example.invalid",
+        )
+        user_b = User.objects.create_user(
+            username="catalog-service-name-race-b",
+            email="catalog-service-name-race-b@example.invalid",
+        )
+        barrier = threading.Barrier(2)
+        results, errors = [], []
+
+        common = {
+            "catalog_id": "wordpress",
+            "variant": "default",
+            "plan_id": self.app_plan.pk,
+            "config": {},
+        }
+        shared_prefix = "a" * 24
+        payloads = [
+            {**common, "name": f"{shared_prefix}-one"},
+            {**common, "name": f"{shared_prefix}-two"},
+        ]
+
+        def worker(user, payload):
+            close_old_connections()
+            try:
+                local_user = User.objects.get(pk=user.pk)
+                local_plan = Plan.objects.get(pk=self.app_plan.pk)
+                local_payload = dict(payload)
+                local_payload["plan_id"] = local_plan.pk
+                barrier.wait(timeout=10)
+                instance = create_application_installation(local_user, local_payload)
+                results.append((str(local_user.pk), str(instance.pk)))
+            except Exception as exc:
+                errors.append((type(exc).__name__, str(exc)))
+            finally:
+                close_old_connections()
+
+        threads = [
+            threading.Thread(target=worker, args=(user_a, payloads[0])),
+            threading.Thread(target=worker, args=(user_b, payloads[1])),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+        assert not errors, errors
+        assert len(results) == 2
+
+        service_names = list(
+            Service.objects.filter(
+                user_id__in=[user_a.pk, user_b.pk],
+                source_kind=Service.SourceKind.CATALOG,
+            ).values_list("name", flat=True)
+        )
+        assert len(service_names) == 4
+        assert len(service_names) == len(set(service_names))
+
