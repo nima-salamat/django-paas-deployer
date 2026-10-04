@@ -836,6 +836,49 @@ def _mysql_exec(
     return False, last_output
 
 
+def _mysql_sql_transport_probe(
+    container,
+    *,
+    platform: str,
+    password: str = "",
+    username: str = "root",
+) -> tuple[bool, bool, str]:
+    """Probe a real SQL connection.
+
+    Returns (server_reachable, authenticated, output). Authentication failures
+    such as 1045 prove that the server is reachable and accepting SQL
+    connections, while transport errors such as 2002/115 indicate startup or
+    socket/connectivity is still converging.
+    """
+    ok, output = _mysql_exec(
+        container,
+        "SELECT 1;",
+        password=password,
+        platform=platform,
+        username=username,
+        protocol="tcp",
+        host="127.0.0.1",
+        port=3306,
+    )
+    if ok:
+        return True, True, output
+
+    lowered = str(output or "").lower()
+    reachable = not any(
+        marker in lowered
+        for marker in (
+            "error 2002",
+            "error 2003",
+            "(115)",
+            "can't connect to server",
+            "connection refused",
+            "connection timed out",
+            "operation now in progress",
+        )
+    )
+    return reachable, False, output
+
+
 def _mysql_ping_with_password(
     container,
     password: str,
@@ -1442,18 +1485,32 @@ class DBDeployer:
                 try:
                     container = runtime.primary_task_container(container_name)
                     if container is not None:
-                        ready, probe_output, admin_executable = _mysql_admin_ping(
+                        admin_ready, probe_output, admin_executable = _mysql_admin_ping(
                             container,
                             platform=platform,
                             password=root_password,
                         )
-                        if ready:
-                            break
-                        last_error = probe_output or (
-                            f"No compatible admin ping client was found for {platform}."
-                            if admin_executable is None
-                            else f"{admin_executable} ping failed."
-                        )
+                        if admin_ready:
+                            transport_ready, authenticated, sql_output = _mysql_sql_transport_probe(
+                                container,
+                                platform=platform,
+                                password=root_password,
+                                username="root",
+                            )
+                            if transport_ready:
+                                # The server is accepting real SQL connections.
+                                # Authentication may still be rejected (1045),
+                                # which is a credential-state issue handled by
+                                # _reconcile_mysql_credentials, not a readiness
+                                # failure.
+                                break
+                            last_error = sql_output or "SQL transport is not ready yet."
+                        else:
+                            last_error = probe_output or (
+                                f"No compatible admin ping client was found for {platform}."
+                                if admin_executable is None
+                                else f"{admin_executable} ping failed."
+                            )
                 except Exception as exc:
                     last_error = str(exc)
                 time.sleep(1)
@@ -1461,7 +1518,7 @@ class DBDeployer:
                 return DBDeployResult(
                     success=False,
                     message=(
-                        f"{platform.upper()} did not become ready in the Docker Swarm task within 180 seconds. "
+                        f"{platform.upper()} did not become SQL-ready in the Docker Swarm task within 180 seconds. "
                         f"Last probe: {last_error[-1000:]}"
                     ),
                     container_name=container_name,
@@ -1469,6 +1526,7 @@ class DBDeployer:
                     error=last_error,
                     details={"runtime": "docker-swarm", "service": container_name},
                 )
+
 
             if container is None:
                 return DBDeployResult(
