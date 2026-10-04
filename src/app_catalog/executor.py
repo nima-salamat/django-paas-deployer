@@ -14,6 +14,7 @@ from deploy.models import DeploymentStatusChoices
 from deployments.core.state.manager import StateManager
 
 from .models import ApplicationInstance, ApplicationInstanceService, ApplicationStatus
+from services.models import Service, ServiceNetworkAttachment
 from .plan import ApplicationPlan, ServicePlan, ready_service_keys
 
 logger = logging.getLogger(__name__)
@@ -187,6 +188,8 @@ class ApplicationStackExecutor:
         lock is held while child bindings/services and the private network are
         removed so concurrent reconciliation cannot run the same cleanup twice.
         """
+        from .services import application_services_for_cleanup
+
         with transaction.atomic():
             locked = (
                 ApplicationInstance.objects
@@ -198,12 +201,16 @@ class ApplicationStackExecutor:
             )
             if locked.status != ApplicationStatus.CANCELLED or not locked.cancel_requested:
                 return False
-            bindings = list(
-                ApplicationInstanceService.objects
-                .select_related("service", "deploy")
-                .select_for_update()
-                .filter(instance_id=self.instance_id)
-            )
+
+            bindings, service_rows, unexpected = application_services_for_cleanup(locked)
+            if unexpected:
+                names = ", ".join(str(service.name) for service in unexpected[:5])
+                suffix = "..." if len(unexpected) > 5 else ""
+                raise RuntimeError(
+                    "Ready App private network still has services that are not owned "
+                    f"by this installation: {names}{suffix}"
+                )
+
             if any(
                 binding.deploy.status in {
                     DeploymentStatusChoices.PENDING,
@@ -218,25 +225,34 @@ class ApplicationStackExecutor:
             locked.stage = "cancellation_cleanup"
             locked.save(update_fields=["stage", "updated_at"])
 
-            # Preflight every child while all bindings/Service rows still
-            # exist. This prevents one early Service deletion from leaving the
-            # installation half-deleted when a later child's Docker cleanup fails.
+            # Preflight every child while all Service rows still exist. This
+            # also recovers legacy installations whose binding was already lost.
             from services.signals import cleanup_service_resources
 
-            for binding in bindings:
-                cleanup_service_resources(binding.service)
+            for service in service_rows:
+                cleanup_service_resources(service)
 
-            # The binding RESTRICT relation is intentionally removed immediately
-            # before the now-safe Service row deletion.
-            for binding in bindings:
-                deploy = binding.deploy
-                if deploy.zip_file and deploy.zip_file.name:
-                    deploy.zip_file.delete(save=False)
-                binding.delete()
-                binding.service.delete()
+            bindings_by_service = {str(binding.service_id): binding for binding in bindings}
+            for service in service_rows:
+                binding = bindings_by_service.get(str(service.pk))
+                if binding is not None:
+                    deploy = binding.deploy
+                    if deploy.zip_file and deploy.zip_file.name:
+                        deploy.zip_file.delete(save=False)
+                    binding.delete()
+                if Service.objects.filter(pk=service.pk).exists():
+                    service.delete()
 
             if network is not None:
-                network.delete()
+                locked_network = type(network).objects.select_for_update().get(pk=network.pk)
+                if (
+                    Service.objects.filter(network_id=locked_network.pk).exists()
+                    or ServiceNetworkAttachment.objects.filter(network_id=locked_network.pk).exists()
+                ):
+                    raise RuntimeError(
+                        f"Ready App network '{locked_network.name}' is still referenced by another service."
+                    )
+                locked_network.delete()
 
             locked.stage = "cancelled"
             locked.network = None
@@ -245,7 +261,7 @@ class ApplicationStackExecutor:
         logger.info(
             "Cleaned cancelled Ready App installation %s; removed %d child services.",
             self.instance_id,
-            len(bindings),
+            len(service_rows),
         )
         return True
 
