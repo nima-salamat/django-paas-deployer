@@ -166,3 +166,52 @@ def test_db_deployer_reconciliation_has_no_direct_hardcoded_mysql_exec():
     assert 'container.exec_run(' not in reconciliation
     assert "_mysql_exec(" in reconciliation
     assert "platform=platform" in reconciliation
+
+
+class FakeMariaDBCredentialContainer:
+    def __init__(self):
+        self.calls = []
+
+    def exec_run(self, command, environment=None):
+        self.calls.append((command, environment))
+        executable = command[0]
+        if executable == "mariadb":
+            if command[-1] == "SELECT 1;" and environment == {"MYSQL_PWD": "new-secret"}:
+                return 1045, b"ERROR 1045 (28000): Access denied for user 'root'@'localhost' (using password: YES)"
+            return 0, b"1"
+        return 127, b'exec: "mariadb": executable file not found in $PATH'
+
+
+def test_mariadb_reconcile_uses_socket_auth_when_configured_password_is_rejected():
+    container = FakeMariaDBCredentialContainer()
+
+    ok, message = _reconcile_mysql_credentials(
+        client=None,
+        container_name="app-mariadb-mariadb",
+        root_password="new-secret",
+        platform="mariadb",
+        container_obj=container,
+    )
+
+    assert ok is True, message
+    first_command, first_env = container.calls[0]
+    assert first_command[0] == "mariadb"
+    assert first_command[1] == "-uroot"
+    assert first_env == {"MYSQL_PWD": "new-secret"}
+    assert any(
+        command[0] == "mariadb"
+        and command[-1] == "SELECT 1;"
+        and environment is None
+        for command, environment in container.calls
+    )
+
+
+def test_mariadb_reconcile_does_not_use_admin_ping_as_password_proof():
+    source = __import__("pathlib").Path(__file__).resolve().parents[1].joinpath("core", "db_deployer.py").read_text(encoding="utf-8")
+    reconciliation = source.split("def _reconcile_mysql_credentials(", 1)[1].split(
+        "# ============================================================================",
+        1,
+    )[0]
+    first_probe = reconciliation.split("# If root password does NOT work", 1)[0]
+    assert "root_password_works, root_auth_output = _mysql_exec(" in first_probe
+    assert "_mysql_ping_with_password(" not in first_probe
