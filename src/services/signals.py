@@ -43,115 +43,163 @@ def _cancel_active_deployments_for_service(service: Service) -> None:
         )
 
 
-@receiver(pre_delete, sender=Service)
-def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
-    """
-    Remove Docker resources before deleting the Service.
+def _remove_owned_volume_attachments(service: Service, docker_volume: DockerVolume, docker_name: str) -> None:
+    """Remove only PassDeployer-owned containers still holding a service volume."""
+    client = docker_volume.client
+    try:
+        containers = client.containers.list(all=True, filters={"volume": docker_name})
+    except Exception as exc:
+        raise RuntimeError(
+            f"Unable to inspect containers using Docker volume '{docker_name}'."
+        ) from exc
 
-    DATABASE:
-        - Stop container if running.
-        - Remove container (volumes owned by this service are cleaned below).
+    expected_service = str(service.pk)
+    for raw in containers:
+        labels = dict(getattr(raw, "labels", {}) or {})
+        managed = labels.get("managed-by") in {"django-paas-deployer", "passdeployer"}
+        owner = str(labels.get("passdeployer.service") or labels.get("service.id") or "")
+        if not managed or owner != expected_service:
+            raise RuntimeError(
+                f"Refusing to remove Docker container '{getattr(raw, 'name', raw.id)}' "
+                f"while deleting service '{service.name}': the volume is attached to "
+                "a container without matching PassDeployer ownership labels."
+            )
 
-    APPLICATION:
-        - Stop + remove container.
-        - Remove image associated with this service name.
-    """
-    service_name = instance.get_docker_service_name()
-    _cancel_active_deployments_for_service(instance)
+        container_name = str(getattr(raw, "name", "") or raw.id)
+        try:
+            raw.reload()
+        except Exception:
+            pass
+
+        if str(getattr(raw, "status", "") or "").lower() == "running":
+            logger.info(
+                "Stopping owned task container '%s' before removing volume '%s'.",
+                container_name,
+                service.name,
+            )
+            try:
+                raw.stop(timeout=10)
+            except Exception:
+                logger.exception(
+                    "Failed to stop owned container '%s' before volume cleanup; "
+                    "trying forced removal.",
+                    container_name,
+                )
+
+        try:
+            raw.remove(force=True)
+            logger.info(
+                "Removed owned container '%s' still attached to volume '%s'.",
+                container_name,
+                service.name,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to remove owned container '{container_name}' while cleaning "
+                f"volume '{docker_name}'."
+            ) from exc
+
+
+def _remove_owned_docker_volume(service: Service, docker_volume: DockerVolume, docker_name: str) -> None:
+    """Remove a managed Docker volume, resolving stale owned task containers first."""
+    try:
+        docker_volume.remove()
+        return
+    except Exception as first_exc:
+        if "volume is in use" not in str(first_exc).lower():
+            raise
+
+        _remove_owned_volume_attachments(service, docker_volume, docker_name)
+
+        # Swarm task/container removal and volume release can race very briefly.
+        # Retry the normal non-forced volume delete after the owned attachments
+        # have been removed; never force-delete an attached volume.
+        for attempt in range(5):
+            try:
+                docker_volume.remove()
+                return
+            except Exception as exc:
+                if "volume is in use" not in str(exc).lower():
+                    raise
+                if attempt == 4:
+                    raise
+                import time
+                time.sleep(0.5)
+
+
+def cleanup_service_resources(service: Service) -> None:
+    """Remove all Docker/log/volume resources owned by a Service, without deleting its DB row."""
+    service_name = service.get_docker_service_name()
+    _cancel_active_deployments_for_service(service)
     logger.info(
-        "pre_delete Service '%s' → cleaning Docker resources for '%s'",
-        instance.name,
+        "Cleaning Docker resources for service '%s' (%s)",
+        service.name,
         service_name,
     )
 
-    try:
-        plan_platform = str(getattr(getattr(instance, "plan", None), "platform", "") or "").strip().lower()
-        from deployments.core.db_deployer import DB_PLATFORMS, DBDeployer
+    plan_platform = str(getattr(getattr(service, "plan", None), "platform", "") or "").strip().lower()
+    from deployments.core.db_deployer import DB_PLATFORMS, DBDeployer
 
-        if plan_platform in DB_PLATFORMS:
-            DBDeployer().remove(service_name)
-        elif swarm_enabled():
-            try:
-                SwarmRuntime().remove_service_group(str(instance.pk))
-            except Exception as exc:
-                logger.exception(
-                    "Failed cleaning Docker Swarm services for service '%s'.",
-                    instance.name,
-                )
-                raise RuntimeError(
-                    f"Failed to remove Swarm runtime for service '{instance.name}'."
-                ) from exc
+    if plan_platform in DB_PLATFORMS:
+        DBDeployer().remove(service_name)
+    elif swarm_enabled():
+        try:
+            SwarmRuntime().remove_service_group(str(service.pk))
+        except Exception as exc:
+            logger.exception(
+                "Failed cleaning Docker Swarm services for service '%s'.",
+                service.name,
+            )
+            raise RuntimeError(
+                f"Failed to remove Swarm runtime for service '{service.name}'."
+            ) from exc
 
-        container = Container(name=service_name)
-
-        if container.exists():
-            raw = container.client.containers.get(service_name)
-            labels = dict(getattr(raw, "labels", {}) or {})
-            expected_service = str(instance.pk)
-            expected_deploy = str(getattr(instance.selected_deploy, "pk", "") or "")
-            managed = labels.get("managed-by") in {"django-paas-deployer", "passdeployer"}
-            owns_service = managed and labels.get("service.id") == expected_service
-            owns_selected_deploy = expected_deploy and labels.get("deployment.id") == expected_deploy
-            if not (owns_service or owns_selected_deploy):
-                logger.error(
-                    "Refusing to remove container '%s' during Service deletion: "
-                    "Docker ownership labels do not match service=%s/deploy=%s.",
-                    service_name, expected_service, expected_deploy or "<none>",
-                )
-                raise RuntimeError(
-                    f"Refusing to delete service '{instance.name}': "
-                    f"container '{service_name}' exists but is not owned by PassDeployer."
-                )
-            else:
-                if container.is_running():
-                    logger.info("Stopping running container '%s'...", service_name)
-                    try:
-                        container.stop(timeout=10)
-                    except Exception:
-                        logger.exception(
-                            "Failed to stop container '%s' (continuing with remove)",
-                            service_name,
-                        )
-
-                logger.info("Removing owned container '%s'...", service_name)
-                try:
-                    container.remove()
-                except Exception:
-                    logger.exception("Failed to remove owned container '%s'", service_name)
-        else:
-            logger.info(
-                "Container '%s' does not exist; nothing to stop/remove.",
-                service_name,
+    container = Container(name=service_name)
+    if container.exists():
+        raw = container.client.containers.get(service_name)
+        labels = dict(getattr(raw, "labels", {}) or {})
+        expected_service = str(service.pk)
+        expected_deploy = str(getattr(service.selected_deploy, "pk", "") or "")
+        managed = labels.get("managed-by") in {"django-paas-deployer", "passdeployer"}
+        owns_service = managed and labels.get("service.id") == expected_service
+        owns_selected_deploy = expected_deploy and labels.get("deployment.id") == expected_deploy
+        if not (owns_service or owns_selected_deploy):
+            raise RuntimeError(
+                f"Refusing to delete service '{service.name}': "
+                f"container '{service_name}' exists but is not owned by PassDeployer."
             )
 
-        # Application plans: remove only images owned by this service.
-        # Build-cache rows are cascaded with the Service, so collect their
-        # physical image identities before the row disappears.
-        if getattr(instance, "plan", None) and getattr(
-            instance.plan, "plan_type", None
-        ) != PlanTypeChoices.DB:
+        if container.is_running():
+            logger.info("Stopping running container '%s'...", service_name)
             try:
-                Image.remove_by_name(service_name)
-                Image.remove_by_name(f"{service_name}:latest")
-            except Exception as exc:
+                container.stop(timeout=10)
+            except Exception:
                 logger.exception(
-                    "Failed to remove image for service '%s'", service_name
+                    "Failed to stop container '%s' (continuing with remove)",
+                    service_name,
                 )
-                raise RuntimeError(
-                    f"Failed to remove application image(s) for service '{service_name}'."
-                ) from exc
 
-        _cleanup_service_cache_images(instance)
+        logger.info("Removing owned container '%s'...", service_name)
+        try:
+            container.remove(force=True)
+        except Exception:
+            logger.exception("Failed to remove owned container '%s'", service_name)
+            raise
 
-    except Exception:
-        logger.exception(
-            "Failed cleaning docker resources for service '%s' (name=%s).",
-            service_name,
-            instance.name,
-        )
-        raise
+    if getattr(service, "plan", None) and getattr(
+        service.plan, "plan_type", None
+    ) != PlanTypeChoices.DB:
+        Image.remove_by_name(service_name)
+        Image.remove_by_name(f"{service_name}:latest")
 
-    _cleanup_service_volumes(instance)
+    _cleanup_service_cache_images(service)
+    _cleanup_service_volumes(service)
+
+
+@receiver(pre_delete, sender=Service)
+def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
+    """Remove Docker resources before the Service row is deleted."""
+    cleanup_service_resources(instance)
 
 def _cleanup_service_cache_images(service: Service) -> None:
     """Remove unshared application images owned by a deleting Service."""
@@ -244,7 +292,11 @@ def _cleanup_service_volumes(service: Service) -> None:
                     raise RuntimeError(
                         f"Refusing to remove Docker volume '{volume.name}': ownership label is missing or unexpected."
                     )
-                docker_volume.remove()
+                _remove_owned_docker_volume(
+                    service,
+                    docker_volume,
+                    docker_name,
+                )
                 logger.info(
                     "Removed Docker volume '%s' for deleted service '%s'.",
                     volume.name,
