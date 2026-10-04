@@ -210,6 +210,31 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         self.assertEqual(tmpfs_mounts[0]["Target"], "/run")
         self.assertEqual(tmpfs_mounts[0]["TmpfsOptions"]["SizeBytes"], 16 * 1024 * 1024)
 
+    def test_create_kwargs_adds_ready_app_service_dns_alias(self):
+        config = _config(
+            labels={
+                "service.id": "svc-1",
+                "deployment.id": "dep-1",
+                "process.name": "web",
+                "application.id": "app-1",
+                "application.service": "mariadb",
+            }
+        )
+        spec = compile_compose_service(config, image_ref="demo:r1")
+        runtime = SwarmRuntime.__new__(SwarmRuntime)
+
+        with patch.object(runtime, "_apply_local_volume_pin", return_value=[]):
+            kwargs = runtime._create_kwargs(
+                config,
+                image_ref="demo:r1",
+                compose_spec=spec,
+            )
+
+        self.assertEqual(len(kwargs["networks"]), 1)
+        attachment = kwargs["networks"][0]
+        self.assertEqual(attachment["Target"], "net-demo")
+        self.assertEqual(attachment["Aliases"], ["mariadb"])
+
     def test_create_kwargs_preserve_effective_start_command(self):
         config = _config(
             entry_point="python app.py --port 8000",
