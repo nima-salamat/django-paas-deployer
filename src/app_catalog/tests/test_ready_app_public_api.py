@@ -157,6 +157,43 @@ class ReadyAppPublicApiTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("managed automatically", response.data["error"])
 
+    def test_repeated_delete_request_does_not_refresh_deletion_intent(self):
+        from unittest.mock import patch
+        from app_catalog.services import create_application_installation
+
+        instance = create_application_installation(
+            self.user,
+            {
+                "catalog_id": "wordpress",
+                "variant": "default",
+                "name": "delete-intent-idempotent",
+                "plan_id": str(self.app_plan.pk),
+                "config": {},
+            },
+            require_public=True,
+        )
+
+        with (
+            patch("app_catalog.executor.ApplicationStackExecutor.cleanup_terminal_application", return_value=False),
+            patch("app_catalog.apis.delete_application_installation.delay") as queue,
+        ):
+            first = ApplicationInstanceDetailAPIView.as_view()(
+                self.request("DELETE", f"/api/application-catalog/installations/{instance.pk}/"),
+                pk=instance.pk,
+            )
+            updated_at_after_first = ApplicationInstance.objects.get(pk=instance.pk).updated_at
+            second = ApplicationInstanceDetailAPIView.as_view()(
+                self.request("DELETE", f"/api/application-catalog/installations/{instance.pk}/"),
+                pk=instance.pk,
+            )
+            updated_at_after_second = ApplicationInstance.objects.get(pk=instance.pk).updated_at
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 202)
+        self.assertEqual(queue.call_count, 1)
+        self.assertEqual(updated_at_after_first, updated_at_after_second)
+
+
     def test_cancelled_delete_requests_remaining_child_cleanup_instead_of_blocking(self):
         from deploy.models import DeploymentStatusChoices
         from app_catalog.services import create_application_installation
