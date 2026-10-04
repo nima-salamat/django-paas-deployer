@@ -30,6 +30,34 @@ class ApplicationTaskDispatchTests(SimpleTestCase):
         assert kwargs["link"].args == ("instance-1", "mariadb", "child-task-1")
         assert kwargs["link_error"].args == ("instance-1", "mariadb", "child-task-1")
 
+    def test_schedule_next_dispatches_database_children_to_db_worker(self):
+        dispatch = SimpleNamespace(
+            binding_id=11,
+            deploy_id=22,
+            instance_id="instance-1",
+            service_key="mariadb",
+            task_id="child-db-task-1",
+        )
+
+        plan = SimpleNamespace(platform="mariadb")
+        service = SimpleNamespace(plan=plan)
+        binding = SimpleNamespace(service=service)
+
+        with patch("app_catalog.tasks.ApplicationStackExecutor") as executor_cls,              patch("app_catalog.tasks.ApplicationInstanceService.objects.select_related") as select_related,              patch("app_catalog.tasks.run_db_deploy.apply_async") as apply_db,              patch("app_catalog.tasks.deploy_task.apply_async") as apply_app:
+            select_related.return_value.filter.return_value.first.return_value = binding
+            executor_cls.return_value.reconcile.return_value = [dispatch]
+
+            tasks._schedule_next("instance-1")
+
+        apply_db.assert_called_once()
+        apply_app.assert_not_called()
+        kwargs = apply_db.call_args.kwargs
+        assert kwargs["args"] == ["22"]
+        assert kwargs["task_id"] == "child-db-task-1"
+        assert kwargs["queue"] == "deployments"
+        assert kwargs["link"].args == ("instance-1", "mariadb", "child-db-task-1")
+        assert kwargs["link_error"].args == ("instance-1", "mariadb", "child-db-task-1")
+
     def test_schedule_next_clears_claim_when_child_publish_fails(self):
         dispatch = SimpleNamespace(
             binding_id=11,
