@@ -113,15 +113,24 @@ class ApplicationStackExecutor:
     def cancel(self, *, reason: str = "Application deployment cancelled.") -> None:
         with transaction.atomic():
             instance = ApplicationInstance.objects.select_for_update().get(pk=self.instance_id)
-            if instance.status in {ApplicationStatus.RUNNING, ApplicationStatus.FAILED, ApplicationStatus.CANCELLED}:
+            if instance.status in {ApplicationStatus.RUNNING, ApplicationStatus.FAILED}:
                 return
-            instance.cancel_requested = True
-            instance.stage = "cancellation_requested"
-            instance.error_code = "APPLICATION_DEPLOYMENT_CANCELLED"
-            instance.error_message = reason
-            instance.save(update_fields=[
-                "cancel_requested", "stage", "error_code", "error_message", "updated_at",
-            ])
+
+            # Cancellation is intentionally idempotent even after the parent
+            # has already converged to CANCELLED. A later delete/reconcile call
+            # may still need to propagate cancellation to a child deployment
+            # that was slow to stop.
+            if instance.status != ApplicationStatus.CANCELLED:
+                instance.cancel_requested = True
+                instance.stage = "cancellation_requested"
+                instance.error_code = "APPLICATION_DEPLOYMENT_CANCELLED"
+                instance.error_message = reason
+                instance.save(update_fields=[
+                    "cancel_requested", "stage", "error_code", "error_message", "updated_at",
+                ])
+            elif not instance.cancel_requested:
+                return
+
             rows = list(
                 ApplicationInstanceService.objects.select_related("deploy")
                 .select_for_update()
