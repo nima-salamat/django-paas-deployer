@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from django.test import TestCase, override_settings
+import threading
+
+from django.db import close_old_connections, connection
+from django.test import TestCase, TransactionTestCase, override_settings
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from app_catalog.apis import (
@@ -465,3 +468,64 @@ class ReadyAppPublicApiTests(TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.data["code"], "application_name_conflict")
         self.assertEqual(response.data["existing_installation_id"], str(existing.pk))
+
+
+class ReadyAppDeletionConcurrencyTests(TransactionTestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(
+            username="ready-app-delete-race",
+            email="ready-app-delete-race@example.invalid",
+        )
+
+    def test_concurrent_delete_requests_enqueue_only_one_durable_task(self):
+        from unittest.mock import patch
+        from app_catalog.apis import _queue_ready_app_deletion
+
+        if connection.vendor != "postgresql":
+            self.skipTest("Deletion intent race requires PostgreSQL row locking.")
+
+        instance = ApplicationInstance.objects.create(
+            user=self.user,
+            name="delete-race",
+            slug="delete-race",
+            catalog_id="wordpress",
+            definition_version="1.0",
+            software_version="7.1.2",
+            variant_id="default",
+            definition_snapshot={"_application_orchestration": {"services": []}},
+            status=ApplicationStatus.FAILED,
+        )
+
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def cleanup():
+            barrier.wait(timeout=10)
+            return False
+
+        def worker():
+            close_old_connections()
+            try:
+                _queue_ready_app_deletion(str(instance.pk))
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                close_old_connections()
+
+        with (
+            patch("app_catalog.apis.ApplicationStackExecutor.cleanup_terminal_application", side_effect=cleanup),
+            patch("app_catalog.apis.delete_application_installation.delay") as queued,
+        ):
+            threads = [threading.Thread(target=worker) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=30)
+
+        assert not errors
+        assert queued.call_count == 1
+        instance.refresh_from_db()
+        assert instance.stage == "deletion_pending"
+        assert instance.error_code == "APPLICATION_DELETION_PENDING"
+
