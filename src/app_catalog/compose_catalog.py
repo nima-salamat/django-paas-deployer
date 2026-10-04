@@ -363,6 +363,12 @@ def compose_to_resolved(*, document: dict[str, Any], metadata: dict[str, Any], c
                 role = "app"
             else:
                 role = "internal"
+
+        if public and role in {"database", "cache", "worker", "scheduler", "internal"}:
+            raise ApplicationPlanError(
+                f"Catalog service {key!r} has non-public role {role!r} but was marked public."
+            )
+
         if role == "database" and database_platform:
             platform = database_platform
             plan_type = "DB"
