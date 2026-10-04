@@ -171,3 +171,43 @@ def test_compose_workers_isolate_base_image_queue_from_deployment_workers():
     assert "-Q" in base_worker
     assert "base-images" in base_worker
     assert "base-images" not in deployment_worker
+
+
+
+def test_mariadb_readiness_uses_image_compatible_admin_client_with_fallback():
+    source = (ROOT / "src" / "deployments" / "core" / "db_deployer.py").read_text(encoding="utf-8")
+
+    helper = source.split("def _mysql_admin_ping(", 1)[1].split(
+        "def _mysql_wait_until_ready(", 1
+    )[0]
+    assert '"mariadb-admin", "mysqladmin"' in helper
+    assert '"mysqladmin", "mariadb-admin"' in helper
+    assert "executable file not found" in helper
+    assert "_mysql_admin_ping(" in source
+
+
+def test_service_state_manager_invalidates_cache_after_direct_service_updates():
+    source = (ROOT / "src" / "deployments" / "core" / "state" / "manager.py").read_text(encoding="utf-8")
+
+    transition = source.split("def transition_service(", 1)[1].split(
+        "def transition_deploy(", 1
+    )[0]
+    activation = source.split("def activate_revision_and_succeed(", 1)[1].split(
+        "def transition_deploy_system_terminal(", 1
+    )[0]
+
+    assert "transaction.on_commit" in transition
+    assert "_invalidate_service_cache" in transition
+    assert "transaction.on_commit" in activation
+
+
+def test_dependency_cancelled_deployments_are_not_labeled_as_user_cancelled_errors():
+    executor = (ROOT / "src" / "app_catalog" / "executor.py").read_text(encoding="utf-8")
+    state = (ROOT / "src" / "deploy" / "deployment_state.py").read_text(encoding="utf-8")
+
+    failure_section = executor.split("if failed:", 1)[1].split("required_bindings", 1)[0]
+    assert "required application service" in failure_section
+    assert '"error_message": ""' in failure_section
+    assert "Deployment cancelled by the user." in state
+    assert 'current.get("status_message")' in state
+    assert 'not isinstance(exception, DeploymentCancelled)' in state
