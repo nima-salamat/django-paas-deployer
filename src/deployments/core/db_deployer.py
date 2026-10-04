@@ -755,64 +755,67 @@ def _mysql_wait_until_ready(
     )
 
 
+def _mysql_client_candidates(platform: str) -> tuple[str, ...]:
+    """Return MySQL-compatible CLI candidates in platform-specific preference order."""
+    normalized = str(platform or "mysql").strip().lower()
+    if normalized == "mariadb":
+        return ("mariadb", "mysql")
+    return ("mysql", "mariadb")
+
+
+def _mysql_cli_missing(output: str) -> bool:
+    lowered = str(output or "").lower()
+    return (
+        "executable file not found" in lowered
+        or "no such file or directory" in lowered
+        or ("not found" in lowered and "exec" in lowered)
+    )
+
+
 def _mysql_exec(
     container,
     statement: str,
     *,
     password: str | None = None,
+    platform: str = "mysql",
+    username: str = "root",
 ) -> tuple[bool, str]:
+    """Execute SQL using the client shipped by the target DB image."""
+    env = {"MYSQL_PWD": password} if password else None
+    last_output = ""
 
-    """
-    Execute SQL inside the MySQL container.
-
-    The password is passed through MYSQL_PWD instead of putting it
-    directly into the command line.
-
-    This avoids:
-
-        mysql -uroot -pPASSWORD
-
-    which would expose the password in process arguments.
-    """
-
-    env = None
-
-    if password:
-        env = {
-            "MYSQL_PWD": password,
-        }
-
-    try:
-
-        exit_code, output = container.exec_run(
-            [
-                "mysql",
-                "-uroot",
-                "--protocol=socket",
-                "--batch",
-                "--skip-column-names",
-                "-e",
-                statement,
-            ],
-            environment=env,
-        )
-
-        text = (
-            output.decode(
-                "utf-8",
-                "replace",
+    for executable in _mysql_client_candidates(platform):
+        try:
+            exit_code, output = container.exec_run(
+                [
+                    executable,
+                    f"-u{username}",
+                    "--protocol=socket",
+                    "--batch",
+                    "--skip-column-names",
+                    "-e",
+                    statement,
+                ],
+                environment=env,
             )
-            if isinstance(output, bytes)
+        except Exception as exc:
+            last_output = str(exc)
+            continue
+
+        output_text = (
+            output.decode("utf-8", "replace")
+            if isinstance(output, (bytes, bytearray))
             else str(output or "")
         )
+        last_output = output_text.strip()
 
         if int(exit_code) == 0:
-            return True, text.strip()
+            return True, last_output
+        if _mysql_cli_missing(last_output):
+            continue
+        return False, last_output
 
-        return False, text.strip()
-
-    except Exception as exc:
-        return False, str(exc)
+    return False, last_output
 
 
 def _mysql_ping_with_password(
@@ -890,7 +893,8 @@ def _reconcile_mysql_credentials(
         ok, output = _mysql_exec(
             container,
             "SELECT 1;",
-        )
+        
+        platform=platform,)
 
         if not ok:
             return False, (
@@ -933,7 +937,8 @@ def _reconcile_mysql_credentials(
             ok, output = _mysql_exec(
                 container,
                 statement,
-            )
+            
+            platform=platform,)
             if not ok:
                 return False, (
                     "Failed to initialize root credentials. "
@@ -944,6 +949,7 @@ def _reconcile_mysql_credentials(
         if not _mysql_ping_with_password(
             container,
             root_password,
+            platform=platform,
         ):
             return False, (
                 "Root password was configured but verification failed."
@@ -991,7 +997,8 @@ def _reconcile_mysql_credentials(
                 container,
                 statement,
                 password=root_password,
-            )
+            
+            platform=platform,)
             if not ok:
                 return False, (
                     "Failed while synchronizing root@%. "
@@ -1030,7 +1037,8 @@ def _reconcile_mysql_credentials(
                 container,
                 create_user_sql,
                 password=root_password,
-            )
+            
+            platform=platform,)
             if not ok:
                 return False, (
                     f"Failed to create MySQL user '{username}'@'{host}'. "
@@ -1046,7 +1054,8 @@ def _reconcile_mysql_credentials(
                 container,
                 alter_user_sql,
                 password=root_password,
-            )
+            
+            platform=platform,)
             if not ok:
                 return False, (
                     f"Failed to update password for MySQL user "
@@ -1070,7 +1079,8 @@ def _reconcile_mysql_credentials(
                 container,
                 create_database_sql,
                 password=root_password,
-            )
+            
+            platform=platform,)
 
             if not ok:
                 return False, (
@@ -1092,7 +1102,8 @@ def _reconcile_mysql_credentials(
                     container,
                     grant_sql,
                     password=root_password,
-                )
+                
+                platform=platform,)
                 if not ok:
                     return False, (
                         f"Failed to grant database '{database}' "
@@ -1108,7 +1119,8 @@ def _reconcile_mysql_credentials(
             container,
             "FLUSH PRIVILEGES",
             password=root_password,
-        )
+        
+        platform=platform,)
 
         if not ok:
             return False, (
@@ -1123,6 +1135,7 @@ def _reconcile_mysql_credentials(
     if not _mysql_ping_with_password(
         container,
         root_password,
+        platform=platform,
     ):
         return False, (
             "Final root password verification failed."
@@ -1136,38 +1149,20 @@ def _reconcile_mysql_credentials(
 
         try:
             verify_sql = "SELECT CURRENT_USER();"
-            env = {
-                "MYSQL_PWD": user_password,
-            }
-
-            exit_code, output = container.exec_run(
-                [
-                    "mysql",
-                    f"-u{username}",
-                    "--protocol=socket",
-                    "--batch",
-                    "--skip-column-names",
-                    "-e",
-                    verify_sql,
-                ],
-                environment=env,
+            ok, output_text = _mysql_exec(
+                container,
+                verify_sql,
+                password=user_password,
+                platform=platform,
+                username=username,
             )
-
-            output_text = (
-                output.decode(
-                    "utf-8",
-                    "replace",
-                )
-                if isinstance(output, bytes)
-                else str(output or "")
-            )
-
-            if int(exit_code) != 0:
+            if not ok:
                 return False, (
                     f"MySQL user '{username}' was configured but "
                     f"credential verification failed. "
                     f"SQL output: {output_text[-1000:]}"
                 )
+
 
         except Exception as exc:
             return False, (
