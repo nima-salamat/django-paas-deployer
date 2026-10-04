@@ -202,6 +202,19 @@ def test_ready_app_deletion_task_is_routed_and_reconciled():
     assert 'delete_application_installation.delay(str(pending.pk))' in tasks
 
 
+def test_ready_app_deletion_reconciliation_does_not_require_stale_updated_at():
+    tasks = (ROOT / "src" / "app_catalog" / "tasks.py").read_text(encoding="utf-8")
+    deletion_section = tasks.split(
+        "def reconcile_application_installations():", 1
+    )[1].split(
+        "    # Recover application coordinators whose creation transaction committed",
+        1,
+    )[0]
+    assert 'stage="deletion_pending"' in deletion_section
+    assert "cleanup_terminal_application()" in deletion_section
+    assert "updated_at__lt=cutoff" not in deletion_section
+
+
 def test_service_state_manager_invalidates_cache_after_direct_service_updates():
     source = (ROOT / "src" / "deployments" / "core" / "state" / "manager.py").read_text(encoding="utf-8")
 
