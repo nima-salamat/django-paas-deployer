@@ -265,6 +265,97 @@ class ApplicationStackExecutor:
         )
         return True
 
+    def cleanup_terminal_application(self) -> bool:
+        """Converge and permanently delete a terminal application installation.
+
+        FAILED installations are intentionally supported here because ordinary
+        cancellation is not the same lifecycle transition as a user requesting
+        deletion. Docker cleanup is performed before database rows disappear,
+        and every database mutation is protected by one transaction.
+        """
+        from deploy.models import Deploy
+        from .services import application_services_for_cleanup
+        from services.signals import cleanup_service_resources
+
+        with transaction.atomic():
+            locked = (
+                ApplicationInstance.objects
+                .select_for_update()
+                .get(pk=self.instance_id)
+            )
+            if locked.status not in {
+                ApplicationStatus.FAILED,
+                ApplicationStatus.CANCELLED,
+                ApplicationStatus.RUNNING,
+            }:
+                return False
+
+            bindings, service_rows, unexpected = application_services_for_cleanup(locked)
+            if unexpected:
+                names = ", ".join(str(service.name) for service in unexpected[:5])
+                suffix = "..." if len(unexpected) > 5 else ""
+                raise RuntimeError(
+                    "Ready App private network still has services that are not owned "
+                    f"by this installation: {names}{suffix}"
+                )
+
+            active_statuses = {
+                DeploymentStatusChoices.PENDING,
+                DeploymentStatusChoices.RUNNING,
+                DeploymentStatusChoices.ROLLING_BACK,
+            }
+            if any(binding.deploy.status in active_statuses for binding in bindings):
+                return False
+
+            network = locked.network
+            locked.stage = "deletion_pending"
+            locked.save(update_fields=["stage", "updated_at"])
+
+            # Preflight every concrete Service while its ownership metadata
+            # still exists. A later DB deletion must never be used as a signal
+            # to skip Docker cleanup.
+            for service in service_rows:
+                cleanup_service_resources(service)
+
+            bindings_by_service = {
+                str(binding.service_id): binding
+                for binding in bindings
+            }
+            for service in service_rows:
+                # Remove every deployment archive owned by the Service. This
+                # includes historical attempts not represented by the current
+                # application binding.
+                for deploy in Deploy.objects.filter(service_id=service.pk).only("zip_file"):
+                    if deploy.zip_file and deploy.zip_file.name:
+                        deploy.zip_file.delete(save=False)
+
+                binding = bindings_by_service.get(str(service.pk))
+                if binding is not None:
+                    binding.delete()
+                if Service.objects.filter(pk=service.pk).exists():
+                    service.delete()
+
+            if network is not None:
+                locked_network = type(network).objects.select_for_update().get(pk=network.pk)
+                if (
+                    Service.objects.filter(network_id=locked_network.pk).exists()
+                    or ServiceNetworkAttachment.objects.filter(network_id=locked_network.pk).exists()
+                ):
+                    raise RuntimeError(
+                        f"Ready App network '{locked_network.name}' is still referenced after "
+                        "all owned child services were deleted."
+                    )
+                locked_network.delete()
+
+            locked.delete()
+
+        logger.info(
+            "Deleted terminal Ready App installation %s; removed %d child services.",
+            self.instance_id,
+            len(service_rows),
+        )
+        return True
+
     def _dependency_map(self, plan: ApplicationPlan) -> dict[str, set[str]]:
         return {svc.key: set(svc.dependencies) for svc in plan.services}
 
