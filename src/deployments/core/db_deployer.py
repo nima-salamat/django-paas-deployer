@@ -452,6 +452,55 @@ def _mysql_is_running(
 
 
 
+def _mysql_admin_ping(
+    container,
+    *,
+    platform: str,
+    password: str,
+) -> tuple[bool, str, str | None]:
+    """Probe a MySQL-compatible server using the admin client shipped by its image."""
+    normalized_platform = str(platform or "").strip().lower()
+    candidates = (
+        ("mariadb-admin", "mysqladmin")
+        if normalized_platform == "mariadb"
+        else ("mysqladmin", "mariadb-admin")
+    )
+    env = {"MYSQL_PWD": password} if password else None
+    last_output = ""
+
+    for executable in candidates:
+        try:
+            exit_code, output = container.exec_run(
+                [
+                    executable,
+                    "ping",
+                    "-uroot",
+                    "--protocol=socket",
+                    "--silent",
+                ],
+                environment=env,
+            )
+        except Exception as exc:
+            last_output = str(exc)
+            continue
+
+        output_text = (
+            output.decode("utf-8", "replace")
+            if isinstance(output, (bytes, bytearray))
+            else str(output or "")
+        )
+        if int(exit_code) == 0:
+            return True, output_text.strip(), executable
+
+        last_output = output_text.strip()
+        lowered = last_output.lower()
+        if "executable file not found" not in lowered and "no such file or directory" not in lowered:
+            return False, last_output, executable
+
+    return False, last_output, None
+
+
+
 def _mysql_wait_until_ready(
     client,
     container_name: str,
@@ -464,7 +513,7 @@ def _mysql_wait_until_ready(
     finished initialization and the FINAL mysqld instance is ready.
 
     IMPORTANT:
-    `mysqladmin ping` alone is NOT sufficient because the official
+    A client-admin ping alone is NOT sufficient because the official
     MySQL entrypoint starts a temporary mysqld during initialization.
 
     We therefore require:
@@ -472,7 +521,7 @@ def _mysql_wait_until_ready(
         1. MySQL initialization to be finished.
         2. Temporary server to have stopped.
         3. Final mysqld to be running.
-        4. Final mysqld to answer mysqladmin ping (with root password).
+        4. Final mysqld to answer the image's admin ping command.
 
     After the entrypoint sets MYSQL_ROOT_PASSWORD on the temporary
     server, root requires a password.  Ping without MYSQL_PWD then
@@ -576,44 +625,18 @@ def _mysql_wait_until_ready(
             ):
 
                 try:
-                    ping_env = None
-                    if root_password:
-                        ping_env = {"MYSQL_PWD": root_password}
-
-                    exit_code, output = (
-                        container.exec_run(
-                            [
-                                "mysqladmin",
-                                "ping",
-                                "-uroot",
-                                "--protocol=socket",
-                                "--silent",
-                            ],
-                            environment=ping_env,
-                        )
+                    ready, probe_output, _admin = _mysql_admin_ping(
+                        container,
+                        platform="mysql",
+                        password=root_password,
                     )
-
-                    output_text = (
-                        output.decode(
-                            "utf-8",
-                            "replace",
-                        )
-                        if isinstance(
-                            output,
-                            (bytes, bytearray),
-                        )
-                        else str(output or "")
-                    )
-
-                    if int(exit_code) == 0:
-
+                    if ready:
                         return (
                             True,
-                            "MySQL official initialization completed "
-                            "and the final MySQL server is ready.",
+                            "MySQL/MariaDB official initialization completed "
+                            "and the final server is ready.",
                         )
-
-                    last_logs = output_text
+                    last_logs = probe_output
 
                 except Exception as exc:
 
@@ -790,27 +813,15 @@ def _mysql_exec(
 def _mysql_ping_with_password(
     container,
     password: str,
+    *,
+    platform: str = "mysql",
 ) -> bool:
-
-    try:
-
-        exit_code, _ = container.exec_run(
-            [
-                "mysqladmin",
-                "ping",
-                "-uroot",
-                "--protocol=socket",
-                "--silent",
-            ],
-            environment={
-                "MYSQL_PWD": password,
-            },
-        )
-
-        return int(exit_code) == 0
-
-    except Exception:
-        return False
+    ready, _output, _admin = _mysql_admin_ping(
+        container,
+        platform=platform,
+        password=password,
+    )
+    return ready
 
 
 # ============================================================================
@@ -822,6 +833,7 @@ def _reconcile_mysql_credentials(
     *,
     root_password: str,
     username: str = "",
+    platform: str = "mysql",
     user_password: str = "",
     database: str = "",
     container_obj=None,
@@ -835,6 +847,7 @@ def _reconcile_mysql_credentials(
     when using MYSQL_PWD, causing false "Access Denied" errors during verification.
     """
 
+    platform = str(platform or "mysql").strip().lower()
     root_password = _clean(root_password)
     username = _clean(username)
     user_password = _clean(user_password) or root_password
@@ -861,6 +874,7 @@ def _reconcile_mysql_credentials(
     root_password_works = _mysql_ping_with_password(
         container,
         root_password,
+        platform=platform,
     )
 
     # ------------------------------------------------------------------------
@@ -1349,24 +1363,18 @@ class DBDeployer:
                 try:
                     container = runtime.primary_task_container(container_name)
                     if container is not None:
-                        exit_code, output = container.exec_run(
-                            [
-                                "mysqladmin",
-                                "ping",
-                                "-uroot",
-                                "--protocol=socket",
-                                "--silent",
-                            ],
-                            environment={"MYSQL_PWD": root_password},
+                        ready, probe_output, admin_executable = _mysql_admin_ping(
+                            container,
+                            platform=platform,
+                            password=root_password,
                         )
-                        text = (
-                            output.decode("utf-8", "replace")
-                            if isinstance(output, bytes)
-                            else str(output or "")
-                        )
-                        if int(exit_code) == 0:
+                        if ready:
                             break
-                        last_error = text
+                        last_error = probe_output or (
+                            f"No compatible admin ping client was found for {platform}."
+                            if admin_executable is None
+                            else f"{admin_executable} ping failed."
+                        )
                 except Exception as exc:
                     last_error = str(exc)
                 time.sleep(1)
@@ -1374,7 +1382,7 @@ class DBDeployer:
                 return DBDeployResult(
                     success=False,
                     message=(
-                        "MySQL did not become ready in the Docker Swarm task within 180 seconds. "
+                        f"{platform.upper()} did not become ready in the Docker Swarm task within 180 seconds. "
                         f"Last probe: {last_error[-1000:]}"
                     ),
                     container_name=container_name,
@@ -1405,6 +1413,7 @@ class DBDeployer:
                 container_name,
                 root_password=root_password,
                 username=username,
+                platform=platform,
                 user_password=user_password,
                 database=database,
                 container_obj=container,
