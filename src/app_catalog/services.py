@@ -191,7 +191,7 @@ def application_services_for_cleanup(instance: ApplicationInstance):
         service_key = str(source.get("service_key") or "")
         catalog_id = str(source.get("catalog_id") or "")
         legacy_catalog_match = (
-            str(service.source_kind) == str(Service.SourceKind.CATALOG)
+            service.source_kind == Service.SourceKind.CATALOG
             and catalog_id == str(instance.catalog_id)
             and service_key in expected_keys
         )
