@@ -249,6 +249,19 @@ def test_mariadb_reconcile_does_not_use_admin_ping_as_password_proof():
         "# ============================================================================",
         1,
     )[0]
-    first_probe = reconciliation.split("# If root password does NOT work", 1)[0]
+    first_probe = reconciliation.split("if not root_password_works:", 1)[0]
     assert "root_password_works, root_auth_output = _mysql_exec(" in first_probe
+    assert 'protocol="tcp"' in first_probe
+    assert 'host="127.0.0.1"' in first_probe
     assert "_mysql_ping_with_password(" not in first_probe
+
+
+def test_mariadb_root_bootstrap_uses_set_password_and_privileged_socket():
+    source = __import__("pathlib").Path(__file__).resolve().parents[1].joinpath("core", "db_deployer.py").read_text(encoding="utf-8")
+    reconciliation = source.split("def _reconcile_mysql_credentials(", 1)[1].split(
+        "# ============================================================================",
+        1,
+    )[0]
+    assert "SET PASSWORD FOR 'root'@'localhost'" in reconciliation
+    assert "SET PASSWORD FOR 'root'@'%'" in reconciliation
+    assert 'exec_user="root"' in reconciliation
