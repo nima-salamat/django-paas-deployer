@@ -165,7 +165,7 @@ def test_service_swarm_cleanup_executes_with_signal_instance():
 def test_service_cleanup_recovers_owned_stale_volume_attachments():
     source = (ROOT / "services" / "signals.py").read_text(encoding="utf-8")
     assert "volume is in use" in source
-    assert "client.containers.list(all=True, filters={"volume": docker_name})" in source
+    assert 'client.containers.list(all=True, filters={"volume": docker_name})' in source
     assert 'labels.get("passdeployer.service")' in source
     assert "raw.remove(force=True)" in source
     assert "for attempt in range(5)" in source
