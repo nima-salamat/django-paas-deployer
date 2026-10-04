@@ -118,3 +118,24 @@ def test_service_swarm_cleanup_executes_with_signal_instance():
         signals.delete_deploy_before_delete_service(None, instance)
 
     runtime_class.return_value.remove_service_group.assert_called_once_with(service_id)
+
+
+
+def test_service_cleanup_recovers_owned_stale_volume_attachments():
+    source = (ROOT / "services" / "signals.py").read_text(encoding="utf-8")
+    assert "volume is in use" in source
+    assert "client.containers.list(all=True, filters={"volume": docker_name})" in source
+    assert 'labels.get("passdeployer.service")' in source
+    assert "raw.remove(force=True)" in source
+    assert "for attempt in range(5)" in source
+    assert "never force-delete an attached volume" in source or "never force-delete an attached volume" in source.lower()
+
+
+def test_ready_app_delete_preflights_all_child_resources_before_deleting_rows():
+    source = (ROOT / "app_catalog" / "apis.py").read_text(encoding="utf-8")
+    delete_section = source.split("class ApplicationInstanceDetailAPIView", 1)[1].split(
+        "class ApplicationInstanceCancelAPIView", 1
+    )[0]
+    assert "cleanup_service_resources" in delete_section
+    assert "for row in service_rows:" in delete_section
+    assert "application_cleanup_pending" in delete_section
