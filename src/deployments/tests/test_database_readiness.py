@@ -13,7 +13,7 @@ class FakeContainer:
         self.responses = dict(responses)
         self.calls = []
 
-    def exec_run(self, command, environment=None):
+    def exec_run(self, command, environment=None, user=None):
         executable = command[0]
         self.calls.append((executable, command, environment))
         return self.responses[executable]
@@ -174,8 +174,8 @@ class FakeMariaDBCredentialContainer:
         self.calls = []
         self.password_configured = False
 
-    def exec_run(self, command, environment=None):
-        self.calls.append((command, environment))
+    def exec_run(self, command, environment=None, user=None):
+        self.calls.append((command, environment, user))
         executable = command[0]
         if executable != "mariadb":
             return 127, b'exec: "mariadb": executable file not found in $PATH'
@@ -212,29 +212,31 @@ def test_mariadb_reconcile_uses_socket_auth_when_configured_password_is_rejected
     )
 
     assert ok is True, message
-    first_command, first_env = container.calls[0]
+    first_command, first_env, first_user = container.calls[0]
     assert first_command[0] == "mariadb"
     assert first_command[1] == "-uroot"
     assert "--protocol=tcp" in first_command
     assert first_env == {"MYSQL_PWD": "new-secret"}
+    assert first_user is None
     assert any(
         command[0] == "mariadb"
         and "--protocol=socket" in command
         and command[-1] == "SELECT 1;"
         and environment is None
-        for command, environment in container.calls
+        for command, environment, _user in container.calls
     )
     assert any(
         "--protocol=socket" in command
-        and "ALTER USER 'root'@'localhost'" in command[-1]
+        and "CREATE USER IF NOT EXISTS 'root'@'localhost'" in command[-1]
         and environment is None
-        for command, environment in container.calls
+        and user == "root"
+        for command, environment, user in container.calls
     )
     assert any(
         "--protocol=tcp" in command
         and command[-1] == "SELECT 1;"
         and environment == {"MYSQL_PWD": "new-secret"}
-        for command, environment in container.calls[1:]
+        for command, environment, _user in container.calls[1:]
     )
 
 
