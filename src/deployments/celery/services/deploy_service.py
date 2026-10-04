@@ -1036,7 +1036,14 @@ class DeployService:
                 cfg.get("working_directory")
                 or cfg.get("working_dir")
                 or runtime_options.get("working_directory")
-                or "/app"
+                or (
+                    "/var/www/html"
+                    if (
+                        str(cfg.get("catalog_id") or "").strip().lower() == "wordpress"
+                        and str(cfg.get("catalog_service_key") or "").strip().lower() == "wordpress"
+                    )
+                    else "/app"
+                )
             ),
             build_dir=build_dir,
             install_command=install_command,
