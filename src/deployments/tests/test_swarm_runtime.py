@@ -1,4 +1,5 @@
 from dataclasses import replace
+import docker
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -227,6 +228,86 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         self.assertNotIn("entrypoint", kwargs)
         self.assertEqual(kwargs["command"], ["/bin/sh", "-lc", "python app.py --port 8000"])
         self.assertNotIn("args", kwargs)
+
+    def test_ensure_network_creates_overlay_when_swarm_is_active(self):
+        client = MagicMock()
+        client.info.return_value = {
+            "Swarm": {
+                "LocalNodeState": "active",
+                "ControlAvailable": True,
+                "NodeID": "node-1",
+            }
+        }
+        network = MagicMock()
+        network.attrs = {"Driver": "overlay"}
+        network.id = "network-1"
+        client.networks.get.side_effect = docker.errors.NotFound("missing")
+        client.networks.create.return_value = network
+
+        runtime = SwarmRuntime(client)
+        self.assertEqual(runtime.ensure_network("net-demo"), "network-1")
+        client.networks.create.assert_called_once_with(
+            "net-demo",
+            driver="overlay",
+            attachable=True,
+            labels={"managed-by": "django-paas-deployer"},
+            check_duplicate=True,
+        )
+
+    def test_ensure_network_migrates_empty_owned_legacy_bridge_network(self):
+        client = MagicMock()
+        client.info.return_value = {
+            "Swarm": {
+                "LocalNodeState": "active",
+                "ControlAvailable": True,
+                "NodeID": "node-1",
+            }
+        }
+        legacy = MagicMock()
+        legacy.attrs = {
+            "Driver": "bridge",
+            "Labels": {"managed-by": "django-paas-deployer"},
+            "Containers": {},
+        }
+        migrated = MagicMock()
+        migrated.id = "network-overlay-1"
+        migrated.attrs = {"Driver": "overlay"}
+        client.networks.get.return_value = legacy
+        client.networks.create.return_value = migrated
+
+        runtime = SwarmRuntime(client)
+        self.assertEqual(runtime.ensure_network("net-demo"), "network-overlay-1")
+        legacy.remove.assert_called_once()
+        client.networks.create.assert_called_once_with(
+            "net-demo",
+            driver="overlay",
+            attachable=True,
+            labels={"managed-by": "django-paas-deployer"},
+            check_duplicate=True,
+        )
+
+    def test_ensure_network_refuses_attached_legacy_bridge_network(self):
+        client = MagicMock()
+        client.info.return_value = {
+            "Swarm": {
+                "LocalNodeState": "active",
+                "ControlAvailable": True,
+                "NodeID": "node-1",
+            }
+        }
+        legacy = MagicMock()
+        legacy.attrs = {
+            "Driver": "bridge",
+            "Labels": {"managed-by": "django-paas-deployer"},
+            "Containers": {"container-1": {}},
+        }
+        client.networks.get.return_value = legacy
+
+        runtime = SwarmRuntime(client)
+        with self.assertRaises(DeploymentError) as ctx:
+            runtime.ensure_network("net-demo")
+        self.assertEqual(ctx.exception.code, "SWARM_NETWORK_DRIVER_MISMATCH")
+        legacy.remove.assert_not_called()
 
     def test_rejects_more_than_one_replica(self):
         with self.assertRaises(Exception):
