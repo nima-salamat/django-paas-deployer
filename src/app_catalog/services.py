@@ -20,7 +20,6 @@ from .catalog import ApplicationCatalog, CatalogValidationError, is_public_defin
 from .models import ApplicationInstance, ApplicationInstanceService, ApplicationStatus
 from services.ports import sync_endpoint_reservation
 from .plan import plan_from_resolved
-from deployments.core.routing import deployment_domain
 import shlex
 
 
@@ -47,13 +46,17 @@ def safe_slug(value: str) -> str:
     return s
 
 
-def platform_application_host(name: str) -> str:
-    """Return the platform-controlled HTTPS hostname for a Ready App."""
-    slug = safe_slug(name)
-    domain = deployment_domain()
-    if not domain:
+_PLATFORM_PUBLIC_HOST_TOKEN = "__PASSDEPLOYER_PUBLIC_HOST__"
+
+
+def _service_public_host(service: Service) -> str:
+    """Return the canonical public host derived from the created Service id."""
+    from services.serializers import _service_host
+
+    host = str(_service_host(service) or "").strip().lower().rstrip(".")
+    if not host:
         raise CatalogValidationError("The platform deployment domain is not configured.")
-    return f"{slug}.{domain}"
+    return host
 
 
 def prepare_application_resolution(definition, variant_id: str, name: str, config: dict | None = None, *, public: bool = False) -> dict:
@@ -73,12 +76,14 @@ def prepare_application_resolution(definition, variant_id: str, name: str, confi
             raise CatalogValidationError("Public Ready App domain fields must be platform-managed.")
         supplied_domain = requested.get("domain")
         if supplied_domain not in (None, ""):
-            raise CatalogValidationError("The platform hostname is managed automatically and cannot be customized.")
-        requested["domain"] = platform_application_host(name)
+            raise CatalogValidationError("The public hostname is assigned automatically after the application is created.")
+        # Resolve with an internal placeholder. The real hostname depends on
+        # the id of the newly created public Service.
+        requested["domain"] = _PLATFORM_PUBLIC_HOST_TOKEN
     resolved = resolve_variant(definition, str(variant_id), requested)
     resolved["config"]["slug"] = safe_slug(name)
     if public:
-        resolved["config"]["domain"] = platform_application_host(name)
+        resolved["config"]["domain"] = _PLATFORM_PUBLIC_HOST_TOKEN
         resolved["config"]["https"] = True
     return resolved
 
@@ -384,7 +389,13 @@ def _create_application_installation(
                         ],
                     },
                 },
-                config=dict(resolved["config"]),
+                # The real public hostname is service-id based and is not
+                # known until the child Services have been created.
+                config={
+                    str(key): value
+                    for key, value in dict(resolved["config"]).items()
+                    if str(key) != "domain"
+                },
                 # Generated secrets are persisted in ServiceSecret/ServiceSecretVersion.
                 # Keep ApplicationInstance free of plaintext secret material.
                 secret_config={},
@@ -436,12 +447,29 @@ def _create_application_installation(
         service_rows.append((sequence, spec, service, plan))
 
     service_hosts = {key: service.get_docker_service_name() for (_, spec, service, _) in service_rows for key in [str(spec["key"])]}
+    public_service_hosts = {
+        str(spec["key"]): _service_public_host(service)
+        for _, spec, service, _ in service_rows
+        if bool(spec.get("public", False))
+    }
+    primary_public_host = next(iter(public_service_hosts.values()), "")
+
+    if primary_public_host:
+        persisted_config = dict(instance.config or {})
+        persisted_config["domain"] = primary_public_host
+        instance.config = persisted_config
+        instance.save(update_fields=["config"])
 
     for sequence, spec, service, plan in service_rows:
         key = str(spec["key"])
         plan_type = str(spec.get("plan_type") or PlanTypeChoices.APP)
         is_database = plan_type == str(PlanTypeChoices.DB)
         resolved_config = dict(resolved["config"])
+        service_public_host = public_service_hosts.get(key, primary_public_host)
+        if service_public_host:
+            resolved_config["domain"] = service_public_host
+        else:
+            resolved_config.pop("domain", None)
         raw_environment = {str(k): str(v) for k, v in (spec.get("environment") or {}).items()}
         cfg = {
             "platform": str(spec.get("platform") or "docker") if is_database else "docker",
@@ -602,7 +630,7 @@ def _create_application_installation(
             "working_directory": spec.get("working_directory"),
             "port": int(port) if port else None,
             "public": public,
-            "public_host": resolved_config.get("domain") if public else None,
+            "public_host": service_public_host if public else None,
             "healthcheck": healthcheck,
             "healthcheck_path": spec.get("healthcheck_path"),
             "healthcheck_timeout": float(spec.get("healthcheck_timeout") or 5),
@@ -651,7 +679,7 @@ def _create_application_installation(
                     "published_port": int(published) if published not in (None, "") else None,
                     "protocol": protocol if protocol in {"tcp", "udp"} else "tcp",
                     "exposure": "public" if public else "internal",
-                    "hostname": str(resolved_config.get("domain") or "") if public else "",
+                    "hostname": service_public_host if public else "",
                     "tls": bool(resolved_config.get("https") or False),
                     "enabled": True,
                     "metadata": {"catalog_service_key": key},
