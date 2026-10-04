@@ -905,8 +905,8 @@ def _reconcile_mysql_credentials(
         ok, output = _mysql_exec(
             container,
             "SELECT 1;",
-        
-        platform=platform,)
+                platform=platform,
+            )
 
         if not ok:
             return False, (
@@ -947,8 +947,8 @@ def _reconcile_mysql_credentials(
             ok, output = _mysql_exec(
                 container,
                 statement,
-            
-            platform=platform,)
+                platform=platform,
+            )
             if not ok:
                 return False, (
                     "Failed to initialize root credentials. "
@@ -983,18 +983,15 @@ def _reconcile_mysql_credentials(
         statements = [
             (
                 "ALTER USER 'root'@'localhost' "
-                "IDENTIFIED WITH mysql_native_password BY "
-                f"'{root_q}'"
+                f"{root_auth}"
             ),
             (
                 "CREATE USER IF NOT EXISTS 'root'@'%' "
-                "IDENTIFIED WITH mysql_native_password BY "
-                f"'{root_q}'"
+                f"{root_auth}"
             ),
             (
                 "ALTER USER 'root'@'%' "
-                "IDENTIFIED WITH mysql_native_password BY "
-                f"'{root_q}'"
+                f"{root_auth}"
             ),
             (
                 "GRANT ALL PRIVILEGES ON *.* "
@@ -1008,8 +1005,8 @@ def _reconcile_mysql_credentials(
                 container,
                 statement,
                 password=root_password,
-            
-            platform=platform,)
+                platform=platform,
+            )
             if not ok:
                 return False, (
                     "Failed while synchronizing root@%. "
@@ -1049,8 +1046,8 @@ def _reconcile_mysql_credentials(
                 container,
                 create_user_sql,
                 password=root_password,
-            
-            platform=platform,)
+                platform=platform,
+            )
             if not ok:
                 return False, (
                     f"Failed to create MySQL user '{username}'@'{host}'. "
@@ -1066,8 +1063,8 @@ def _reconcile_mysql_credentials(
                 container,
                 alter_user_sql,
                 password=root_password,
-            
-            platform=platform,)
+                platform=platform,
+            )
             if not ok:
                 return False, (
                     f"Failed to update password for MySQL user "
@@ -1091,8 +1088,8 @@ def _reconcile_mysql_credentials(
                 container,
                 create_database_sql,
                 password=root_password,
-            
-            platform=platform,)
+                platform=platform,
+            )
 
             if not ok:
                 return False, (
@@ -1114,8 +1111,8 @@ def _reconcile_mysql_credentials(
                     container,
                     grant_sql,
                     password=root_password,
-                
-                platform=platform,)
+                platform=platform,
+            )
                 if not ok:
                     return False, (
                         f"Failed to grant database '{database}' "
@@ -1131,8 +1128,8 @@ def _reconcile_mysql_credentials(
             container,
             "FLUSH PRIVILEGES",
             password=root_password,
-        
-        platform=platform,)
+                platform=platform,
+            )
 
         if not ok:
             return False, (
