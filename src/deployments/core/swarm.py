@@ -432,6 +432,14 @@ class SwarmRuntime:
         return swarm
 
     def ensure_network(self, name: str, *, attachable: bool = True) -> str:
+        """Ensure a Swarm-compatible overlay network exists.
+
+        Older PassDeployer versions created application private networks as
+        bridge networks. When Swarm is active, those networks are unusable by
+        Swarm services. Owned, empty legacy bridge networks are safely replaced
+        in-place; unrelated or attached networks fail closed instead of being
+        deleted behind the operator's back.
+        """
         value = str(name or "").strip()
         if not value:
             raise DeploymentError(
@@ -439,28 +447,100 @@ class SwarmRuntime:
                 stage="network_creation",
                 code="SWARM_NETWORK_INVALID",
             )
+
+        self.assert_active()
+
         try:
             network = self.client.networks.get(value)
-            if str((network.attrs or {}).get("Driver") or "").lower() != "overlay":
-                raise DeploymentError(
-                    f"Docker network {value!r} is not an overlay network.",
-                    stage="network_creation",
-                    code="SWARM_NETWORK_DRIVER_MISMATCH",
-                    user_message=(
-                        f"Network {value!r} already exists as a non-Swarm network. "
-                        "Create/recreate it as an attachable overlay network before deploying."
-                    ),
-                )
-            return network.id
         except docker.errors.NotFound:
-            network = self.client.networks.create(
-                value,
-                driver="overlay",
-                attachable=bool(attachable),
-                labels={"managed-by": "django-paas-deployer"},
-                check_duplicate=True,
-            )
+            try:
+                network = self.client.networks.create(
+                    value,
+                    driver="overlay",
+                    attachable=bool(attachable),
+                    labels={"managed-by": "django-paas-deployer"},
+                    check_duplicate=True,
+                )
+            except docker.errors.APIError as exc:
+                if getattr(exc, "status_code", None) == 409:
+                    network = self.client.networks.get(value)
+                else:
+                    raise DeploymentError(
+                        f"Unable to create Swarm overlay network {value!r}: {exc}",
+                        stage="network_creation",
+                        code="SWARM_NETWORK_CREATE_FAILED",
+                        recoverable=True,
+                    ) from exc
+            except docker.errors.DockerException as exc:
+                raise DeploymentError(
+                    f"Unable to create Swarm overlay network {value!r}: {exc}",
+                    stage="network_creation",
+                    code="SWARM_NETWORK_CREATE_FAILED",
+                    recoverable=True,
+                ) from exc
+
+        attrs = network.attrs or {}
+        driver = str(attrs.get("Driver") or "").strip().lower()
+        if driver == "overlay":
             return network.id
+
+        labels = dict(attrs.get("Labels") or {})
+        containers = attrs.get("Containers") or {}
+        owned = labels.get("managed-by") == "django-paas-deployer"
+
+        if owned and not containers:
+            # This is a safe migration of the legacy private-network rows that
+            # were accidentally created as bridge networks before the runtime
+            # became Swarm-first.
+            try:
+                network.remove()
+                network = self.client.networks.create(
+                    value,
+                    driver="overlay",
+                    attachable=bool(attachable),
+                    labels={"managed-by": "django-paas-deployer"},
+                    check_duplicate=True,
+                )
+                logger.warning(
+                    "Migrated legacy managed Docker network '%s' from bridge to overlay for Swarm.",
+                    value,
+                )
+                return network.id
+            except docker.errors.DockerException as exc:
+                raise DeploymentError(
+                    f"Managed Docker network {value!r} could not be migrated to an overlay network: {exc}",
+                    stage="network_creation",
+                    code="SWARM_NETWORK_MIGRATION_FAILED",
+                    recoverable=True,
+                    user_message=(
+                        "PassDeployer found an old private network that was created "
+                        "without Swarm support and could not safely replace it. "
+                        "Retry the deployment after the network is idle."
+                    ),
+                ) from exc
+
+        ownership_note = (
+            "It is owned by PassDeployer but still has attached containers."
+            if owned
+            else "It is not owned by PassDeployer."
+        )
+        raise DeploymentError(
+            f"Docker network {value!r} uses driver {driver or 'unknown'}, not overlay.",
+            stage="network_creation",
+            code="SWARM_NETWORK_DRIVER_MISMATCH",
+            user_message=(
+                f"Network {value!r} is not a Swarm overlay network and cannot be used "
+                f"for this deployment. {ownership_note}"
+            ),
+            details={
+                "network": value,
+                "driver": driver or None,
+                "owned": owned,
+                "attached_container_count": len(containers),
+                "required_driver": "overlay",
+                "required_attachable": bool(attachable),
+            },
+        )
 
     def _local_manager_node_id(self) -> str | None:
         try:
