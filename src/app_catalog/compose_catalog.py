@@ -316,6 +316,11 @@ def compose_to_resolved(*, document: dict[str, Any], metadata: dict[str, Any], c
                 volumes.append({"source": source or str(key), "target": str(vol["target"]), "mode": "ro" if vol.get("read_only") else "rw", "mount_type": "volume"})
         public = bool(raw.get("x-passdeployer", {}).get("public", False)) or key in public_services
         ports = raw.get("ports") or raw.get("expose") or []
+        if public and isinstance(ports, list) and len(ports) > 1:
+            raise ApplicationPlanError(
+                f"Catalog public service {key!r} declares multiple ports. "
+                "Ready Apps currently require one explicit public port per public service."
+            )
         port_target = None
         if ports:
             first = ports[0]
