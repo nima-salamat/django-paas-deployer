@@ -26,6 +26,7 @@ class ServiceDispatch:
     instance_id: str
     service_key: str
     task_id: str
+    platform: str = ""
 
 
 class ApplicationStackExecutor:
@@ -452,6 +453,10 @@ class ApplicationStackExecutor:
                     instance_id=self.instance_id,
                     service_key=binding.service_key,
                     task_id=token,
+                    platform=str(
+                        getattr(getattr(deploy.service, "plan", None), "platform", "")
+                        or ""
+                    ).strip().lower(),
                 ))
             if dispatches:
                 locked.stage = "dispatching_services"
