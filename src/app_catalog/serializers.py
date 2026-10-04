@@ -208,6 +208,10 @@ class ApplicationInstanceSerializer(serializers.ModelSerializer):
         return rows
 
     def get_application_url(self, obj):
+        # The hostname can be deterministic before runtime exists, but it is
+        # not an application address until the installation is actually ready.
+        if obj.status != "running":
+            return ""
         for binding in obj.services.select_related("service").all():
             endpoint = binding.service.endpoints.filter(
                 enabled=True, exposure="public",
