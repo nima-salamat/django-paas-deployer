@@ -29,24 +29,30 @@ from .tasks import (
 
 def _queue_ready_app_deletion(instance_id: str) -> bool:
     """Request deletion once and let durable reconciliation own subsequent retries."""
+    from django.db import transaction
     from django.utils import timezone
 
-    instance = ApplicationInstance.objects.filter(pk=instance_id).first()
-    if instance is None:
-        return True
-
-    already_pending = (
-        instance.stage == "deletion_pending"
-        and instance.error_code == "APPLICATION_DELETION_PENDING"
-    )
-    if not already_pending:
-        ApplicationInstance.objects.filter(pk=instance_id).update(
-            stage="deletion_pending",
-            error_code="APPLICATION_DELETION_PENDING",
-            updated_at=timezone.now(),
+    # Claim deletion intent under the application row lock. Only the
+    # transaction that changes the row into deletion_pending is allowed to
+    # enqueue the first asynchronous deletion attempt.
+    with transaction.atomic():
+        instance = (
+            ApplicationInstance.objects
+            .select_for_update()
+            .filter(pk=instance_id)
+            .first()
         )
-        instance.stage = "deletion_pending"
-        instance.error_code = "APPLICATION_DELETION_PENDING"
+        if instance is None:
+            return True
+
+        already_pending = (
+            instance.stage == "deletion_pending"
+            and instance.error_code == "APPLICATION_DELETION_PENDING"
+        )
+        if not already_pending:
+            instance.stage = "deletion_pending"
+            instance.error_code = "APPLICATION_DELETION_PENDING"
+            instance.save(update_fields=["stage", "error_code", "updated_at"])
 
     # Always make one bounded synchronous attempt. If the service is still
     # active, cleanup_terminal_application requests cancellation and returns
@@ -65,8 +71,8 @@ def _queue_ready_app_deletion(instance_id: str) -> bool:
             instance_id,
         )
 
-    # Only enqueue the durable task on the first request. Repeated frontend
-    # polling/DELETE calls must not flood the operations queue.
+    # Only the first transaction that claimed deletion intent may enqueue the
+    # durable task. Later concurrent DELETE requests rely on reconciliation.
     if already_pending:
         return False
 
