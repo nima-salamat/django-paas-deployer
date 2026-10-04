@@ -772,6 +772,23 @@ def _mysql_cli_missing(output: str) -> bool:
     )
 
 
+def _mysql_client_candidates(platform: str) -> tuple[str, ...]:
+    """Return MySQL-compatible SQL client candidates for the target image."""
+    normalized = str(platform or "mysql").strip().lower()
+    if normalized == "mariadb":
+        return ("mariadb", "mysql")
+    return ("mysql", "mariadb")
+
+
+def _mysql_cli_missing(output: str) -> bool:
+    lowered = str(output or "").lower()
+    return (
+        "executable file not found" in lowered
+        or "no such file or directory" in lowered
+        or ("not found" in lowered and "exec" in lowered)
+    )
+
+
 def _mysql_exec(
     container,
     statement: str,
@@ -780,7 +797,7 @@ def _mysql_exec(
     platform: str = "mysql",
     username: str = "root",
 ) -> tuple[bool, str]:
-    """Execute SQL using the client shipped by the target DB image."""
+    """Execute SQL using the client shipped by the target database image."""
     env = {"MYSQL_PWD": password} if password else None
     last_output = ""
 
@@ -811,8 +828,10 @@ def _mysql_exec(
 
         if int(exit_code) == 0:
             return True, last_output
+
         if _mysql_cli_missing(last_output):
             continue
+
         return False, last_output
 
     return False, last_output
@@ -891,10 +910,12 @@ def _reconcile_mysql_credentials(
     # ------------------------------------------------------------------------
     # First determine whether root password already works.
     # ------------------------------------------------------------------------
-    root_password_works = _mysql_ping_with_password(
+    root_password_works, root_auth_output = _mysql_exec(
         container,
-        root_password,
+        "SELECT 1;",
+        password=root_password,
         platform=platform,
+        username="root",
     )
 
     # ------------------------------------------------------------------------
@@ -913,7 +934,8 @@ def _reconcile_mysql_credentials(
                 "Cannot authenticate to MySQL as root. "
                 "The configured root password does not work and "
                 "socket authentication without password also failed. "
-                f"mysql output: {output[-1000:]}"
+                f"password authentication output: {root_auth_output[-500:]}; "
+                f"socket authentication output: {output[-500:]}"
             )
 
         # --------------------------------------------------------------------
@@ -1141,11 +1163,13 @@ def _reconcile_mysql_credentials(
     # Final root verification
     # =========================================================================
 
-    if not _mysql_ping_with_password(
+    if not _mysql_exec(
         container,
-        root_password,
+        "SELECT 1;",
+        password=root_password,
         platform=platform,
-    ):
+        username="root",
+    )[0]:
         return False, (
             "Final root password verification failed."
         )
