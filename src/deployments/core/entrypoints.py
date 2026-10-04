@@ -91,6 +91,39 @@ def resolve_django_entrypoint(tar_stream, *, server_type: str | None = None) -> 
 
 
 
+
+_FASTAPI_IMPORT_TARGET_RE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*:"
+    r"[A-Za-z_][A-Za-z0-9_]*$"
+)
+
+
+def _archive_names_from_sequence(names) -> set[str]:
+    """Normalize archive member names for runtime-resolution helpers."""
+    return {
+        str(name or "").replace("\\", "/").lstrip("./").rstrip("/")
+        for name in (names or [])
+        if str(name or "").strip()
+    }
+
+
+def _flatten_runtime_names(names: set[str]) -> tuple[set[str], str]:
+    """Mirror the image builder's single-wrapper flattening semantics."""
+    try:
+        from .project_model import detect_archive_wrapper, strip_archive_prefix
+        wrapper = detect_archive_wrapper(names)
+    except Exception:
+        wrapper = ""
+    if not wrapper:
+        return names, ""
+    return {
+        stripped
+        for item in names
+        for stripped in [strip_archive_prefix(item, wrapper)]
+        if stripped
+    }, wrapper
+
+
 def resolve_python_runtime_context(names, module: str | None) -> dict:
     """Resolve a Python import target and source root consistently for runtime.
 
