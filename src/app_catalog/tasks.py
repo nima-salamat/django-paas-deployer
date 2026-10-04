@@ -239,7 +239,11 @@ def reconcile_application_installations():
         Q(status=ApplicationStatus.DEPLOYING)
         | Q(status=ApplicationStatus.CANCELLED, cancel_requested=True)
         | Q(
-            status__in=(ApplicationStatus.FAILED, ApplicationStatus.CANCELLED),
+            status__in=(
+                ApplicationStatus.RUNNING,
+                ApplicationStatus.FAILED,
+                ApplicationStatus.CANCELLED,
+            ),
             stage="deletion_pending",
             updated_at__lt=cutoff,
         )
@@ -249,7 +253,11 @@ def reconcile_application_installations():
         pending = ApplicationInstance.objects.filter(
             pk=instance.pk,
             stage="deletion_pending",
-            status__in=(ApplicationStatus.FAILED, ApplicationStatus.CANCELLED),
+            status__in=(
+                ApplicationStatus.RUNNING,
+                ApplicationStatus.FAILED,
+                ApplicationStatus.CANCELLED,
+            ),
         ).first()
         if pending is not None:
             try:
@@ -261,7 +269,8 @@ def reconcile_application_installations():
 
         # A cancellation task can be lost after the API commits the flag.
         # Re-apply cancellation from the periodic reconciler so child
-        # deployments cannot remain active forever.
+        # deployments cannot remain active forever. RUNNING applications that
+        # are deletion_pending are handled by the durable deletion task above.
         try:
             fresh = ApplicationInstance.objects.only("status", "cancel_requested").get(pk=instance.pk)
             if fresh.cancel_requested:
