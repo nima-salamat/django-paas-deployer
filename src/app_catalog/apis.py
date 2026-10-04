@@ -234,11 +234,28 @@ class ApplicationInstanceDetailAPIView(CatalogPermissionMixin, APIView):
                     status=status.HTTP_409_CONFLICT,
                 )
 
-        # Delete child services first. Their pre_delete handlers remove
-        # containers/volumes before the application-owned Docker network is
-        # deleted; relying on Django CASCADE ordering could otherwise attempt
-        # to remove an attached network too early and leak it.
+        # Preflight all child Docker resources before deleting any binding or
+        # Service row. This makes application deletion resumable instead of
+        # partially deleting earlier children before a later cleanup fails.
+        from services.signals import cleanup_service_resources
         service_rows = list(instance.services.select_related("service", "deploy").all())
+        try:
+            for row in service_rows:
+                cleanup_service_resources(row.service)
+        except Exception as exc:
+            logger = __import__("logging").getLogger(__name__)
+            logger.exception("Ready App resource preflight failed for %s", instance.pk)
+            return Response(
+                {
+                    "error": "The installation still has resources that could not be cleaned up.",
+                    "code": "application_cleanup_pending",
+                    "detail": str(exc),
+                },
+                status=status.HTTP_202_ACCEPTED,
+            )
+
+        # Docker resources are now converged; delete the database bindings and
+        # Service rows without letting one later child recreate partial deletion.
         network = instance.network
         for row in service_rows:
             deploy = row.deploy
