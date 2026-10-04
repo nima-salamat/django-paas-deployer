@@ -286,7 +286,6 @@ class ApplicationStackExecutor:
             if locked.status not in {
                 ApplicationStatus.FAILED,
                 ApplicationStatus.CANCELLED,
-                ApplicationStatus.RUNNING,
             }:
                 return False
 
