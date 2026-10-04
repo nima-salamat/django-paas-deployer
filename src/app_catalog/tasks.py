@@ -188,7 +188,10 @@ def reconcile_application_installations():
     except Exception:
         pass
     cutoff = timezone.now() - timedelta(seconds=stale_seconds)
-    instances = ApplicationInstance.objects.filter(status=ApplicationStatus.DEPLOYING).only("pk")
+    instances = ApplicationInstance.objects.filter(
+        Q(status=ApplicationStatus.DEPLOYING)
+        | Q(status=ApplicationStatus.CANCELLED, cancel_requested=True)
+    ).only("pk")
     recovered = 0
     for instance in instances.iterator():
         # A cancellation task can be lost after the API commits the flag.
