@@ -178,11 +178,15 @@ class StateManager:
             now = timezone.now()
             updates["updated_at"] = now
             if target == sm.DEPLOY_PENDING:
-                # A queued execution has not started yet. Clear timestamps
-                # from any previous execution of a reused Deploy row.
+                # A queued execution has not started yet. Clear every timestamp
+                # that can participate in the lifecycle deadline so a reused
+                # Deploy row starts with a fresh execution budget.
                 updates.setdefault("started_at", None)
                 updates.setdefault("completed_at", None)
                 updates.setdefault("worker_heartbeat_at", None)
+                updates.setdefault("base_image_wait_started_at", None)
+                updates.setdefault("base_image_ready_at", None)
+                updates.setdefault("application_started_at", None)
             elif target == sm.DEPLOY_RUNNING:
                 updates.setdefault("started_at", now)
             elif target in (
@@ -488,12 +492,18 @@ class StateManager:
             from deploy.models import DeploymentStatusChoices  # type: ignore
             deploy.status = DeploymentStatusChoices.RUNNING
             deploy.started_at = now
+            deploy.completed_at = None
+            deploy.base_image_wait_started_at = None
+            deploy.base_image_ready_at = None
+            deploy.application_started_at = None
             deploy.worker_heartbeat_at = now
             deploy.execution_task_id = task_id or deploy.execution_task_id or ""
             deploy.stage = "starting"
             deploy.progress = 0
             deploy.save(update_fields=[
-                "status", "started_at", "worker_heartbeat_at",
+                "status", "started_at", "completed_at",
+                "base_image_wait_started_at", "base_image_ready_at",
+                "application_started_at", "worker_heartbeat_at",
                 "execution_task_id", "stage", "progress",
             ])
 
