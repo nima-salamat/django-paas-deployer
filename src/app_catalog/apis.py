@@ -234,14 +234,36 @@ class ApplicationInstanceDetailAPIView(CatalogPermissionMixin, APIView):
                     status=status.HTTP_409_CONFLICT,
                 )
 
-        # Preflight all child Docker resources before deleting any binding or
-        # Service row. This makes application deletion resumable instead of
-        # partially deleting earlier children before a later cleanup fails.
+        # Preflight every Service that belongs to this application's private
+        # network. Binding rows are authoritative, while the application-owned
+        # network plus catalog metadata recover legacy orphaned child Services
+        # left behind by an earlier partial deletion.
+        from django.db import transaction
+        from deploy.models import Deploy
+        from services.models import PrivateNetwork, ServiceNetworkAttachment
         from services.signals import cleanup_service_resources
-        service_rows = list(instance.services.select_related("service", "deploy").all())
+        from .services import application_services_for_cleanup
+
+        service_bindings, service_rows, unexpected_services = application_services_for_cleanup(instance)
+        if unexpected_services:
+            names = ", ".join(str(service.name) for service in unexpected_services[:5])
+            suffix = "..." if len(unexpected_services) > 5 else ""
+            return Response(
+                {
+                    "error": "The installation's private network is still used by another service.",
+                    "code": "application_cleanup_pending",
+                    "detail": (
+                        f"Cannot safely delete the network until these service attachments are "
+                        f"removed or detached: {names}{suffix}"
+                    ),
+                    "blocked_service_count": len(unexpected_services),
+                },
+                status=status.HTTP_202_ACCEPTED,
+            )
+
         try:
-            for row in service_rows:
-                cleanup_service_resources(row.service)
+            for service in service_rows:
+                cleanup_service_resources(service)
         except Exception as exc:
             logger = __import__("logging").getLogger(__name__)
             logger.exception("Ready App resource preflight failed for %s", instance.pk)
@@ -254,21 +276,90 @@ class ApplicationInstanceDetailAPIView(CatalogPermissionMixin, APIView):
                 status=status.HTTP_202_ACCEPTED,
             )
 
-        # Docker resources are now converged; delete the database bindings and
-        # Service rows without letting one later child recreate partial deletion.
-        network = instance.network
-        for row in service_rows:
-            deploy = row.deploy
-            if deploy.zip_file and deploy.zip_file.name:
-                try:
-                    deploy.zip_file.delete(save=False)
-                except Exception:
-                    pass
-            row.delete()
-            row.service.delete()
-        if network is not None:
-            network.delete()
-        instance.delete()
+        # Perform all database deletion under one transaction. Locking the
+        # application/network closes the gap where another worker could attach
+        # a Service between the preflight and PrivateNetwork.delete().
+        with transaction.atomic():
+            locked_instance = (
+                ApplicationInstance.objects
+                .select_for_update()
+                .get(pk=instance.pk)
+            )
+            locked_network = (
+                PrivateNetwork.objects
+                .select_for_update()
+                .filter(pk=locked_instance.network_id)
+                .first()
+            )
+            if locked_network is not None:
+                _, locked_service_rows, unexpected_services = application_services_for_cleanup(locked_instance)
+                if unexpected_services:
+                    names = ", ".join(str(service.name) for service in unexpected_services[:5])
+                    suffix = "..." if len(unexpected_services) > 5 else ""
+                    return Response(
+                        {
+                            "error": "The installation's private network is still used by another service.",
+                            "code": "application_cleanup_pending",
+                            "detail": (
+                                f"Cannot safely delete the network until these service attachments are "
+                                f"removed or detached: {names}{suffix}"
+                            ),
+                            "blocked_service_count": len(unexpected_services),
+                        },
+                        status=status.HTTP_202_ACCEPTED,
+                    )
+                service_rows = locked_service_rows
+            else:
+                service_rows = list(
+                    Service.objects.filter(
+                        user_id=locked_instance.user_id,
+                        pk__in=[binding.service_id for binding in service_bindings],
+                    )
+                )
+
+            bindings_by_service = {
+                str(binding.service_id): binding
+                for binding in service_bindings
+            }
+            for service in service_rows:
+                for deploy in Deploy.objects.filter(service_id=service.pk).only("zip_file"):
+                    if deploy.zip_file and deploy.zip_file.name:
+                        try:
+                            deploy.zip_file.delete(save=False)
+                        except Exception:
+                            logger = __import__("logging").getLogger(__name__)
+                            logger.exception(
+                                "Failed deleting deployment archive for service %s.",
+                                service.pk,
+                            )
+                binding = bindings_by_service.get(str(service.pk))
+                if binding is not None:
+                    binding.delete()
+                if Service.objects.filter(pk=service.pk).exists():
+                    service.delete()
+
+            if locked_network is not None:
+                if (
+                    Service.objects.filter(network_id=locked_network.pk).exists()
+                    or ServiceNetworkAttachment.objects.filter(network_id=locked_network.pk).exists()
+                ):
+                    return Response(
+                        {
+                            "error": "The installation's private network is still referenced by another service.",
+                            "code": "application_cleanup_pending",
+                            "detail": (
+                                f"Private network '{locked_network.name}' still has a service or "
+                                "network attachment after child cleanup."
+                            ),
+                        },
+                        status=status.HTTP_202_ACCEPTED,
+                    )
+                locked_network.delete()
+
+            locked_instance.network = None
+            locked_instance.save(update_fields=["network", "updated_at"])
+            locked_instance.delete()
+
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
