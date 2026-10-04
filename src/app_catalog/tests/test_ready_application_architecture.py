@@ -238,6 +238,47 @@ class ReadyApplicationArchitectureTests(TestCase):
             for row in instance.services.select_related("deploy")
         )
 
+    def test_cancelled_installation_cleanup_removes_children_and_network(self):
+        from unittest.mock import patch
+
+        instance = self.install(name="cancel-cleanup")
+        bindings = list(instance.services.select_related("service", "deploy"))
+        instance.status = ApplicationStatus.CANCELLED
+        instance.cancel_requested = True
+        for binding in bindings:
+            binding.deploy.status = DeploymentStatusChoices.CANCELLED
+            binding.deploy.save(update_fields=["status", "updated_at"])
+        instance.save(update_fields=["status", "cancel_requested", "updated_at"])
+
+        network = instance.network
+        with patch.object(network, "delete", autospec=True) as network_delete,              patch.object(bindings[0].service, "delete", autospec=True) as first_service_delete,              patch.object(bindings[1].service, "delete", autospec=True) as second_service_delete:
+            ApplicationStackExecutor(str(instance.pk))._cleanup_cancelled_children()
+
+        network_delete.assert_called_once()
+        first_service_delete.assert_called_once()
+        second_service_delete.assert_called_once()
+        instance.refresh_from_db()
+        assert instance.status == ApplicationStatus.CANCELLED
+        assert instance.stage == "cancelled"
+        assert instance.network_id is None
+        assert not ApplicationInstanceService.objects.filter(instance_id=instance.pk).exists()
+
+    def test_cancelled_installation_keeps_parent_when_network_is_cleaned(self):
+        from services.models import PrivateNetwork
+
+        instance = self.install(name="cancel-network-parent")
+        network = instance.network
+        instance.status = ApplicationStatus.CANCELLED
+        instance.cancel_requested = True
+        instance.save(update_fields=["status", "cancel_requested", "updated_at"])
+
+        network.delete()
+        instance.refresh_from_db()
+
+        assert ApplicationInstance.objects.filter(pk=instance.pk).exists()
+        assert instance.network_id is None
+        assert not PrivateNetwork.objects.filter(pk=network.pk).exists()
+
 
 @pytest.mark.skipif(connection.vendor != 'postgresql', reason='Real transaction race requires PostgreSQL row locking.')
 class ApplicationInstallationConcurrencyTests(TransactionTestCase):
