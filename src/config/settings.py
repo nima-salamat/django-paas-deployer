@@ -424,6 +424,7 @@ CELERY_TASK_ROUTES = {
     "app_catalog.advance_application_service": {"queue": "deployments"},
     "app_catalog.application_service_failed": {"queue": "deployments"},
     "app_catalog.cancel_application_installation": {"queue": "operations"},
+    "app_catalog.delete_application_installation": {"queue": "operations"},
     "app_catalog.reconcile_application_installations": {"queue": "deployments"},
 }
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
