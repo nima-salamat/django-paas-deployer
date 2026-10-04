@@ -348,7 +348,10 @@ class ApplicationStackExecutor:
                                 "event_type": "deployment.cancelled.warning",
                                 "stage": "cancelled",
                                 "level": "warning",
-                                "message": "Service was not started because a required application service failed.",
+                                "message": (
+                                    f"Service was not started because required application service "
+                                    f"'{first.service_key}' failed."
+                                ),
                                 "progress": 100,
                                 "details": {"controlled_by": "application_executor", "dependency_failed": True},
                             },
