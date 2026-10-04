@@ -188,4 +188,24 @@ def test_public_compose_service_rejects_multiple_ports():
             catalog_id="public-port-fixture",
             version="1.0",
         )
+def test_public_database_service_is_rejected():
+    from app_catalog.compose_catalog import compose_to_resolved
+    import pytest
+
+    with pytest.raises(ApplicationPlanError, match="non-public role"):
+        compose_to_resolved(
+            document={
+                "services": {
+                    "postgres": {
+                        "image": "postgres:16.15",
+                        "ports": ["5432:5432"],
+                    },
+                },
+            },
+            metadata={"public_services": ["postgres"]},
+            config={},
+            secrets={},
+            catalog_id="public-db-fixture",
+            version="1.0",
+        )
 
