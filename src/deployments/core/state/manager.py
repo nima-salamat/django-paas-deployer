@@ -249,6 +249,14 @@ class StateManager:
 
             activate_revision_locked(service, revision_id)
 
+            # Service revisions/status are cached by the user-facing service
+            # API. State changes performed with QuerySet.update() bypass ORM
+            # signals, so invalidate after the transaction commits.
+            user_id = service.user_id
+            transaction.on_commit(
+                lambda user_id=user_id: _invalidate_service_cache(user_id)
+            )
+
             now = timezone.now()
             if service.status != sm.SERVICE_RUNNING:
                 try:
