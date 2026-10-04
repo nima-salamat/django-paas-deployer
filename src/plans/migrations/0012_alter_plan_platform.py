@@ -1,0 +1,43 @@
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+
+    dependencies = [
+        ("plans", "0011_alter_plan_platform"),
+    ]
+
+    operations = [
+        migrations.AlterField(
+            model_name="plan",
+            name="platform",
+            field=models.CharField(
+                choices=[
+                    ("php", "PHP"),
+                    ("laravel", "Laravel"),
+                    ("python", "Python"),
+                    ("django", "Django"),
+                    ("nextjs", "Next.js"),
+                    ("nodejs", "Node.js"),
+                    ("flask", "Flask"),
+                    ("fastapi", "FastAPI"),
+                    ("docker", "Docker"),
+                    ("go", "Go"),
+                    ("statichtmlcss", "Static HTML/CSS"),
+                    ("vuejs", "Vue.js"),
+                    ("angular", "Angular"),
+                    ("react", "React"),
+                    ("dotnet", ".NET"),
+                    ("mysql", "MySQL"),
+                    ("postgresql", "PostgreSQL"),
+                    ("mariadb", "MariaDB"),
+                    ("mongodb", "MongoDB"),
+                    ("redis", "Redis"),
+                    ("oracle", "Oracle"),
+                ],
+                help_text="Technology platform this plan supports",
+                max_length=20,
+                verbose_name="Platform",
+            ),
+        ),
+    ]
