@@ -30,6 +30,14 @@ from deployments.common.exceptions import InvalidServiceStateError
 logger = logging.getLogger(__name__)
 
 
+def _invalidate_service_cache(user_id) -> None:
+    try:
+        from core.app_cache import invalidate_user_services
+        invalidate_user_services(user_id)
+    except Exception:
+        logger.exception("Service cache invalidation failed for user=%s", user_id)
+
+
 class StateManager:
     """
     Single source of truth for Service / Deploy state mutations.
@@ -108,6 +116,13 @@ class StateManager:
                 updates.setdefault("deploy_started", now)
 
             Service.objects.filter(pk=service_id).update(**updates)
+            # QuerySet.update() bypasses Django model signals, so explicitly
+            # invalidate the user-facing service cache only after this state
+            # transition commits successfully.
+            user_id = service.user_id
+            transaction.on_commit(
+                lambda user_id=user_id: _invalidate_service_cache(user_id)
+            )
             logger.info(
                 "StateManager: service %s %s -> %s",
                 service_id, src, target,
