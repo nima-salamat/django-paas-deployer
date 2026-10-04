@@ -962,6 +962,20 @@ class FastAPIProfileRegressionTests(unittest.TestCase):
         self.assertEqual(result["working_directory"], "/app/src")
         self.assertEqual(result["source"], "pyproject.toml")
 
+    def test_source_scan_resolves_fastapi_src_layout(self):
+        from deployments.core.entrypoints import resolve_fastapi_entrypoint
+
+        result = resolve_fastapi_entrypoint(make_tar({
+            "src/app/__init__.py": "",
+            "src/app/main.py": "from fastapi import FastAPI\\napp = FastAPI()\\n",
+            "requirements.txt": "fastapi\\n",
+        }))
+        self.assertEqual(result["entrypoint"], "app.main:app")
+        self.assertEqual(result["module"], "app.main")
+        self.assertEqual(result["source_root"], "src")
+        self.assertEqual(result["working_directory"], "/app/src")
+
+
     def test_wrapped_zip_layout_matches_image_builder_flattening(self):
         from deployments.core.entrypoints import resolve_python_runtime_context
 
