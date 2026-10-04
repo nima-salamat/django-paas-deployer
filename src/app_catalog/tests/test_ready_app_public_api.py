@@ -213,7 +213,12 @@ class ReadyAppPublicApiTests(TestCase):
             binding.deploy.save(update_fields=["status", "updated_at"])
 
         network = instance.network
-        with patch("services.models.Service.delete") as service_delete, patch("services.models.PrivateNetwork.delete") as network_delete:
+        with (
+            patch("app_catalog.executor.ApplicationStackExecutor._cleanup_cancelled_children") as cleanup_children,
+            patch("services.signals.cleanup_service_resources"),
+            patch("services.models.Service.delete") as service_delete,
+            patch("services.models.PrivateNetwork.delete") as network_delete,
+        ):
             response = ApplicationInstanceDetailAPIView.as_view()(
                 self.request("DELETE", f"/api/application-catalog/installations/{instance.pk}/"),
                 pk=instance.pk,
@@ -223,6 +228,7 @@ class ReadyAppPublicApiTests(TestCase):
         self.assertFalse(ApplicationInstance.objects.filter(pk=instance.pk).exists())
         self.assertEqual(service_delete.call_count, len(bindings))
         network_delete.assert_called()
+        cleanup_children.assert_called_once()
 
     def test_non_public_installation_is_rejected_at_api_boundary(self):
         response = ApplicationInstanceListCreateAPIView.as_view()(
