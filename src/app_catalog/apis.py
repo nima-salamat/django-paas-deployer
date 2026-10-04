@@ -28,14 +28,36 @@ from .tasks import (
 
 
 def _queue_ready_app_deletion(instance_id: str) -> None:
-    """Persist deletion intent and hand cleanup to the durable Celery worker."""
+    """Converge deletion immediately, then persist a durable retry."""
     from django.utils import timezone
+
+    instance = ApplicationInstance.objects.filter(pk=instance_id).first()
+    if instance is None:
+        return
 
     ApplicationInstance.objects.filter(pk=instance_id).update(
         stage="deletion_pending",
         error_code="APPLICATION_DELETION_PENDING",
         updated_at=timezone.now(),
     )
+
+    # Do not make cancellation dependent on Celery availability. This bounded
+    # coordinator attempt cancels active child Deploys and performs any safe
+    # synchronous cleanup; the durable task remains responsible for retries.
+    try:
+        from .executor import ApplicationStackExecutor
+
+        ApplicationStackExecutor(str(instance_id)).cleanup_terminal_application()
+    except Exception:
+        logger = __import__("logging").getLogger(__name__)
+        logger.exception(
+            "Immediate Ready App deletion convergence failed for %s; keeping durable retry.",
+            instance_id,
+        )
+
+    if not ApplicationInstance.objects.filter(pk=instance_id).exists():
+        return
+
     try:
         delete_application_installation.delay(str(instance_id))
     except Exception:
