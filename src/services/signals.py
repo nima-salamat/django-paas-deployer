@@ -239,8 +239,11 @@ def _cleanup_service_cache_images(service: Service) -> None:
     client = get_docker_client()
     running_ids = set()
     for container in client.containers.list():
-        image = getattr(container, "image", None)
-        image_id = str(getattr(image, "id", "") or "")
+        # Prefer the image identifier already returned by Container.attrs.
+        # Accessing container.image performs a separate inspect_image call and
+        # can raise ImageNotFound when a stale container references an image
+        # that has already been pruned from this Docker daemon.
+        image_id = str((getattr(container, "attrs", {}) or {}).get("Image") or "")
         if image_id:
             running_ids.add(image_id)
 
