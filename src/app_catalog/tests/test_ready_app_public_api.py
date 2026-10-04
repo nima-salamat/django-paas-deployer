@@ -300,6 +300,46 @@ class ReadyAppPublicApiTests(TestCase):
         )
 
 
+    def test_running_delete_cancels_active_children_and_queues_cleanup(self):
+        from unittest.mock import patch
+        from deploy.models import DeploymentStatusChoices
+        from app_catalog.services import create_application_installation
+        from app_catalog.tasks import delete_application_installation
+
+        instance = create_application_installation(
+            self.user,
+            {
+                "catalog_id": "wordpress",
+                "variant": "default",
+                "name": "running-delete-queue",
+                "plan_id": str(self.app_plan.pk),
+                "config": {},
+            },
+            require_public=True,
+        )
+        instance.status = ApplicationStatus.RUNNING
+        instance.save(update_fields=["status", "updated_at"])
+
+        binding = instance.services.select_related("service", "deploy").first()
+        binding.deploy.status = DeploymentStatusChoices.RUNNING
+        binding.deploy.save(update_fields=["status", "updated_at"])
+
+        with (
+            patch("services.signals._cancel_active_deployments_for_service") as cancel_active,
+            patch.object(delete_application_installation, "delay") as queued,
+        ):
+            response = ApplicationInstanceDetailAPIView.as_view()(
+                self.request("DELETE", f"/api/application-catalog/installations/{instance.pk}/"),
+                pk=instance.pk,
+            )
+
+        self.assertEqual(response.status_code, 202)
+        instance.refresh_from_db()
+        self.assertEqual(instance.stage, "deletion_pending")
+        cancel_active.assert_called()
+        queued.assert_called_once_with(str(instance.pk))
+        self.assertTrue(ApplicationInstance.objects.filter(pk=instance.pk).exists())
+
     def test_failed_delete_queues_durable_cleanup_after_resource_failure(self):
         from unittest.mock import patch
         from app_catalog.services import create_application_installation
