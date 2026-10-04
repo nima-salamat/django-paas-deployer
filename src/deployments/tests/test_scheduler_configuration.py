@@ -191,7 +191,11 @@ def test_ready_app_deletion_task_is_routed_and_reconciled():
     settings = (ROOT / "src" / "config" / "settings.py").read_text(encoding="utf-8")
     tasks = (ROOT / "src" / "app_catalog" / "tasks.py").read_text(encoding="utf-8")
     assert '"app_catalog.delete_application_installation": {"queue": "operations"}' in settings
-        assert 'status__in=(ApplicationStatus.RUNNING, ApplicationStatus.FAILED, ApplicationStatus.CANCELLED)' in tasks or 'status__in=(\n                ApplicationStatus.RUNNING,' in tasks
+    deletion_query = tasks.split("instances = ApplicationInstance.objects.filter(", 1)[1].split(
+        "    recovered = 0", 1
+    )[0]
+    assert "ApplicationStatus.RUNNING" in deletion_query
+    assert 'stage="deletion_pending"' in deletion_query
     assert 'name="app_catalog.delete_application_installation"' in tasks
     assert 'max_retries=None' in tasks
     assert 'stage="deletion_pending"' in tasks
