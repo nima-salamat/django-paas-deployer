@@ -181,6 +181,44 @@ def cancel_application_installation(instance_id: str, reason: str = "Application
     _schedule_next(instance_id)
 
 
+@shared_task(
+    bind=True,
+    name="app_catalog.delete_application_installation",
+    max_retries=None,
+)
+def delete_application_installation(self, instance_id: str):
+    """Retry terminal Ready App deletion until all owned resources converge."""
+    instance = ApplicationInstance.objects.filter(pk=instance_id).first()
+    if instance is None:
+        return {"deleted": True, "reason": "already_absent"}
+
+    try:
+        deleted = ApplicationStackExecutor(str(instance_id)).cleanup_terminal_application()
+        if deleted:
+            return {"deleted": True}
+        return self.retry(
+            countdown=15,
+            kwargs={"instance_id": str(instance_id)},
+        )
+    except ApplicationInstance.DoesNotExist:
+        return {"deleted": True, "reason": "already_absent"}
+    except Exception as exc:
+        logger.exception("Ready App deletion retry failed for %s", instance_id)
+        try:
+            ApplicationInstance.objects.filter(pk=instance_id).update(
+                stage="deletion_pending",
+                error_code="APPLICATION_DELETION_PENDING",
+                updated_at=timezone.now(),
+            )
+        except Exception:
+            logger.exception("Unable to persist deletion-pending state for %s", instance_id)
+        raise self.retry(
+            exc=exc,
+            countdown=15,
+            kwargs={"instance_id": str(instance_id)},
+        )
+
+
 @shared_task(name="app_catalog.reconcile_application_installations")
 def reconcile_application_installations():
     """Recover missed Celery callbacks and broker/worker interruptions.
@@ -200,9 +238,27 @@ def reconcile_application_installations():
     instances = ApplicationInstance.objects.filter(
         Q(status=ApplicationStatus.DEPLOYING)
         | Q(status=ApplicationStatus.CANCELLED, cancel_requested=True)
+        | Q(
+            status__in=(ApplicationStatus.FAILED, ApplicationStatus.CANCELLED),
+            stage="deletion_pending",
+            updated_at__lt=cutoff,
+        )
     ).only("pk")
     recovered = 0
     for instance in instances.iterator():
+        pending = ApplicationInstance.objects.filter(
+            pk=instance.pk,
+            stage="deletion_pending",
+            status__in=(ApplicationStatus.FAILED, ApplicationStatus.CANCELLED),
+        ).first()
+        if pending is not None:
+            try:
+                delete_application_installation.delay(str(pending.pk))
+                recovered += 1
+            except Exception:
+                logger.exception("Unable to requeue Ready App deletion %s", pending.pk)
+            continue
+
         # A cancellation task can be lost after the API commits the flag.
         # Re-apply cancellation from the periodic reconciler so child
         # deployments cannot remain active forever.
