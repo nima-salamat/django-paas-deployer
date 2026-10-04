@@ -162,12 +162,11 @@ class ApplicationStackExecutor:
                         logger.exception("Unable to cancel pending child deploy %s", deploy.pk)
 
     def _cleanup_cancelled_children(self) -> bool:
-        """Delete child Services and the application-owned network after cancellation.
+        """Delete cancelled child resources through the normal Service boundary.
 
-        Cancellation first stops/cancels active Deploy work. Cleanup runs only
-        after every child Deploy is terminal, so normal Service deletion remains
-        the single Docker/resource cleanup boundary. The ApplicationInstance
-        record is retained as durable cancellation history.
+        The application row stays as durable cancellation history. The instance
+        lock is held while child bindings/services and the private network are
+        removed so concurrent reconciliation cannot run the same cleanup twice.
         """
         with transaction.atomic():
             locked = (
@@ -193,33 +192,30 @@ class ApplicationStackExecutor:
                 for binding in bindings
             ):
                 return False
-            network_id = locked.network_id
+
+            network = locked.network
             locked.stage = "cancellation_cleanup"
             locked.save(update_fields=["stage", "updated_at"])
 
-        for binding in bindings:
-            deploy = binding.deploy
-            if deploy.zip_file and deploy.zip_file.name:
-                try:
+            # Service.delete() owns Docker/container/image/volume/log cleanup.
+            # Remove the binding immediately before that deletion because its
+            # RESTRICT relation intentionally prevents ordinary direct Service
+            # deletion. If cleanup raises, this transaction rolls back the
+            # binding deletion and the next reconciliation can retry safely.
+            for binding in bindings:
+                deploy = binding.deploy
+                if deploy.zip_file and deploy.zip_file.name:
                     deploy.zip_file.delete(save=False)
-                except Exception:
-                    logger.exception(
-                        "Failed to delete cancelled catalog Deploy archive %s.",
-                        deploy.pk,
-                    )
-            binding.delete()
-            binding.service.delete()
+                binding.delete()
+                binding.service.delete()
 
-        if network_id:
-            from services.models import PrivateNetwork
-            network = PrivateNetwork.objects.filter(pk=network_id).first()
             if network is not None:
                 network.delete()
 
-        ApplicationInstance.objects.filter(
-            pk=self.instance_id,
-            status=ApplicationStatus.CANCELLED,
-        ).update(stage="cancelled", network_id=None, updated_at=timezone.now())
+            locked.stage = "cancelled"
+            locked.network = None
+            locked.save(update_fields=["stage", "network", "updated_at"])
+
         logger.info(
             "Cleaned cancelled Ready App installation %s; removed %d child services.",
             self.instance_id,
