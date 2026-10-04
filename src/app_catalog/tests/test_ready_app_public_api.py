@@ -299,6 +299,44 @@ class ReadyAppPublicApiTests(TestCase):
             PrivateNetwork.objects.filter(pk=network_id).exists()
         )
 
+
+    def test_failed_delete_queues_durable_cleanup_after_resource_failure(self):
+        from unittest.mock import patch
+        from app_catalog.services import create_application_installation
+        from app_catalog.tasks import delete_application_installation
+
+        instance = create_application_installation(
+            self.user,
+            {
+                "catalog_id": "wordpress",
+                "variant": "default",
+                "name": "failed-delete-queued",
+                "plan_id": str(self.app_plan.pk),
+                "config": {},
+            },
+            require_public=True,
+        )
+        instance.status = ApplicationStatus.FAILED
+        instance.error_code = "APPLICATION_SERVICE_DEPLOYMENT_FAILED"
+        instance.error_message = "mariadb: database deployment failed"
+        instance.save(update_fields=["status", "error_code", "error_message", "updated_at"])
+
+        with (
+            patch("services.signals.cleanup_service_resources", side_effect=RuntimeError("volume is still in use")),
+            patch.object(delete_application_installation, "delay") as queued,
+        ):
+            response = ApplicationInstanceDetailAPIView.as_view()(
+                self.request("DELETE", f"/api/application-catalog/installations/{instance.pk}/"),
+                pk=instance.pk,
+            )
+
+        self.assertEqual(response.status_code, 202)
+        instance.refresh_from_db()
+        self.assertEqual(instance.stage, "deletion_pending")
+        self.assertEqual(instance.error_code, "APPLICATION_DELETION_PENDING")
+        queued.assert_called_once_with(str(instance.pk))
+        self.assertTrue(ApplicationInstance.objects.filter(pk=instance.pk).exists())
+
     def test_non_public_installation_is_rejected_at_api_boundary(self):
         response = ApplicationInstanceListCreateAPIView.as_view()(
             self.request(
