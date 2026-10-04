@@ -218,11 +218,16 @@ class ApplicationStackExecutor:
             locked.stage = "cancellation_cleanup"
             locked.save(update_fields=["stage", "updated_at"])
 
-            # Service.delete() owns Docker/container/image/volume/log cleanup.
-            # Remove the binding immediately before that deletion because its
-            # RESTRICT relation intentionally prevents ordinary direct Service
-            # deletion. If cleanup raises, this transaction rolls back the
-            # binding deletion and the next reconciliation can retry safely.
+            # Preflight every child while all bindings/Service rows still
+            # exist. This prevents one early Service deletion from leaving the
+            # installation half-deleted when a later child's Docker cleanup fails.
+            from services.signals import cleanup_service_resources
+
+            for binding in bindings:
+                cleanup_service_resources(binding.service)
+
+            # The binding RESTRICT relation is intentionally removed immediately
+            # before the now-safe Service row deletion.
             for binding in bindings:
                 deploy = binding.deploy
                 if deploy.zip_file and deploy.zip_file.name:
