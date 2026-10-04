@@ -150,6 +150,8 @@ class ReadyApplicationArchitectureTests(TestCase):
         sibling.deploy.refresh_from_db()
         assert instance.status == ApplicationStatus.FAILED
         assert sibling.deploy.status == DeploymentStatusChoices.CANCELLED
+        assert "required application service 'postgres' failed" in sibling.deploy.status_message
+        assert sibling.deploy.error_message == ""
 
     def test_unrelated_integrity_error_is_not_a_name_conflict(self):
         from unittest.mock import patch
