@@ -109,6 +109,27 @@ class ReadyApplicationArchitectureTests(TestCase):
         assert refs
         assert refs[0]["key"] == "service_password_root"
         assert refs[0]["version"] == root_secret.current_version
+    def test_wordpress_app_receives_materialized_mariadb_connection_contract(self):
+        instance = self.install(
+            catalog_id="wordpress",
+            variant="default",
+            name="wordpress-db-env-contract",
+        )
+        app = instance.services.get(service_key="wordpress").service
+
+        env = {
+            row.key: row.resolve_value()
+            for row in app.environment_variables.filter(enabled=True)
+        }
+
+        assert env["WORDPRESS_DB_HOST"] == "mariadb"
+        assert env["WORDPRESS_DB_USER"] == "app"
+        assert env["WORDPRESS_DB_NAME"] == "wordpress"
+        assert env["WORDPRESS_DB_PASSWORD"] == app.secrets.get(
+            key="service_password_wordpress"
+        ).get_current_value()
+
+
     def test_real_installation_materializes_db_child_and_composite_secret(self):
         instance = self.install(name='mattermost-real-materialization')
         bindings = {row.service_key: row for row in instance.services.select_related('service', 'deploy')}
