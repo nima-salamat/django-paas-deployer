@@ -77,6 +77,22 @@ class ReadyApplicationArchitectureTests(TestCase):
         assert rows["wordpress"] == "my-deploy-wordpress-docker"
         assert rows["mariadb"] == "my-deploy-mariadb-mariadb"
 
+    def test_ready_app_mariadb_accepts_mysql_env_aliases_for_user_database_and_password(self):
+        instance = self.install(catalog_id="wordpress", variant="default", name="mariadb-alias-contract")
+        binding = instance.services.get(service_key="mariadb")
+        materialized = materialize_revision_config(ensure_revision_for_deploy(binding.deploy, force_new=True).revision)
+
+        assert materialized["platform"] == "mariadb"
+        assert materialized["username"] == "app"
+        assert materialized["database"] == "wordpress"
+        assert materialized["password"] == instance.services.get(service_key="wordpress").service.secrets.get(
+            key="service_password_wordpress"
+        ).get_current_value()
+        assert materialized["root_password"] == binding.service.secrets.get(
+            key="service_password_root"
+        ).get_current_value()
+
+
     def test_ready_app_mariadb_root_secret_reference_materializes_to_real_value(self):
         instance = self.install(catalog_id="wordpress", variant="default", name="mariadb-secret-materialization")
         binding = instance.services.get(service_key="mariadb")
