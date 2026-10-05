@@ -322,20 +322,34 @@ def _database_runtime_config(spec: dict, *, environment: dict) -> dict:
     if str(spec.get("role") or "") != "database" or str(spec.get("plan_type") or "") != str(PlanTypeChoices.DB):
         return {}
     platform = str(spec.get("platform") or "").lower()
-    prefix = {"postgresql": "POSTGRES", "postgres": "POSTGRES", "mysql": "MYSQL", "mariadb": "MARIADB", "mongodb": "MONGO", "mongo": "MONGO", "oracle": "ORACLE"}.get(platform, "")
     normalized = {str(k).upper(): v for k, v in environment.items()}
     username = spec.get("database_username")
     database = spec.get("database_name")
     password = spec.get("password")
     root_password = spec.get("root_password")
-    if prefix:
+
+    # MySQL and MariaDB images accept both MYSQL_* and MARIADB_* variable
+    # families. Ready App definitions historically use both spellings, so the
+    # normalized DB contract must read from either family rather than relying
+    # on the selected image's preferred prefix.
+    if platform in {"mysql", "mariadb"}:
+        prefixes = ("MYSQL", "MARIADB")
+    else:
+        prefix = {
+            "postgresql": "POSTGRES",
+            "postgres": "POSTGRES",
+            "mongodb": "MONGO",
+            "mongo": "MONGO",
+            "oracle": "ORACLE",
+        }.get(platform, "")
+        prefixes = (prefix,) if prefix else ()
+
+    for prefix in prefixes:
         username = username or normalized.get(f"{prefix}_USER") or normalized.get(f"{prefix}_USERNAME")
         database = database or normalized.get(f"{prefix}_DB") or normalized.get(f"{prefix}_DATABASE")
         password = password or normalized.get(f"{prefix}_PASSWORD")
         root_password = root_password or normalized.get(f"{prefix}_ROOT_PASSWORD")
-    if not password and prefix == "MARIADB":
-        password = normalized.get("MYSQL_PASSWORD")
-        root_password = root_password or normalized.get("MYSQL_ROOT_PASSWORD")
+
     return {key: value for key, value in {
         "platform": platform, "username": username, "database": database,
         "password": password, "root_password": root_password,
