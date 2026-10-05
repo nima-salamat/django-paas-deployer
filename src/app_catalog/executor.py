@@ -343,7 +343,7 @@ class ApplicationStackExecutor:
                 if binding is not None:
                     binding.delete()
                 if Service.objects.filter(pk=service.pk).exists():
-                    service.delete()
+                    delete_service_row_after_cleanup(service)
 
             if network is not None:
                 locked_network = type(network).objects.select_for_update().get(pk=network.pk)
