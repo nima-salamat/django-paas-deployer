@@ -87,7 +87,7 @@ jobs:
         run: >-
           pytest -q
           src/plans/tests/test_models_serializers_api.py
-          src/users/tests/test_models_serializers_api.py
+          src/users/tests/test_users_models_serializers_api.py
           src/auth_users/tests/test_models_admin_api.py
           src/auth_users/tests/test_token_serializers_contracts.py
           src/tickets/tests/test_models_serializers_permissions.py
