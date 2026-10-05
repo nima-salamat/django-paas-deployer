@@ -15,6 +15,7 @@ from deployments.core.state.manager import StateManager
 
 from .models import ApplicationInstance, ApplicationInstanceService, ApplicationStatus
 from services.models import Service, ServiceNetworkAttachment
+from services.signals import cleanup_service_resources, delete_service_row_after_cleanup
 from .plan import ApplicationPlan, ServicePlan, ready_service_keys
 
 logger = logging.getLogger(__name__)
@@ -227,8 +228,6 @@ class ApplicationStackExecutor:
 
             # Preflight every child while all Service rows still exist. This
             # also recovers legacy installations whose binding was already lost.
-            from services.signals import cleanup_service_resources
-
             for service in service_rows:
                 cleanup_service_resources(service)
 
@@ -241,7 +240,7 @@ class ApplicationStackExecutor:
                         deploy.zip_file.delete(save=False)
                     binding.delete()
                 if Service.objects.filter(pk=service.pk).exists():
-                    service.delete()
+                    delete_service_row_after_cleanup(service)
 
             if network is not None:
                 locked_network = type(network).objects.select_for_update().get(pk=network.pk)
