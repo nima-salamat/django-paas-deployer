@@ -196,9 +196,23 @@ def cleanup_service_resources(service: Service) -> None:
     _cleanup_service_volumes(service)
 
 
+def delete_service_row_after_cleanup(service: Service) -> None:
+    """Delete a Service row after an explicit resource cleanup pass.
+
+    Normal ``Service.delete()`` calls still use the pre_delete cleanup signal.
+    Ready App/application coordinators, which must preflight Docker cleanup before
+    their database transaction, call this helper so the same cleanup is not
+    executed a second time by the signal.
+    """
+    setattr(service, "_docker_cleanup_completed", True)
+    service.delete()
+
+
 @receiver(pre_delete, sender=Service)
 def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
-    """Remove Docker resources before the Service row is deleted."""
+    """Remove Docker resources before the Service row is deleted unless pre-cleaned."""
+    if getattr(instance, "_docker_cleanup_completed", False):
+        return
     cleanup_service_resources(instance)
 
 def _cleanup_service_cache_images(service: Service) -> None:
