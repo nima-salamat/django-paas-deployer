@@ -20,6 +20,7 @@ from .services import (
     resource_summary_for_resolved,
     safe_slug,
 )
+from services.signals import cleanup_service_resources, delete_service_row_after_cleanup
 from .tasks import (
     start_application_installation,
     cancel_application_installation,
@@ -304,7 +305,6 @@ class ApplicationInstanceDetailAPIView(CatalogPermissionMixin, APIView):
         from django.db import transaction
         from deploy.models import Deploy
         from services.models import PrivateNetwork, ServiceNetworkAttachment
-        from services.signals import cleanup_service_resources
         from .services import application_services_for_cleanup
 
         service_bindings, service_rows, unexpected_services = application_services_for_cleanup(instance)
@@ -403,7 +403,7 @@ class ApplicationInstanceDetailAPIView(CatalogPermissionMixin, APIView):
                     if binding is not None:
                         binding.delete()
                     if Service.objects.filter(pk=service.pk).exists():
-                        service.delete()
+                        delete_service_row_after_cleanup(service)
 
                 if locked_network is not None:
                     if (
