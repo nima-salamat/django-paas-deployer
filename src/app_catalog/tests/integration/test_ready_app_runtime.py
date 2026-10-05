@@ -48,7 +48,49 @@ class ReadyApplicationRuntimeTests(TestCase):
             name="Bronze", platform="postgresql", plan_type=PlanTypeChoices.DB,
             defaults=common,
         )
+        Plan.objects.get_or_create(
+            name="Bronze", platform="mariadb", plan_type=PlanTypeChoices.DB,
+            defaults=common,
+        )
         return app
+
+    def test_wordpress_mariadb_real_stack(self):
+        user = User.objects.create_user(
+            username="runtime-wordpress-integration",
+            email="runtime-wordpress-integration@example.invalid",
+        )
+        app_plan = self._plans()
+        instance = create_application_installation(
+            user,
+            {
+                "catalog_id": "wordpress",
+                "variant": "default",
+                "name": "runtime-wordpress",
+                "plan_id": app_plan.pk,
+                "config": {
+                    "domain": "wordpress.integration.test",
+                },
+            },
+        )
+
+        start_application_installation.delay(str(instance.pk))
+
+        deadline = time.monotonic() + int(os.getenv("DEPLOYMENT_INTEGRATION_TIMEOUT", "900"))
+        while time.monotonic() < deadline:
+            instance.refresh_from_db()
+            if instance.status in {
+                ApplicationStatus.RUNNING,
+                ApplicationStatus.FAILED,
+                ApplicationStatus.CANCELLED,
+            }:
+                break
+            time.sleep(3)
+
+        instance.refresh_from_db()
+        self.assertEqual(instance.status, ApplicationStatus.RUNNING, instance.error_message)
+        statuses = {b.service_key: b.deploy.status for b in instance.services.select_related("deploy")}
+        self.assertEqual(statuses.get("mariadb"), "succeeded")
+        self.assertEqual(statuses.get("wordpress"), "succeeded")
 
     def test_mattermost_postgres_real_stack(self):
         user = User.objects.create_user(
