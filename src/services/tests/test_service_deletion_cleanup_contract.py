@@ -225,3 +225,14 @@ def test_in_use_managed_volume_cleanup_removes_owned_task_container_then_retries
     assert remove_calls["count"] == 2
     attached.stop.assert_called_once_with(timeout=10)
     attached.remove.assert_called_once_with(force=True)
+
+
+def test_precleaned_service_delete_skips_duplicate_runtime_cleanup():
+    source = (ROOT / "services" / "signals.py").read_text(encoding="utf-8")
+
+    assert "def delete_service_row_after_cleanup(service: Service)" in source
+    assert 'setattr(service, "_docker_cleanup_completed", True)' in source
+    signal = source.split("@receiver(pre_delete, sender=Service)", 1)[1].split(
+        "def _cleanup_service_volumes", 1
+    )[0]
+    assert 'getattr(instance, "_docker_cleanup_completed", False)' in signal
