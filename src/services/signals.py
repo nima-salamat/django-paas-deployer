@@ -141,7 +141,21 @@ def cleanup_service_resources(service: Service) -> None:
     from deployments.core.db_deployer import DB_PLATFORMS, DBDeployer
 
     if plan_platform in DB_PLATFORMS:
-        DBDeployer().remove(service_name)
+        if swarm_enabled():
+            # Database Swarm removal is asynchronous. Wait for the task
+            # containers to drain before touching their persistent volumes.
+            try:
+                SwarmRuntime().remove_service_group(str(service.pk))
+            except Exception as exc:
+                logger.exception(
+                    "Failed cleaning DB Swarm services for service '%s'.",
+                    service.name,
+                )
+                raise RuntimeError(
+                    f"Failed to remove DB Swarm runtime for service '{service.name}'."
+                ) from exc
+        else:
+            DBDeployer().remove(service_name)
     elif swarm_enabled():
         try:
             SwarmRuntime().remove_service_group(str(service.pk))
