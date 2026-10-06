@@ -80,6 +80,13 @@ class AgentContractTests(TestCase):
         self.assertEqual(operation["x-required-scopes"], ["services.create", "plans.apply"])
         self.assertFalse(operation["x-enabled-for-agent"])
 
+    def test_shell_protocol_exposes_agent_websocket_authentication(self):
+        protocol = shell_protocol_metadata("service-1")
+        auth = protocol["interactive_pty"]["authentication"]
+        self.assertEqual(auth["agent_query_parameter"], "agent_token")
+        self.assertEqual(auth["shell_query_parameter"], "shell_token")
+        self.assertEqual(protocol["interactive_pty"]["websocket_path"], "/ws/services/shell/service-1/")
+
     def test_shell_close_and_file_operations_use_contract_scopes(self):
         close = contract_for(
             "/agent/v1/services/{service_id}/shell/sessions/{session_id}/close",
