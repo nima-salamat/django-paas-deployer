@@ -740,9 +740,28 @@ def _create_application_installation(
             "catalog_service_key": key,
             "catalog_managed": True,
             "start_command": (
-                shlex.join([str(x) for x in (spec.get("command") or [])])
+                shlex.join(
+                    [
+                        _render_service_value(
+                            str(x),
+                            config=resolved_config,
+                            secrets={},
+                            service_hosts=service_hosts,
+                        )
+                        for x in (spec.get("command") or [])
+                    ]
+                )
                 if isinstance(spec.get("command"), (list, tuple)) and spec.get("command")
-                else (str(spec.get("command")) if spec.get("command") else None)
+                else (
+                    _render_service_value(
+                        str(spec.get("command")),
+                        config=resolved_config,
+                        secrets={},
+                        service_hosts=service_hosts,
+                    )
+                    if spec.get("command")
+                    else None
+                )
             ),
             "entry_point": (
                 shlex.join([str(x) for x in (spec.get("entrypoint") or [])])
