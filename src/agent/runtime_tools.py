@@ -340,6 +340,46 @@ def _wordpress_page_create(service, user, payload: dict[str, Any]) -> dict[str, 
     return {"platform": "wordpress", "title": title, "status": status, **result}
 
 
+def _wordpress_page_update(service, user, payload: dict[str, Any]) -> dict[str, Any]:
+    from services.shell import _platform_for_service
+
+    if _platform_for_service(service) != "wordpress":
+        raise ValueError("wordpress.page.update is only available for WordPress services.")
+    try:
+        page_id = int(payload.get("page_id"))
+    except (TypeError, ValueError):
+        raise ValueError("page_id must be an integer.")
+    args = ["wp", "post", "update", str(page_id)]
+    fields = 0
+    if payload.get("title") is not None:
+        title = str(payload.get("title") or "").strip()
+        if not title or len(title) > 300:
+            raise ValueError("title must be non-empty and at most 300 characters.")
+        args.append(f"--post_title={title}")
+        fields += 1
+    if payload.get("content") is not None:
+        content = str(payload.get("content") or "")
+        if len(content) > 256 * 1024:
+            raise ValueError("content is too large.")
+        args.append(f"--post_content={content}")
+        fields += 1
+    if payload.get("status") is not None:
+        status = str(payload.get("status") or "").strip().lower()
+        if status not in {"draft", "publish", "pending", "private"}:
+            raise ValueError("Unsupported page status.")
+        args.append(f"--post_status={status}")
+        fields += 1
+    if payload.get("slug") is not None:
+        slug = str(payload.get("slug") or "").strip()
+        if not re.fullmatch(r"[a-z0-9-]{1,200}", slug):
+            raise ValueError("slug must contain lowercase letters, digits and hyphens only.")
+        args.append(f"--post_name={slug}")
+        fields += 1
+    if not fields:
+        raise ValueError("At least one page field is required.")
+    result = command_result_from_argv(service, user, args, confirm=bool(payload.get("confirm", False)))
+    return {"platform": "wordpress", "page_id": page_id, **result}
+
 def _wordpress_plugin_manage(service, user, payload: dict[str, Any]) -> dict[str, Any]:
     from services.shell import _platform_for_service
 
@@ -370,7 +410,7 @@ def _wordpress_theme_manage(service, user, payload: dict[str, Any]) -> dict[str,
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,200}", slug):
         raise ValueError("slug must be a WordPress theme slug.")
     args = ["wp", "theme", action, slug]
-    if action == "install":
+    if action == "install" and payload.get("activate", False):
         args.append("--activate")
     result = command_result_from_argv(service, user, args, confirm=bool(payload.get("confirm", False)))
     return {"platform": "wordpress", "action": action, "slug": slug, **result}
@@ -391,6 +431,9 @@ def _php_composer(service, user, payload: dict[str, Any]) -> dict[str, Any]:
     platform = _platform_for_service(service)
     if platform not in {"php", "laravel", "wordpress"}:
         raise ValueError("php.composer is only available for PHP-compatible services.")
+    detected = _runtime_detect(service, user, {"commands": ["composer"]})
+    if not detected["commands"][0]["installed"]:
+        return {"platform": platform, "installed": False, "action": str(payload.get("action") or "validate")}
     action = str(payload.get("action") or "validate").strip().lower()
     allowed = {"validate", "show", "outdated", "install", "update"}
     if action not in allowed:
@@ -399,8 +442,7 @@ def _php_composer(service, user, payload: dict[str, Any]) -> dict[str, Any]:
     if action in {"install", "update"} and payload.get("no_dev") is True:
         args.append("--no-dev")
     result = command_result_from_argv(service, user, args, confirm=bool(payload.get("confirm", False)))
-    return {"platform": platform, "action": action, **result}
-
+    return {"platform": platform, "action": action, "installed": True, **result}
 
 def _database_health(service, user, payload: dict[str, Any]) -> dict[str, Any]:
     from services.shell import _platform_for_service, _resolve_container, _database_runtime_values, runtime_workdir_for_platform, prepare_interactive_exec_environment, DATABASE_PLATFORMS
@@ -512,13 +554,23 @@ TOOLS = (
         handler=_wordpress_page_create,
     ),
     RuntimeTool(
+        name="wordpress.page.update",
+        title="Update WordPress page",
+        summary="Update a WordPress Page through WP-CLI using structured page fields.",
+        platforms=("wordpress",),
+        scopes=("shell.execute",),
+        mutating=True,
+        input_schema={"type": "object", "required": ["page_id"], "properties": {"page_id": {"type": "integer"}, "title": {"type": "string"}, "content": {"type": "string"}, "slug": {"type": "string"}, "status": {"type": "string", "enum": ["draft", "publish", "pending", "private"]}, "confirm": {"type": "boolean"}}},
+        handler=_wordpress_page_update,
+    ),
+    RuntimeTool(
         name="wordpress.plugin.manage",
         title="Manage WordPress plugin",
         summary="Install, activate, deactivate, update or delete a plugin by slug.",
         platforms=("wordpress",),
         scopes=("shell.execute",),
         mutating=True,
-        input_schema={"type": "object", "required": ["action", "slug"], "properties": {"action": {"type": "string", "enum": ["install", "activate", "deactivate", "update", "delete"]}, "slug": {"type": "string"}, "activate": {"type": "boolean"}, "confirm": {"type": "boolean"}}},
+        input_schema={"type": "object", "required": ["action", "slug"], "properties": {"action": {"type": "string", "enum": ["install", "activate", "deactivate", "update", "delete"]}, "slug": {"type": "string"}, "activate": {"type": "boolean", "default": True}, "confirm": {"type": "boolean"}}},
         handler=_wordpress_plugin_manage,
     ),
     RuntimeTool(
@@ -528,7 +580,7 @@ TOOLS = (
         platforms=("wordpress",),
         scopes=("shell.execute",),
         mutating=True,
-        input_schema={"type": "object", "required": ["action", "slug"], "properties": {"action": {"type": "string", "enum": ["install", "activate", "update", "delete"]}, "slug": {"type": "string"}, "confirm": {"type": "boolean"}}},
+        input_schema={"type": "object", "required": ["action", "slug"], "properties": {"action": {"type": "string", "enum": ["install", "activate", "update", "delete"]}, "slug": {"type": "string"}, "activate": {"type": "boolean", "default": False}, "confirm": {"type": "boolean"}}},
         handler=_wordpress_theme_manage,
     ),
     RuntimeTool(
