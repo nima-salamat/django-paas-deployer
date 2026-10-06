@@ -912,6 +912,11 @@ def _validate_database_argv(argv: list[str], platform: str) -> None:
             _policy_reject("Do not put database passwords in command arguments. Use the interactive database client.")
         if lower in {"-e", "--execute", "-c", "--command", "-f", "--file", "--eval"}:
             _policy_reject("Batch SQL/script execution is not exposed through the restricted shell. Use the interactive database client.")
+    if base == "psql":
+        for token in argv[1:]:
+            value = str(token).strip().lower()
+            if value.startswith(("postgresql://", "postgres://")):
+                _policy_reject("PostgreSQL connection strings are not allowed in the restricted shell; use the local managed connection.")
     host_options = {"-h", "--host", "--hostname"}
     for i, token in enumerate(argv[1:], start=1):
         if token in host_options and i + 1 < len(argv):
