@@ -16,7 +16,7 @@ class RuntimeToolIndexView(AgentSecuredAPIView):
     agent_contract_path = "/agent/v1/services/{service_id}/tools"
 
     def get(self, request, service_id):
-        service = get_service(service_id, request.user, action="can_view")
+        service = get_service(service_id, request.user, action="can_shell")
         tools = tools_for_service(request.agent, service)
         return Response({
             "result": "success",
@@ -67,11 +67,12 @@ class RuntimeToolExecuteView(AgentSecuredAPIView):
         self.audit_metadata = {
             "tool": tool.name,
             "platform": platform,
-            "tool_args": {
-                key: value
-                for key, value in payload.items()
-                if key not in {"password", "secret", "token", "credential"}
-            },
+            "argument_keys": sorted(
+                str(key) for key in payload.keys()
+                if str(key) not in {"password", "secret", "token", "credential"}
+            ),
+            "argument_count": len(payload),
+            "has_confirmation": bool(payload.get("confirm")),
         }
         result = tool.handler(service, request.user, payload) if tool.handler else {}
         return Response({
