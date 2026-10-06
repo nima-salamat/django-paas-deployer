@@ -532,7 +532,8 @@ the password through PTY stdin. Never echo or log the password.
 
 For MySQL/MariaDB use the engine-specific admin ping command from the command catalog. For PostgreSQL use `pg_isready`. These are read-only checks and do not require entering a SQL REPL.        """,
         scopes=("shell.read", "shell.execute"),
-    ),    _skill(
+    ),
+    _skill(
         "developer-shell",
         "Developer Shell",
         "Use a hardened interactive developer shell when the service and Agent explicitly grant developer-shell access.",
