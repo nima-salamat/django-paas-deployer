@@ -392,7 +392,7 @@ def _wordpress_plugin_manage(service, user, payload: dict[str, Any]) -> dict[str
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,200}", slug):
         raise ValueError("slug must be a WordPress plugin slug.")
     args = ["wp", "plugin", action, slug]
-    if action == "install" and payload.get("activate", True):
+    if action == "install" and payload.get("activate", False):
         args.append("--activate")
     result = command_result_from_argv(service, user, args, confirm=bool(payload.get("confirm", False)))
     return {"platform": "wordpress", "action": action, "slug": slug, **result}
@@ -570,7 +570,7 @@ TOOLS = (
         platforms=("wordpress",),
         scopes=("shell.execute",),
         mutating=True,
-        input_schema={"type": "object", "required": ["action", "slug"], "properties": {"action": {"type": "string", "enum": ["install", "activate", "deactivate", "update", "delete"]}, "slug": {"type": "string"}, "activate": {"type": "boolean", "default": True}, "confirm": {"type": "boolean"}}},
+        input_schema={"type": "object", "required": ["action", "slug"], "properties": {"action": {"type": "string", "enum": ["install", "activate", "deactivate", "update", "delete"]}, "slug": {"type": "string"}, "activate": {"type": "boolean", "default": False}, "confirm": {"type": "boolean"}}},
         handler=_wordpress_plugin_manage,
     ),
     RuntimeTool(
@@ -663,7 +663,7 @@ TOOLS = (
         title="Run WP-CLI",
         summary="Run a non-interactive, policy-checked WP-CLI operation against the WordPress site.",
         platforms=("wordpress",),
-        scopes=("shell.execute",),
+        scopes=("shell.execute", "shell.developer"),
         mutating=True,
         input_schema={
             "type": "object",
