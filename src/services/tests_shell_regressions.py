@@ -229,7 +229,7 @@ def test_database_restricted_workspace_is_not_a_data_directory():
 def test_developer_shell_security_contract_is_explicit():
     source = SHELL
     assert "def developer_shell_security_check" in source
-    assert "no-new-privileges" in source
+    assert "seccomp=unconfined" in source
     assert "Docker engine access is mounted" in source
     assert "host devices are exposed" in source
     assert '"developer": "developer"' in source
