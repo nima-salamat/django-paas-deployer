@@ -144,7 +144,10 @@ def public_resolution_payload(definition: CatalogDefinition, resolved: dict, res
         "application": {
             "id": definition.id,
             "name": definition.name,
-            "software_version": definition.software_version,
+            "software_version": str(
+                (resolved.get("config") or {}).get("software_version")
+                or definition.software_version
+            ),
             "definition_version": definition.definition_version,
             "variant": str(resolved.get("variant_id") or ""),
         },
