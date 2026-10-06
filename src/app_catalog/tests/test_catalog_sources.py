@@ -146,12 +146,7 @@ networks:
             wordpress["environment"]["PASSDEPLOYER_PUBLIC_HOST"],
             "app.example.com",
         )
-        self.assertEqual(
-            wordpress["command"][:2],
-            ["/bin/sh", "-lc"],
-        )
-        self.assertIn("app.example.com", wordpress["command"][2])
-        self.assertIn("apache2-foreground", wordpress["command"][2])
+        self.assertFalse(wordpress.get("command"))
 
     def test_public_host_placeholder_is_replaced_during_final_service_render(self):
         from app_catalog.services import _PLATFORM_PUBLIC_HOST_TOKEN, _render_service_value
