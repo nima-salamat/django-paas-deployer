@@ -34,6 +34,12 @@ DEFAULT_WORKDIRS = {
     "laravel": "/var/www/html",
     "php": "/var/www/html",
     "wordpress": "/var/www/html",
+    "mysql": "/var/lib/mysql",
+    "mariadb": "/var/lib/mysql",
+    "postgresql": "/var/lib/postgresql/data",
+    "mongodb": "/data/db",
+    "redis": "/data",
+    "oracle": "/opt/oracle/oradata",
     "node": "/app",
     "python": "/app",
     "django": "/app",
@@ -59,6 +65,23 @@ PLATFORM_ALIASES = {
     "vue": "node",
     "angular": "node",
     "express": "node",
+    "mysql": "mysql",
+    "mariadb": "mariadb",
+    "postgres": "postgresql",
+    "postgresql": "postgresql",
+    "mongodb": "mongodb",
+    "mongo": "mongodb",
+    "redis": "redis",
+    "oracle": "oracle",
+}
+
+DATABASE_PLATFORMS = {
+    "mysql": {"client": "mysql", "data_root": "/var/lib/mysql", "interactive": ("mysql",)},
+    "mariadb": {"client": "mariadb", "data_root": "/var/lib/mysql", "interactive": ("mariadb", "mysql")},
+    "postgresql": {"client": "psql", "data_root": "/var/lib/postgresql/data", "interactive": ("psql",)},
+    "mongodb": {"client": "mongosh", "data_root": "/data/db", "interactive": ("mongosh",)},
+    "redis": {"client": "redis-cli", "data_root": "/data", "interactive": ("redis-cli",)},
+    "oracle": {"client": "sqlplus", "data_root": "/opt/oracle/oradata", "interactive": ("sqlplus",)},
 }
 
 # ---------------------------------------------------------------------------
@@ -112,9 +135,16 @@ RUNTIME_COMMANDS = {
 PLATFORM_COMMANDS = {
     "laravel": {"php", "composer", "node", "npm", "npx", "yarn", "pnpm", "git", "make"},
     "php": {"php", "composer", "git", "make"},
+    "wordpress": {"php", "git"},
     "django": {"python", "python3", "pip", "pip3", "git", "make"},
     "python": {"python", "python3", "pip", "pip3", "git", "make"},
     "node": {"node", "npm", "npx", "yarn", "pnpm", "bun", "git", "make"},
+    "mysql": {"mysql"},
+    "mariadb": {"mariadb", "mysql"},
+    "postgresql": {"psql"},
+    "mongodb": {"mongosh"},
+    "redis": {"redis-cli"},
+    "oracle": {"sqlplus"},
     "generic": set(RUNTIME_COMMANDS),
 }
 
@@ -220,19 +250,16 @@ GENERIC_COMMAND_CATALOG = set(BASE_COMMANDS) | {"git", "make"}
 
 
 def _platform_for_service(service: Service) -> str:
-    """Resolve a stable platform label used for workdir defaults and UI catalogs.
+    """Resolve a stable platform label for shell policy, workdir and catalogs.
 
-    Platform is advisory for binary availability: runtime tools (php, python,
-    node, git, …) are accepted on every platform so a mis-labelled deploy does
-    not block legitimate commands. The label still drives the default work-root.
-    Catalog-managed services also expose their canonical catalog service key in
-    runtime/source metadata; use that signal when the generic Docker platform
-    label does not carry framework identity.
+    The resolver understands normal Service Plans, Ready App metadata and
+    database-native services. Generic Docker is only the final fallback.
     """
     deploy = get_active_deploy(service)
     config = getattr(deploy, "config", None) or {}
     runtime_config = getattr(service, "runtime_config", None) or {}
     source_config = getattr(service, "source_config", None) or {}
+    plan = getattr(service, "plan", None)
     candidates = [
         config.get("framework"),
         config.get("platform"),
@@ -244,9 +271,12 @@ def _platform_for_service(service: Service) -> str:
         runtime_config.get("stack"),
         runtime_config.get("catalog_service_key"),
         runtime_config.get("catalog_platform"),
+        runtime_config.get("database_engine"),
+        runtime_config.get("engine"),
         source_config.get("catalog_id"),
         source_config.get("service_key"),
         getattr(deploy, "framework", None) if deploy is not None else None,
+        getattr(plan, "platform", None) if plan is not None else None,
         getattr(service, "framework", None),
         getattr(service, "platform", None),
     ]
@@ -256,13 +286,19 @@ def _platform_for_service(service: Service) -> str:
             continue
         if value in PLATFORM_ALIASES:
             return PLATFORM_ALIASES[value]
-        if value in PLATFORM_COMMANDS:
+        if value in PLATFORM_COMMANDS or value in DATABASE_PLATFORMS:
             return value
-        # Partial matches (e.g. "laravel-10", "node18").
         for key, mapped in PLATFORM_ALIASES.items():
             if key in value or value in key:
                 return mapped
     return "generic"
+
+
+def default_workdir_for_platform(platform: str) -> str:
+    normalized = str(platform or "").strip().lower()
+    if normalized in DATABASE_PLATFORMS:
+        return str(DATABASE_PLATFORMS[normalized]["data_root"])
+    return DEFAULT_WORKDIRS.get(normalized, "/app")
 
 def _safe_workdir(path: str, root: str) -> str:
     path = str(path or root).strip() or root
@@ -986,7 +1022,7 @@ def expire_idle_sessions(*, service=None, now=None) -> int:
 
 def create_session(service: Service, user, workdir: str | None = None) -> tuple[object, str]:
     platform = _platform_for_service(service)
-    root = DEFAULT_WORKDIRS.get(platform, "/app")
+    root = default_workdir_for_platform(platform)
     workdir = _safe_workdir(workdir or root, root)
     _resolve_container(service)
     now = timezone.now()
@@ -1295,7 +1331,7 @@ def prepare_interactive_exec_environment(container, *, platform: str = "", root_
        (Docker exec ``Env`` replaces the whole environment when set).
     """
     platform = (platform or "").strip().lower()
-    root = (root_path or "").strip() or DEFAULT_WORKDIRS.get(platform, "/app")
+    root = (root_path or "").strip() or default_workdir_for_platform(platform)
 
     # (xdg_config_home, psysh_dir)
     options: list[tuple[str, str]] = []
