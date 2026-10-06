@@ -34,6 +34,9 @@ class AgentSkillTests(TestCase):
         self.assertIn("php", names)
         self.assertIn("wordpress", names)
         self.assertIn("databases", names)
+        self.assertIn("python", names)
+        self.assertIn("node", names)
+        self.assertIn("runtime-tools", names)
         self.assertNotIn("deployments", names)
 
     def test_skill_detail_returns_markdown(self):
