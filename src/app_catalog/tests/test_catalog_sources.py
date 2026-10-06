@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 import unittest
 
-from app_catalog.catalog import ApplicationCatalog, CatalogValidationError, resolve_variant
+from app_catalog.catalog import ApplicationCatalog, CatalogValidationError, is_public_definition, resolve_variant
 from app_catalog.compose import load_compose
 from app_catalog.compose_catalog import compose_to_resolved
 from app_catalog.plan import ApplicationPlanError, plan_from_resolved
@@ -122,6 +122,35 @@ networks:
         self.assertEqual(wordpress["working_directory"], "/var/www/html")
         self.assertEqual(wordpress["volumes"][0]["target"], "/var/www/html")
 
+    def test_wordpress_choice_image_template_is_public(self):
+        definition = ApplicationCatalog.get("wordpress")
+        self.assertTrue(is_public_definition(definition))
+
+    def test_free_form_image_template_is_not_public(self):
+        definition = ApplicationCatalog.get("wordpress")
+        data = dict(definition.data)
+        variant = dict(next(iter(data["variants"].values())))
+        variant["fields"] = [
+            field for field in (variant.get("fields") or [])
+            if field.get("id") != "software_version"
+        ] + [{
+            "id": "software_version",
+            "label": "WordPress version",
+            "type": "string",
+            "required": True,
+        }]
+        variant["services"] = [
+            dict(variant["services"][0], image="wordpress:" + "$" + "{config.software_version}" + "-php8.3-apache")
+        ]
+        data["variants"] = {"default": variant}
+        from dataclasses import replace
+        self.assertFalse(is_public_definition(replace(definition, data=data)))
+
+    def test_public_catalog_publication_is_model_backed_editorial_state(self):
+        source = Path(__import__("app_catalog.models", fromlist=["CatalogPublication"]).__file__).read_text(encoding="utf-8")
+        self.assertIn("class CatalogPublication(models.Model):", source)
+        self.assertIn('catalog_id = models.CharField(max_length=64, unique=True)', source)
+        self.assertIn("featured_override = models.BooleanField(", source)
     def test_wordpress_public_service_uses_port_80_silent_healthcheck_and_https_config(self):
         definition = ApplicationCatalog.get("wordpress")
         resolved = resolve_variant(definition, "default", {"domain": "app.example.com"})
