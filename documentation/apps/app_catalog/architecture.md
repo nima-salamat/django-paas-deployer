@@ -6,7 +6,7 @@
 
 It performs catalog parsing/security validation, variant resolution, immutable installation-intent capture, child Service/Deploy materialization, and application-level dependency scheduling/cancellation/timeout/reconciliation.
 
-It does not execute Docker, build images, perform readiness checks, or implement a second deployment runtime.
+It also owns a lightweight Ready App runtime supervisor that validates the persisted application graph and child-state invariants after an installation is RUNNING. The supervisor does not execute Docker, build images, perform readiness checks, or implement a second deployment runtime; the deployments monitor remains responsible for runtime observation and repair.
 
 ## 2. Responsibilities
 
