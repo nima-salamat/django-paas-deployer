@@ -483,6 +483,45 @@ def build_openapi(agent, *, request=None):
         "/agent/v1/services/{service_id}/shell/files": {
             "post": {"summary": "Use the existing restricted file operation boundary"}
         },
+        "/agent/v1/services/{service_id}/tools": {
+            "get": {
+                "summary": "List platform-aware runtime tools enabled for this Agent",
+                "responses": {
+                    "200": {
+                        "description": "Runtime tool definitions",
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/RuntimeToolIndex"}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/agent/v1/services/{service_id}/tools/{tool_name}": {
+            "post": {
+                "summary": "Execute one platform-aware runtime tool",
+                "requestBody": {
+                    "required": False,
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": "#/components/schemas/RuntimeToolRequest"}
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Runtime tool result",
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/RuntimeToolResponse"}
+                            }
+                        }
+                    },
+                    "409": {"$ref": "#/components/responses/Error"}
+                }
+            }
+        },
         "/agent/v1/plans": {"get": {"summary": "List plans"}},
         "/agent/v1/plans/{plan_id}": {"get": {"summary": "Inspect plan"}},
         "/agent/v1/plans/{plan_id}/apply": {"post": {"summary": "Create service from this plan", "parameters": [idempotency]}},
@@ -1590,6 +1629,42 @@ def build_openapi(agent, *, request=None):
                 "skills": {"type": "array", "items": {"$ref": "#/components/schemas/Skill"}}
             }
         },
+        "RuntimeTool": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "title": {"type": "string"},
+                "summary": {"type": "string"},
+                "platforms": {"type": "array", "items": {"type": "string"}},
+                "required_scopes": {"type": "array", "items": {"type": "string"}},
+                "mutating": {"type": "boolean"},
+                "interactive": {"type": "boolean"},
+                "input_schema": {"type": "object", "additionalProperties": True}
+            }
+        },
+        "RuntimeToolIndex": {
+            "type": "object",
+            "properties": {
+                "result": {"type": "string", "enum": ["success"]},
+                "service_id": {"type": "string", "format": "uuid"},
+                "platform": {"type": "string"},
+                "tools": {"type": "array", "items": {"$ref": "#/components/schemas/RuntimeTool"}}
+            }
+        },
+        "RuntimeToolRequest": {
+            "type": "object",
+            "additionalProperties": True
+        },
+        "RuntimeToolResponse": {
+            "type": "object",
+            "properties": {
+                "result": {"type": "string", "enum": ["success"]},
+                "service_id": {"type": "string", "format": "uuid"},
+                "tool": {"type": "string"},
+                "platform": {"type": "string"},
+                "output": {"type": "object", "additionalProperties": True}
+            }
+        },
     })
 
 
@@ -1759,6 +1834,8 @@ def build_openapi(agent, *, request=None):
             "manifest_scope": "agent.manifest.generate",
             "skills_endpoint": "/agent/v1/skills",
             "skills_scope_filtered": True,
+            "runtime_tools_endpoint": "/agent/v1/services/{service_id}/tools",
+            "runtime_tools_scope_filtered": True,
             "high_risk_scopes": sorted(HIGH_RISK_SCOPES),
         },
     }
