@@ -90,3 +90,32 @@ def test_wordpress_shell_does_not_advertise_artisan_commands():
     assert artisan_guard in source
     wordpress_php_guard = 'if platform == "wordpress":'
     assert wordpress_php_guard in source
+
+
+def test_database_workspaces_and_clients_are_engine_aware():
+    source = SHELL
+    assert '"mysql": "/var/lib/mysql"' in source
+    assert '"mariadb": "/var/lib/mysql"' in source
+    assert '"postgresql": "/var/lib/postgresql/data"' in source
+    assert '"mongodb": "/data/db"' in source
+    assert '"redis": "/data"' in source
+    assert '"oracle": "/opt/oracle/oradata"' in source
+    assert 'def default_workdir_for_platform' in source
+    assert 'def _validate_database_argv' in source
+    assert 'Database client connections must remain local' in source
+
+
+def test_database_and_wordpress_interactive_commands_use_pty():
+    source = SHELL
+    assert '"mysql", "mariadb", "psql", "mongosh", "redis-cli", "sqlplus"' in source
+    assert 'str(argv[1]).lower() == "db" and str(argv[2]).lower() == "cli"' in source
+    assert 'mysql -uroot' in source
+    assert 'wp db cli' in source
+
+
+def test_managed_database_credentials_are_injected_without_commandline_passwords():
+    source = SHELL
+    assert 'env["MYSQL_PWD"] = password' in source
+    assert 'env["PGPASSWORD"] = password' in source
+    assert 'env["REDISCLI_AUTH"] = password' in source
+    assert 'Do not put database passwords in command arguments.' in source
