@@ -147,7 +147,7 @@ networks:
         self.assertFalse(is_public_definition(replace(definition, data=data)))
 
     def test_public_catalog_publication_is_model_backed_editorial_state(self):
-        source = Path(__import__("app_catalog.models", fromlist=["CatalogPublication"]).__file__).read_text(encoding="utf-8")
+        source = (Path(__file__).resolve().parents[1] / "models.py").read_text(encoding="utf-8")
         self.assertIn("class CatalogPublication(models.Model):", source)
         self.assertIn('catalog_id = models.CharField(max_length=64, unique=True)', source)
         self.assertIn("featured_override = models.BooleanField(", source)
