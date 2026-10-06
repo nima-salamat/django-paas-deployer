@@ -243,7 +243,7 @@ def cancel_application_installation(instance_id: str, reason: str = "Application
     max_retries=None,
 )
 def delete_application_installation(self, instance_id: str):
-    """Retry terminal Ready App deletion until all owned resources converge."""
+    """Retry Ready App deletion until all owned resources converge."""
     instance = ApplicationInstance.objects.filter(pk=instance_id).first()
     if instance is None:
         return {"deleted": True, "reason": "already_absent"}
