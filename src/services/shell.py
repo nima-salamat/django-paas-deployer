@@ -863,6 +863,37 @@ def _validate_pip_argv(argv: list[str]) -> None:
         _policy_reject(f"pip subcommand '{sub}' is not allowed.")
 
 
+def _validate_database_argv(argv: list[str], platform: str) -> None:
+    """Validate local database-client use without embedding secrets or remote targets."""
+    if platform not in DATABASE_PLATFORMS:
+        return
+    base = os.path.basename(argv[0]).lower()
+    for token in argv[1:]:
+        value = str(token)
+        lower = value.lower()
+        if lower.startswith("--password=") or (lower.startswith("-p") and len(lower) > 2):
+            _policy_reject("Do not put database passwords in command arguments. Use the interactive database client.")
+        if lower in {"-e", "--execute", "-c", "--command", "-f", "--file", "--eval"}:
+            _policy_reject("Batch SQL/script execution is not exposed through the restricted shell. Use the interactive database client.")
+    host_options = {"-h", "--host", "--hostname"}
+    for i, token in enumerate(argv[1:], start=1):
+        if token in host_options and i + 1 < len(argv):
+            host = str(argv[i + 1]).strip().lower()
+            if host not in {"localhost", "127.0.0.1", "::1"}:
+                _policy_reject("Database client connections must remain local to the managed database runtime.")
+        if str(token).lower().startswith("--host="):
+            host = str(token).split("=", 1)[1].strip().lower()
+            if host not in {"localhost", "127.0.0.1", "::1"}:
+                _policy_reject("Database client connections must remain local to the managed database runtime.")
+    if base == "mongosh":
+        for token in argv[1:]:
+            value = str(token).lower()
+            if "://" in value and not value.startswith(("mongodb://localhost", "mongodb://127.0.0.1", "mongodb://[::1]")):
+                _policy_reject("mongosh connections must remain local to the managed database runtime.")
+    if base == "sqlplus":
+        allowed = {"/nolog", "-v", "-V", "--version", "-h", "--help"}
+        if any(str(token) not in allowed for token in argv[1:]):
+            _policy_reject("Start Oracle SQL*Plus with /nolog and connect interactively.")
 def _validate_platform_command(argv: list[str], platform: str, root: str, *, allow_advanced: bool = False) -> None:
     """Risk-based command validation.
 
@@ -925,6 +956,8 @@ def _validate_platform_command(argv: list[str], platform: str, root: str, *, all
             _policy_reject("ping requires a host.")
         _validate_network_target(targets[-1])
 
+    if base in {"mysql", "mariadb", "psql", "mongosh", "redis-cli", "sqlplus"}:
+        _validate_database_argv(argv, platform)
     if base == "php":
         _validate_php_argv(argv, allow_advanced=allow_advanced)
     elif base == "composer":
@@ -1138,6 +1171,8 @@ def classify_command_risk(argv: list[str]) -> str:
     if base in {"mkdir", "touch", "cp", "mv", "tee", "sed"}:
         return Risk.NORMAL_MUTATION if base != "tee" else Risk.DESTRUCTIVE
 
+    if base in {"mysql", "mariadb", "psql", "mongosh", "redis-cli", "sqlplus"}:
+        return Risk.INTERACTIVE
     if base == "php" and len(argv) >= 3 and argv[1] == "artisan":
         cmd = argv[2]
         if cmd in ARTISAN_ADVANCED_INTERACTIVE:
