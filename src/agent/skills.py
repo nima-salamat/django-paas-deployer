@@ -67,6 +67,14 @@ service-level state. Prefer the first-class Service API over shell.
 - POST {{base}}/services/{service_id}/rebuild
 - POST {{base}}/services/{service_id}/purge-runtime
 
+## First-class tools
+
+- `php.lint` checks PHP syntax for one workspace file.
+- `php.composer` provides constrained Composer actions (`validate`, `show`,
+  `outdated`, `install`, `update`) when Composer is actually installed.
+
+Call `/services/{service_id}/tools` and `/runtime.detect` before assuming
+Composer exists in a runtime image.
 ## Rules
 
 Use /capabilities to confirm the granted scope before mutating. Use OpenAPI for
@@ -401,6 +409,17 @@ persistent volume merely to fix a code/configuration issue.
    to the immutable deployment/runtime configuration rather than persistent
    WordPress content.
 
+## First-class tools
+
+Prefer these Agent tools when they are available:
+- `wordpress.inspect` for a structured site snapshot before making changes.
+- `wordpress.page.create` for creating Pages without manually building WP-CLI arguments.
+- `wordpress.plugin.manage` and `wordpress.theme.manage` for plugin/theme lifecycle operations.
+- `wordpress.cache.flush` after cache-sensitive changes.
+- `wordpress.wp_cli` for other supported non-interactive WP-CLI operations.
+
+The tool list is runtime- and scope-filtered. Do not assume a tool is enabled
+only because it is documented; call `/services/{service_id}/tools` first.
 ## Content vs code
 
 Theme/plugin PHP, CSS and JavaScript changes belong in the workspace.
@@ -445,6 +464,13 @@ Use this skill for database-provider services.
 MySQL, MariaDB, PostgreSQL, MongoDB, Redis and Oracle are recognized as
 database runtimes by the shell.
 
+## Tool-first workflow
+
+1. Call `/services/{service_id}/tools`.
+2. Call `runtime.detect` for client binaries.
+3. Call `workspace.inspect` when storage or permissions matter.
+4. Use `database.health` for non-destructive readiness checks.
+5. Use the database PTY for actual SQL/commands that require an interactive client.
 ## Workspace
 
 Restricted database sessions use a safe workspace (normally `/tmp`) and must not edit the engine data directory directly. Developer sessions use the image-native runtime working directory while retaining the container security boundary.
@@ -459,7 +485,7 @@ resolved engine, safe workspace root, data root and interactive commands.
 
 ## Interactive clients
 
-Interactive database clients require advanced shell permission; for an Agent this means the `shell.developer` scope. They are intentionally not exposed to low-privilege shared users.
+Interactive database clients require the service’s advanced-shell permission. For Agent developer mode, the additional `shell.developer` scope is required; restricted database PTY access uses the normal advanced-interactive permission. Low-privilege shared users do not automatically receive database PTY access.
 
 Use the PTY/WebSocket transport for:
 - `mysql -u<username>` for MySQL (or `-uroot` when no managed username is reported)
@@ -629,8 +655,25 @@ When a path is outside the restricted workspace, treat that as a boundary, not
 as a transient command failure. Ask the tool/API layer what operation owns that
 resource instead of repeatedly trying filesystem commands.
 
-## Platform examples
+## First-class platform tools
 
+WordPress currently exposes:
+- `wordpress.inspect`
+- `wordpress.page.create`
+- `wordpress.plugin.manage`
+- `wordpress.theme.manage`
+- `wordpress.cache.flush`
+- `wordpress.wp_cli`
+
+PHP-compatible services expose `php.lint` and `php.composer`.
+Database runtimes expose `database.health` plus engine-specific interactive
+clients through the Shell/PTTY transport.
+
+These tools intentionally provide structured inputs. Prefer them to assembling
+raw shell strings because the backend can validate their arguments and classify
+the resulting mutation consistently.
+
+## Platform examples
 WordPress exposes a policy-checked WP-CLI tool and PHP linting.
 PHP/Laravel services expose PHP linting and their framework-aware Shell catalog.
 Database services expose engine-aware Shell metadata and interactive clients.
@@ -749,6 +792,21 @@ If a requested path is outside the restricted workspace, do not keep retrying
 the same command. Switch to a first-class control-plane API, workspace-file
 operation, or developer shell only when the service security posture and
 permission allow it.
+
+## Storage access reality
+
+Before changing an unfamiliar path, use `workspace.inspect` with that path.
+The result distinguishes:
+- image-backed files
+- persistent Docker-volume mounts
+- read-only mounts/root filesystem
+- paths that are outside the restricted workspace
+- paths where the Docker mount is RW but the runtime UID still cannot write.
+
+A failed write does not automatically mean the file is absent, and a file being
+present does not imply it is persistent. Use the mount metadata and live probe
+before deciding whether the fix belongs in the image/build, a persistent volume,
+or the PassDeployer control plane.
 
 ## Operating procedure
 
