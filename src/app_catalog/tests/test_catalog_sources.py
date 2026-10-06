@@ -122,6 +122,21 @@ networks:
         self.assertEqual(wordpress["working_directory"], "/var/www/html")
         self.assertEqual(wordpress["volumes"][0]["target"], "/var/www/html")
 
+    def test_wordpress_public_service_uses_port_80_and_silent_tcp_healthcheck(self):
+        definition = ApplicationCatalog.get("wordpress-with-mariadb")
+        resolved = resolve_variant(definition, "default", {})
+        wordpress = next(item for item in resolved["services"] if item["key"] == "wordpress")
+        self.assertEqual(wordpress["port"], 80)
+        self.assertTrue(wordpress["public"])
+        healthcheck = wordpress["healthcheck"]
+        self.assertEqual(healthcheck["test"][0], "CMD")
+        self.assertEqual(healthcheck["test"][1], "php")
+        self.assertIn("fsockopen", healthcheck["test"][3])
+        self.assertEqual(healthcheck["interval"], "5s")
+        self.assertEqual(healthcheck["timeout"], "3s")
+        self.assertEqual(healthcheck["start_period"], "10s")
+        self.assertEqual(healthcheck["retries"], 6)
+
     def test_external_env_interpolation_is_safe_and_generated(self):
         definition = load_yaml_definition(Path(ApplicationCatalog.get("n8n-with-postgres-and-worker").source))
         self.assertIsNotNone(definition)
