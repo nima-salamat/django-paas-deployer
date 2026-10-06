@@ -493,3 +493,42 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             [{"target": 53, "published": 3053, "protocol": "udp", "mode": "ingress"}],
         )
 
+
+
+class SwarmRuntimeCleanupTests(unittest.TestCase):
+    def test_remove_service_group_removes_drained_task_container_references(self):
+        runtime = SwarmRuntime.__new__(SwarmRuntime)
+
+        task = {
+            "ID": "task-1",
+            "Status": {
+                "DesiredState": "shutdown",
+                "State": "shutdown",
+                "ContainerStatus": {"ContainerID": "container-1"},
+            },
+        }
+
+        service = _FakeService(image="app:image", tasks=[SimpleNamespace(
+            task_id="task-1",
+            state="shutdown",
+            desired_state="shutdown",
+        )])
+        service.tasks = lambda filters=None: [task]
+
+        container = MagicMock()
+        container.status = "exited"
+        container.attrs = {"Image": "sha256:image"}
+        container.id = "container-1"
+
+        client = MagicMock()
+        client.services = _FakeServices(service)
+        client.containers.get.return_value = container
+
+        runtime.client = client
+        runtime.service_names_for_service = MagicMock(return_value=["demo"])
+        runtime.remove = MagicMock()
+
+        runtime.remove_service_group("svc-1")
+
+        runtime.remove.assert_called_once_with("demo")
+        container.remove.assert_called_once_with(force=True)
