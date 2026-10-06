@@ -1582,7 +1582,7 @@ def command_catalog(platform: str) -> list[dict]:
         _catalog_item("git remote -v", "Git remotes", risk=Risk.READ_ONLY),
     ])
 
-    if platform in {"laravel", "php", "wordpress", "generic"}:
+    if platform in {"laravel", "php", "generic"}:
         for name, meta in sorted(ARTISAN_COMMAND_CATALOG.items()):
             cmd = f"php artisan {name}"
             if name == "queue:work":
@@ -1601,6 +1601,13 @@ def command_catalog(platform: str) -> list[dict]:
             _catalog_item("composer validate", "Validate composer.json"),
             _catalog_item("composer outdated", "Outdated Composer packages"),
             _catalog_item("composer install", "Composer install", risk=Risk.NORMAL_MUTATION),
+        ])
+
+    if platform == "wordpress":
+        items.extend([
+            _catalog_item("php -v", "PHP version"),
+            _catalog_item("php --ini", "PHP ini location"),
+            _catalog_item("php -m", "PHP extensions"),
         ])
 
     if platform in {"django", "python", "generic"}:
