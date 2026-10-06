@@ -159,7 +159,23 @@ def is_public_definition(definition: CatalogDefinition) -> bool:
     # A public Ready App must not publish mutable or dynamically templated
     # executable images. Internal recipes may retain compatibility with
     # looser image references.
-    return _public_images_are_pinned(definition.data)
+    if not _public_images_are_pinned(definition.data):
+        return False
+
+    # Editorial publication is a database-backed operator override. It can
+    # hide an already-safe curated recipe, but it cannot turn an unsafe or
+    # non-first-party definition into a public Ready App.
+    try:
+        from .models import CatalogPublication
+        publication = (
+            CatalogPublication.objects
+            .filter(catalog_id=definition.id)
+            .values("enabled")
+            .first()
+        )
+    except Exception:
+        publication = None
+    return publication is None or bool(publication["enabled"])
 
 
 class ApplicationCatalog:
