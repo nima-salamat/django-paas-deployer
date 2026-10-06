@@ -2009,41 +2009,10 @@ def command_catalog(platform: str, service: Service | None = None) -> list[dict]
 
 def execute_command(session, command: str, *, confirm: bool = False, dry_run: bool = False) -> dict:
     if getattr(session, "mode", "restricted") == "developer":
-        if not isinstance(command, str) or not command.strip():
-            raise ValidationError("Command is required.")
-        if len(command) > MAX_COMMAND_LENGTH:
-            raise ValidationError("Command is too long.")
-        if " " in command or "" in command:
-            raise ValidationError("Invalid control characters in command.")
-        if dry_run:
-            return {
-                "exit_code": 0, "stdout": "", "stderr": "", "cwd": session.workdir,
-                "dry_run": True, "risk": Risk.NORMAL_MUTATION,
-                "note": "Developer shell executes through /bin/sh; use PTY for interactive commands.",
-            }
-        container = _resolve_container(session.service)
-        allowed, reason = developer_shell_security_check(container)
-        if not allowed:
-            raise ShellPolicyError(reason, code="AUTHORIZATION_FAILED")
-        exit_code, stdout, stderr = _run_argv_with_timeout(
-            container, ["/bin/sh", "-c", command], session.workdir, timeout_seconds=120
+        raise ShellPolicyError(
+            "Developer shell commands must use the interactive PTY transport.",
+            code="DEVELOPER_SHELL_REQUIRES_PTY",
         )
-        now = timezone.now()
-        session.last_used_at = now
-        session.expires_at = _session_expiry(now)
-        session.save(update_fields=["last_used_at", "expires_at"])
-        result = {
-            "stdout": stdout[:MAX_OUTPUT_BYTES].decode("utf-8", "replace"),
-            "stderr": stderr[:MAX_OUTPUT_BYTES].decode("utf-8", "replace"),
-            "exit_code": exit_code, "cwd": session.workdir,
-        }
-        record_shell_audit(
-            service=session.service, user=getattr(session, "user", None), session=session,
-            action="command", command=command, cwd=session.workdir, exit_code=exit_code,
-            success=exit_code == 0, output_preview=result["stdout"][:2000],
-            detail=result["stderr"][:500], meta={"mode": "developer"},
-        )
-        return result
     parts = parse_safe_command(command)
     if len(parts) > 1:
         if dry_run:
