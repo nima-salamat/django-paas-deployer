@@ -355,6 +355,8 @@ def reconcile_application_installations():
         created_at__lt=pending_cutoff,
         execution_task_id="",
         cancel_requested=False,
+    ).exclude(
+        stage="deletion_pending",
     ).only("pk")
     pending_requeued = 0
     for pending_instance in pending.iterator():
