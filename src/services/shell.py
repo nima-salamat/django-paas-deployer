@@ -481,6 +481,8 @@ def is_interactive_command(argv: list[str]) -> bool:
         return not any(str(token) in informational for token in argv[1:])
     return False
 
+    if platform in DATABASE_PLATFORMS and base in {"env", "printenv"}:
+        _policy_reject("Environment dumping is blocked for database runtimes because it can reveal managed credentials.")
 def can_use_advanced_shell(service: Service, user) -> bool:
     """Allow advanced interactive developer tools for owners or explicit shares."""
     if str(service.user_id) == str(user.id):
@@ -1353,7 +1355,7 @@ def _command_path_arguments(argv):
     return []
 
 
-def prepare_interactive_exec_environment(container, *, platform: str = "", root_path: str = "") -> dict[str, str]:
+def prepare_interactive_exec_environment(container, *, platform: str = "", root_path: str = "", service: Service | None = None) -> dict[str, str]:
     """Build an environment dict suitable for interactive REPLs (tinker/psysh/etc).
 
     PsySH writes config/history under ``$XDG_CONFIG_HOME/psysh`` (preferred)
@@ -1435,6 +1437,31 @@ def prepare_interactive_exec_environment(container, *, platform: str = "", root_
     env["TERM"] = env.get("TERM") or "xterm-256color"
     env["COLUMNS"] = env.get("COLUMNS") or "120"
     env["LINES"] = env.get("LINES") or "40"
+    if service is not None and platform in DATABASE_PLATFORMS:
+        try:
+            database = getattr(service, "database_resource", None)
+            credential = getattr(database, "credential", None) if database else None
+            password = credential.get_password() if credential and hasattr(credential, "get_password") else ""
+            username = str(getattr(credential, "username", "") or "")
+            database_name = str(getattr(database, "database_name", "") or "")
+            port = str(getattr(database, "port", "") or "")
+            if platform in {"mysql", "mariadb"} and password:
+                env["MYSQL_PWD"] = password
+                env["MYSQL_HISTFILE"] = "/dev/null"
+            elif platform == "postgresql":
+                if password:
+                    env["PGPASSWORD"] = password
+                if username:
+                    env["PGUSER"] = username
+                if database_name:
+                    env["PGDATABASE"] = database_name
+                env["PGHOST"] = "127.0.0.1"
+                if port:
+                    env["PGPORT"] = port
+            elif platform == "redis" and password:
+                env["REDISCLI_AUTH"] = password
+        except Exception:
+            pass
     return env
 
 
