@@ -31,7 +31,7 @@ class RuntimeToolExecuteView(AgentSecuredAPIView):
 
     @idempotent
     def post(self, request, service_id, tool_name):
-        service = get_service(service_id, request.user, action="can_view")
+        service = get_service(service_id, request.user, action="can_shell")
         from services.shell import _platform_for_service
         platform = _platform_for_service(service)
         tool = tool_for_service(request.agent, service, tool_name)
