@@ -1300,8 +1300,10 @@ def terminate_active_session(service: Service, *, actor=None):
 def authenticate_session(service: Service, user, token: str):
     from services.models import ShellSession
     session = ShellSession.objects.filter(
-        service=service, user=user, token_hash=_token_hash(str(token or "")), status=ShellSession.Status.ACTIVE        mode=mode,
-
+        service=service,
+        user=user,
+        token_hash=_token_hash(str(token or "")),
+        status=ShellSession.Status.ACTIVE,
     ).first()
     if not session:
         raise ValidationError("Invalid or inactive shell session.")
