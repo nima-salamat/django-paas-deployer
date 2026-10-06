@@ -321,7 +321,9 @@ def test_release_application_image_rejects_unknown_shared_reference_ownership():
 
     assert ok is False
     assert "none could be proven" in detail
-\n\ndef test_precleaned_service_delete_skips_duplicate_runtime_cleanup():
+
+
+def test_precleaned_service_delete_skips_duplicate_runtime_cleanup():
     source = (ROOT / "services" / "signals.py").read_text(encoding="utf-8")
 
     assert "def delete_service_row_after_cleanup(service: Service)" in source
