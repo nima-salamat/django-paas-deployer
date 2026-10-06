@@ -582,7 +582,8 @@ environments. Use the interactive database client and enter credentials through
 its PTY prompt when required.
         """,
         scopes=("shell.read", "shell.execute", "shell.developer"),
-    ),    _skill(
+    ),
+    _skill(
         "runtime-tools",
         "Runtime Tools",
         "Discover and use first-class platform-aware runtime tools before falling back to low-level shell commands.",
