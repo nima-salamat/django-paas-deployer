@@ -426,12 +426,12 @@ database runtimes by the shell.
 
 ## Workspace
 
-Database shell sessions use a safe restricted workspace, normally `/tmp`. The persistent database data directory is not the shell/file-manager workspace and must not be edited directly.
-- MySQL / MariaDB data root: `/var/lib/mysql`
-- PostgreSQL data root: `/var/lib/postgresql/data`
-- MongoDB data root: `/data/db`
-- Redis data root: `/data`
-- Oracle data root: `/opt/oracle/oradata`
+Restricted database sessions use a safe workspace (normally `/tmp`) and must not edit the engine data directory directly. Developer sessions use the image-native runtime working directory while retaining the container security boundary.
+- MySQL / MariaDB runtime cwd: `/` · data root: `/var/lib/mysql`
+- PostgreSQL runtime cwd: `/` · data root: `/var/lib/postgresql/data`
+- MongoDB runtime cwd: `/` · data root: `/data/db`
+- Redis runtime cwd: `/data` · data root: `/data`
+- Oracle runtime cwd: `/opt/oracle` · data root: `/opt/oracle/oradata`
 
 Always read `GET {{base}}/services/{service_id}/shell` first. It reports the
 resolved engine, safe workspace root, data root and interactive commands.
