@@ -638,6 +638,82 @@ requires interactive PTY transport. Handle those outcomes explicitly.
         any_scopes=("shell.read", "shell.execute"),
     ),
     _skill(
+        "python",
+        "Python Runtime",
+        "Develop, inspect and diagnose Python services inside the managed workspace.",
+        """
+# Python Runtime
+
+Use this skill for Python services, including Flask/FastAPI runtimes.
+
+## Workspace
+
+Use GET {{base}}/services/{service_id}/shell first and use
+workspace.default_workdir. Most application runtimes use /app, but the actual
+service contract is authoritative.
+
+Prefer the managed workspace file API for source changes. Use runtime.detect to
+check Python, pip and optional tools before assuming they exist.
+
+For framework-specific checks:
+- Django: use python manage.py check, migrate and the documented management
+  commands when available.
+- FastAPI/Flask: inspect the actual application entrypoint and process command
+  before changing it.
+
+Do not assume a package is installed because it is present in requirements or
+pyproject.toml. Verify the live container.
+
+## Access
+
+A path may exist in the image but not be writable because the root filesystem
+or mount is read-only. A RW volume does not guarantee runtime-user write access.
+Use workspace.inspect for uncertain paths.
+
+Never put secrets into source files or shell command arguments.
+        """,
+        scopes=("shell.read", "shell.execute", "shell.files.read", "shell.files.write"),
+    ),
+    _skill(
+        "node",
+        "Node.js Runtime",
+        "Develop and diagnose Node.js services and frontend build runtimes.",
+        """
+# Node.js Runtime
+
+Use this skill for Node.js, React, Vue, Angular, Next.js and related build
+services.
+
+## Workspace
+
+Read GET {{base}}/services/{service_id}/shell before starting. Use the returned
+workspace.default_workdir rather than assuming /app.
+
+Use runtime.detect to verify node, npm, npx, yarn, pnpm or bun availability.
+
+## Workflow
+
+Inspect package.json and lockfiles before changing dependencies. Prefer the
+managed file API for source edits. Run the project's actual lint/test/build
+scripts only after reading package scripts.
+
+Package-manager commands can mutate the dependency tree. Inspect the diff and
+verify the build result afterward.
+
+Do not assume node_modules is persistent. It may be created in the image during
+build and absent from a runtime-only filesystem.
+
+## Storage
+
+A build artifact directory can be image-backed while application data is
+volume-backed. Use workspace.inspect when the task depends on persistence or
+write access.
+
+Never store credentials in package scripts, committed files or command history.
+        """,
+        scopes=("shell.read", "shell.execute", "shell.files.read", "shell.files.write"),
+    ),
+    _skill(
         "shell",
         "Restricted Runtime Shell",
         "Run authorized non-interactive or interactive commands inside a service runtime.",
