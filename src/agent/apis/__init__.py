@@ -13,6 +13,7 @@ from .deployments import DeploymentListCreateView, DeploymentDetailView, Deploym
 from .configuration import ConfigurationView, EnvironmentView, SecretsView, EndpointConfigView, NetworkAttachmentsView, RevisionListView, RevisionDetailView, RevisionRollbackView, DatabaseBindingsView, DatabaseCredentialsView
 from .shell import ShellInfoView, ShellSessionView, ShellCommandView, ShellCloseView, ShellReplaceView, ShellFileView
 from .skills import SkillIndexView, SkillDetailView
+from .runtime_tools import RuntimeToolIndexView, RuntimeToolExecuteView
 
 __all__ = [
     name for name in (
@@ -23,7 +24,7 @@ __all__ = [
         "NetworkListCreateView", "NetworkDetailView", "VolumeListCreateView", "VolumeDetailView",
         "DeploymentListCreateView", "DeploymentDetailView", "DeploymentUploadView", "DeploymentActionView", "DeploymentRollbackView", "DeploymentLogsView", "DeploymentLogsExportView",
         "ConfigurationView", "EnvironmentView", "SecretsView", "EndpointConfigView", "NetworkAttachmentsView", "RevisionListView", "RevisionDetailView", "RevisionRollbackView", "DatabaseBindingsView",
-        "ShellInfoView", "ShellSessionView", "ShellCommandView", "ShellCloseView", "ShellReplaceView", "ShellFileView", "SkillIndexView", "SkillDetailView",
+        "ShellInfoView", "ShellSessionView", "ShellCommandView", "ShellCloseView", "ShellReplaceView", "ShellFileView", "SkillIndexView", "SkillDetailView", "RuntimeToolIndexView", "RuntimeToolExecuteView",
         "DeploymentHelpView", "DeploymentInspectView", "DatabaseCredentialsView",
     )
 ]
