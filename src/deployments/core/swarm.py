@@ -257,7 +257,10 @@ def _service_labels(config) -> dict[str, str]:
         labels["traefik.swarm.network"] = "proxy_net"
         if rule:
             labels[f"traefik.http.routers.{router}.rule"] = rule
+        middleware = f"{router}-https"
+        labels[f"traefik.http.middlewares.{middleware}.headers.customrequestheaders.X-Forwarded-Proto"] = "https"
         labels[f"traefik.http.routers.{router}.entrypoints"] = "web"
+        labels[f"traefik.http.routers.{router}.middlewares"] = middleware
         labels[f"traefik.http.routers.{router}.service"] = router
         labels[f"traefik.http.services.{router}.loadbalancer.server.port"] = str(endpoint.target_port)
     return labels
