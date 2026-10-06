@@ -465,7 +465,26 @@ afterward.
 
 Use the control-plane database binding/credential APIs for service bindings;
 do not recreate those relationships from inside a database container.
-        """,
+
+## Agent interactive transport
+
+The HTTP `POST .../shell/sessions/{session_id}/commands` endpoint is for one-shot
+commands. Interactive database clients require the persistent PTY WebSocket.
+
+After creating a shell session, construct the WebSocket URL from the Agent API
+origin by replacing `https://` with `wss://` and using the `interactive_pty.websocket_path`
+returned by the shell metadata endpoint. Authenticate the WebSocket with:
+- `agent_token=<agent access token>`
+- `shell_token=<temporary shell session token>`
+
+Once connected, send `{ "type": "command", "command": "psql" }` (or the appropriate
+engine client), then send `{ "type": "stdin", "data": "..." }` for responses and
+queries. Use the `signal` message for Ctrl-C/Ctrl-D/Ctrl-Z/Ctrl-L and wait for
+`process.exit` before starting another command.
+
+The agent token is accepted only for the interactive shell transport and is
+revalidated on connection and ping. Use TLS (`wss://`) and never place database
+passwords in the command string.        """,
         scopes=("shell.read", "shell.execute"),
     ),    _skill(
         "shell",
