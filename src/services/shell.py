@@ -924,6 +924,10 @@ def _validate_wp_argv(argv: list[str], root: str) -> None:
     if sub not in allowed:
         _policy_reject(f"WP-CLI command '{sub}' is not enabled in the restricted runtime.")
     for token in argv[2:]:
+        lower = str(token).lower()
+        if lower == "--ssh" or lower.startswith("--ssh=") or lower == "--http" or lower.startswith("--http="):
+            _policy_reject("Remote WordPress transports are not allowed. Operate on the local managed runtime.")
+
         value = str(token)
         lower = value.lower()
         if lower.startswith("--path="):
