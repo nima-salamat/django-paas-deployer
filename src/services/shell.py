@@ -945,7 +945,9 @@ def _validate_platform_command(argv: list[str], platform: str, root: str, *, all
     if base in FORBIDDEN_BASENAMES or base.startswith("docker"):
         _policy_reject(f"Command '{base}' is not allowed.", code="POLICY_REJECTED")
 
-    allowed = BASE_COMMANDS | RUNTIME_COMMANDS | PLATFORM_COMMANDS.get(platform, set()) | PLATFORM_COMMANDS.get("generic", set())
+    allowed = BASE_COMMANDS | PLATFORM_COMMANDS.get(platform, set())
+    if platform == "generic":
+        allowed |= RUNTIME_COMMANDS
     if base not in allowed:
         _policy_reject(
             f"Command '{base}' is not allowed. "
@@ -1772,13 +1774,14 @@ def command_catalog(platform: str) -> list[dict]:
         _catalog_item(c, c.replace("_", " "), risk=Risk.READ_ONLY)
         for c in sorted(GENERIC_COMMAND_CATALOG)
     ]
-    items.extend([
-        _catalog_item("git status", "Git status", risk=Risk.READ_ONLY),
-        _catalog_item("git log --oneline -20", "Git recent commits", risk=Risk.READ_ONLY),
-        _catalog_item("git diff", "Git diff", risk=Risk.READ_ONLY),
-        _catalog_item("git branch -a", "Git branches", risk=Risk.READ_ONLY),
-        _catalog_item("git remote -v", "Git remotes", risk=Risk.READ_ONLY),
-    ])
+    if "git" in (PLATFORM_COMMANDS.get(platform, set()) or set()):
+        items.extend([
+            _catalog_item("git status", "Git status", risk=Risk.READ_ONLY),
+            _catalog_item("git log --oneline -20", "Git recent commits", risk=Risk.READ_ONLY),
+            _catalog_item("git diff", "Git diff", risk=Risk.READ_ONLY),
+            _catalog_item("git branch -a", "Git branches", risk=Risk.READ_ONLY),
+            _catalog_item("git remote -v", "Git remotes", risk=Risk.READ_ONLY),
+        ])
 
     if platform in DATABASE_PLATFORMS:
         if platform in {"mysql", "mariadb"}:
