@@ -255,7 +255,7 @@ ARTISAN_COMMAND_CATALOG = {
     "up": {"label": "Leave maintenance mode", "risk": Risk.NORMAL_MUTATION},
 }
 
-GENERIC_COMMAND_CATALOG = set(BASE_COMMANDS) | {"git", "make"}
+GENERIC_COMMAND_CATALOG = set(BASE_COMMANDS)
 
 
 def _platform_for_service(service: Service) -> str:
