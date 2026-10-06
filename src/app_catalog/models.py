@@ -95,3 +95,39 @@ class ApplicationInstanceService(models.Model):
 
     def __str__(self):
         return f"{self.instance_id}:{self.service_key}"
+
+
+class CatalogPublication(models.Model):
+    """Operator publication overrides for repository-backed Ready App recipes.
+
+    The executable catalog definition remains source-controlled. This model
+    only controls editorial publication state and featured presentation; it
+    cannot turn an unsafe/internal recipe into a public Ready App.
+    """
+
+    catalog_id = models.CharField(max_length=64, unique=True)
+    enabled = models.BooleanField(
+        default=True,
+        help_text="When disabled, hide this curated catalog entry from Ready Apps.",
+    )
+    featured_override = models.BooleanField(
+        null=True,
+        blank=True,
+        help_text="Optional override for the catalog recipe's featured flag.",
+    )
+    notes = models.TextField(blank=True, default="")
+    updated_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("catalog_id",)
+
+    def __str__(self):
+        return f"{self.catalog_id} ({'enabled' if self.enabled else 'hidden'})"
