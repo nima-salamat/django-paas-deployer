@@ -275,6 +275,174 @@ def command_result_from_argv(service, user, argv: list[str], *, confirm: bool = 
     return result
 
 
+def _run_tool_commands(service, user, commands: list[list[str]], *, continue_on_error: bool = True) -> list[dict[str, Any]]:
+    results = []
+    for argv in commands:
+        try:
+            result = command_result_from_argv(service, user, argv, confirm=False)
+            results.append({"command": argv, **result})
+        except Exception as exc:
+            if not continue_on_error:
+                raise
+            results.append({"command": argv, "exit_code": None, "error": str(exc)})
+    return results
+
+
+def _wordpress_inspect(service, user, payload: dict[str, Any]) -> dict[str, Any]:
+    from services.shell import _platform_for_service
+
+    if _platform_for_service(service) != "wordpress":
+        raise ValueError("wordpress.inspect is only available for WordPress services.")
+    checks = _run_tool_commands(service, user, [
+        ["wp", "core", "version"],
+        ["wp", "option", "get", "home"],
+        ["wp", "option", "get", "siteurl"],
+        ["wp", "theme", "list", "--status=active", "--field=name"],
+        ["wp", "plugin", "list", "--status=active", "--field=name"],
+        ["wp", "db", "check"],
+    ])
+    def output(name: str) -> str:
+        row = next((x for x in checks if " ".join(x["command"]) == name), None)
+        return str((row or {}).get("stdout") or "").strip()
+    return {
+        "platform": "wordpress",
+        "core_version": output("wp core version"),
+        "home": output("wp option get home"),
+        "siteurl": output("wp option get siteurl"),
+        "active_theme": output("wp theme list --status=active --field=name"),
+        "active_plugins": [x for x in output("wp plugin list --status=active --field=name").splitlines() if x],
+        "database": next((x for x in checks if " ".join(x["command"]) == "wp db check"), {}),
+        "checks": checks,
+    }
+
+
+def _wordpress_page_create(service, user, payload: dict[str, Any]) -> dict[str, Any]:
+    from services.shell import _platform_for_service
+
+    if _platform_for_service(service) != "wordpress":
+        raise ValueError("wordpress.page.create is only available for WordPress services.")
+    title = str(payload.get("title") or "").strip()
+    content = str(payload.get("content") or "")
+    if not title:
+        raise ValueError("title is required.")
+    if len(title) > 300 or len(content) > 256 * 1024:
+        raise ValueError("Page title/content is too large.")
+    status = str(payload.get("status") or "draft").strip().lower()
+    if status not in {"draft", "publish", "pending", "private"}:
+        raise ValueError("Unsupported page status.")
+    args = ["wp", "post", "create", "--post_type=page", f"--post_title={title}", f"--post_content={content}", f"--post_status={status}", "--porcelain"]
+    if payload.get("slug"):
+        slug = str(payload["slug"]).strip()
+        if not re.fullmatch(r"[a-z0-9-]{1,200}", slug):
+            raise ValueError("slug must contain lowercase letters, digits and hyphens only.")
+        args.append(f"--post_name={slug}")
+    result = command_result_from_argv(service, user, args, confirm=bool(payload.get("confirm", False)))
+    return {"platform": "wordpress", "title": title, "status": status, **result}
+
+
+def _wordpress_plugin_manage(service, user, payload: dict[str, Any]) -> dict[str, Any]:
+    from services.shell import _platform_for_service
+
+    if _platform_for_service(service) != "wordpress":
+        raise ValueError("wordpress.plugin.manage is only available for WordPress services.")
+    action = str(payload.get("action") or "").strip().lower()
+    slug = str(payload.get("slug") or "").strip()
+    if action not in {"install", "activate", "deactivate", "update", "delete"}:
+        raise ValueError("action must be install, activate, deactivate, update or delete.")
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,200}", slug):
+        raise ValueError("slug must be a WordPress plugin slug.")
+    args = ["wp", "plugin", action, slug]
+    if action == "install" and payload.get("activate", True):
+        args.append("--activate")
+    result = command_result_from_argv(service, user, args, confirm=bool(payload.get("confirm", False)))
+    return {"platform": "wordpress", "action": action, "slug": slug, **result}
+
+
+def _wordpress_theme_manage(service, user, payload: dict[str, Any]) -> dict[str, Any]:
+    from services.shell import _platform_for_service
+
+    if _platform_for_service(service) != "wordpress":
+        raise ValueError("wordpress.theme.manage is only available for WordPress services.")
+    action = str(payload.get("action") or "").strip().lower()
+    slug = str(payload.get("slug") or "").strip()
+    if action not in {"install", "activate", "update", "delete"}:
+        raise ValueError("action must be install, activate, update or delete.")
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,200}", slug):
+        raise ValueError("slug must be a WordPress theme slug.")
+    args = ["wp", "theme", action, slug]
+    if action == "install":
+        args.append("--activate")
+    result = command_result_from_argv(service, user, args, confirm=bool(payload.get("confirm", False)))
+    return {"platform": "wordpress", "action": action, "slug": slug, **result}
+
+
+def _wordpress_cache_flush(service, user, payload: dict[str, Any]) -> dict[str, Any]:
+    from services.shell import _platform_for_service
+
+    if _platform_for_service(service) != "wordpress":
+        raise ValueError("wordpress.cache.flush is only available for WordPress services.")
+    result = command_result_from_argv(service, user, ["wp", "cache", "flush"], confirm=bool(payload.get("confirm", False)))
+    return {"platform": "wordpress", **result}
+
+
+def _php_composer(service, user, payload: dict[str, Any]) -> dict[str, Any]:
+    from services.shell import _platform_for_service
+
+    platform = _platform_for_service(service)
+    if platform not in {"php", "laravel", "wordpress"}:
+        raise ValueError("php.composer is only available for PHP-compatible services.")
+    action = str(payload.get("action") or "validate").strip().lower()
+    allowed = {"validate", "show", "outdated", "install", "update"}
+    if action not in allowed:
+        raise ValueError("Unsupported Composer action.")
+    args = ["composer", action]
+    if action in {"install", "update"} and payload.get("no_dev") is True:
+        args.append("--no-dev")
+    result = command_result_from_argv(service, user, args, confirm=bool(payload.get("confirm", False)))
+    return {"platform": platform, "action": action, **result}
+
+
+def _database_health(service, user, payload: dict[str, Any]) -> dict[str, Any]:
+    from services.shell import _platform_for_service, _resolve_container, _database_runtime_values, runtime_workdir_for_platform, prepare_interactive_exec_environment
+
+    platform = _platform_for_service(service)
+    if platform not in {"mysql", "mariadb", "postgresql", "mongodb", "redis", "oracle"}:
+        raise ValueError("database.health is only available for managed database runtimes.")
+    container = _resolve_container(service)
+    values = _database_runtime_values(service)
+    env = prepare_interactive_exec_environment(container, platform=platform, root_path=runtime_workdir_for_platform(platform), service=service)
+    username = str(values.get("username") or "").strip()
+    database = str(values.get("database") or "").strip()
+    port = str(values.get("port") or "").strip()
+    if platform == "mysql":
+        argv = ["mysqladmin", "--host=127.0.0.1", "--protocol=tcp", "ping"]
+        if username: argv.insert(1, f"--user={username}")
+    elif platform == "mariadb":
+        argv = ["mariadb-admin", "--host=127.0.0.1", "--protocol=tcp", "ping"]
+        if username: argv.insert(1, f"--user={username}")
+    elif platform == "postgresql":
+        argv = ["pg_isready", "-h", "127.0.0.1"]
+        if port: argv += ["-p", port]
+        if username: argv += ["-U", username]
+        if database: argv += ["-d", database]
+    elif platform == "redis":
+        argv = ["redis-cli", "-h", "127.0.0.1", "ping"]
+    elif platform == "mongodb":
+        argv = ["mongosh", "--host", "127.0.0.1", "--quiet", "--eval", "db.adminCommand({ ping: 1 }).ok"]
+    else:
+        return {"platform": platform, "healthy": None, "status": "interactive_check_required", "client": "sqlplus"}
+    result = container.exec_run(argv, workdir=runtime_workdir_for_platform(platform), environment=env, stdout=True, stderr=True, demux=True, tty=False)
+    out, err = result.output if isinstance(result.output, tuple) else (result.output or b"", b"")
+    code = int(result.exit_code if result.exit_code is not None else 1)
+    return {
+        "platform": platform,
+        "healthy": code == 0,
+        "exit_code": code,
+        "stdout": _command_output_text(out)[:65536],
+        "stderr": _command_output_text(err)[:65536],
+        "client": DATABASE_PLATFORMS.get(platform, {}).get("client") if "DATABASE_PLATFORMS" in globals() else None,
+    }
+
 def _wordpress_wp_cli(service, user, payload: dict[str, Any]) -> dict[str, Any]:
     from services.shell import _platform_for_service, is_interactive_command
     from agent.errors import AgentError
@@ -315,6 +483,83 @@ def _wordpress_wp_cli(service, user, payload: dict[str, Any]) -> dict[str, Any]:
 
 TOOLS = (
     RuntimeTool(
+        name="wordpress.inspect",
+        title="Inspect WordPress site",
+        summary="Return structured WordPress core, URL, active theme, active plugins and database health information.",
+        platforms=("wordpress",),
+        scopes=("shell.read",),
+        input_schema={"type": "object", "properties": {}},
+        handler=_wordpress_inspect,
+    ),
+    RuntimeTool(
+        name="wordpress.page.create",
+        title="Create WordPress page",
+        summary="Create a WordPress Page through WP-CLI with structured title/content/status arguments.",
+        platforms=("wordpress",),
+        scopes=("shell.execute",),
+        mutating=True,
+        input_schema={
+            "type": "object",
+            "required": ["title"],
+            "properties": {
+                "title": {"type": "string"},
+                "content": {"type": "string"},
+                "slug": {"type": "string"},
+                "status": {"type": "string", "enum": ["draft", "publish", "pending", "private"]},
+                "confirm": {"type": "boolean", "default": False},
+            },
+        },
+        handler=_wordpress_page_create,
+    ),
+    RuntimeTool(
+        name="wordpress.plugin.manage",
+        title="Manage WordPress plugin",
+        summary="Install, activate, deactivate, update or delete a plugin by slug.",
+        platforms=("wordpress",),
+        scopes=("shell.execute",),
+        mutating=True,
+        input_schema={"type": "object", "required": ["action", "slug"], "properties": {"action": {"type": "string", "enum": ["install", "activate", "deactivate", "update", "delete"]}, "slug": {"type": "string"}, "activate": {"type": "boolean"}, "confirm": {"type": "boolean"}}},
+        handler=_wordpress_plugin_manage,
+    ),
+    RuntimeTool(
+        name="wordpress.theme.manage",
+        title="Manage WordPress theme",
+        summary="Install, activate, update or delete a theme by slug.",
+        platforms=("wordpress",),
+        scopes=("shell.execute",),
+        mutating=True,
+        input_schema={"type": "object", "required": ["action", "slug"], "properties": {"action": {"type": "string", "enum": ["install", "activate", "update", "delete"]}, "slug": {"type": "string"}, "confirm": {"type": "boolean"}}},
+        handler=_wordpress_theme_manage,
+    ),
+    RuntimeTool(
+        name="wordpress.cache.flush",
+        title="Flush WordPress cache",
+        summary="Flush the WordPress object cache through WP-CLI.",
+        platforms=("wordpress",),
+        scopes=("shell.execute",),
+        mutating=True,
+        input_schema={"type": "object", "properties": {"confirm": {"type": "boolean", "default": False}}},
+        handler=_wordpress_cache_flush,
+    ),
+    RuntimeTool(
+        name="php.composer",
+        title="Run Composer action",
+        summary="Run a constrained Composer action for PHP-compatible services.",
+        platforms=("php", "laravel", "wordpress"),
+        scopes=("shell.execute",),
+        mutating=True,
+        input_schema={"type": "object", "properties": {"action": {"type": "string", "enum": ["validate", "show", "outdated", "install", "update"]}, "no_dev": {"type": "boolean"}, "confirm": {"type": "boolean"}}},
+        handler=_php_composer,
+    ),
+    RuntimeTool(
+        name="database.health",
+        title="Check database health",
+        summary="Run an engine-native local readiness/health check without accepting arbitrary SQL or remote targets.",
+        platforms=("mysql", "mariadb", "postgresql", "mongodb", "redis", "oracle"),
+        scopes=("shell.read",),
+        input_schema={"type": "object", "properties": {}},
+        handler=_database_health,
+    ),    RuntimeTool(
         name="workspace.inspect",
         title="Inspect workspace and mounts",
         summary="Tell the Agent which workspace is managed, which mounts exist, and whether requested paths are writable.",
