@@ -70,14 +70,6 @@ services:
         define( 'WP_HOME', 'https://${config.domain}' );
         define( 'WP_SITEURL', 'https://${config.domain}' );
         define( 'FORCE_SSL_ADMIN', true );
-    command:
-      - /bin/sh
-      - -lc
-      - |
-        if [ -f /var/www/html/wp-config.php ]; then
-          sed -i "s|__PASSDEPLOYER_PUBLIC_HOST__|${config.domain}|g" /var/www/html/wp-config.php
-        fi
-        exec apache2-foreground
     depends_on:
       - mariadb
     healthcheck:
