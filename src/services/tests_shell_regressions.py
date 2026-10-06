@@ -75,3 +75,18 @@ def test_unified_services_search_is_server_side_for_all_scopes():
 def test_volume_update_rechecks_shared_detach_permission():
     source = (ROOT / "api" / "user_services.py").read_text()
     assert 'volume.service, "can_volume_detach"' in source
+
+
+def test_shell_resolves_catalog_wordpress_to_its_real_workspace():
+    source = SHELL
+    assert '"wordpress": "/var/www/html"' in source
+    assert '"wordpress": "wordpress"' in source
+    assert 'runtime_config.get("catalog_service_key")' in source
+
+
+def test_wordpress_shell_does_not_advertise_artisan_commands():
+    source = SHELL
+    artisan_guard = 'if platform in {"laravel", "php", "generic"}:'
+    assert artisan_guard in source
+    wordpress_php_guard = 'if platform == "wordpress":'
+    assert wordpress_php_guard in source
