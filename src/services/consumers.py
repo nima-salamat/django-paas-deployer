@@ -357,6 +357,7 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                         platform=getattr(self.session, "platform", None) or "",
                         root_path=getattr(self.session, "root_path", None) or "",
                         service=self.service,
+                        include_database_credentials=False,
                     )
                     cols = getattr(self, "term_cols", None) or 120
                     rows = getattr(self, "term_rows", None) or 40
@@ -364,7 +365,7 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                     environment["LINES"] = str(rows)
                     created = api.exec_create(
                         container.id,
-                        cmd=["/bin/sh", "-lc", command],
+                        cmd=["/bin/sh", "-c", command],
                         stdout=True, stderr=True, stdin=True, tty=True,
                         workdir=self.session.workdir,
                         environment=environment,
