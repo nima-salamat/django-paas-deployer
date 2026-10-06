@@ -138,13 +138,15 @@ networks:
         self.assertEqual(healthcheck["retries"], 6)
         self.assertEqual(
             wordpress["environment"]["WORDPRESS_CONFIG_EXTRA"],
-            "// The Ready App public endpoint is always HTTPS at the platform edge.\n"
-            "// Do not depend on the reverse proxy chain preserving X-Forwarded-Proto.\n"
-            "$_SERVER['HTTPS'] = 'on';\n"
             "define( 'WP_HOME', 'https://app.example.com' );\n"
             "define( 'WP_SITEURL', 'https://app.example.com' );\n"
-            "define( 'FORCE_SSL_ADMIN', true );\n",
+            "define( 'FORCE_SSL_ADMIN', true );\n"
         )
+        self.assertIn("FROM wordpress:7.1.2-php8.3-apache", wordpress["dockerfile"])
+        self.assertIn("ARG WP_CLI_VERSION=2.12.0", wordpress["dockerfile"])
+        self.assertIn("WP_CLI_ALLOW_ROOT=1", wordpress["dockerfile"])
+        self.assertIn("wp-cli-${WP_CLI_VERSION}.phar", wordpress["dockerfile"])
+        self.assertIn("sha512sum -c -", wordpress["dockerfile"])
         self.assertFalse(wordpress.get("command"))
 
     def test_public_host_placeholder_is_replaced_during_final_service_render(self):
