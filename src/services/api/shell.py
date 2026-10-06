@@ -136,9 +136,13 @@ def shell_catalog_apiview(request, service_id):
 def shell_create_apiview(request, service_id):
     try:
         service = _resolve(request, service_id, action="can_shell")
-        session, token = create_session(service, request.user, request.data.get("workdir"))
+        mode = str(request.data.get("mode") or "restricted").strip().lower()
+        from services.shell import can_use_advanced_shell
+        if mode == "developer" and not can_use_advanced_shell(service, request.user):
+            return Response({"result": "error", "code": "AUTHORIZATION_FAILED", "detail": "Developer shell requires advanced shell permission."}, status=403)
+        session, token = create_session(service, request.user, request.data.get("workdir"), mode=mode)
         from services.shell import shell_workspace_metadata
-        return Response({"result":"success","session_id":str(session.id),"token":token,"platform":session.platform,"cwd":session.workdir,"expires_at":session.expires_at,"workspace":shell_workspace_metadata(service)}, status=201)
+        return Response({"result":"success","session_id":str(session.id),"token":token,"platform":session.platform,"cwd":session.workdir,"mode":session.mode,"expires_at":session.expires_at,"workspace":shell_workspace_metadata(service)}, status=201)
     except ValidationError as exc:
         from services.models import ShellSession
         from services.api.sharing import user_can_access_service
@@ -193,8 +197,12 @@ def shell_replace_apiview(request, service_id):
             return Response({"result":"error","detail":"You are not allowed to replace another user's shell session."}, status=403)
         if request.data.get("confirm") is not True:
             return Response({"result":"error","detail":"confirm=true is required to replace the active shell session."}, status=400)
+        mode = str(request.data.get("mode") or "restricted").strip().lower()
+        from services.shell import can_use_advanced_shell
+        if mode == "developer" and not can_use_advanced_shell(service, request.user):
+            return Response({"result": "error", "code": "AUTHORIZATION_FAILED", "detail": "Developer shell requires advanced shell permission."}, status=403)
         old = terminate_active_session(service, actor=request.user)
-        session, token = create_session(service, request.user, request.data.get("workdir"))
+        session, token = create_session(service, request.user, request.data.get("workdir"), mode=mode)
         return Response({
             "result":"success",
             "replaced": bool(old),
@@ -203,6 +211,7 @@ def shell_replace_apiview(request, service_id):
             "token": token,
             "platform": session.platform,
             "cwd": session.workdir,
+            "mode": session.mode,
             "expires_at": session.expires_at,
         }, status=201)
     except PermissionError as exc:
