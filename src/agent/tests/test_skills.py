@@ -25,6 +25,12 @@ class AgentSkillTests(TestCase):
     def _auth(self):
         return {"HTTP_AUTHORIZATION": f"Bearer {self.raw}"}
 
+    def test_skill_registry_imports_without_type_error(self):
+        from agent.skills import all_skills
+
+        skills = all_skills()
+        self.assertGreaterEqual(len(skills), 1)
+        self.assertTrue(all(skill.body.strip() for skill in skills))
     def test_skill_index_is_scope_filtered(self):
         response = self.client.get("/agent/v1/skills", **self._auth())
         self.assertEqual(response.status_code, 200)
