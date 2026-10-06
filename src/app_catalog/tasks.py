@@ -231,10 +231,52 @@ def supervise_ready_applications():
     }
 
 
-@shared_task(name="app_catalog.cancel_application_installation")
-def cancel_application_installation(instance_id: str, reason: str = "Application deployment cancelled by user request."):
-    ApplicationStackExecutor(instance_id).cancel(reason=reason)
-    _schedule_next(instance_id)
+@shared_task(
+    bind=True,
+    name="app_catalog.cancel_application_installation",
+    max_retries=None,
+)
+def cancel_application_installation(
+    self,
+    instance_id: str,
+    reason: str = "Application deployment cancelled by user request.",
+):
+    """Converge Ready App cancellation until all child runtime is gone."""
+    executor = ApplicationStackExecutor(instance_id)
+    try:
+        instance = ApplicationInstance.objects.filter(pk=instance_id).first()
+        if instance is None:
+            return {"cancelled": True, "reason": "already_absent"}
+        if instance.stage == "deletion_pending":
+            return {"cancelled": False, "reason": "deletion_in_progress"}
+
+        executor.cancel(reason=reason)
+        if executor._cleanup_cancelled_children():
+            return {"cancelled": True}
+        return self.retry(
+            countdown=10,
+            kwargs={"instance_id": str(instance_id), "reason": reason},
+        )
+    except ApplicationInstance.DoesNotExist:
+        return {"cancelled": True, "reason": "already_absent"}
+    except Exception as exc:
+        logger.exception("Ready App cancellation convergence failed for %s", instance_id)
+        try:
+            ApplicationInstance.objects.filter(pk=instance_id).exclude(
+                stage="deletion_pending"
+            ).update(
+                stage="cancellation_cleanup",
+                error_code="APPLICATION_DEPLOYMENT_CANCELLED",
+                error_message="Application cancellation is still stopping child runtime resources.",
+                updated_at=timezone.now(),
+            )
+        except Exception:
+            logger.exception("Unable to persist cancellation-cleanup state for %s", instance_id)
+        raise self.retry(
+            exc=exc,
+            countdown=10,
+            kwargs={"instance_id": str(instance_id), "reason": reason},
+        )
 
 
 @shared_task(
@@ -292,7 +334,7 @@ def reconcile_application_installations():
         pass
     cutoff = timezone.now() - timedelta(seconds=stale_seconds)
     instances = ApplicationInstance.objects.filter(
-        Q(status=ApplicationStatus.DEPLOYING)
+        Q(status__in=(ApplicationStatus.PENDING, ApplicationStatus.DEPLOYING), cancel_requested=True)
         | Q(status=ApplicationStatus.CANCELLED, cancel_requested=True)
     ).only("pk")
     recovered = 0
@@ -325,11 +367,22 @@ def reconcile_application_installations():
         # Re-apply cancellation from the periodic reconciler so child
         # deployments cannot remain active forever.
         try:
-            fresh = ApplicationInstance.objects.only("status", "cancel_requested").get(pk=instance.pk)
+            fresh = ApplicationInstance.objects.only(
+                "status", "cancel_requested", "stage"
+            ).get(pk=instance.pk)
             if fresh.cancel_requested:
-                ApplicationStackExecutor(str(instance.pk)).cancel(
+                executor = ApplicationStackExecutor(str(instance.pk))
+                executor.cancel(
                     reason="Application deployment cancelled by user request."
                 )
+                try:
+                    executor._cleanup_cancelled_children()
+                except Exception:
+                    logger.exception(
+                        "Ready App cancellation cleanup still converging for %s",
+                        instance.pk,
+                    )
+                continue
         except ApplicationInstance.DoesNotExist:
             continue
 
