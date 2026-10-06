@@ -144,6 +144,7 @@ networks:
         )
         self.assertIn("FROM wordpress:7.1.2-php8.3-apache", wordpress["dockerfile"])
         self.assertIn("ARG WP_CLI_VERSION=2.12.0", wordpress["dockerfile"])
+        self.assertIn("mariadb-client", wordpress["dockerfile"])
         self.assertIn("WP_CLI_ALLOW_ROOT=1", wordpress["dockerfile"])
         self.assertIn("wp-cli-${WP_CLI_VERSION}.phar", wordpress["dockerfile"])
         self.assertIn("sha512sum -c -", wordpress["dockerfile"])
