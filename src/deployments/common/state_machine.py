@@ -136,6 +136,10 @@ DEPLOY_TRANSITIONS: FrozenSet[tuple[str | None, str]] = frozenset({
     (DEPLOY_RUNNING, DEPLOY_CANCELLED),
     (DEPLOY_RUNNING, DEPLOY_ROLLING_BACK),
 
+    # Deletion/cancellation may arrive while rollback is in progress. Once
+    # the runtime has been fenced for deletion, cancellation is a terminal and
+    # safe outcome for the deployment attempt.
+    (DEPLOY_ROLLING_BACK, DEPLOY_CANCELLED),
     (DEPLOY_ROLLING_BACK, DEPLOY_ROLLED_BACK),
     (DEPLOY_ROLLING_BACK, DEPLOY_FAILED),  # rollback itself failed
 
