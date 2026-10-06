@@ -59,6 +59,29 @@ DATABASE_DATA_ROOTS = {
     "oracle": "/opt/oracle/oradata",
 }
 
+# Restricted shell roots intentionally do not point at database files. Database
+# data directories use engine-specific on-disk formats and must not be treated
+# as editable workspaces.
+DATABASE_SAFE_WORKDIRS = {
+    "mysql": "/tmp",
+    "mariadb": "/tmp",
+    "postgresql": "/tmp",
+    "mongodb": "/tmp",
+    "redis": "/tmp",
+    "oracle": "/tmp",
+}
+
+# Actual WORKDIR values of the images used by the platform. Images without an
+# explicit WORKDIR inherit Docker's default "/" .
+DATABASE_RUNTIME_WORKDIRS = {
+    "mysql": "/",
+    "mariadb": "/",
+    "postgresql": "/",
+    "mongodb": "/",
+    "redis": "/data",
+    "oracle": "/opt/oracle",
+}
+
 PLATFORM_ALIASES = {
     "laravel": "laravel",
     "php": "php",
@@ -308,9 +331,18 @@ def _platform_for_service(service: Service) -> str:
 
 
 def default_workdir_for_platform(platform: str) -> str:
+    """Return the safe restricted-shell workspace root."""
     normalized = str(platform or "").strip().lower()
-    if normalized in DATABASE_PLATFORMS:
-        return str(DATABASE_PLATFORMS[normalized]["data_root"])
+    if normalized in DATABASE_SAFE_WORKDIRS:
+        return DATABASE_SAFE_WORKDIRS[normalized]
+    return DEFAULT_WORKDIRS.get(normalized, "/app")
+
+
+def runtime_workdir_for_platform(platform: str) -> str:
+    """Return the image-native/default cwd used by developer sessions."""
+    normalized = str(platform or "").strip().lower()
+    if normalized in DATABASE_RUNTIME_WORKDIRS:
+        return DATABASE_RUNTIME_WORKDIRS[normalized]
     return DEFAULT_WORKDIRS.get(normalized, "/app")
 
 def _safe_workdir(path: str, root: str) -> str:
@@ -1178,15 +1210,19 @@ def developer_shell_security_check(container) -> tuple[bool, str]:
         return False, f"Could not verify container security posture: {exc}"
 def create_session(service: Service, user, workdir: str | None = None, mode: str = "restricted") -> tuple[object, str]:
     platform = _platform_for_service(service)
-    root = default_workdir_for_platform(platform)
     mode = str(mode or "restricted").strip().lower()
     if mode not in SHELL_MODES:
         raise ValidationError(f"Unsupported shell mode: {mode}")
-    if mode == "developer" and workdir:
-        workdir = posixpath.normpath(str(workdir).strip())
-        if not workdir.startswith("/"):
-            workdir = posixpath.join(root, workdir)
+
+    if mode == "developer":
+        root = "/"
+        workdir = runtime_workdir_for_platform(platform)
+        if workdir is not None and str(workdir or "").strip():
+            requested = str(workdir).strip()
+            workdir = requested if requested.startswith("/") else posixpath.join(workdir, requested)
+            workdir = posixpath.normpath(workdir)
     else:
+        root = default_workdir_for_platform(platform)
         workdir = _safe_workdir(workdir or root, root)
     container = _resolve_container(service)
     if mode == "developer":
@@ -1864,10 +1900,12 @@ def shell_workspace_metadata(service: Service) -> dict:
     """Return non-secret workspace/runtime metadata for UI and Agent clients."""
     platform = _platform_for_service(service)
     workspace = default_workdir_for_platform(platform)
+    runtime_workdir = runtime_workdir_for_platform(platform)
     result = {
         "platform": platform,
         "workspace_root": workspace,
         "default_workdir": workspace,
+        "developer_default_workdir": runtime_workdir,
         "is_database": platform in DATABASE_PLATFORMS,
         "interactive_commands": list(DATABASE_PLATFORMS.get(platform, {}).get("interactive", ())),
     }
