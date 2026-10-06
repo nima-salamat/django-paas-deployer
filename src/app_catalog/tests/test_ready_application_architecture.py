@@ -320,6 +320,22 @@ class ReadyApplicationArchitectureTests(TestCase):
         assert process.process_type == 'database'
 
 
+    def test_reconcile_routes_active_cancellation_to_runtime_cleanup(self):
+        from unittest.mock import patch
+
+        instance = self.install(catalog_id="wordpress", variant="default", name="cancel-route-active")
+        instance.status = ApplicationStatus.DEPLOYING
+        instance.cancel_requested = True
+        instance.stage = "cancellation_requested"
+        instance.save(update_fields=["status", "cancel_requested", "stage", "updated_at"])
+
+        with patch.object(ApplicationStackExecutor, "cancel") as cancel,              patch.object(ApplicationStackExecutor, "_cleanup_cancelled_children", return_value=True) as cleanup:
+            result = ApplicationStackExecutor(str(instance.pk)).reconcile()
+
+        assert result == []
+        cancel.assert_called_once()
+        cleanup.assert_called_once_with()
+
     def test_cancellation_converges_pending_children(self):
         instance = self.install(name="cancel-convergence")
         executor = ApplicationStackExecutor(str(instance.pk))
