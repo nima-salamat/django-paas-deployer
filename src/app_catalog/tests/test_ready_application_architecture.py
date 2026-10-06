@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import zipfile
 
 import pytest
 from django.db.models.deletion import RESTRICT, RestrictedError
@@ -118,6 +119,50 @@ class ReadyApplicationArchitectureTests(TestCase):
         assert refs
         assert refs[0]["key"] == "service_password_root"
         assert refs[0]["version"] == root_secret.current_version
+    def test_wordpress_selected_version_flows_through_installation_and_deploy_artifact(self):
+        instance = self.install(
+            catalog_id="wordpress",
+            variant="default",
+            name="wordpress-selected-version",
+        )
+        # The helper above installs the default version; exercise the actual
+        # user-selected version through the public creation path.
+        instance.delete()
+        instance = create_application_installation(
+            self.user,
+            {
+                "catalog_id": "wordpress",
+                "variant": "default",
+                "name": "wordpress-selected-version",
+                "plan_id": self.app_plan.pk,
+                "config": {
+                    "domain": "wordpress-selected-version.example.invalid",
+                    "software_version": "7.1.1",
+                },
+            },
+        )
+
+        binding = instance.services.get(service_key="wordpress")
+        service = binding.service
+        deploy = binding.deploy
+
+        assert instance.software_version == "7.1.1"
+        assert instance.config["software_version"] == "7.1.1"
+        assert service.source_config["software_version"] == "7.1.2"
+        assert service.source_config["selected_software_version"] == "7.1.1"
+        assert service.runtime_config["selected_software_version"] == "7.1.1"
+
+        dockerfile = str((service.build_config or {}).get("dockerfile") or "")
+        assert "FROM wordpress:7.1.1-php8.3-apache" in dockerfile
+        assert "FROM wordpress:7.1.2-php8.3-apache" not in dockerfile
+
+        assert deploy.zip_file and deploy.zip_file.name
+        with deploy.zip_file.open("rb") as handle:
+            with zipfile.ZipFile(handle) as archive:
+                archived_dockerfile = archive.read("Dockerfile").decode("utf-8")
+
+        assert archived_dockerfile == dockerfile
+        assert "FROM wordpress:7.1.1-php8.3-apache" in archived_dockerfile
     def test_wordpress_app_receives_materialized_mariadb_connection_contract(self):
         instance = self.install(
             catalog_id="wordpress",
