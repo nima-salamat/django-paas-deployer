@@ -899,6 +899,23 @@ class DeployService:
             )
         elif runtime_graph is not None:
             for raw_endpoint in runtime_graph.endpoints:
+                endpoint_hostname = str(raw_endpoint.hostname or "").strip()
+                # Ready App public DNS is a platform-owned identity derived
+                # from the actual Service row. Never let an old revision
+                # snapshot, placeholder, or stale endpoint hostname create a
+                # Traefik router for a different host.
+                if (
+                    str(getattr(service, "source_kind", "") or "").lower() == str(Service.SourceKind.CATALOG).lower()
+                    and raw_endpoint.exposure == "public"
+                    and raw_endpoint.enabled
+                ):
+                    try:
+                        from services.serializers import _service_host
+                        canonical_host = str(_service_host(service) or "").strip()
+                    except Exception:
+                        canonical_host = ""
+                    if canonical_host:
+                        endpoint_hostname = canonical_host
                 endpoint_specs.append(
                     EndpointSpec(
                         name=raw_endpoint.name,
@@ -906,7 +923,7 @@ class DeployService:
                         published_port=raw_endpoint.published_port,
                         protocol=raw_endpoint.protocol,
                         exposure=raw_endpoint.exposure,
-                        hostname=raw_endpoint.hostname,
+                        hostname=endpoint_hostname,
                         path=raw_endpoint.path,
                         tls=raw_endpoint.tls,
                         enabled=raw_endpoint.enabled,
