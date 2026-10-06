@@ -30,6 +30,10 @@ MAX_COMMAND_LENGTH = 4096
 MAX_COMPOUND_SEGMENTS = 16
 MAX_PIPE_INPUT_BYTES = 256 * 1024
 MAX_FILE_SIZE = 256 * 1024
+SHELL_MODES = {
+    "restricted": "restricted",
+    "developer": "developer",
+}
 DEFAULT_WORKDIRS = {
     "laravel": "/var/www/html",
     "php": "/var/www/html",
@@ -1135,11 +1139,45 @@ def expire_idle_sessions(*, service=None, now=None) -> int:
     return qs.update(status=ShellSession.Status.EXPIRED, closed_at=now, expires_at=now)
 
 
-def create_session(service: Service, user, workdir: str | None = None) -> tuple[object, str]:
+def developer_shell_security_check(container) -> tuple[bool, str]:
+    """Return whether unrestricted developer shell is safe for this container."""
+    try:
+        container.reload()
+        host = container.attrs.get('HostConfig') or {}
+        if host.get('Privileged'):
+            return False, "Developer shell is disabled for privileged containers."
+        if str(host.get('PidMode') or '').strip().lower() == 'host':
+            return False, "Developer shell is disabled when the container shares the host PID namespace."
+        if str(host.get('NetworkMode') or '').strip().lower() == 'host':
+            return False, "Developer shell is disabled when the container uses the host network namespace."
+        security_opts = [str(x).lower() for x in (host.get('SecurityOpt') or [])]
+        if not any('no-new-privileges' in item for item in security_opts):
+            return False, "Developer shell requires no-new-privileges on the container."
+        for raw in host.get('Binds') or []:
+            source = str(raw).split(':', 1)[0].strip()
+            normalized = source.rstrip('/')
+            if normalized in {'/var/run/docker.sock', '/run/docker.sock'} or normalized.startswith('/var/lib/docker'):
+                return False, "Developer shell is disabled when Docker engine access is mounted into the container."
+        for cap in host.get('CapAdd') or []:
+            normalized = str(cap).strip().upper().replace('-', '_')
+            if normalized in {'SYS_ADMIN', 'SYS_PTRACE', 'NET_ADMIN', 'SYS_RAWIO', 'SYS_MODULE'}:
+                return False, f"Developer shell is disabled with dangerous added capability {normalized}."
+        return True, ''
+    except Exception as exc:
+        return False, f"Could not verify container security posture: {exc}"
+
+def create_session(service: Service, user, workdir: str | None = None, mode: str = "restricted") -> tuple[object, str]:
     platform = _platform_for_service(service)
     root = default_workdir_for_platform(platform)
+    mode = str(mode or "restricted").strip().lower()
+    if mode not in SHELL_MODES:
+        raise ValidationError(f"Unsupported shell mode: {mode}")
     workdir = _safe_workdir(workdir or root, root)
-    _resolve_container(service)
+    container = _resolve_container(service)
+    if mode == "developer":
+        allowed, reason = developer_shell_security_check(container)
+        if not allowed:
+            raise ValidationError(reason)
     now = timezone.now()
     # Lazy import avoids model cycle during Django app loading.
     from services.models import ShellSession
@@ -1211,7 +1249,8 @@ def terminate_active_session(service: Service, *, actor=None):
 def authenticate_session(service: Service, user, token: str):
     from services.models import ShellSession
     session = ShellSession.objects.filter(
-        service=service, user=user, token_hash=_token_hash(str(token or "")), status=ShellSession.Status.ACTIVE
+        service=service, user=user, token_hash=_token_hash(str(token or "")), status=ShellSession.Status.ACTIVE        mode=mode,
+
     ).first()
     if not session:
         raise ValidationError("Invalid or inactive shell session.")
@@ -1723,6 +1762,10 @@ def shell_protocol_metadata(service_id=None):
     if service_id is not None:
         websocket_path = websocket_path.format(service_id=service_id)
     return {
+        "modes": {
+            "restricted": {"description": "Policy-enforced command allowlist and workspace confinement."},
+            "developer": {"description": "Full /bin/sh -lc execution inside the hardened service container.", "requires_advanced": True},
+        },
         "command_api": {
             "mode": "one_shot",
             "compound": True,
