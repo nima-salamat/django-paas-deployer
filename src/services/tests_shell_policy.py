@@ -129,10 +129,10 @@ def test_php_artisan_route_list_allowed():
     allow(["php", "artisan", "route:list"])
 
 
-def test_php_artisan_custom_command_allowed():
+def test_php_artisan_custom_command_requires_confirmation():
     allow(["php", "artisan", "app:sync-users"])
-    assert not _is_destructive_command(["php", "artisan", "app:sync-users"])
-    assert classify_command_risk(["php", "artisan", "app:sync-users"]) == Risk.NORMAL_MUTATION
+    assert _is_destructive_command(["php", "artisan", "app:sync-users"])
+    assert classify_command_risk(["php", "artisan", "app:sync-users"]) == Risk.HIGH_IMPACT
 
 
 def test_php_artisan_destructive_requires_confirm():
@@ -190,7 +190,8 @@ def test_npm_run_scripts_allowed():
     allow(["npm", "run", "lint"], platform="node")
     allow(["npm", "run", "typecheck"], platform="node")
     allow(["npm", "run", "my-custom-script"], platform="node")
-    assert not _is_destructive_command(["npm", "run", "build"])
+    assert _is_destructive_command(["npm", "run", "build"])
+    assert classify_command_risk(["npm", "run", "build"]) == Risk.HIGH_IMPACT
 
 
 def test_npm_install_is_destructive():
@@ -203,10 +204,15 @@ def test_yarn_pnpm_scripts_allowed():
     allow(["pnpm", "run", "test"], platform="node")
 
 
-def test_npx_common_tools_allowed():
-    allow(["npx", "vite", "build"], platform="node")
-    allow(["npx", "eslint", "."], platform="node")
-    allow(["npx", "@vitejs/plugin-react"], platform="node")
+def test_npx_common_tools_allowed_but_high_impact():
+    for cmd in (
+        ["npx", "vite", "build"],
+        ["npx", "eslint", "."],
+        ["npx", "@vitejs/plugin-react"],
+    ):
+        allow(cmd, platform="node")
+        assert _is_destructive_command(cmd)
+        assert classify_command_risk(cmd) == Risk.HIGH_IMPACT
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +250,68 @@ def test_base_commands_allowed():
     for cmd in (["pwd"], ["ls", "-la"], ["cat", "README.md"], ["mkdir", "tmp"]):
         allow(cmd)
 
+def test_curl_is_not_available_in_restricted_shell():
+    reject(["curl", "https://example.com"])
+
+# ---------------------------------------------------------------------------
+# WordPress / WP-CLI
+# ---------------------------------------------------------------------------
+
+def test_wp_cli_read_only_and_cache_operations():
+    allow(["wp", "core", "version"], platform="wordpress")
+    allow(["wp", "plugin", "list"], platform="wordpress")
+    allow(["wp", "cache", "flush"], platform="wordpress")
+    assert classify_command_risk(["wp", "core", "version"]) == Risk.READ_ONLY
+    assert classify_command_risk(["wp", "plugin", "list"]) == Risk.READ_ONLY
+    assert classify_command_risk(["wp", "cache", "flush"]) == Risk.NORMAL_MUTATION
+    assert not _is_destructive_command(["wp", "cache", "flush"])
+
+def test_wp_cli_publish_and_content_lifecycle_are_impact_aware():
+    draft = ["wp", "post", "create", "--post_status=draft"]
+    publish = ["wp", "post", "create", "--post_status=publish"]
+    update = ["wp", "post", "update", "42", "--post_title=Updated"]
+    publish_update = ["wp", "post", "update", "42", "--post_status=publish"]
+    for cmd in (draft, publish, update, publish_update):
+        allow(cmd, platform="wordpress")
+    assert classify_command_risk(draft) == Risk.NORMAL_MUTATION
+    assert classify_command_risk(update) == Risk.NORMAL_MUTATION
+    assert classify_command_risk(publish) == Risk.HIGH_IMPACT
+    assert classify_command_risk(publish_update) == Risk.HIGH_IMPACT
+    assert _is_destructive_command(publish)
+    assert _is_destructive_command(publish_update)
+
+def test_wp_cli_privileged_operations_require_confirmation():
+    commands = [
+        ["wp", "plugin", "activate", "example"],
+        ["wp", "theme", "activate", "example"],
+        ["wp", "user", "create", "alice", "alice@example.com"],
+        ["wp", "user", "set-role", "42", "administrator"],
+        ["wp", "config", "set", "DISALLOW_FILE_MODS", "false"],
+    ]
+    for cmd in commands:
+        allow(cmd, platform="wordpress")
+        assert classify_command_risk(cmd) == Risk.PRIVILEGED
+        assert _is_destructive_command(cmd)
+
+def test_wp_cli_plugin_install_is_high_impact_and_not_implicitly_activated():
+    cmd = ["wp", "plugin", "install", "example"]
+    allow(cmd, platform="wordpress")
+    assert classify_command_risk(cmd) == Risk.HIGH_IMPACT
+    assert _is_destructive_command(cmd)
+
+def test_wp_cli_rejects_remote_resources_and_external_paths():
+    reject(["wp", "plugin", "install", "https://example.com/plugin.zip"], platform="wordpress")
+    reject(["wp", "media", "import", "https://example.com/file.jpg"], platform="wordpress")
+    reject(["wp", "plugin", "install", "/etc/plugin.zip"], platform="wordpress")
+    reject(["wp", "media", "import", "../../etc/file"], platform="wordpress")
+    allow(["wp", "plugin", "install", "/var/www/html/plugin.zip"], platform="wordpress")
+
+def test_wp_cli_rejects_code_loading_and_remote_transports():
+    reject(["wp", "plugin", "list", "--require=/var/www/html/a.php"], platform="wordpress")
+    reject(["wp", "plugin", "list", "--exec=echo"], platform="wordpress")
+    reject(["wp", "plugin", "list", "--ssh=root@example.com"], platform="wordpress")
+    reject(["wp", "plugin", "list", "--http=https://example.com"], platform="wordpress")
+
 
 def test_path_traversal_rejected():
     reject(["cat", "/etc/passwd"])
@@ -278,9 +346,14 @@ def test_artisan_name_regex():
     (["git", "status"], Risk.READ_ONLY),
     (["php", "artisan", "migrate"], Risk.NORMAL_MUTATION),
     (["php", "artisan", "migrate:fresh"], Risk.DESTRUCTIVE),
+    (["php", "artisan", "custom:sync"], Risk.HIGH_IMPACT),
     (["rm", "file.txt"], Risk.DESTRUCTIVE),
-    (["npm", "run", "build"], Risk.NORMAL_MUTATION),
+    (["npm", "run", "build"], Risk.HIGH_IMPACT),
     (["npm", "install"], Risk.DESTRUCTIVE),
+    (["wp", "core", "version"], Risk.READ_ONLY),
+    (["wp", "cache", "flush"], Risk.NORMAL_MUTATION),
+    (["wp", "plugin", "install", "example"], Risk.HIGH_IMPACT),
+    (["wp", "plugin", "activate", "example"], Risk.PRIVILEGED),
     (["php", "artisan", "tinker"], Risk.INTERACTIVE),
 ])
 def test_risk_matrix(argv, expected):
