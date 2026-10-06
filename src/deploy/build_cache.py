@@ -13,6 +13,7 @@ from typing import Any, Iterable
 
 from django.db.models import Sum
 from django.utils import timezone
+from docker.errors import ImageNotFound
 
 from deploy.models import (
     BaseRuntimeImage,
