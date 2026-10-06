@@ -61,11 +61,11 @@ services:
     volumes:
       - wordpress-files:/var/www/html
     environment:
-      - SERVICE_URL_WORDPRESS
-      - WORDPRESS_DB_HOST=mariadb
-      - WORDPRESS_DB_USER=$SERVICE_USER_WORDPRESS
-      - WORDPRESS_DB_PASSWORD=$SERVICE_PASSWORD_WORDPRESS
-      - WORDPRESS_DB_NAME=wordpress
+      SERVICE_URL_WORDPRESS: ${config.domain}
+      WORDPRESS_DB_HOST: mariadb
+      WORDPRESS_DB_USER: ${config.service_user_wordpress}
+      WORDPRESS_DB_PASSWORD: ${secret.service_password_wordpress}
+      WORDPRESS_DB_NAME: wordpress
       WORDPRESS_CONFIG_EXTRA: |
         define( 'WP_HOME', 'https://${config.domain}' );
         define( 'WP_SITEURL', 'https://${config.domain}' );
