@@ -946,6 +946,9 @@ def _validate_platform_command(argv: list[str], platform: str, root: str, *, all
         )
 
     _validate_path_tokens(argv, base, root)
+    if platform in DATABASE_PLATFORMS and base in {"env", "printenv"}:
+        _policy_reject("Environment dumping is blocked for database runtimes because it can reveal managed credentials.")
+
 
     if base == "find":
         if {a.lower() for a in argv[1:]} & {"-exec", "-execdir", "-ok", "-okdir", "-delete"}:
