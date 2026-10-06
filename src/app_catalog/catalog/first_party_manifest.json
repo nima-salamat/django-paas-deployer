@@ -1447,7 +1447,7 @@
         "wordpress",
         "mariadb"
       ],
-      "source_sha256": "d902bff423586545b1c29e3d70a4d5c4db436ee67e16703b37e26558aad9765e",
+      "source_sha256": "aa468025160b0b68e3e5827a631dea7a659fe1f17b6e329c03417c6ee582859b",
       "source_template": "wordpress-with-mariadb.yaml"
     }
   ],
