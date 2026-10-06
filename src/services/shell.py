@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import posixpath
@@ -143,6 +144,7 @@ class ShellPolicyError(ValidationError):
 class Risk:
     READ_ONLY = "READ_ONLY"
     NORMAL_MUTATION = "NORMAL_MUTATION"
+    HIGH_IMPACT = "HIGH_IMPACT"
     DESTRUCTIVE = "DESTRUCTIVE"
     INTERACTIVE = "INTERACTIVE"
     PRIVILEGED = "PRIVILEGED"
@@ -153,7 +155,7 @@ BASE_COMMANDS = {
     "pwd", "ls", "cat", "head", "tail", "mkdir", "touch", "rm", "rmdir", "cp", "mv",
     "find", "grep", "egrep", "fgrep", "wc", "sort", "uniq", "cut", "tr", "sed", "tee",
     "stat", "date", "whoami", "id", "env", "printenv", "which", "type", "df", "du",
-    "uname", "hostname", "ping", "curl", "cd", "file", "basename", "dirname", "realpath",
+    "uname", "hostname", "ping", "cd", "file", "basename", "dirname", "realpath",
     "md5sum", "sha256sum", "sha1sum", "cmp", "diff", "true", "false", "echo", "printf",
     "test", "[", "sleep", "expr",
 }
@@ -408,28 +410,44 @@ def _reject_shell_syntax(command: str) -> None:
 
 
 def _validate_network_target(target: str) -> None:
-    host = target
-    if "://" in target:
-        parsed = urlparse(target)
+    """Allow network probes only to public destinations."""
+    host = str(target or "").strip()
+    if "://" in host:
+        parsed = urlparse(host)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            raise ValidationError("Only http/https URLs are allowed for curl.")
+            raise ValidationError("Only http/https URLs are allowed for network probes.")
         host = parsed.hostname
-    host = host.split("/")[0].split(":")[0].strip().lower()
-    if host in {"localhost", "localhost.localdomain", "host.docker.internal"}:
-        raise ValidationError("Local host targets are not allowed.")
-    try:
-        ip = socket.gethostbyname(host)
-        octets = [int(x) for x in ip.split(".")]
-        if (
-            octets[0] in {10, 127} or
-            (octets[0] == 169 and octets[1] == 254) or
-            (octets[0] == 172 and 16 <= octets[1] <= 31) or
-            (octets[0] == 192 and octets[1] == 168)
-        ):
-            raise ValidationError("Private or link-local network targets are not allowed.")
-    except socket.gaierror:
-        pass
+    else:
+        host = host.split("/")[0].strip("[]")
 
+    if not host:
+        raise ValidationError("A network target is required.")
+
+    try:
+        addresses = {
+            addr[4][0]
+            for addr in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+            if addr and addr[4]
+        }
+    except socket.gaierror:
+        # Preserve the old behavior for names that cannot be resolved now; the
+        # network client remains responsible for reporting the actual failure.
+        return
+
+    for raw in addresses:
+        try:
+            ip = ipaddress.ip_address(raw)
+        except ValueError:
+            continue
+        if (
+            ip.is_loopback
+            or ip.is_link_local
+            or ip.is_private
+            or ip.is_unspecified
+            or ip.is_reserved
+            or ip.is_multicast
+        ):
+            raise ValidationError("Private, loopback, link-local or reserved network targets are not allowed.")
 
 def _non_option_args(argv: list[str], base: str) -> list[str]:
     """Return positional path-like arguments without mistaking option values for paths."""
@@ -911,35 +929,93 @@ def _validate_pip_argv(argv: list[str]) -> None:
 
 
 def _validate_wp_argv(argv: list[str], root: str) -> None:
-    """Validate a constrained WP-CLI surface for WordPress runtimes."""
+    """Validate a constrained, local-only WP-CLI surface."""
     if len(argv) < 2:
         _policy_reject("wp requires a command or --info/--version.")
+
     sub = str(argv[1]).lower()
     if sub in {"--info", "--version", "-v", "-h", "--help"}:
         return
+
     blocked = {"eval", "eval-file", "shell", "server", "package"}
     if sub in blocked:
         _policy_reject(f"WP-CLI command '{sub}' is blocked in the restricted runtime.")
-    allowed = {"cli", "core", "config", "option", "post", "page", "menu", "plugin", "theme", "user", "media", "rewrite", "cache", "db", "comment", "site", "network", "transient", "cron", "language", "role", "cap", "taxonomy", "term", "search-replace", "maintenance-mode", "scaffold"}
+
+    allowed = {
+        "cli", "core", "config", "option", "post", "page", "menu", "plugin",
+        "theme", "user", "media", "rewrite", "cache", "db", "comment", "site",
+        "network", "transient", "cron", "language", "role", "cap", "taxonomy",
+        "term", "search-replace", "maintenance-mode", "scaffold",
+    }
     if sub not in allowed:
         _policy_reject(f"WP-CLI command '{sub}' is not enabled in the restricted runtime.")
-    for token in argv[2:]:
-        lower = str(token).lower()
-        if lower == "--ssh" or lower.startswith("--ssh=") or lower == "--http" or lower.startswith("--http="):
-            _policy_reject("Remote WordPress transports are not allowed. Operate on the local managed runtime.")
 
+    action = str(argv[2]).lower() if len(argv) >= 3 else ""
+    remote_resource_ops = {
+        ("media", "import"),
+        ("plugin", "install"),
+        ("theme", "install"),
+        ("import", ""),
+    }
+    local_path_ops = {
+        ("media", "import"),
+        ("plugin", "install"),
+        ("theme", "install"),
+        ("config", "create"),
+        ("import", ""),
+    }
+
+    for token in argv[2:]:
         value = str(token)
         lower = value.lower()
-        if lower.startswith("--path="):
-            path = value.split("=", 1)[1]
-            _safe_workdir(path if path.startswith("/") else posixpath.join(root, path), root)
-        if lower in {"--require", "--exec"}:
+
+        if lower in {"--ssh", "--http"} or lower.startswith("--ssh=") or lower.startswith("--http="):
+            _policy_reject("Remote WordPress transports are not allowed. Operate on the local managed runtime.")
+
+        if lower in {"--require", "--exec"} or lower.startswith("--require=") or lower.startswith("--exec="):
             _policy_reject("WP-CLI code-loading options are not allowed.")
-        if lower.startswith("--require=") or lower.startswith("--exec="):
-            _policy_reject("WP-CLI code-loading options are not allowed.")
-    if sub == "db" and len(argv) >= 3 and str(argv[2]).lower() == "cli":
+
+        if lower.startswith("http://") or lower.startswith("https://"):
+            if (sub, action) in remote_resource_ops:
+                _policy_reject(
+                    f"Remote resources are not allowed for 'wp {sub} {action}'. "
+                    "Use a workspace-local artifact in restricted mode."
+                )
+            continue
+
+    # WP-CLI has many command-specific local file arguments which the generic
+    # shell path parser cannot identify safely. Validate the known resource
+    # acquisition forms explicitly.
+    op = (sub, action)
+    if op in local_path_ops:
+        positional = []
+        for token in argv[2:]:
+            value = str(token)
+            if not value or value.startswith("-"):
+                continue
+            if value.lower().startswith(("http://", "https://")):
+                continue
+            positional.append(value)
+        if positional:
+            candidates = positional if op in {("media", "import"), ("import", "")} else positional[:1]
+            for value in candidates:
+                looks_like_path = (
+                    value.startswith(("/", "./", "../"))
+                    or "/" in value
+                    or "\\" in value
+                    or value.lower().endswith((".zip", ".tar", ".gz", ".json", ".php"))
+                )
+                if looks_like_path:
+                    candidate = value if value.startswith("/") else posixpath.join(root, value)
+                    _safe_workdir(candidate, root)
+
+    if sub == "core" and action == "download":
+        _policy_reject("wp core download is not allowed in the restricted runtime.")
+
+    if sub == "db" and action == "cli":
         # Interactive DB access is intentionally exposed only through PTY.
         return
+
 def _validate_database_argv(argv: list[str], platform: str) -> None:
     """Validate local database-client use without embedding secrets or remote targets."""
     if platform not in DATABASE_PLATFORMS:
@@ -1189,10 +1265,17 @@ def developer_shell_security_check(container) -> tuple[bool, str]:
         security_opts = [str(x).lower() for x in (host.get('SecurityOpt') or [])]
         if any('seccomp=unconfined' in item or 'seccomp:unconfined' in item for item in security_opts):
             return False, "Developer shell is disabled when the container uses an unconfined seccomp profile."
+        sensitive_host_roots = (
+            '/etc', '/root', '/home', '/var', '/run', '/proc', '/sys', '/dev',
+            '/srv', '/opt', '/mnt', '/media',
+        )
         for raw in host.get('Binds') or []:
-            source = str(raw).split(':', 1)[0].strip().rstrip('/')
-            if source in {'/var/run/docker.sock', '/run/docker.sock'} or source.startswith('/var/lib/docker'):
+            source = str(raw).split(':', 1)[0].strip().rstrip('/') or '/'
+            normalized_source = posixpath.normpath(source)
+            if normalized_source in {'/var/run/docker.sock', '/run/docker.sock'} or normalized_source.startswith('/var/lib/docker'):
                 return False, "Developer shell is disabled when Docker engine access is mounted into the container."
+            if normalized_source == '/' or normalized_source.startswith(sensitive_host_roots):
+                return False, f"Developer shell is disabled when sensitive host path {normalized_source} is bind-mounted."
         if host.get('Devices'):
             return False, "Developer shell is disabled when host devices are exposed to the container."
         for mount in container.attrs.get('Mounts') or []:
@@ -1322,12 +1405,7 @@ def authenticate_session(service: Service, user, token: str):
 
 
 def classify_command_risk(argv: list[str]) -> str:
-    """Return a Risk level for confirmation / UI purposes.
-
-    READ_ONLY / NORMAL_MUTATION → no confirmation
-    DESTRUCTIVE / PRIVILEGED → confirmation required
-    INTERACTIVE → may need advanced permission (handled separately)
-    """
+    """Return the execution impact class used for confirmation and UI."""
     if not argv:
         return Risk.READ_ONLY
     base = os.path.basename(argv[0]).lower()
@@ -1350,9 +1428,13 @@ def classify_command_risk(argv: list[str]) -> str:
 
     if base in {"mysql", "mariadb", "psql", "mongosh", "redis-cli", "sqlplus"}:
         return Risk.INTERACTIVE
+
     if base == "wp":
-        if len(argv) >= 4 and str(argv[1]).lower() == "db" and str(argv[2]).lower() == "cli":
+        if len(argv) >= 3 and str(argv[1]).lower() == "db" and len(argv) >= 3 and str(argv[2]).lower() == "cli":
             return Risk.INTERACTIVE
+
+        sub = str(argv[1]).lower() if len(argv) >= 2 else ""
+        action = str(argv[2]).lower() if len(argv) >= 3 else ""
 
         read_only_commands = {
             ("core", "version"), ("core", "is-installed"),
@@ -1365,20 +1447,58 @@ def classify_command_risk(argv: list[str]) -> str:
             ("rewrite", "list"), ("maintenance-mode", "status"),
             ("cli", "version"), ("cli", "check-update"),
         }
-        if len(argv) >= 3 and (str(argv[1]).lower(), str(argv[2]).lower()) in read_only_commands:
+        if (sub, action) in read_only_commands:
             return Risk.READ_ONLY
 
         destructive_commands = {
-            ("plugin", "delete"), ("plugin", "deactivate"),
-            ("theme", "delete"), ("theme", "disable"),
+            ("plugin", "delete"), ("theme", "delete"),
             ("post", "delete"), ("page", "delete"),
             ("user", "delete"), ("media", "delete"),
             ("option", "delete"), ("db", "reset"), ("db", "clean"),
+            ("role", "delete"), ("cap", "delete"),
         }
-        if len(argv) >= 3 and (str(argv[1]).lower(), str(argv[2]).lower()) in destructive_commands:
+        if (sub, action) in destructive_commands:
             return Risk.DESTRUCTIVE
 
-        return Risk.NORMAL_MUTATION
+        privileged_commands = {
+            ("plugin", "activate"), ("theme", "activate"),
+            ("user", "create"), ("user", "update"),
+            ("user", "add-role"), ("user", "set-role"), ("user", "add-cap"),
+            ("role", "create"), ("role", "delete"),
+            ("cap", "add"), ("cap", "delete"),
+            ("config", "set"),
+        }
+        if (sub, action) in privileged_commands:
+            return Risk.PRIVILEGED
+
+        high_impact_commands = {
+            ("core", "update"), ("core", "verify-checksums"),
+            ("plugin", "install"), ("plugin", "update"), ("plugin", "deactivate"),
+            ("theme", "install"), ("theme", "update"),
+            ("post", "create"), ("post", "update"),
+            ("page", "create"), ("page", "update"),
+            ("option", "update"),
+            ("search-replace", ""),
+            ("cron", "event"), ("maintenance-mode", "activate"),
+            ("maintenance-mode", "deactivate"),
+            ("scaffold", ""),
+            ("media", "import"),
+        }
+        if (sub, action) in high_impact_commands:
+            for token in argv[1:]:
+                if str(token).lower() in {"--post_status=publish", "--post-status=publish"}:
+                    return Risk.HIGH_IMPACT
+            return Risk.HIGH_IMPACT
+
+        if sub in {"search-replace", "scaffold"}:
+            return Risk.HIGH_IMPACT
+        if sub in {"role", "cap"}:
+            return Risk.PRIVILEGED
+
+        # Unknown WP-CLI mutations stay elevated rather than silently becoming
+        # ordinary mutations.
+        return Risk.HIGH_IMPACT
+
     if base == "php" and len(argv) >= 3 and argv[1] == "artisan":
         cmd = argv[2]
         if cmd in ARTISAN_ADVANCED_INTERACTIVE:
@@ -1388,8 +1508,9 @@ def classify_command_risk(argv: list[str]) -> str:
         meta = ARTISAN_COMMAND_CATALOG.get(cmd)
         if meta:
             return meta.get("risk") or (Risk.DESTRUCTIVE if meta.get("destructive") else Risk.NORMAL_MUTATION)
-        # Unknown / custom artisan commands are normal mutations, not destructive.
-        return Risk.NORMAL_MUTATION
+        # Unknown application-defined Artisan commands are executable code paths;
+        # require explicit confirmation instead of treating them as ordinary writes.
+        return Risk.HIGH_IMPACT
 
     if base == "php":
         return Risk.READ_ONLY
@@ -1401,51 +1522,52 @@ def classify_command_risk(argv: list[str]) -> str:
         if cmd in DJANGO_DESTRUCTIVE:
             return Risk.DESTRUCTIVE
         if cmd in {"migrate", "makemigrations", "collectstatic", "createsuperuser",
-                    "changepassword", "test", "loaddata", "dumpdata"}:
+                   "changepassword", "test", "loaddata", "dumpdata"}:
             return Risk.NORMAL_MUTATION
-        return Risk.NORMAL_MUTATION
+        return Risk.HIGH_IMPACT
 
     if base in {"python", "python3"}:
         return Risk.READ_ONLY
 
     if base == "composer":
         sub = argv[1] if len(argv) >= 2 else ""
-        if sub in {"install", "update", "require", "remove"}:
-            return Risk.DESTRUCTIVE if sub in {"update", "remove"} else Risk.NORMAL_MUTATION
+        if sub in {"update", "remove"}:
+            return Risk.DESTRUCTIVE
+        if sub in {"install", "require"}:
+            return Risk.HIGH_IMPACT
         return Risk.READ_ONLY
 
     if base in {"npm", "yarn", "pnpm", "bun"}:
         sub = argv[1] if len(argv) >= 2 else ""
         if sub in PKG_DESTRUCTIVE_SUBS:
             return Risk.DESTRUCTIVE
-        if sub in {"run", "test", "start", "build"} or (
-            base in {"yarn", "pnpm", "bun"} and sub and not sub.startswith("-")
-        ):
-            return Risk.NORMAL_MUTATION
+        if sub == "run" or (base in {"yarn", "pnpm", "bun"} and sub and not sub.startswith("-")):
+            return Risk.HIGH_IMPACT
+        if sub in {"exec", "install"}:
+            return Risk.HIGH_IMPACT
         return Risk.READ_ONLY
 
     if base == "npx":
-        return Risk.NORMAL_MUTATION
+        return Risk.HIGH_IMPACT if len(argv) >= 2 else Risk.READ_ONLY
 
     if base in {"pip", "pip3"}:
         sub = argv[1] if len(argv) >= 2 else ""
-        if sub in {"install", "uninstall"}:
-            return Risk.DESTRUCTIVE if sub == "uninstall" else Risk.NORMAL_MUTATION
+        if sub == "uninstall":
+            return Risk.DESTRUCTIVE
+        if sub == "install":
+            return Risk.HIGH_IMPACT
         return Risk.READ_ONLY
 
     if base == "git":
         sub = argv[1].lstrip("-") if len(argv) >= 2 else ""
         flags = {a for a in argv[2:] if a.startswith("-")}
-        # Pure inspection.
         if sub in {"status", "log", "diff", "show", "ls-files", "rev-parse", "rev-list",
                    "describe", "blame", "shortlog", "whatchanged", "name-rev", "cat-file",
                    "ls-tree", "for-each-ref", "help", "version", "ls-remote"}:
             return Risk.READ_ONLY
-        # Listing branches/tags/remotes is read-only; creating/deleting is destructive.
         if sub == "branch":
             if flags & {"-d", "-D", "--delete", "-m", "-M", "--move", "-c", "-C", "--copy"}:
                 return Risk.DESTRUCTIVE
-            # `git branch newname` creates a branch.
             positionals = [a for a in argv[2:] if not a.startswith("-")]
             return Risk.DESTRUCTIVE if positionals else Risk.READ_ONLY
         if sub == "tag":
@@ -1454,7 +1576,6 @@ def classify_command_risk(argv: list[str]) -> str:
                 return Risk.DESTRUCTIVE
             return Risk.READ_ONLY
         if sub == "remote":
-            # `git remote -v` / `git remote` are read-only; add/remove/set-url mutate.
             positionals = [a for a in argv[2:] if not a.startswith("-")]
             if positionals and positionals[0] in {"add", "remove", "rm", "set-url", "rename", "prune"}:
                 return Risk.DESTRUCTIVE
@@ -1466,21 +1587,20 @@ def classify_command_risk(argv: list[str]) -> str:
         return Risk.READ_ONLY
 
     if base == "make":
-        return Risk.NORMAL_MUTATION
+        return Risk.HIGH_IMPACT
 
-    if base in {"curl", "ping"}:
+    if base == "ping":
         return Risk.READ_ONLY
 
     if base == "node":
-        return Risk.NORMAL_MUTATION if len(argv) >= 2 else Risk.READ_ONLY
+        return Risk.HIGH_IMPACT if len(argv) >= 2 else Risk.READ_ONLY
 
     return Risk.NORMAL_MUTATION
-
 
 def _is_destructive_command(argv: list[str]) -> bool:
     """True when the command requires explicit confirm=true before execution."""
     risk = classify_command_risk(argv)
-    return risk in {Risk.DESTRUCTIVE, Risk.PRIVILEGED}
+    return risk in {Risk.HIGH_IMPACT, Risk.DESTRUCTIVE, Risk.PRIVILEGED}
 
 def _assert_container_path_within(container, path: str, root: str) -> None:
     """Resolve a path inside the container and reject symlink/workspace escapes.
