@@ -137,7 +137,8 @@ def shell_create_apiview(request, service_id):
     try:
         service = _resolve(request, service_id, action="can_shell")
         session, token = create_session(service, request.user, request.data.get("workdir"))
-        return Response({"result":"success","session_id":str(session.id),"token":token,"platform":session.platform,"cwd":session.workdir,"expires_at":session.expires_at}, status=201)
+        from services.shell import shell_workspace_metadata
+        return Response({"result":"success","session_id":str(session.id),"token":token,"platform":session.platform,"cwd":session.workdir,"expires_at":session.expires_at,"workspace":shell_workspace_metadata(service)}, status=201)
     except ValidationError as exc:
         from services.models import ShellSession
         from services.api.sharing import user_can_access_service
