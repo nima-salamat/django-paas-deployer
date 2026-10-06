@@ -230,11 +230,11 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
     cleanup_service_resources(instance)
 
 def _cleanup_service_cache_images(service: Service) -> None:
-    """Remove unshared application images owned by a deleting Service."""
-    from deploy.build_cache import BuildCacheArtifact
+    """Release cache-image references owned by a deleting Service safely."""
+    from collections import defaultdict
+    from deploy.build_cache import BuildCacheArtifact, release_application_image_references
     from deploy.models import BaseRuntimeImage
     from deployments.core.manager.client_manager import get_docker_client
-    from docker.errors import ImageNotFound
 
     rows = list(
         BuildCacheArtifact.objects.filter(
@@ -245,6 +245,11 @@ def _cleanup_service_cache_images(service: Service) -> None:
     image_ids = {str(image_id) for image_id, _ref in rows if image_id}
     if not image_ids:
         return
+
+    refs_by_image = defaultdict(set)
+    for image_id, image_ref in rows:
+        if image_id and image_ref:
+            refs_by_image[str(image_id)].add(str(image_ref).strip())
 
     other_refs = set(
         str(value)
@@ -276,30 +281,30 @@ def _cleanup_service_cache_images(service: Service) -> None:
             running_ids.add(image_id)
 
     for image_id in sorted(image_ids - other_refs - protected_base_ids - running_ids):
-        try:
-            client.images.remove(image_id, force=False)
+        ok, detail = release_application_image_references(
+            image_id,
+            refs_by_image.get(image_id, ()),
+            owner_service_ids=(str(service.pk),),
+            client=client,
+        )
+        if ok:
             logger.info(
-                "Removed unshared application cache image '%s' for deleted service '%s'.",
+                "Released application cache image '%s' for deleted service '%s': %s",
                 image_id,
                 service.name,
+                detail,
             )
-        except ImageNotFound:
-            logger.info(
-                "Application cache image '%s' for deleted service '%s' is already absent.",
-                image_id,
-                service.name,
-            )
-        except Exception as exc:
-            logger.exception(
-                "Failed to remove application cache image '%s' for deleted service '%s'.",
-                image_id,
-                service.name,
-            )
-            raise RuntimeError(
-                f"Failed to remove application cache image '{image_id}' "
-                f"for service '{service.name}'."
-            ) from exc
+            continue
 
+        logger.error(
+            "Failed to release application cache image '%s' for deleted service '%s': %s",
+            image_id,
+            service.name,
+            detail,
+        )
+        raise RuntimeError(
+            f"Failed to remove application image(s) for service '{service.name}': {detail}"
+        )
 
 def _cleanup_service_volumes(service: Service) -> None:
     """

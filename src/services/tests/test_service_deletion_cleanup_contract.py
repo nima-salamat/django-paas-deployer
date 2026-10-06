@@ -75,6 +75,7 @@ def test_service_delete_reclaims_only_unshared_application_cache_images():
     assert "client.containers.list()" in source
     assert "image_ids - other_refs - protected_base_ids - running_ids" in source
     assert "force=False" in source
+    assert "release_application_image_references" in source
 
 
 def test_cache_cleanup_reads_container_image_id_without_inspecting_image():
@@ -227,7 +228,100 @@ def test_in_use_managed_volume_cleanup_removes_owned_task_container_then_retries
     attached.remove.assert_called_once_with(force=True)
 
 
-def test_precleaned_service_delete_skips_duplicate_runtime_cleanup():
+
+
+def test_cache_cleanup_releases_owned_tag_without_force_deleting_shared_image():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock, patch
+
+    from services import signals
+
+    class FakeImage:
+        id = "sha256:" + "a" * 64
+        def __init__(self, tags):
+            self.tags = list(tags)
+            self.attrs = {
+                "RepoTags": list(tags),
+                "Config": {"Labels": {"io.passdeployer.service": "svc-1"}},
+            }
+
+    image = FakeImage(["app-svc-1:1", "shared/image:1"])
+    removed = []
+
+    class Images:
+        def get(self, ref):
+            if ref == image.id or ref in image.tags:
+                return image
+            from docker.errors import ImageNotFound
+            raise ImageNotFound(ref)
+
+        def remove(self, ref, force=False):
+            assert force is False
+            removed.append(ref)
+            if ref in image.tags:
+                image.tags.remove(ref)
+                image.attrs["RepoTags"] = list(image.tags)
+            else:
+                if ref == image.id:
+                    image.tags.clear()
+                    image.attrs["RepoTags"] = []
+
+    first_qs = MagicMock()
+    first_qs.values_list.return_value = [(image.id, "app-svc-1:1")]
+    second_qs = MagicMock()
+    second_qs.exclude.return_value.values_list.return_value = []
+    base_qs = MagicMock()
+    base_qs.values_list.return_value = []
+    artifact_manager = MagicMock()
+    artifact_manager.filter.side_effect = [first_qs, second_qs]
+    base_manager = MagicMock()
+    base_manager.filter.return_value = base_qs
+    client = SimpleNamespace(
+        containers=SimpleNamespace(list=MagicMock(return_value=[])),
+        images=Images(),
+    )
+    service = SimpleNamespace(pk="svc-1", name="wordpress")
+
+    with (
+        patch("deploy.build_cache.BuildCacheArtifact.objects", artifact_manager),
+        patch("deploy.models.BaseRuntimeImage.objects", base_manager),
+        patch("deployments.core.manager.client_manager.get_docker_client", return_value=client),
+    ):
+        signals._cleanup_service_cache_images(service)
+
+    assert removed == ["app-svc-1:1"]
+    assert image.tags == ["shared/image:1"]
+
+
+def test_release_application_image_rejects_unknown_shared_reference_ownership():
+    from types import SimpleNamespace
+    from docker.errors import ImageNotFound
+    from deploy.build_cache import release_application_image_references
+
+    class Images:
+        def get(self, ref):
+            if ref == "sha256:" + "b" * 64:
+                return SimpleNamespace(
+                    id=ref,
+                    tags=["foreign:1", "foreign:2"],
+                    attrs={"RepoTags": ["foreign:1", "foreign:2"], "Config": {"Labels": {}}},
+                )
+            raise ImageNotFound(ref)
+
+        def remove(self, ref, force=False):
+            raise AssertionError("unknown shared references must not be removed")
+
+    client = SimpleNamespace(images=Images())
+    ok, detail = release_application_image_references(
+        "sha256:" + "b" * 64,
+        ["not-the-image:1"],
+        owner_service_ids=("svc-1",),
+        client=client,
+    )
+
+    assert ok is False
+    assert "none could be proven" in detail
+\n\ndef test_precleaned_service_delete_skips_duplicate_runtime_cleanup():
     source = (ROOT / "services" / "signals.py").read_text(encoding="utf-8")
 
     assert "def delete_service_row_after_cleanup(service: Service)" in source

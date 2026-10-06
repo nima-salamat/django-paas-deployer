@@ -885,6 +885,7 @@ class Image(Client):
 
     @classmethod
     def remove_by_name(cls, name):
+        """Remove one repository reference without force-deleting its image ID."""
         client = Client()()
         try:
             image = client.images.get(name)
@@ -896,14 +897,18 @@ class Image(Client):
             raise
 
         try:
-            client.images.remove(image.id)
+            # Delete the requested repository/tag reference, not the immutable
+            # image ID. The same image can legitimately be referenced by other
+            # repositories, and forcing an ID removal could delete an unrelated
+            # reference.
+            client.images.remove(name, force=False)
             logger.info(
-                "Image '%s' removed successfully (id=%s)", name, image.id
+                "Image reference '%s' removed successfully (id=%s)", name, image.id
             )
             return True
         except Exception as e:
             logger.error(
-                "Failed to remove image '%s' (id=%s): %s",
+                "Failed to remove image reference '%s' (id=%s): %s",
                 name,
                 getattr(image, "id", None),
                 e,

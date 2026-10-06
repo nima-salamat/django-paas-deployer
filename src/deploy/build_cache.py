@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import timedelta
 import logging
-from typing import Any
+from typing import Any, Iterable
 
 from django.db.models import Sum
 from django.utils import timezone
@@ -275,6 +275,127 @@ def _base_image_ids() -> set[str]:
     }
 
 
+def release_application_image_references(
+    image_id: str,
+    image_refs: Iterable[str] | str = (),
+    *,
+    owner_service_ids: Iterable[str] = (),
+    client=None,
+) -> tuple[bool, str]:
+    """Safely release PassDeployer-owned references to one Docker image.
+
+    Docker image IDs are content identities, not ownership boundaries. One
+    image can legitimately be exposed through multiple repository tags. Never
+    force-delete by ID while any repository reference may belong to another
+    owner. Remove only references proven to belong to this logical artifact or
+    service, then remove the underlying image only when it is untagged.
+    """
+    client = client or get_docker_client()
+    target_id = str(image_id or "").strip()
+    if not target_id:
+        return False, "Application artifact has no Docker image identity."
+
+    if isinstance(image_refs, str):
+        known_refs = {image_refs.strip()} if image_refs.strip() else set()
+    else:
+        known_refs = {str(ref).strip() for ref in (image_refs or ()) if str(ref).strip()}
+    owner_ids = {str(value).strip() for value in (owner_service_ids or ()) if str(value).strip()}
+
+    try:
+        image = client.images.get(target_id)
+    except ImageNotFound:
+        return True, "Docker image is already absent."
+    except Exception as exc:
+        return False, f"Unable to inspect Docker image '{target_id}': {exc}"
+
+    attrs = getattr(image, "attrs", {}) or {}
+    config = attrs.get("Config") or {}
+    labels = dict(config.get("Labels") or attrs.get("Labels") or {})
+    label_owner = str(
+        labels.get("io.passdeployer.service")
+        or labels.get("passdeployer.service")
+        or labels.get("service.id")
+        or ""
+    ).strip()
+    image_tags = {
+        str(tag).strip()
+        for tag in (getattr(image, "tags", None) or attrs.get("RepoTags") or [])
+        if str(tag).strip()
+    }
+
+    # A historical image_ref is considered owned only when that exact tag still
+    # resolves to this image ID. A reused tag must never be detached blindly.
+    owned_refs: set[str] = set()
+    for ref in known_refs:
+        try:
+            tagged = client.images.get(ref)
+        except ImageNotFound:
+            continue
+        except Exception as exc:
+            return False, f"Unable to inspect Docker reference '{ref}': {exc}"
+        if str(getattr(tagged, "id", "") or "").strip() == target_id:
+            owned_refs.add(ref)
+
+    # A matching PassDeployer ownership label allows release of all current
+    # repository tags because the immutable image identity is owned by this
+    # service. Without that proof, stay limited to explicit artifact refs.
+    owner_confirmed = bool(label_owner and label_owner in owner_ids)
+    if owner_confirmed:
+        owned_refs.update(image_tags)
+
+    removed_refs: list[str] = []
+    for ref in sorted(owned_refs):
+        try:
+            client.images.remove(ref, force=False)
+            removed_refs.append(ref)
+        except ImageNotFound:
+            removed_refs.append(ref)
+        except Exception as exc:
+            return False, (
+                f"Failed to remove owned Docker image reference '{ref}' "
+                f"for image '{target_id}': {exc}"
+            )
+
+    try:
+        remaining = client.images.get(target_id)
+    except ImageNotFound:
+        return True, "Docker image and all owned references are gone."
+    except Exception as exc:
+        return False, f"Unable to verify Docker image '{target_id}' after cleanup: {exc}"
+
+    remaining_attrs = getattr(remaining, "attrs", {}) or {}
+    remaining_tags = {
+        str(tag).strip()
+        for tag in (getattr(remaining, "tags", None) or remaining_attrs.get("RepoTags") or [])
+        if str(tag).strip()
+    }
+    if remaining_tags:
+        if removed_refs:
+            return True, (
+                f"Released {len(removed_refs)} owned image reference(s); retained "
+                f"{len(remaining_tags)} unowned/shared reference(s)."
+            )
+        return False, (
+            f"Image '{target_id}' still has repository references, but none could "
+            "be proven to belong to the deleting service/artifact."
+        )
+
+    try:
+        client.images.remove(target_id, force=False)
+    except ImageNotFound:
+        return True, "Docker image is absent after reference cleanup."
+    except Exception as exc:
+        return False, f"Failed to remove untagged Docker image '{target_id}': {exc}"
+
+    try:
+        client.images.get(target_id)
+    except ImageNotFound:
+        return True, "Docker image and all owned references are gone."
+    except Exception as exc:
+        return False, f"Unable to verify Docker image '{target_id}' after final cleanup: {exc}"
+    return False, f"Docker image '{target_id}' still exists after non-force cleanup."
+
+
 def _remove_image_group(
     image_id: str,
     rows: list[BuildCacheArtifact],
@@ -283,24 +404,23 @@ def _remove_image_group(
 ) -> tuple[bool, str, int]:
     client = client or get_docker_client()
     size = max((int(row.size_bytes or 0) for row in rows), default=0)
-    if not image_id:
-        return False, "Application artifact has no Docker image identity.", 0
-
-    try:
-        client.images.remove(image_id, force=False)
-    except Exception as exc:
-        # The Docker image may have been removed independently; the DB record
-        # should converge to reclaimed instead of retrying forever.
-        if type(exc).__name__ == "ImageNotFound":
-            return True, "", size
-        return False, str(exc), 0
-
-    try:
-        client.images.get(image_id)
-    except Exception:
-        return True, "", size
-    return False, "Docker image still exists after non-force removal.", 0
-
+    refs = {
+        str(row.image_ref).strip()
+        for row in rows
+        if str(row.image_ref or "").strip()
+    }
+    owner_service_ids = {
+        str(row.service_id)
+        for row in rows
+        if getattr(row, "service_id", None)
+    }
+    ok, detail = release_application_image_references(
+        image_id,
+        refs,
+        owner_service_ids=owner_service_ids if len(owner_service_ids) == 1 else (),
+        client=client,
+    )
+    return (True, detail, size) if ok else (False, detail, 0)
 
 def _mark_group_reclaimed(rows: list[BuildCacheArtifact], error: str = "") -> None:
     now = timezone.now()
