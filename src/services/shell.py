@@ -1200,7 +1200,7 @@ def create_session(service: Service, user, workdir: str | None = None, mode: str
         token = secrets.token_urlsafe(32)
         session = ShellSession.objects.create(
             service=service, user=user, token_hash=_token_hash(token),
-            platform=platform, root_path=root, workdir=workdir,
+            platform=platform, root_path=root, workdir=workdir, mode=mode,
             status=ShellSession.Status.ACTIVE,
             expires_at=_session_expiry(now),
         )
@@ -1208,7 +1208,7 @@ def create_session(service: Service, user, workdir: str | None = None, mode: str
         record_shell_audit(
             service=service, user=user, session=session,
             action="session_open", cwd=workdir,
-            detail=f"platform={platform} limit={limit}",
+            detail=f"platform={platform} mode={mode} limit={limit}",
         )
     except Exception:
         pass
