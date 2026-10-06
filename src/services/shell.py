@@ -1799,7 +1799,7 @@ def shell_workspace_metadata(service: Service) -> dict:
             "credentials_managed_by_platform": bool(values.get("password")),
         }
     return result
-def command_catalog(platform: str) -> list[dict]:
+def command_catalog(platform: str, service: Service | None = None) -> list[dict]:
     """Return platform-aware command *suggestions* for the terminal UI.
 
     This catalog is not the policy gate. Policy is enforced by
@@ -1821,8 +1821,18 @@ def command_catalog(platform: str) -> list[dict]:
     if platform in DATABASE_PLATFORMS:
         if platform in {"mysql", "mariadb"}:
             executable = "mariadb" if platform == "mariadb" else "mysql"
+            values = _database_runtime_values(service) if service is not None else {}
+            username = str(values.get("username") or "root").strip()
+            if not re.fullmatch(r"[A-Za-z0-9_.$-]{1,128}", username):
+                username = "root"
             items.extend([
-                _catalog_item(f"{executable} -uroot", f"{platform.title()} interactive client", risk=Risk.INTERACTIVE, interactive=True, advanced=True),
+                _catalog_item(
+                    f"{executable} -u{username}",
+                    f"{platform.title()} interactive client",
+                    risk=Risk.INTERACTIVE,
+                    interactive=True,
+                    advanced=True,
+                ),
                 _catalog_item(f"{executable} --version", f"{platform.title()} client version"),
             ])
         elif platform == "postgresql":
