@@ -308,6 +308,91 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                     "message": "A command is already running. Send input or wait for it to finish.",
                 })
                 return
+
+            container = await database_sync_to_async(_resolve_container)(self.service)
+            if getattr(self.session, "mode", "restricted") == "developer":
+                if not isinstance(command, str) or not command.strip():
+                    await self.send_json({"type": "error", "code": "INVALID_REQUEST", "message": "Command is required."})
+                    return
+                if len(command) > 4096 or "\x00" in command or "\r" in command:
+                    await self.send_json({"type": "error", "code": "INVALID_REQUEST", "message": "Invalid or oversized command."})
+                    return
+
+                from services.shell import developer_shell_security_check, _probe_directory, _session_expiry
+                allowed, reason = await database_sync_to_async(developer_shell_security_check)(container)
+                if not allowed:
+                    await self.send_json({"type": "error", "code": "AUTHORIZATION_FAILED", "message": reason})
+                    return
+
+                # Persist simple cd commands; all other commands run inside
+                # a real POSIX shell so pipes, redirects, scripts and package
+                # manager syntax work exactly as they do in the container.
+                try:
+                    cd_parts = shlex.split(command)
+                except ValueError:
+                    cd_parts = []
+                if cd_parts and cd_parts[0] == "cd" and len(cd_parts) <= 2:
+                    target = cd_parts[1] if len(cd_parts) == 2 else getattr(self.session, "root_path", "/")
+                    candidate = target if target.startswith("/") else posixpath.join(self.session.workdir, target)
+                    candidate = posixpath.normpath(candidate)
+                    ok, resolved = await database_sync_to_async(_probe_directory)(container, candidate)
+                    if not ok:
+                        await self.send_json({"type": "error", "code": "INVALID_WORKDIR", "message": f"Directory does not exist or is not accessible: {candidate}"})
+                        return
+                    self.session.workdir = resolved
+                    now = timezone.now()
+                    self.session.last_used_at = now
+                    self.session.expires_at = await database_sync_to_async(_session_expiry)(now)
+                    await database_sync_to_async(self.session.save)(update_fields=["workdir", "last_used_at", "expires_at"])
+                    await self.send_json({"type": "command.output", "stdout": f"{resolved}\n", "stderr": "", "exit_code": 0, "cwd": resolved})
+                    return
+
+                loop = asyncio.get_running_loop()
+
+                def create_exec():
+                    from services.shell import prepare_interactive_exec_environment
+                    api = container.client.api
+                    environment = prepare_interactive_exec_environment(
+                        container,
+                        platform=getattr(self.session, "platform", None) or "",
+                        root_path=getattr(self.session, "root_path", None) or "",
+                        service=self.service,
+                    )
+                    cols = getattr(self, "term_cols", None) or 120
+                    rows = getattr(self, "term_rows", None) or 40
+                    environment["COLUMNS"] = str(cols)
+                    environment["LINES"] = str(rows)
+                    created = api.exec_create(
+                        container.id,
+                        cmd=["/bin/sh", "-lc", command],
+                        stdout=True, stderr=True, stdin=True, tty=True,
+                        workdir=self.session.workdir,
+                        environment=environment,
+                    )
+                    sock = api.exec_start(created["Id"], tty=True, socket=True)
+                    return created["Id"], sock
+
+                self.exec_id, self.exec_socket = await loop.run_in_executor(None, create_exec)
+                await self.send_json({
+                    "type": "process.started",
+                    "exec_id": self.exec_id,
+                    "cwd": self.session.workdir,
+                    "command": command,
+                    "risk": "DEVELOPER_SHELL",
+                    "mode": "developer",
+                })
+                try:
+                    from services.shell import record_shell_audit
+                    await database_sync_to_async(record_shell_audit)(
+                        service=self.service, user=self.user, session=self.session,
+                        action="interactive_start", command=command, cwd=self.session.workdir,
+                        detail="mode=developer",
+                    )
+                except Exception:
+                    pass
+                self.exec_task = asyncio.create_task(self._read_exec_output(command))
+                return
+
             parts = parse_safe_command(command)
             if len(parts) != 1:
                 await self.send_json({
@@ -317,7 +402,6 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                 })
                 return
             argv = parts[0][0]
-            container = await database_sync_to_async(_resolve_container)(self.service)
             await database_sync_to_async(validate_argv_for_container)(
                 argv,
                 self.session.platform,
@@ -335,7 +419,7 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                 })
                 return
             if argv and argv[0] == "cd":
-                from .shell import execute_command
+                from services.shell import execute_command
                 result = await database_sync_to_async(execute_command)(self.session, command, confirm=confirm)
                 await self.send_json({"type": "command.output", **result})
                 return
@@ -356,13 +440,8 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                 environment["LINES"] = str(rows)
                 created = api.exec_create(
                     container.id,
-                    cmd=argv,
-                    stdout=True,
-                    stderr=True,
-                    stdin=True,
-                    tty=True,
-                    workdir=self.session.workdir,
-                    environment=environment,
+                    cmd=argv, stdout=True, stderr=True, stdin=True, tty=True,
+                    workdir=self.session.workdir, environment=environment,
                 )
                 sock = api.exec_start(created["Id"], tty=True, socket=True)
                 return created["Id"], sock
@@ -376,7 +455,7 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                 "risk": classify_command_risk(argv),
             })
             try:
-                from .shell import record_shell_audit
+                from services.shell import record_shell_audit
                 await database_sync_to_async(record_shell_audit)(
                     service=self.service, user=self.user, session=self.session,
                     action="interactive_start", command=command, cwd=self.session.workdir,
