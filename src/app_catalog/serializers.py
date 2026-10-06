@@ -77,6 +77,22 @@ def _public_field(field: dict) -> dict | None:
     return item
 
 
+def catalog_featured(definition: CatalogDefinition) -> bool:
+    """Return the effective operator/editorial featured flag."""
+    featured = bool(definition.data.get("featured", False))
+    try:
+        from .models import CatalogPublication
+        override = (
+            CatalogPublication.objects
+            .filter(catalog_id=definition.id)
+            .values_list("featured_override", flat=True)
+            .first()
+        )
+    except Exception:
+        override = None
+    return featured if override is None else bool(override)
+
+
 def public_catalog_definition(definition: CatalogDefinition) -> dict:
     variants = []
     for variant_id, variant in definition.variants.items():
@@ -102,7 +118,7 @@ def public_catalog_definition(definition: CatalogDefinition) -> dict:
         "logo": str(definition.data.get("logo") or ""),
         "software_version": definition.software_version,
         "definition_version": definition.definition_version,
-        "featured": bool(definition.data.get("featured", False)),
+        "featured": catalog_featured(definition),
         "features": _safe_string_list(definition.data.get("features")),
         "requirements": _safe_string_list(definition.data.get("requirements")),
         "outputs": _safe_string_list(definition.data.get("outputs")),
