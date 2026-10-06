@@ -80,7 +80,9 @@ urlpatterns = (
         path("admin/start_service/", admin_start_service_apiview, name="admin_start_service"),
         path("admin/stop_service/", admin_stop_service_apiview, name="admin_stop_service"),
         path("admin/purge_service_runtime/", admin_purge_service_runtime_apiview, name="admin_purge_service_runtime"),
+        # Canonical API route; keep the legacy /services/ path for existing clients.
         path("service_status/", service_status_apiview, name="service_status"),
+        path("api_service_status/", service_status_apiview, name="api_service_status"),
         path("service/<uuid:service_id>/volume-capabilities/", service_volume_capabilities_apiview, name="service_volume_capabilities"),
         path("service/<uuid:service_id>/configuration/", ServiceConfigurationAPIView.as_view(), name="service_configuration"),
         path("service/<uuid:service_id>/environment/", ServiceEnvironmentAPIView.as_view(), name="service_environment"),
