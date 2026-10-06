@@ -94,6 +94,8 @@ class ApplicationStackExecutor:
             instance = ApplicationInstance.objects.select_for_update().get(pk=self.instance_id)
             if instance.status in {ApplicationStatus.RUNNING, ApplicationStatus.FAILED, ApplicationStatus.CANCELLED}:
                 return False
+            if instance.cancel_requested or instance.stage == "deletion_pending":
+                return False
             if instance.status == ApplicationStatus.DEPLOYING:
                 current_owner = str(instance.execution_task_id or "")
                 requested_owner = str(task_id or "")
