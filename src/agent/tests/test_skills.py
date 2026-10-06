@@ -85,3 +85,15 @@ class AgentSkillTests(TestCase):
         body = response.content.decode()
         self.assertIn("/agent/v1/skills/services", body)
         self.assertIn("/agent/v1/skills/workspace-files", body)
+
+
+    def test_runtime_tool_skill_and_registry_are_exposed(self):
+        response = self.client.get("/agent/v1/skills/runtime-tools", **self._auth())
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("/agent/v1/services/{service_id}/tools", response.content.decode())
+
+    def test_runtime_tool_openapi_contract_is_present(self):
+        response = self.client.get("/agent/v1/openapi.json", **self._auth())
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("/agent/v1/services/{service_id}/tools", response.data["paths"])
+        self.assertIn("/agent/v1/services/{service_id}/tools/{tool_name}", response.data["paths"])
