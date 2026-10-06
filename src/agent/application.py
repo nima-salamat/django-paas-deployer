@@ -846,6 +846,14 @@ def redact_shell_result(service, result):
     except Exception:
         pass
     try:
+        database = getattr(service, "database_resource", None)
+        credential = getattr(database, "credential", None) if database else None
+        password = credential.get_password() if credential and hasattr(credential, "get_password") else ""
+        if password:
+            values.append(password)
+    except Exception:
+        pass
+    try:
         from services.models import ServiceDatabaseBinding
         for binding in ServiceDatabaseBinding.objects.filter(service=service).select_related("database"):
             credential=getattr(binding.database,"credential",None)
