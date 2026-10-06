@@ -175,6 +175,62 @@ def application_service_failed(instance_id: str, service_key: str, child_task_id
     _schedule_next(instance_id, current_key=service_key)
 
 
+@shared_task(name="app_catalog.supervise_ready_applications")
+def supervise_ready_applications():
+    """Continuously validate RUNNING Ready App coordinator state.
+
+    Runtime Docker/Swarm repair remains owned by the deployment monitor. This
+    task makes sure a healthy-looking application row cannot remain stale when
+    child state, ownership metadata, or the application network drift.
+    """
+    batch_size = 100
+    try:
+        from django.conf import settings
+        batch_size = max(
+            1,
+            int(getattr(settings, "CATALOG_RUNTIME_SUPERVISOR_BATCH_SIZE", 100)),
+        )
+    except (TypeError, ValueError):
+        pass
+
+    queryset = (
+        ApplicationInstance.objects
+        .filter(
+            status=ApplicationStatus.RUNNING,
+        )
+        .exclude(stage="deletion_pending")
+        .order_by("updated_at")
+    )[:batch_size]
+
+    healthy = degraded = corrupted = missing = 0
+    for instance in queryset.iterator():
+        try:
+            result = ApplicationStackExecutor(str(instance.pk)).supervise_runtime()
+            state = str(result.get("status") or "")
+            if state == "healthy":
+                healthy += 1
+            elif state == "degraded":
+                degraded += 1
+            elif state == "corrupted":
+                corrupted += 1
+            elif state == "missing":
+                missing += 1
+        except Exception:
+            logger.exception(
+                "Ready App runtime supervisor failed for application %s",
+                instance.pk,
+            )
+
+    return {
+        "status": "ok",
+        "checked": healthy + degraded + corrupted + missing,
+        "healthy": healthy,
+        "degraded": degraded,
+        "corrupted": corrupted,
+        "missing": missing,
+    }
+
+
 @shared_task(name="app_catalog.cancel_application_installation")
 def cancel_application_installation(instance_id: str, reason: str = "Application deployment cancelled by user request."):
     ApplicationStackExecutor(instance_id).cancel(reason=reason)
