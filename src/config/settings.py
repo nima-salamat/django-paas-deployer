@@ -426,6 +426,7 @@ CELERY_TASK_ROUTES = {
     "app_catalog.cancel_application_installation": {"queue": "operations"},
     "app_catalog.delete_application_installation": {"queue": "operations"},
     "app_catalog.reconcile_application_installations": {"queue": "deployments"},
+    "app_catalog.supervise_ready_applications": {"queue": "operations"},
 }
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_TASK_ACKS_LATE = True
@@ -464,6 +465,10 @@ CELERY_BEAT_SCHEDULE = {
     },
     "application_catalog_reconciliation": {
         "task": "app_catalog.reconcile_application_installations",
+        "schedule": 10.0,
+    },
+    "ready_app_runtime_supervisor": {
+        "task": "app_catalog.supervise_ready_applications",
         "schedule": 10.0,
     },
     "expire_idle_shell_sessions": {
@@ -648,6 +653,7 @@ AGENT_API_BASE_URL = os.getenv("AGENT_API_BASE_URL", "").strip().rstrip("/")
 
 CATALOG_APPLICATION_TIMEOUT_MINUTES = 60
 CATALOG_DISPATCH_STALE_SECONDS = 300
+CATALOG_RUNTIME_SUPERVISOR_BATCH_SIZE = 100
 
 
 # Deployment observability is optional and never authoritative for lifecycle state.
