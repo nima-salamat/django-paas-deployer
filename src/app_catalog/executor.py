@@ -184,25 +184,152 @@ class ApplicationStackExecutor:
                     except Exception:
                         logger.exception("Unable to cancel pending child deploy %s", deploy.pk)
 
-    def _cleanup_cancelled_children(self) -> bool:
-        """Delete cancelled child resources through the normal Service boundary.
+    def _fence_children_for_cancellation(self) -> None:
+        """Invalidate child lifecycle work so a cancelled app cannot resurrect runtime."""
+        from services.lifecycle import bump_lifecycle
 
-        The application row stays as durable cancellation history. The instance
-        lock is held while child bindings/services and the private network are
-        removed so concurrent reconciliation cannot run the same cleanup twice.
+        bindings = list(
+            ApplicationInstanceService.objects
+            .select_related("service", "deploy")
+            .filter(instance_id=self.instance_id)
+        )
+        for binding in bindings:
+            service = binding.service
+            desired_state = str(getattr(service, "desired_state", "") or "").strip().lower()
+            if desired_state in {"stopped", "deleted"}:
+                continue
+            bump_lifecycle(service.pk, desired_state="stopped")
+
+    def _terminalize_cancelled_children(
+        self,
+        *,
+        message: str,
+        controlled_by: str,
+    ) -> int:
+        """Make cancellation authoritative after runtime cleanup has succeeded."""
+        bindings = list(
+            ApplicationInstanceService.objects
+            .select_related("deploy", "service")
+            .filter(instance_id=self.instance_id)
+        )
+        terminalized = 0
+        for binding in bindings:
+            deploy = binding.deploy
+            if deploy.status not in {
+                DeploymentStatusChoices.PENDING,
+                DeploymentStatusChoices.RUNNING,
+                DeploymentStatusChoices.ROLLING_BACK,
+            }:
+                continue
+            if not deploy.cancel_requested:
+                continue
+
+            committed = StateManager.transition_deploy_system_terminal(
+                deploy.pk,
+                DeploymentStatusChoices.CANCELLED,
+                update_fields={
+                    "cancel_requested": True,
+                    "stage": "cancelled",
+                    "progress": 100,
+                    "status_message": message,
+                    "error_message": "",
+                },
+                event_payload={
+                    "event_id": str(uuid.uuid4()),
+                    "trace_id": str(deploy.pk),
+                    "deployment_id": str(deploy.pk),
+                    "service_id": str(deploy.service_id),
+                    "revision_id": str(getattr(deploy, "revision_id", "") or ""),
+                    "task_id": controlled_by,
+                    "event_type": "deployment.cancelled.warning",
+                    "stage": "cancelled",
+                    "level": "warning",
+                    "message": message,
+                    "progress": 100,
+                    "details": {"controlled_by": controlled_by},
+                },
+            )
+            if committed:
+                terminalized += 1
+        return terminalized
+
+    def _cleanup_cancelled_children(self) -> bool:
+        """Converge a cancelled Ready App by removing all child runtime resources.
+
+        Cancellation is durable even when the original child workers disappear.
+        Child lifecycle generations are fenced first, runtime resources are then
+        removed, active Deploy rows are terminalized, and the parent remains as
+        CANCELLED history. The private network and child Service rows are
+        removed just like a normal installation cleanup.
         """
+        from deploy.models import Deploy
         from .services import application_services_for_cleanup
 
+        # Phase 1: establish that cancellation is still the owning intent.
         with transaction.atomic():
             locked = (
                 ApplicationInstance.objects
                 .select_for_update()
-                # Keep the application row lock independent from the nullable network FK.
-                # select_related("network") would emit a LEFT OUTER JOIN and PostgreSQL
-                # rejects FOR UPDATE when the nullable side is joined.
-                .get(pk=self.instance_id)
+                .filter(pk=self.instance_id)
+                .first()
             )
-            if locked.status != ApplicationStatus.CANCELLED or not locked.cancel_requested:
+            if locked is None:
+                return True
+            if locked.stage == "deletion_pending":
+                return False
+            if not locked.cancel_requested:
+                return False
+
+            if locked.status != ApplicationStatus.CANCELLED:
+                locked.stage = "cancellation_cleanup"
+                locked.error_code = locked.error_code or "APPLICATION_DEPLOYMENT_CANCELLED"
+                locked.error_message = (
+                    locked.error_message
+                    or "Application deployment cancellation is stopping all child services."
+                )
+                locked.save(update_fields=[
+                    "stage",
+                    "error_code",
+                    "error_message",
+                    "updated_at",
+                ])
+
+        # Phase 2: fence stale workers before runtime mutation.
+        self._fence_children_for_cancellation()
+
+        # Phase 3: remove runtime resources without holding the application row lock.
+        instance = ApplicationInstance.objects.get(pk=self.instance_id)
+        if instance.stage == "deletion_pending":
+            return False
+
+        bindings, service_rows, unexpected = application_services_for_cleanup(instance)
+        if unexpected:
+            names = ", ".join(str(service.name) for service in unexpected[:5])
+            suffix = "..." if len(unexpected) > 5 else ""
+            raise RuntimeError(
+                "Ready App private network still has services that are not owned "
+                f"by this installation: {names}{suffix}"
+            )
+
+        for service in service_rows:
+            cleanup_service_resources(service)
+
+        self._terminalize_cancelled_children(
+            message="Deployment cancelled because the owning Ready App was cancelled.",
+            controlled_by="ready_app_cancellation",
+        )
+
+        # Phase 4: finalize the durable parent cancellation only after runtime is gone.
+        with transaction.atomic():
+            locked = (
+                ApplicationInstance.objects
+                .select_for_update()
+                .filter(pk=self.instance_id)
+                .first()
+            )
+            if locked is None:
+                return True
+            if locked.stage == "deletion_pending":
                 return False
 
             bindings, service_rows, unexpected = application_services_for_cleanup(locked)
@@ -214,32 +341,40 @@ class ApplicationStackExecutor:
                     f"by this installation: {names}{suffix}"
                 )
 
-            if any(
-                binding.deploy.status in {
+            active = [
+                binding for binding in bindings
+                if binding.deploy.status in {
                     DeploymentStatusChoices.PENDING,
                     DeploymentStatusChoices.RUNNING,
                     DeploymentStatusChoices.ROLLING_BACK,
                 }
-                for binding in bindings
-            ):
+            ]
+            if active:
+                locked.stage = "cancellation_cleanup"
+                locked.error_code = "APPLICATION_DEPLOYMENT_CANCELLED"
+                locked.error_message = (
+                    f"{len(active)} child deployment(s) are still stopping."
+                )
+                locked.save(update_fields=[
+                    "stage",
+                    "error_code",
+                    "error_message",
+                    "updated_at",
+                ])
                 return False
 
             network = locked.network
-            locked.stage = "cancellation_cleanup"
-            locked.save(update_fields=["stage", "updated_at"])
+            bindings_by_service = {
+                str(binding.service_id): binding for binding in bindings
+            }
 
-            # Preflight every child while all Service rows still exist. This
-            # also recovers legacy installations whose binding was already lost.
             for service in service_rows:
-                cleanup_service_resources(service)
-
-            bindings_by_service = {str(binding.service_id): binding for binding in bindings}
-            for service in service_rows:
-                binding = bindings_by_service.get(str(service.pk))
-                if binding is not None:
-                    deploy = binding.deploy
+                for deploy in Deploy.objects.filter(service_id=service.pk).only("zip_file"):
                     if deploy.zip_file and deploy.zip_file.name:
                         deploy.zip_file.delete(save=False)
+
+                binding = bindings_by_service.get(str(service.pk))
+                if binding is not None:
                     binding.delete()
                 if Service.objects.filter(pk=service.pk).exists():
                     delete_service_row_after_cleanup(service)
@@ -251,13 +386,31 @@ class ApplicationStackExecutor:
                     or ServiceNetworkAttachment.objects.filter(network_id=locked_network.pk).exists()
                 ):
                     raise RuntimeError(
-                        f"Ready App network '{locked_network.name}' is still referenced by another service."
+                        f"Ready App network '{locked_network.name}' is still referenced after "
+                        "all cancelled child services were cleaned."
                     )
                 locked_network.delete()
 
+            locked.status = ApplicationStatus.CANCELLED
+            locked.cancel_requested = True
             locked.stage = "cancelled"
+            locked.error_code = "APPLICATION_DEPLOYMENT_CANCELLED"
+            locked.error_message = (
+                locked.error_message
+                or "Application deployment cancelled by user request."
+            )
+            locked.deployed_at = None
             locked.network = None
-            locked.save(update_fields=["stage", "network", "updated_at"])
+            locked.save(update_fields=[
+                "status",
+                "cancel_requested",
+                "stage",
+                "error_code",
+                "error_message",
+                "deployed_at",
+                "network",
+                "updated_at",
+            ])
 
         logger.info(
             "Cleaned cancelled Ready App installation %s; removed %d child services.",
@@ -287,52 +440,10 @@ class ApplicationStackExecutor:
             _cancel_active_deployments_for_service(binding.service)
 
     def _terminalize_cancelled_children_for_deletion(self) -> int:
-        """Make cancellation authoritative after their runtime is gone."""
-        bindings = list(
-            ApplicationInstanceService.objects
-            .select_related("deploy", "service")
-            .filter(instance_id=self.instance_id)
+        return self._terminalize_cancelled_children(
+            message="Deployment cancelled because the owning Ready App is being deleted.",
+            controlled_by="ready_app_deletion",
         )
-        terminalized = 0
-        for binding in bindings:
-            deploy = binding.deploy
-            if deploy.status not in {
-                DeploymentStatusChoices.PENDING,
-                DeploymentStatusChoices.RUNNING,
-                DeploymentStatusChoices.ROLLING_BACK,
-            }:
-                continue
-            if not deploy.cancel_requested:
-                continue
-
-            committed = StateManager.transition_deploy_system_terminal(
-                deploy.pk,
-                DeploymentStatusChoices.CANCELLED,
-                update_fields={
-                    "cancel_requested": True,
-                    "stage": "cancelled",
-                    "progress": 100,
-                    "status_message": "Deployment cancelled because the owning Ready App is being deleted.",
-                    "error_message": "",
-                },
-                event_payload={
-                    "event_id": str(uuid.uuid4()),
-                    "trace_id": str(deploy.pk),
-                    "deployment_id": str(deploy.pk),
-                    "service_id": str(deploy.service_id),
-                    "revision_id": str(getattr(deploy, "revision_id", "") or ""),
-                    "task_id": "ready-app-deletion",
-                    "event_type": "deployment.cancelled.warning",
-                    "stage": "cancelled",
-                    "level": "warning",
-                    "message": "Deployment cancelled because the owning Ready App is being deleted.",
-                    "progress": 100,
-                    "details": {"controlled_by": "ready_app_deletion"},
-                },
-            )
-            if committed:
-                terminalized += 1
-        return terminalized
 
     def cleanup_terminal_application(self) -> bool:
         """Drive a Ready App deletion to completion, independent of child workers.
