@@ -381,6 +381,13 @@ Typical site code is under:
 Never delete `wp-config.php`, the WordPress database volume, or the WordPress
 persistent volume merely to fix a code/configuration issue.
 
+## Tool-first workflow
+
+1. Call /services/{service_id}/tools and inspect the available WordPress tools.
+2. Use runtime.detect when unsure whether an optional CLI is present.
+3. Prefer wordpress.wp_cli for supported CMS operations instead of inventing SQL.
+4. Use php.lint after changing PHP.
+
 ## Workflow
 
 1. Inspect service status, shell metadata and runtime logs.
@@ -469,6 +476,17 @@ reported by `workspace.database.username`; the command catalog is generated
 with that username when one exists. For PostgreSQL, `PGUSER`, `PGPASSWORD`,
 `PGDATABASE`, and local `PGHOST`/`PGPORT` are supplied to the PTY. Never put passwords in command-line
 arguments, URLs, SQL strings, shell history or audit messages.
+
+## Access and storage reality
+
+The database data directory is storage, not an application source tree. Do not
+expect to edit database files directly. Use the engine client for logical data
+operations.
+
+The database may be attached to a volume, but the volume can be mounted
+read-only or the runtime user may lack write permission. Use workspace.inspect
+before path-based work and treat its result as authoritative for the runtime
+view.
 
 ## Rules
 
@@ -563,6 +581,63 @@ its PTY prompt when required.
         """,
         scopes=("shell.read", "shell.execute", "shell.developer"),
     ),    _skill(
+        "runtime-tools",
+        "Runtime Tools",
+        "Discover and use first-class platform-aware runtime tools before falling back to low-level shell commands.",
+        """
+# Runtime Tools
+
+The Agent has a tool layer in addition to the generic Service, Shell and file
+APIs.
+
+## Discovery
+
+- GET {{base}}/services/{service_id}/tools
+- POST {{base}}/services/{service_id}/tools/{tool_name}
+
+The GET response is scope-filtered and platform-aware. Do not assume a tool is
+available just because its name appears in documentation.
+
+## Recommended workflow
+
+1. Read /capabilities and /services/{service_id}/shell.
+2. Read /services/{service_id}/tools.
+3. Call workspace.inspect before editing paths whose storage/permissions are
+   unclear.
+4. Call runtime.detect when a framework CLI may or may not be installed.
+5. Prefer a first-class platform tool over a raw shell command when both can
+   perform the same task.
+6. Use the interactive PTY for tools that explicitly report interactive
+   transport requirements.
+
+## Storage and access
+
+A service can have several different storage layers:
+- immutable image files
+- persistent Docker volumes
+- writable tmpfs or ephemeral paths
+- control-plane configuration outside the runtime workspace
+
+A path can exist without being writable. A Docker volume can be RW while the
+runtime UID cannot write the target. Conversely, the managed file API can have
+backend privileges that differ from the service UID.
+
+When a path is outside the restricted workspace, treat that as a boundary, not
+as a transient command failure. Ask the tool/API layer what operation owns that
+resource instead of repeatedly trying filesystem commands.
+
+## Platform examples
+
+WordPress exposes a policy-checked WP-CLI tool and PHP linting.
+PHP/Laravel services expose PHP linting and their framework-aware Shell catalog.
+Database services expose engine-aware Shell metadata and interactive clients.
+
+Tool responses may report that a tool is not installed, not applicable, or
+requires interactive PTY transport. Handle those outcomes explicitly.
+        """,
+        any_scopes=("shell.read", "shell.execute"),
+    ),
+    _skill(
         "shell",
         "Restricted Runtime Shell",
         "Run authorized non-interactive or interactive commands inside a service runtime.",
@@ -579,9 +654,26 @@ Shell is a service-runtime facility, not host access.
 - POST {{base}}/services/{service_id}/shell/sessions/{session_id}/close
 - POST {{base}}/services/{service_id}/shell/replace
 
+## Runtime tools and workspace reality
+
+Use `GET {{base}}/services/{service_id}/tools` before complex runtime work. It
+returns first-class tools that may be easier and safer than composing raw shell
+commands.
+
+Use `workspace.inspect` to learn whether the target path is inside the
+managed workspace, backed by a Docker volume, mounted read-only, or writable
+for the runtime user. A Docker RW mount does not guarantee that the service
+UID can write to a path. The managed file API may have different permissions
+from the runtime user.
+
+If a requested path is outside the restricted workspace, do not keep retrying
+the same command. Switch to a first-class control-plane API, workspace-file
+operation, or developer shell only when the service security posture and
+permission allow it.
+
 ## Operating procedure
 
-1. Read /services/{service_id}/shell and /capabilities.
+1. Read /services/{service_id}/shell, /services/{service_id}/tools and /capabilities.
 2. Choose one-shot or PTY/WebSocket transport according to the returned policy.
 3. Create a session and use its temporary shell token.
 4. For ambiguous or compound commands, use dry_run when supported.
