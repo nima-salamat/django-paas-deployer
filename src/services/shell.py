@@ -1000,8 +1000,18 @@ def _validate_platform_command(argv: list[str], platform: str, root: str, *, all
 
     if base in {"mysql", "mariadb", "psql", "mongosh", "redis-cli", "sqlplus"}:
         _validate_database_argv(argv, platform)
+        if not allow_advanced:
+            _policy_reject(
+                "Interactive database shells require advanced shell permission.",
+                code="AUTHORIZATION_FAILED",
+            )
     if base == "wp":
         _validate_wp_argv(argv, root)
+        if len(argv) >= 3 and str(argv[1]).lower() == "db" and str(argv[2]).lower() == "cli" and not allow_advanced:
+            _policy_reject(
+                "WordPress database CLI requires advanced shell permission.",
+                code="AUTHORIZATION_FAILED",
+            )
     if base == "php":
         _validate_php_argv(argv, allow_advanced=allow_advanced)
     elif base == "composer":
