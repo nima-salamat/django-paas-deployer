@@ -18,3 +18,5 @@
 - **I16:** Database transactions do not imply storage/Docker transactions; catalog deployment archives are explicitly compensated on failed installation.
 - **I17:** Published endpoint reservations remain owned by the normal Service endpoint subsystem.
 - **I18:** `ServiceProcess.name="web"` is a compatibility identifier; `process_type` carries service role semantics.
+- **I19:** A RUNNING Ready App is periodically checked by the application runtime supervisor; recoverable child runtime drift is recorded without duplicating Docker execution, while structural coordinator corruption fails closed.
+- **I20:** Ready App supervision runs on the operations queue independently of the long-running deployment queue so a busy deployment worker cannot starve application health reconciliation.
