@@ -1668,6 +1668,40 @@ def command_catalog(platform: str) -> list[dict]:
         _catalog_item("git remote -v", "Git remotes", risk=Risk.READ_ONLY),
     ])
 
+    if platform in DATABASE_PLATFORMS:
+        if platform in {"mysql", "mariadb"}:
+            executable = "mariadb" if platform == "mariadb" else "mysql"
+            items.extend([
+                _catalog_item(f"{executable} -uroot", f"{platform.title()} interactive client", risk=Risk.INTERACTIVE, interactive=True, advanced=True),
+                _catalog_item(f"{executable} --version", f"{platform.title()} client version"),
+            ])
+        elif platform == "postgresql":
+            items.extend([
+                _catalog_item("psql", "PostgreSQL interactive client", risk=Risk.INTERACTIVE, interactive=True, advanced=True),
+                _catalog_item("psql --version", "PostgreSQL client version"),
+            ])
+        elif platform == "mongodb":
+            items.extend([
+                _catalog_item("mongosh", "MongoDB interactive shell", risk=Risk.INTERACTIVE, interactive=True, advanced=True),
+                _catalog_item("mongosh --version", "MongoDB Shell version"),
+            ])
+        elif platform == "redis":
+            items.extend([
+                _catalog_item("redis-cli", "Redis interactive CLI", risk=Risk.INTERACTIVE, interactive=True, advanced=True),
+                _catalog_item("redis-cli --version", "Redis CLI version"),
+            ])
+        elif platform == "oracle":
+            items.extend([
+                _catalog_item("sqlplus /nolog", "Oracle SQL*Plus interactive session", risk=Risk.INTERACTIVE, interactive=True, advanced=True),
+                _catalog_item("sqlplus -V", "Oracle SQL*Plus version"),
+            ])
+
+    if platform == "wordpress":
+        items.extend([
+            _catalog_item("php -v", "PHP version"),
+            _catalog_item("php --ini", "PHP ini location"),
+            _catalog_item("php -m", "PHP extensions"),
+        ])
     if platform in {"laravel", "php", "generic"}:
         for name, meta in sorted(ARTISAN_COMMAND_CATALOG.items()):
             cmd = f"php artisan {name}"
