@@ -96,6 +96,17 @@ class AgentSkillTests(TestCase):
         self.assertIn("/agent/v1/skills/workspace-files", body)
 
 
+    def test_runtime_tool_registry_contains_platform_tools(self):
+        from agent.runtime_tools import tools_for_service
+
+        names = {tool.name for tool in __import__("agent.runtime_tools", fromlist=["TOOLS"]).TOOLS}
+        for expected in {
+            "workspace.inspect", "runtime.detect", "php.lint", "php.composer",
+            "wordpress.inspect", "wordpress.page.create", "wordpress.page.update",
+            "wordpress.plugin.manage", "wordpress.theme.manage", "wordpress.cache.flush",
+            "wordpress.wp_cli", "database.health",
+        }:
+            self.assertIn(expected, names)
     def test_runtime_tool_skill_and_registry_are_exposed(self):
         response = self.client.get("/agent/v1/skills/runtime-tools", **self._auth())
         self.assertEqual(response.status_code, 200)
