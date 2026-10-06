@@ -445,7 +445,7 @@ def build_openapi(agent, *, request=None):
             "post": {"summary": "Rollback through existing revision boundary", "parameters": [idempotency]}
         },
         "/agent/v1/services/{service_id}/shell": {"get": {"summary": "Read restricted shell capability and policy"}},
-        "/agent/v1/services/{service_id}/shell/sessions": {"post": {"summary": "Create restricted service-container shell session"}},
+        "/agent/v1/services/{service_id}/shell/sessions": {"post": {"summary": "Create a restricted or developer service-container shell session"}},
         "/agent/v1/services/{service_id}/shell/sessions/{session_id}/commands": {
             "post": {
                 "summary": "Execute command through the existing shell security policy",
@@ -869,7 +869,13 @@ def build_openapi(agent, *, request=None):
         "ShellSessionCreateRequest": {
             "type": "object",
             "properties": {
-                "workdir": {"type": "string", "description": "Optional restricted workspace directory."},
+                "workdir": {"type": "string", "description": "Optional working directory. Restricted mode confines it to the service workspace; developer mode may use the container filesystem."},
+                "mode": {
+                    "type": "string",
+                    "enum": ["restricted", "developer"],
+                    "default": "restricted",
+                    "description": "Execution profile. Developer requires the shell.developer Agent scope, advanced shell service permission, and a hardened container posture; developer commands must use the interactive PTY.",
+                },
             },
         },
         "ShellSessionResponse": {
@@ -881,6 +887,7 @@ def build_openapi(agent, *, request=None):
                 "token_type": {"type": "string", "enum": ["Shell"]},
                 "platform": {"type": "string"},
                 "cwd": {"type": "string"},
+                "mode": {"type": "string", "enum": ["restricted", "developer"]},
                 "expires_at": {"type": "string", "format": "date-time"},
             },
         },
@@ -1212,7 +1219,7 @@ def build_openapi(agent, *, request=None):
         ("/agent/v1/services/{service_id}/shell/sessions", "POST"): {
             "schema": "ShellSessionResponse", "status": 201, "tags": ["Service Shell"],
             "body": _json_body({"$ref": "#/components/schemas/ShellSessionCreateRequest"}),
-            "description": "Create a restricted service-runtime shell session. This is not host shell access.",
+            "description": "Create a service-runtime shell session. mode=restricted uses the command policy; mode=developer requires shell.developer plus advanced service permission and executes through the interactive PTY inside a hardened container. This is never host shell access.",
             "sensitive": True,
         },
         ("/agent/v1/services/{service_id}/shell/sessions/{session_id}/commands", "POST"): {
@@ -1223,7 +1230,7 @@ def build_openapi(agent, *, request=None):
         },
         ("/agent/v1/services/{service_id}/shell/sessions/{session_id}/close", "POST"): {
             "schema": "ObjectResult", "status": 200, "tags": ["Service Shell"],
-            "description": "Close the authenticated restricted shell session.",
+            "description": "Close the authenticated service shell session.",
             "sensitive_request": True,
         },
         ("/agent/v1/services/{service_id}/shell/replace", "POST"): {
@@ -1232,7 +1239,7 @@ def build_openapi(agent, *, request=None):
                 {"type": "object", "properties": {"confirm": {"type": "boolean", "enum": [True]}, "workdir": {"type": "string"}}},
                 example={"confirm": True},
             ),
-            "description": "Replace the active restricted shell session. Explicit confirm=true is required.",
+            "description": "Replace the active service shell session. Explicit confirm=true is required; mode selects restricted or developer execution.",
             "confirmation": True,
             "sensitive": True,
         },
