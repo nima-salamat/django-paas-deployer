@@ -438,6 +438,8 @@ resolved engine, safe workspace root, data root and interactive commands.
 
 ## Interactive clients
 
+Interactive database clients require advanced shell permission; for an Agent this means the `shell.developer` scope. They are intentionally not exposed to low-privilege shared users.
+
 Use the PTY/WebSocket transport for:
 - `mysql -u<username>` for MySQL (or `-uroot` when no managed username is reported)
 - `mariadb -u<username>` for MariaDB (or `-uroot` when no managed username is reported)
@@ -498,6 +500,54 @@ the password through PTY stdin. Never echo or log the password.
 
 For MySQL/MariaDB use the engine-specific admin ping command from the command catalog. For PostgreSQL use `pg_isready`. These are read-only checks and do not require entering a SQL REPL.        """,
         scopes=("shell.read", "shell.execute"),
+    ),    _skill(
+        "developer-shell",
+        "Full developer shell inside the hardened service container.",
+        """
+# Developer Shell
+
+Use this skill only when the Agent has the `shell.developer` scope and the
+service grants advanced shell access.
+
+## Mode
+
+Create the session with:
+
+`POST {{base}}/services/{service_id}/shell/sessions`
+
+using `{"mode": "developer"}`.
+
+Developer mode must use the interactive PTY/WebSocket transport. The normal
+one-shot command endpoint intentionally does not execute developer-mode
+commands.
+
+## What it provides
+
+Commands are executed by a real POSIX shell inside the service container, so
+normal shell syntax, pipelines, redirects, scripts, environment changes within
+the command, package managers and runtime CLIs work without PassDeployer
+maintaining an allowlist of every possible command.
+
+`cd` is persisted by PassDeployer for simple `cd <path>` commands. Other shell
+state such as exported variables or aliases exists only for the child shell
+that ran the command.
+
+## Security boundary
+
+Developer mode is not host shell access. PassDeployer refuses developer mode
+for containers with privileged mode, host PID/network namespaces, Docker engine
+socket/host Docker mounts, exposed host devices, dangerous added capabilities,
+or without `no-new-privileges`.
+
+Do not assume developer mode can cross service-control-plane boundaries. Use the
+dedicated Service, Deployment, Network, Volume, Secret and Database APIs for
+managed resources.
+
+Do not expect managed database passwords to be injected into developer shell
+environments. Use the interactive database client and enter credentials through
+its PTY prompt when required.
+        """,
+        scopes=("shell.read", "shell.execute", "shell.developer"),
     ),    _skill(
         "shell",
         "Restricted Runtime Shell",
