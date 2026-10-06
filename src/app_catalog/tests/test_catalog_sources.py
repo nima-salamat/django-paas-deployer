@@ -124,7 +124,7 @@ networks:
 
     def test_wordpress_public_service_uses_port_80_silent_healthcheck_and_https_config(self):
         definition = ApplicationCatalog.get("wordpress")
-        resolved = resolve_variant(definition, "default", {})
+        resolved = resolve_variant(definition, "default", {"domain": "app.example.com"})
         wordpress = next(item for item in resolved["services"] if item["key"] == "wordpress")
         self.assertEqual(wordpress["port"], 80)
         self.assertTrue(wordpress["public"])
@@ -138,8 +138,8 @@ networks:
         self.assertEqual(healthcheck["retries"], 6)
         self.assertEqual(
             wordpress["environment"]["WORDPRESS_CONFIG_EXTRA"],
-            "define( 'WP_HOME', 'https://' );\n"
-            "define( 'WP_SITEURL', 'https://' );\n"
+            "define( 'WP_HOME', 'https://app.example.com' );\n"
+            "define( 'WP_SITEURL', 'https://app.example.com' );\n"
             "define( 'FORCE_SSL_ADMIN', true );\n",
         )
 
