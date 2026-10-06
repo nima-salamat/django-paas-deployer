@@ -202,8 +202,14 @@ def validate_definition(data: dict, *, source: str = "catalog") -> None:
             seen_fields.add(fid)
             if field.get("type") not in {"string", "integer", "boolean", "choice", "domain", "secret"}:
                 raise CatalogValidationError(f"{source}: unsupported field type for {fid}")
-            if field.get("type") == "choice" and not field.get("options"):
-                raise CatalogValidationError(f"{source}: choice field {fid} requires options")
+            if field.get("type") == "choice":
+                options = field.get("options") or []
+                if not options:
+                    raise CatalogValidationError(f"{source}: choice field {fid} requires options")
+                if "default" in field and field.get("default") not in options:
+                    raise CatalogValidationError(
+                        f"{source}: choice field {fid} default must be one of its options"
+                    )
         services = variant.get("services") or []
         service_keys = set()
         if variant.get("compose_document") is not None:
