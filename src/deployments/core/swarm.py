@@ -1950,6 +1950,51 @@ class SwarmRuntime:
                     active_containers.append(container_id)
 
             if not active_containers:
+                # A Swarm task can be stopped but remain as a Docker container.
+                # Such a container still holds a reference to its image and can
+                # make subsequent cache-image cleanup fail with HTTP 409.
+                # These IDs were captured before deletion, so they are safe to
+                # remove explicitly once the task is no longer active.
+                for container_id in sorted(task_container_ids):
+                    try:
+                        container = self.client.containers.get(container_id)
+                    except docker.errors.NotFound:
+                        continue
+                    except docker.errors.DockerException as exc:
+                        raise DeploymentError(
+                            f"Unable to inspect stopped Swarm task container '{container_id}'.",
+                            stage="swarm_cleanup",
+                            code="SWARM_TASK_CONTAINER_INSPECTION_UNKNOWN",
+                            recoverable=True,
+                            details={
+                                "service_id": str(service_id),
+                                "container_id": container_id,
+                                "error": str(exc),
+                                "error_type": type(exc).__name__,
+                            },
+                        ) from exc
+                    try:
+                        container.remove(force=True)
+                        logger.info(
+                            "Removed drained Swarm task container '%s' for service group '%s'.",
+                            container_id,
+                            service_id,
+                        )
+                    except docker.errors.NotFound:
+                        continue
+                    except docker.errors.DockerException as exc:
+                        raise DeploymentError(
+                            f"Unable to remove drained Swarm task container '{container_id}'.",
+                            stage="swarm_cleanup",
+                            code="SWARM_TASK_CONTAINER_REMOVE_FAILED",
+                            recoverable=True,
+                            details={
+                                "service_id": str(service_id),
+                                "container_id": container_id,
+                                "error": str(exc),
+                                "error_type": type(exc).__name__,
+                            },
+                        ) from exc
                 return
 
             if time.monotonic() >= deadline:
