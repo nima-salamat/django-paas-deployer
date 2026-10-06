@@ -2,6 +2,7 @@ from django.conf import settings
 from django.contrib import admin
 from django.urls import path, include
 from django.views.generic import TemplateView
+from services.apis import service_status_apiview
 
 urlpatterns = [
     # Harmless decoy/joke page. The real Wagtail/Django admin routes remain
@@ -22,6 +23,7 @@ urlpatterns = [
     path("plans/", include("plans.urls")),
     path("services/", include("services.urls")),
     path("api/volumes/", include("services.volume_api_urls")),
+    path("api/services/service_status/", service_status_apiview, name="api_service_status"),
     path("api/networks/", include("services.network_api_urls")),
     path("deploy/", include("deploy.urls")),
     path("agent/", include("agent.urls")),
