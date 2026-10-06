@@ -75,6 +75,103 @@ class ApplicationStackExecutor:
         if binding_keys != graph_keys:
             raise ValueError("Application service bindings do not match the immutable application graph.")
         return instance, plan
+    def _ensure_public_endpoints(self, instance: ApplicationInstance, plan: ApplicationPlan) -> int:
+        """Repair missing platform-managed public endpoints from the current catalog definition."""
+        from .catalog import ApplicationCatalog
+
+        definition = ApplicationCatalog.get(instance.catalog_id)
+        variant = definition.variants.get(str(instance.variant_id)) or {}
+        document = variant.get("compose_document") if isinstance(variant, dict) else None
+        raw_services = (document or {}).get("services") if isinstance(document, dict) else None
+
+        repaired = 0
+        for spec in plan.services:
+            service = (
+                Service.objects
+                .filter(
+                    application_binding__instance_id=instance.pk,
+                    application_binding__service_key=spec.key,
+                )
+                .select_related("plan")
+                .first()
+            )
+            if service is None:
+                continue
+
+            endpoint_exists = service.endpoints.filter(
+                enabled=True,
+                exposure="public",
+            ).exists()
+            if endpoint_exists:
+                continue
+
+            public = False
+            target_port = None
+            if isinstance(raw_services, dict) and spec.key in raw_services:
+                raw = raw_services.get(spec.key) or {}
+                metadata = raw.get("x-passdeployer") or {}
+                public = bool(metadata.get("public"))
+                ports = raw.get("ports") or raw.get("expose") or []
+                if ports:
+                    first = ports[0]
+                    if isinstance(first, dict):
+                        target_port = first.get("target") or first.get("published")
+                    elif isinstance(first, int):
+                        target_port = first
+                    else:
+                        text = str(first)
+                        target_port = int(text.split(":")[-1].split("/")[0])
+                if not public:
+                    public = spec.key in set(
+                        str(item) for item in ((variant.get("compose_metadata") or {}).get("public_services") or [])
+                    )
+            else:
+                for raw in variant.get("services") or []:
+                    if str(raw.get("key") or "") != spec.key:
+                        continue
+                    public = bool(raw.get("public"))
+                    target_port = raw.get("port")
+                    break
+
+            if not public:
+                continue
+
+            try:
+                target_port = int(target_port or service.runtime_config.get("port") or 0)
+            except (TypeError, ValueError):
+                target_port = 0
+
+            # WordPress/Apache and other HTTP catalog recipes should declare
+            # their public port. Missing target_port is not safe to repair.
+            if target_port <= 0:
+                continue
+
+            from services.serializers import _service_host
+            from services.ports import sync_endpoint_reservation
+            host = str(_service_host(service) or "").strip()
+            if not host:
+                continue
+
+            endpoint, _ = ServiceEndpoint.objects.update_or_create(
+                service=service,
+                name=f"port-{target_port}-tcp",
+                defaults={
+                    "target_port": target_port,
+                    "published_port": None,
+                    "protocol": "tcp",
+                    "exposure": "public",
+                    "hostname": host,
+                    "path": "",
+                    "tls": True,
+                    "enabled": True,
+                    "metadata": {"catalog_service_key": spec.key, "repaired_by": "ready_app_supervisor"},
+                },
+            )
+            sync_endpoint_reservation(endpoint)
+            repaired += 1
+
+        return repaired
+
     @staticmethod
     def _timeout_minutes() -> int:
         try:
@@ -838,6 +935,20 @@ class ApplicationStackExecutor:
                 message,
             )
             return {"status": "corrupted", "message": message}
+
+        try:
+            repaired_endpoints = self._ensure_public_endpoints(instance, plan)
+            if repaired_endpoints:
+                logger.info(
+                    "Ready App %s supervisor repaired %d public endpoint(s).",
+                    self.instance_id,
+                    repaired_endpoints,
+                )
+        except Exception:
+            logger.exception(
+                "Ready App %s public endpoint repair failed.",
+                self.instance_id,
+            )
 
         runtime_issues: list[str] = []
         for spec in plan.services:
