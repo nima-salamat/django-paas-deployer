@@ -1698,6 +1698,11 @@ def shell_protocol_metadata(service_id=None):
             "stdin": True,
             "signals": ["ctrl-c", "ctrl-d", "ctrl-z", "ctrl-l"],
             "compound": False,
+            "authentication": {
+                "user_query_parameter": "token",
+                "agent_query_parameter": "agent_token",
+                "shell_query_parameter": "shell_token",
+            },
         },
         "policy": {
             "host_shell": False,
