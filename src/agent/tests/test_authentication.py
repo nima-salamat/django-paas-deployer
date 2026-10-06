@@ -16,7 +16,14 @@ class AgentAuthenticationTests(TestCase):
         self.credential,self.raw=issue_access_credential(self.agent)
         self.client=APIClient()
 
-    def test_shared_token_resolver(self):\n        from agent.authentication import authenticate_agent_token\n        agent, user, credential = authenticate_agent_token(self.raw, ip="127.0.0.1")\n        self.assertEqual(agent.pk, self.agent.pk)\n        self.assertEqual(user.pk, self.user.pk)\n        self.assertEqual(credential.pk, self.credential.pk)\n\n    def test_valid_credential(self):
+    def test_shared_token_resolver(self):
+        from agent.authentication import authenticate_agent_token
+        agent, user, credential = authenticate_agent_token(self.raw, ip="127.0.0.1")
+        self.assertEqual(agent.pk, self.agent.pk)
+        self.assertEqual(user.pk, self.user.pk)
+        self.assertEqual(credential.pk, self.credential.pk)
+
+    def test_valid_credential(self):
         response=self.client.get("/agent/v1/auth/me",HTTP_AUTHORIZATION=f"Bearer {self.raw}")
         self.assertEqual(response.status_code,200)
         self.assertEqual(response.data["agent_id"],str(self.agent.pk))
