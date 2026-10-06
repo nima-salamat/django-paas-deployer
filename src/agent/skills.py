@@ -439,17 +439,19 @@ resolved engine, safe workspace root, data root and interactive commands.
 ## Interactive clients
 
 Use the PTY/WebSocket transport for:
-- `mysql -u<username>` or `mysql -uroot` when the returned database username is empty
-- `mariadb -u<username>` or `mariadb -uroot` when the returned database username is empty
+- `mysql -u<username>` for MySQL (or `-uroot` when no managed username is reported)
+- `mariadb -u<username>` for MariaDB (or `-uroot` when no managed username is reported)
 - `psql`
-- `mongosh`
+- `pg_isready` for PostgreSQL readiness checks
+- `mongosh --host 127.0.0.1 --username <username> --authenticationDatabase admin` for authenticated MongoDB
 - `redis-cli`
-- `sqlplus /nolog`
+- `sqlplus /nolog` for Oracle SQL*Plus
 
 The platform injects managed credentials into the supported local client
 environment where the client supports it. For MySQL/MariaDB, use the username
 reported by `workspace.database.username`; the command catalog is generated
-with that username when one exists. Never put passwords in command-line
+with that username when one exists. For PostgreSQL, `PGUSER`, `PGPASSWORD`,
+`PGDATABASE`, and local `PGHOST`/`PGPORT` are supplied to the PTY. Never put passwords in command-line
 arguments, URLs, SQL strings, shell history or audit messages.
 
 ## Rules
@@ -490,7 +492,11 @@ passwords in the command string.
 For MongoDB and Oracle, no generic password environment variable is assumed.
 When authentication is required, use the dedicated high-risk credential
 endpoint only when authorized, start the interactive client, and provide
-the password through PTY stdin. Never echo or log the password.        """,
+the password through PTY stdin. Never echo or log the password.
+
+## Safe diagnostics
+
+For MySQL/MariaDB use the engine-specific admin ping command from the command catalog. For PostgreSQL use `pg_isready`. These are read-only checks and do not require entering a SQL REPL.        """,
         scopes=("shell.read", "shell.execute"),
     ),    _skill(
         "shell",
