@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from django.utils.translation import gettext_lazy as _
 
-from app_catalog.models import ApplicationInstance, ApplicationInstanceService
+from app_catalog.models import ApplicationInstance, ApplicationInstanceService, CatalogPublication
 from cms.wagtail_admin.utils import ReadOnlyModelPermissionPolicy, panels_for
 from wagtail.snippets.views.snippets import SnippetViewSet, SnippetViewSetGroup
 
@@ -40,8 +40,25 @@ class ApplicationInstanceServiceViewSet(SnippetViewSet):
     panels = panels_for(editable=[], read_only=["id", "instance", "service", "deploy", "service_key", "sequence", "dispatch_task_id", "dispatched_at"])
 
 
+class CatalogPublicationViewSet(SnippetViewSet):
+    """Editorial controls for repository-backed Ready App publication."""
+
+    model = CatalogPublication
+    icon = "site"
+    menu_label = _("Ready App publication")
+    menu_order = 179
+    list_display = ["catalog_id", "enabled", "featured_override", "updated_by", "updated_at"]
+    list_filter = ["enabled", "featured_override", "updated_at"]
+    search_fields = ["catalog_id", "notes", "updated_by__username", "updated_by__email"]
+    ordering = ["catalog_id"]
+    panels = panels_for(
+        editable=["catalog_id", "enabled", "featured_override", "notes", "updated_by"],
+        read_only=["id", "created_at", "updated_at"],
+    )
+
+
 class ApplicationCatalogGroup(SnippetViewSetGroup):
-    items = (ApplicationInstanceViewSet, ApplicationInstanceServiceViewSet)
+    items = (CatalogPublicationViewSet, ApplicationInstanceViewSet, ApplicationInstanceServiceViewSet)
     menu_label = _("Applications")
     menu_icon = "site"
     menu_order = 180
