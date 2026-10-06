@@ -1349,8 +1349,31 @@ def classify_command_risk(argv: list[str]) -> str:
     if base == "wp":
         if len(argv) >= 4 and str(argv[1]).lower() == "db" and str(argv[2]).lower() == "cli":
             return Risk.INTERACTIVE
-        if len(argv) >= 3 and str(argv[2]).lower() in {"delete", "reset"}:
+
+        read_only_commands = {
+            ("core", "version"), ("core", "is-installed"),
+            ("plugin", "list"), ("plugin", "status"),
+            ("theme", "list"), ("theme", "status"),
+            ("post", "list"), ("page", "list"),
+            ("user", "list"), ("media", "list"),
+            ("option", "get"), ("option", "list"),
+            ("config", "get"), ("db", "size"),
+            ("rewrite", "list"), ("maintenance-mode", "status"),
+            ("cli", "version"), ("cli", "check-update"),
+        }
+        if len(argv) >= 3 and (str(argv[1]).lower(), str(argv[2]).lower()) in read_only_commands:
+            return Risk.READ_ONLY
+
+        destructive_commands = {
+            ("plugin", "delete"), ("plugin", "deactivate"),
+            ("theme", "delete"), ("theme", "disable"),
+            ("post", "delete"), ("page", "delete"),
+            ("user", "delete"), ("media", "delete"),
+            ("option", "delete"), ("db", "reset"), ("db", "clean"),
+        }
+        if len(argv) >= 3 and (str(argv[1]).lower(), str(argv[2]).lower()) in destructive_commands:
             return Risk.DESTRUCTIVE
+
         return Risk.NORMAL_MUTATION
     if base == "php" and len(argv) >= 3 and argv[1] == "artisan":
         cmd = argv[2]
