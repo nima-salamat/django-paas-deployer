@@ -161,6 +161,7 @@ class ApplicationInstanceSerializer(serializers.ModelSerializer):
     services = serializers.SerializerMethodField()
     config = serializers.SerializerMethodField()
     application_url = serializers.SerializerMethodField()
+    application_host = serializers.SerializerMethodField()
     resource_summary = serializers.SerializerMethodField()
 
     class Meta:
@@ -168,7 +169,7 @@ class ApplicationInstanceSerializer(serializers.ModelSerializer):
         fields = (
             "id", "name", "catalog_id", "definition_version", "software_version", "variant_id",
             "status", "stage", "cancel_requested", "config", "error_code", "error_message", "created_at",
-            "updated_at", "deployed_at", "services", "application_url", "resource_summary",
+            "updated_at", "deployed_at", "services", "application_url", "application_host", "resource_summary",
         )
 
     def get_config(self, obj):
@@ -179,36 +180,101 @@ class ApplicationInstanceSerializer(serializers.ModelSerializer):
         out["secrets_configured"] = sorted(secret_keys)
         return out
 
+    @staticmethod
+    def _canonical_service_host(service):
+        try:
+            from services.serializers import _service_host
+            return str(_service_host(service) or "").strip()
+        except Exception:
+            try:
+                return str(service.get_docker_service_name() or "").strip()
+            except Exception:
+                return ""
+
     def get_services(self, obj):
         rows = []
-        for binding in obj.services.select_related("service", "deploy").all():
+        for binding in obj.services.select_related("service", "deploy", "service__plan").all():
             deploy = binding.deploy
+            service = binding.service
+            service_host = self._canonical_service_host(service)
+            endpoints = []
+            for endpoint in service.endpoints.filter(enabled=True, exposure="public").order_by("id"):
+                # Platform-managed Ready App hosts must always use the canonical
+                # Service-derived hostname. Explicit custom hostnames remain
+                # available for non-catalog services.
+                endpoint_host = service_host or str(endpoint.hostname or "").strip()
+                url = ""
+                if endpoint_host:
+                    scheme = "https" if endpoint.tls else "http"
+                    url = f"{scheme}://{endpoint_host}"
+                    if endpoint.path:
+                        url = f"{url.rstrip('/')}/{str(endpoint.path).lstrip('/')}"
+                endpoints.append({
+                    "name": endpoint.name,
+                    "hostname": endpoint_host,
+                    "url": url,
+                    "target_port": endpoint.target_port,
+                    "protocol": endpoint.protocol,
+                    "tls": bool(endpoint.tls),
+                    "path": endpoint.path,
+                })
             rows.append({
                 "key": binding.service_key,
                 "service_id": str(binding.service_id),
-                "service_name": binding.service.name,
+                "service_name": service.name,
+                "service_host": service_host,
                 "deploy_id": str(deploy.pk),
                 "status": deploy.status,
                 "stage": deploy.stage,
                 "status_message": deploy.status_message,
                 "error_message": deploy.error_message if deploy.status == "failed" else "",
+                "resource_limits": {
+                    "cpu_vcpu": getattr(service.plan, "max_cpu", None),
+                    "ram_mb": getattr(service.plan, "max_ram", None),
+                    "storage_mb": sum(int(v.size_mb or 0) for v in service.volumes.all()),
+                },
+                "public_endpoints": endpoints,
             })
         return rows
 
+    def _public_service_host(self, obj):
+        for binding in obj.services.select_related("service").all():
+            service = binding.service
+            endpoint = service.endpoints.filter(
+                enabled=True, exposure="public",
+            ).order_by("id").first()
+            if endpoint is None:
+                continue
+            host = self._canonical_service_host(service)
+            if not host:
+                host = str(endpoint.hostname or "").strip()
+            if host:
+                return host
+        return ""
+
+    def get_application_host(self, obj):
+        return self._public_service_host(obj)
+
     def get_application_url(self, obj):
-        # The hostname can be deterministic before runtime exists, but it is
-        # not an application address until the installation is actually ready.
+        # A Ready App public hostname is derived from the Service identity, not
+        # a mutable/stale endpoint snapshot. Do not expose a URL until the
+        # application is actually running.
         if obj.status != "running":
             return ""
+        host = self._public_service_host(obj)
+        if not host:
+            return ""
+        endpoint = None
         for binding in obj.services.select_related("service").all():
             endpoint = binding.service.endpoints.filter(
                 enabled=True, exposure="public",
             ).order_by("id").first()
             if endpoint is not None:
-                hostname = str(endpoint.hostname or "").strip()
-                if hostname:
-                    return f"{'https' if endpoint.tls else 'http'}://{hostname}"
-        return ""
+                break
+        scheme = "https" if endpoint is None or endpoint.tls else "http"
+        path = str(endpoint.path or "").strip() if endpoint is not None else ""
+        url = f"{scheme}://{host}"
+        return f"{url.rstrip('/')}/{path.lstrip('/')}" if path else url
 
     def get_resource_summary(self, obj):
         total_storage = 0
