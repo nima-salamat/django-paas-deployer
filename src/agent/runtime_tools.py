@@ -37,7 +37,7 @@ def _safe_command_name(value: str) -> str:
     return value
 
 
-def _workspace_inspect(service, payload: dict[str, Any]) -> dict[str, Any]:
+def _workspace_inspect(service, user, payload: dict[str, Any]) -> dict[str, Any]:
     from services.shell import (
         _container_mount_policy,
         _platform_for_service,
@@ -129,7 +129,7 @@ def _workspace_inspect(service, payload: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _runtime_detect(service, payload: dict[str, Any]) -> dict[str, Any]:
+def _runtime_detect(service, user, payload: dict[str, Any]) -> dict[str, Any]:
     from services.shell import _platform_for_service, _resolve_container
 
     names = payload.get("commands")
@@ -169,7 +169,7 @@ def _runtime_detect(service, payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _php_lint(service, payload: dict[str, Any]) -> dict[str, Any]:
+def _php_lint(service, user, payload: dict[str, Any]) -> dict[str, Any]:
     from services.shell import (
         _platform_for_service,
         _resolve_container,
@@ -204,7 +204,7 @@ def _php_lint(service, payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _wordpress_wp_cli(service, payload: dict[str, Any]) -> dict[str, Any]:
+def _wordpress_wp_cli(service, user, payload: dict[str, Any]) -> dict[str, Any]:
     from services.shell import (
         _platform_for_service,
         execute_command,
@@ -238,14 +238,17 @@ def _wordpress_wp_cli(service, payload: dict[str, Any]) -> dict[str, Any]:
         )
 
     command = " ".join(shlex.quote(value) for value in argv)
-    from services.shell import create_session
-    session, _token = create_session(service, service.user, mode="restricted")
-    result = execute_command(
-        session,
-        command,
-        confirm=bool(payload.get("confirm", False)),
-    )
-    return {"platform": platform, "tool": "wp-cli", **result}
+    from services.shell import close_session, create_session
+    session, _token = create_session(service, user, mode="restricted")
+    try:
+        result = execute_command(
+            session,
+            command,
+            confirm=bool(payload.get("confirm", False)),
+        )
+        return {"platform": platform, "tool": "wp-cli", **result}
+    finally:
+        close_session(session)
 
 
 TOOLS = (
