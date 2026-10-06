@@ -224,16 +224,28 @@ def _platform_for_service(service: Service) -> str:
 
     Platform is advisory for binary availability: runtime tools (php, python,
     node, git, …) are accepted on every platform so a mis-labelled deploy does
-    not block legitimate developer commands. The label still drives the default
-    work-root (Laravel → /var/www/html, others → /app).
+    not block legitimate commands. The label still drives the default work-root.
+    Catalog-managed services also expose their canonical catalog service key in
+    runtime/source metadata; use that signal when the generic Docker platform
+    label does not carry framework identity.
     """
     deploy = get_active_deploy(service)
     config = getattr(deploy, "config", None) or {}
+    runtime_config = getattr(service, "runtime_config", None) or {}
+    source_config = getattr(service, "source_config", None) or {}
     candidates = [
         config.get("framework"),
         config.get("platform"),
         config.get("runtime"),
         config.get("stack"),
+        runtime_config.get("framework"),
+        runtime_config.get("platform"),
+        runtime_config.get("runtime"),
+        runtime_config.get("stack"),
+        runtime_config.get("catalog_service_key"),
+        runtime_config.get("catalog_platform"),
+        source_config.get("catalog_id"),
+        source_config.get("service_key"),
         getattr(deploy, "framework", None) if deploy is not None else None,
         getattr(service, "framework", None),
         getattr(service, "platform", None),
@@ -251,7 +263,6 @@ def _platform_for_service(service: Service) -> str:
             if key in value or value in key:
                 return mapped
     return "generic"
-
 
 def _safe_workdir(path: str, root: str) -> str:
     path = str(path or root).strip() or root
