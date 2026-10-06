@@ -220,15 +220,19 @@ class ReadyAppPublicApiTests(TestCase):
         binding.deploy.status = DeploymentStatusChoices.RUNNING
         binding.deploy.save(update_fields=["status", "updated_at"])
 
-        response = ApplicationInstanceDetailAPIView.as_view()(
-            self.request("DELETE", f"/api/application-catalog/installations/{instance.pk}/"),
-            pk=instance.pk,
-        )
+        with patch(
+            "app_catalog.executor.ApplicationStackExecutor.cleanup_terminal_application",
+            return_value=False,
+        ) as cleanup:
+            response = ApplicationInstanceDetailAPIView.as_view()(
+                self.request("DELETE", f"/api/application-catalog/installations/{instance.pk}/"),
+                pk=instance.pk,
+            )
 
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.data["code"], "application_cleanup_pending")
+        cleanup.assert_called_once_with()
         binding.deploy.refresh_from_db()
-        self.assertTrue(binding.deploy.cancel_requested)
         self.assertTrue(ApplicationInstance.objects.filter(pk=instance.pk).exists())
 
     def test_cancelled_delete_finishes_after_child_deploys_are_terminal(self):
@@ -258,6 +262,7 @@ class ReadyAppPublicApiTests(TestCase):
 
         with (
             patch("app_catalog.executor.ApplicationStackExecutor._cleanup_cancelled_children") as cleanup_children,
+            patch("app_catalog.executor.ApplicationStackExecutor.cleanup_terminal_application", return_value=False),
             patch("services.signals.cleanup_service_resources"),
             patch("services.signals._cleanup_service_log_records"),
             patch("services.signals.Network.network_exists", return_value=False),
@@ -365,7 +370,10 @@ class ReadyAppPublicApiTests(TestCase):
         binding.deploy.save(update_fields=["status", "updated_at"])
 
         with (
-            patch("services.signals._cancel_active_deployments_for_service") as cancel_active,
+            patch(
+                "app_catalog.executor.ApplicationStackExecutor.cleanup_terminal_application",
+                return_value=False,
+            ) as cleanup,
             patch.object(delete_application_installation, "delay") as queued,
         ):
             response = ApplicationInstanceDetailAPIView.as_view()(
@@ -376,9 +384,46 @@ class ReadyAppPublicApiTests(TestCase):
         self.assertEqual(response.status_code, 202)
         instance.refresh_from_db()
         self.assertEqual(instance.stage, "deletion_pending")
-        cancel_active.assert_called()
+        cleanup.assert_called_once_with()
         queued.assert_called_once_with(str(instance.pk))
+        self.assertTrue(instance.cancel_requested)
         self.assertTrue(ApplicationInstance.objects.filter(pk=instance.pk).exists())
+
+    def test_deploying_delete_is_accepted_and_marked_for_coordinator_cleanup(self):
+        from unittest.mock import patch
+        from app_catalog.services import create_application_installation
+
+        instance = create_application_installation(
+            self.user,
+            {
+                "catalog_id": "wordpress",
+                "variant": "default",
+                "name": "deploying-delete",
+                "plan_id": str(self.app_plan.pk),
+                "config": {},
+            },
+            require_public=True,
+        )
+        instance.status = ApplicationStatus.DEPLOYING
+        instance.save(update_fields=["status", "updated_at"])
+
+        with (
+            patch(
+                "app_catalog.executor.ApplicationStackExecutor.cleanup_terminal_application",
+                return_value=False,
+            ),
+            patch.object(delete_application_installation, "delay") as queued,
+        ):
+            response = ApplicationInstanceDetailAPIView.as_view()(
+                self.request("DELETE", f"/api/application-catalog/installations/{instance.pk}/"),
+                pk=instance.pk,
+            )
+
+        self.assertEqual(response.status_code, 202)
+        instance.refresh_from_db()
+        self.assertEqual(instance.stage, "deletion_pending")
+        self.assertTrue(instance.cancel_requested)
+        queued.assert_called_once_with(str(instance.pk))
 
     def test_failed_delete_queues_durable_cleanup_after_resource_failure(self):
         from unittest.mock import patch
