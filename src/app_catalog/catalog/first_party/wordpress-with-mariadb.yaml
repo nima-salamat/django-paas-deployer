@@ -66,10 +66,21 @@ services:
       WORDPRESS_DB_USER: ${config.service_user_wordpress}
       WORDPRESS_DB_PASSWORD: ${secret.service_password_wordpress}
       WORDPRESS_DB_NAME: wordpress
+      # Platform-managed hostname used to repair a persistent wp-config.php
+      # created by an earlier deployment that contained the host placeholder.
+      PASSDEPLOYER_PUBLIC_HOST: ${config.domain}
       WORDPRESS_CONFIG_EXTRA: |
         define( 'WP_HOME', 'https://${config.domain}' );
         define( 'WP_SITEURL', 'https://${config.domain}' );
         define( 'FORCE_SSL_ADMIN', true );
+    command:
+      - /bin/sh
+      - -lc
+      - |
+        if [ -f /var/www/html/wp-config.php ]; then
+          sed -i "s|__PASSDEPLOYER_PUBLIC_HOST__|$PASSDEPLOYER_PUBLIC_HOST|g" /var/www/html/wp-config.php
+        fi
+        exec apache2-foreground
     depends_on:
       - mariadb
     healthcheck:
