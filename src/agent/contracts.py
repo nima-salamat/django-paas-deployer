@@ -99,6 +99,8 @@ CONTRACTS: tuple[EndpointContract, ...] = (
     _contract("/agent/v1/services/{service_id}/shell/sessions/{session_id}/close", "POST", scopes=("shell.execute",), mutating=True, throttle_scope="shell"),
     _contract("/agent/v1/services/{service_id}/shell/replace", "POST", scopes=("shell.replace",), mutating=True, throttle_scope="shell"),
     _contract("/agent/v1/services/{service_id}/shell/files", "POST", any_scopes=("shell.files.read", "shell.files.write"), mutating=True, throttle_scope="shell"),
+    _contract("/agent/v1/services/{service_id}/tools", "GET", scopes=("shell.read",), throttle_scope="shell"),
+    _contract("/agent/v1/services/{service_id}/tools/{tool_name}", "POST", any_scopes=("shell.read", "shell.execute"), mutating=True, throttle_scope="shell"),
 
     _contract("/agent/v1/plans", "GET", scopes=("plans.read",)),
     _contract("/agent/v1/plans/{plan_id}", "GET", scopes=("plans.read",)),
