@@ -71,7 +71,7 @@ The resource summary has aggregate and per-service allocation. Aggregate fields 
 | GET | /installations/ | ApplicationInstanceListCreateAPIView | Returns only the caller's installations. |
 | POST | /installations/ | ApplicationInstanceListCreateAPIView | Validates catalog id, variant, name, plan id and config; creates ApplicationInstance and child-plan metadata, then queues start_application_installation. If broker enqueue fails, the row remains durable PENDING and the API reports queue failure instead of pretending the install started. |
 | GET | /installations/<uuid>/ | ApplicationInstanceDetailAPIView | Owner-scoped inspection of coordinator state and child-service summaries. |
-| DELETE | /installations/<uuid>/ | ApplicationInstanceDetailAPIView | Allowed only for terminal application state and only when no active child deployment remains. Child Services are removed before the application-owned PrivateNetwork. |
+| DELETE | /installations/<uuid>/ | ApplicationInstanceDetailAPIView | Durable deletion is accepted from every application lifecycle state. The deletion coordinator fences/cancels active child work, removes owned runtime resources, waits for child Deploys to become terminal, then removes child Services and the application-owned PrivateNetwork. |
 | POST | /installations/<uuid>/cancel/ | ApplicationInstanceCancelAPIView | Locks the coordinator, records cancellation intent and queues cancellation. If broker delivery fails, cancellation falls back to the synchronous cancel path. |
 
 ### Install request
