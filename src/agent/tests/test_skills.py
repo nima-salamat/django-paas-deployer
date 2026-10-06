@@ -51,6 +51,13 @@ class AgentSkillTests(TestCase):
         self.assertIn("# WordPress", wordpress.content.decode())
         self.assertIn("# Databases", databases.content.decode())
 
+    def test_developer_skill_is_scope_filtered(self):
+        self.agent.scopes = ["services.read", "shell.read", "shell.execute"]
+        self.agent.save(update_fields=["scopes", "updated_at"])
+        response = self.client.get("/agent/v1/skills/developer-shell", **self._auth())
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "INSUFFICIENT_SCOPE")
+
     def test_unavailable_skill_is_denied(self):
         response = self.client.get("/agent/v1/skills/deployments", **self._auth())
         self.assertEqual(response.status_code, 403)
