@@ -26,6 +26,17 @@ def test_application_catalog_reconcile_schedule_matches_registered_task_name():
     assert f'"task": "{legacy_wrong}"' not in settings
 
 
+def test_ready_app_runtime_supervisor_is_scheduled_on_operations_queue():
+    settings = (ROOT / "src" / "config" / "settings.py").read_text(encoding="utf-8")
+    tasks = (ROOT / "src" / "app_catalog" / "tasks.py").read_text(encoding="utf-8")
+
+    canonical = "app_catalog.supervise_ready_applications"
+
+    assert f'"task": "{canonical}"' in settings
+    assert f'"{canonical}": {{"queue": "operations"}}' in settings
+    assert f'name="{canonical}"' in tasks
+
+
 def test_deployment_log_tasks_are_explicitly_registered():
     celery = (ROOT / "src" / "config" / "celery.py").read_text(encoding="utf-8")
 
