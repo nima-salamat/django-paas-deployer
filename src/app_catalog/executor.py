@@ -910,13 +910,13 @@ class ApplicationStackExecutor:
             return {"status": "healthy"}
     
     def reconcile(self) -> list[ServiceDispatch]:
-        # Cancellation cleanup removes ApplicationInstanceService bindings.
-        # Handle terminal cancellation before _load(), which requires the
-        # complete immutable binding graph to still exist.
+        # Cancellation is a durable coordinator intent. Handle it before
+        # _load(), because cancellation cleanup may remove the child bindings.
         current = ApplicationInstance.objects.filter(pk=self.instance_id).first()
         if current is None:
             return []
-        if current.status == ApplicationStatus.CANCELLED and current.cancel_requested:
+        if current.cancel_requested and current.stage != "deletion_pending":
+            self.cancel(reason=current.error_message or "Application deployment cancelled.")
             self._cleanup_cancelled_children()
             return []
         if current.status in {
@@ -957,8 +957,7 @@ class ApplicationStackExecutor:
         # must stop scheduling new child services in this reconciliation.
         if should_cancel:
             self.cancel(reason=cancel_reason)
-            latest, _ = self._load()
-            self._reconcile_terminal(latest, plan)
+            self._cleanup_cancelled_children()
             return []
 
         if self._reconcile_terminal(instance, plan):
