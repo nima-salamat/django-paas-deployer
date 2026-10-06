@@ -34,16 +34,25 @@ DEFAULT_WORKDIRS = {
     "laravel": "/var/www/html",
     "php": "/var/www/html",
     "wordpress": "/var/www/html",
+    "mysql": "/tmp",
+    "mariadb": "/tmp",
+    "postgresql": "/tmp",
+    "mongodb": "/tmp",
+    "redis": "/tmp",
+    "oracle": "/tmp",
+    "node": "/app",
+    "python": "/app",
+    "django": "/app",
+    "generic": "/app",
+}
+
+DATABASE_DATA_ROOTS = {
     "mysql": "/var/lib/mysql",
     "mariadb": "/var/lib/mysql",
     "postgresql": "/var/lib/postgresql/data",
     "mongodb": "/data/db",
     "redis": "/data",
     "oracle": "/opt/oracle/oradata",
-    "node": "/app",
-    "python": "/app",
-    "django": "/app",
-    "generic": "/app",
 }
 
 PLATFORM_ALIASES = {
@@ -1714,6 +1723,40 @@ def _catalog_item(command: str, label: str, *, risk: str = Risk.READ_ONLY, inter
     }
 
 
+def shell_workspace_metadata(service: Service) -> dict:
+    """Return non-secret workspace/runtime metadata for UI and Agent clients."""
+    platform = _platform_for_service(service)
+    workspace = default_workdir_for_platform(platform)
+    result = {
+        "platform": platform,
+        "workspace_root": workspace,
+        "default_workdir": workspace,
+        "is_database": platform in DATABASE_PLATFORMS,
+        "interactive_commands": list(DATABASE_PLATFORMS.get(platform, {}).get("interactive", ())),
+    }
+    if platform in DATABASE_PLATFORMS:
+        try:
+            database = getattr(service, "database_resource", None)
+            credential = getattr(database, "credential", None) if database else None
+            result["database"] = {
+                "engine": platform,
+                "client": DATABASE_PLATFORMS[platform]["client"],
+                "data_root": DATABASE_DATA_ROOTS[platform],
+                "local_host": "127.0.0.1",
+                "port": getattr(database, "port", None) if database else None,
+                "database": getattr(database, "database_name", "") if database else "",
+                "username": getattr(credential, "username", "") if credential else "",
+                "credentials_managed_by_platform": bool(credential),
+            }
+        except Exception:
+            result["database"] = {
+                "engine": platform,
+                "client": DATABASE_PLATFORMS[platform]["client"],
+                "data_root": DATABASE_DATA_ROOTS[platform],
+                "local_host": "127.0.0.1",
+            }
+    return result
+
 def command_catalog(platform: str) -> list[dict]:
     """Return platform-aware command *suggestions* for the terminal UI.
 
@@ -1765,9 +1808,14 @@ def command_catalog(platform: str) -> list[dict]:
             _catalog_item("php -v", "PHP version"),
             _catalog_item("php --ini", "PHP ini location"),
             _catalog_item("php -m", "PHP extensions"),
+            _catalog_item("wp --info", "Check WP-CLI availability"),
+            _catalog_item("wp core version", "WordPress core version"),
+            _catalog_item("wp theme list", "List WordPress themes"),
+            _catalog_item("wp plugin list", "List WordPress plugins"),
+            _catalog_item("wp post list", "List WordPress posts"),
+            _catalog_item("wp user list", "List WordPress users"),
+            _catalog_item("wp db cli", "WordPress database interactive client", risk=Risk.INTERACTIVE, interactive=True, advanced=True),
         ])
-    if platform == "wordpress":
-        items.extend([
             _catalog_item("wp --info", "Check WP-CLI availability"),
             _catalog_item("wp core version", "WordPress core version"),
             _catalog_item("wp theme list", "List WordPress themes"),
