@@ -538,7 +538,8 @@ def _create_application_installation(
                             "definition_version": definition.definition_version,
                             "software_version": definition.software_version,
                             "selected_software_version": str(
-                                resolved_config.get("software_version") or definition.software_version
+                                (resolved.get("config") or {}).get("software_version")
+                                or definition.software_version
                             ),
                             "variant": str(payload["variant"]),
                             "service_key": key,
