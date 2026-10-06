@@ -168,6 +168,29 @@ class ApplicationStackExecutor:
                 },
             )
             sync_endpoint_reservation(endpoint)
+
+            # Existing Ready App installations created before public endpoint
+            # support may already have a live Swarm service without proxy_net
+            # membership or Traefik labels. Repair the live service once at the
+            # same moment we reconstruct its missing endpoint.
+            if swarm_enabled():
+                try:
+                    from deployments.core.swarm import SwarmRuntime
+                    SwarmRuntime().reconcile_public_routing(
+                        service_name=service.get_docker_service_name(),
+                        endpoints=service.endpoints.filter(enabled=True, exposure="public").order_by("name"),
+                        networks=(
+                            [service.network.get_docker_network_name()]
+                            if getattr(service, "network", None) is not None
+                            else []
+                        ),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Ready App %s failed to repair live public routing for service %s.",
+                        self.instance_id,
+                        service.pk,
+                    )
             repaired += 1
 
         return repaired
