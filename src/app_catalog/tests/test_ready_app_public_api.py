@@ -392,6 +392,7 @@ class ReadyAppPublicApiTests(TestCase):
     def test_deploying_delete_is_accepted_and_marked_for_coordinator_cleanup(self):
         from unittest.mock import patch
         from app_catalog.services import create_application_installation
+        from app_catalog.tasks import delete_application_installation
 
         instance = create_application_installation(
             self.user,
