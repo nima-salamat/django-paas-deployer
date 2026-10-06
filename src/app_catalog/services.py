@@ -287,6 +287,15 @@ def _render_service_value(value: str, *, config: dict, secrets: dict, service_ho
         out = out.replace(f"${{config.{key}}}", str(val))
     for key, host in service_hosts.items():
         out = out.replace(f"${{service.{key}.host}}", str(host))
+
+    # Public Ready Apps resolve their hostname only after the public Service
+    # row has been created. Earlier resolution therefore leaves the platform
+    # placeholder in rendered strings such as WP_HOME and SERVICE_URL_*.
+    # Always replace that deferred value during the final service materialization
+    # so application containers never receive the internal placeholder.
+    public_host = config.get("domain")
+    if public_host not in (None, "", _PLATFORM_PUBLIC_HOST_TOKEN):
+        out = out.replace(_PLATFORM_PUBLIC_HOST_TOKEN, str(public_host))
     return out
 
 
@@ -695,6 +704,16 @@ def _create_application_installation(
             healthcheck_instruction = _dockerfile_healthcheck(healthcheck)
             if healthcheck_instruction and "HEALTHCHECK" not in dockerfile_text:
                 dockerfile_text = dockerfile_text.rstrip() + "\n" + healthcheck_instruction + "\n"
+
+            # Apache-based catalog images should not emit the noisy
+            # AH00558 startup warning. Keep this scoped to images that
+            # explicitly identify Apache so unrelated images are untouched.
+            if "apache" in image.lower() and "ServerName " not in dockerfile_text:
+                dockerfile_text = (
+                    dockerfile_text.rstrip()
+                    + "\nRUN grep -q '^ServerName ' /etc/apache2/apache2.conf "
+                    + "|| echo 'ServerName localhost' >> /etc/apache2/apache2.conf\n"
+                )
             files = {}
             for name, content in (spec.get("files") or {}).items():
                 if _secret_references(content):
