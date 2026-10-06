@@ -429,8 +429,8 @@ random files.
 
 Prefer WP-CLI for CMS operations. Common patterns include:
 - `wp core version` and `wp core verify-checksums` for diagnostics
-- `wp theme list`, `wp theme activate <slug>`
-- `wp plugin list`, `wp plugin install <slug> --activate`
+- `wp theme list`, `wp theme activate <slug>` (activation is privileged)
+- `wp plugin list`, `wp plugin install <slug>`; activation is a separate privileged operation
 - `wp post create`, `wp post update`, `wp page create`
 - `wp option get/set`, `wp menu list`
 - `wp user list/create/update`
@@ -674,7 +674,8 @@ raw shell strings because the backend can validate their arguments and classify
 the resulting mutation consistently.
 
 ## Platform examples
-WordPress exposes a policy-checked WP-CLI tool and PHP linting.
+WordPress exposes structured policy-checked tools, while raw `wordpress.wp_cli`
+is intentionally elevated and requires the `shell.developer` scope.
 PHP/Laravel services expose PHP linting and their framework-aware Shell catalog.
 Database services expose engine-aware Shell metadata and interactive clients.
 
