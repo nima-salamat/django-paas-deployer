@@ -43,7 +43,8 @@ class ShellSessionView(AgentSecuredAPIView):
         from services.shell import create_session
         session,token=create_session(service,request.user,request.data.get("workdir"))
         self.audit_metadata={"session_id":str(session.pk),"service_id":str(service.pk)}
-        return Response({"result":"success","session_id":str(session.pk),"token":token,"token_type":"Shell","platform":session.platform,"cwd":session.workdir,"expires_at":session.expires_at},status=201)
+        from services.shell import shell_workspace_metadata
+        return Response({"result":"success","session_id":str(session.pk),"token":token,"token_type":"Shell","platform":session.platform,"cwd":session.workdir,"expires_at":session.expires_at,"workspace":shell_workspace_metadata(service)},status=201)
 
 class ShellCommandView(AgentSecuredAPIView):
     agent_contract_path = "/agent/v1/services/{service_id}/shell/sessions/{session_id}/commands"
