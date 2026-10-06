@@ -120,14 +120,6 @@ class ReadyApplicationArchitectureTests(TestCase):
         assert refs[0]["key"] == "service_password_root"
         assert refs[0]["version"] == root_secret.current_version
     def test_wordpress_selected_version_flows_through_installation_and_deploy_artifact(self):
-        instance = self.install(
-            catalog_id="wordpress",
-            variant="default",
-            name="wordpress-selected-version",
-        )
-        # The helper above installs the default version; exercise the actual
-        # user-selected version through the public creation path.
-        instance.delete()
         instance = create_application_installation(
             self.user,
             {
