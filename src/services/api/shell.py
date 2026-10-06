@@ -37,6 +37,7 @@ from ..shell import (
     ShellPolicyError,
     classify_command_risk,
     shell_protocol_metadata,
+    shell_workspace_metadata,
 )
 
 
@@ -115,6 +116,7 @@ def shell_catalog_apiview(request, service_id):
                 "note": "Commands marked interactive may pause and request stdin without terminating the process.",
             },
             "transport": shell_protocol_metadata(service.pk),
+            "workspace": shell_workspace_metadata(service),
             "policy": {
                 "arbitrary_php_scripts": False,
                 "arbitrary_python_eval": False,
