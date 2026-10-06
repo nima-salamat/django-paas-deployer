@@ -466,7 +466,13 @@ def _create_application_installation(
                 slug=slug,
                 catalog_id=definition.id,
                 definition_version=definition.definition_version,
-                software_version=definition.software_version,
+                # software_version is installation provenance, so it must
+                # reflect the exact user-selected catalog version rather than
+                # the catalog current/default display version.
+                software_version=str(
+                    (resolved.get("config") or {}).get("software_version")
+                    or definition.software_version
+                ),
                 variant_id=str(payload["variant"]),
                 definition_snapshot={
                     **copy.deepcopy(definition.data),
