@@ -127,3 +127,47 @@ def test_command_catalog_source_has_no_stray_wordpress_block():
     source = SHELL
     assert source.count('_catalog_item("wp --info", "Check WP-CLI availability")') == 1
     assert source.count('if platform == "wordpress":') == 1
+
+
+def test_database_client_commands_are_accepted_per_engine():
+    from services.shell import (
+        _validate_platform_command,
+        default_workdir_for_platform,
+    )
+
+    commands = {
+        "mysql": ["mysql", "-uroot"],
+        "mariadb": ["mariadb", "-uroot"],
+        "postgresql": ["psql"],
+        "mongodb": ["mongosh"],
+        "redis": ["redis-cli"],
+        "oracle": ["sqlplus", "/nolog"],
+    }
+    for platform, argv in commands.items():
+        _validate_platform_command(
+            argv,
+            platform,
+            default_workdir_for_platform(platform),
+        )
+
+
+def test_database_client_password_and_remote_execution_are_rejected():
+    from services.shell import _validate_platform_command, default_workdir_for_platform
+
+    cases = [
+        ("mysql", ["mysql", "-pSuperSecret"]),
+        ("mariadb", ["mariadb", "--password=SuperSecret"]),
+        ("postgresql", ["psql", "-c", "SELECT 1"]),
+        ("mongodb", ["mongosh", "mongodb://10.0.0.5:27017"]),
+        ("oracle", ["sqlplus", "system/password@remote"]),
+    ]
+    for platform, argv in cases:
+        try:
+            _validate_platform_command(
+                argv,
+                platform,
+                default_workdir_for_platform(platform),
+            )
+        except Exception:
+            continue
+        raise AssertionError(f"Unsafe DB command was accepted: {platform} {argv}")
