@@ -1,10 +1,11 @@
-import os
 """First-class service-local tools exposed to PassDeployer Agents.
 
 Tools are small wrappers around existing runtime boundaries. They do not call
 PassDeployer over HTTP from inside the backend.
 """
 from __future__ import annotations
+
+import os
 
 import posixpath
 import re
@@ -230,14 +231,14 @@ def command_result_from_argv(service, user, argv: list[str], *, confirm: bool = 
     risk = classify_command_risk(argv)
 
     if _is_destructive_command(argv) and not confirm:
-        return {
-            "stdout": "",
-            "stderr": "",
-            "exit_code": None,
-            "cwd": root,
-            "risk": risk,
-            "requires_confirmation": True,
-        }
+        from agent.errors import AgentError
+        raise AgentError(
+            "CONFIRMATION_REQUIRED",
+            "This runtime tool operation is destructive and requires confirm=true.",
+            status_code=409,
+            failure_domain="authorization",
+            extra={"tool_command": " ".join(shlex.quote(value) for value in argv), "risk": risk},
+        )
 
     if os.path.basename(argv[0]).lower() in {"mkdir", "touch", "rm", "rmdir", "cp", "mv", "tee"}:
         code, stdout, stderr = _run_mutating_argv(container, argv, root)
@@ -266,7 +267,14 @@ def command_result_from_argv(service, user, argv: list[str], *, confirm: bool = 
         )
     except Exception:
         pass
+    try:
+        from agent.application import redact_shell_result
+        result = redact_shell_result(service, result)
+    except Exception:
+        pass
     return result
+
+
 def _wordpress_wp_cli(service, user, payload: dict[str, Any]) -> dict[str, Any]:
     from services.shell import _platform_for_service, is_interactive_command
     from agent.errors import AgentError
