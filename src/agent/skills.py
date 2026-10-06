@@ -537,7 +537,7 @@ that ran the command.
 Developer mode is not host shell access. PassDeployer refuses developer mode
 for containers with privileged mode, host PID/network namespaces, Docker engine
 socket/host Docker mounts, exposed host devices, dangerous added capabilities,
-or without `no-new-privileges`.
+or an unconfined seccomp profile.
 
 Do not assume developer mode can cross service-control-plane boundaries. Use the
 dedicated Service, Deployment, Network, Volume, Secret and Database APIs for
