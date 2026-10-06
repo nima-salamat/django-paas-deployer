@@ -431,6 +431,102 @@ class SwarmRuntime:
             )
         return swarm
 
+    def reconcile_public_routing(
+        self,
+        *,
+        service_name: str,
+        endpoints: Iterable[Any],
+        networks: Iterable[str] = (),
+    ) -> bool:
+        """Repair Traefik labels and proxy network membership on a live Swarm service."""
+        from docker.types import NetworkAttachmentConfig
+
+        service = self.client.services.get(_validate_service_name(service_name))
+        service.reload()
+
+        public_endpoints = [
+            endpoint
+            for endpoint in (endpoints or ())
+            if bool(getattr(endpoint, "enabled", True))
+            and str(getattr(endpoint, "exposure", "") or "").lower() == "public"
+            and str(getattr(endpoint, "protocol", "") or "").lower() in {"http", "https", "ws"}
+            and getattr(endpoint, "target_port", None)
+        ]
+        if not public_endpoints:
+            return False
+
+        spec = dict(service.attrs.get("Spec") or {})
+        task_template = dict(spec.get("TaskTemplate") or {})
+        current_labels = dict(spec.get("Labels") or {})
+        labels = {
+            key: value
+            for key, value in current_labels.items()
+            if not str(key).startswith("traefik.")
+        }
+        labels["traefik.enable"] = "true"
+        labels["traefik.swarm.network"] = "proxy_net"
+
+        for index, endpoint in enumerate(public_endpoints):
+            host = str(getattr(endpoint, "hostname", "") or "").strip().lower().rstrip(".")
+            if not host:
+                continue
+            token = re.sub(
+                r"[^a-z0-9-]",
+                "-",
+                f"{service_name}-{getattr(endpoint, 'name', '')}".lower(),
+            ).strip("-")[:50]
+            if not token:
+                token = f"{_validate_service_name(service_name)}-ep-{index}"
+            tick = chr(96)
+            rule = f"Host({tick}{host}{tick})"
+            path = str(getattr(endpoint, "path", "") or "").strip()
+            if path:
+                rule = f"{rule} && PathPrefix({tick}{path}{tick})"
+            labels[f"traefik.http.routers.{token}.rule"] = rule
+            labels[f"traefik.http.routers.{token}.entrypoints"] = "web"
+            labels[f"traefik.http.routers.{token}.service"] = token
+            labels[f"traefik.http.routers.{token}.priority"] = str(10000 + index)
+            labels[f"traefik.http.services.{token}.loadbalancer.server.port"] = str(int(getattr(endpoint, "target_port")))
+            health_path = (getattr(endpoint, "metadata", None) or {}).get("healthcheck_path")
+            if health_path:
+                labels[f"traefik.http.services.{token}.loadbalancer.healthcheck.path"] = str(health_path)
+                labels[f"traefik.http.services.{token}.loadbalancer.healthcheck.interval"] = "2s"
+                labels[f"traefik.http.services.{token}.loadbalancer.healthcheck.timeout"] = "2s"
+
+        if not any(
+            str(key).startswith("traefik.http.routers.") and str(key).endswith(".rule")
+            for key in labels
+        ):
+            return False
+
+        self.ensure_network("proxy_net", attachable=True)
+        desired_names = []
+        seen_names = set()
+        for network_name in list(networks or ()) + ["proxy_net"]:
+            name = str(network_name or "").strip()
+            if name and name not in seen_names:
+                desired_names.append(name)
+                seen_names.add(name)
+
+        for item in task_template.get("Networks") or ():
+            if not isinstance(item, dict):
+                continue
+            target = str(item.get("Target") or item.get("target") or "").strip()
+            if not target:
+                continue
+            try:
+                name = str(self.client.networks.get(target).name or "").strip()
+            except Exception:
+                name = target
+            if name and name not in seen_names:
+                desired_names.append(name)
+                seen_names.add(name)
+
+        service.update(
+            labels=labels,
+            networks=[NetworkAttachmentConfig(target=name) for name in desired_names],
+        )
+        return True
     def ensure_network(self, name: str, *, attachable: bool = True) -> str:
         """Ensure a Swarm-compatible overlay network exists.
 
