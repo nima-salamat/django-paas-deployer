@@ -214,227 +214,31 @@ class ApplicationInstanceDetailAPIView(CatalogPermissionMixin, APIView):
 
     def delete(self, request, pk):
         instance = get_object_or_404(
-            ApplicationInstance.objects.filter(user=request.user).prefetch_related("services__deploy"),
+            ApplicationInstance.objects.filter(user=request.user),
             pk=pk,
         )
-        terminal = {ApplicationStatus.RUNNING, ApplicationStatus.FAILED, ApplicationStatus.CANCELLED}
-        if instance.status not in terminal:
-            return Response(
-                {
-                    "error": "Application must be in a terminal state before deletion.",
-                    "code": "application_not_terminal",
-                    "status": instance.status,
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
-        active_children = [
-            row for row in instance.services.select_related("deploy").all()
-            if row.deploy.status in {"pending", "running", "rolling_back"}
-        ]
 
-        if instance.status == ApplicationStatus.CANCELLED and instance.cancel_requested:
-            # DELETE on a cancelled installation is allowed to finish its own
-            # cancellation/cleanup flow. Propagate the cancellation again in
-            # case a child deployment was slow or the original cancel worker
-            # was lost. We never delete a live child runtime.
-            from .executor import ApplicationStackExecutor
-            try:
-                ApplicationStackExecutor(str(instance.pk)).cancel(
-                    reason=instance.error_message or "Application deployment cancelled."
-                )
-                instance.refresh_from_db()
-                active_children = [
-                    row for row in instance.services.select_related("deploy").all()
-                    if row.deploy.status in {"pending", "running", "rolling_back"}
-                ]
-            except Exception as exc:
-                logger = __import__("logging").getLogger(__name__)
-                logger.exception("Ready App cancellation propagation failed for %s", instance.pk)
-                return Response(
-                    {
-                        "error": "Cancellation cleanup could not be continued safely.",
-                        "code": "application_cleanup_failed",
-                        "detail": str(exc),
-                    },
-                    status=status.HTTP_409_CONFLICT,
-                )
+        # Deletion is a durable intent and is valid for every application
+        # lifecycle state, including PENDING/DEPLOYING. The coordinator first
+        # fences/cancels child work and only then removes runtime and DB state.
+        deleted_now = _queue_ready_app_deletion(str(instance.pk))
+        if deleted_now:
+            return Response(status=status.HTTP_204_NO_CONTENT)
 
-        if active_children:
-            deleted_now = _queue_ready_app_deletion(instance.pk)
-            if deleted_now:
-                return Response(status=status.HTTP_204_NO_CONTENT)
-            return Response(
-                {
-                    "error": "Cleanup is still in progress.",
-                    "code": "application_cleanup_pending",
-                    "detail": (
-                        "The application has been marked for deletion. PassDeployer is "
-                        "stopping active child deployments and will retry cleanup automatically."
-                    ),
-                    "active_service_count": len(active_children),
-                },
-                status=status.HTTP_202_ACCEPTED,
-            )
-
-        # A cancelled installation may reach this endpoint before its
-        # asynchronous cleanup callback. Make deletion self-healing by running
-        # the same normal Service/resource cleanup synchronously.
-        if instance.status == ApplicationStatus.CANCELLED and instance.cancel_requested:
-            from .executor import ApplicationStackExecutor
-            try:
-                ApplicationStackExecutor(str(instance.pk))._cleanup_cancelled_children()
-                instance.refresh_from_db()
-            except Exception as exc:
-                logger = __import__("logging").getLogger(__name__)
-                logger.exception("Ready App deletion cleanup failed for %s", instance.pk)
-                deleted_now = _queue_ready_app_deletion(instance.pk)
-                if deleted_now:
-                    return Response(status=status.HTTP_204_NO_CONTENT)
-                return Response(
-                    {
-                        "error": "The installation is queued for cleanup.",
-                        "code": "application_cleanup_pending",
-                        "detail": str(exc),
-                    },
-                    status=status.HTTP_202_ACCEPTED,
-                )
-
-        # Preflight every Service that belongs to this application's private
-        # network. Binding rows are authoritative, while the application-owned
-        # network plus catalog metadata recover legacy orphaned child Services
-        # left behind by an earlier partial deletion.
-        from django.db import transaction
-        from deploy.models import Deploy
-        from services.models import PrivateNetwork, ServiceNetworkAttachment
-        from .services import application_services_for_cleanup
-
-        service_bindings, service_rows, unexpected_services = application_services_for_cleanup(instance)
-        if unexpected_services:
-            names = ", ".join(str(service.name) for service in unexpected_services[:5])
-            suffix = "..." if len(unexpected_services) > 5 else ""
-            return Response(
-                {
-                    "error": "The installation's private network is still used by another service.",
-                    "code": "application_cleanup_pending",
-                    "detail": (
-                        f"Cannot safely delete the network until these service attachments are "
-                        f"removed or detached: {names}{suffix}"
-                    ),
-                    "blocked_service_count": len(unexpected_services),
-                },
-                status=status.HTTP_202_ACCEPTED,
-            )
-
-        try:
-            for service in service_rows:
-                cleanup_service_resources(service)
-        except Exception as exc:
-            logger = __import__("logging").getLogger(__name__)
-            logger.exception("Ready App resource preflight failed for %s", instance.pk)
-            deleted_now = _queue_ready_app_deletion(instance.pk)
-            if deleted_now:
-                return Response(status=status.HTTP_204_NO_CONTENT)
-            return Response(
-                {
-                    "error": "The installation is queued for cleanup.",
-                    "code": "application_cleanup_pending",
-                    "detail": str(exc),
-                },
-                status=status.HTTP_202_ACCEPTED,
-            )
-
-        # Perform all database deletion under one transaction. Locking the
-        # application/network closes the gap where another worker could attach
-        # a Service between the preflight and PrivateNetwork.delete().
-        try:
-            with transaction.atomic():
-                locked_instance = (
-                    ApplicationInstance.objects
-                    .select_for_update()
-                    .get(pk=instance.pk)
-                )
-                locked_network = (
-                    PrivateNetwork.objects
-                    .select_for_update()
-                    .filter(pk=locked_instance.network_id)
-                    .first()
-                )
-                if locked_network is not None:
-                    _, locked_service_rows, unexpected_services = application_services_for_cleanup(locked_instance)
-                    if unexpected_services:
-                        names = ", ".join(str(service.name) for service in unexpected_services[:5])
-                        suffix = "..." if len(unexpected_services) > 5 else ""
-                        return Response(
-                            {
-                                "error": "The installation's private network is still used by another service.",
-                                "code": "application_cleanup_pending",
-                                "detail": (
-                                    f"Cannot safely delete the network until these service attachments are "
-                                    f"removed or detached: {names}{suffix}"
-                                ),
-                                "blocked_service_count": len(unexpected_services),
-                            },
-                            status=status.HTTP_202_ACCEPTED,
-                        )
-                    service_rows = locked_service_rows
-                else:
-                    service_rows = list(
-                        Service.objects.filter(
-                            user_id=locked_instance.user_id,
-                            pk__in=[binding.service_id for binding in service_bindings],
-                        )
-                    )
-
-                bindings_by_service = {
-                    str(binding.service_id): binding
-                    for binding in service_bindings
-                }
-                for service in service_rows:
-                    for deploy in Deploy.objects.filter(service_id=service.pk).only("zip_file"):
-                        if deploy.zip_file and deploy.zip_file.name:
-                            try:
-                                deploy.zip_file.delete(save=False)
-                            except Exception:
-                                logger = __import__("logging").getLogger(__name__)
-                                logger.exception(
-                                    "Failed deleting deployment archive for service %s.",
-                                    service.pk,
-                                )
-                    binding = bindings_by_service.get(str(service.pk))
-                    if binding is not None:
-                        binding.delete()
-                    if Service.objects.filter(pk=service.pk).exists():
-                        delete_service_row_after_cleanup(service)
-
-                if locked_network is not None:
-                    if (
-                        Service.objects.filter(network_id=locked_network.pk).exists()
-                        or ServiceNetworkAttachment.objects.filter(network_id=locked_network.pk).exists()
-                    ):
-                        raise RuntimeError(
-                            f"Private network '{locked_network.name}' is still referenced after "
-                            "all owned child services were deleted."
-                        )
-                    locked_network.delete()
-
-                locked_instance.network = None
-                locked_instance.save(update_fields=["network", "updated_at"])
-                locked_instance.delete()
-        except Exception as exc:
-            logger = __import__("logging").getLogger(__name__)
-            logger.exception("Ready App database deletion failed for %s", instance.pk)
-            deleted_now = _queue_ready_app_deletion(instance.pk)
-            if deleted_now:
-                return Response(status=status.HTTP_204_NO_CONTENT)
-            return Response(
-                {
-                    "error": "The installation is queued for cleanup.",
-                    "code": "application_cleanup_pending",
-                    "detail": str(exc),
-                },
-                status=status.HTTP_202_ACCEPTED,
-            )
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        instance.refresh_from_db()
+        return Response(
+            {
+                "error": "Cleanup is still in progress.",
+                "code": "application_cleanup_pending",
+                "detail": (
+                    "The application has been marked for deletion. PassDeployer "
+                    "is cancelling active work and retrying runtime cleanup automatically."
+                ),
+                "status": instance.status,
+                "stage": instance.stage,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
 class ApplicationInstanceCancelAPIView(CatalogPermissionMixin, APIView):
     def post(self, request, pk):
