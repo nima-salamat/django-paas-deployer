@@ -111,11 +111,7 @@ def _workspace_inspect(service, user, payload: dict[str, Any]) -> dict[str, Any]
 
         access = path_access(container, normalized)
         row.update({
-            "status": (
-                "accessible"
-                if access.get("effective_writable") or access.get("mount_writable")
-                else "not_writable"
-            ),
+            "status": "writable" if access.get("effective_writable") else "not_writable",
             "mount_mode": access.get("mode"),
             "docker_mount_writable": bool(access.get("mount_writable")),
             "runtime_user_effective_writable": bool(access.get("effective_writable")),
