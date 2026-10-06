@@ -905,7 +905,7 @@ class DeployService:
                 # snapshot, placeholder, or stale endpoint hostname create a
                 # Traefik router for a different host.
                 if (
-                    str(getattr(service, "source_kind", "") or "").lower() == str(Service.SourceKind.CATALOG).lower()
+                    str(getattr(service, "source_kind", "") or "").lower() == "catalog"
                     and raw_endpoint.exposure == "public"
                     and raw_endpoint.enabled
                 ):
