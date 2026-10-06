@@ -12,6 +12,7 @@ from django.utils import timezone
 
 from deploy.models import DeploymentStatusChoices
 from deployments.core.state.manager import StateManager
+from deployments.core.swarm import swarm_enabled
 
 from .models import ApplicationInstance, ApplicationInstanceService, ApplicationStatus
 from services.models import Service, ServiceNetworkAttachment
