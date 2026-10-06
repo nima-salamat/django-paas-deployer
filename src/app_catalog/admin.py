@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 from core.django_admin import ProjectModelAdmin, ReadOnlyProjectModelAdmin, SensitiveReadOnlyAdmin
-from .models import ApplicationInstance, ApplicationInstanceService
+from .models import ApplicationInstance, ApplicationInstanceService, CatalogPublication
 
 
 @admin.register(ApplicationInstance)
@@ -18,3 +18,11 @@ class ApplicationInstanceServiceAdmin(ReadOnlyProjectModelAdmin):
     list_filter = ("sequence",)
     search_fields = ("service_key",)
     raw_id_fields = ("instance", "service", "deploy")
+
+
+@admin.register(CatalogPublication)
+class CatalogPublicationAdmin(ProjectModelAdmin):
+    list_display = ("catalog_id", "enabled", "featured_override", "updated_by", "updated_at")
+    list_filter = ("enabled", "featured_override")
+    search_fields = ("catalog_id", "notes", "updated_by__username", "updated_by__email")
+    raw_id_fields = ("updated_by",)
