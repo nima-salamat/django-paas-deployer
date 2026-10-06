@@ -1183,8 +1183,8 @@ def developer_shell_security_check(container) -> tuple[bool, str]:
         if str(host.get('NetworkMode') or '').strip().lower() == 'host':
             return False, "Developer shell is disabled when the container uses the host network namespace."
         security_opts = [str(x).lower() for x in (host.get('SecurityOpt') or [])]
-        if not any('no-new-privileges' in item for item in security_opts):
-            return False, "Developer shell requires no-new-privileges on the container."
+        if any('seccomp=unconfined' in item or 'seccomp:unconfined' in item for item in security_opts):
+            return False, "Developer shell is disabled when the container uses an unconfined seccomp profile."
         for raw in host.get('Binds') or []:
             source = str(raw).split(':', 1)[0].strip().rstrip('/')
             if source in {'/var/run/docker.sock', '/run/docker.sock'} or source.startswith('/var/lib/docker'):
