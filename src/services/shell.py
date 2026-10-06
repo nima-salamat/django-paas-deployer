@@ -1450,6 +1450,9 @@ def classify_command_risk(argv: list[str]) -> str:
         if (sub, action) in read_only_commands:
             return Risk.READ_ONLY
 
+        if (sub == "cache" and action == "flush"):
+            return Risk.NORMAL_MUTATION
+
         destructive_commands = {
             ("plugin", "delete"), ("theme", "delete"),
             ("post", "delete"), ("page", "delete"),
@@ -1471,12 +1474,21 @@ def classify_command_risk(argv: list[str]) -> str:
         if (sub, action) in privileged_commands:
             return Risk.PRIVILEGED
 
-        high_impact_commands = {
-            ("core", "update"), ("core", "verify-checksums"),
-            ("plugin", "install"), ("plugin", "update"), ("plugin", "deactivate"),
-            ("theme", "install"), ("theme", "update"),
+        # Normal page/post edits are useful day-to-day mutations. Publishing is
+        # intentionally a higher-impact operation and requires confirmation.
+        if (sub, action) in {
             ("post", "create"), ("post", "update"),
             ("page", "create"), ("page", "update"),
+        }:
+            for token in argv[1:]:
+                if str(token).lower() in {"--post_status=publish", "--post-status=publish"}:
+                    return Risk.HIGH_IMPACT
+            return Risk.NORMAL_MUTATION
+
+        high_impact_commands = {
+            ("core", "update"),
+            ("plugin", "install"), ("plugin", "update"), ("plugin", "deactivate"),
+            ("theme", "install"), ("theme", "update"),
             ("option", "update"),
             ("search-replace", ""),
             ("cron", "event"), ("maintenance-mode", "activate"),
@@ -1485,9 +1497,6 @@ def classify_command_risk(argv: list[str]) -> str:
             ("media", "import"),
         }
         if (sub, action) in high_impact_commands:
-            for token in argv[1:]:
-                if str(token).lower() in {"--post_status=publish", "--post-status=publish"}:
-                    return Risk.HIGH_IMPACT
             return Risk.HIGH_IMPACT
 
         if sub in {"search-replace", "scaffold"}:
