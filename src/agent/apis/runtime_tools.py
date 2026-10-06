@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from rest_framework.response import Response
 
-from .base import AgentSecuredAPIView
+from .base import AgentSecuredAPIView, idempotent
 from ..application import get_service
 from ..errors import AgentError
 from ..runtime_tools import (
@@ -29,6 +29,7 @@ class RuntimeToolIndexView(AgentSecuredAPIView):
 class RuntimeToolExecuteView(AgentSecuredAPIView):
     agent_contract_path = "/agent/v1/services/{service_id}/tools/{tool_name}"
 
+    @idempotent
     def post(self, request, service_id, tool_name):
         service = get_service(service_id, request.user, action="can_view")
         from services.shell import _platform_for_service
@@ -75,10 +76,13 @@ class RuntimeToolExecuteView(AgentSecuredAPIView):
             "has_confirmation": bool(payload.get("confirm")),
         }
         result = tool.handler(service, request.user, payload) if tool.handler else {}
+        output = result if isinstance(result, dict) else {"value": result}
+        risk = str(output.get("risk") or "").upper()
+        self.audit_mutating = bool(tool.mutating and risk not in {"READ_ONLY", ""})
         return Response({
             "result": "success",
             "service_id": str(service.pk),
             "tool": tool.name,
             "platform": platform,
-            "output": result,
+            "output": output,
         })
