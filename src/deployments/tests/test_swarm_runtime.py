@@ -133,6 +133,14 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             labels["traefik.http.services.demo-http.loadbalancer.server.port"],
             "8000",
         )
+        self.assertEqual(
+            labels["traefik.http.middlewares.demo-http-https.headers.customrequestheaders.X-Forwarded-Proto"],
+            "https",
+        )
+        self.assertEqual(
+            labels["traefik.http.routers.demo-http.middlewares"],
+            "demo-http-https",
+        )
 
 
     def test_compiles_healthcheck_resource_and_process_placement(self):
