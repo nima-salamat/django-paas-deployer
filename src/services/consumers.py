@@ -186,6 +186,8 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
             if agent_token:
                 from agent.authentication import authenticate_agent_token
                 self.agent, self.user, self.agent_credential = await database_sync_to_async(authenticate_agent_token)(agent_token)
+                if "shell.execute" not in set(self.agent.scopes or []):
+                    raise PermissionError("Agent does not have shell.execute scope.")
             else:
                 self.user = await database_sync_to_async(resolve_user_from_access_token)(access_token)
                 self.auth_session_id = get_session_id_from_access_token(access_token)
