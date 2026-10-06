@@ -197,3 +197,39 @@ def test_postgresql_remote_connection_string_is_rejected():
     except Exception:
         return
     raise AssertionError("Remote PostgreSQL connection string was accepted")
+
+def test_shell_api_imports_workspace_metadata():
+    import services.api.shell as shell_api
+
+    assert callable(shell_api.shell_info_apiview)
+    assert callable(shell_api.shell_catalog_apiview)
+
+
+def test_database_restricted_workspace_is_not_a_data_directory():
+    from services.shell import (
+        default_workdir_for_platform,
+        runtime_workdir_for_platform,
+    )
+
+    assert default_workdir_for_platform("mysql") == "/tmp"
+    assert default_workdir_for_platform("mariadb") == "/tmp"
+    assert default_workdir_for_platform("postgresql") == "/tmp"
+    assert default_workdir_for_platform("mongodb") == "/tmp"
+    assert default_workdir_for_platform("redis") == "/tmp"
+    assert default_workdir_for_platform("oracle") == "/tmp"
+
+    assert runtime_workdir_for_platform("mysql") == "/"
+    assert runtime_workdir_for_platform("mariadb") == "/"
+    assert runtime_workdir_for_platform("postgresql") == "/"
+    assert runtime_workdir_for_platform("mongodb") == "/"
+    assert runtime_workdir_for_platform("redis") == "/data"
+    assert runtime_workdir_for_platform("oracle") == "/opt/oracle"
+
+
+def test_developer_shell_security_contract_is_explicit():
+    source = SHELL
+    assert "def developer_shell_security_check" in source
+    assert "no-new-privileges" in source
+    assert "Docker engine access is mounted" in source
+    assert "host devices are exposed" in source
+    assert '"developer": "developer"' in source
