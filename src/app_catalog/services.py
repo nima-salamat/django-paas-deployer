@@ -537,6 +537,9 @@ def _create_application_installation(
                             "catalog_id": definition.id,
                             "definition_version": definition.definition_version,
                             "software_version": definition.software_version,
+                            "selected_software_version": str(
+                                resolved_config.get("software_version") or definition.software_version
+                            ),
                             "variant": str(payload["variant"]),
                             "service_key": key,
                         },
@@ -591,6 +594,9 @@ def _create_application_installation(
             "catalog_id": definition.id,
             "catalog_definition_version": definition.definition_version,
             "catalog_software_version": definition.software_version,
+            "selected_software_version": str(
+                resolved_config.get("software_version") or definition.software_version
+            ),
             "catalog_variant": str(payload["variant"]),
             "catalog_service_key": key,
             "catalog_managed": True,
