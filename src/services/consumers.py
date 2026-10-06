@@ -172,26 +172,38 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
         query = self.scope.get("query_string", b"").decode("utf-8")
         params = urllib.parse.parse_qs(query)
         access_token = (params.get("token") or [None])[0]
+        agent_token = (params.get("agent_token") or [None])[0]
         shell_token = (params.get("shell_token") or [None])[0]
         service_id = self.scope["url_route"]["kwargs"].get("service_id")
-        if not access_token or not shell_token:
+        if (not access_token and not agent_token) or not shell_token:
             await self.close(code=4001)
             return
         try:
-            self.user = await database_sync_to_async(resolve_user_from_access_token)(access_token)
-            self.auth_session_id = get_session_id_from_access_token(access_token)
-            if self.user is None or not self.auth_session_id:
-                raise PermissionError("Invalid authentication session")
+            self.auth_session_id = None
+            self.agent = None
+            self.agent_credential = None
+            self.agent_token = agent_token
+            if agent_token:
+                from agent.authentication import authenticate_agent_token
+                self.agent, self.user, self.agent_credential = await database_sync_to_async(authenticate_agent_token)(agent_token)
+            else:
+                self.user = await database_sync_to_async(resolve_user_from_access_token)(access_token)
+                self.auth_session_id = get_session_id_from_access_token(access_token)
+                if self.user is None or not self.auth_session_id:
+                    raise PermissionError("Invalid authentication session")
             self.service = await database_sync_to_async(self._get_service)(service_id)
             self.session = await database_sync_to_async(self._authenticate_shell)(shell_token)
         except (Service.DoesNotExist, PermissionError):
             await self.close(code=4003)
             return
+        except Exception:
+            await self.close(code=4002)
+            return
         self.exec_socket = None
         self.exec_task = None
         self.exec_id = None
         await self.accept()
-        await self.send_json({"type": "ready", "cwd": self.session.workdir, "platform": self.session.platform})
+        await self.send_json({"type": "ready", "cwd": self.session.workdir, "platform": self.session.platform, "auth": "agent" if self.agent is not None else "user"})
 
     def _get_service(self, service_id):
         from services.api.sharing import user_can_access_service
@@ -232,10 +244,14 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
         message_type = str(content.get("type") or "").strip().lower()
         if message_type == "ping":
             try:
-                await database_sync_to_async(resolve_session)(
-                    self.auth_session_id,
-                    user_id=self.user.id,
-                )
+                if self.agent is not None:
+                    from agent.authentication import authenticate_agent_token
+                    self.agent, self.user, self.agent_credential = await database_sync_to_async(authenticate_agent_token)(self.agent_token)
+                else:
+                    await database_sync_to_async(resolve_session)(
+                        self.auth_session_id,
+                        user_id=self.user.id,
+                    )
             except Exception:
                 await self.close(code=4401)
                 return
