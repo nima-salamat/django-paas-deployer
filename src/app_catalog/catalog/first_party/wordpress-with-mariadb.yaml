@@ -69,10 +69,14 @@ services:
     depends_on:
       - mariadb
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1"]
-      interval: 2s
-      timeout: 10s
-      retries: 10
+      # Probe Apache at the TCP layer so Docker can verify readiness without
+      # generating an HTTP access-log entry every interval. WordPress may
+      # legitimately return a 3xx redirect before its setup wizard is complete.
+      test: ["CMD", "php", "-r", "$socket=@fsockopen(\"127.0.0.1\", 80, $errno, $errstr, 2); if ($socket) { fclose($socket); exit(0); } exit(1);"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 6
   mariadb:
     image: mariadb:11.8.9
     volumes:
