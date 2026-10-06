@@ -439,15 +439,17 @@ resolved engine, safe workspace root, data root and interactive commands.
 ## Interactive clients
 
 Use the PTY/WebSocket transport for:
-- `mysql -uroot`
-- `mariadb -uroot`
+- `mysql -u<username>` or `mysql -uroot` when the returned database username is empty
+- `mariadb -u<username>` or `mariadb -uroot` when the returned database username is empty
 - `psql`
 - `mongosh`
 - `redis-cli`
 - `sqlplus /nolog`
 
 The platform injects managed credentials into the supported local client
-environment where the client supports it. Never put passwords in command-line
+environment where the client supports it. For MySQL/MariaDB, use the username
+reported by `workspace.database.username`; the command catalog is generated
+with that username when one exists. Never put passwords in command-line
 arguments, URLs, SQL strings, shell history or audit messages.
 
 ## Rules
