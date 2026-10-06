@@ -51,6 +51,7 @@ import docker
 from docker.errors import APIError, NotFound
 
 from core.global_settings.config import MIRROR_DOCKER
+from deployments.common.retry import classify_docker_exception
 from deployments.core.exceptions import DeploymentError
 from deployments.core.manager.client_manager import Client
 from deployments.core.manager.volume_manager import Volume as DockerVolume
@@ -126,6 +127,55 @@ class DBDeployResult:
 
 def _clean(value: Any) -> str:
     return str(value or "").strip()
+
+def _format_image_pull_failure(full_image: str, exc: BaseException) -> tuple[str, dict[str, Any]]:
+    """Translate registry/Docker pull failures into safe user-facing diagnostics."""
+    failure = classify_docker_exception(exc, stage="image_pull")
+    raw = str(exc or "").strip()
+    lowered = raw.lower()
+    mirror = _clean(MIRROR_DOCKER).rstrip("/")
+    registry = mirror if mirror and str(full_image).startswith(mirror + "/") else ""
+
+    if "lookup " in lowered and "i/o timeout" in lowered:
+        message = (
+            f"Could not reach the configured Docker registry mirror '{registry or 'configured mirror'}'. "
+            f"The mirror's DNS/network connection timed out while pulling '{full_image}'. "
+            "This is usually a temporary registry or network problem. Please retry; "
+            "if it continues, switch the Docker registry mirror."
+        )
+    elif "no such host" in lowered or "temporary failure in name resolution" in lowered:
+        message = (
+            f"Could not resolve the Docker registry mirror '{registry or 'configured mirror'}' "
+            f"while pulling '{full_image}'. Please retry or switch the configured Docker mirror."
+        )
+    elif failure.http_status in {401, 403}:
+        message = (
+            f"The configured Docker registry mirror rejected access while pulling '{full_image}'. "
+            "Check the registry credentials or mirror configuration."
+        )
+    elif failure.http_status == 404 or "manifest unknown" in lowered or "not found" in lowered:
+        message = (
+            f"The Docker registry does not have image '{full_image}'. "
+            "Check the database image name/tag or choose a mirror that provides it."
+        )
+    elif failure.retryable:
+        message = (
+            f"The Docker registry could not provide image '{full_image}' because of a temporary "
+            "infrastructure problem. Please retry; if it persists, check or switch the configured mirror."
+        )
+    else:
+        message = f"Could not pull database image '{full_image}'. Check the image and registry configuration."
+
+    details = {
+        "image": str(full_image),
+        "registry_mirror": registry,
+        "stage": failure.stage,
+        "reason_code": failure.reason_code,
+        "http_status": failure.http_status,
+        "retryable": bool(failure.retryable),
+        "technical_error": raw[:4000],
+    }
+    return message, details
 
 
 def _mysql_identifier(value: str) -> str:
@@ -1798,14 +1848,12 @@ class DBDeployer:
             docker.errors.DockerException,
         ) as exc:
 
-            message = (
-                f"Failed to pull image '{full_image}': {exc}"
-            )
-
+            message, details = _format_image_pull_failure(full_image, exc)
             log.error(
                 "image_pull",
                 message,
                 progress=100,
+                details=details,
             )
 
             return DBDeployResult(
@@ -1814,6 +1862,7 @@ class DBDeployer:
                 container_name=container_name,
                 platform=platform,
                 error=str(exc),
+                details=details,
             )
 
         log.info(

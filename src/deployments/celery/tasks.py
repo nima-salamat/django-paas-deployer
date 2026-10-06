@@ -959,7 +959,12 @@ def _mark_failure(
 
 
 
-def _lock_for_db_deploy(deploy_id: str | int, *, task_id: str | None = None) -> tuple[Deploy, Service] | None:
+def _lock_for_db_deploy(
+    deploy_id: str | int,
+    *,
+    task_id: str | None = None,
+    allow_owned_retry: bool = False,
+) -> tuple[Deploy, Service] | None:
     """
     Transition Service QUEUED -> DEPLOYING and Deploy -> RUNNING under
     row locks.
@@ -995,9 +1000,22 @@ def _lock_for_db_deploy(deploy_id: str | int, *, task_id: str | None = None) -> 
             logger.info("run_db_deploy: skipping deploy=%s — service task owner mismatch", deploy_id)
             return None
 
-        # STRICT: only QUEUED is accepted.  A duplicate task delivery
-        # (which is possible under Celery's at-least-once semantics)
-        # will see DEPLOYING and no-op, leaving the original to finish.
+        # Normal deliveries are allowed to claim only QUEUED work. A Celery
+        # retry is different: it reuses the same task id and must be allowed to
+        # resume the RUNNING deployment it already owns. Fresh duplicate task
+        # deliveries still fail this ownership check and are ignored.
+        owned_retry = (
+            allow_owned_retry
+            and service.status == SERVICE_STATUS_CHOICES.DEPLOYING
+            and deploy.status == DeploymentStatusChoices.RUNNING
+            and expected_owner
+            and deploy.execution_task_id == expected_owner
+            and service.task_id == expected_owner
+        )
+        if owned_retry:
+            deploy.refresh_from_db()
+            return deploy, service
+
         if service.status != SERVICE_STATUS_CHOICES.QUEUED:
             logger.info(
                 "run_db_deploy: skipping deploy=%s — service status is %s "
@@ -1006,8 +1024,6 @@ def _lock_for_db_deploy(deploy_id: str | int, *, task_id: str | None = None) -> 
             )
             return None
 
-        # Also refuse if the deploy row is already RUNNING — means a
-        # previous task picked it up.
         if deploy.status == DeploymentStatusChoices.RUNNING:
             logger.info(
                 "run_db_deploy: skipping deploy=%s — deploy already RUNNING. "
@@ -1056,7 +1072,11 @@ def run_db_deploy(self, deploy_id: str | int, force_reinit: bool = False) -> Non
         deploy_id, force_reinit,
     )
 
-    locked = _lock_for_db_deploy(deploy_id, task_id=str(self.request.id))
+    locked = _lock_for_db_deploy(
+        deploy_id,
+        task_id=str(self.request.id),
+        allow_owned_retry=bool(getattr(self.request, "retries", 0)),
+    )
     if locked is None:
         return
 
@@ -1188,12 +1208,40 @@ def run_db_deploy(self, deploy_id: str | int, force_reinit: bool = False) -> Non
             or result.error
             or "Database deployment failed."
         )
+        result_details = result.details or {}
+
+        # A registry/Docker pull failure can be transient (for example mirror
+        # DNS timeout or HTTP 5xx). Retry only when the normalized result says
+        # it is safe to do so. The owned-retry path above permits the same
+        # Celery task to resume the RUNNING Deploy without admitting duplicates.
+        if (
+            bool(result_details.get("retryable"))
+            and self.request.retries < self.max_retries
+        ):
+            logger.warning(
+                "Retrying transient DB deployment failure for deploy=%s on attempt %s/%s: %s",
+                deploy.pk,
+                self.request.retries + 1,
+                self.max_retries,
+                failure_message,
+            )
+            retry_error = DeploymentError(
+                failure_message,
+                stage=str(result_details.get("stage") or "image_pull"),
+                code=str(result_details.get("reason_code") or "DATABASE_DEPLOYMENT_TRANSIENT_FAILURE").upper(),
+                category="transient_infrastructure",
+                recoverable=True,
+                user_message=failure_message,
+                details=result_details,
+            )
+            raise self.retry(exc=retry_error, countdown=self.default_retry_delay)
+
         _mark_failure(
             deploy,
             service,
             failure_message,
-            stage="deployment_failed",
-            details=result.details or {},
+            stage=str(result_details.get("stage") or "deployment_failed"),
+            details=result_details,
         )
         # Celery's success callback is the coordinator's "dependency succeeded"
         # signal. A DB deployment that returned a terminal failure result must
@@ -1201,8 +1249,8 @@ def run_db_deploy(self, deploy_id: str | int, force_reinit: bool = False) -> Non
         # application_service_failed instead of advance_application_service.
         raise DeploymentError(
             failure_message,
-            stage="deployment_failed",
+            stage=str(result_details.get("stage") or "deployment_failed"),
             code="DATABASE_DEPLOYMENT_FAILED",
             user_message=failure_message,
-            details=result.details or {},
+            details=result_details,
         )

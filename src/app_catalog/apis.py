@@ -20,6 +20,7 @@ from .services import (
     resource_summary_for_resolved,
     safe_slug,
 )
+from services.models import Service
 from services.signals import cleanup_service_resources, delete_service_row_after_cleanup
 from .tasks import (
     start_application_installation,
