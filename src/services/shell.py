@@ -1487,12 +1487,11 @@ def prepare_interactive_exec_environment(container, *, platform: str = "", root_
     env["LINES"] = env.get("LINES") or "40"
     if service is not None and platform in DATABASE_PLATFORMS:
         try:
-            database = getattr(service, "database_resource", None)
-            credential = getattr(database, "credential", None) if database else None
-            password = credential.get_password() if credential and hasattr(credential, "get_password") else ""
-            username = str(getattr(credential, "username", "") or "")
-            database_name = str(getattr(database, "database_name", "") or "")
-            port = str(getattr(database, "port", "") or "")
+            values = _database_runtime_values(service)
+            password = str(values.get("password") or "")
+            username = str(values.get("username") or "")
+            database_name = str(values.get("database") or "")
+            port = str(values.get("port") or "")
             if platform in {"mysql", "mariadb"} and password:
                 env["MYSQL_PWD"] = password
                 env["MYSQL_HISTFILE"] = "/dev/null"
@@ -1510,6 +1509,7 @@ def prepare_interactive_exec_environment(container, *, platform: str = "", root_
                 env["REDISCLI_AUTH"] = password
         except Exception:
             pass
+
     return env
 
 
@@ -1730,6 +1730,41 @@ def _catalog_item(command: str, label: str, *, risk: str = Risk.READ_ONLY, inter
     }
 
 
+def _database_runtime_values(service: Service) -> dict:
+    """Resolve non-secret DB runtime metadata and secret values from either DBResource or standalone DB Service."""
+    values = {}
+    try:
+        database = getattr(service, "database_resource", None)
+        credential = getattr(database, "credential", None) if database else None
+        if database is not None:
+            values.update({
+                "engine": str(getattr(database, "engine", "") or "").lower(),
+                "host": str(getattr(database, "host", "") or "127.0.0.1"),
+                "port": getattr(database, "port", None),
+                "database": str(getattr(database, "database_name", "") or ""),
+                "username": str(getattr(credential, "username", "") or ""),
+                "password": credential.get_password() if credential and hasattr(credential, "get_password") else "",
+            })
+            return values
+    except Exception:
+        pass
+
+    try:
+        deploy = get_active_deploy(service)
+        from deployments.common.config import parse_config
+        config = parse_config(getattr(deploy, "config", None)) if deploy is not None else {}
+        values.update({
+            "engine": _platform_for_service(service),
+            "host": "127.0.0.1",
+            "port": config.get("port") or None,
+            "database": str(config.get("database") or ""),
+            "username": str(config.get("username") or ""),
+            "password": str(config.get("password") or config.get("root_password") or ""),
+        })
+    except Exception:
+        pass
+    return values
+
 def shell_workspace_metadata(service: Service) -> dict:
     """Return non-secret workspace/runtime metadata for UI and Agent clients."""
     platform = _platform_for_service(service)
@@ -1742,28 +1777,18 @@ def shell_workspace_metadata(service: Service) -> dict:
         "interactive_commands": list(DATABASE_PLATFORMS.get(platform, {}).get("interactive", ())),
     }
     if platform in DATABASE_PLATFORMS:
-        try:
-            database = getattr(service, "database_resource", None)
-            credential = getattr(database, "credential", None) if database else None
-            result["database"] = {
-                "engine": platform,
-                "client": DATABASE_PLATFORMS[platform]["client"],
-                "data_root": DATABASE_DATA_ROOTS[platform],
-                "local_host": "127.0.0.1",
-                "port": getattr(database, "port", None) if database else None,
-                "database": getattr(database, "database_name", "") if database else "",
-                "username": getattr(credential, "username", "") if credential else "",
-                "credentials_managed_by_platform": bool(credential),
-            }
-        except Exception:
-            result["database"] = {
-                "engine": platform,
-                "client": DATABASE_PLATFORMS[platform]["client"],
-                "data_root": DATABASE_DATA_ROOTS[platform],
-                "local_host": "127.0.0.1",
-            }
+        values = _database_runtime_values(service)
+        result["database"] = {
+            "engine": platform,
+            "client": DATABASE_PLATFORMS[platform]["client"],
+            "data_root": DATABASE_DATA_ROOTS[platform],
+            "local_host": values.get("host") or "127.0.0.1",
+            "port": values.get("port"),
+            "database": values.get("database") or "",
+            "username": values.get("username") or "",
+            "credentials_managed_by_platform": bool(values.get("password")),
+        }
     return result
-
 def command_catalog(platform: str) -> list[dict]:
     """Return platform-aware command *suggestions* for the terminal UI.
 
