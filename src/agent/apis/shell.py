@@ -40,10 +40,13 @@ class ShellSessionView(AgentSecuredAPIView):
 
     def post(self,request,service_id):
         service=get_service(service_id,request.user,action="can_shell")
-        from services.shell import create_session
+        from services.shell import create_session, can_use_advanced_shell
         mode=str(request.data.get("mode") or "restricted").strip().lower()
-        if mode == "developer" and "shell.developer" not in set(request.agent.scopes or []):
-            raise AgentError("INSUFFICIENT_SCOPE","Developer shell requires the shell.developer Agent scope.",status_code=403,failure_domain="authorization")
+        if mode == "developer":
+            if "shell.developer" not in set(request.agent.scopes or []):
+                raise AgentError("INSUFFICIENT_SCOPE","Developer shell requires the shell.developer Agent scope.",status_code=403,failure_domain="authorization")
+            if not can_use_advanced_shell(service, request.user):
+                raise AgentError("AUTHORIZATION_FAILED","Developer shell requires advanced shell service permission.",status_code=403,failure_domain="authorization")
         session,token=create_session(service,request.user,request.data.get("workdir"),mode=mode)
         self.audit_metadata={"session_id":str(session.pk),"service_id":str(service.pk)}
         from services.shell import shell_workspace_metadata
