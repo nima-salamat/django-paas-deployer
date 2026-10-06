@@ -50,7 +50,7 @@ class ShellSessionView(AgentSecuredAPIView):
         session,token=create_session(service,request.user,request.data.get("workdir"),mode=mode)
         self.audit_metadata={"session_id":str(session.pk),"service_id":str(service.pk)}
         from services.shell import shell_workspace_metadata
-        return Response({"result":"success","session_id":str(session.pk),"token":token,"token_type":"Shell","platform":session.platform,"cwd":session.workdir,"expires_at":session.expires_at,"workspace":shell_workspace_metadata(service)},status=201)
+        return Response({"result":"success","session_id":str(session.pk),"token":token,"token_type":"Shell","platform":session.platform,"cwd":session.workdir,"mode":session.mode,"expires_at":session.expires_at,"workspace":shell_workspace_metadata(service)},status=201)
 
 class ShellCommandView(AgentSecuredAPIView):
     agent_contract_path = "/agent/v1/services/{service_id}/shell/sessions/{session_id}/commands"
@@ -103,8 +103,15 @@ class ShellReplaceView(AgentSecuredAPIView):
         ensure_service_access(service,request.user,action="can_shell_replace")
         if request.data.get("confirm") is not True:raise AgentError("CONFIRMATION_REQUIRED","confirm=true is required to replace the active shell session.",status_code=409,failure_domain="authorization")
         from services.shell import terminate_active_session,create_session
-        old=terminate_active_session(service,actor=request.user); session,token=create_session(service,request.user,request.data.get("workdir"))
-        return Response({"result":"success","replaced":bool(old),"previous_session_id":str(old.pk) if old else None,"session_id":str(session.pk),"token":token,"expires_at":session.expires_at,"cwd":session.workdir},status=201)
+        mode=str(request.data.get("mode") or "restricted").strip().lower()
+        if mode == "developer":
+            if "shell.developer" not in set(request.agent.scopes or []):
+                raise AgentError("INSUFFICIENT_SCOPE","Developer shell requires the shell.developer Agent scope.",status_code=403,failure_domain="authorization")
+            from services.shell import can_use_advanced_shell
+            if not can_use_advanced_shell(service, request.user):
+                raise AgentError("AUTHORIZATION_FAILED","Developer shell requires advanced shell service permission.",status_code=403,failure_domain="authorization")
+        old=terminate_active_session(service,actor=request.user); session,token=create_session(service,request.user,request.data.get("workdir"),mode=mode)
+        return Response({"result":"success","replaced":bool(old),"previous_session_id":str(old.pk) if old else None,"session_id":str(session.pk),"token":token,"expires_at":session.expires_at,"cwd":session.workdir,"mode":session.mode},status=201)
 
 class ShellFileView(AgentSecuredAPIView):
     agent_contract_path = "/agent/v1/services/{service_id}/shell/files"
