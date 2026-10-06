@@ -148,9 +148,9 @@ PLATFORM_COMMANDS = {
     "django": {"python", "python3", "pip", "pip3", "git", "make"},
     "python": {"python", "python3", "pip", "pip3", "git", "make"},
     "node": {"node", "npm", "npx", "yarn", "pnpm", "bun", "git", "make"},
-    "mysql": {"mysql"},
-    "mariadb": {"mariadb", "mysql"},
-    "postgresql": {"psql"},
+    "mysql": {"mysql", "mysqladmin"},
+    "mariadb": {"mariadb", "mariadb-admin", "mysql"},
+    "postgresql": {"psql", "pg_isready"},
     "mongodb": {"mongosh"},
     "redis": {"redis-cli"},
     "oracle": {"sqlplus"},
@@ -927,6 +927,25 @@ def _validate_database_argv(argv: list[str], platform: str) -> None:
             value = str(token).lower()
             if "://" in value and not value.startswith(("mongodb://localhost", "mongodb://127.0.0.1", "mongodb://[::1]")):
                 _policy_reject("mongosh connections must remain local to the managed database runtime.")
+    if base in {"mysqladmin", "mariadb-admin"}:
+        allowed = {"ping", "version", "--version", "-V", "status", "variables", "--help", "-h"}
+        if any(str(token).startswith("--password=") for token in argv[1:]):
+            _policy_reject("Do not put database passwords in command arguments.")
+        if any(str(token) not in allowed and not (str(token).startswith("-u") or str(token).startswith("--user=")) for token in argv[1:]):
+            _policy_reject("Only safe database administration/health commands are enabled.")
+
+    if base == "pg_isready":
+        for token in argv[1:]:
+            if str(token) in {"-h", "--host"}:
+                continue
+            if str(token).lower().startswith("-h") and len(str(token)) > 2:
+                host = str(token)[2:]
+                if host not in {"localhost", "127.0.0.1", "::1"}:
+                    _policy_reject("PostgreSQL readiness checks must remain local.")
+            if str(token).startswith("--host="):
+                host = str(token).split("=", 1)[1].strip().lower()
+                if host not in {"localhost", "127.0.0.1", "::1"}:
+                    _policy_reject("PostgreSQL readiness checks must remain local.")
     if base == "sqlplus":
         allowed = {"/nolog", "-v", "-V", "--version", "-h", "--help"}
         if any(str(token) not in allowed for token in argv[1:]):
@@ -998,7 +1017,7 @@ def _validate_platform_command(argv: list[str], platform: str, root: str, *, all
             _policy_reject("ping requires a host.")
         _validate_network_target(targets[-1])
 
-    if base in {"mysql", "mariadb", "psql", "mongosh", "redis-cli", "sqlplus"}:
+    if base in {"mysql", "mariadb", "mysqladmin", "mariadb-admin", "psql", "pg_isready", "mongosh", "redis-cli", "sqlplus"}:
         _validate_database_argv(argv, platform)
         if not allow_advanced:
             _policy_reject(
@@ -1224,6 +1243,9 @@ def classify_command_risk(argv: list[str]) -> str:
         return Risk.DESTRUCTIVE
     if base in {"mkdir", "touch", "cp", "mv", "tee", "sed"}:
         return Risk.NORMAL_MUTATION if base != "tee" else Risk.DESTRUCTIVE
+
+    if base in {"mysqladmin", "mariadb-admin", "pg_isready"}:
+        return Risk.READ_ONLY
 
     if base in {"mysql", "mariadb", "psql", "mongosh", "redis-cli", "sqlplus"}:
         return Risk.INTERACTIVE
@@ -1820,11 +1842,12 @@ def command_catalog(platform: str, service: Service | None = None) -> list[dict]
 
     if platform in DATABASE_PLATFORMS:
         if platform in {"mysql", "mariadb"}:
-            executable = "mariadb" if platform == "mariadb" else "mysql"
             values = _database_runtime_values(service) if service is not None else {}
             username = str(values.get("username") or "root").strip()
             if not re.fullmatch(r"[A-Za-z0-9_.$-]{1,128}", username):
                 username = "root"
+            executable = "mariadb" if platform == "mariadb" else "mysql"
+            admin_executable = "mariadb-admin" if platform == "mariadb" else "mysqladmin"
             items.extend([
                 _catalog_item(
                     f"{executable} -u{username}",
@@ -1834,15 +1857,23 @@ def command_catalog(platform: str, service: Service | None = None) -> list[dict]
                     advanced=True,
                 ),
                 _catalog_item(f"{executable} --version", f"{platform.title()} client version"),
+                _catalog_item(f"{admin_executable} ping -u{username}", f"Check {platform.title()} readiness"),
             ])
         elif platform == "postgresql":
             items.extend([
                 _catalog_item("psql", "PostgreSQL interactive client", risk=Risk.INTERACTIVE, interactive=True, advanced=True),
                 _catalog_item("psql --version", "PostgreSQL client version"),
+                _catalog_item("pg_isready", "Check PostgreSQL readiness"),
             ])
         elif platform == "mongodb":
+            values = _database_runtime_values(service) if service is not None else {}
+            username = str(values.get("username") or "").strip()
+            if username and re.fullmatch(r"[A-Za-z0-9_.$-]{1,128}", username):
+                mongo_command = f"mongosh --host 127.0.0.1 --username {username} --authenticationDatabase admin"
+            else:
+                mongo_command = "mongosh"
             items.extend([
-                _catalog_item("mongosh", "MongoDB interactive shell", risk=Risk.INTERACTIVE, interactive=True, advanced=True),
+                _catalog_item(mongo_command, "MongoDB interactive shell", risk=Risk.INTERACTIVE, interactive=True, advanced=True),
                 _catalog_item("mongosh --version", "MongoDB Shell version"),
             ])
         elif platform == "redis":
