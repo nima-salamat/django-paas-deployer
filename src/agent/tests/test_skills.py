@@ -17,7 +17,7 @@ class AgentSkillTests(TestCase):
         self.agent = Agent.objects.create(
             user=self.user,
             name="skill-agent",
-            scopes=["services.read", "shell.files.read", "shell.files.write"],
+            scopes=["services.read", "shell.read", "shell.execute", "shell.files.read", "shell.files.write"],
         )
         _, self.raw = issue_access_credential(self.agent)
         self.client = APIClient()
@@ -31,6 +31,9 @@ class AgentSkillTests(TestCase):
         names = {item["name"] for item in response.data["skills"]}
         self.assertIn("services", names)
         self.assertIn("workspace-files", names)
+        self.assertIn("php", names)
+        self.assertIn("wordpress", names)
+        self.assertIn("databases", names)
         self.assertNotIn("deployments", names)
 
     def test_skill_detail_returns_markdown(self):
@@ -39,6 +42,14 @@ class AgentSkillTests(TestCase):
         body = response.content.decode()
         self.assertIn("# Workspace Files", body)
         self.assertIn("/agent/v1/services/{service_id}/shell/files", body)
+
+    def test_wordpress_and_database_skills_return_markdown(self):
+        wordpress = self.client.get("/agent/v1/skills/wordpress", **self._auth())
+        databases = self.client.get("/agent/v1/skills/databases", **self._auth())
+        self.assertEqual(wordpress.status_code, 200)
+        self.assertEqual(databases.status_code, 200)
+        self.assertIn("# WordPress", wordpress.content.decode())
+        self.assertIn("# Databases", databases.content.decode())
 
     def test_unavailable_skill_is_denied(self):
         response = self.client.get("/agent/v1/skills/deployments", **self._auth())
