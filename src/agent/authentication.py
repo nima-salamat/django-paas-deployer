@@ -7,7 +7,7 @@ from .models import Agent, AgentCredential
 from .security import client_ip,stable_token_hash,token_hash
 
 
-def authenticate_agent_token(raw: str):
+def authenticate_agent_token(raw: str, *, ip: str = ""):
     """Resolve an Agent access token to (agent, user, credential)."""
     raw = str(raw or "").strip()
     if not raw:
@@ -38,7 +38,7 @@ def authenticate_agent_token(raw: str):
     if credential.last_used_at is None or (now - credential.last_used_at).total_seconds() >= 60:
         AgentCredential.objects.filter(pk=credential.pk).update(
             last_used_at=now,
-            last_used_ip="",
+            last_used_ip=str(ip or ""),
             updated_at=now,
         )
         Agent.objects.filter(pk=agent.pk).update(last_used_at=now, updated_at=now)
@@ -55,8 +55,6 @@ class AgentTokenAuthentication(authentication.BaseAuthentication):
         parts=header.split()
         if len(parts)!=2 or parts[0].lower()!=self.keyword.lower(): raise AuthenticationFailed("Use Authorization: Bearer <agent-access-token>.")
         raw=parts[1].strip()
-        agent,user,credential=authenticate_agent_token(raw)
+        agent,user,credential=authenticate_agent_token(raw, ip=client_ip(request))
         request.agent=agent; request.agent_credential=credential; request.agent_token=credential
-        if credential.last_used_at is None or (timezone.now()-credential.last_used_at).total_seconds() < 60:
-            credential.last_used_at=timezone.now(); agent.last_used_at=timezone.now()
         return user,credential
