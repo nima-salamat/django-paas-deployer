@@ -16,6 +16,7 @@ class ShellInfoView(AgentSecuredAPIView):
             _platform_for_service,
             can_use_advanced_shell,
             shell_protocol_metadata,
+            shell_workspace_metadata,
         )
         allowed = ensure_service_access(service, request.user, action="can_shell")
         platform = _platform_for_service(service)
@@ -31,6 +32,7 @@ class ShellInfoView(AgentSecuredAPIView):
             "commands": command_catalog(platform),
             "transport": protocol,
             "policy": protocol["policy"],
+            "workspace": shell_workspace_metadata(service),
         })
 
 class ShellSessionView(AgentSecuredAPIView):
