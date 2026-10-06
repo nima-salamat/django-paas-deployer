@@ -34,6 +34,21 @@ x-passdeployer:
       type: domain
       required: false
       user_editable: false
+    - id: software_version
+      label: WordPress version
+      type: choice
+      required: true
+      default: "7.1.2"
+      options:
+        - "7.1.2"
+        - "7.1.1"
+        - "7.1.0"
+      option_labels:
+        "7.1.2": "7.1.2 — Recommended"
+        "7.1.1": "7.1.1 — Previous patch"
+        "7.1.0": "7.1.0 — Previous patch"
+      ui:
+        helper_text: "Choose a pinned official WordPress Docker release. PassDeployer uses the exact selected version."
     - id: service_user_wordpress
       label: WordPress database user
       type: string
@@ -54,9 +69,9 @@ x-passdeployer:
 
 services:
   wordpress:
-    image: wordpress:7.1.2-php8.3-apache
+    image: wordpress:${config.software_version}-php8.3-apache
     dockerfile: |
-      FROM wordpress:7.1.2-php8.3-apache
+      FROM wordpress:${config.software_version}-php8.3-apache
       
       # WP-CLI is part of the Ready App runtime so Agent/Shell can manage
       # pages, plugins, themes and database operations without ad-hoc installs.
