@@ -33,6 +33,7 @@ MAX_FILE_SIZE = 256 * 1024
 DEFAULT_WORKDIRS = {
     "laravel": "/var/www/html",
     "php": "/var/www/html",
+    "wordpress": "/var/www/html",
     "node": "/app",
     "python": "/app",
     "django": "/app",
@@ -42,6 +43,8 @@ DEFAULT_WORKDIRS = {
 PLATFORM_ALIASES = {
     "laravel": "laravel",
     "php": "php",
+    "wordpress": "wordpress",
+    "wordpress-docker": "wordpress",
     "lumen": "laravel",
     "django": "django",
     "python": "python",
@@ -1579,7 +1582,7 @@ def command_catalog(platform: str) -> list[dict]:
         _catalog_item("git remote -v", "Git remotes", risk=Risk.READ_ONLY),
     ])
 
-    if platform in {"laravel", "php", "generic"}:
+    if platform in {"laravel", "php", "wordpress", "generic"}:
         for name, meta in sorted(ARTISAN_COMMAND_CATALOG.items()):
             cmd = f"php artisan {name}"
             if name == "queue:work":
