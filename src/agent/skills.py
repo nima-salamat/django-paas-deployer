@@ -386,8 +386,8 @@ persistent volume merely to fix a code/configuration issue.
 1. Inspect service status, shell metadata and runtime logs.
 2. Inspect `wp-content` before editing anything.
 3. Prefer the managed workspace file API for edits and verify each important write.
-4. Check whether `wp` (WP-CLI) is actually installed before using it; do not assume
-   the official runtime image contains it.
+4. This Ready App image includes WP-CLI 2.12.0 on PATH. Use `wp --info` or
+   `wp cli version` for a cheap runtime verification before CMS mutations.
 5. Use the interactive PTY for commands that need a persistent stdin session.
 6. After changes, verify PHP/Apache logs and request the affected public URL.
 7. Use a PassDeployer deployment/rebuild operation only when the change belongs
@@ -397,10 +397,24 @@ persistent volume merely to fix a code/configuration issue.
 ## Content vs code
 
 Theme/plugin PHP, CSS and JavaScript changes belong in the workspace.
-WordPress Pages, Posts, menus and plugin state are database-backed CMS state;
-do not fake them by editing random files. Use WP-CLI or the WordPress
-application/API only when the required authentication and tooling are
-actually available.
+WordPress Pages, Posts, menus, users, plugin activation, theme activation and
+most site settings are database-backed CMS state; do not fake them by editing
+random files.
+
+Prefer WP-CLI for CMS operations. Common patterns include:
+- `wp core version` and `wp core verify-checksums` for diagnostics
+- `wp theme list`, `wp theme activate <slug>`
+- `wp plugin list`, `wp plugin install <slug> --activate`
+- `wp post create`, `wp post update`, `wp page create`
+- `wp option get/set`, `wp menu list`
+- `wp user list/create/update`
+- `wp rewrite flush`, `wp cache flush`
+- `wp search-replace` for controlled URL/content migrations
+- `wp db cli` for an interactive database session
+
+The shell policy blocks WP-CLI code-loading commands such as `wp eval`,
+`wp eval-file`, `wp shell`, and global `--require/--exec` options. Use the
+managed file API for source files and WP-CLI for CMS state.
 
 ## Safety
 
