@@ -106,7 +106,7 @@ def shell_catalog_apiview(request, service_id):
             "result": "success",
             "platform": platform,
             "advanced_interactive": bool(can_use_advanced_shell(service, request.user)),
-            "commands": command_catalog(platform),
+            "commands": command_catalog(platform, service),
             "interactive": {
                 "supported": True,
                 "transport": "websocket",
