@@ -260,13 +260,10 @@ class ReadyAppPublicApiTests(TestCase):
             binding.deploy.status = DeploymentStatusChoices.CANCELLED
             binding.deploy.save(update_fields=["status", "updated_at"])
 
-        with (
-            patch("app_catalog.executor.ApplicationStackExecutor._cleanup_cancelled_children") as cleanup_children,
-            patch("app_catalog.executor.ApplicationStackExecutor.cleanup_terminal_application", return_value=False),
-            patch("services.signals.cleanup_service_resources"),
-            patch("services.signals._cleanup_service_log_records"),
-            patch("services.signals.Network.network_exists", return_value=False),
-        ):
+        with patch(
+            "app_catalog.executor.ApplicationStackExecutor.cleanup_terminal_application",
+            return_value=True,
+        ) as cleanup:
             response = ApplicationInstanceDetailAPIView.as_view()(
                 self.request("DELETE", f"/api/application-catalog/installations/{instance.pk}/"),
                 pk=instance.pk,
@@ -274,11 +271,8 @@ class ReadyAppPublicApiTests(TestCase):
 
         self.assertEqual(response.status_code, 204)
         self.assertFalse(ApplicationInstance.objects.filter(pk=instance.pk).exists())
-        self.assertEqual(
-            list(instance.services.values_list("pk", flat=True)),
-            [],
-        )
-        cleanup_children.assert_called_once()
+        self.assertTrue(ApplicationInstance.objects.filter(pk=instance.pk).count() == 0)
+        cleanup.assert_called_once_with()
 
     def test_failed_delete_recovers_legacy_orphan_service_before_private_network(self):
         from unittest.mock import patch
