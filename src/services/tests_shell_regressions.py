@@ -171,3 +171,24 @@ def test_database_client_password_and_remote_execution_are_rejected():
         except Exception:
             continue
         raise AssertionError(f"Unsafe DB command was accepted: {platform} {argv}")
+
+def test_database_diagnostic_commands_are_allowed_per_engine():
+    from services.shell import _validate_platform_command, default_workdir_for_platform
+
+    commands = {
+        "mysql": ["mysqladmin", "ping", "-uroot"],
+        "mariadb": ["mariadb-admin", "ping", "-uroot"],
+        "postgresql": ["pg_isready"],
+    }
+    for platform, argv in commands.items():
+        _validate_platform_command(argv, platform, default_workdir_for_platform(platform))
+
+
+def test_postgresql_remote_connection_string_is_rejected():
+    from services.shell import _validate_platform_command, default_workdir_for_platform
+    unsafe = ["psql", "postgresql://user@10.0.0.5:5432/db"]
+    try:
+        _validate_platform_command(unsafe, "postgresql", default_workdir_for_platform("postgresql"))
+    except Exception:
+        return
+    raise AssertionError("Remote PostgreSQL connection string was accepted")
