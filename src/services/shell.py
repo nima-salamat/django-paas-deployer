@@ -1154,9 +1154,20 @@ def developer_shell_security_check(container) -> tuple[bool, str]:
         if not any('no-new-privileges' in item for item in security_opts):
             return False, "Developer shell requires no-new-privileges on the container."
         for raw in host.get('Binds') or []:
-            source = str(raw).split(':', 1)[0].strip()
-            normalized = source.rstrip('/')
-            if normalized in {'/var/run/docker.sock', '/run/docker.sock'} or normalized.startswith('/var/lib/docker'):
+            source = str(raw).split(':', 1)[0].strip().rstrip('/')
+            if source in {'/var/run/docker.sock', '/run/docker.sock'} or source.startswith('/var/lib/docker'):
+                return False, "Developer shell is disabled when Docker engine access is mounted into the container."
+        if host.get('Devices'):
+            return False, "Developer shell is disabled when host devices are exposed to the container."
+        for mount in container.attrs.get('Mounts') or []:
+            if not isinstance(mount, dict):
+                continue
+            source = str(mount.get('Source') or '').strip().rstrip('/')
+            mount_type = str(mount.get('Type') or '').strip().lower()
+            if mount_type == 'bind' and (
+                source in {'/var/run/docker.sock', '/run/docker.sock'}
+                or source.startswith('/var/lib/docker')
+            ):
                 return False, "Developer shell is disabled when Docker engine access is mounted into the container."
         for cap in host.get('CapAdd') or []:
             normalized = str(cap).strip().upper().replace('-', '_')
@@ -1165,7 +1176,6 @@ def developer_shell_security_check(container) -> tuple[bool, str]:
         return True, ''
     except Exception as exc:
         return False, f"Could not verify container security posture: {exc}"
-
 def create_session(service: Service, user, workdir: str | None = None, mode: str = "restricted") -> tuple[object, str]:
     platform = _platform_for_service(service)
     root = default_workdir_for_platform(platform)
@@ -1479,7 +1489,7 @@ def _command_path_arguments(argv):
     return []
 
 
-def prepare_interactive_exec_environment(container, *, platform: str = "", root_path: str = "", service: Service | None = None) -> dict[str, str]:
+def prepare_interactive_exec_environment(container, *, platform: str = "", root_path: str = "", service: Service | None = None, include_database_credentials: bool = True) -> dict[str, str]:
     """Build an environment dict suitable for interactive REPLs (tinker/psysh/etc).
 
     PsySH writes config/history under ``$XDG_CONFIG_HOME/psysh`` (preferred)
@@ -1561,7 +1571,7 @@ def prepare_interactive_exec_environment(container, *, platform: str = "", root_
     env["TERM"] = env.get("TERM") or "xterm-256color"
     env["COLUMNS"] = env.get("COLUMNS") or "120"
     env["LINES"] = env.get("LINES") or "40"
-    if service is not None and platform in DATABASE_PLATFORMS:
+    if include_database_credentials and service is not None and platform in DATABASE_PLATFORMS:
         try:
             values = _database_runtime_values(service)
             password = str(values.get("password") or "")
