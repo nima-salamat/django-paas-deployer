@@ -142,6 +142,16 @@ networks:
             "define( 'WP_SITEURL', 'https://app.example.com' );\n"
             "define( 'FORCE_SSL_ADMIN', true );\n",
         )
+        self.assertEqual(
+            wordpress["environment"]["PASSDEPLOYER_PUBLIC_HOST"],
+            "app.example.com",
+        )
+        self.assertEqual(
+            wordpress["command"][:2],
+            ["/bin/sh", "-lc"],
+        )
+        self.assertIn("__PASSDEPLOYER_PUBLIC_HOST__", wordpress["command"][2])
+        self.assertIn("apache2-foreground", wordpress["command"][2])
 
     def test_public_host_placeholder_is_replaced_during_final_service_render(self):
         from app_catalog.services import _PLATFORM_PUBLIC_HOST_TOKEN, _render_service_value
