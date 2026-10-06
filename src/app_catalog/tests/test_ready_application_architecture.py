@@ -83,6 +83,11 @@ class ReadyApplicationArchitectureTests(TestCase):
         dockerfile = str((app.build_config or {}).get("dockerfile") or "")
         assert "ServerName localhost" in dockerfile
 
+        start_command = str((app.runtime_config or {}).get("start_command") or "")
+        assert "apache2-foreground" in start_command
+        assert "__PASSDEPLOYER_PUBLIC_HOST__" not in start_command
+        assert "wordpress-apache-servername" in start_command or ".example.invalid" in start_command
+
     def test_ready_app_mariadb_accepts_mysql_env_aliases_for_user_database_and_password(self):
         instance = self.install(catalog_id="wordpress", variant="default", name="mariadb-alias-contract")
         binding = instance.services.get(service_key="mariadb")
