@@ -327,6 +327,147 @@ storage changes.
         any_scopes=("service_volumes.read", "service_volumes.write"),
     ),
     _skill(
+        "php",
+        "PHP Runtime",
+        "Develop and diagnose PHP applications inside the service workspace.",
+        """
+# PHP Runtime
+
+Use this skill for PHP services and PHP-based application development.
+
+## Workspace
+
+For PHP web runtimes the managed workspace is normally `/var/www/html`.
+Always call `GET {{base}}/services/{service_id}/shell` before opening a session
+and use the returned `workspace.default_workdir` rather than assuming a path.
+
+## Commands
+
+Use the restricted shell command catalog for PHP and Composer. Direct
+`php -r`, arbitrary PHP script execution, and unrestricted shell interpreters
+are blocked by policy. Use application/framework CLIs when they exist.
+
+For file changes use `POST {{base}}/services/{service_id}/shell/files` rather than
+building shell pipelines. Re-read changed files and inspect runtime logs after
+important mutations.
+
+## Rules
+
+Do not modify platform-owned configuration through the runtime when a
+PassDeployer configuration endpoint owns it. Never put credentials in command
+arguments or generated files.
+        """,
+        scopes=("shell.read", "shell.execute", "shell.files.read", "shell.files.write"),
+    ),
+    _skill(
+        "wordpress",
+        "WordPress",
+        "Operate a WordPress runtime, including themes, plugins, PHP/CSS/JS files and runtime diagnosis.",
+        """
+# WordPress
+
+Use this skill for a WordPress service running in the managed container.
+
+## Workspace
+
+The canonical WordPress document root is `/var/www/html`. Confirm it from
+`GET {{base}}/services/{service_id}/shell` before acting.
+
+Typical site code is under:
+- `/var/www/html/wp-content/themes`
+- `/var/www/html/wp-content/plugins`
+- `/var/www/html/wp-content/uploads`
+
+Never delete `wp-config.php`, the WordPress database volume, or the WordPress
+persistent volume merely to fix a code/configuration issue.
+
+## Workflow
+
+1. Inspect service status, shell metadata and runtime logs.
+2. Inspect `wp-content` before editing anything.
+3. Prefer the managed workspace file API for edits and verify each important write.
+4. Check whether `wp` (WP-CLI) is actually installed before using it; do not assume
+   the official runtime image contains it.
+5. Use the interactive PTY for commands that need a persistent stdin session.
+6. After changes, verify PHP/Apache logs and request the affected public URL.
+7. Use a PassDeployer deployment/rebuild operation only when the change belongs
+   to the immutable deployment/runtime configuration rather than persistent
+   WordPress content.
+
+## Content vs code
+
+Theme/plugin PHP, CSS and JavaScript changes belong in the workspace.
+WordPress Pages, Posts, menus and plugin state are database-backed CMS state;
+do not fake them by editing random files. Use WP-CLI or the WordPress
+application/API only when the required authentication and tooling are
+actually available.
+
+## Safety
+
+Preserve existing themes, plugins and content. Do not overwrite `wp-config.php`
+with ad-hoc HTTPS/PHP bootstrap code. Platform HTTPS is already represented by
+the runtime reverse-proxy contract.
+        """,
+        scopes=("shell.read", "shell.execute", "shell.files.read", "shell.files.write"),
+    ),
+    _skill(
+        "databases",
+        "Databases",
+        "Operate managed MySQL, MariaDB, PostgreSQL, MongoDB, Redis and Oracle runtimes with engine-aware shells.",
+        """
+# Databases
+
+Use this skill for database-provider services.
+
+## Supported engines
+
+MySQL, MariaDB, PostgreSQL, MongoDB, Redis and Oracle are recognized as
+database runtimes by the shell.
+
+## Workspace
+
+Database shell sessions start in the engine data workspace:
+- MySQL / MariaDB: `/var/lib/mysql`
+- PostgreSQL: `/var/lib/postgresql/data`
+- MongoDB: `/data/db`
+- Redis: `/data`
+- Oracle: `/opt/oracle/oradata`
+
+Always read `GET {{base}}/services/{service_id}/shell` first. It reports the
+resolved engine, client, workspace root and interactive commands.
+
+## Interactive clients
+
+Use the PTY/WebSocket transport for:
+- `mysql -uroot`
+- `mariadb -uroot`
+- `psql`
+- `mongosh`
+- `redis-cli`
+- `sqlplus /nolog`
+
+The platform injects managed credentials into the supported local client
+environment where the client supports it. Never put passwords in command-line
+arguments, URLs, SQL strings, shell history or audit messages.
+
+## Rules
+
+Database batch flags such as `-e`, `--execute`, `-c`, `-f` and `--eval` are
+intentionally blocked in the restricted command API. Use the interactive PTY
+for actual SQL/queries so the transport and engine session remain explicit.
+
+Keep client connections local to the managed database runtime. Do not use the
+database shell as a general network client or to pivot to another host.
+
+For destructive schema/data changes, inspect the target first and obtain the
+user's explicit confirmation before executing the mutation. Verify the result
+afterward.
+
+Use the control-plane database binding/credential APIs for service bindings;
+do not recreate those relationships from inside a database container.
+        """,
+        scopes=("shell.read", "shell.execute"),
+    ),    _skill(
         "shell",
         "Restricted Runtime Shell",
         "Run authorized non-interactive or interactive commands inside a service runtime.",
