@@ -55,6 +55,22 @@ x-passdeployer:
 services:
   wordpress:
     image: wordpress:7.1.2-php8.3-apache
+    dockerfile: |
+      FROM wordpress:7.1.2-php8.3-apache
+      
+      # WP-CLI is part of the Ready App runtime so Agent/Shell can manage
+      # pages, plugins, themes and database operations without ad-hoc installs.
+      ARG WP_CLI_VERSION=2.12.0
+      RUN set -eux; \
+          apt-get update; \
+          apt-get install -y --no-install-recommends ca-certificates curl; \
+          curl -fsSL "https://github.com/wp-cli/wp-cli/releases/download/v${WP_CLI_VERSION}/wp-cli-${WP_CLI_VERSION}.phar" -o /usr/local/bin/wp; \
+          echo "fe19025cc113142492a3ca68dd93d20ba4164e5ecb3c0a0d86a9db7e06b917201120763fa2b8256addeaa9cb745b2b8bef8e8d74a697230e30ef681f13e09186  /usr/local/bin/wp" | sha512sum -c -; \
+          chmod 0755 /usr/local/bin/wp; \
+          wp --info --allow-root; \
+          rm -rf /var/lib/apt/lists/*
+      ENV WP_CLI_ALLOW_ROOT=1
+      WORKDIR /var/www/html
     ports:
       - 80
     working_dir: /var/www/html
