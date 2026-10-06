@@ -29,7 +29,7 @@ class ShellInfoView(AgentSecuredAPIView):
             "enabled": bool(allowed is not False and "shell.execute" in set(request.agent.scopes or [])),
             "platform": platform,
             "advanced_interactive": advanced,
-            "commands": command_catalog(platform),
+            "commands": command_catalog(platform, service),
             "transport": protocol,
             "policy": protocol["policy"],
             "workspace": shell_workspace_metadata(service),
