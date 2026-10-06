@@ -920,7 +920,7 @@ def _validate_wp_argv(argv: list[str], root: str) -> None:
     blocked = {"eval", "eval-file", "shell", "server", "package"}
     if sub in blocked:
         _policy_reject(f"WP-CLI command '{sub}' is blocked in the restricted runtime.")
-    allowed = {"core", "config", "option", "post", "page", "menu", "plugin", "theme", "user", "media", "rewrite", "cache", "db", "comment", "site", "transient"}
+    allowed = {"cli", "core", "config", "option", "post", "page", "menu", "plugin", "theme", "user", "media", "rewrite", "cache", "db", "comment", "site", "network", "transient", "cron", "language", "role", "cap", "taxonomy", "term", "search-replace", "maintenance-mode", "scaffold"}
     if sub not in allowed:
         _policy_reject(f"WP-CLI command '{sub}' is not enabled in the restricted runtime.")
     for token in argv[2:]:
