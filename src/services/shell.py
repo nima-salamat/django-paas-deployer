@@ -1444,6 +1444,7 @@ def classify_command_risk(argv: list[str]) -> str:
             ("user", "list"), ("media", "list"),
             ("option", "get"), ("option", "list"),
             ("config", "get"), ("db", "size"),
+            ("core", "verify-checksums"),
             ("rewrite", "list"), ("maintenance-mode", "status"),
             ("cli", "version"), ("cli", "check-update"),
         }
