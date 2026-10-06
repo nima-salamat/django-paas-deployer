@@ -426,15 +426,15 @@ database runtimes by the shell.
 
 ## Workspace
 
-Database shell sessions start in the engine data workspace:
-- MySQL / MariaDB: `/var/lib/mysql`
-- PostgreSQL: `/var/lib/postgresql/data`
-- MongoDB: `/data/db`
-- Redis: `/data`
-- Oracle: `/opt/oracle/oradata`
+Database shell sessions use a safe restricted workspace, normally `/tmp`. The persistent database data directory is not the shell/file-manager workspace and must not be edited directly.
+- MySQL / MariaDB data root: `/var/lib/mysql`
+- PostgreSQL data root: `/var/lib/postgresql/data`
+- MongoDB data root: `/data/db`
+- Redis data root: `/data`
+- Oracle data root: `/opt/oracle/oradata`
 
 Always read `GET {{base}}/services/{service_id}/shell` first. It reports the
-resolved engine, client, workspace root and interactive commands.
+resolved engine, safe workspace root, data root and interactive commands.
 
 ## Interactive clients
 
@@ -484,7 +484,11 @@ queries. Use the `signal` message for Ctrl-C/Ctrl-D/Ctrl-Z/Ctrl-L and wait for
 
 The agent token is accepted only for the interactive shell transport and is
 revalidated on connection and ping. Use TLS (`wss://`) and never place database
-passwords in the command string.        """,
+passwords in the command string.
+For MongoDB and Oracle, no generic password environment variable is assumed.
+When authentication is required, use the dedicated high-risk credential
+endpoint only when authorized, start the interactive client, and provide
+the password through PTY stdin. Never echo or log the password.        """,
         scopes=("shell.read", "shell.execute"),
     ),    _skill(
         "shell",
@@ -516,7 +520,23 @@ Do not assume shell UID permissions equal managed file-manager permissions. Do n
 use shell for a first-class control-plane or workspace file operation. Do not
 set confirmation flags merely to force a blocked command. Interactive commands
 must use the interactive transport when required.
-        """,
+
+## Agent interactive PTY
+
+Interactive commands cannot be completed through the one-shot command endpoint.
+Create a shell session first, then use the WebSocket path returned by
+`GET {{base}}/services/{service_id}/shell`.
+
+For an Agent connection use WSS with:
+- `agent_token=<agent access token>`
+- `shell_token=<temporary shell session token>`
+
+Send one command message at a time. Use stdin messages for prompts and handle
+`process.started`, `process.output`, `process.exit`, `confirm_required` and `error` events.
+Use signal messages for Ctrl-C/Ctrl-D/Ctrl-Z/Ctrl-L.
+
+The Agent token is validated on WebSocket connect and ping. Never put database
+passwords or other secrets in command arguments.        """,
         scopes=("shell.read", "shell.execute"),
     ),
     _skill(
