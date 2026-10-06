@@ -150,7 +150,7 @@ networks:
             wordpress["command"][:2],
             ["/bin/sh", "-lc"],
         )
-        self.assertIn("__PASSDEPLOYER_PUBLIC_HOST__", wordpress["command"][2])
+        self.assertIn("$PASSDEPLOYER_PUBLIC_HOST", wordpress["command"][2])
         self.assertIn("apache2-foreground", wordpress["command"][2])
 
     def test_public_host_placeholder_is_replaced_during_final_service_render(self):
