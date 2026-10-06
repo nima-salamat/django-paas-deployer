@@ -149,6 +149,23 @@ networks:
         self.assertIn("sha512sum -c -", wordpress["dockerfile"])
         self.assertFalse(wordpress.get("command"))
 
+    def test_wordpress_version_is_selectable_and_pinned_to_official_tags(self):
+        definition = ApplicationCatalog.get("wordpress")
+        variant = definition.variants["default"]
+        version_field = next(field for field in variant["fields"] if field["id"] == "software_version")
+        self.assertEqual(version_field["type"], "choice")
+        self.assertEqual(version_field["default"], "7.1.2")
+        self.assertEqual(version_field["options"], ["7.1.2", "7.1.1", "7.1.0"])
+
+        resolved = resolve_variant(definition, "default", {"software_version": "7.1.1"})
+        wordpress = next(item for item in resolved["services"] if item["key"] == "wordpress")
+        self.assertIn("FROM wordpress:7.1.1-php8.3-apache", wordpress["dockerfile"])
+
+    def test_wordpress_rejects_unlisted_version(self):
+        definition = ApplicationCatalog.get("wordpress")
+        with self.assertRaises(CatalogValidationError):
+            resolve_variant(definition, "default", {"software_version": "7.1.3"})
+
     def test_public_host_placeholder_is_replaced_during_final_service_render(self):
         from app_catalog.services import _PLATFORM_PUBLIC_HOST_TOKEN, _render_service_value
 
