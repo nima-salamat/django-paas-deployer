@@ -474,8 +474,12 @@ def is_interactive_command(argv: list[str]) -> bool:
         return argv[2] in ARTISAN_INTERACTIVE_COMMANDS
     if len(argv) >= 3 and os.path.basename(argv[0]).lower() in {"python", "python3"} and argv[1] == "manage.py":
         return argv[2] in DJANGO_INTERACTIVE_COMMANDS
-    return False
 
+    base = os.path.basename(argv[0]).lower() if argv else ""
+    if base in {"mysql", "mariadb", "psql", "mongosh", "redis-cli", "sqlplus"}:
+        informational = {"--help", "-h", "--version", "-V", "-v", "-?"}
+        return not any(str(token) in informational for token in argv[1:])
+    return False
 
 def can_use_advanced_shell(service: Service, user) -> bool:
     """Allow advanced interactive developer tools for owners or explicit shares."""
