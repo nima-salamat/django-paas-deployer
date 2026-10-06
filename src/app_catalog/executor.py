@@ -519,6 +519,182 @@ class ApplicationStackExecutor:
                 return True
             return False
 
+    def supervise_runtime(self) -> dict[str, object]:
+        """Check a RUNNING Ready App's persisted application-level invariants.
+
+        This is deliberately separate from Docker/runtime execution. The
+        deployment monitor owns runtime repair; this supervisor owns the parent
+        application's durable state and records when a running installation is
+        temporarily degraded or structurally inconsistent.
+        """
+        current = ApplicationInstance.objects.filter(pk=self.instance_id).first()
+        if current is None:
+            return {"status": "missing"}
+
+        # A live installation can legitimately pass through deletion_pending
+        # while its resources are being removed. Do not report that cleanup
+        # transition as runtime corruption.
+        if (
+            current.status != ApplicationStatus.RUNNING
+            or current.stage == "deletion_pending"
+        ):
+            return {"status": "skipped", "application_status": str(current.status)}
+
+        try:
+            instance, plan = self._load()
+        except ApplicationInstance.DoesNotExist:
+            return {"status": "missing"}
+        except Exception as exc:
+            message = (
+                "Ready App coordinator state is inconsistent and could not be "
+                f"validated safely: {str(exc)[:450]}"
+            )
+            with transaction.atomic():
+                locked = (
+                    ApplicationInstance.objects
+                    .select_for_update()
+                    .filter(pk=self.instance_id)
+                    .first()
+                )
+                if locked and locked.status == ApplicationStatus.RUNNING and locked.stage != "deletion_pending":
+                    locked.status = ApplicationStatus.FAILED
+                    locked.stage = "state_corrupted"
+                    locked.error_code = "APPLICATION_STATE_CORRUPTED"
+                    locked.error_message = message
+                    locked.save(update_fields=[
+                        "status", "stage", "error_code", "error_message", "updated_at",
+                    ])
+            logger.error("Ready App %s coordinator state is corrupted: %s", self.instance_id, exc)
+            return {"status": "corrupted", "message": message}
+
+        bindings = list(
+            ApplicationInstanceService.objects
+            .select_related("deploy", "service")
+            .filter(instance_id=self.instance_id)
+        )
+        expected = {spec.key: spec for spec in plan.services}
+        actual = {binding.service_key: binding for binding in bindings}
+
+        structural_errors: list[str] = []
+        missing = sorted(set(expected) - set(actual))
+        extra = sorted(set(actual) - set(expected))
+        if missing:
+            structural_errors.append("missing child service bindings: " + ", ".join(missing))
+        if extra:
+            structural_errors.append("unexpected child service bindings: " + ", ".join(extra))
+
+        if not instance.network_id:
+            structural_errors.append("application private network is missing")
+        else:
+            from services.models import PrivateNetwork
+            if not PrivateNetwork.objects.filter(pk=instance.network_id).exists():
+                structural_errors.append("application private network record is missing")
+
+        for key, binding in actual.items():
+            if key not in expected:
+                continue
+            if binding.service.network_id != instance.network_id:
+                structural_errors.append(
+                    f"child service '{key}' is attached to a different private network"
+                )
+
+        if structural_errors:
+            message = (
+                "Ready App coordinator state is structurally inconsistent: "
+                + "; ".join(structural_errors[:5])
+            )
+            with transaction.atomic():
+                locked = (
+                    ApplicationInstance.objects
+                    .select_for_update()
+                    .filter(pk=self.instance_id)
+                    .first()
+                )
+                if locked and locked.status == ApplicationStatus.RUNNING and locked.stage != "deletion_pending":
+                    locked.status = ApplicationStatus.FAILED
+                    locked.stage = "state_corrupted"
+                    locked.error_code = "APPLICATION_STATE_CORRUPTED"
+                    locked.error_message = message
+                    locked.save(update_fields=[
+                        "status", "stage", "error_code", "error_message", "updated_at",
+                    ])
+            logger.error(
+                "Ready App %s coordinator invariants failed: %s",
+                self.instance_id,
+                message,
+            )
+            return {"status": "corrupted", "message": message}
+
+        runtime_issues: list[str] = []
+        for spec in plan.services:
+            binding = actual[spec.key]
+            deploy_status = str(binding.deploy.status or "").lower()
+            service_status = str(binding.service.status or "").lower()
+            desired_state = str(binding.service.desired_state or "").lower()
+
+            terminal = deploy_status in {
+                DeploymentStatusChoices.SUCCEEDED,
+                DeploymentStatusChoices.FAILED,
+                DeploymentStatusChoices.ROLLED_BACK,
+                DeploymentStatusChoices.CANCELLED,
+            }
+            if not terminal:
+                runtime_issues.append(
+                    f"{spec.key}: child deployment is still {deploy_status or 'unknown'}"
+                )
+            elif spec.required and deploy_status != DeploymentStatusChoices.SUCCEEDED:
+                runtime_issues.append(
+                    f"{spec.key}: required child deployment is {deploy_status}"
+                )
+
+            if desired_state != "running":
+                runtime_issues.append(
+                    f"{spec.key}: desired state is {desired_state or 'unset'}"
+                )
+
+            if deploy_status == DeploymentStatusChoices.SUCCEEDED and service_status not in {
+                "running",
+                "succeeded",
+            }:
+                runtime_issues.append(
+                    f"{spec.key}: deployment succeeded but service state is {service_status or 'unknown'}"
+                )
+
+        with transaction.atomic():
+            locked = (
+                ApplicationInstance.objects
+                .select_for_update()
+                .filter(pk=self.instance_id)
+                .first()
+            )
+            if not locked or locked.status != ApplicationStatus.RUNNING or locked.stage == "deletion_pending":
+                return {"status": "skipped"}
+
+            if runtime_issues:
+                locked.stage = "runtime_reconciling"
+                locked.error_code = "APPLICATION_RUNTIME_DEGRADED"
+                locked.error_message = (
+                    "Ready App runtime is temporarily degraded; the deployment "
+                    "monitor is reconciling child services. "
+                    + "; ".join(runtime_issues[:5])
+                )
+                locked.save(update_fields=[
+                    "stage", "error_code", "error_message", "updated_at",
+                ])
+                return {
+                    "status": "degraded",
+                    "issues": runtime_issues,
+                }
+
+            locked.stage = "application_ready"
+            locked.error_code = ""
+            locked.error_message = ""
+            locked.deployed_at = locked.deployed_at or timezone.now()
+            locked.save(update_fields=[
+                "stage", "error_code", "error_message", "deployed_at", "updated_at",
+            ])
+            return {"status": "healthy"}
+    
     def reconcile(self) -> list[ServiceDispatch]:
         # Cancellation cleanup removes ApplicationInstanceService bindings.
         # Handle terminal cancellation before _load(), which requires the
