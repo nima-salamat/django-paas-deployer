@@ -12,6 +12,8 @@ cancel_application_installation stops future dispatch and performs safe terminal
 
 reconcile_application_installations is the recovery scheduler: it inspects persisted execution_task_id/deadline and child bindings to requeue or fail stale coordinator work. It must not infer a missing child from a transient query result and blindly duplicate it.
 
+`supervise_ready_applications` is the independent runtime supervisor for applications already marked RUNNING. It periodically validates the immutable installation graph, private-network ownership, child Deploy terminality, required-child success, Service desired state and successful-child runtime status. Recoverable child runtime problems are recorded as `APPLICATION_RUNTIME_DEGRADED` while the normal deployment monitor performs the actual Docker/Swarm repair; structural coordinator corruption fails closed as `APPLICATION_STATE_CORRUPTED`.
+
 Account deletion is coordinated by `users.tasks.finalize_user_deletion`. `ApplicationInstanceService.service` and `ApplicationInstanceService.deploy` use database `RESTRICT`: direct child Service/Deploy deletion remains blocked while bound, while a compound User deletion can remove the complete ApplicationInstance graph together. Child Service cleanup remains the normal ownership boundary.
 
 Queue routing for these tasks is configured centrally in src/config/settings.py. Child deployment work remains subject to deployments ownership/retry/fencing rules.
