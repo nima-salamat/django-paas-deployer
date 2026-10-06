@@ -534,7 +534,8 @@ For MySQL/MariaDB use the engine-specific admin ping command from the command ca
         scopes=("shell.read", "shell.execute"),
     ),    _skill(
         "developer-shell",
-        "Full developer shell inside the hardened service container.",
+        "Developer Shell",
+        "Use a hardened interactive developer shell when the service and Agent explicitly grant developer-shell access.",
         """
 # Developer Shell
 
