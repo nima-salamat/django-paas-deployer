@@ -26,6 +26,18 @@ def test_application_catalog_reconcile_schedule_matches_registered_task_name():
     assert f'"task": "{legacy_wrong}"' not in settings
 
 
+def test_ready_app_deletion_can_cancel_rollback_children():
+    state = (ROOT / "src" / "deployments" / "common" / "state_machine.py").read_text(encoding="utf-8")
+    assert "(DEPLOY_ROLLING_BACK, DEPLOY_CANCELLED)" in state
+
+
+def test_ready_app_pending_deletion_cannot_be_requeued_for_start():
+    tasks = (ROOT / "src" / "app_catalog" / "tasks.py").read_text(encoding="utf-8")
+    executor = (ROOT / "src" / "app_catalog" / "executor.py").read_text(encoding="utf-8")
+    assert 'stage="deletion_pending"' in tasks
+    assert 'instance.cancel_requested or instance.stage == "deletion_pending"' in executor
+
+
 def test_ready_app_runtime_supervisor_is_scheduled_on_operations_queue():
     settings = (ROOT / "src" / "config" / "settings.py").read_text(encoding="utf-8")
     tasks = (ROOT / "src" / "app_catalog" / "tasks.py").read_text(encoding="utf-8")
