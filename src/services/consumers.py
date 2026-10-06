@@ -330,6 +330,7 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                     container,
                     platform=getattr(self.session, "platform", None) or "",
                     root_path=getattr(self.session, "root_path", None) or "",
+                    service=self.service,
                 )
                 cols = getattr(self, "term_cols", None) or 120
                 rows = getattr(self, "term_rows", None) or 40
