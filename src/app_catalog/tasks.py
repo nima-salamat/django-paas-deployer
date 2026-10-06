@@ -304,6 +304,8 @@ def reconcile_application_installations():
     pending_deletions = ApplicationInstance.objects.filter(
         stage="deletion_pending",
         status__in=(
+            ApplicationStatus.PENDING,
+            ApplicationStatus.DEPLOYING,
             ApplicationStatus.RUNNING,
             ApplicationStatus.FAILED,
             ApplicationStatus.CANCELLED,
