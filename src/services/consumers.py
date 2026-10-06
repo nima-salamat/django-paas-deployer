@@ -195,6 +195,12 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                     raise PermissionError("Invalid authentication session")
             self.service = await database_sync_to_async(self._get_service)(service_id)
             self.session = await database_sync_to_async(self._authenticate_shell)(shell_token)
+            if getattr(self.session, "mode", "restricted") == "developer":
+                if self.agent is not None and "shell.developer" not in set(self.agent.scopes or []):
+                    raise PermissionError("Agent does not have shell.developer scope for this developer session.")
+                from services.shell import can_use_advanced_shell
+                if not can_use_advanced_shell(self.service, self.user):
+                    raise PermissionError("Developer shell requires advanced shell service permission.")
         except (Service.DoesNotExist, PermissionError):
             await self.close(code=4003)
             return
