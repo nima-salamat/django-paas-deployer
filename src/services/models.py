@@ -1172,12 +1172,16 @@ class ServiceShareEvent(BaseModel):
 
 
 class ShellSession(BaseModel):
-    """Short-lived, single-user restricted shell session for a service."""
+    """Short-lived, single-user shell session for a service."""
 
     class Status(models.TextChoices):
         ACTIVE = "active", _("Active")
         CLOSED = "closed", _("Closed")
         EXPIRED = "expired", _("Expired")
+
+    class Mode(models.TextChoices):
+        RESTRICTED = "restricted", _("Restricted")
+        DEVELOPER = "developer", _("Developer")
 
     service = models.ForeignKey("services.Service", on_delete=models.CASCADE, related_name="shell_sessions")
     user = models.ForeignKey("users.User", on_delete=models.CASCADE, related_name="shell_sessions")
@@ -1185,6 +1189,7 @@ class ShellSession(BaseModel):
     platform = models.CharField(max_length=32)
     root_path = models.CharField(max_length=512, default="/app")
     workdir = models.CharField(max_length=512, default="/app")
+    mode = models.CharField(max_length=16, choices=Mode.choices, default=Mode.RESTRICTED)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
     last_used_at = models.DateTimeField(default=timezone.now)
     expires_at = models.DateTimeField()
