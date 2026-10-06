@@ -1299,7 +1299,10 @@ class DeploymentOrchestrator:
             labels[f"traefik.http.routers.{safe_router}.rule"] = rule
             # Host Nginx terminates public TLS before forwarding to Traefik.
             # The compose stack exposes only Traefik's web entrypoint.
+            middleware = f"{safe_router}-https"
+            labels[f"traefik.http.middlewares.{middleware}.headers.customrequestheaders.X-Forwarded-Proto"] = "https"
             labels[f"traefik.http.routers.{safe_router}.entrypoints"] = "web"
+            labels[f"traefik.http.routers.{safe_router}.middlewares"] = middleware
             labels[f"traefik.http.routers.{safe_router}.service"] = safe_router
             labels[f"traefik.http.routers.{safe_router}.priority"] = str(priority + index)
             labels[f"traefik.http.services.{safe_router}.loadbalancer.server.port"] = str(endpoint.target_port)
