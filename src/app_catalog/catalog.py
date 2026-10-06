@@ -67,19 +67,20 @@ _MUTABLE_IMAGE_TAGS = {
 }
 
 
-def _iter_definition_image_refs(data: dict):
-    """Yield executable image references from all catalog variants."""
-    for variant in (data.get("variants") or {}).values():
-        compose = variant.get("compose_document")
-        if isinstance(compose, dict):
-            for service in (compose.get("services") or {}).values():
-                if isinstance(service, dict) and service.get("image"):
-                    yield str(service["image"])
-        for service in (variant.get("services") or []):
-            if isinstance(service, dict):
-                for key in ("image", "image_template", "image_ref"):
-                    if service.get(key):
-                        yield str(service[key])
+_CONFIG_IMAGE_TEMPLATE_RE = re.compile(r"\$\{config\.([A-Za-z0-9_.-]+)\}")
+
+def _iter_variant_image_refs(variant: dict):
+    """Yield executable image references belonging to one catalog variant."""
+    compose = variant.get("compose_document")
+    if isinstance(compose, dict):
+        for service in (compose.get("services") or {}).values():
+            if isinstance(service, dict) and service.get("image"):
+                yield str(service["image"])
+    for service in (variant.get("services") or []):
+        if isinstance(service, dict):
+            for key in ("image", "image_template", "image_ref"):
+                if service.get(key):
+                    yield str(service[key])
 
 
 def _is_pinned_image_ref(image_ref: str) -> bool:
@@ -96,8 +97,55 @@ def _is_pinned_image_ref(image_ref: str) -> bool:
     return bool(tag) and tag not in _MUTABLE_IMAGE_TAGS
 
 
+def _expand_public_image_reference(image_ref: str, variant: dict) -> list[str]:
+    """Expand bounded config-choice image templates into concrete references.
+
+    A public recipe may use a ``${config.foo}`` placeholder only when ``foo``
+    is a finite ``choice`` field. Every possible choice must resolve to a
+    pinned, non-mutable image tag/digest. Free-form values remain blocked.
+    """
+    matches = list(dict.fromkeys(_CONFIG_IMAGE_TEMPLATE_RE.findall(str(image_ref or ""))))
+    if not matches:
+        return [str(image_ref)]
+
+    fields = {
+        str(field.get("id")): field
+        for field in (variant.get("fields") or [])
+        if isinstance(field, dict) and field.get("id")
+    }
+    option_lists: list[list[str]] = []
+    for field_id in matches:
+        field = fields.get(field_id)
+        if not field or str(field.get("type") or "") != "choice":
+            return []
+        options = [
+            str(option)
+            for option in (field.get("options") or [])
+            if option not in (None, "")
+        ]
+        if not options or len(options) > 32:
+            return []
+        option_lists.append(options)
+
+    from itertools import product
+
+    expanded = []
+    for values in product(*option_lists):
+        rendered = str(image_ref)
+        for field_id, value in zip(matches, values):
+            rendered = rendered.replace("${config.%s}" % field_id, value)
+        expanded.append(rendered)
+    return expanded
+
+
 def _public_images_are_pinned(data: dict) -> bool:
-    return all(_is_pinned_image_ref(image_ref) for image_ref in _iter_definition_image_refs(data))
+    """Validate every possible public image reference, not just the default."""
+    for variant in (data.get("variants") or {}).values():
+        for image_ref in _iter_variant_image_refs(variant):
+            expanded = _expand_public_image_reference(image_ref, variant)
+            if not expanded or any(not _is_pinned_image_ref(item) for item in expanded):
+                return False
+    return True
 
 
 def is_public_definition(definition: CatalogDefinition) -> bool:
