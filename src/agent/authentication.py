@@ -36,11 +36,10 @@ def authenticate_agent_token(raw: str, *, ip: str = ""):
     if not user or not user.is_active:
         raise AuthenticationFailed("The underlying PassDeployer user is inactive.")
     if credential.last_used_at is None or (now - credential.last_used_at).total_seconds() >= 60:
-        AgentCredential.objects.filter(pk=credential.pk).update(
-            last_used_at=now,
-            last_used_ip=str(ip or ""),
-            updated_at=now,
-        )
+        updates = {"last_used_at": now, "updated_at": now}
+        if str(ip or ""):
+            updates["last_used_ip"] = str(ip)
+        AgentCredential.objects.filter(pk=credential.pk).update(**updates)
         Agent.objects.filter(pk=agent.pk).update(last_used_at=now, updated_at=now)
         credential.last_used_at = now
         agent.last_used_at = now
