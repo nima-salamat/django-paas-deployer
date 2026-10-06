@@ -122,25 +122,21 @@ class ReadyAppDeletionResilienceTests(TestCase):
 
     def test_deletion_fences_child_desired_state_before_cleanup(self):
         instance, _network = self._application()
-        services = list(
-            instance.services.select_related("service").values_list(
-                "service_id", flat=True
-            )
-        )
+        observed_states = []
+
+        def observe(service):
+            observed_states.append((service.pk, service.desired_state))
 
         with (
-            patch("app_catalog.executor.cleanup_service_resources"),
+            patch(
+                "app_catalog.executor.cleanup_service_resources",
+                side_effect=observe,
+            ),
             patch("services.signals._cancel_active_deployments_for_service"),
             patch("services.signals._cleanup_service_log_records"),
             patch("services.signals.Network.network_exists", return_value=False),
         ):
             ApplicationStackExecutor(str(instance.pk)).cleanup_terminal_application()
 
-        self.assertEqual(
-            set(
-                Service.objects.filter(pk__in=services).values_list(
-                    "desired_state", flat=True
-                )
-            ),
-            set(),
-        )
+        self.assertEqual(len(observed_states), 3)
+        self.assertTrue(all(state == "deleted" for _, state in observed_states))
