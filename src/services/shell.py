@@ -1816,14 +1816,7 @@ def command_catalog(platform: str) -> list[dict]:
             _catalog_item("wp user list", "List WordPress users"),
             _catalog_item("wp db cli", "WordPress database interactive client", risk=Risk.INTERACTIVE, interactive=True, advanced=True),
         ])
-            _catalog_item("wp --info", "Check WP-CLI availability"),
-            _catalog_item("wp core version", "WordPress core version"),
-            _catalog_item("wp theme list", "List WordPress themes"),
-            _catalog_item("wp plugin list", "List WordPress plugins"),
-            _catalog_item("wp post list", "List WordPress posts"),
-            _catalog_item("wp user list", "List WordPress users"),
-            _catalog_item("wp db cli", "WordPress database interactive client", risk=Risk.INTERACTIVE, interactive=True, advanced=True),
-        ])
+
     if platform in {"laravel", "php", "generic"}:
         for name, meta in sorted(ARTISAN_COMMAND_CATALOG.items()):
             cmd = f"php artisan {name}"
@@ -1845,12 +1838,7 @@ def command_catalog(platform: str) -> list[dict]:
             _catalog_item("composer install", "Composer install", risk=Risk.NORMAL_MUTATION),
         ])
 
-    if platform == "wordpress":
-        items.extend([
-            _catalog_item("php -v", "PHP version"),
-            _catalog_item("php --ini", "PHP ini location"),
-            _catalog_item("php -m", "PHP extensions"),
-        ])
+
 
     if platform in {"django", "python", "generic"}:
         items.extend([
