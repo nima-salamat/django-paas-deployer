@@ -138,6 +138,9 @@ networks:
         self.assertEqual(healthcheck["retries"], 6)
         self.assertEqual(
             wordpress["environment"]["WORDPRESS_CONFIG_EXTRA"],
+            "// The Ready App public endpoint is always HTTPS at the platform edge.\n"
+            "// Do not depend on the reverse proxy chain preserving X-Forwarded-Proto.\n"
+            "$_SERVER['HTTPS'] = 'on';\n"
             "define( 'WP_HOME', 'https://app.example.com' );\n"
             "define( 'WP_SITEURL', 'https://app.example.com' );\n"
             "define( 'FORCE_SSL_ADMIN', true );\n",
