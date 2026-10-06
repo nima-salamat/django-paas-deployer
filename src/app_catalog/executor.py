@@ -264,33 +264,143 @@ class ApplicationStackExecutor:
         )
         return True
 
-    def cleanup_terminal_application(self) -> bool:
-        """Converge and permanently delete a terminal application installation.
+    def _fence_children_for_deletion(self) -> None:
+        """Invalidate every child lifecycle operation before touching runtime resources."""
+        from services.lifecycle import mark_deleted
 
-        FAILED installations are intentionally supported here because ordinary
-        cancellation is not the same lifecycle transition as a user requesting
-        deletion. Docker cleanup is performed before database rows disappear,
-        and every database mutation is protected by one transaction.
+        bindings = list(
+            ApplicationInstanceService.objects
+            .select_related("service", "deploy")
+            .filter(instance_id=self.instance_id)
+        )
+        for binding in bindings:
+            mark_deleted(binding.service_id)
+
+        # The lifecycle fence prevents a stale worker from winning a later
+        # activation after deletion has started.
+        from services.signals import _cancel_active_deployments_for_service
+        for binding in bindings:
+            _cancel_active_deployments_for_service(binding.service)
+
+    def _terminalize_cancelled_children_for_deletion(self) -> int:
+        """Make cancellation authoritative after their runtime is gone."""
+        bindings = list(
+            ApplicationInstanceService.objects
+            .select_related("deploy", "service")
+            .filter(instance_id=self.instance_id)
+        )
+        terminalized = 0
+        for binding in bindings:
+            deploy = binding.deploy
+            if deploy.status not in {
+                DeploymentStatusChoices.PENDING,
+                DeploymentStatusChoices.RUNNING,
+                DeploymentStatusChoices.ROLLING_BACK,
+            }:
+                continue
+            if not deploy.cancel_requested:
+                continue
+
+            committed = StateManager.transition_deploy_system_terminal(
+                deploy.pk,
+                DeploymentStatusChoices.CANCELLED,
+                update_fields={
+                    "cancel_requested": True,
+                    "stage": "cancelled",
+                    "progress": 100,
+                    "status_message": "Deployment cancelled because the owning Ready App is being deleted.",
+                    "error_message": "",
+                },
+                event_payload={
+                    "event_id": str(uuid.uuid4()),
+                    "trace_id": str(deploy.pk),
+                    "deployment_id": str(deploy.pk),
+                    "service_id": str(deploy.service_id),
+                    "revision_id": str(getattr(deploy, "revision_id", "") or ""),
+                    "task_id": "ready-app-deletion",
+                    "event_type": "deployment.cancelled.warning",
+                    "stage": "cancelled",
+                    "level": "warning",
+                    "message": "Deployment cancelled because the owning Ready App is being deleted.",
+                    "progress": 100,
+                    "details": {"controlled_by": "ready_app_deletion"},
+                },
+            )
+            if committed:
+                terminalized += 1
+        return terminalized
+
+    def cleanup_terminal_application(self) -> bool:
+        """Drive a Ready App deletion to completion, independent of child workers.
+
+        Deletion is a durable application intent. Once deletion_pending is set,
+        child lifecycle generations are fenced, active deployments are
+        cancelled, runtime resources are removed, cancelled Deploy rows are
+        terminalized, and only then is the database graph deleted.
         """
         from deploy.models import Deploy
         from .services import application_services_for_cleanup
-        from services.signals import cleanup_service_resources
 
+        # Phase 1: persist deletion intent under a short application-row lock.
         with transaction.atomic():
             locked = (
                 ApplicationInstance.objects
                 .select_for_update()
-                .get(pk=self.instance_id)
+                .filter(pk=self.instance_id)
+                .first()
             )
-            deletion_requested = locked.stage == "deletion_pending"
-            if locked.status not in {
-                ApplicationStatus.FAILED,
-                ApplicationStatus.CANCELLED,
-            } and not (
-                deletion_requested
-                and locked.status == ApplicationStatus.RUNNING
-            ):
+            if locked is None:
+                return True
+            if locked.stage != "deletion_pending":
                 return False
+
+            if locked.status not in {ApplicationStatus.CANCELLED, ApplicationStatus.FAILED}:
+                locked.cancel_requested = True
+                locked.stage = "deletion_pending"
+                locked.error_code = "APPLICATION_DELETION_PENDING"
+                locked.error_message = (
+                    "The Ready App is being deleted; active child deployments "
+                    "are being cancelled and cleaned up."
+                )
+                locked.save(update_fields=[
+                    "cancel_requested",
+                    "stage",
+                    "error_code",
+                    "error_message",
+                    "updated_at",
+                ])
+
+        # Phase 2: fence child lifecycle workers before runtime mutation.
+        self._fence_children_for_deletion()
+
+        # Phase 3: runtime cleanup without holding database locks.
+        instance = ApplicationInstance.objects.get(pk=self.instance_id)
+        bindings, service_rows, unexpected = application_services_for_cleanup(instance)
+        if unexpected:
+            names = ", ".join(str(service.name) for service in unexpected[:5])
+            suffix = "..." if len(unexpected) > 5 else ""
+            raise RuntimeError(
+                "Ready App private network still has services that are not owned "
+                f"by this installation: {names}{suffix}"
+            )
+
+        for service in service_rows:
+            cleanup_service_resources(service)
+
+        # Runtime resources are now gone. Cancellation is safe to commit even
+        # when the original Celery worker disappeared or stopped responding.
+        self._terminalize_cancelled_children_for_deletion()
+
+        # Phase 4: verify quiescence and remove the complete DB graph.
+        with transaction.atomic():
+            locked = (
+                ApplicationInstance.objects
+                .select_for_update()
+                .filter(pk=self.instance_id)
+                .first()
+            )
+            if locked is None:
+                return True
 
             bindings, service_rows, unexpected = application_services_for_cleanup(locked)
             if unexpected:
@@ -301,40 +411,29 @@ class ApplicationStackExecutor:
                     f"by this installation: {names}{suffix}"
                 )
 
-            active_statuses = {
-                DeploymentStatusChoices.PENDING,
-                DeploymentStatusChoices.RUNNING,
-                DeploymentStatusChoices.ROLLING_BACK,
-            }
-            active_bindings = [
+            active = [
                 binding for binding in bindings
-                if binding.deploy.status in active_statuses
+                if binding.deploy.status in {
+                    DeploymentStatusChoices.PENDING,
+                    DeploymentStatusChoices.RUNNING,
+                    DeploymentStatusChoices.ROLLING_BACK,
+                }
             ]
-            if active_bindings:
-                from services.signals import _cancel_active_deployments_for_service
-
-                for binding in active_bindings:
-                    _cancel_active_deployments_for_service(binding.service)
+            if active:
+                locked.stage = "deletion_pending"
+                locked.error_code = "APPLICATION_DELETION_PENDING"
+                locked.error_message = f"{len(active)} child deployment(s) are still converging."
+                locked.save(update_fields=[
+                    "stage", "error_code", "error_message", "updated_at",
+                ])
                 return False
 
             network = locked.network
-            locked.stage = "deletion_pending"
-            locked.save(update_fields=["stage", "updated_at"])
-
-            # Preflight every concrete Service while its ownership metadata
-            # still exists. A later DB deletion must never be used as a signal
-            # to skip Docker cleanup.
-            for service in service_rows:
-                cleanup_service_resources(service)
-
             bindings_by_service = {
-                str(binding.service_id): binding
-                for binding in bindings
+                str(binding.service_id): binding for binding in bindings
             }
+
             for service in service_rows:
-                # Remove every deployment archive owned by the Service. This
-                # includes historical attempts not represented by the current
-                # application binding.
                 for deploy in Deploy.objects.filter(service_id=service.pk).only("zip_file"):
                     if deploy.zip_file and deploy.zip_file.name:
                         deploy.zip_file.delete(save=False)
@@ -360,7 +459,7 @@ class ApplicationStackExecutor:
             locked.delete()
 
         logger.info(
-            "Deleted terminal Ready App installation %s; removed %d child services.",
+            "Deleted Ready App installation %s; removed %d child services.",
             self.instance_id,
             len(service_rows),
         )
