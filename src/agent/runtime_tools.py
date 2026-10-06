@@ -403,7 +403,7 @@ def _php_composer(service, user, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _database_health(service, user, payload: dict[str, Any]) -> dict[str, Any]:
-    from services.shell import _platform_for_service, _resolve_container, _database_runtime_values, runtime_workdir_for_platform, prepare_interactive_exec_environment
+    from services.shell import _platform_for_service, _resolve_container, _database_runtime_values, runtime_workdir_for_platform, prepare_interactive_exec_environment, DATABASE_PLATFORMS
 
     platform = _platform_for_service(service)
     if platform not in {"mysql", "mariadb", "postgresql", "mongodb", "redis", "oracle"}:
@@ -440,7 +440,7 @@ def _database_health(service, user, payload: dict[str, Any]) -> dict[str, Any]:
         "exit_code": code,
         "stdout": _command_output_text(out)[:65536],
         "stderr": _command_output_text(err)[:65536],
-        "client": DATABASE_PLATFORMS.get(platform, {}).get("client") if "DATABASE_PLATFORMS" in globals() else None,
+        "client": DATABASE_PLATFORMS.get(platform, {}).get("client"),
     }
 
 def _wordpress_wp_cli(service, user, payload: dict[str, Any]) -> dict[str, Any]:
