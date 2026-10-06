@@ -92,6 +92,11 @@ def test_wordpress_shell_does_not_advertise_artisan_commands():
     assert wordpress_php_guard in source
 
 
+def test_shell_workspace_metadata_is_importable():
+    from services.shell import shell_workspace_metadata
+
+    assert callable(shell_workspace_metadata)
+
 def test_database_workspaces_and_clients_are_engine_aware():
     source = SHELL
     assert '"mysql": "/tmp"' in source
