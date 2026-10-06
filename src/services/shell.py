@@ -479,11 +479,9 @@ def is_interactive_command(argv: list[str]) -> bool:
     if base in {"mysql", "mariadb", "psql", "mongosh", "redis-cli", "sqlplus"}:
         informational = {"--help", "-h", "--version", "-V", "-v", "-?"}
         return not any(str(token) in informational for token in argv[1:])
-    return False
-
-    if platform in DATABASE_PLATFORMS and base in {"env", "printenv"}:
-        _policy_reject("Environment dumping is blocked for database runtimes because it can reveal managed credentials.")    if base == "wp" and len(argv) >= 3 and str(argv[1]).lower() == "db" and str(argv[2]).lower() == "cli":
+    if base == "wp" and len(argv) >= 3 and str(argv[1]).lower() == "db" and str(argv[2]).lower() == "cli":
         return True
+    return False
 
 def can_use_advanced_shell(service: Service, user) -> bool:
     """Allow advanced interactive developer tools for owners or explicit shares."""
