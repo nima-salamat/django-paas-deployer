@@ -94,13 +94,15 @@ def test_wordpress_shell_does_not_advertise_artisan_commands():
 
 def test_database_workspaces_and_clients_are_engine_aware():
     source = SHELL
-    assert '"mysql": "/var/lib/mysql"' in source
-    assert '"mariadb": "/var/lib/mysql"' in source
-    assert '"postgresql": "/var/lib/postgresql/data"' in source
-    assert '"mongodb": "/data/db"' in source
-    assert '"redis": "/data"' in source
-    assert '"oracle": "/opt/oracle/oradata"' in source
+    assert '"mysql": "/tmp"' in source
+    assert '"mariadb": "/tmp"' in source
+    assert '"postgresql": "/tmp"' in source
+    assert '"mongodb": "/tmp"' in source
+    assert '"redis": "/tmp"' in source
+    assert '"oracle": "/tmp"' in source
     assert 'def default_workdir_for_platform' in source
+    assert 'DATABASE_DATA_ROOTS' in source
+    assert 'def shell_workspace_metadata' in source
     assert 'def _validate_database_argv' in source
     assert 'Database client connections must remain local' in source
 
@@ -119,3 +121,9 @@ def test_managed_database_credentials_are_injected_without_commandline_passwords
     assert 'env["PGPASSWORD"] = password' in source
     assert 'env["REDISCLI_AUTH"] = password' in source
     assert 'Do not put database passwords in command arguments.' in source
+
+
+def test_command_catalog_source_has_no_stray_wordpress_block():
+    source = SHELL
+    assert source.count('_catalog_item("wp --info", "Check WP-CLI availability")') == 1
+    assert source.count('if platform == "wordpress":') == 1
