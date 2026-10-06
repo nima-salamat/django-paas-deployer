@@ -1182,7 +1182,12 @@ def create_session(service: Service, user, workdir: str | None = None, mode: str
     mode = str(mode or "restricted").strip().lower()
     if mode not in SHELL_MODES:
         raise ValidationError(f"Unsupported shell mode: {mode}")
-    workdir = _safe_workdir(workdir or root, root)
+    if mode == "developer" and workdir:
+        workdir = posixpath.normpath(str(workdir).strip())
+        if not workdir.startswith("/"):
+            workdir = posixpath.join(root, workdir)
+    else:
+        workdir = _safe_workdir(workdir or root, root)
     container = _resolve_container(service)
     if mode == "developer":
         allowed, reason = developer_shell_security_check(container)
