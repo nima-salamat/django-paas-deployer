@@ -125,6 +125,19 @@ class ServiceConfigurationAPIView(ServiceConfigBaseAPIView):
 
         data = request.data if isinstance(request.data, dict) else dict(request.data)
 
+        if service.source_kind == Service.SourceKind.CATALOG:
+            protected = {"source_kind", "source_config"}
+            changed = protected.intersection(data.keys())
+            if changed:
+                return Response(
+                    {
+                        "error": "Catalog-managed service provenance is controlled by its Ready App.",
+                        "code": "catalog_service_managed",
+                        "fields": sorted(changed),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
         def contains_sensitive_keys(value):
             sensitive = (
                 "password", "secret", "token", "private_key",
