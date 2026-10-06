@@ -276,7 +276,9 @@ class ApplicationStackExecutor:
             .filter(instance_id=self.instance_id)
         )
         for binding in bindings:
-            mark_deleted(binding.service_id)
+            service = binding.service
+            if str(getattr(service, "desired_state", "") or "").lower() != "deleted":
+                mark_deleted(binding.service_id)
 
         # The lifecycle fence prevents a stale worker from winning a later
         # activation after deletion has started.
