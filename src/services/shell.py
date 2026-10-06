@@ -135,7 +135,7 @@ RUNTIME_COMMANDS = {
 PLATFORM_COMMANDS = {
     "laravel": {"php", "composer", "node", "npm", "npx", "yarn", "pnpm", "git", "make"},
     "php": {"php", "composer", "git", "make"},
-    "wordpress": {"php", "git"},
+    "wordpress": {"php", "git", "wp"},
     "django": {"python", "python3", "pip", "pip3", "git", "make"},
     "python": {"python", "python3", "pip", "pip3", "git", "make"},
     "node": {"node", "npm", "npx", "yarn", "pnpm", "bun", "git", "make"},
@@ -482,7 +482,9 @@ def is_interactive_command(argv: list[str]) -> bool:
     return False
 
     if platform in DATABASE_PLATFORMS and base in {"env", "printenv"}:
-        _policy_reject("Environment dumping is blocked for database runtimes because it can reveal managed credentials.")
+        _policy_reject("Environment dumping is blocked for database runtimes because it can reveal managed credentials.")    if base == "wp" and len(argv) >= 3 and str(argv[1]).lower() == "db" and str(argv[2]).lower() == "cli":
+        return True
+
 def can_use_advanced_shell(service: Service, user) -> bool:
     """Allow advanced interactive developer tools for owners or explicit shares."""
     if str(service.user_id) == str(user.id):
@@ -865,6 +867,32 @@ def _validate_pip_argv(argv: list[str]) -> None:
         _policy_reject(f"pip subcommand '{sub}' is not allowed.")
 
 
+def _validate_wp_argv(argv: list[str], root: str) -> None:
+    """Validate a constrained WP-CLI surface for WordPress runtimes."""
+    if len(argv) < 2:
+        _policy_reject("wp requires a command or --info/--version.")
+    sub = str(argv[1]).lower()
+    if sub in {"--info", "--version", "-v", "-h", "--help"}:
+        return
+    blocked = {"eval", "eval-file", "shell", "server", "package"}
+    if sub in blocked:
+        _policy_reject(f"WP-CLI command '{sub}' is blocked in the restricted runtime.")
+    allowed = {"core", "config", "option", "post", "page", "menu", "plugin", "theme", "user", "media", "rewrite", "cache", "db", "comment", "site", "transient"}
+    if sub not in allowed:
+        _policy_reject(f"WP-CLI command '{sub}' is not enabled in the restricted runtime.")
+    for token in argv[2:]:
+        value = str(token)
+        lower = value.lower()
+        if lower.startswith("--path="):
+            path = value.split("=", 1)[1]
+            _safe_workdir(path if path.startswith("/") else posixpath.join(root, path), root)
+        if lower in {"--require", "--exec"}:
+            _policy_reject("WP-CLI code-loading options are not allowed.")
+        if lower.startswith("--require=") or lower.startswith("--exec="):
+            _policy_reject("WP-CLI code-loading options are not allowed.")
+    if sub == "db" and len(argv) >= 3 and str(argv[2]).lower() == "cli":
+        # Interactive DB access is intentionally exposed only through PTY.
+        return
 def _validate_database_argv(argv: list[str], platform: str) -> None:
     """Validate local database-client use without embedding secrets or remote targets."""
     if platform not in DATABASE_PLATFORMS:
@@ -960,6 +988,8 @@ def _validate_platform_command(argv: list[str], platform: str, root: str, *, all
 
     if base in {"mysql", "mariadb", "psql", "mongosh", "redis-cli", "sqlplus"}:
         _validate_database_argv(argv, platform)
+    if base == "wp":
+        _validate_wp_argv(argv, root)
     if base == "php":
         _validate_php_argv(argv, allow_advanced=allow_advanced)
     elif base == "composer":
@@ -1175,6 +1205,12 @@ def classify_command_risk(argv: list[str]) -> str:
 
     if base in {"mysql", "mariadb", "psql", "mongosh", "redis-cli", "sqlplus"}:
         return Risk.INTERACTIVE
+    if base == "wp":
+        if len(argv) >= 4 and str(argv[1]).lower() == "db" and str(argv[2]).lower() == "cli":
+            return Risk.INTERACTIVE
+        if len(argv) >= 3 and str(argv[2]).lower() in {"delete", "reset"}:
+            return Risk.DESTRUCTIVE
+        return Risk.NORMAL_MUTATION
     if base == "php" and len(argv) >= 3 and argv[1] == "artisan":
         cmd = argv[2]
         if cmd in ARTISAN_ADVANCED_INTERACTIVE:
@@ -1728,6 +1764,16 @@ def command_catalog(platform: str) -> list[dict]:
             _catalog_item("php -v", "PHP version"),
             _catalog_item("php --ini", "PHP ini location"),
             _catalog_item("php -m", "PHP extensions"),
+        ])
+    if platform == "wordpress":
+        items.extend([
+            _catalog_item("wp --info", "Check WP-CLI availability"),
+            _catalog_item("wp core version", "WordPress core version"),
+            _catalog_item("wp theme list", "List WordPress themes"),
+            _catalog_item("wp plugin list", "List WordPress plugins"),
+            _catalog_item("wp post list", "List WordPress posts"),
+            _catalog_item("wp user list", "List WordPress users"),
+            _catalog_item("wp db cli", "WordPress database interactive client", risk=Risk.INTERACTIVE, interactive=True, advanced=True),
         ])
     if platform in {"laravel", "php", "generic"}:
         for name, meta in sorted(ARTISAN_COMMAND_CATALOG.items()):
