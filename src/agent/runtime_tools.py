@@ -1,3 +1,4 @@
+import os
 """First-class service-local tools exposed to PassDeployer Agents.
 
 Tools are small wrappers around existing runtime boundaries. They do not call
@@ -200,12 +201,74 @@ def _php_lint(service, user, payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _wordpress_wp_cli(service, user, payload: dict[str, Any]) -> dict[str, Any]:
+
+
+def _command_output_text(value):
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).decode("utf-8", "replace")
+    return str(value or "")
+
+
+def command_result_from_argv(service, user, argv: list[str], *, confirm: bool = False) -> dict[str, Any]:
+    """Execute one validated tool command without creating a persistent shell session."""
     from services.shell import (
+        _is_destructive_command,
         _platform_for_service,
-        execute_command,
-        is_interactive_command,
+        _resolve_container,
+        _run_argv_with_timeout,
+        _run_mutating_argv,
+        classify_command_risk,
+        default_workdir_for_platform,
+        record_shell_audit,
+        validate_argv_for_container,
     )
+
+    platform = _platform_for_service(service)
+    root = default_workdir_for_platform(platform)
+    container = _resolve_container(service)
+    validate_argv_for_container(argv, platform, root, container, allow_advanced=False)
+    risk = classify_command_risk(argv)
+
+    if _is_destructive_command(argv) and not confirm:
+        return {
+            "stdout": "",
+            "stderr": "",
+            "exit_code": None,
+            "cwd": root,
+            "risk": risk,
+            "requires_confirmation": True,
+        }
+
+    if os.path.basename(argv[0]).lower() in {"mkdir", "touch", "rm", "rmdir", "cp", "mv", "tee"}:
+        code, stdout, stderr = _run_mutating_argv(container, argv, root)
+    else:
+        code, stdout, stderr = _run_argv_with_timeout(
+            container, argv, root, timeout_seconds=120
+        )
+
+    result = {
+        "stdout": _command_output_text(stdout)[:65536],
+        "stderr": _command_output_text(stderr)[:65536],
+        "exit_code": int(code),
+        "cwd": root,
+        "risk": risk,
+    }
+    try:
+        record_shell_audit(
+            service=service,
+            user=user,
+            action="tool_command",
+            command=" ".join(shlex.quote(value) for value in argv),
+            cwd=root,
+            success=int(code) == 0,
+            detail="runtime_tool",
+            meta={"platform": platform, "risk": risk},
+        )
+    except Exception:
+        pass
+    return result
+def _wordpress_wp_cli(service, user, payload: dict[str, Any]) -> dict[str, Any]:
+    from services.shell import _platform_for_service, is_interactive_command
     from agent.errors import AgentError
 
     platform = _platform_for_service(service)
@@ -233,18 +296,13 @@ def _wordpress_wp_cli(service, user, payload: dict[str, Any]) -> dict[str, Any]:
             },
         )
 
-    command = " ".join(shlex.quote(value) for value in argv)
-    from services.shell import close_session, create_session
-    session, _token = create_session(service, user, mode="restricted")
-    try:
-        result = execute_command(
-            session,
-            command,
-            confirm=bool(payload.get("confirm", False)),
-        )
-        return {"platform": platform, "tool": "wp-cli", **result}
-    finally:
-        close_session(session)
+    result = command_result_from_argv(
+        service,
+        user,
+        argv,
+        confirm=bool(payload.get("confirm", False)),
+    )
+    return {"platform": platform, "tool": "wp-cli", **result}
 
 
 TOOLS = (
