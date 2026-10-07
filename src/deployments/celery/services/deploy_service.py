@@ -1236,7 +1236,7 @@ class DeployService:
         from dataclasses import replace
 
         from deployments.runtime.contract import RuntimeIdentity
-                from deploy.models import BuildArtifact, Release
+        from deploy.models import BuildArtifact, Release
 
         resolver = DjangoRuntimeSelectionResolver()
         selection = resolver.resolve(
