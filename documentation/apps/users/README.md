@@ -49,3 +49,7 @@ The canonical user editor is Wagtail's built-in **Settings → Users** surface u
 
 - [API reference](api.md)
 - [Complete model field reference](field-reference.md)
+
+## Detailed contracts
+
+- [Detailed API reference](api-reference.md)
