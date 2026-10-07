@@ -20,6 +20,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from deployments.core.swarm import SwarmRuntime, swarm_enabled
+from deployments.common.docker_identity import legacy_service_name_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -259,7 +260,9 @@ class Command(BaseCommand):
             raw = labels.get(key)
             if raw and str(raw) in services_by_id:
                 return services_by_id[str(raw)]
-        # 3) Name pattern app-{8 hex}-{rest} from get_docker_service_name
+        # 3) Canonical pattern is covered by the shared name map above.
+        # Keep the explicit hex lookup for partially malformed-but-identifiable
+        # names produced by older runtimes.
         if name.startswith("app-") and len(name) > 12:
             hex8 = name[4:12]
             if hex8 in hex_map:
@@ -466,9 +469,12 @@ class Command(BaseCommand):
         services_by_id = {}
         for s in services:
             try:
-                dname = s.get_docker_service_name()
-                name_map[dname] = s
-                name_map[dname.lower()] = s
+                # Canonical name is the preferred identity. Historical names
+                # are lookup aliases only so log collection can still discover
+                # resources that predate the current naming contract.
+                for dname in legacy_service_name_candidates(s.id, s.name):
+                    name_map[dname] = s
+                    name_map[dname.lower()] = s
                 hex_map[s.id.hex[:8]] = s
                 services_by_id[str(s.pk)] = s
                 services_by_id[s.id.hex] = s
