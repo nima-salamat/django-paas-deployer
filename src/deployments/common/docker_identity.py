@@ -36,6 +36,10 @@ def _text(value: Any) -> str:
     return str(value if value is not None else "").strip()
 
 
+def _raw(value: Any) -> str:
+    return str(value if value is not None else "")
+
+
 def _uuid8(value: Any, *, field: str) -> str:
     raw = _text(getattr(value, "hex", value)).replace("-", "").lower()
     if len(raw) < 8 or not re.fullmatch(r"[0-9a-f]{8,}", raw):
@@ -84,7 +88,7 @@ def validate_docker_component(value: Any, *, field: str, max_length: int = 256) 
 
 def validate_image_repository(value: Any) -> str:
     """Validate a lowercase Docker repository path, including namespaces."""
-    cleaned = _text(value).lower()
+    cleaned = _raw(value)
     if not cleaned:
         raise DeploymentSecurityError(
             "Image repository is empty.",
@@ -92,7 +96,7 @@ def validate_image_repository(value: Any) -> str:
             code="DOCKER_IMAGE_REPOSITORY_EMPTY",
             user_message="The deployment generated an empty Docker image repository.",
         )
-    if len(cleaned) > 255 or not _DOCKER_REPOSITORY_RE.fullmatch(cleaned):
+    if cleaned != cleaned.lower() or len(cleaned) > 255 or not _DOCKER_REPOSITORY_RE.fullmatch(cleaned):
         raise DeploymentSecurityError(
             f"Invalid Docker image repository: {value!r}",
             stage="identity_validation",
@@ -133,7 +137,7 @@ def canonical_image_ref(repository: Any, tag: Any = None) -> str:
 def canonical_service_name(service_id: Any, service_name: Any) -> str:
     """Canonical container/repository identity for a Service."""
     sid = _uuid8(service_id, field="service_id")
-    raw_name = _text(service_name).lower()
+    raw_name = _raw(service_name).lower()
     if not raw_name:
         raise DeploymentSecurityError(
             "Service name is empty.",
@@ -168,7 +172,7 @@ def legacy_service_name_candidates(service_id: Any, service_name: Any) -> tuple[
 def canonical_network_name(network_id: Any, network_name: Any) -> str:
     nid = _uuid8(network_id, field="network_id")
     return validate_docker_component(
-        f"net-{nid}-{_text(network_name)}",
+        f"net-{nid}-{_raw(network_name)}",
         field="network_name",
         max_length=63,
     )
@@ -177,7 +181,7 @@ def canonical_network_name(network_id: Any, network_name: Any) -> str:
 def canonical_volume_name(volume_id: Any, volume_name: Any) -> str:
     vid = _uuid8(volume_id, field="volume_id")
     return validate_docker_component(
-        f"vol-{vid}-{_text(volume_name)}",
+        f"vol-{vid}-{_raw(volume_name)}",
         field="volume_name",
         max_length=63,
     )
@@ -241,11 +245,36 @@ def canonical_remote_image_ref(
 ) -> str:
     """Build the registry-qualified image ref used by Swarm when configured."""
     service = canonical_swarm_service_name(service_name)
-    clean_registry = _text(registry).rstrip("/")
-    clean_namespace = _text(namespace).strip("/")
-    repo = service
+    clean_registry = _raw(registry).strip().rstrip("/")
+    clean_namespace = _raw(namespace).strip("/")
     if clean_registry:
-        repo = f"{clean_registry}/{clean_namespace}/{service}" if clean_namespace else f"{clean_registry}/{service}"
+        if not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]{1,5})?", clean_registry):
+            raise DeploymentSecurityError(
+                f"Invalid Docker registry endpoint: {registry!r}",
+                stage="identity_validation",
+                code="DOCKER_REGISTRY_INVALID",
+                user_message="The configured Docker image registry is invalid.",
+            )
+        if clean_namespace:
+            namespace_repo = f"{clean_registry.lower()}/{clean_namespace.lower()}/{service}"
+        else:
+            namespace_repo = f"{clean_registry.lower()}/{service}"
+        # Validate the repository after removing the optional registry
+        # endpoint syntax. Registry host/port is valid Docker syntax but is
+        # intentionally outside repository-name validation.
+        if not re.fullmatch(
+            r"(?:[a-z0-9.-]+(?::[0-9]{1,5})?/)?"
+            r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*",
+            namespace_repo,
+        ):
+            raise DeploymentSecurityError(
+                f"Invalid Docker remote image repository: {namespace_repo!r}",
+                stage="identity_validation",
+                code="DOCKER_REMOTE_IMAGE_REPOSITORY_INVALID",
+                user_message="The deployment generated an invalid Docker registry image reference.",
+                details={"repository": namespace_repo},
+            )
+        repo = namespace_repo
     return canonical_image_ref(repo, tag)
 
 
