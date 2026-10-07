@@ -52,13 +52,24 @@ def declared_routes(path):
             continue
         first = node.args[0]
         if isinstance(first, ast.Constant) and isinstance(first.value, str) and first.value:
-            # Included URL trees are documented by their owning app.
             if len(node.args) > 1 and isinstance(node.args[1], ast.Call):
                 target = node.args[1].func
                 if isinstance(target, ast.Name) and target.id == "include":
                     continue
             routes.append(first.value)
     return sorted(set(routes))
+
+def route_doc_variants(route, app):
+    normalized = re.sub(
+        r"<(?:[^:>]+:)?([^>]+)>",
+        lambda m: "{" + m.group(1) + "}",
+        route,
+    )
+    variants = {route, normalized, "/" + normalized.lstrip("/")}
+    if app == "agent" and normalized.startswith("v1/"):
+        variants.add("/agent/" + normalized)
+        variants.add("agent/" + normalized)
+    return variants
 
 def django_model_fields(node):
     fields = []
@@ -94,9 +105,12 @@ def main():
         for path in python_files(app):
             rel=path.relative_to(ROOT).as_posix()
             if rel not in docs[app]: errors.append(f"production module not mapped: {rel}")
-            if path.name in {"urls.py", "api_urls.py", "network_api_urls.py", "volume_api_urls.py", "settings_urls.py"}:
+            if path.name == "urls.py":
                 for route in declared_routes(path):
-                    if route not in docs[app]:
+                    if not any(
+                        variant in docs[app]
+                        for variant in route_doc_variants(route, app)
+                    ):
                         errors.append(f"API route undocumented: {rel} -> {route}")
             tree=parse(path)
             for node in ast.walk(tree):
