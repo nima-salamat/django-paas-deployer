@@ -100,3 +100,13 @@ def test_release_promotion_retires_previous_release():
     assert 'status="retired"' in source
     assert 'retired_at=now' in source
     assert 'status="promoted"' in source
+
+
+def test_deploy_service_uses_canonical_runtime_contract_imports():
+    deploy = _source("celery", "services", "deploy_service.py")
+    stop = _source("celery", "services", "stop_service.py")
+    assert "deployments.runtime.runtime_spec" not in deploy
+    assert "deployments.runtime.identity" not in deploy
+    assert "deployments.runtime.identity" not in stop
+    assert "from deployments.runtime.contract import RuntimeIdentity" in deploy
+    assert "from deployments.runtime.contract import RuntimeIdentity" in stop
