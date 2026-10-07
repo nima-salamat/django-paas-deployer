@@ -268,7 +268,12 @@ class SwarmRuntimeAdapter:
         config, image_ref = self._plan_config(plan)
         identity = self._identity(plan)
         try:
-            state = self.runtime.apply(config, image_ref=image_ref, operation_key=operation_key)
+            state = self.runtime.apply(
+                config,
+                image_ref=image_ref,
+                operation_key=operation_key,
+                cancel_check=None,
+            )
         except DeploymentError as exc:
             raise RuntimeOperationError(
                 str(exc),
