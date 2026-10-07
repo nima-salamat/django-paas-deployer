@@ -15,6 +15,7 @@ deploy            -> Deploy provenance + deployment/base-image/operator records
 deployments       -> build/planning/runtime/lifecycle/reconciliation execution
 logs              -> runtime/service log persistence and ingestion
 app_catalog       -> catalog interpretation + multi-Service installation coordinator
+agent              -> machine control-plane authentication/scopes/API/audit
 messenger         -> messaging/realtime domain
 tickets           -> support workflow
 custom_emails     -> email template/delivery domain
