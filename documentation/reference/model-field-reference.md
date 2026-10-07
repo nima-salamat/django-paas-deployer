@@ -51,3 +51,5 @@ Every field reference records:
 - The original declaration details where useful for maintenance.
 
 The source model declaration remains authoritative. A generated/reference table must never be treated as a substitute for migrations or runtime validation.
+
+For inherited project/framework fields, see [inherited-model-fields.md](inherited-model-fields.md).
