@@ -34,6 +34,8 @@ class DeploymentPlan:
     endpoints: tuple[EndpointSpec, ...] = ()
     resources: Mapping[str, Any] = field(default_factory=dict)
     placement: tuple[str, ...] = ()
+    runtime_options: Mapping[str, Any] = field(default_factory=dict)
+    release_spec: Mapping[str, Any] = field(default_factory=dict)
     health_policy: Mapping[str, Any] = field(default_factory=dict)
     rollout_policy: Mapping[str, Any] = field(default_factory=dict)
     retry_policy: Mapping[str, Any] = field(default_factory=dict)
@@ -64,6 +66,8 @@ class DeploymentPlan:
             "networks": [network.name for network in self.networks],
             "volumes": [volume.target for volume in self.volumes],
             "endpoints": [endpoint.name for endpoint in self.endpoints],
+            "runtime_options": {"keys": sorted(self.runtime_options)},
+            "release_spec": {"configured": bool(self.release_spec)},
             "provenance": self.provenance.as_dict(),
         }
 
@@ -172,6 +176,8 @@ class DeploymentPlanCompiler:
             endpoints=tuple(endpoints),
             resources=copy.deepcopy(resources),
             placement=tuple(str(value) for value in (runtime_options.get("placement_constraints") or ())),
+            runtime_options=copy.deepcopy(runtime_options),
+            release_spec=copy.deepcopy(resolved.get("release_spec") or {}),
             health_policy=copy.deepcopy(health_policy),
             rollout_policy=copy.deepcopy(resolved.get("rollout_policy") or {}),
             retry_policy=copy.deepcopy(resolved.get("retry_policy") or {}),
