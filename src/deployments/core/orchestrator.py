@@ -41,6 +41,7 @@ import docker
 
 from .health import DockerHealthChecker
 from .manager.container_manager import Container
+from deployments.common.docker_identity import canonical_process_name
 from .manager.image_manager import Image
 from .manager.network_manager import Network
 from .platform_bridge import enrich_config_from_project, extract_zip_to_temp
@@ -1091,7 +1092,6 @@ class DeploymentOrchestrator:
         containers: list[Container] = []
         deployment_id = str((config.labels or {}).get("deployment.id") or self.logger.deployment_id or "")
         service_id = str((config.labels or {}).get("service.id") or "")
-        deployment_suffix = re.sub(r"[^a-z0-9-]+", "-", deployment_id.lower())[-12:] or "current"
 
         for raw in process_specs or []:
             if not raw.get("enabled", True):
@@ -1115,7 +1115,12 @@ class DeploymentOrchestrator:
             process_env.update({str(k): str(v) for k, v in (raw.get("environment") or {}).items()})
 
             for replica in range(1, replicas + 1):
-                name = f"{config.name}-{safe_process}-{replica}-{deployment_suffix}"
+                name = canonical_process_name(
+                    config.name,
+                    safe_process,
+                    replica,
+                    deployment_id,
+                )
                 labels = {
                     "managed-by": "django-paas-deployer",
                     "deployment.id": deployment_id,
