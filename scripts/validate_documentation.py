@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 DOC = ROOT / "documentation"
-APPS = ["users","auth_users","services","plans","deploy","deployments","logs","app_catalog","messenger","tickets","custom_emails","docs","core","cms"]
+APPS = ["agent","users","auth_users","services","plans","deploy","deployments","logs","app_catalog","messenger","tickets","custom_emails","docs","core","cms"]
 EXCLUDED_PARTS = {"migrations","tests","__pycache__"}
 EXCLUDED_FILES = {"__init__.py"}
 
