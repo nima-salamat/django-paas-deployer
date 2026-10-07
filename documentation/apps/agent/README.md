@@ -55,3 +55,10 @@ Only verified inputs are advertised: ZIP/archive application deployments and dat
 ## Security and operations
 
 Important mutating operations support durable `Idempotency-Key` semantics. Agent-specific throttles are stricter for deployment, upload and shell actions. Audit records are sanitized and do not contain bearer/enrollment/shell credentials or plaintext service secrets.
+
+## Contract references
+
+- [API reference](api.md)
+- [Complete model field reference](field-reference.md)
+
+The API reference is source-defined from `src/agent/contracts.py`; the machine-readable OpenAPI document remains the runtime schema.
