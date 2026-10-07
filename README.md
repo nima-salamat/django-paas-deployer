@@ -10,7 +10,7 @@ Service
   -> ServiceRuntimeGraph
   -> Docker image / external image
   -> Swarm Service (one per enabled process)
-  -> Swarm Task (replica = 1)
+  -> Swarm Task (replicas 1..8 for running processes)
 ```
 
 Docker Compose remains the installation/runtime-specification format for the PassDeployer control plane. Tenant applications are not launched with `docker compose up`.
