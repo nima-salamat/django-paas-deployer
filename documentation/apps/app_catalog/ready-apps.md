@@ -237,14 +237,14 @@ Cancellation is available only for non-terminal installations. The endpoint reco
 ### Delete
 Cancellation cleanup is idempotent and recoverable. After all child Deploys reach terminal states, the coordinator removes the managed child Services through the normal Service deletion boundary, which owns runtime/container/image/volume/log cleanup, then removes the application-owned network. The `ApplicationInstance` is retained as cancellation history until explicitly deleted.
 
-The owner-scoped DELETE endpoint is also self-healing for cancelled installations: if asynchronous cleanup was missed, deletion performs the same cleanup synchronously before removing the parent record.
+The owner-scoped DELETE endpoint is self-healing across lifecycle states: if asynchronous cancellation/cleanup was missed, deletion re-enters the same coordinator cleanup path instead of assuming the previous task completed.
  
 
 `DELETE /api/application-catalog/installations/<uuid>/`
 
-Deletion requires owner scope, a terminal application state (`running`, `failed`, or `cancelled`), and no active child deployment.
+Deletion is an owner-scoped durable intent and is valid even while the installation is `pending` or `deploying`. The coordinator first records/fences deletion, cancels active child work when necessary, waits for child Deploys to converge, then removes child Services and the application-owned network.
 
-Child Services are removed before the application-owned network so attached Docker resources are released safely.
+A direct DELETE may therefore return HTTP 202 with `application_cleanup_pending` while cleanup is still converging. It is not necessary to wait for the application to become terminal before requesting deletion. Child Services are removed before the application-owned network so attached Docker resources are released safely.
 
 The Ready Apps MVP UI does not expose arbitrary destructive deletion controls, but the lifecycle API documents the supported owner-scoped operation.
 
