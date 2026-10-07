@@ -52,6 +52,7 @@ from deployments.core.dockerfile import DockerfileGenerator
 from deployments.core.converter import convert_zip_to_tar
 from deployments.core.types import DeploymentConfig, DeploymentEvent
 from deployments.planning.runtime_spec import RuntimeSpec
+from deployments.planning.policies import ReleaseSpec
 from deployments.runtime import RuntimeBackend, RuntimeIdentity
 from deployments.infrastructure.django_runtime import DjangoRuntimeSelectionResolver
 from deployments.runtime.errors import RuntimeUnavailableError
@@ -1487,6 +1488,36 @@ class DeployService:
                     "managed-by": "django-paas-deployer",
                 },
             )
+            configured_release_spec = dict(getattr(runtime_plan, "release_spec", {}) or {})
+            if not configured_release_spec and platform == "laravel" and bool(cfg.get("migrate", True)):
+                primary_replicas = 1
+                primary_process = next(
+                    (
+                        item for item in getattr(runtime_plan.process_graph, "processes", ())
+                        if str(getattr(item, "name", "")).lower() == "web"
+                    ),
+                    None,
+                )
+                if primary_process is not None:
+                    primary_replicas = int(getattr(primary_process, "replicas", 1) or 1)
+                configured_release_spec = ReleaseSpec(
+                    command=("php", "artisan", "migrate", "--force"),
+                    timeout=float(cfg.get("release_command_timeout") or 300.0),
+                    failure_policy="block",
+                    run_once=(primary_replicas == 1),
+                    idempotency_key=f"release:{deploy_item.revision_id}:laravel-migrate",
+                    execution_backend="runtime-entrypoint",
+                ).as_dict()
+                runtime_plan = replace(
+                    runtime_plan,
+                    release_spec=configured_release_spec,
+                )
+            if configured_release_spec.get("command"):
+                runtime_plan = replace(
+                    runtime_plan,
+                    release_spec=configured_release_spec,
+                )
+
             runtime_spec = RuntimeSpec.from_plan(
                 runtime_plan,
                 image_digest=str(artifact.digest),
