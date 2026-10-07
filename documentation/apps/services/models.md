@@ -91,3 +91,5 @@ Source: src/services/models.py.
 ## Catalog-managed Services
 
 A `Service` with `source_kind=catalog` remains a normal mutable desired-state object, but its execution ownership is constrained by `ApplicationInstanceService`. Catalog-owned plan, network and provenance metadata cannot be changed independently, and direct deletion is rejected while the application binding exists. Mutable runtime configuration still flows through the normal `ServiceRevision -> Deploy` pipeline.
+
+> **Complete field reference:** [field-reference.md](field-reference.md) lists every field explicitly declared in `src/services/models.py`, including type, null/blank behavior, defaults, constraints and purpose.
