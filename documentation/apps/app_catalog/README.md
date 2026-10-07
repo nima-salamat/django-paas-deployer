@@ -62,3 +62,10 @@ For the public application product, read ready-apps.md after api.md and serializ
 ## Wagtail administration
 
 Installed catalog applications are exposed in Wagtail under **Applications** as read-only coordinator records. `ApplicationInstance` shows safe identity/config/status/error metadata; `secret_config` is not exposed. `ApplicationInstanceService` is read-only coordinator provenance. **Cancel installation** requires `app_catalog.change_applicationinstance` and delegates to the existing `cancel_application_installation` task, with its established synchronous executor fallback.\n\nThe **Ready App publication** surface is the operator/editorial control for curated catalog visibility. It changes only `CatalogPublication.enabled` / `featured_override` / `notes`; the executable YAML/Compose recipe remains source-controlled.
+
+## Contract references
+
+- [API reference](api.md)
+- [Complete model field reference](field-reference.md)
+
+For installation and Ready App specifics, also read [ready-apps.md](ready-apps.md) and [architecture.md](architecture.md).
