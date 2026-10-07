@@ -13,7 +13,7 @@ from app_catalog.apis import (
     CatalogResolveAPIView,
     ApplicationInstanceDetailAPIView,
 )
-from app_catalog.models import ApplicationInstance, ApplicationStatus
+from app_catalog.models import ApplicationInstance, ApplicationStatus, CatalogPublication
 from plans.models import Plan
 from users.models import User
 from core.global_settings.config import NameChoices, PlanTypeChoices, StorageTypeChoices
@@ -64,6 +64,30 @@ class ReadyAppPublicApiTests(TestCase):
         for row in response.data:
             self.assertNotIn("services", row)
             self.assertNotIn("compose_document", row)
+
+    def test_operator_publication_override_can_hide_curated_app(self):
+        CatalogPublication.objects.create(
+            catalog_id="wordpress",
+            enabled=False,
+        )
+        response = CatalogListAPIView.as_view()(
+            self.request("GET", "/api/application-catalog/apps/")
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("wordpress", {row["id"] for row in response.data})
+
+    def test_operator_publication_override_can_control_featured_flag(self):
+        CatalogPublication.objects.create(
+            catalog_id="wordpress",
+            enabled=True,
+            featured_override=False,
+        )
+        response = CatalogDetailAPIView.as_view()(
+            self.request("GET", "/api/application-catalog/apps/wordpress/"),
+            catalog_id="wordpress",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data["featured"])
 
     def test_internal_definition_is_not_discoverable(self):
         response = CatalogDetailAPIView.as_view()(
