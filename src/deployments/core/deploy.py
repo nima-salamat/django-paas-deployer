@@ -10,6 +10,7 @@ from deployments.core.entrypoints import (
 )
 from deployments.core.exceptions import DeploymentError
 from deployments.core.manager.client_manager import Client
+from deployments.common.docker_identity import canonical_image_tag, validate_image_repository
 from deployments.core.manager.container_manager import Container
 from deployments.core.manager.image_manager import Image
 from deployments.core.orchestrator import DeploymentOrchestrator
@@ -123,8 +124,10 @@ class Deploy:
         execution_plan=None,
         deadline=None,
     ):
-        self.name = name
-        self.tag = str(tag)
+        # Keep this compatibility facade on the same identity contract as
+        # ImageManager; callers must not invent a second name/tag policy.
+        self.name = validate_image_repository(name)
+        self.tag = canonical_image_tag(tag)
         self.zip_filename = zip_filename
         self.dockerfile_text = dockerfile_text
         self.max_cpu = max_cpu
