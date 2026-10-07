@@ -56,6 +56,29 @@ class DjangoDeploymentLifecycleStore:
         if details:
             updates["error_message"] = str(details.get("error_message") or "")[:1000]
         terminal = sm.is_deploy_terminal(target)
+        if target == sm.DEPLOY_SUCCEEDED:
+            event_payload = {
+                "event_id": str(__import__("uuid").uuid4()),
+                "trace_id": str(context.operation_key),
+                "deployment_id": str(context.deployment_id),
+                "service_id": str(context.service_id),
+                "revision_id": str(context.revision_id or ""),
+                "task_id": str(self.task_id or context.worker_task_id or ""),
+                "event_type": "deployment.succeeded.info",
+                "stage": "finished",
+                "level": "info",
+                "message": message or "Deployment completed successfully.",
+                "progress": 100,
+                "details": dict(details or {}),
+            }
+            from deployments.core.state.manager import StateManager
+            return StateManager.activate_revision_and_succeed(
+                int(self.deployment_id),
+                context.revision_id,
+                task_id=self.task_id or context.worker_task_id,
+                update_fields={**updates, "stage": "finished", "progress": 100},
+                event_payload=event_payload,
+            )
         event_payload = None
         if terminal:
             import uuid
