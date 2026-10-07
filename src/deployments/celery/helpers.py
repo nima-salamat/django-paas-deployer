@@ -7,6 +7,7 @@ from deploy.models import Deploy
 from core.global_settings.config import Config
 from deployments.core.manager.container_manager import Container
 from deployments.core.manager.image_manager import Image
+from deployments.common.docker_identity import canonical_image_ref
 
 
 @dataclass(frozen=True)
@@ -251,7 +252,7 @@ class DeploymentHelper:
                 return False
             if not Image.check_exists(image_id):
                 if not Image.check_exists(container_name) and not Image.check_exists(
-                    f"{container_name}:latest"
+                    canonical_image_ref(container_name, "latest")
                 ):
                     return False
         except Exception:
