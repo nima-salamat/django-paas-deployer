@@ -514,7 +514,11 @@ class StateManager:
             now = timezone.now()
             service.status = SERVICE_STATUS_CHOICES.DEPLOYING
             service.deploy_started = now
-            service.save(update_fields=["status", "deploy_started"])
+            if task_id:
+                service.task_id = str(task_id)
+                service.save(update_fields=["status", "deploy_started", "task_id"])
+            else:
+                service.save(update_fields=["status", "deploy_started"])
 
             from deploy.models import DeploymentStatusChoices  # type: ignore
             deploy.status = DeploymentStatusChoices.RUNNING

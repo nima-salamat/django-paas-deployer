@@ -28,6 +28,17 @@ def test_terminal_compatibility_helper_delegates_to_owned_transition():
     assert "terminal=True" in method
 
 
+def test_deployment_claim_establishes_service_owner_for_heartbeat_fence():
+    source = (ROOT / "deployments/core/state/manager.py").read_text(encoding="utf-8")
+    method = source.split("def lock_and_get_deployment", 1)[1].split(
+        "def heartbeat_deploy", 1
+    )[0]
+
+    assert 'service.task_id = str(task_id)' in method
+    assert '"task_id"' in method
+    assert 'service.save(update_fields=["status", "deploy_started", "task_id"])' in method
+
+
 def test_django_lifecycle_store_does_not_continue_after_cancel_wins_start_race():
     source = (ROOT / "deployments/infrastructure/django_lifecycle.py").read_text(
         encoding="utf-8"

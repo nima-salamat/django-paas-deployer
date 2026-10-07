@@ -57,6 +57,11 @@ class ReadyApplicationArchitectureTests(TestCase):
         binding.deploy.refresh_from_db()
         assert binding.service.status == "deploying"
         assert binding.deploy.status == DeploymentStatusChoices.RUNNING
+        assert binding.service.task_id == "ready-app-child-worker"
+        assert StateManager.heartbeat_deploy(
+            binding.deploy_id,
+            task_id="ready-app-child-worker",
+        ) is True
 
     def test_installation_queues_children_and_keeps_selected_deploy_empty(self):
         instance = self.install(name="queued-child-lifecycle")
