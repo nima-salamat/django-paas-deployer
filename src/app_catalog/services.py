@@ -853,13 +853,12 @@ def _create_application_installation(
                 "process_type": str(spec.get("role") or "web"),
                 "command": runtime_config.get("start_command"),
                 "entrypoint": runtime_config.get("entry_point"),
-                "replicas": 1,
+                "replicas": int(spec.get("replicas") or 1),
                 "enabled": True,
                 "environment": {},
                 "healthcheck": healthcheck or {},
                 "resources": {},
                 "metadata": {"catalog_service_key": key},
-                "replicas": int(spec.get("replicas") or 1),
             },
         )
 
