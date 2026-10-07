@@ -228,7 +228,8 @@ class GlobalIPRateThrottle(_ConfiguredRateThrottle):
     default_rate = "600/min"
 
     def allow_request(self, request, view) -> bool:
-        return self._check(f"global:ip:{_request_ip(request)}", self._rate(view))
+        rate = getattr(settings, self.rate_setting, self.default_rate)
+        return self._check(f"global:ip:{_request_ip(request)}", rate)
 
 
 class GlobalUserRateThrottle(_ConfiguredRateThrottle):
@@ -239,7 +240,8 @@ class GlobalUserRateThrottle(_ConfiguredRateThrottle):
         user = getattr(request, "user", None)
         if user is None or not getattr(user, "is_authenticated", False):
             return True
-        return self._check(f"global:user:{user.pk}", self._rate(view))
+        rate = getattr(settings, self.rate_setting, self.default_rate)
+        return self._check(f"global:user:{user.pk}", rate)
 
 
 class AuthenticationIPRateThrottle(_ConfiguredRateThrottle):
