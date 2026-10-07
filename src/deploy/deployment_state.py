@@ -3,7 +3,7 @@ from django.utils import timezone
 import logging
 import uuid
 
-from .event_pipeline import DeploymentEventPipeline
+from .event_pipeline import DeploymentEventPipeline, sanitize
 from .models import Deploy, DeploymentStatusChoices, RollbackStatusChoices
 from deployments.core.exceptions import DeploymentCancelled
 from deployments.core.types import DeploymentEvent
@@ -395,6 +395,16 @@ class DjangoDeploymentState:
             update["reconciliation_required"] = True
         if result_details.get("technical_message"):
             details["technical_message"] = result_details["technical_message"]
+        exception_technical_message = getattr(exception, "technical_message", None) if exception is not None else None
+        if exception_technical_message:
+            details["technical_message"] = str(exception_technical_message)[:4000]
+        if exception is not None:
+            exception_details = getattr(exception, "details", None)
+            if isinstance(exception_details, dict):
+                # The terminal state is written directly by StateManager rather
+                # than through DeploymentEventPipeline, so sanitize exception
+                # diagnostics here before they enter the durable outbox.
+                details["failure_details"] = sanitize(exception_details)
         if error_code:
             details["error_code"] = error_code
         if error_category:
