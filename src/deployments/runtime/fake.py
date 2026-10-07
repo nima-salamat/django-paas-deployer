@@ -235,6 +235,7 @@ class FakeRuntime:
         *,
         operation_key: str,
         target_plan: Any | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> RuntimeOperationResult:
         self._ensure_usable(plan)
         identity = self._identity(target_plan or plan)
