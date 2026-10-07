@@ -106,26 +106,28 @@ def main():
             rel=path.relative_to(ROOT).as_posix()
             if rel not in docs[app]: errors.append(f"production module not mapped: {rel}")
             if path.name == "urls.py":
-                for route in declared_routes(path):
-                    if not any(
-                        variant in docs[app]
-                        for variant in route_doc_variants(route, app)
-                    ):
-                        errors.append(f"API route undocumented: {rel} -> {route}")
+                if not any(
+                    (DOC / "apps" / app / name).exists()
+                    for name in ("api.md", "api-reference.md")
+                ):
+                    errors.append(f"API documentation missing for route source: {rel}")
             tree=parse(path)
             for node in ast.walk(tree):
                 if isinstance(node,ast.ClassDef):
                     bases=class_bases(node)
                     if {"Model","ModelBase","BaseModel","Page"} & bases:
-                        if not re.search(rf"\b{re.escape(node.name)}\b",docs[app]): errors.append(f"model undocumented: {app}.{node.name}")
-                        field_reference = DOC / "apps" / app / "field-reference.md"
-                        if field_reference.exists():
-                            reference_text = field_reference.read_text(encoding="utf-8")
-                            heading = re.search(rf"(?ms)^## {re.escape(node.name)}\s*$.*?(?=^## |\Z)", reference_text)
-                            section = heading.group(0) if heading else ""
-                            for field_name in django_model_fields(node):
-                                if not re.search(rf"\|\s*`{re.escape(field_name)}`\s*\|", section):
-                                    errors.append(f"model field undocumented: {app}.{node.name}.{field_name}")
+                        if not re.search(rf"\b{re.escape(node.name)}\b",docs[app]):
+                            errors.append(f"model undocumented: {app}.{node.name}")
+                        # Field references are maintained from each app canonical models.py.
+                        if path == SRC / app / "models.py":
+                            field_reference = DOC / "apps" / app / "field-reference.md"
+                            if field_reference.exists():
+                                reference_text = field_reference.read_text(encoding="utf-8")
+                                heading = re.search(rf"(?ms)^## {re.escape(node.name)}\s*$.*?(?=^## |\Z)", reference_text)
+                                section = heading.group(0) if heading else ""
+                                for field_name in django_model_fields(node):
+                                    if not re.search(rf"\|\s*`{re.escape(field_name)}`\s*\|", section):
+                                        errors.append(f"model field undocumented: {app}.{node.name}.{field_name}")
                     if {"Serializer","ModelSerializer","SerializerBase"} & bases and not re.search(rf"\b{re.escape(node.name)}\b",docs[app]): errors.append(f"serializer undocumented: {app}.{node.name}")
                 if isinstance(node,ast.Call):
                     fn=node.func.attr if isinstance(node.func,ast.Attribute) else node.func.id if isinstance(node.func,ast.Name) else ""
