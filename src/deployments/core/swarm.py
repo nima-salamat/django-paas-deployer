@@ -1758,6 +1758,15 @@ class SwarmRuntime:
                 service,
                 service_id=str((config.labels or {}).get("service.id") or ""),
             )
+            existing_labels = self._managed_service_labels(service)
+            if (
+                operation_key
+                and existing_labels.get("operation.key") == str(operation_key)
+            ):
+                operation["idempotent_replay"] = True
+                current = self.inspect_service(name)
+                if current is not None:
+                    return current
             operation["mutation_started"] = True
             service.update(
                 image=image_ref,
