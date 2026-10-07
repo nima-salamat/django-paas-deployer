@@ -63,7 +63,7 @@ when available, a BuildArtifact. Multiple Deploy attempts may reference the
 same Release.
 
 The existing Deploy.release_id remains the historical per-attempt UUID for
-backward compatibility. Deploy.release is the new reusable Release relationship.
+backward compatibility. Deploy.release_reference is the new reusable Release relationship.
 
 Rollback targets an existing Release/artifact rather than rebuilding source
 solely because the operation is a rollback.
