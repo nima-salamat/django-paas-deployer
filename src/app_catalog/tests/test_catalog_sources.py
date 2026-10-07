@@ -301,3 +301,34 @@ def test_imported_database_compose_service_is_normalized_as_db_service():
     assert db["platform"] == "postgresql"
     assert db["plan_type"] == "DB"
     assert db["environment"]["POSTGRES_PASSWORD"] == "${" + "secret.service_password_postgres}"
+
+
+    def test_wordpress_managed_install_and_scaled_resource_contract(self):
+        definition = ApplicationCatalog.get("wordpress")
+        resolved = resolve_variant(
+            definition,
+            "default",
+            {
+                "php_version": "8.4",
+                "wordpress_site_title": "Agent Site",
+                "wordpress_admin_user": "agent-admin",
+                "wordpress_admin_email": "agent@example.com",
+                "wordpress_replicas": 3,
+            },
+        )
+        wordpress = next(item for item in resolved["services"] if item["key"] == "wordpress")
+        self.assertEqual(wordpress["replicas"], 3)
+        self.assertIn("wp-cli-\${WP_CLI_VERSION}.phar", wordpress["dockerfile"])
+        self.assertIn("passdeployer-wordpress-entrypoint.sh", wordpress["dockerfile"])
+        self.assertIn("wp core install", wordpress["dockerfile"])
+        self.assertIn("WORDPRESS_ADMIN_EMAIL", wordpress["environment"])
+        self.assertIn("WORDPRESS_TABLE_PREFIX", wordpress["environment"])
+        self.assertIn("WORDPRESS_MANAGED_CRON", wordpress["environment"])
+        self.assertIn("FROM wordpress:7.1.2-php8.4-apache", wordpress["dockerfile"])
+
+    def test_wordpress_replica_is_preserved_in_application_plan(self):
+        definition = ApplicationCatalog.get("wordpress")
+        resolved = resolve_variant(definition, "default", {"wordpress_replicas": 2})
+        plan = plan_from_resolved(resolved)
+        wordpress = plan.service("wordpress")
+        self.assertEqual(wordpress.replicas, 2)
