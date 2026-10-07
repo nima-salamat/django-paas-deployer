@@ -233,6 +233,12 @@ No Service activation should happen until runtime readiness succeeds.
 
 `_deploy_swarm_runtime()` delegates to `SwarmRuntime` and process application.
 
+### Runtime handle contract
+
+A successful runtime apply must return a `RuntimeHandle`. The handle is the stable identity used by readiness, cancellation cleanup and rollback. If apply reports success without a handle, lifecycle execution fails before readiness or activation with `runtime_handle_missing`.
+
+This prevents the lifecycle from guessing which external resource it owns from a name or from mutable service state.
+
 ### Legacy mode
 
 When Swarm is disabled, the orchestrator uses container snapshot/rename/replace behavior.
