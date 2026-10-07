@@ -69,8 +69,6 @@ def main():
         if not (root/"README.md").exists(): errors.append(f"missing canonical README: {app}")
         docs[app]=docs_for(app)
         field_reference = root / "field-reference.md"
-        if not (root / "README.md").exists():
-            pass
         if app != "deployments" and not field_reference.exists():
             errors.append(f"missing model field reference: {app}")
     for app in APPS:
