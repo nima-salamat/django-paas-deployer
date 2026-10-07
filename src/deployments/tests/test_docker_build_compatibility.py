@@ -150,7 +150,45 @@ def test_build_falls_back_when_engine_rejects_optional_build_controls(monkeypatc
     assert "network_mode" not in api.calls[1]
 
 
-def test_transient_build_transport_failure_refreshes_client_once(monkeypatch):
+
+
+def test_http_400_build_request_is_retried_with_minimal_profile(monkeypatch):
+    class FakeApi:
+        def __init__(self):
+            self.calls = []
+
+        def build(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                def fail_before_stream():
+                    error = docker.errors.APIError("Bad parameter", response=None)
+                    error.status_code = 400
+                    raise error
+                    yield  # pragma: no cover
+                return fail_before_stream()
+            return iter([{"aux": {"ID": "sha256:0123456789abcdef"}}])
+
+        def tag(self, *args, **kwargs):
+            return True
+
+    api = FakeApi()
+    client = _FakeDockerClient(api)
+    _patch_image_client(monkeypatch, [client])
+
+    image = image_manager.Image(
+        "test/repo",
+        "v1",
+        "FROM alpine\nCMD [\"true\"]",
+        _empty_tar(),
+    )
+    image.create()
+
+    assert len(api.calls) == 2
+    assert "container_limits" in api.calls[0]
+    assert "shmsize" in api.calls[0]
+    assert "container_limits" not in api.calls[1]
+    assert "shmsize" not in api.calls[1]
+\ndef test_transient_build_transport_failure_refreshes_client_once(monkeypatch):
     class FailingApi:
         def __init__(self):
             self.calls = 0
