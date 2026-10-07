@@ -104,8 +104,11 @@ class DeploymentPlanCompiler:
             required.add(RuntimeCapability.PERSISTENT_VOLUMES)
 
         rollout_policy_raw = dict(resolved.get("rollout_policy") or {})
+        runtime_options = dict(resolved.get("runtime_options") or {})
         RolloutStrategy.from_mapping(rollout_policy_raw)
-        HealthPolicy.from_mapping(dict(resolved.get("health_policy") or runtime_options.get("healthcheck") or {}))
+        HealthPolicy.from_mapping(
+            dict(resolved.get("health_policy") or runtime_options.get("healthcheck") or {})
+        )
         ReleaseSpec.from_mapping(dict(resolved.get("release_spec") or {}))
         rollout_kind = str(rollout_policy_raw.get("kind") or "RECREATE").strip().upper()
         if rollout_kind == "ROLLING":
@@ -120,7 +123,6 @@ class DeploymentPlanCompiler:
             or resolved.get("health_policy")
         ):
             required.add(RuntimeCapability.HEALTH_CHECKS)
-        runtime_options = dict(resolved.get("runtime_options") or {})
         if runtime_options.get("placement_constraints"):
             required.add(RuntimeCapability.NODE_CONSTRAINTS)
 
