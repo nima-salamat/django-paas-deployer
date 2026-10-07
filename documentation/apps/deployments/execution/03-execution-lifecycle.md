@@ -2,23 +2,19 @@
 
 ## Purpose
 
-This is the operational map of one application deployment. Read it before changing task execution, orchestration, activation, cancellation, rollback or cleanup.
+This is the operational map of one application deployment. Read it before
+changing execution, activation, cancellation, rollback or runtime behavior.
 
 ## Production call chain
 
-```text
+~~~text
 deploy()
   |
   v
 DeployService.execute()
   |
-  +--> PostgreSQL advisory lock (whole task)
-  |
-  v
-StateManager.lock_and_get_deployment()
-  |
-  +--> Service QUEUED -> DEPLOYING
-  +--> Deploy PENDING -> RUNNING
+  +--> PostgreSQL advisory lock
+  +--> StateManager ownership/fencing
   |
   v
 ensure_revision_for_deploy()
@@ -26,29 +22,39 @@ ensure_revision_for_deploy()
   v
 _process_deployment()
   |
-  +--> revision config / profile
-  +--> platform + Dockerfile
-  +--> compatibility DeploymentPlan
+  +--> revision snapshot + normalized configuration
+  +--> platform detection + policy validation
   |
   v
-DeploymentOrchestrator.deploy()
+native DeploymentPlan
   |
-  +--> validate
-  +--> prepare/build
-  +--> base image
-  +--> application image
-  +--> network/volume
-  +--> runtime apply
-  +--> readiness
-  +--> activation callback
-  +--> cleanup
+  v
+DeploymentLifecycleExecutor
+  |
+  +--> strategy.plan()
+  |      +--> base-image resolution
+  |      +--> Dockerfile generation
+  |      +--> application artifact build
+  |      +--> immutable BuildArtifact
+  |      +--> immutable Release
+  |
+  +--> RuntimeContract.apply()
+  +--> RuntimeContract.wait_ready()
+  +--> canonical activation / success
   |
   v
 DjangoDeploymentState.finish()
   |
   v
-terminal Deploy + legacy Service sync
-```
+terminal Deploy + durable event
+~~~
+
+The native Swarm path never constructs DeploymentOrchestrator. The lifecycle
+executor is the production lifecycle owner.
+
+The build step still uses the existing Dockerfile generator and image manager,
+but the resulting artifact is promoted into a durable BuildArtifact before
+runtime application.
 
 ## Entry: Celery task
 
