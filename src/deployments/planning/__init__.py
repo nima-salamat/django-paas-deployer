@@ -1,3 +1,4 @@
+from .policies import HealthPolicy, ReleaseSpec, RolloutStrategy
 """Pure planning and configuration-resolution primitives."""
 
 from .configuration import (
@@ -23,3 +24,5 @@ __all__ = [
     "ProvenanceRecord",
     "ResolvedConfiguration",
 ]
+
+__all__ = [*globals().get("__all__", []), "HealthPolicy", "ReleaseSpec", "RolloutStrategy"]
