@@ -28,3 +28,5 @@ CoreSettings is operator state, not tenant Service configuration. Deployments co
 SystemSetting is durable operator configuration; Redis/cache is not an authority for it. Secret flags are metadata for safe admin presentation, not encryption by themselves; deployment/runtime secrets have separate handling in services/deployments.
 
 Source: src/core/models.py, src/core/settings_service.py.
+
+> **Complete field reference:** [field-reference.md](field-reference.md) lists every field explicitly declared in `src/core/models.py`, including type, null/blank behavior, defaults, constraints and purpose.
