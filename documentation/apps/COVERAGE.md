@@ -8,6 +8,7 @@ Every production source surface must be mapped to its owning canonical document 
 
 ## Installed first-party applications
 
+- [agent](./agent/README.md)
 - [users](./users/README.md)
 - [auth_users](./auth_users/README.md)
 - [services](./services/README.md)
@@ -27,6 +28,7 @@ Every production source surface must be mapped to its owning canonical document 
 
 | Application | Production Python modules | Canonical documentation |
 |---|---:|---|
+| `agent` | 36 | [agent](./agent/README.md) |
 | `users` | 19 | [users](./users/README.md) |
 | `auth_users` | 23 | [auth_users](./auth_users/README.md) |
 | `services` | 36 | [services](./services/README.md) |
@@ -41,7 +43,7 @@ Every production source surface must be mapped to its owning canonical document 
 | `docs` | 9 | [docs](./docs/README.md) |
 | `core` | 31 | [core](./core/README.md) |
 | `cms` | 9 | [cms](./cms/README.md) |
-| **Total** | **377** | **14 app boundaries** |
+| **Total** | **413** | **15 app boundaries** |
 
 ### Module-level inventory
 
