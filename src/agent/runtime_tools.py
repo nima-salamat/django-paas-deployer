@@ -554,7 +554,7 @@ def _wordpress_core_update(service, user, payload: dict[str, Any]) -> dict[str, 
     args = ["wp", "core", "update"]
     version = str(payload.get("version") or "").strip()
     if version:
-        if not re.fullmatch(r"[0-9]+\\.[0-9]+(?:\\.[0-9]+)?", version):
+        if not re.fullmatch("[0-9]+\\.[0-9]+(?:\\.[0-9]+)?", version):
             raise ValueError("version must be a semantic WordPress version such as 7.1.2.")
         args.append(f"--version={version}")
     if payload.get("dry_run") is True:
