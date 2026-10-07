@@ -87,6 +87,32 @@ class AgentContractTests(TestCase):
         self.assertEqual(auth["shell_query_parameter"], "shell_token")
         self.assertEqual(protocol["interactive_pty"]["websocket_path"], "/ws/services/shell/service-1/")
 
+    def test_compound_shell_file_scope_requires_both_scopes(self):
+        from agent.contracts import contracts_for_agent
+
+        self.agent.scopes = ["shell.files.read"]
+        self.agent.save(update_fields=["scopes", "updated_at"])
+        paths = {
+            (item.method, item.path)
+            for item in contracts_for_agent(self.agent)
+        }
+        self.assertNotIn(
+            ("POST", "/agent/v1/services/{service_id}/shell/files"),
+            paths,
+        )
+
+        self.agent.scopes = ["shell.files.read", "shell.files.write"]
+        self.agent.save(update_fields=["scopes", "updated_at"])
+        paths = {
+            (item.method, item.path)
+            for item in contracts_for_agent(self.agent)
+        }
+        self.assertIn(
+            ("POST", "/agent/v1/services/{service_id}/shell/files"),
+            paths,
+        )
+
+
     def test_shell_close_and_file_operations_use_contract_scopes(self):
         close = contract_for(
             "/agent/v1/services/{service_id}/shell/sessions/{session_id}/close",
