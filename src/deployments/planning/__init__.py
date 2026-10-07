@@ -1,4 +1,3 @@
-from .policies import HealthPolicy, ReleaseSpec, RolloutStrategy
 """Pure planning and configuration-resolution primitives."""
 
 from .configuration import (
@@ -12,7 +11,12 @@ from .runtime_spec import RuntimeSpec
 from .provenance import ConfigurationProvenance, ProvenanceRecord
 from .bridge import DeploymentPlanCompatibilityCompiler
 
+from .policies import HealthPolicy, ReleaseSpec, RolloutStrategy
+
 __all__ = [
+    "HealthPolicy",
+    "ReleaseSpec",
+    "RolloutStrategy",
     "ConfigurationLayer",
     "ConfigurationProvenance",
     "ConfigurationResolutionError",
