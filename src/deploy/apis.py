@@ -45,6 +45,7 @@ from deployments.core.deploy import Deploy as OrchestratorDeploy
 from deployments.core.manager.client_manager import Client
 from deployments.core.manager.container_manager import Container
 from deployments.core.manager.image_manager import Image
+from deployments.common.docker_identity import canonical_image_ref
 from docker.errors import APIError, NotFound as DockerNotFound
 
 from .models import Deploy, DeployLog, DeploymentStatusChoices
@@ -767,7 +768,7 @@ class DeployViewSet(ModelViewSet):
                         container.remove()
                     if not is_db:
                         Image.remove_by_name(container_name)
-                        Image.remove_by_name(f"{container_name}:latest")
+                        Image.remove_by_name(canonical_image_ref(container_name, "latest"))
                 teardown_error = None
             except Exception as exc:
                 logger.exception(
