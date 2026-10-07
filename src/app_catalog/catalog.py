@@ -148,7 +148,23 @@ def _public_images_are_pinned(data: dict) -> bool:
     return True
 
 
-def is_public_definition(definition: CatalogDefinition) -> bool:
+def _publication_enabled_overrides() -> dict[str, bool]:
+    """Load publication visibility overrides in one query for catalog listing."""
+    try:
+        from .models import CatalogPublication
+        return {
+            str(row["catalog_id"]): bool(row["enabled"])
+            for row in CatalogPublication.objects.values("catalog_id", "enabled")
+        }
+    except Exception:
+        return {}
+
+
+def is_public_definition(
+    definition: CatalogDefinition,
+    *,
+    publication_enabled: bool | None = None,
+) -> bool:
     source = definition.source.resolve()
     first_party_root = (CATALOG_ROOT / "first_party").resolve()
     if (
@@ -165,18 +181,31 @@ def is_public_definition(definition: CatalogDefinition) -> bool:
     # Editorial publication is a database-backed operator override. It can
     # hide an already-safe curated recipe, but it cannot turn an unsafe or
     # non-first-party definition into a public Ready App.
+    if publication_enabled is not None:
+        return bool(publication_enabled)
     try:
         from .models import CatalogPublication
         publication = (
             CatalogPublication.objects
             .filter(catalog_id=definition.id)
-            .values("enabled")
+            .values_list("enabled", flat=True)
             .first()
         )
     except Exception:
         publication = None
-    return publication is None or bool(publication["enabled"])
+    return publication is None or bool(publication)
 
+
+def public_catalog_definitions() -> list[CatalogDefinition]:
+    overrides = _publication_enabled_overrides()
+    return [
+        definition
+        for definition in ApplicationCatalog.definitions()
+        if is_public_definition(
+            definition,
+            publication_enabled=overrides.get(definition.id),
+        )
+    ]
 
 class ApplicationCatalog:
     @classmethod
