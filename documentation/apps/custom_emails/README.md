@@ -37,3 +37,8 @@ Current HTTP management is superuser-only. Header injection is rejected; rendere
 ## Reading order
 
 models.md -> serializers.md -> api.md -> background.md.
+
+## Contract references
+
+- [API reference](api.md)
+- [Complete model field reference](field-reference.md)
