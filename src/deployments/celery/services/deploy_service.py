@@ -53,6 +53,14 @@ from deployments.common.exceptions import (
     to_deployment_error,
 )
 from deployments.planning import ConfigurationResolver, DeploymentPlanCompiler
+from deployments.application.context import DeploymentExecutionContext, DeploymentExecutionEvent
+from deployments.application.lifecycle import DeploymentLifecycleExecutor
+from deployments.application.strategies import CallbackDeploymentStrategy
+from deployments.infrastructure.django_lifecycle import DjangoDeploymentLifecycleStore
+from deployments.core.dockerfile import DockerfileGenerator
+from deployments.core.converter import convert_zip_to_tar
+from deployments.core.types import DeploymentConfig, DeploymentEvent
+from deployments.planning.runtime_spec import RuntimeSpec
 from deployments.runtime import RuntimeBackend, RuntimeIdentity
 from deployments.infrastructure.django_runtime import DjangoRuntimeSelectionResolver
 from deployments.runtime.errors import RuntimeUnavailableError
@@ -979,6 +987,50 @@ class DeployService:
             zip_path, os.path.getsize(zip_path),
             _docker_tag_from_deploy(deploy_item.version), container_name,
         )
+
+        if swarm_enabled() and execution_plan is not None:
+            return self._execute_native_swarm_lifecycle(
+                deploy_item,
+                container_name,
+                state_tracker,
+                cfg=cfg,
+                execution_plan=execution_plan,
+                dockerfile_text=dockerfile_text,
+                zip_path=zip_path,
+                platform=platform,
+                resource_limits=resource_limits,
+                build_resource_policy=build_resource_policy,
+                build_options=build_options,
+                runtime_options=runtime_options,
+                networks=networks,
+                volume_specs=volume_specs,
+                endpoint_specs=endpoint_specs,
+                environment=environment,
+                port=port,
+                server_type=server_type,
+                celery=celery,
+                celery_beat=celery_beat,
+                entry_point=entry_point,
+                worker_count=worker_count,
+                runtime_version=(cfg.get("runtime_version") or cfg.get("node_version") or cfg.get("php_version")
+                    or cfg.get("python_version") or cfg.get("django_python_version") or cfg.get("go_version")
+                    or cfg.get("dotnet_version")),
+                package_manager=package_manager,
+                working_directory=(cfg.get("working_directory") or cfg.get("working_dir")
+                    or runtime_options.get("working_directory") or "/app"),
+                build_dir=build_dir,
+                install_command=install_command,
+                build_command=build_command,
+                start_command=cfg.get("start_command"),
+                frontend=dict(cfg.get("frontend") or {}),
+                document_root=cfg.get("document_root") or cfg.get("resolved_paths", {}).get("document_root"),
+                static_dir=cfg.get("static_dir") or cfg.get("resolved_paths", {}).get("static_dir"),
+                media_dir=cfg.get("media_dir") or cfg.get("resolved_paths", {}).get("media_dir"),
+                url_handling=url_handling,
+                healthcheck_path=healthcheck_path,
+                healthcheck_expected_status=expected_status,
+                healthcheck_timeout=healthcheck_timeout,
+            )
 
         deployer = DeployFacade(
             name=container_name,
