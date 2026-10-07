@@ -11,6 +11,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from services.ports import sync_endpoint_reservation
+from deployments.common.docker_identity import canonical_runtime_process_service_name
 
 from services.models import (
     Service,
@@ -217,7 +218,10 @@ def scale_service_process(service: Service, process_name: str, replicas: int, *,
     docker_name = (
         locked.get_docker_service_name()
         if process_name == "web"
-        else f"{locked.get_docker_service_name()}-{process_name}"
+        else canonical_runtime_process_service_name(
+            locked.get_docker_service_name(),
+            process_name,
+        )
     )
     try:
         from deployments.core.swarm import SwarmRuntime, swarm_enabled
