@@ -101,6 +101,9 @@ Source of truth: `src/deploy/models.py`. Django/Django-contrib inherited fields 
 - `operation_previous_resource_id`: `CharField` with DB non-null, blank allowed. The model declaration is authoritative for validation and persistence behavior.
 - `recovery_metadata`: `JSONField` with DB nullable, blank allowed. The model declaration is authoritative for validation and persistence behavior.
 
+| `release_reference` | ForeignKey | yes | yes | `—` | on_delete=SET_NULL; related_name=deployment_attempts | Reusable immutable Release referenced by this deployment attempt; legacy `release_id` remains a separate historical UUID. |
+| `artifact` | ForeignKey | yes | yes | `—` | on_delete=SET_NULL; related_name=deployment_attempts | Immutable BuildArtifact used by this deployment attempt. |
+
 ## DeploymentResource
 
 **Bases:** `BaseModel`  
@@ -397,3 +400,44 @@ Source of truth: `src/deploy/models.py`. Django/Django-contrib inherited fields 
 - **DB nullable** means the database may store NULL; **Blank** is a Django validation/form contract and is not equivalent to NULL.
 - A default may be a callable (for example `dict`, `timezone.now`, or a project helper), so the displayed expression is not necessarily the stored value at declaration time.
 - JSON fields are intentionally flexible and their detailed semantic contract belongs in the app/domain documentation; this table records the field's persistence role.
+
+
+## BuildArtifact
+
+**Bases:** `BaseModel`  
+**Declared fields:** 11
+
+| Field | Django type | DB nullable | Blank | Default | Constraints / relation | Purpose / contract |
+|---|---|---:|---:|---|---|---|
+| `digest` | CharField | no | no | `—` | unique, indexed | Immutable canonical artifact identity. |
+| `image_ref` | CharField | no | no | `—` | DB non-null | Runtime image reference alias; digest remains canonical identity. |
+| `source_digest` | CharField | no | yes | `""` | DB non-null | Digest of the exact source bundle used for the build. |
+| `build_definition_digest` | CharField | no | yes | `""` | DB non-null | Digest of deterministic build definition inputs. |
+| `base_image_digests` | JSONField | no | yes | `list` | DB non-null | Digests of base runtime images used by the build. |
+| `build_context_identity` | CharField | no | yes | `""` | DB non-null | Identity of the build context represented by the artifact. |
+| `builder_backend` | CharField | no | yes | `""` | DB non-null | Builder backend/provenance label. |
+| `platform_architecture` | CharField | no | yes | `""` | DB non-null | Build platform/architecture identity. |
+| `provenance` | JSONField | no | yes | `dict` | DB non-null | Secret-safe build provenance metadata. |
+| `created_by` | ForeignKey | yes | yes | `—` | on_delete=SET_NULL | Actor associated with artifact creation. |
+
+## Release
+
+**Bases:** `BaseModel`  
+**Declared fields:** 15
+
+| Field | Django type | DB nullable | Blank | Default | Constraints / relation | Purpose / contract |
+|---|---|---:|---:|---|---|---|
+| `service` | ForeignKey | no | no | `—` | on_delete=CASCADE; related_name=releases | Service whose immutable executable revision is being released. |
+| `revision` | ForeignKey | no | no | `—` | on_delete=PROTECT; related_name=releases | Immutable ServiceRevision captured by the release. |
+| `artifact` | ForeignKey | yes | yes | `—` | on_delete=PROTECT; related_name=releases | Immutable BuildArtifact used by the release. |
+| `identity_fingerprint` | CharField | no | no | `—` | unique, indexed | Deterministic content fingerprint for release identity. |
+| `runtime_spec` | JSONField | no | yes | `dict` | DB non-null | Immutable runtime specification snapshot. |
+| `rollout_policy` | JSONField | no | yes | `dict` | DB non-null | Immutable rollout semantics. |
+| `health_policy` | JSONField | no | yes | `dict` | DB non-null | Immutable readiness/health semantics. |
+| `release_command` | JSONField | no | yes | `dict` | DB non-null | Secret-safe release command policy snapshot. |
+| `previous_release` | ForeignKey | yes | yes | `—` | self relation; on_delete=SET_NULL | Previous known-good release provenance. |
+| `status` | CharField | no | no | `ReleaseStatusChoices.PREPARED` | choices, indexed | Mutable release lifecycle metadata. |
+| `provenance` | JSONField | no | yes | `dict` | DB non-null | Secret-safe release provenance. |
+| `promoted_at` | DateTimeField | yes | yes | `—` | DB nullable | Time canonical activation promoted this release. |
+| `retired_at` | DateTimeField | yes | yes | `—` | DB nullable | Time release retirement was recorded. |
+| `created_by` | ForeignKey | yes | yes | `—` | on_delete=SET_NULL | Actor associated with release creation. |
