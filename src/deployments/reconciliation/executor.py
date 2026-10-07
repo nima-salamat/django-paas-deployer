@@ -81,6 +81,14 @@ class ReconciliationExecutor:
         if action is ReconciliationAction.STOP:
             if handle is None:
                 raise ValueError("STOP reconciliation requires an identified runtime handle.")
+            if not handle.runtime_id:
+                raise StaleDeploymentWorkerError(
+                    "Destructive reconciliation requires a runtime resource identity."
+                )
+            if str(handle.identity.service_id) != str(desired.service_id):
+                raise StaleDeploymentWorkerError(
+                    "Runtime resource identity does not belong to the desired service."
+                )
             result = runtime.stop(handle, operation_key=operation_key)
         elif action in {
             ReconciliationAction.CREATE,
@@ -90,6 +98,11 @@ class ReconciliationExecutor:
             if plan is None:
                 raise ValueError(
                     f"{action.value.upper()} reconciliation requires a native DeploymentPlan."
+                )
+            plan_identity = getattr(plan, "identity", None)
+            if plan_identity is not None and str(getattr(plan_identity, "service_id", "")) != str(desired.service_id):
+                raise StaleDeploymentWorkerError(
+                    "Reconciliation plan identity does not belong to the desired service."
                 )
             result = runtime.apply(
                 plan,
