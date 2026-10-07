@@ -188,7 +188,8 @@ def test_http_400_build_request_is_retried_with_minimal_profile(monkeypatch):
     assert "shmsize" in api.calls[0]
     assert "container_limits" not in api.calls[1]
     assert "shmsize" not in api.calls[1]
-\ndef test_transient_build_transport_failure_refreshes_client_once(monkeypatch):
+
+def test_transient_build_transport_failure_refreshes_client_once(monkeypatch):
     class FailingApi:
         def __init__(self):
             self.calls = 0
