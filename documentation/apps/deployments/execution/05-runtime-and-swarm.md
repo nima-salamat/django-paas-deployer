@@ -165,7 +165,7 @@ An observation can tell you what exists, but identity fields determine whether i
 
 ### Why it exists
 
-It is the migration seam that presents the old Swarm implementation through the RuntimeContract.
+It is the runtime boundary between the runtime-neutral execution contract and the concrete Swarm implementation.
 
 ### Called by
 
