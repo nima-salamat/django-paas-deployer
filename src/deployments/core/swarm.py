@@ -2,7 +2,7 @@
 
 Dockerfiles remain build inputs. Runtime execution is driven by a
 Compose/Stack-shaped specification applied through the Docker Engine API.
-The supported replica states are 0 (stopped) and 1 (running).
+The supported replica states are 0 (stopped) and 1-8 (running).
 """
 from __future__ import annotations
 
