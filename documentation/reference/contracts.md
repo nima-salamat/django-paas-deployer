@@ -59,6 +59,25 @@ The detailed app documentation remains the narrative contract. This file answers
 | `services` | `src/services/models.py` | `ShellAuditEvent` | project model/abstract class | [field reference](../apps/services/field-reference.md#shellauditevent) |
 | `plans` | `src/plans/models.py` | `Plan` | project model/abstract class | [field reference](../apps/plans/field-reference.md#plan) |
 
+| `app_catalog` | `src/app_catalog/models.py` | `ApplicationInstance` | project model/abstract class | [field reference](../apps/app_catalog/field-reference.md#applicationinstance) |
+| `app_catalog` | `src/app_catalog/models.py` | `ApplicationInstanceService` | project model/abstract class | [field reference](../apps/app_catalog/field-reference.md#applicationinstanceservice) |
+| `app_catalog` | `src/app_catalog/models.py` | `CatalogPublication` | project model/abstract class | [field reference](../apps/app_catalog/field-reference.md#catalogpublication) |
+| `cms` | `src/cms/models.py` | `HomePage` | project model/abstract class | [field reference](../apps/cms/field-reference.md#homepage) |
+| `core` | `src/core/models.py` | `SystemSetting` | project model/abstract class | [field reference](../apps/core/field-reference.md#systemsetting) |
+| `core` | `src/core/models.py` | `CoreSettings` | project model/abstract class | [field reference](../apps/core/field-reference.md#coresettings) |
+| `custom_emails` | `src/custom_emails/models.py` | `EmailTemplate` | project model/abstract class | [field reference](../apps/custom_emails/field-reference.md#emailtemplate) |
+| `custom_emails` | `src/custom_emails/models.py` | `EmailLog` | project model/abstract class | [field reference](../apps/custom_emails/field-reference.md#emaillog) |
+| `deploy` | `src/deploy/models.py` | `Deploy` | project model/abstract class | [field reference](../apps/deploy/field-reference.md#deploy) |
+| `deploy` | `src/deploy/models.py` | `DeploymentResource` | project model/abstract class | [field reference](../apps/deploy/field-reference.md#deploymentresource) |
+| `deploy` | `src/deploy/models.py` | `DeploymentEventOutbox` | project model/abstract class | [field reference](../apps/deploy/field-reference.md#deploymenteventoutbox) |
+| `deploy` | `src/deploy/models.py` | `DeployLog` | project model/abstract class | [field reference](../apps/deploy/field-reference.md#deploylog) |
+| `deploy` | `src/deploy/models.py` | `BuildCacheArtifact` | project model/abstract class | [field reference](../apps/deploy/field-reference.md#buildcacheartifact) |
+| `deploy` | `src/deploy/models.py` | `BuildCacheQuota` | project model/abstract class | [field reference](../apps/deploy/field-reference.md#buildcachequota) |
+| `deploy` | `src/deploy/models.py` | `BaseRuntimeImageLease` | project model/abstract class | [field reference](../apps/deploy/field-reference.md#baseruntimeimagelease) |
+| `deploy` | `src/deploy/models.py` | `BaseRuntimeImage` | project model/abstract class | [field reference](../apps/deploy/field-reference.md#baseruntimeimage) |
+| `deploy` | `src/deploy/models.py` | `SwarmCluster` | project model/abstract class | [field reference](../apps/deploy/field-reference.md#swarmcluster) |
+| `deploy` | `src/deploy/models.py` | `SwarmNode` | project model/abstract class | [field reference](../apps/deploy/field-reference.md#swarmnode) |
+
 ## Model field inventory
 
 | App | Source | Model | Field | Django type | Documentation |
