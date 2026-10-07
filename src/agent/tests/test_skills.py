@@ -102,9 +102,10 @@ class AgentSkillTests(TestCase):
         names = {tool.name for tool in __import__("agent.runtime_tools", fromlist=["TOOLS"]).TOOLS}
         for expected in {
             "workspace.inspect", "runtime.detect", "php.lint", "php.composer",
-            "wordpress.inspect", "wordpress.page.create", "wordpress.page.update",
+            "wordpress.status", "wordpress.inspect", "wordpress.page.create", "wordpress.page.update",
             "wordpress.plugin.manage", "wordpress.theme.manage", "wordpress.cache.flush",
-            "wordpress.wp_cli", "database.health",
+            "wordpress.core.update", "wordpress.cron.run", "wordpress.site.configure",
+            "wordpress.search_replace", "wordpress.scale", "wordpress.wp_cli", "database.health",
         }:
             self.assertIn(expected, names)
     def test_runtime_tool_skill_and_registry_are_exposed(self):
