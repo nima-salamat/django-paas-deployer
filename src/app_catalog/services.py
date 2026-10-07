@@ -486,6 +486,7 @@ def _create_application_installation(
                                 "platform": str(spec.get("platform") or "docker"),
                                 "plan_type": str(spec.get("plan_type") or PlanTypeChoices.APP),
                                 "depends_on": [str(dep) for dep in (spec.get("depends_on") or [])],
+                                "replicas": int(spec.get("replicas") or 1),
                                 "required": bool(spec.get("required", True)),
                             }
                             for spec in (resolved.get("services") or [])
