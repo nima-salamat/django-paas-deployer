@@ -128,9 +128,9 @@ It also checks policy ceilings such as replica limits.
 
 Do not overstate this contract.
 
-The current DeployService uses `ConfigurationResolver` inside `_compile_compatibility_plan()`, where it supplies a **subset** of the possible layers: platform-policy resource limits and a revision-snapshot-like set of environment/runtime/network/volume/endpoint/health values.
+The current DeployService uses `ConfigurationResolver` inside `_compile_native_plan()`, where it supplies a **subset** of the possible layers: platform-policy resource limits and a revision-snapshot-like set of environment/runtime/network/volume/endpoint/health values.
 
-The main path still performs additional concrete normalization in `_process_deployment()`.
+The main path still performs additional concrete normalization in `_process_deployment()` before the native plan is compiled.
 
 ### How it is used
 
