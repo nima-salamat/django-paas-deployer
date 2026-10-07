@@ -14,6 +14,7 @@ from deployments.runtime.errors import RuntimeUnsupportedError
 
 from .configuration import ResolvedConfiguration
 from .provenance import ConfigurationProvenance
+from .policies import HealthPolicy, ReleaseSpec, RolloutStrategy
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,9 @@ class DeploymentPlanCompiler:
             required.add(RuntimeCapability.PERSISTENT_VOLUMES)
 
         rollout_policy_raw = dict(resolved.get("rollout_policy") or {})
+        RolloutStrategy.from_mapping(rollout_policy_raw)
+        HealthPolicy.from_mapping(dict(resolved.get("health_policy") or runtime_options.get("healthcheck") or {}))
+        ReleaseSpec.from_mapping(dict(resolved.get("release_spec") or {}))
         rollout_kind = str(rollout_policy_raw.get("kind") or "RECREATE").strip().upper()
         if rollout_kind == "ROLLING":
             required.add(RuntimeCapability.ROLLING_UPDATE)
