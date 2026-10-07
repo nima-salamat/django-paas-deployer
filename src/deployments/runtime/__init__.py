@@ -1,3 +1,4 @@
+from .artifacts import ArtifactReference, ArtifactRegistry, SwarmArtifactRegistry
 """Runtime contracts and adapters for deployment execution.
 
 The runtime package is intentionally dependency-light.  Domain and planning
@@ -40,3 +41,5 @@ __all__ = [
     "RuntimeUnavailableError",
     "RuntimeUnsupportedError",
 ]
+
+__all__ = [*globals().get("__all__", []), "ArtifactReference", "ArtifactRegistry", "SwarmArtifactRegistry"]
