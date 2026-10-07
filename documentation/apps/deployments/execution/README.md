@@ -234,7 +234,7 @@ The planner should return a decision. A runtime executor should perform the actu
 
 Use this package when changing backend-neutral runtime semantics: identity, capabilities, availability, handles, observations or backend selection.
 
-Use `runtime/swarm/adapter.py` for the migration seam. Use `core/swarm.py` for the current concrete Swarm implementation.
+Use `runtime/swarm/adapter.py` for the runtime-neutral-to-Swarm boundary. Use `core/swarm.py` for the concrete Swarm implementation.
 
 ### `infrastructure/`
 
@@ -292,12 +292,12 @@ The arrows below are semantic contracts, not decoration.
 | lock -> state start | `StateManager.lock_and_get_deployment()` | Deploy id + task id | Service QUEUED→DEPLOYING; Deploy PENDING→RUNNING | lifecycle |
 | state -> revision | `ensure_revision_for_deploy()` | Deploy + Service | freezes executable snapshot | materializer |
 | revision -> graph | `ServiceRuntimeGraph.from_revision()` | immutable revision | reconstructs process/runtime semantics | planning/orchestrator |
-| graph -> plan | `DeploymentPlanCompiler.compile()` | graph + selection + resolved config | validates capabilities and freezes execution description | compatibility bridge |
-| plan -> legacy DTO | `DeploymentPlanCompatibilityCompiler.compile()` | plan + base config | maps plan into current orchestrator DTO | Deploy facade |
+| graph -> plan | `DeploymentPlanCompiler.compile()` | graph + selection + resolved config | validates capabilities and freezes execution description | native production planning |
+| plan -> legacy DTO | `DeploymentPlanCompatibilityCompiler.compile()` | plan + base config | legacy compatibility mapping only | explicit non-Swarm/legacy callers |
 | DTO -> orchestration | `DeploymentOrchestrator.deploy()` | DeploymentConfig | validates, builds image, applies runtime | Swarm/legacy runtime |
 | runtime -> readiness | concrete runtime/health checker | runtime resource | proves resource can serve | activation |
 | readiness -> activation | DeployService callback | revision id + previous-deploy expectation | commits active revision under Service lock | Service |
-| activation -> cleanup | orchestrator | active replacement + previous resources | removes old owned resources | terminal state |
+| activation -> cleanup | lifecycle/runtime/resource journal | active replacement + previous resources | removes old owned resources and records cleanup outcome | terminal/reconciliation state |
 | cleanup -> terminal | `DjangoDeploymentState.finish()` | result + owner | owned terminal state commit | reconciliation |
 
 ## Important lifecycle distinction
