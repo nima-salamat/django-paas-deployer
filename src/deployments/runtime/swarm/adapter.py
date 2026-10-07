@@ -288,6 +288,13 @@ class SwarmRuntimeAdapter:
                 operation_key=operation_key,
             )
             image_ref = published.image_ref
+        config = replace(
+            config,
+            labels={
+                **dict(getattr(config, "labels", {}) or {}),
+                "operation.key": str(operation_key),
+            },
+        )
         try:
             apply_processes = getattr(self.runtime, "apply_processes", None)
             if callable(apply_processes):
