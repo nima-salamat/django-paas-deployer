@@ -383,6 +383,7 @@ class SwarmRuntimeAdapter:
         *,
         operation_key: str,
         target_plan: Any | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> RuntimeOperationResult:
         rollback_plan = target_plan or getattr(plan, "rollback_plan", None)
         if rollback_plan is None:
@@ -390,7 +391,7 @@ class SwarmRuntimeAdapter:
                 "Swarm rollback requires an explicit previously-known-good plan.",
                 code="swarm_rollback_plan_required",
             )
-        return self.apply(rollback_plan, operation_key=operation_key)
+        return self.apply(rollback_plan, operation_key=operation_key, cancel_check=cancel_check)
 
     def restart_service_group(self, service_id: str) -> RuntimeOperationResult:
         self._ensure_available(self)
