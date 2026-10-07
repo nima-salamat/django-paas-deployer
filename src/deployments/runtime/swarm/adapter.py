@@ -13,6 +13,7 @@ from typing import Any, Callable
 from deployments.common.exceptions import DeploymentError
 from deployments.core.swarm import SwarmRuntime, SwarmServiceState, swarm_enabled
 
+from ..artifacts import ArtifactReference, SwarmArtifactRegistry
 from ..capabilities import (
     RuntimeAvailability,
     RuntimeAvailabilityState,
@@ -71,6 +72,13 @@ class SwarmRuntimeAdapter:
         self._runtime = runtime
         self._runtime_factory = runtime_factory or SwarmRuntime
         self._operator_enabled = operator_enabled
+        self._artifact_registry = None
+
+    @property
+    def artifact_registry(self) -> SwarmArtifactRegistry:
+        if self._artifact_registry is None:
+            self._artifact_registry = SwarmArtifactRegistry(self.runtime)
+        return self._artifact_registry
 
     @property
     def runtime(self) -> SwarmRuntime:
@@ -227,6 +235,7 @@ class SwarmRuntimeAdapter:
         health = dict(getattr(plan, "health_policy", {}) or {})
         spec = SwarmExecutionSpec(
             name=identity.runtime_name or identity.service_id,
+            tag=(image_ref.rsplit(":", 1)[-1] if ":" in image_ref and "@" not in image_ref else "release"),
             image_ref=image_ref,
             environment={
                 str(k): str(v)
@@ -267,12 +276,26 @@ class SwarmRuntimeAdapter:
         self._ensure_available(self)
         config, image_ref = self._plan_config(plan)
         identity = self._identity(plan)
+        artifact_digest = str(getattr(plan, "artifact_digest", "") or "")
+        if artifact_digest:
+            published = self.artifact_registry.ensure_available(
+                ArtifactReference(
+                    digest=artifact_digest,
+                    image_ref=image_ref,
+                    source_digest=str(getattr(plan, "source_digest", "") or ""),
+                ),
+                service_name=config.name,
+                tag=config.tag,
+                operation_key=operation_key,
+            )
+            image_ref = published.image_ref
         try:
             states = self.runtime.apply_processes(
                 config,
                 image_ref=image_ref,
                 operation_key=operation_key,
                 cancel_check=cancel_check,
+                prepared_image_ref=image_ref,
             )
             process_names = tuple(
                 str(state.name) for state in states.values()
