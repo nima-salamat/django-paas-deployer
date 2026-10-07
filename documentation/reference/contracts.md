@@ -413,6 +413,17 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `services` | `src/services/models.py` | `ShellAuditEvent` | project model class | [field reference](../apps/services/field-reference.md#shellauditevent) |
 | `services` | `src/services/models.py` | `ShellSession` | project model class | [field reference](../apps/services/field-reference.md#shellsession) |
 | `services` | `src/services/models.py` | `Volume` | project model class | [field reference](../apps/services/field-reference.md#volume) |
+| `tickets` | `src/tickets/models.py` | `DepartmentMembership` | project model class | [field reference](../apps/tickets/field-reference.md#departmentmembership) |
+| `tickets` | `src/tickets/models.py` | `Department` | project model class | [field reference](../apps/tickets/field-reference.md#department) |
+| `tickets` | `src/tickets/models.py` | `TicketAttachment` | project model class | [field reference](../apps/tickets/field-reference.md#ticketattachment) |
+| `tickets` | `src/tickets/models.py` | `TicketMessage` | project model class | [field reference](../apps/tickets/field-reference.md#ticketmessage) |
+| `tickets` | `src/tickets/models.py` | `TicketReadState` | project model class | [field reference](../apps/tickets/field-reference.md#ticketreadstate) |
+| `tickets` | `src/tickets/models.py` | `Ticket` | project model class | [field reference](../apps/tickets/field-reference.md#ticket) |
+| `users` | `src/users/models.py` | `PermissionMixin` | project model class | [field reference](../apps/users/field-reference.md#permissionmixin) |
+| `users` | `src/users/models.py` | `Profile` | project model class | [field reference](../apps/users/field-reference.md#profile) |
+| `users` | `src/users/models.py` | `Receipt` | project model class | [field reference](../apps/users/field-reference.md#receipt) |
+| `users` | `src/users/models.py` | `Rule` | project model class | [field reference](../apps/users/field-reference.md#rule) |
+| `users` | `src/users/models.py` | `User` | project model class | [field reference](../apps/users/field-reference.md#user) |
 
 ## Model field inventory
 
