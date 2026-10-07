@@ -79,7 +79,7 @@ This package does not own tenant desired state, catalog definitions, plan policy
 
 ## Migration seams
 
-The current production path still contains deliberate compatibility bridges such as the legacy `Deploy` facade, runtime Swarm adapter, plan-to-legacy configuration compiler, and framework-neutral lifecycle executor. These are documented migration seams, not duplicate ownership models.
+The normal Swarm production path is owned by `DeploymentLifecycleExecutor` and consumes the native `DeploymentPlan` through `RuntimeContract`. The legacy `Deploy` facade and plan-to-legacy compiler remain isolated compatibility paths for non-Swarm/legacy callers.
 
 ## Reading order
 
@@ -107,3 +107,6 @@ Recent lifecycle hardening added these first-class production surfaces:
 - `src/deployments/common/event_outbox.py` — durable deployment-event journaling, retry scheduling, and bounded retention of dispatched events.
 - `src/deployments/observability.py` — optional OpenTelemetry/Sentry tracing and secret-safe diagnostics.
 - `src/deployments/planning/runtime_spec.py` — immutable runtime/provenance snapshot with secret references rather than secret values.
+- `src/deployments/planning/policies.py` — typed rollout, health and release-command policy value objects.
+- `src/deployments/reconciliation/executor.py` — generation-aware runtime repair executor with ownership fencing.
+- `src/deployments/runtime/artifacts.py` — runtime-neutral artifact identity/publication contract and Swarm adapter.
