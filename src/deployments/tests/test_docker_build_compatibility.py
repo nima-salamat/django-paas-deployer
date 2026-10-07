@@ -66,7 +66,7 @@ class _FakeDockerClient:
         self.closed = True
 
 
-class _UnsupportedBuildOption(docker.errors.DockerException):
+class _UnsupportedBuildOption(docker.errors.APIError):
     status_code = 400
 
 
