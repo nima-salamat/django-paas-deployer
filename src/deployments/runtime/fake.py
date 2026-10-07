@@ -206,6 +206,12 @@ class FakeRuntime:
 
     def stop(self, handle: RuntimeHandle, *, operation_key: str, cancel_check: Callable[[], bool] | None = None) -> RuntimeOperationResult:
         self._ensure_usable()
+        if cancel_check is not None and cancel_check():
+            raise RuntimeOperationError(
+                "Runtime stop was cancelled.",
+                code="runtime_cancelled",
+                category="cancellation",
+            )
         key = handle.identity.resource_name()
         current = self._observations.get(key)
         if current is None or current.status == RuntimeObservedStatus.STOPPED:
@@ -217,6 +223,12 @@ class FakeRuntime:
 
     def remove(self, handle: RuntimeHandle, *, operation_key: str, cancel_check: Callable[[], bool] | None = None) -> RuntimeOperationResult:
         self._ensure_usable()
+        if cancel_check is not None and cancel_check():
+            raise RuntimeOperationError(
+                "Runtime remove was cancelled.",
+                code="runtime_cancelled",
+                category="cancellation",
+            )
         key = handle.identity.resource_name()
         current = self._observations.pop(key, None)
         self.remove_count += 1 if current is not None else 0
