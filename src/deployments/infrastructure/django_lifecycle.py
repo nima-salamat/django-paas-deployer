@@ -31,6 +31,8 @@ class DjangoDeploymentLifecycleStore:
         if self.is_terminal():
             return False
         context.assert_owner()
+        if self.status == sm.DEPLOY_RUNNING:
+            return True
         transitioned = StateManager.transition_deploy_if_owned(
             self.deployment_id,
             sm.DEPLOY_RUNNING,
