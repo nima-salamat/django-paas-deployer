@@ -25,6 +25,20 @@ cms               -> Wagtail integration
 
 ## Control-plane path
 
+```mermaid
+flowchart LR
+    Client[HTTP / Agent / Ready App] --> API[Django / DRF / Channels]
+    API --> Domain[Owning domain app]
+    Domain --> Queue[Celery / background work]
+    Queue --> Deploy[Deployments engine]
+    Deploy --> Runtime[Docker Engine / Swarm]
+    Runtime --> Obs[Observation / logs / events]
+    Obs --> State[Durable state]
+    State --> Reconcile[Reconciliation]
+    Reconcile --> Deploy
+```
+
+
 ~~~text
 HTTP / WebSocket
  -> Django / DRF / Channels
