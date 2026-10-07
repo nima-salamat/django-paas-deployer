@@ -82,7 +82,7 @@ deployments
 
 ## Deployment lifecycle
 
-The current production execution path still contains compatibility layers around the concrete orchestrator.
+The normal Swarm production execution path is native: `Celery -> DeployService -> DeploymentLifecycleExecutor -> RuntimeContract -> SwarmRuntimeAdapter -> SwarmRuntime`. Legacy orchestrator components remain isolated for explicit non-Swarm compatibility.
 
 At a high level:
 
@@ -97,7 +97,7 @@ At a high level:
 9. Old resources are cleaned only after the new release is committed.
 10. Reconciliation handles crashes or external drift without assuming that a same-name resource belongs to a stale worker.
 
-The framework-neutral `DeploymentLifecycleExecutor` and `RuntimeContract` are migration-oriented contracts. The established Celery -> DeployService -> concrete orchestrator path remains the production compatibility path documented under [deployments/execution/03-execution-lifecycle.md](deployments/execution/03-execution-lifecycle.md).
+`DeploymentLifecycleExecutor` and `RuntimeContract` are now the production Swarm lifecycle contracts. The concrete `DeploymentOrchestrator` path is retained only for explicit non-Swarm compatibility and is documented as such under [deployments/execution/03-execution-lifecycle.md](deployments/execution/03-execution-lifecycle.md).
 
 ## Cancellation and concurrency
 
