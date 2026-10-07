@@ -21,9 +21,32 @@ Django model state is the durable control-plane authority for desired state, own
 
 Deployment-related worker topology, queues, locks, task ownership, retries and cancellation are canonical in [deployments/execution/06-workers-concurrency-and-state.md](apps/deployments/execution/06-workers-concurrency-and-state.md).
 
+## Deployment execution authority
+
+~~~text
+Service
+ -> ServiceRevision
+ -> Release
+ -> Deploy / DeploymentAttempt
+ -> DeploymentLifecycleExecutor
+ -> RuntimeContract
+ -> SwarmRuntimeAdapter
+ -> SwarmRuntime
+ -> readiness
+ -> canonical activation
+~~~
+
+The activation boundary updates `Service.active_revision`; runtime observations
+never become desired state. Deployment ownership continues to use durable worker
+identity, heartbeat and lifecycle-generation fencing.
+
 ## Reconciliation
 
-Scheduled reconciliation compares durable desired state against runtime/worker observations. The detailed recovery contract is [deployments/execution/07-reconciliation-and-recovery.md](apps/deployments/execution/07-reconciliation-and-recovery.md).
+Scheduled reconciliation compares durable desired state against runtime
+observations. The pure `ReconciliationPlanner` produces a decision and the
+generation-aware `ReconciliationExecutor` is the runtime repair boundary.
+Unknown or unowned runtime identity is not destructively adopted.
+
 
 ## Databases
 
