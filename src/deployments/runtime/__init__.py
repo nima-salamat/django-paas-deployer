@@ -1,4 +1,4 @@
-"""Runtime contracts and adapters for deployment execution.
+"""Runtime contracts and adapters for deployment execution.\n\nThe runtime package is intentionally dependency-light. Domain and planning\ncode should depend on these value objects and protocols rather than on a\nDocker SDK client or a concrete Swarm implementation.\n"""\n\n"""Runtime contracts and adapters for deployment execution.
 
 The runtime package is intentionally dependency-light. Domain and planning
 code should depend on these value objects and protocols rather than on a
