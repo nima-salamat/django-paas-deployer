@@ -7,7 +7,7 @@ only after callers use this contract.
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 from deployments.common.exceptions import DeploymentError
@@ -32,6 +32,28 @@ from ..observations import (
     RuntimeObservedStatus,
     RuntimeTaskObservation,
 )
+
+
+@dataclass(frozen=True)
+class SwarmExecutionSpec:
+    """Typed Swarm backend input compiled from the native DeploymentPlan."""
+    name: str
+    tag: str = "release"
+    image_ref: str = ""
+    environment: dict[str, str] = field(default_factory=dict)
+    start_command: Any = None
+    entry_point: Any = None
+    working_directory: str = "/app"
+    read_only: bool = True
+    resource_limits: dict[str, Any] = field(default_factory=dict)
+    runtime_options: dict[str, Any] = field(default_factory=dict)
+    networks: tuple[Any, ...] = ()
+    volumes: tuple[Any, ...] = ()
+    endpoints: tuple[Any, ...] = ()
+    labels: dict[str, str] = field(default_factory=dict)
+    public_host: str | None = None
+    health_timeout: float = 60.0
+    process: Any = None
 
 
 class SwarmRuntimeAdapter:
@@ -73,7 +95,7 @@ class SwarmRuntimeAdapter:
                     RuntimeCapability.PROCESS_GRAPH,
                 }
             ),
-            metadata={"replica_limit": "0..1", "adapter": "legacy-swarm-runtime"},
+            metadata={"replica_limit": "0..8", "adapter": "swarm-runtime"},
         )
 
     def check_availability(
@@ -157,20 +179,73 @@ class SwarmRuntimeAdapter:
         )
 
     @staticmethod
-    def _plan_config(plan: Any) -> tuple[Any, str]:
-        config = getattr(plan, "deployment_config", None)
-        image_ref = getattr(plan, "image_ref", None)
-        if config is None:
-            config = getattr(plan, "config", None)
-        if image_ref is None and config is not None:
-            image_ref = getattr(config, "image_ref", None)
-        if config is None or not image_ref:
+    def _plan_config(plan: Any) -> tuple[SwarmExecutionSpec, str]:
+        """Compile a native DeploymentPlan into a typed Swarm backend request."""
+        image_ref = str(getattr(plan, "image_ref", "") or "")
+        identity = SwarmRuntimeAdapter._identity(plan)
+        if not image_ref:
             raise RuntimeOperationError(
-                "The Swarm compatibility adapter requires a compiled deployment config and image reference.",
-                code="swarm_plan_bridge_required",
+                "The deployment plan does not contain an application artifact reference.",
+                code="swarm_artifact_reference_missing",
                 category="runtime_contract",
             )
-        return config, str(image_ref)
+        graph = getattr(plan, "process_graph", None)
+        processes = list(getattr(graph, "processes", ()) or ())
+        primary = next(
+            (item for item in processes if str(getattr(item, "name", "")).lower() == "web"),
+            processes[0] if processes else None,
+        )
+        runtime_options = dict(getattr(plan, "runtime_options", {}) or {})
+        runtime_options.setdefault(
+            "processes",
+            [
+                {
+                    "name": str(getattr(item, "name", "web") or "web"),
+                    "process_type": str(getattr(item, "process_type", "custom") or "custom"),
+                    "command": getattr(item, "command", None),
+                    "entrypoint": getattr(item, "entrypoint", None),
+                    "replicas": int(getattr(item, "replicas", 1) or 1),
+                    "enabled": bool(getattr(item, "enabled", True)),
+                    "environment": dict(getattr(item, "environment", {}) or {}),
+                    "healthcheck": dict(getattr(item, "healthcheck", {}) or {}),
+                    "resources": dict(getattr(item, "resources", {}) or {}),
+                    "metadata": dict(getattr(item, "metadata", {}) or {}),
+                }
+                for item in processes
+            ],
+        )
+        labels = {str(k): str(v) for k, v in dict(getattr(plan, "labels", {}) or {}).items()}
+        labels.update({
+            "passdeployer.service": identity.service_id,
+            "passdeployer.deployment": str(identity.deployment_id or ""),
+            "passdeployer.process": str(getattr(primary, "name", "web") or "web"),
+            "release.id": str(getattr(plan, "release_id", "") or ""),
+            "revision.id": str(identity.revision_id or ""),
+            "artifact.digest": str(getattr(plan, "artifact_digest", "") or ""),
+        })
+        routing = dict(runtime_options.get("routing") or {})
+        health = dict(getattr(plan, "health_policy", {}) or {})
+        spec = SwarmExecutionSpec(
+            name=identity.runtime_name or identity.service_id,
+            image_ref=image_ref,
+            environment={
+                str(k): str(v)
+                for k, v in dict(getattr(plan, "environment", {}) or {}).items()
+            },
+            start_command=getattr(primary, "command", None) if primary is not None else None,
+            entry_point=getattr(primary, "entrypoint", None) if primary is not None else None,
+            working_directory=str(runtime_options.get("working_directory") or "/app"),
+            read_only=bool(runtime_options.get("read_only", True)),
+            resource_limits=dict(getattr(plan, "resources", {}) or {}),
+            runtime_options=runtime_options,
+            networks=tuple(getattr(plan, "networks", ()) or ()),
+            volumes=tuple(getattr(plan, "volumes", ()) or ()),
+            endpoints=tuple(getattr(plan, "endpoints", ()) or ()),
+            labels=labels,
+            public_host=str(routing.get("public_host") or "") or None,
+            health_timeout=float(health.get("timeout") or 60.0),
+        )
+        return spec, image_ref
 
     @staticmethod
     def _ensure_available(adapter: "SwarmRuntimeAdapter") -> None:
@@ -193,7 +268,7 @@ class SwarmRuntimeAdapter:
         config, image_ref = self._plan_config(plan)
         identity = self._identity(plan)
         try:
-            state = self.runtime.apply(config, image_ref=image_ref)
+            state = self.runtime.apply(config, image_ref=image_ref, operation_key=operation_key)
         except DeploymentError as exc:
             raise RuntimeOperationError(
                 str(exc),
@@ -249,10 +324,27 @@ class SwarmRuntimeAdapter:
                 category="cancellation",
             )
         try:
-            state = self.runtime.wait_ready(
-                handle.resource_name or handle.identity.resource_name(),
-                timeout=float(timeout or 60),
-            )
+            process_names = tuple(
+                str(item) for item in (handle.metadata.get("service_names") or ())
+                if str(item).strip()
+            ) or (handle.resource_name or handle.identity.resource_name(),)
+            import time
+            deadline = time.monotonic() + float(timeout or 60)
+            states = {}
+            for service_name in process_names:
+                remaining = max(0.0, deadline - time.monotonic())
+                if cancel_check is not None and cancel_check():
+                    raise RuntimeOperationError(
+                        "Runtime readiness was cancelled.",
+                        code="runtime_cancelled",
+                        category="cancellation",
+                    )
+                states[service_name] = self.runtime.wait_ready(
+                    service_name,
+                    timeout=remaining,
+                    cancel_check=cancel_check,
+                )
+            state = states.get(handle.resource_name or "") or next(iter(states.values()))
         except DeploymentError as exc:
             raise RuntimeOperationError(
                 str(exc),
@@ -262,7 +354,7 @@ class SwarmRuntimeAdapter:
                 user_message=getattr(exc, "user_message", None),
             ) from exc
         observation = self._observation(handle.identity, state, assume_identity_revision=True)
-        return RuntimeOperationResult(success=True, changed=True, handle=handle, observation=observation)
+        return RuntimeOperationResult(success=True, changed=True, handle=handle, observation=observation, details={"processes": sorted(process_names)})
 
     def stop(self, handle: RuntimeHandle, *, operation_key: str) -> RuntimeOperationResult:
         self._ensure_available(self)
