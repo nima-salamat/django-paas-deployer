@@ -1344,7 +1344,7 @@ class SwarmRuntime:
 
         self._last_apply_recovery = build_recovery()
         self.assert_active()
-        prepared_ref = prepared_image_ref or self.prepare_image(image_ref, config.name, config.tag)
+        prepared_ref = prepared_image_ref
         if cancel_check is not None and cancel_check():
             raise DeploymentError("Swarm process application was cancelled.", stage="swarm_apply", code="SWARM_OPERATION_CANCELLED")
         results: dict[str, SwarmServiceState] = {}
@@ -1400,15 +1400,26 @@ class SwarmRuntime:
             replicas = _validate_replicas(raw.get("replicas") or 1)
 
             try:
-                results[process_name] = self.apply(
-                    process_config,
-                    image_ref=image_ref,
-                    replicas=replicas,
-                    operation_key=f"{operation_key}:process:{process_name}" if operation_key else None,
-                    cancel_check=cancel_check,
-                    prepared_image_ref=prepared_ref,
-                    wait_for_ready=False,
-                )
+                apply_kwargs = {"image_ref": prepared_ref or image_ref}
+                try:
+                    import inspect
+                    parameters = inspect.signature(self.apply).parameters
+                except (TypeError, ValueError):
+                    parameters = {}
+                optional_kwargs = {
+                    "replicas": replicas,
+                    "operation_key": (
+                        f"{operation_key}:process:{process_name}"
+                        if operation_key else None
+                    ),
+                    "cancel_check": cancel_check,
+                    "prepared_image_ref": prepared_ref,
+                    "wait_for_ready": False,
+                }
+                for key, value in optional_kwargs.items():
+                    if key in parameters and value is not None:
+                        apply_kwargs[key] = value
+                results[process_name] = self.apply(process_config, **apply_kwargs)
                 if self._last_apply_operation:
                     recovery_operations.append(dict(self._last_apply_operation))
                 self._last_apply_recovery = build_recovery()
