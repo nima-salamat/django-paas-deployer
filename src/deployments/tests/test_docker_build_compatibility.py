@@ -67,7 +67,12 @@ class _FakeDockerClient:
 
 
 class _UnsupportedBuildOption(docker.errors.APIError):
-    status_code = 400
+    @property
+    def status_code(self):
+        return 400
+
+    def __str__(self):
+        return self.args[0] if self.args else "unsupported build option"
 
 
 def _patch_image_client(monkeypatch, clients):
