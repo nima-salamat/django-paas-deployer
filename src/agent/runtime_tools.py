@@ -288,29 +288,45 @@ def _run_tool_commands(service, user, commands: list[list[str]], *, continue_on_
     return results
 
 
-def _wordpress_inspect(service, user, payload: dict[str, Any]) -> dict[str, Any]:
+def _wordpress_status(service, user, payload: dict[str, Any]) -> dict[str, Any]:
     from services.shell import _platform_for_service
 
     if _platform_for_service(service) != "wordpress":
-        raise ValueError("wordpress.inspect is only available for WordPress services.")
+        raise ValueError("wordpress.status is only available for WordPress services.")
+
     checks = _run_tool_commands(service, user, [
+        ["wp", "--info"],
+        ["wp", "core", "is-installed"],
         ["wp", "core", "version"],
         ["wp", "option", "get", "home"],
         ["wp", "option", "get", "siteurl"],
-        ["wp", "theme", "list", "--status=active", "--field=name"],
-        ["wp", "plugin", "list", "--status=active", "--field=name"],
+        ["wp", "option", "get", "blogname"],
+        ["wp", "option", "get", "timezone_string"],
         ["wp", "db", "check"],
     ])
+
     def output(name: str) -> str:
         row = next((x for x in checks if " ".join(x["command"]) == name), None)
         return str((row or {}).get("stdout") or "").strip()
+
+    installed_row = next(
+        (x for x in checks if " ".join(x["command"]) == "wp core is-installed"),
+        {},
+    )
+    installed = int(installed_row.get("exit_code") or 1) == 0
+    cli_row = next((x for x in checks if " ".join(x["command"]) == "wp --info"), {})
+    cli_available = int(cli_row.get("exit_code") or 1) == 0 and bool(cli_row.get("stdout"))
+
     return {
         "platform": "wordpress",
+        "wp_cli_available": cli_available,
+        "wp_cli_info": output("wp --info"),
+        "installed": installed,
         "core_version": output("wp core version"),
         "home": output("wp option get home"),
         "siteurl": output("wp option get siteurl"),
-        "active_theme": output("wp theme list --status=active --field=name"),
-        "active_plugins": [x for x in output("wp plugin list --status=active --field=name").splitlines() if x],
+        "site_title": output("wp option get blogname"),
+        "timezone": output("wp option get timezone_string"),
         "database": next((x for x in checks if " ".join(x["command"]) == "wp db check"), {}),
         "checks": checks,
     }
@@ -485,6 +501,160 @@ def _database_health(service, user, payload: dict[str, Any]) -> dict[str, Any]:
         "client": DATABASE_PLATFORMS.get(platform, {}).get("client"),
     }
 
+def _wordpress_core_update(service, user, payload: dict[str, Any]) -> dict[str, Any]:
+    from services.shell import _platform_for_service
+
+    if _platform_for_service(service) != "wordpress":
+        raise ValueError("wordpress.core.update is only available for WordPress services.")
+
+    args = ["wp", "core", "update"]
+    version = str(payload.get("version") or "").strip()
+    if version:
+        if not re.fullmatch(r"[0-9]+\\.[0-9]+(?:\\.[0-9]+)?", version):
+            raise ValueError("version must be a semantic WordPress version such as 7.1.2.")
+        args.append(f"--version={version}")
+    if payload.get("dry_run") is True:
+        args.append("--dry-run")
+
+    result = command_result_from_argv(
+        service,
+        user,
+        args,
+        confirm=bool(payload.get("confirm", False)),
+    )
+    return {"platform": "wordpress", "action": "core.update", **result}
+
+
+def _wordpress_cron_run(service, user, payload: dict[str, Any]) -> dict[str, Any]:
+    from services.shell import _platform_for_service
+
+    if _platform_for_service(service) != "wordpress":
+        raise ValueError("wordpress.cron.run is only available for WordPress services.")
+
+    result = command_result_from_argv(
+        service,
+        user,
+        ["wp", "cron", "event", "run", "--due-now"],
+        confirm=bool(payload.get("confirm", False)),
+    )
+    return {"platform": "wordpress", "action": "cron.run", **result}
+
+
+def _wordpress_site_configure(service, user, payload: dict[str, Any]) -> dict[str, Any]:
+    from services.shell import _platform_for_service
+
+    if _platform_for_service(service) != "wordpress":
+        raise ValueError("wordpress.site.configure is only available for WordPress services.")
+
+    commands = []
+    changed = {}
+    if payload.get("title") is not None:
+        title = str(payload.get("title") or "").strip()
+        if not title or len(title) > 300:
+            raise ValueError("title must be between 1 and 300 characters.")
+        commands.append(["wp", "option", "update", "blogname", title])
+        changed["title"] = title
+    if payload.get("timezone") is not None:
+        timezone = str(payload.get("timezone") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_+./:-]{1,100}", timezone):
+            raise ValueError("Invalid timezone.")
+        commands.append(["wp", "option", "update", "timezone_string", timezone])
+        changed["timezone"] = timezone
+    if payload.get("locale") is not None:
+        locale = str(payload.get("locale") or "").strip()
+        if not re.fullmatch(r"[A-Za-z_]{2,20}", locale):
+            raise ValueError("Invalid locale.")
+        commands.append(["wp", "option", "update", "WPLANG", locale])
+        changed["locale"] = locale
+    if payload.get("permalink_structure") is not None:
+        structure = str(payload.get("permalink_structure") or "").strip()
+        if not re.fullmatch(r"/[A-Za-z0-9_%./-]{1,120}/", structure):
+            raise ValueError("Invalid permalink structure.")
+        commands.append(["wp", "rewrite", "structure", structure])
+        changed["permalink_structure"] = structure
+    if not commands:
+        raise ValueError("At least one site setting is required.")
+
+    results = []
+    for argv in commands:
+        results.append({
+            "command": argv,
+            **command_result_from_argv(
+                service,
+                user,
+                argv,
+                confirm=bool(payload.get("confirm", False)),
+            ),
+        })
+    return {"platform": "wordpress", "action": "site.configure", "changed": changed, "results": results}
+
+
+def _wordpress_search_replace(service, user, payload: dict[str, Any]) -> dict[str, Any]:
+    from services.shell import _platform_for_service
+
+    if _platform_for_service(service) != "wordpress":
+        raise ValueError("wordpress.search_replace is only available for WordPress services.")
+
+    old = str(payload.get("old") or "")
+    new = str(payload.get("new") or "")
+    if not old:
+        raise ValueError("old is required.")
+    if len(old) > 4096 or len(new) > 4096:
+        raise ValueError("search/replace values are too large.")
+
+    dry_run = bool(payload.get("dry_run", True))
+    args = [
+        "wp",
+        "search-replace",
+        old,
+        new,
+        "--all-tables-with-prefix",
+        "--report-changed-only",
+    ]
+    if dry_run:
+        args.append("--dry-run")
+    result = command_result_from_argv(
+        service,
+        user,
+        args,
+        confirm=bool(payload.get("confirm", False)),
+    )
+    return {"platform": "wordpress", "action": "search-replace", "dry_run": dry_run, **result}
+
+
+def _wordpress_scale(service, user, payload: dict[str, Any]) -> dict[str, Any]:
+    from services.shell import _platform_for_service
+
+    if _platform_for_service(service) != "wordpress":
+        raise ValueError("wordpress.scale is only available for WordPress services.")
+
+    try:
+        replicas = int(payload.get("replicas"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("replicas must be an integer.") from exc
+    if not 1 <= replicas <= 8:
+        raise ValueError("replicas must be between 1 and 8.")
+
+    from services.revisioning import scale_service_process
+    revision, previous, current = scale_service_process(
+        service,
+        "web",
+        replicas,
+        created_by=user,
+    )
+    return {
+        "platform": "wordpress",
+        "action": "scale",
+        "process": "web",
+        "previous_replicas": previous,
+        "replicas": current,
+        "revision": {
+            "id": str(revision.pk),
+            "revision": revision.revision_number,
+        },
+    }
+
+
 def _wordpress_wp_cli(service, user, payload: dict[str, Any]) -> dict[str, Any]:
     from services.shell import _platform_for_service, is_interactive_command
     from agent.errors import AgentError
@@ -524,6 +694,94 @@ def _wordpress_wp_cli(service, user, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 TOOLS = (
+    RuntimeTool(
+        name="wordpress.status",
+        title="Inspect WordPress runtime",
+        summary="Return WordPress installation state, WP-CLI availability, URLs, site settings and database health.",
+        platforms=("wordpress",),
+        scopes=("shell.read",),
+        input_schema={"type": "object", "properties": {}},
+        handler=_wordpress_status,
+    ),
+    RuntimeTool(
+        name="wordpress.core.update",
+        title="Update WordPress core",
+        summary="Update WordPress core through WP-CLI, optionally pinning an exact semantic version.",
+        platforms=("wordpress",),
+        scopes=("shell.execute",),
+        mutating=True,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "version": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": False},
+                "confirm": {"type": "boolean", "default": False},
+            },
+        },
+        handler=_wordpress_core_update,
+    ),
+    RuntimeTool(
+        name="wordpress.cron.run",
+        title="Run due WordPress cron",
+        summary="Execute due WordPress cron events through WP-CLI.",
+        platforms=("wordpress",),
+        scopes=("shell.execute",),
+        mutating=True,
+        input_schema={"type": "object", "properties": {"confirm": {"type": "boolean", "default": False}}},
+        handler=_wordpress_cron_run,
+    ),
+    RuntimeTool(
+        name="wordpress.site.configure",
+        title="Configure WordPress site",
+        summary="Update supported site options such as title, timezone, locale and permalinks.",
+        platforms=("wordpress",),
+        scopes=("shell.execute",),
+        mutating=True,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "timezone": {"type": "string"},
+                "locale": {"type": "string"},
+                "permalink_structure": {"type": "string"},
+                "confirm": {"type": "boolean", "default": False},
+            },
+        },
+        handler=_wordpress_site_configure,
+    ),
+    RuntimeTool(
+        name="wordpress.search_replace",
+        title="Search and replace WordPress",
+        summary="Run WP-CLI search-replace across tables using a dry-run by default.",
+        platforms=("wordpress",),
+        scopes=("shell.execute",),
+        mutating=True,
+        input_schema={
+            "type": "object",
+            "required": ["old", "new"],
+            "properties": {
+                "old": {"type": "string"},
+                "new": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+                "confirm": {"type": "boolean", "default": False},
+            },
+        },
+        handler=_wordpress_search_replace,
+    ),
+    RuntimeTool(
+        name="wordpress.scale",
+        title="Scale WordPress web replicas",
+        summary="Scale the WordPress web process to 1-8 Swarm replicas and persist the change as an immutable revision.",
+        platforms=("wordpress",),
+        scopes=("services.update",),
+        mutating=True,
+        input_schema={
+            "type": "object",
+            "required": ["replicas"],
+            "properties": {"replicas": {"type": "integer", "minimum": 1, "maximum": 8}},
+        },
+        handler=_wordpress_scale,
+    ),
     RuntimeTool(
         name="wordpress.inspect",
         title="Inspect WordPress site",
