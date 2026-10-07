@@ -111,6 +111,7 @@ class RuntimeContract(Protocol):
         *,
         operation_key: str,
         target_plan: Any | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> RuntimeOperationResult:
         ...
 
