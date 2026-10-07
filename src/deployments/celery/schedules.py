@@ -24,9 +24,19 @@ from deploy.models import (
 from services.models import Service
 from services.lifecycle.authority import get_authoritative_deploy
 from services.revisioning import activate_revision_locked
-from services.revisioning import ensure_revision_for_deploy, get_active_deploy
+from services.revisioning import ensure_revision_for_deploy, get_active_deploy, materialize_revision_config
 
 from .monitoring.policies import ACTIVE_DEPLOY_STATUSES, ACTIVE_SERVICE_STATUSES, runtime_policies
+from deployments.planning import ConfigurationResolver, DeploymentPlanCompiler
+from deployments.reconciliation import (
+    DesiredRuntimeState,
+    ReconciliationAction,
+    ReconciliationExecutionContext,
+    ReconciliationExecutor,
+    ReconciliationPlanner,
+)
+from deployments.runtime import RuntimeIdentity, RuntimeHandle
+from deployments.infrastructure.django_runtime import DjangoRuntimeSelectionResolver
 from .monitoring.actions import (
     mark_service_running,
     mark_service_stopped,
@@ -1173,66 +1183,245 @@ def _reconcile_service_runtime(service: Service) -> None:
             return
 
 
+def _native_reconciliation_plan(
+    service: Service,
+    deploy: Deploy | None,
+    selection,
+):
+    if deploy is None or not getattr(deploy, "revision_id", None):
+        return None
+    release = getattr(deploy, "release_reference", None)
+    if release is None:
+        try:
+            from deploy.models import Release
+            release = (
+                Release.objects
+                .filter(
+                    service_id=service.pk,
+                    revision_id=deploy.revision_id,
+                    status="promoted",
+                )
+                .select_related("artifact", "revision")
+                .order_by("-promoted_at", "-created_at")
+                .first()
+            )
+        except Exception:
+            release = None
+    revision = getattr(service, "active_revision", None) or getattr(deploy, "revision", None)
+    if revision is None:
+        return None
+    graph = __import__("deployments.core.runtime_graph", fromlist=["ServiceRuntimeGraph"]).ServiceRuntimeGraph.from_revision(revision)
+    config = materialize_revision_config(revision)
+    runtime_options = dict(config.get("runtime_options") or {})
+    resolved = ConfigurationResolver().resolve(
+        platform_policy={
+            "resource_limits": runtime_limits(getattr(service, "plan", None)),
+            "max_replicas": int(getattr(getattr(service, "plan", None), "max_replicas", 8) or 8),
+        },
+        revision_snapshot={
+            "environment": dict(config.get("environment") or config.get("env") or {}),
+            "runtime_options": runtime_options,
+            "networks": list(getattr(graph, "networks", ()) or ()),
+            "volumes": list(getattr(graph, "volumes", ()) or ()),
+            "endpoints": [
+                {
+                    "name": endpoint.name,
+                    "target_port": endpoint.target_port,
+                    "published_port": endpoint.published_port,
+                    "protocol": endpoint.protocol,
+                    "exposure": endpoint.exposure,
+                    "hostname": endpoint.hostname,
+                    "path": endpoint.path,
+                    "tls": endpoint.tls,
+                    "enabled": endpoint.enabled,
+                    "process": endpoint.process,
+                    "metadata": dict(endpoint.metadata),
+                }
+                for endpoint in (getattr(graph, "endpoints", ()) or ())
+            ],
+            "health_policy": dict(
+                config.get("health_policy")
+                or runtime_options.get("healthcheck")
+                or {}
+            ),
+            "rollout_policy": dict(config.get("rollout_policy") or {}),
+            "release_spec": dict(config.get("release_spec") or (getattr(release, "release_command", {}) or {})),
+            "labels": dict(config.get("labels") or {}),
+        },
+    )
+    identity = RuntimeIdentity(
+        service_id=str(service.pk),
+        deployment_id=str(getattr(deploy, "pk", "") or "") or None,
+        revision_id=str(getattr(revision, "pk", "") or "") or None,
+        process_name="web",
+        runtime_name=service.get_docker_service_name(),
+    )
+    image_ref = (
+        str(getattr(getattr(release, "artifact", None), "image_ref", "") or "")
+        or str(getattr(deploy, "image_ref", "") or "")
+    )
+    if not image_ref:
+        return None
+    plan = DeploymentPlanCompiler().compile(
+        identity=identity,
+        graph=graph,
+        selection=selection,
+        resolved=resolved,
+        image_ref=image_ref,
+    )
+    return __import__("dataclasses").replace(
+        plan,
+        artifact_digest=str(getattr(getattr(release, "artifact", None), "digest", "") or getattr(deploy, "image_digest", "") or ""),
+        release_id=str(getattr(release, "pk", "") or "") or None,
+        release_spec=dict(getattr(release, "release_command", {}) or plan.release_spec),
+        rollout_policy=dict(getattr(release, "rollout_policy", {}) or plan.rollout_policy),
+        health_policy=dict(getattr(release, "health_policy", {}) or plan.health_policy),
+    )
+
+
 def _reconcile_service_runtime_swarm(service: Service) -> None:
-    runtime = SwarmRuntime()
+    resolver = DjangoRuntimeSelectionResolver()
+    selection = resolver.resolve(
+        service=service,
+        revision=getattr(service, "active_revision", None),
+        deployment=get_authoritative_deploy(service),
+        probe=True,
+    )
+    runtime = resolver.registry.resolve_adapter(selection)
     service_name = service.get_docker_service_name()
-    try:
-        state = runtime.inspect_service(service_name)
-    except Exception as exc:
-        logger.warning("Failed to inspect Swarm service '%s': %s", service_name, exc)
-        return
-    running = bool(state and state.replicas_running == 1)
-    now = timezone.now()
     deploy = get_authoritative_deploy(service)
-    current_policies = runtime_policies()
+
+    try:
+        observed = runtime.inspect(
+            RuntimeIdentity(
+                service_id=str(service.pk),
+                deployment_id=str(getattr(deploy, "pk", "") or "") or None,
+                revision_id=str(getattr(getattr(service, "active_revision", None), "pk", "") or "") or None,
+                process_name="web",
+                runtime_name=service_name,
+            )
+        )
+    except Exception as exc:
+        logger.warning("Swarm runtime observation failed for service %s: %s", service.pk, exc)
+        return
+
+    desired_state = str(getattr(service, "desired_state", "") or "").lower()
+    if desired_state not in {"running", "stopped"}:
+        desired_state = (
+            "stopped"
+            if service.status in {SERVICE_STATUS_CHOICES.STOPPING, SERVICE_STATUS_CHOICES.STOPPED}
+            else "running"
+        )
+    desired = DesiredRuntimeState(
+        service_id=str(service.pk),
+        revision_id=str(getattr(getattr(service, "active_revision", None), "pk", "") or "") or None,
+        desired_state=desired_state,
+        runtime_name=service_name,
+        metadata={
+            "readiness_timeout": int(runtime_policies().get("queued_timeout_minutes", 10) or 10) * 60,
+        },
+    )
+    plan = None
+    try:
+        if desired_state == "running" and deploy is not None:
+            plan = _native_reconciliation_plan(service, deploy, selection)
+    except Exception:
+        logger.exception("Could not construct native reconciliation plan for service %s", service.pk)
+        return
+
+    if plan is not None:
+        desired = __import__("dataclasses").replace(
+            desired,
+            required_capabilities=plan.required_capabilities,
+        )
+
+    decision = ReconciliationPlanner().decide(desired, observed, selection)
+    logger.info(
+        "Swarm reconciliation decision service=%s action=%s reason=%s",
+        service.pk,
+        decision.action.value,
+        decision.reason_code,
+    )
+
+    if decision.action in {
+        ReconciliationAction.CONVERGED,
+        ReconciliationAction.BLOCKED,
+        ReconciliationAction.MANUAL_INTERVENTION,
+    }:
+        if decision.action is ReconciliationAction.BLOCKED:
+            logger.warning(
+                "Swarm reconciliation blocked service=%s reason=%s details=%s",
+                service.pk, decision.reason_code, decision.details,
+            )
+        with transaction.atomic():
+            locked = Service.objects.select_for_update().filter(pk=service.pk).first()
+            if not locked:
+                return
+            if (
+                decision.action is ReconciliationAction.CONVERGED
+                and locked.status == SERVICE_STATUS_CHOICES.SUCCEEDED
+            ):
+                mark_service_running(locked, deploy=get_authoritative_deploy(locked))
+        return
+
+    generation = getattr(service, "lifecycle_generation", 0)
+    context = ReconciliationExecutionContext(
+        service_id=str(service.pk),
+        lifecycle_generation=generation,
+        active_revision_id=desired.revision_id,
+        owns_execution=lambda sid=str(service.pk), gen=generation: Service.objects.filter(
+            pk=sid, lifecycle_generation=gen,
+        ).exists(),
+        current_generation=lambda sid=str(service.pk): Service.objects.filter(
+            pk=sid
+        ).values_list("lifecycle_generation", flat=True).first(),
+        cancellation_requested=lambda sid=str(service.pk): (
+            str(Service.objects.filter(pk=sid).values_list("desired_state", flat=True).first() or "").lower()
+            != "running"
+            if desired_state == "running"
+            else False
+        ),
+    )
+
+    handle = None
+    if decision.action is ReconciliationAction.STOP:
+        handle = RuntimeHandle(
+            backend=selection.backend,
+            identity=observed.identity,
+            runtime_id=observed.runtime_id,
+            resource_name=observed.identity.resource_name(),
+        )
+    try:
+        result = ReconciliationExecutor().execute(
+            decision,
+            desired=desired,
+            selection=selection,
+            runtime=runtime,
+            context=context,
+            plan=plan,
+            handle=handle,
+        )
+    except Exception as exc:
+        logger.exception(
+            "Swarm reconciliation execution failed service=%s action=%s reason=%s",
+            service.pk, decision.action.value, decision.reason_code,
+        )
+        return
+
+    if result is None:
+        return
     with transaction.atomic():
         locked = Service.objects.select_for_update().filter(pk=service.pk).first()
-        if not locked or locked.status not in ACTIVE_SERVICE_STATUSES:
+        if not locked:
             return
-        if locked.status in (SERVICE_STATUS_CHOICES.RUNNING, SERVICE_STATUS_CHOICES.SUCCEEDED):
-            if not running:
-                if not _swarm_has_terminal_runtime_failure(state):
-                    logger.warning(
-                        "Swarm service %s has no running task during restart/backoff; "
-                        "keeping service status=%s.",
-                        service_name,
-                        locked.status,
-                    )
-                    return
-                mark_service_failed(
-                    service=locked,
-                    message="Swarm service has no running task and no active restart attempt remains.",
-                    deploy=deploy,
-                    details=_swarm_failure_details(runtime, service_name, state),
-                )
-            elif locked.status == SERVICE_STATUS_CHOICES.SUCCEEDED:
-                mark_service_running(locked, deploy=deploy)
-            return
-        if locked.status in (SERVICE_STATUS_CHOICES.QUEUED, SERVICE_STATUS_CHOICES.DEPLOYING):
-            if locked.deploy_started:
-                elapsed = (now - locked.deploy_started).total_seconds() / 60.0
-                if elapsed >= int(current_policies["queued_timeout_minutes"]):
-                    mark_service_failed(
-                        service=locked,
-                        message="Service stuck in queue/deploying beyond timeout.",
-                        deploy=deploy,
-                        details={"runtime": "docker-swarm", "elapsed_minutes": round(elapsed, 1)},
-                    )
-                    return
-            if running:
-                mark_service_running(locked, deploy=deploy)
-            return
-        if locked.status == SERVICE_STATUS_CHOICES.STOPPING:
-            if not running:
-                mark_service_stopped(locked, deploy=deploy)
-            elif locked.deploy_started:
-                elapsed = (now - locked.deploy_started).total_seconds() / 60.0
-                if elapsed >= int(current_policies["stop_timeout_minutes"]):
-                    try:
-                        runtime.stop(service_name)
-                    except Exception:
-                        logger.exception("Failed to force-stop Swarm service %s", service_name)
-                    mark_service_stopped(locked, deploy=deploy)
+        if decision.action is ReconciliationAction.STOP:
+            mark_service_stopped(locked, deploy=get_authoritative_deploy(locked))
+        elif result.success and decision.action in {
+            ReconciliationAction.CREATE,
+            ReconciliationAction.UPDATE,
+            ReconciliationAction.REPAIR,
+        }:
+            mark_service_running(locked, deploy=get_authoritative_deploy(locked))
 
 
 
