@@ -57,6 +57,13 @@ class DjangoDeploymentLifecycleStore:
         updates = {"status_message": message[:500]}
         if details:
             updates["error_message"] = str(details.get("error_message") or "")[:1000]
+            if "reconciliation_required" in details:
+                updates["reconciliation_required"] = bool(details.get("reconciliation_required"))
+            if "cleanup_failed" in details:
+                updates["cleanup_status"] = (
+                    "failed" if details.get("cleanup_failed") else "not_required"
+                )
+                updates["cleanup_failures"] = list(details.get("cleanup_failures") or [])
         terminal = sm.is_deploy_terminal(target)
         if target == sm.DEPLOY_SUCCEEDED:
             event_payload = {
