@@ -1,6 +1,6 @@
 # Documentation coverage manifest
 
-Generated from the source tree at commit `fa88823257e3c0aad05c8abf2de754d0c9dccac9` on 2026-09-29. Source code is authoritative. This is a reviewable source-surface inventory, not a claim that every module requires a separate Markdown file.
+Maintained against the `master` source tree; the latest documentation refresh was committed on 2026-10-07. Source code is authoritative. This is a reviewable source-surface inventory, not a claim that every module requires a separate Markdown file.
 
 ## Acceptance equation
 
