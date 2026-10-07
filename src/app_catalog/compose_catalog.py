@@ -230,7 +230,7 @@ def _transform(
 
     if preserve_native_variables:
         return value
-    return _VAR_RE.sub(replace, value).replace("$", "$")
+    return _VAR_RE.sub(replace, value).replace("$" * 2, "$")
 
 
 def _service_url_keys(document: dict[str, Any]) -> set[str]:
