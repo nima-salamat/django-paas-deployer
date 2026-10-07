@@ -20,7 +20,9 @@ EXECUTION / PROVENANCE
 COMPILED EXECUTION
   ServiceRuntimeGraph
   DeploymentPlan
-  DeploymentConfig compatibility DTO
+  Release
+  Deploy
+  DeploymentPlan
 
 OBSERVED INFRASTRUCTURE
   RuntimeObservation
@@ -76,7 +78,7 @@ Revisioning snapshots it and the runtime graph later turns each enabled process 
 
 ### Current invariant
 
-The model/runtime currently supports one replica per process. Swarm execution rejects values other than one.
+The model/runtime supports 0 replicas for stopped processes and 1..8 replicas for running processes. The same 8-replica ceiling is enforced by the Swarm backend.
 
 ### Why it exists
 
@@ -114,7 +116,7 @@ Service intent may change. Secrets may gain newer versions. A new Deploy may be 
 
 ### Consumption boundary
 
-`materialize_revision_config()` resolves the revision into the legacy DeploymentConfig-shaped mapping; `ServiceRuntimeGraph.from_revision()` reconstructs runtime-neutral process/endpoints/volumes/networks.
+`materialize_revision_config()` reconstructs the revision snapshot for application normalization; `ServiceRuntimeGraph.from_revision()` reconstructs runtime-neutral process/endpoints/volumes/networks. A transient `DeploymentConfig` is used only by the build/Dockerfile subsystem, not as the runtime contract.
 
 ### Compatibility
 
@@ -207,7 +209,7 @@ Current DeployService after revision materialization.
 
 ### Produces
 
-A graph used to derive DeploymentPlan input and to populate legacy DeploymentConfig/runtime options.
+A graph used to derive the native DeploymentPlan and, for the build subsystem, any transient Dockerfile-generation configuration.
 
 ### Why it exists
 
