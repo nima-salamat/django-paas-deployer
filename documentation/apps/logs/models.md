@@ -123,3 +123,5 @@ JSON fields are structured contracts. Do not introduce keys by observation from 
 **Compatibility behavior:** fields explicitly described as projections, legacy state, or migration bridges must not be interpreted as a second source of truth.
 
 **Do not assume:** a Django field being writable at the ORM level means any API or worker is allowed to mutate it. Workflow ownership and invariants in the app documentation control safe writes.
+
+> **Complete field reference:** [field-reference.md](field-reference.md) lists every field explicitly declared in `src/logs/models.py`, including type, null/blank behavior, defaults, constraints and purpose.
