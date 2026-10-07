@@ -14,6 +14,7 @@ from ..authentication import AgentTokenAuthentication
 from ..errors import AgentError, agent_error_response, normalize_exception
 from ..permissions import AgentScopePermission, IsAgentAuthenticated
 from ..security import client_ip, extract_sensitive_request_values, get_request_id, sanitize_error_payload, sanitize_metadata
+from core.throttling import GlobalIPRateThrottle, GlobalUserRateThrottle
 from ..throttling import AgentRateThrottle
 
 
@@ -100,7 +101,7 @@ def _audit_resource_id(kwargs, data):
 class AgentAPIView(APIView):
     authentication_classes = []
     permission_classes = []
-    throttle_classes = [AgentRateThrottle]
+    throttle_classes = [GlobalIPRateThrottle, GlobalUserRateThrottle, AgentRateThrottle]
     throttle_scope = "read"
     required_scopes = ()
     required_scopes_by_method = {}
