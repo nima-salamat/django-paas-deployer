@@ -204,7 +204,7 @@ class FakeRuntime:
         self._observations[key] = ready
         return RuntimeOperationResult(success=True, changed=True, handle=handle, observation=ready)
 
-    def stop(self, handle: RuntimeHandle, *, operation_key: str) -> RuntimeOperationResult:
+    def stop(self, handle: RuntimeHandle, *, operation_key: str, cancel_check: Callable[[], bool] | None = None) -> RuntimeOperationResult:
         self._ensure_usable()
         key = handle.identity.resource_name()
         current = self._observations.get(key)
@@ -215,7 +215,7 @@ class FakeRuntime:
         self.stop_count += 1
         return RuntimeOperationResult(success=True, changed=True, handle=handle, observation=stopped)
 
-    def remove(self, handle: RuntimeHandle, *, operation_key: str) -> RuntimeOperationResult:
+    def remove(self, handle: RuntimeHandle, *, operation_key: str, cancel_check: Callable[[], bool] | None = None) -> RuntimeOperationResult:
         self._ensure_usable()
         key = handle.identity.resource_name()
         current = self._observations.pop(key, None)
