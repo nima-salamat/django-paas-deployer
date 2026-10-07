@@ -93,3 +93,5 @@ DELETE is intentionally restricted to terminal application state and rejects act
 3. Coordinator and child execution state are distinct.
 4. Cancellation prevents future child dispatch and attempts safe cleanup of existing children.
 5. The stored variant/definition snapshot is required for deterministic recovery.
+
+> **Complete field reference:** [field-reference.md](field-reference.md) lists every field explicitly declared in `src/app_catalog/models.py`, including type, null/blank behavior, defaults, constraints and purpose.
