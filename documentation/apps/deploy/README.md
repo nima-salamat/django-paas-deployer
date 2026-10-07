@@ -43,3 +43,10 @@ For execution semantics always continue to ../deployments/README.md.
 ## Wagtail administration
 
 `Deploy` is read-only in Wagtail because its lifecycle is owned by the deployment control plane. Operators use **Cancel deployment**, which requires `deploy.change_deploy` and calls the existing `CancelDeploymentUseCase(DjangoDeploymentCancellationGateway())`. `DeployLog` is read-only and continues to read from `DEPLOYMENT_LOG_DB_ALIAS`. `BaseRuntimeImageLease` is exposed read-only. Base-image build/renew controls remain guarded by `deploy.change_baseruntimeimage` and the existing `request_base_runtime_image_build` helper. Swarm node identity/cluster is read-only; desired availability and labels remain operator-controlled.
+
+## Contract references
+
+- [API reference](api.md)
+- [Complete model field reference](field-reference.md)
+
+For lifecycle/runtime execution, read [../deployments/README.md](../deployments/README.md) after the Deploy-domain contract.
