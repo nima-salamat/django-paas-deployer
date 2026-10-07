@@ -93,3 +93,5 @@ Current implementation: User is the custom Django auth model and is referenced t
 Architectural intent: durable identity remains independent of session/credential protocol state.
 
 Compatibility behavior: first_name/last_name, Django permissions and Wagtail admin fields remain for framework compatibility.
+
+> **Complete field reference:** [field-reference.md](field-reference.md) lists every field explicitly declared in `src/users/models.py`, including type, null/blank behavior, defaults, constraints and purpose.
