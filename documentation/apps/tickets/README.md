@@ -45,3 +45,8 @@ models.md -> api.md -> serializers.md -> state-contracts.md -> background.md -> 
 ## Wagtail administration
 
 Ticket models are intentionally **not registered in Wagtail**. The existing staff API scopes non-superuser operators by `DepartmentMembership` and uses `CanManageTicket` for status, priority and assignment mutations. Django Admin/API remain the canonical support workflow rather than duplicating ticket content and bypassing those checks.
+
+## Contract references
+
+- [API reference](api.md)
+- [Complete model field reference](field-reference.md)
