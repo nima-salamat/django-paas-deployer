@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from rest_framework import serializers
-from .catalog import ApplicationCatalog, CatalogDefinition, is_public_definition
+from .catalog import ApplicationCatalog, CatalogDefinition, is_public_definition, public_catalog_definitions
 from .models import ApplicationInstance
 
 
@@ -77,9 +77,28 @@ def _public_field(field: dict) -> dict | None:
     return item
 
 
-def catalog_featured(definition: CatalogDefinition) -> bool:
+def _publication_featured_overrides() -> dict[str, bool | None]:
+    """Load featured overrides once for catalog-list serialization."""
+    try:
+        from .models import CatalogPublication
+        return {
+            str(row["catalog_id"]): row["featured_override"]
+            for row in CatalogPublication.objects.values("catalog_id", "featured_override")
+        }
+    except Exception:
+        return {}
+
+
+def catalog_featured(
+    definition: CatalogDefinition,
+    *,
+    featured_overrides: dict[str, bool | None] | None = None,
+) -> bool:
     """Return the effective operator/editorial featured flag."""
     featured = bool(definition.data.get("featured", False))
+    if featured_overrides is not None and definition.id in featured_overrides:
+        override = featured_overrides[definition.id]
+        return featured if override is None else bool(override)
     try:
         from .models import CatalogPublication
         override = (
@@ -92,8 +111,11 @@ def catalog_featured(definition: CatalogDefinition) -> bool:
         override = None
     return featured if override is None else bool(override)
 
-
-def public_catalog_definition(definition: CatalogDefinition) -> dict:
+def public_catalog_definition(
+    definition: CatalogDefinition,
+    *,
+    featured_overrides: dict[str, bool | None] | None = None,
+) -> dict:
     variants = []
     for variant_id, variant in definition.variants.items():
         fields = [item for field in (variant.get("fields") or []) if (item := _public_field(field)) is not None]
@@ -118,7 +140,7 @@ def public_catalog_definition(definition: CatalogDefinition) -> dict:
         "logo": str(definition.data.get("logo") or ""),
         "software_version": definition.software_version,
         "definition_version": definition.definition_version,
-        "featured": catalog_featured(definition),
+        "featured": catalog_featured(definition, featured_overrides=featured_overrides),
         "features": _safe_string_list(definition.data.get("features")),
         "requirements": _safe_string_list(definition.data.get("requirements")),
         "outputs": _safe_string_list(definition.data.get("outputs")),
@@ -126,10 +148,6 @@ def public_catalog_definition(definition: CatalogDefinition) -> dict:
         "links": links,
         "variants": variants,
     }
-
-
-def public_catalog_definitions() -> list[CatalogDefinition]:
-    return [definition for definition in ApplicationCatalog.definitions() if is_public_definition(definition)]
 
 
 def public_resolution_payload(definition: CatalogDefinition, resolved: dict, resource_summary: dict) -> dict:
@@ -319,4 +337,11 @@ class ApplicationInstanceSerializer(serializers.ModelSerializer):
 
 
 def catalog_listing():
-    return [public_catalog_definition(definition) for definition in public_catalog_definitions()]
+    featured_overrides = _publication_featured_overrides()
+    return [
+        public_catalog_definition(
+            definition,
+            featured_overrides=featured_overrides,
+        )
+        for definition in public_catalog_definitions()
+    ]
