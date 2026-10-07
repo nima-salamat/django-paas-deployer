@@ -11,7 +11,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 import docker
 import yaml
@@ -882,6 +882,7 @@ class SwarmRuntime:
         *,
         timeout: float = 60.0,
         expected_image: str | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> SwarmServiceState:
         """Wait until a Swarm service is running and, when configured, healthy."""
         deadline = time.monotonic() + float(timeout)
@@ -892,6 +893,14 @@ class SwarmRuntime:
             "rollback_completed",
         }
         while time.monotonic() < deadline:
+            if cancel_check is not None and cancel_check():
+                raise DeploymentError(
+                    "Swarm readiness was cancelled.",
+                    stage="swarm_startup",
+                    code="SWARM_OPERATION_CANCELLED",
+                    user_message="Deployment readiness was cancelled.",
+                    details={"service": name},
+                )
             latest = self.inspect_service(name)
             if latest is None:
                 raise DeploymentError(
@@ -1662,7 +1671,7 @@ class SwarmRuntime:
             expected_image=expected_image,
         )
 
-    def apply(self, config, *, image_ref: str, replicas: int = 1) -> SwarmServiceState:
+    def apply(self, config, *, image_ref: str, replicas: int = 1, operation_key: str | None = None, prepared_image_ref: str | None = None) -> SwarmServiceState:
         replicas = _validate_replicas(replicas)
         self.assert_active()
         for network in config.networks or ():
@@ -1670,7 +1679,7 @@ class SwarmRuntime:
         if public_http_endpoints(config):
             self.ensure_network("proxy_net", attachable=True)
 
-        image_ref = self.prepare_image(image_ref, config.name, config.tag)
+        image_ref = prepared_image_ref or self.prepare_image(image_ref, config.name, config.tag)
         spec = compile_compose_service(config, image_ref=image_ref, replicas=replicas)
         name = _validate_service_name(config.name)
         spec["services"][name]["deploy"]["placement"]["constraints"] = (
@@ -1684,6 +1693,7 @@ class SwarmRuntime:
             "preexisting": False,
             "mutation_started": False,
             "mutation_succeeded": False,
+            "operation_key": str(operation_key or ""),
         }
         expected_image = None
         try:
@@ -1871,6 +1881,14 @@ class SwarmRuntime:
                 return True
             if time.monotonic() >= deadline:
                 return False
+            if cancel_check is not None and cancel_check():
+                raise DeploymentError(
+                    "Swarm readiness was cancelled.",
+                    stage="swarm_startup",
+                    code="SWARM_OPERATION_CANCELLED",
+                    user_message="Deployment readiness was cancelled.",
+                    details={"service": name},
+                )
             time.sleep(0.25)
 
     def service_names_for_service(self, service_id: str) -> list[str]:
