@@ -954,7 +954,7 @@ class DeployService:
             networks.append((service.network.get_docker_network_name(), "overlay"))
 
         volume_specs = self._volume_specs(deploy_item, platform=platform)
-        execution_plan = self._compile_compatibility_plan(
+        execution_plan = self._compile_native_plan(
             deploy_item=deploy_item,
             service=service,
             container_name=container_name,
@@ -1659,7 +1659,7 @@ class DeployService:
         )
 
     @staticmethod
-    def _compile_compatibility_plan(
+    def _compile_native_plan(
         *,
         deploy_item: Deploy,
         service,
@@ -1675,12 +1675,8 @@ class DeployService:
         healthcheck_expected_status,
         healthcheck_timeout,
     ):
-        """Compile the current Swarm path without changing its executor.
+        """Compile the native DeploymentPlan from the normalized ServiceRevision graph."""
 
-        This is intentionally a transitional bridge.  Legacy deployments
-        without a revision, and explicit legacy Docker mode, retain the old
-        path until the compatibility backend is registered.
-        """
         if runtime_graph is None:
             return None
 
