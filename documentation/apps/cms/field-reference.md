@@ -9,3 +9,12 @@ Source-derived from `src/cms/models.py` on `master`. This supplements [models.md
 - Relationship fields also carry deletion semantics through `on_delete`; the relation is therefore part of the lifecycle behavior of the model.
 - JSON fields deliberately hold structured state/configuration; their deeper schema is documented by the owning app's contract pages.
 - For inherited fields, read the model's base class before assuming a missing `id`, timestamp or permission field is absent.
+ 
+## HomePage
+
+**Source:** `src/cms/models.py`  
+**Bases:** `wagtail.models.Page`  
+**Declared project fields:** 0
+
+`HomePage` is a project model class for the root Wagtail page type. It declares no additional database fields; its effective fields and tree/publication behavior are inherited from Wagtail's `Page` model.
+
