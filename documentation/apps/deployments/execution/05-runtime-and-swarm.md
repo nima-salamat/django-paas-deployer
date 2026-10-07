@@ -208,7 +208,7 @@ The current production application path calls this class directly.
 
 ### It consumes
 
-A resolved DeploymentConfig/compiled process specifications.
+A native DeploymentPlan with normalized process specifications. A transient DeploymentConfig may still be used by the build/Dockerfile subsystem, but it is not the runtime contract.
 
 It should not derive tenant security policy from raw request data.
 
@@ -314,7 +314,7 @@ Use the runtime contract when implementing backend-neutral lifecycle behavior.
 
 Use `core/swarm.py` when fixing the actual current Swarm Docker behavior.
 
-Use the adapter when changing the migration seam.
+Use the adapter when changing the runtime-neutral-to-Swarm boundary.
 
 Do not introduce a Docker call in planning simply because the runtime object is not convenient to reach.
 
