@@ -101,6 +101,13 @@ class DeploymentPlanCompiler:
             required.add(RuntimeCapability.REPLICAS)
         if graph.volumes:
             required.add(RuntimeCapability.PERSISTENT_VOLUMES)
+
+        rollout_policy_raw = dict(resolved.get("rollout_policy") or {})
+        rollout_kind = str(rollout_policy_raw.get("kind") or "RECREATE").strip().upper()
+        if rollout_kind == "ROLLING":
+            required.add(RuntimeCapability.ROLLING_UPDATE)
+        elif rollout_kind in {"CANARY", "BLUE_GREEN"}:
+            required.add(RuntimeCapability.TRAFFIC_SPLITTING)
         if graph.networks:
             required.add(RuntimeCapability.OVERLAY_NETWORKS)
         if (
