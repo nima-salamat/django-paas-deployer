@@ -57,7 +57,7 @@ Protects the production lifecycle executor:
 - cancellation wins completion race;
 - runtime unavailable/disabled/unsupported are blocked before activation.
 
-This is a migration contract, not proof that the main DeployService has fully migrated.
+The native Swarm execution path is production-facing; the remaining legacy facade is limited to the explicit non-Swarm compatibility boundary.
 
 **`test_integrated_lifecycle_contracts.py`**
 
