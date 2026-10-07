@@ -109,7 +109,16 @@ class DeploymentPlanCompiler:
         HealthPolicy.from_mapping(
             dict(resolved.get("health_policy") or runtime_options.get("healthcheck") or {})
         )
-        ReleaseSpec.from_mapping(dict(resolved.get("release_spec") or {}))
+        release_spec = ReleaseSpec.from_mapping(dict(resolved.get("release_spec") or {}))
+        if release_spec.command and release_spec.execution_backend not in {"runtime-entrypoint"}:
+            raise RuntimeUnsupportedError(
+                "This runtime does not have a safe release-command executor for the requested backend.",
+                code="RELEASE_COMMAND_BACKEND_UNSUPPORTED",
+                details={
+                    "backend": release_spec.execution_backend,
+                    "runtime": effective_selection.backend,
+                },
+            )
         rollout_kind = str(rollout_policy_raw.get("kind") or "RECREATE").strip().upper()
         if rollout_kind == "ROLLING":
             required.add(RuntimeCapability.ROLLING_UPDATE)
