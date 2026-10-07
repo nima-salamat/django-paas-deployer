@@ -1619,27 +1619,8 @@ class DeployService:
             readiness_timeout=float(cfg.get("health_timeout") or healthcheck_timeout or 60.0),
         )
         if result.success:
-            state_tracker.finish(
-                MockOrchestratorResult(
-                    success=True,
-                    status="succeeded",
-                    stage="deployment_completed",
-                    message="Deployment completed successfully.",
-                )
-            )
             return result
         if result.status == "cancelled":
-            state_tracker.finish(
-                MockOrchestratorResult(
-                    success=False,
-                    status="cancelled",
-                    stage="cancelled",
-                    message=str(
-                        getattr(result.error, "user_message", None)
-                        or "Deployment cancelled."
-                    ),
-                )
-            )
             return result
         error = result.error
         raise OrchestratorDeploymentError(
