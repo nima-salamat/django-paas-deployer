@@ -49,3 +49,8 @@ Active ConversationParticipant membership is the primary resource boundary. Grou
 ## Reading order
 
 models.md -> api.md -> serializers.md -> background.md -> tests.md.
+
+## Contract references
+
+- [API reference](api.md)
+- [Complete model field reference](field-reference.md)
