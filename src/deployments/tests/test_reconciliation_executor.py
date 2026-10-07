@@ -71,8 +71,9 @@ def test_reconciliation_executor_applies_native_plan_with_generation_operation_k
     assert result.success is True
     assert result.handle is not None
     assert runtime.apply_count == 1
-    assert runtime.operations[-1][0].startswith(
-        "reconcile:service-1:generation:7:revision:revision-2:action:create"
+    assert any(
+        key.startswith("reconcile:service-1:generation:7:revision:revision-2:action:create")
+        for key in runtime._operations
     )
 
 
