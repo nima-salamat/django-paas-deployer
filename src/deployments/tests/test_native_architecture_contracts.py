@@ -85,3 +85,18 @@ def test_runtime_spec_redacts_sensitive_environment_from_native_plan():
     assert "def from_plan(" in source
     assert "_is_sensitive_key(key)" in source
     assert '"[SECRET_REF]"' in source
+
+
+def test_swarm_artifact_reference_is_portable_after_publish():
+    source = _source("runtime", "artifacts.py")
+    assert "SWARM_IMAGE_REGISTRY" in source
+    assert 'image_ref.startswith(registry + "/")' in source
+    deploy_source = _source("celery", "services", "deploy_service.py")
+    assert "published_image_ref = str(published.image_ref)" in deploy_source
+
+
+def test_release_promotion_retires_previous_release():
+    source = _source("core", "state", "manager.py")
+    assert 'status="retired"' in source
+    assert 'retired_at=now' in source
+    assert 'status="promoted"' in source
