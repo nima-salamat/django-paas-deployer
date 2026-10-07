@@ -156,6 +156,14 @@ def enrich_config_from_project(
             preferred_platform=preferred,
         )
     except Exception as exc:
+        from .platforms.registry import PlatformDetectionPolicyError
+        if isinstance(exc, PlatformDetectionPolicyError):
+            logger.error(
+                "Automatic platform detection was blocked for %s: %s",
+                config.name,
+                exc,
+            )
+            raise
         logger.warning(
             "Platform auto-detection failed for %s: %s – continuing with original config.",
             config.name,
