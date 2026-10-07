@@ -36,6 +36,7 @@ from services.models import Volume  # type: ignore
 from services.revisioning import ensure_revision_for_deploy, activate_revision_locked, materialize_revision_config, mark_revision_failed
 
 from deployments.common import parse_config, as_bool, as_int
+from deployments.common.docker_identity import canonical_image_tag
 from deployments.common.deadline import DeploymentDeadline
 from deployments.common.deployment_profile import normalize_profile
 from deployments.common.resource_policy import runtime_limits, worker_count as derive_worker_count, build_limits
@@ -64,16 +65,10 @@ logger = logging.getLogger(__name__)
 
 
 def _docker_tag_from_deploy(version) -> str:
-    """Return the Deploy.version value unchanged as the Docker tag.
+    """Resolve the canonical Docker image tag for a Deploy.version value."""
+    return canonical_image_tag(version)
 
-    Deploy.version is the canonical server-side version field.  Do not invent
-    staging tags or rewrite the value here; the Image manager validates the
-    final reference before sending it to Docker.
-    """
-    if version is None:
-        return "latest"
-    value = str(version).strip()
-    return value or "latest"
+
 
 # Backward-compatible symbol for older internal callers/tests. It does not
 # transform the version; it returns the model value unchanged.
