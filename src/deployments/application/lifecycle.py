@@ -176,6 +176,31 @@ class DeploymentLifecycleExecutor:
                     "Runtime apply completed without returning a handle.",
                     code="runtime_handle_missing",
                 )
+            journal = getattr(self.store, "journal_runtime_resource", None)
+            if callable(journal):
+                service_names = tuple(handle.metadata.get("service_names") or ())
+                service_ids = dict(handle.metadata.get("service_ids") or {})
+                if not service_names:
+                    service_names = (handle.resource_name or handle.identity.resource_name(),)
+                for service_name in service_names:
+                    journal(
+                        context,
+                        kind="runtime_service",
+                        name=str(service_name),
+                        runtime_id=str(service_ids.get(service_name) or handle.runtime_id or ""),
+                        state="active",
+                        metadata={
+                            "operation_key": context.operation("apply"),
+                            "revision_id": str(context.revision_id or ""),
+                            "release_id": str(getattr(plan, "release_id", "") or ""),
+                            "artifact_digest": str(getattr(plan, "artifact_digest", "") or ""),
+                            "process": str(
+                                service_name.rsplit("-", 1)[-1]
+                                if service_name != handle.resource_name
+                                else getattr(handle.identity, "process_name", "web")
+                            ),
+                        },
+                    )
             context.assert_can_continue()
 
             context.emit("readiness", "Waiting for runtime readiness.", progress=75)
