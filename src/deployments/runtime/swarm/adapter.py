@@ -1,8 +1,7 @@
-"""Compatibility adapter around the existing SwarmRuntime implementation.
+"""Native runtime adapter translating DeploymentPlan into Swarm execution inputs.
 
-This module intentionally delegates to deployments.core.swarm for now.  The
-adapter is the migration seam; the Swarm implementation will be decomposed
-only after callers use this contract.
+The adapter owns the runtime-neutral contract boundary. Concrete Docker/Swarm
+operations remain implemented by deployments.core.swarm.
 """
 
 from __future__ import annotations
@@ -290,18 +289,29 @@ class SwarmRuntimeAdapter:
             )
             image_ref = published.image_ref
         try:
-            states = self.runtime.apply_processes(
-                config,
-                image_ref=image_ref,
-                operation_key=operation_key,
-                cancel_check=cancel_check,
-                prepared_image_ref=image_ref,
-            )
-            process_names = tuple(
-                str(state.name) for state in states.values()
-                if getattr(state, "name", None)
-            )
-            state = states.get("web") or next(iter(states.values()))
+            apply_processes = getattr(self.runtime, "apply_processes", None)
+            if callable(apply_processes):
+                states = apply_processes(
+                    config,
+                    image_ref=image_ref,
+                    operation_key=operation_key,
+                    cancel_check=cancel_check,
+                    prepared_image_ref=image_ref,
+                )
+                process_names = tuple(
+                    str(state.name) for state in states.values()
+                    if getattr(state, "name", None)
+                )
+                state = states.get("web") or next(iter(states.values()))
+            else:
+                # Small legacy test doubles/non-process runtimes may only expose
+                # single-service apply. Production SwarmRuntime always exposes
+                # apply_processes.
+                state = self.runtime.apply(
+                    config,
+                    image_ref=image_ref,
+                )
+                process_names = (str(getattr(state, "name", config.name)),)
         except DeploymentError as exc:
             raise RuntimeOperationError(
                 str(exc),
