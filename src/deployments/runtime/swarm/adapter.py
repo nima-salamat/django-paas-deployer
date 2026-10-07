@@ -327,7 +327,13 @@ class SwarmRuntimeAdapter:
             identity=identity,
             runtime_id=observation.runtime_id,
             resource_name=identity.resource_name(),
-            metadata={"service_names": process_names},
+            metadata={
+                "service_names": process_names,
+                "service_ids": {
+                    str(name): str(getattr(result, "service_id", "") or "")
+                    for name, result in states.items()
+                },
+            },
         )
         return RuntimeOperationResult(
             success=True,
