@@ -47,7 +47,7 @@ The `src/docs/` directory is a Django application for product document/public-as
 - `src/app_catalog`: declarative catalog definitions, Compose normalization and multi-service installation planning.
 - `src/agent`: machine control-plane authentication, scopes, API contracts, audit and delegated operations.
 - `src/plans`: resource/execution policy.
-- `src/logs`: runtime/deployment log ingestion and retention.
+- `src/logs`: runtime service-log ingestion, persistence, query and retention. Deployment lifecycle events are owned by `src/deploy`.
 - `src/core`: cross-cutting platform facilities.
 - `src/users` + `src/auth_users`: identity, permissions and authentication.
 - `src/cms`: Wagtail integration.
