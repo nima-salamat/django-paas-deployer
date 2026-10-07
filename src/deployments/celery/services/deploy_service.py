@@ -1542,7 +1542,7 @@ class DeployService:
                 image_digest=str(artifact.digest),
             )
             Deploy.objects.filter(pk=deploy_item.pk).update(
-                release=release,
+                release_reference=release,
                 artifact=artifact,
                 image_ref=artifact.image_ref,
                 image_digest=artifact.digest,
