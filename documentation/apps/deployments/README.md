@@ -23,6 +23,21 @@ This directory is the only canonical documentation home for `src/deployments/`. 
 
 ## Execution pipeline
 
+```mermaid
+flowchart LR
+    S[Service intent] --> R[ServiceRevision]
+    R --> D[Deploy]
+    D --> P[Configuration + DeploymentPlan]
+    P --> B[Build / platform]
+    B --> A[Runtime apply]
+    A --> H[Readiness]
+    H --> X[Activation]
+    X --> C[Cleanup / rollback]
+    A -. drift/crash .-> Q[Reconciliation]
+    Q --> D
+```
+
+
 ```text
 Service
   -> ServiceRevision
