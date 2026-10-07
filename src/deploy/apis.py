@@ -57,7 +57,7 @@ from deployments.infrastructure.django_cancellation import (
 from .serializers import DeployLogSerializer, DeploySerializer
 from services.models import Service
 from core.utils import make_uuid4
-from core.throttling import ScopedRateThrottle
+from core.throttling import GlobalIPRateThrottle, GlobalUserRateThrottle, ScopedRateThrottle
 from services.revisioning import ensure_revision_for_deploy, get_active_deploy
 
 logger = logging.getLogger(__name__)
@@ -210,7 +210,7 @@ def _require_deploy_service_action(deploy, user, action: str):
 class DeployViewSet(ModelViewSet):
     # Explicit parser contract for deployment JSON + ZIP uploads.
     parser_classes = [MultiPartParser, FormParser, JSONParser]
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [GlobalIPRateThrottle, GlobalUserRateThrottle, ScopedRateThrottle]
     throttle_scope = "deploy.action"
     throttle_rate = "20/min"
     queryset = Deploy.objects.all()
