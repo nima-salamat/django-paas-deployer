@@ -1,25 +1,28 @@
 from pathlib import Path
-import re
+
+from deployments.common.docker_identity import validate_image_repository
+
 
 def _source():
     root = Path(__file__).resolve().parents[2]
     return (root / "deployments" / "core" / "manager" / "image_manager.py").read_text()
 
-def test_repository_component_pattern_accepts_namespaced_repositories():
-    text = _source()
-    m = re.search(r'_VALID_NAME_COMPONENT_RE = re\.compile\(r"(.+?)"\)', text)
-    assert m, "component validation regex missing"
-    pattern = re.compile(m.group(1))
-    assert pattern.fullmatch("paas-base")
-    assert pattern.fullmatch("php-apache")
-    assert not pattern.fullmatch("PHP")
 
-def test_repository_validation_splits_namespace_components():
+def test_image_manager_delegates_repository_validation_to_central_identity_policy():
     text = _source()
-    assert 'parts = value.split("/")' in text
-    assert 'any(not part or not _VALID_NAME_COMPONENT_RE.fullmatch(part) for part in parts)' in text
+    assert "validate_image_repository" in text
+    assert "def _validate_image_name" in text
+    assert "return validate_image_repository(name)" in text
 
-def test_namespaced_repository_is_supported_by_runtime_validator():
-    text = _source()
-    assert '_VALID_NAME_COMPONENT_RE' in text
-    assert 'return value' in text
+
+def test_repository_validation_supports_namespaced_repositories():
+    assert validate_image_repository("paas-base/php-apache") == "paas-base/php-apache"
+    assert validate_image_repository("registry.example.test/app/runtime") == "registry.example.test/app/runtime"
+
+
+def test_repository_validation_rejects_non_lowercase_or_invalid_components():
+    import pytest
+    with pytest.raises(Exception):
+        validate_image_repository("PHP/appliCation")
+    with pytest.raises(Exception):
+        validate_image_repository("bad//repository")
