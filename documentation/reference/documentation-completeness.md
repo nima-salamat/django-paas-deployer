@@ -3,9 +3,10 @@
 Audit baseline: master, 2026-09-28. Source code remains authoritative. This Markdown inventory makes omissions visible when implementation surfaces change.
 
 ## Installed first-party apps
-users, auth_users, services, plans, deploy, deployments, logs, app_catalog, messenger, tickets, custom_emails, docs, core, cms.
+agent, users, auth_users, services, plans, deploy, deployments, logs, app_catalog, messenger, tickets, custom_emails, docs, core, cms.
 
 ## Models
+- agent: Agent, AgentCredential, AgentEnrollmentToken, AgentAuditEvent, AgentIdempotencyRecord
 - app_catalog: ApplicationStatus, ApplicationInstance, ApplicationInstanceService
 - auth_users: LoginSettings, SessionEvictionPolicy, Device, UserSession, UserContactChange, InviteLink, InviteUsage, AuthCode, LoginLog
 - core: SystemSetting
@@ -47,6 +48,7 @@ users, auth_users, services, plans, deploy, deployments, logs, app_catalog, mess
 | users | none | user/session/cache/resource cleanup; lifecycle fencing/network attachment preparation | none |
 
 ## Route source inventory
+agent: src/agent/urls.py, src/agent/user_urls.py
 app_catalog: src/app_catalog/urls.py  
 auth_users: src/auth_users/urls.py  
 core: src/core/urls.py, src/core/settings_urls.py  
