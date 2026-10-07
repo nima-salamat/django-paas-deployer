@@ -109,12 +109,12 @@ def _validate_replicas(value: Any) -> int:
             stage="swarm_validation",
             code="SWARM_INVALID_REPLICA_COUNT",
         ) from exc
-    if replicas not in {0, 1}:
+    if not 0 <= replicas <= 8:
         raise DeploymentError(
-            "PassDeployer currently supports only 0 or 1 replica per Swarm service.",
+            "PassDeployer currently supports between 0 and 8 replicas per Swarm service.",
             stage="swarm_validation",
             code="SWARM_REPLICA_COUNT_UNSUPPORTED",
-            user_message="This installation currently supports exactly one running replica per service.",
+            user_message="This installation supports up to 8 running replicas per service.",
         )
     return replicas
 
@@ -966,32 +966,32 @@ class SwarmRuntime:
                 and task.desired_state.lower() == "running"
                 and (not expected_image or task.image == expected_image)
             ]
-            if latest.replicas_desired == 1 and len(running) == 1:
-                task = running[0]
+            desired = latest.replicas_desired
+            if desired > 0 and len(running) >= desired:
                 if latest.healthcheck_configured:
-                    health_status = (task.health_status or "").lower()
-                    if health_status == "healthy":
+                    healthy_count = sum(
+                        1 for task in running
+                        if (task.health_status or "").lower() == "healthy"
+                    )
+                    if healthy_count >= desired:
                         return latest
-                    if health_status == "unhealthy":
+                    if any((task.health_status or "").lower() == "unhealthy" for task in running):
                         service_logs = self._service_logs_for_failure(name)
                         technical = (
-                            f"Swarm task is running but unhealthy: task_id={task.task_id}; "
-                            f"health_status={health_status!r}; expected_image={expected_image!r}; "
-                            f"service_image={latest.service_image!r}; "
+                            f"Swarm tasks are running but one or more are unhealthy: "
+                            f"healthy={healthy_count}/{desired}; service={name!r}; "
                             f"service_logs={service_logs[-12000:]}"
                         )
                         raise DeploymentError(
                             technical,
                             stage="swarm_startup",
                             code="SWARM_TASK_UNHEALTHY",
-                            user_message="The Swarm task is running but its configured health check is unhealthy.",
+                            user_message="One or more Swarm replicas are unhealthy.",
                             technical_message=technical,
                             details={
-                                "task_id": task.task_id,
-                                "health_status": health_status,
-                                "healthcheck_configured": True,
-                                "expected_image": expected_image,
-                                "service_image": latest.service_image,
+                                "replicas_desired": desired,
+                                "replicas_running": len(running),
+                                "healthy_replicas": healthy_count,
                                 "service_logs": service_logs[-12000:],
                             },
                         )
@@ -1273,7 +1273,7 @@ class SwarmRuntime:
             "env": service_doc.get("environment") or [],
             "labels": labels,
             "container_labels": labels,
-            "mode": ServiceMode(mode="replicated", replicas=1),
+            "mode": ServiceMode(mode="replicated", replicas=int(deploy_doc.get("replicas") or 0)),
             "networks": [
                 NetworkAttachmentConfig(
                     target=str(network_name),
@@ -1390,16 +1390,14 @@ class SwarmRuntime:
                     "process.type": str(raw.get("process_type") or "custom"),
                 },
             )
-            replicas = int(raw.get("replicas") or 1)
-            if replicas != 1:
-                raise DeploymentError(
-                    "Only one running replica is supported for every PassDeployer process.",
-                    stage="swarm_validation",
-                    code="SWARM_REPLICA_COUNT_UNSUPPORTED",
-                )
+            replicas = _validate_replicas(raw.get("replicas") or 1)
 
             try:
-                results[process_name] = self.apply(process_config, image_ref=image_ref)
+                results[process_name] = self.apply(
+                    process_config,
+                    image_ref=image_ref,
+                    replicas=replicas,
+                )
                 if self._last_apply_operation:
                     recovery_operations.append(dict(self._last_apply_operation))
                 self._last_apply_recovery = build_recovery()
@@ -1591,7 +1589,7 @@ class SwarmRuntime:
         ):
             self.ensure_network("proxy_net", attachable=True)
 
-        spec = compile_compose_service(config, image_ref=image_ref, replicas=1)
+        spec = compile_compose_service(config, image_ref=image_ref, replicas=replicas)
         service_name = _validate_service_name(name)
         constraints = self._apply_local_volume_pin(
             config,
@@ -1667,7 +1665,8 @@ class SwarmRuntime:
             expected_image=expected_image,
         )
 
-    def apply(self, config, *, image_ref: str) -> SwarmServiceState:
+    def apply(self, config, *, image_ref: str, replicas: int = 1) -> SwarmServiceState:
+        replicas = _validate_replicas(replicas)
         self.assert_active()
         for network in config.networks or ():
             self.ensure_network(network.name, attachable=True)
@@ -1769,6 +1768,51 @@ class SwarmRuntime:
         return self.wait_ready(
             name,
             timeout=startup_timeout,
+            expected_image=expected_image,
+        )
+
+    def scale_service(self, name: str, replicas: int, *, timeout: float = 180.0) -> SwarmServiceState:
+        """Scale an existing Swarm service without rebuilding its image."""
+        self.assert_active()
+        replicas = _validate_replicas(replicas)
+        service = self.client.services.get(_validate_service_name(name))
+        service.reload()
+        from docker.types import ServiceMode
+        operation = {
+            "name": str(service.name),
+            "preexisting": True,
+            "mutation_started": True,
+            "mutation_succeeded": False,
+            "operation": "scale",
+            "replicas": replicas,
+        }
+        try:
+            service.update(mode=ServiceMode(mode="replicated", replicas=replicas))
+            operation["mutation_succeeded"] = True
+        except docker.errors.APIError as exc:
+            raise DeploymentError(
+                f"Unable to scale Swarm service {name!r}: {exc}",
+                stage="swarm_scale",
+                code="SWARM_SCALE_FAILED",
+                recoverable=True,
+                details={"service": name, "replicas": replicas},
+            ) from exc
+        finally:
+            self._last_apply_operation = operation
+
+        observed = self.inspect_service(name)
+        if observed is None:
+            raise DeploymentError(
+                f"Swarm service {name!r} disappeared after scaling.",
+                stage="swarm_scale",
+                code="SWARM_SERVICE_MISSING",
+            )
+        if replicas == 0:
+            return observed
+        expected_image = observed.service_image
+        return self.wait_ready(
+            name,
+            timeout=max(30.0, float(timeout)),
             expected_image=expected_image,
         )
 
