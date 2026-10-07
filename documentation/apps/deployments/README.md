@@ -77,9 +77,14 @@ This package does not own tenant desired state, catalog definitions, plan policy
 
 `src/deployments/` contains substantially more architecture than its Django model surface: lifecycle objects, planning contracts, runtime value objects/protocols, platform strategies, Celery tasks, reconciliation decisions, infrastructure adapters and concrete managers. These non-ORM contracts are first-class documentation surfaces and are inventoried by [COVERAGE.md](../COVERAGE.md).
 
-## Migration seams
+## Production compatibility boundaries
 
-The normal Swarm production path is owned by `DeploymentLifecycleExecutor` and consumes the native `DeploymentPlan` through `RuntimeContract`. The legacy `Deploy` facade and plan-to-legacy compiler remain isolated compatibility paths for non-Swarm/legacy callers.
+The normal Swarm production path is owned by `DeploymentLifecycleExecutor` and
+consumes the native `DeploymentPlan` through `RuntimeContract`.
+
+The legacy `Deploy` facade and `DeploymentPlanCompatibilityCompiler` remain
+isolated compatibility paths for explicit non-Swarm or legacy callers. They are
+not alternate sources of Service authority.
 
 ## Reading order
 
