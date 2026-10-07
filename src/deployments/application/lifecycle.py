@@ -276,6 +276,7 @@ class DeploymentLifecycleExecutor:
                     "recoverable": error.recoverable,
                     "rollback_performed": rollback_performed,
                     "rollback_failed": rollback_failed,
+                    "reconciliation_required": bool(rollback_failed),
                 },
             )
             if not transitioned:
@@ -332,52 +333,66 @@ class DeploymentLifecycleExecutor:
         handle: RuntimeHandle | None,
         error: DeploymentCancelled,
     ) -> DeploymentLifecycleResult:
-        self._cancel_runtime(context, runtime, handle)
+        cleanup = self._cancel_runtime(context, runtime, handle)
+        details = {**dict(error.details or {}), **cleanup}
         transitioned = self.store.transition(
             context,
             sm.DEPLOY_CANCELLED,
             message=error.user_message,
-            details=error.details,
+            details=details,
         )
         if transitioned:
-            context.emit("cancelled", error.user_message, level="warning", progress=100)
+            context.emit(
+                "cancelled",
+                error.user_message,
+                level="warning",
+                progress=100,
+                details=details,
+            )
             return DeploymentLifecycleResult(
                 status=self.store.status,
                 success=False,
                 error=error,
-                details=error.details,
+                details=details,
             )
         return self._stale_result(context, error=error)
-
-    @staticmethod
-    def _stale_result(
-        context: DeploymentExecutionContext,
-        *,
-        error: DeploymentError | None = None,
-    ) -> DeploymentLifecycleResult:
-        return DeploymentLifecycleResult(
-            status="stale",
-            success=False,
-            error=error,
-            details={
-                "deployment_id": context.deployment_id,
-                "operation_key": context.operation_key,
-            },
-        )
 
     @staticmethod
     def _cancel_runtime(
         context: DeploymentExecutionContext,
         runtime: RuntimeContract,
         handle: RuntimeHandle | None,
-    ) -> None:
+    ) -> dict[str, Any]:
         if handle is None or not context.owns_execution():
-            return
-        try:
-            runtime.stop(handle, operation_key=context.operation("cancel-stop"))
-            runtime.remove(handle, operation_key=context.operation("cancel-remove"))
-        except Exception:
-            return
+            return {}
+        failures = []
+        for action, suffix in (("stop", "cancel-stop"), ("remove", "cancel-remove")):
+            try:
+                operation = runtime.stop if action == "stop" else runtime.remove
+                operation(
+                    handle,
+                    operation_key=context.operation(suffix),
+                    cancel_check=lambda: False,
+                )
+            except Exception as exc:
+                failures.append(
+                    {
+                        "operation": action,
+                        "error_code": str(
+                            getattr(exc, "code", "") or "runtime_cleanup_failed"
+                        ),
+                        "error": str(
+                            getattr(exc, "technical_message", None) or exc
+                        ),
+                    }
+                )
+        if not failures:
+            return {"cleanup_failed": False}
+        return {
+            "cleanup_failed": True,
+            "reconciliation_required": True,
+            "cleanup_failures": failures,
+        }
 
     @staticmethod
     def _recover_failure(
