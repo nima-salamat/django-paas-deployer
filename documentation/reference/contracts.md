@@ -336,6 +336,27 @@ Source code is authoritative. App-level API/model references explain behavior; t
 
 | App | Source | Model | Model kind | Documentation |
 |---|---|---|---|---|
+| `agent` | `src/agent/models.py` | `Agent` | project model class | [field reference](../apps/agent/field-reference.md#agent) |
+| `agent` | `src/agent/models.py` | `AgentCredential` | project model class | [field reference](../apps/agent/field-reference.md#agentcredential) |
+| `agent` | `src/agent/models.py` | `AgentEnrollmentToken` | project model class | [field reference](../apps/agent/field-reference.md#agentenrollmenttoken) |
+| `agent` | `src/agent/models.py` | `AgentAuditEvent` | project model class | [field reference](../apps/agent/field-reference.md#agentauditevent) |
+| `agent` | `src/agent/models.py` | `AgentIdempotencyRecord` | project model class | [field reference](../apps/agent/field-reference.md#agentidempotencyrecord) |
+| `app_catalog` | `src/app_catalog/models.py` | `ApplicationInstance` | project model class | [field reference](../apps/app_catalog/field-reference.md#applicationinstance) |
+| `app_catalog` | `src/app_catalog/models.py` | `ApplicationInstanceService` | project model class | [field reference](../apps/app_catalog/field-reference.md#applicationinstanceservice) |
+| `app_catalog` | `src/app_catalog/models.py` | `CatalogPublication` | project model class | [field reference](../apps/app_catalog/field-reference.md#catalogpublication) |
+| `auth_users` | `src/auth_users/models.py` | `LoginSettings` | project model class | [field reference](../apps/auth_users/field-reference.md#loginsettings) |
+| `auth_users` | `src/auth_users/models.py` | `Device` | project model class | [field reference](../apps/auth_users/field-reference.md#device) |
+| `auth_users` | `src/auth_users/models.py` | `UserSession` | project model class | [field reference](../apps/auth_users/field-reference.md#usersession) |
+| `auth_users` | `src/auth_users/models.py` | `UserContactChange` | project model class | [field reference](../apps/auth_users/field-reference.md#usercontactchange) |
+| `auth_users` | `src/auth_users/models.py` | `InviteLink` | project model class | [field reference](../apps/auth_users/field-reference.md#invitelink) |
+| `auth_users` | `src/auth_users/models.py` | `InviteUsage` | project model class | [field reference](../apps/auth_users/field-reference.md#inviteusage) |
+| `auth_users` | `src/auth_users/models.py` | `AuthCode` | project model class | [field reference](../apps/auth_users/field-reference.md#authcode) |
+| `auth_users` | `src/auth_users/models.py` | `LoginLog` | project model class | [field reference](../apps/auth_users/field-reference.md#loginlog) |
+| `cms` | `src/cms/models.py` | `HomePage` | project model class | [field reference](../apps/cms/field-reference.md#homepage) |
+| `core` | `src/core/models.py` | `SystemSetting` | project model class | [field reference](../apps/core/field-reference.md#systemsetting) |
+| `core` | `src/core/models.py` | `CoreSettings` | project model class | [field reference](../apps/core/field-reference.md#coresettings) |
+| `custom_emails` | `src/custom_emails/models.py` | `EmailTemplate` | project model class | [field reference](../apps/custom_emails/field-reference.md#emailtemplate) |
+| `custom_emails` | `src/custom_emails/models.py` | `EmailLog` | project model class | [field reference](../apps/custom_emails/field-reference.md#emaillog) |
 
 ## Model field inventory
 
