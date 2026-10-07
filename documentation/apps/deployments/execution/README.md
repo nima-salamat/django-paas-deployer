@@ -117,7 +117,7 @@ Docker / Swarm
 
 Two compatibility exceptions are deliberate:
 
-1. the application boundary still calls the legacy `Deploy` facade, which uses the orchestrator;
+1. the application boundary still contains an explicit legacy `Deploy` facade branch for non-Swarm compatibility;
 2. the runtime adapter currently delegates down into `core/swarm.py`.
 
 There is a second direction for reconciliation:
@@ -163,7 +163,7 @@ Use this package when changing the **semantic lifecycle contract**.
 - `DeploymentStrategyResolver` chooses the workload strategy.
 - `cancellation.py` contains framework-neutral cancellation policy.
 
-**Called by:** the current system still composes most production execution through `DeployService`; the framework-neutral executor is the migration/contract seam.
+**Called by:** `DeployService._execute_native_swarm_lifecycle()` on the normal Swarm path; the executor owns common production lifecycle sequencing. The legacy orchestrator path is explicit non-Swarm compatibility.
 
 **Preconditions:** lifecycle composition must already have a RuntimeSelection, strategy, persistence port and ownership/cancellation callbacks.
 
@@ -210,7 +210,7 @@ Start at:
 - `state/` for locking and lifecycle persistence;
 - `health.py`, `rollback.py`, `cleanup.py` for safety-sensitive execution stages.
 
-This package contains migration-era concrete behavior. Before extracting or moving a component, inspect its current caller in `DeployService`.
+This package contains concrete Docker/Swarm infrastructure. Before extracting or moving a component, inspect its current caller in `DeployService` and the RuntimeContract adapter.
 
 ### `planning/`
 
