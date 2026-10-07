@@ -32,6 +32,13 @@ def test_native_deploy_service_uses_lifecycle_executor_for_swarm():
     assert branch < legacy
 
 
+def test_native_build_uses_dataclass_replace_for_resolved_base_images():
+    source = _source("celery", "services", "deploy_service.py")
+    assert "build_config = replace(" in source
+    assert 'base_images=dict(resolved_bases or {})' in source
+    assert "build_config.base_images =" not in source
+
+
 def test_native_plan_carries_artifact_and_release_identity():
     source = _source("planning", "plan.py")
     assert "artifact_digest: str" in source

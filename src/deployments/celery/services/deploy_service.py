@@ -1372,7 +1372,10 @@ class DeployService:
                 logger_sink=None,
                 deployment_id=deploy_item.pk,
             )
-            build_config.base_images = dict(resolved_bases or {})
+            build_config = replace(
+                build_config,
+                base_images=dict(resolved_bases or {}),
+            )
 
             tar_stream = convert_zip_to_tar(zip_path)
             rendered_dockerfile = DockerfileGenerator().render(
