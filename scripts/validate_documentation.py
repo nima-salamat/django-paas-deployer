@@ -41,6 +41,25 @@ def class_bases(node):
         out.add(base.id if isinstance(base,ast.Name) else base.attr if isinstance(base,ast.Attribute) else "")
     return out
 
+def declared_routes(path):
+    tree = parse(path)
+    routes = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func.id if isinstance(node.func, ast.Name) else ""
+        if fn not in {"path", "re_path"} or not node.args:
+            continue
+        first = node.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str) and first.value:
+            # Included URL trees are documented by their owning app.
+            if len(node.args) > 1 and isinstance(node.args[1], ast.Call):
+                target = node.args[1].func
+                if isinstance(target, ast.Name) and target.id == "include":
+                    continue
+            routes.append(first.value)
+    return sorted(set(routes))
+
 def django_model_fields(node):
     fields = []
     for child in node.body:
@@ -75,6 +94,10 @@ def main():
         for path in python_files(app):
             rel=path.relative_to(ROOT).as_posix()
             if rel not in docs[app]: errors.append(f"production module not mapped: {rel}")
+            if path.name in {"urls.py", "api_urls.py", "network_api_urls.py", "volume_api_urls.py", "settings_urls.py"}:
+                for route in declared_routes(path):
+                    if route not in docs[app]:
+                        errors.append(f"API route undocumented: {rel} -> {route}")
             tree=parse(path)
             for node in ast.walk(tree):
                 if isinstance(node,ast.ClassDef):
