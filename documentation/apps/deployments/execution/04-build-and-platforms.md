@@ -153,7 +153,7 @@ Use `core/platforms/loader.py` as the exact registry source before documenting a
 
 ### Called by
 
-`DeploymentOrchestrator.deploy()` during source extraction/build preparation.
+`DeployService._execute_native_swarm_lifecycle()` during source extraction/build preparation.
 
 ### Input
 
@@ -181,7 +181,7 @@ The Dockerfile renderer owns the final image startup semantics for these familie
 
 ### Called by
 
-DeploymentOrchestrator after configuration/platform information is resolved.
+The native `DeployService` plan-building path after configuration/platform information is resolved.
 
 ### Input
 
