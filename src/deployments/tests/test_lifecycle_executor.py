@@ -248,3 +248,30 @@ def test_unsupported_runtime_capability_is_blocked_before_planning():
 
     assert result.status == sm.DEPLOY_FAILED
     assert result.error.code == "runtime_capability_unsupported"
+
+
+def test_cancellation_cleanup_failure_requires_reconciliation():
+    runtime = FakeRuntime()
+    identity = RuntimeIdentity(service_id="service-1", runtime_name="app-service-1")
+
+    def fail_stop(handle, *, operation_key, cancel_check=None):
+        raise RuntimeOperationError(
+            "stop failed",
+            code="runtime_stop_failed",
+            category="runtime",
+        )
+
+    runtime.stop = fail_stop
+    strategy = _Strategy(_plan(identity))
+    store = InMemoryLifecycleStore()
+
+    result = DeploymentLifecycleExecutor(store).execute(
+        _context(identity, cancelled=lambda: True),
+        strategy,
+        runtime,
+    )
+
+    assert result.status == sm.DEPLOY_CANCELLED
+    assert result.details["cleanup_failed"] is True
+    assert result.details["reconciliation_required"] is True
+    assert result.details["cleanup_failures"][0]["operation"] == "stop"
