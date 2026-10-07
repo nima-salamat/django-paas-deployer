@@ -12,6 +12,7 @@ from deployments.reconciliation import (
 )
 from deployments.runtime import RuntimeRegistry, RuntimeIdentity
 from deployments.runtime.fake import FakeRuntime
+from deployments.runtime.errors import RuntimeOperationError
 from deployments.common.exceptions import StaleDeploymentWorkerError
 
 
@@ -161,7 +162,7 @@ def test_reconciliation_executor_passes_cancellation_to_native_runtime():
         image_ref="demo@sha256:artifact",
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(RuntimeOperationError) as exc_info:
         ReconciliationExecutor().execute(
             _decision(ReconciliationAction.REPAIR),
             desired=desired,
