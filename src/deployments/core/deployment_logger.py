@@ -144,6 +144,10 @@ class DeploymentLogger:
             "rollback_failed",
             "error_code",
             "error_category",
+            "reason_code",
+            "http_status",
+            "docker_api_reached",
+            "docker_runtime",
             "recoverable",
         )
         parts = []
