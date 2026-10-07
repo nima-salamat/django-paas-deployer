@@ -42,3 +42,8 @@ Read the owning app README first, then its Wagtail admin module; read this app w
 Source: src/cms/management/commands/setup_wagtail_site.py.
 
 Bootstraps the default Wagtail Site and the root HomePage, removes default welcome content, and derives the hostname from DOMAIN_NAME/API_DOMAIN_NAME with localhost development fallback. It is transactional and should be run after migrations when initializing or repairing the CMS site tree.
+
+## Contract references
+
+- [API reference](api.md)
+- [Complete model field reference](field-reference.md)
