@@ -124,3 +124,16 @@ Source of truth: `src/users/models.py`. Django/Django-contrib inherited fields a
 - **DB nullable** means the database may store NULL; **Blank** is a Django validation/form contract and is not equivalent to NULL.
 - A default may be a callable (for example `dict`, `timezone.now`, or a project helper), so the displayed expression is not necessarily the stored value at declaration time.
 - JSON fields are intentionally flexible and their detailed semantic contract belongs in the app/domain documentation; this table records the field's persistence role.
+ 
+## User — inherited framework fields
+
+The project-declared User fields are documented above. The effective model also inherits:
+
+| Inherited field | Source | Purpose |
+|---|---|---|
+| `last_login` | Django `AbstractBaseUser` | Records the last successful authentication time. |
+| `groups` | Django `PermissionsMixin` | Many-to-many group relationship for permission inheritance. |
+| `user_permissions` | Django `PermissionsMixin` | Direct Django permission assignments. |
+
+These are framework-owned fields rather than declarations in `src/users/models.py`.
+
