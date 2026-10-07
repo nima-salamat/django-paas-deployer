@@ -31,6 +31,7 @@ from core.utils import make_uuid4
 from deployments.core.db_deployer import DB_PLATFORMS, DBDeployer
 from deployments.core.deploy import Deploy as OrchestratorDeploy
 from deployments.core.manager.container_manager import Container
+from deployments.common.docker_identity import canonical_image_ref
 from deployments.core.manager.client_manager import Client
 from deployments.core.swarm import SwarmRuntime, swarm_enabled
 from docker.errors import NotFound as DockerNotFound
@@ -647,7 +648,7 @@ def _force_cancel_runtime_cleanup(service, *, container_name: str) -> dict:
             report["container"] = "absent" if isinstance(exc, DockerNotFound) else "error"
             if report["container"] == "error":
                 report["errors"].append(f"container: {exc}")
-        for ref in (container_name, f"{container_name}:latest"):
+        for ref in (container_name, canonical_image_ref(container_name, "latest")):
             try:
                 client.images.remove(ref, force=True)
                 report["images"].append({"ref": ref, "result": "removed"})
