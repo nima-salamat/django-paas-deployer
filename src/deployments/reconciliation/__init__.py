@@ -1,5 +1,6 @@
 """Desired-versus-observed reconciliation primitives."""
 
+from .executor import ReconciliationExecutionContext, ReconciliationExecutor
 from .planner import (
     DesiredRuntimeState,
     ReconciliationAction,
@@ -12,4 +13,6 @@ __all__ = [
     "ReconciliationAction",
     "ReconciliationDecision",
     "ReconciliationPlanner",
+    "ReconciliationExecutionContext",
+    "ReconciliationExecutor",
 ]
