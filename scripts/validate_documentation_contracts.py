@@ -122,11 +122,12 @@ def rows(s):
 
 def inventory():
     s=INV.read_text(encoding="utf-8")
-    api={(r[0],r[1],r[2],r[3]) for r in rows(sec(s,"## API route inventory","## Router actions")) if len(r)>=5 and r[0]!="App"}
-    router_section=rows(sec(s,"## Router actions","## Model inventory"))
-    routers={(r[0],r[1],"router",r[3],r[2]) for r in router_section if len(r)>=8 and r[0]!="App"}
+    api={(r[0],r[1],r[2],r[3]) for r in rows(sec(s,"## API route inventory","## Router registrations")) if len(r)>=5 and r[0]!="App"}
+    router_section=rows(sec(s,"## Router registrations","## Router actions"))
+    routers={(r[0],r[1],"router",r[3].replace("<empty-prefix>",""),r[4]) for r in router_section if len(r)>=6 and r[0]!="App"}
+    action_section=rows(sec(s,"## Router actions","## Model inventory"))
     actions=set()
-    for r in router_section:
+    for r in action_section:
         if len(r)>=8 and r[0]!="App" and r[7]=="custom action":
             methods=tuple(x.strip().upper() for x in r[5].split(',') if x.strip())
             actions.add((r[0],r[1],r[2],r[3],r[4].lower()=="true",methods,r[6]))
