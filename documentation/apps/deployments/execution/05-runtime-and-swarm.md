@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Separate the semantic runtime contract from the current concrete Docker Swarm implementation.
+Separate the semantic runtime contract from the concrete Docker Swarm implementation used by the production lifecycle.
 
 The key rule is:
 
@@ -35,7 +35,7 @@ Docker Engine / Swarm
 
 ### Called by
 
-Current compatibility plan construction and the newer application lifecycle seam.
+`DeployService._compile_native_plan()` and `DeploymentLifecycleExecutor`.
 
 ### Inputs
 
@@ -191,7 +191,7 @@ Do not make this adapter a second independent Swarm implementation.
 
 **Path:** `core/swarm.py`
 
-The current production application path calls this class directly.
+The production Swarm application path reaches this class through `DeploymentLifecycleExecutor` and `RuntimeContract`.
 
 ### It owns
 
@@ -312,7 +312,7 @@ Do not add new Swarm semantics to the legacy container manager or assume legacy 
 
 Use the runtime contract when implementing backend-neutral lifecycle behavior.
 
-Use `core/swarm.py` when fixing the actual current Swarm Docker behavior.
+Use `core/swarm.py` when fixing the concrete Docker/Swarm backend behavior.
 
 Use the adapter when changing the runtime-neutral-to-Swarm boundary.
 
