@@ -75,6 +75,10 @@ jobs:
       - name: Validate documentation source coverage
         run: |
           python scripts/validate_documentation.py
+      - name: Validate canonical source contract inventory
+        run: |
+          python scripts/validate_documentation_contracts.py
+
       - name: Run unit and regression tests
         run: |
           # Unit/regression suite only. Real Docker/Swarm tests are marked
