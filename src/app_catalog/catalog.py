@@ -160,10 +160,13 @@ def _publication_enabled_overrides() -> dict[str, bool]:
         return {}
 
 
+_PUBLICATION_UNSET = object()
+
+
 def is_public_definition(
     definition: CatalogDefinition,
     *,
-    publication_enabled: bool | None = None,
+    publication_enabled: bool | None | object = _PUBLICATION_UNSET,
 ) -> bool:
     source = definition.source.resolve()
     first_party_root = (CATALOG_ROOT / "first_party").resolve()
@@ -181,8 +184,8 @@ def is_public_definition(
     # Editorial publication is a database-backed operator override. It can
     # hide an already-safe curated recipe, but it cannot turn an unsafe or
     # non-first-party definition into a public Ready App.
-    if publication_enabled is not None:
-        return bool(publication_enabled)
+    if publication_enabled is not _PUBLICATION_UNSET:
+        return True if publication_enabled is None else bool(publication_enabled)
     try:
         from .models import CatalogPublication
         publication = (
