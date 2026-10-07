@@ -173,7 +173,7 @@ RuntimeRegistry and runtime contract tests.
 
 ### Preconditions
 
-SwarmRuntime must be available; plan must carry DeploymentConfig compatibility data and image ref for the current implementation.
+SwarmRuntime must be available and the native DeploymentPlan must contain the runtime identity and artifact/image reference required by the adapter.
 
 ### Output
 
