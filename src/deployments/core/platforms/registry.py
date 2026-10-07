@@ -10,6 +10,10 @@ from .base.platform import BasePlatform, DetectionResult, ProjectConfig
 from .inspector import ProjectInspector
 
 
+class PlatformDetectionPolicyError(RuntimeError):
+    """Raised when source evidence is too weak for automatic production selection."""
+
+
 class PlatformRegistry:
     """
     Central registry. Plugins register themselves via the decorator
@@ -75,9 +79,19 @@ class PlatformRegistry:
                     cfg = inst.resolve(file_index, user_config)
                     return inst, res, cfg
 
-        # Highest confidence, then highest plugin priority
+        # Highest confidence, then highest plugin priority.
         candidates.sort(key=lambda t: (t[1].confidence, t[0].priority), reverse=True)
         best_inst, best_res = candidates[0]
+
+        # A low-confidence result is only safe when the caller explicitly
+        # selected that platform. Otherwise the engine must fail closed rather
+        # than silently turning an unknown source tree into a production app.
+        if best_res.confidence < 0.50:
+            raise PlatformDetectionPolicyError(
+                "Automatic platform detection lacks sufficient evidence for production deployment. "
+                "Choose an explicit platform configuration."
+            )
+
         cfg = best_inst.resolve(file_index, user_config)
         return best_inst, best_res, cfg
 
