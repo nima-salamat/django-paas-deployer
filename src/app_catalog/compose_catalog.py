@@ -334,7 +334,8 @@ def compose_to_resolved(*, document: dict[str, Any], metadata: dict[str, Any], c
                 port_target = int(target.split("/")[0] if sep else host.split("/")[0])
                 if sep and host and not public:
                     raise ApplicationPlanError(f"Catalog service {key!r} publishes a host port but is not declared public.")
-        role = str((raw.get("x-passdeployer") or {}).get("role") or "")
+        pd_meta = raw.get("x-passdeployer") or {}
+        role = str(pd_meta.get("role") or "")
         image_hint = str(raw.get("image") or "").lower()
         database_platform = next(
             (
@@ -363,6 +364,16 @@ def compose_to_resolved(*, document: dict[str, Any], metadata: dict[str, Any], c
                 role = "app"
             else:
                 role = "internal"
+
+        raw_replicas = pd_meta.get("replicas", 1)
+        try:
+            replicas = int(_transform(str(raw_replicas), render_context, aliases, secrets))
+        except (TypeError, ValueError) as exc:
+            raise ApplicationPlanError(f"Catalog service {key!r} replicas must be an integer.") from exc
+        if not 1 <= replicas <= 8:
+            raise ApplicationPlanError(
+                f"Catalog service {key!r} replicas must be between 1 and 8."
+            )
 
         if public and role in {"database", "cache", "worker", "scheduler", "internal"}:
             raise ApplicationPlanError(
@@ -408,6 +419,7 @@ def compose_to_resolved(*, document: dict[str, Any], metadata: dict[str, Any], c
             "healthcheck": deepcopy(health) if isinstance(health, dict) else None,
             "working_directory": raw.get("working_dir"),
             "healthcheck_path": readiness_path,
+            "replicas": replicas,
             "healthcheck_timeout": _duration_seconds((health or {}).get("timeout"), 5) if isinstance(health, dict) else 5,
             "public": public,
             "required": bool((raw.get("x-passdeployer") or {}).get("required", True)),
