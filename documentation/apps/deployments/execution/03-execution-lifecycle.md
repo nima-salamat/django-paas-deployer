@@ -159,7 +159,7 @@ The native branch is the production lifecycle entry. The compatibility orchestra
 
 ## _execute_orchestrator() — legacy/non-Swarm
 
-This layer combines the final resolved runtime graph and compatibility DTO.
+This layer composes the final resolved revision/runtime graph into the native DeploymentPlan; a transient DeploymentConfig is confined to Dockerfile/build rendering.
 
 Important inputs:
 
@@ -185,7 +185,7 @@ The deployment constructs the configuration passed to the orchestrator once and 
 
 ### Preconditions
 
-A complete `DeploymentConfig` is available and worker ownership/cancellation is still valid.
+The native lifecycle context has a complete immutable revision-derived plan and current worker ownership/cancellation fence.
 
 ### Stages
 
