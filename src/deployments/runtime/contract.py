@@ -80,7 +80,7 @@ class RuntimeContract(Protocol):
     ) -> RuntimeAvailability:
         ...
 
-    def apply(self, plan: Any, *, operation_key: str) -> RuntimeOperationResult:
+    def apply(self, plan: Any, *, operation_key: str, cancel_check: Callable[[], bool] | None = None) -> RuntimeOperationResult:
         ...
 
     def inspect(self, identity: RuntimeIdentity) -> RuntimeObservation:
