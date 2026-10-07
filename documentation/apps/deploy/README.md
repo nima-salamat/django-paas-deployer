@@ -50,3 +50,7 @@ For execution semantics always continue to ../deployments/README.md.
 - [Complete model field reference](field-reference.md)
 
 For lifecycle/runtime execution, read [../deployments/README.md](../deployments/README.md) after the Deploy-domain contract.
+
+## Detailed contracts
+
+- [Detailed API reference](api-reference.md)
