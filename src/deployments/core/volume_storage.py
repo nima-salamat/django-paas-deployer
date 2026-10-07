@@ -8,6 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from deployments.common.docker_identity import canonical_volume_name
+
 CAPACITY_HARD_ENFORCED = "HARD_ENFORCED"
 CAPACITY_LOGICAL_ONLY = "LOGICAL_ONLY"
 CAPACITY_UNENFORCED = "UNENFORCED"
@@ -195,7 +197,7 @@ def reconcile_managed_volumes(client) -> dict[str, list[dict[str, Any]]]:
     expected = {}
     for row in registry_rows:
         volume_id = str(row["id"])
-        expected_name = f"vol-{volume_id.replace('-', '')[:8]}-{row['name']}"
+        expected_name = canonical_volume_name(volume_id, row["name"])
         expected[expected_name] = row
 
     managed_names = set()
