@@ -26,16 +26,33 @@ Ready Apps do not introduce a second runtime, a tenant-facing arbitrary Compose 
 
 ## Publication boundary
 
-A definition is eligible for the public Ready Apps API only when both conditions are true:
+A definition is eligible for the public Ready Apps API only when all of these conditions are true:
 
 1. `visibility` is `public`.
 2. The definition source is directly under `src/app_catalog/catalog/first_party/`.
+3. Every executable image reference is pinned to a non-mutable tag or immutable digest. A `${config.foo}` image placeholder is allowed only when `foo` is a finite `choice` field and every option resolves to a pinned image reference.
+4. There is no operator `CatalogPublication(enabled=false)` override for that catalog id.
 
 This is implemented by the shared `is_public_definition()` policy. There is intentionally no application-id denylist.
 
-A definition can remain installed in the catalog while being internal, experimental, externally supplied, deprecated, or otherwise unavailable to the public product.
+The executable catalog topology remains source-controlled. `CatalogPublication` is only an editorial/operator overlay: it can hide a safe curated app or override its featured flag, but it cannot make an unsafe, mutable-image or non-first-party definition public.
+
+A definition can remain installed in the catalog while being internal, experimental, externally supplied, deprecated, unsafe for public publication, or intentionally hidden by an operator.
 
 ## Catalog authoring contract
+
+### Wagtail publication controls
+
+Operators can manage the public/editorial state of curated Ready Apps in Wagtail under **Applications → Ready App publication**. The screen is backed by `CatalogPublication`.
+
+The controls are intentionally limited to publication metadata:
+
+- `enabled`: hide/show an otherwise eligible curated Ready App;
+- `featured_override`: override the source `featured` flag;
+- `notes`: operator notes.
+
+Changing a publication row never edits the Compose/YAML topology, runtime images, services, dependencies, secrets or deployment behavior. Recipe changes remain source-controlled so deployment provenance and review stay auditable.
+
 
 Compose YAML is the trusted authoring representation for the current first-party Ready App recipes.
 
