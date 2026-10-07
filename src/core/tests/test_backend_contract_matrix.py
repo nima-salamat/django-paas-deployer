@@ -134,6 +134,41 @@ def test_every_modelserializer_declares_a_real_model_and_valid_read_only_fields(
     assert failures == [], "\n".join(failures)
 
 
+def test_every_project_drf_endpoint_has_global_or_auth_rate_limit_policy():
+    import config.urls as root_urls
+    from core.throttling import (
+        AuthenticationIPRateThrottle,
+        GlobalIPRateThrottle,
+    )
+
+    configured = set(getattr(__import__("django.conf", fromlist=["settings"]).settings, "REST_FRAMEWORK", {}).get("DEFAULT_THROTTLE_CLASSES", ()))
+    required_default = {
+        "core.throttling.GlobalIPRateThrottle",
+        "core.throttling.GlobalUserRateThrottle",
+    }
+    assert required_default.issubset(configured)
+
+    missing = []
+    acceptable_explicit = {GlobalIPRateThrottle, AuthenticationIPRateThrottle}
+
+    for route, pattern in _walk_patterns(root_urls.urlpatterns):
+        if not _is_project_api_route(route):
+            continue
+        _callback, cls = _drf_callback(pattern)
+        if cls is None or "throttle_classes" not in cls.__dict__:
+            continue
+
+        classes = set(getattr(cls, "throttle_classes", ()) or ())
+        if not classes.intersection(acceptable_explicit):
+            name = pattern.name or "<unnamed>"
+            missing.append(f"{name}: {route} -> {cls.__module__}.{cls.__name__}")
+
+    assert missing == [], (
+        "Explicitly throttled DRF endpoints must retain a client-IP boundary "
+        "(global or authentication-specific):\n" + "\n".join(sorted(missing))
+    )
+
+
 def test_every_project_drf_endpoint_declares_an_explicit_permission_policy():
     import config.urls as root_urls
 
