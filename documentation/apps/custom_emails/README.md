@@ -42,3 +42,7 @@ models.md -> serializers.md -> api.md -> background.md.
 
 - [API reference](api.md)
 - [Complete model field reference](field-reference.md)
+
+## Detailed contracts
+
+- [Detailed API reference](api-reference.md)
