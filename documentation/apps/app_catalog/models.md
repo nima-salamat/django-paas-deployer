@@ -40,6 +40,22 @@ The durable owner and coordinator for one catalog installation.
 | cancel_requested | Boolean, default false | Cancellation intent; tasks must observe it before dispatching further child work. |
 | network | OneToOne services.PrivateNetwork, CASCADE, nullable | Shared private network for the application's child Services. |
 
+
+## CatalogPublication
+
+Operator/editorial state for repository-backed Ready App recipes. It does not replace the YAML source of truth for executable topology.
+
+| Field | Type / default | Semantics |
+|---|---|---|
+| catalog_id | CharField(64), unique | Stable catalog definition id controlled by the operator. |
+| enabled | Boolean, default true | Hides an otherwise eligible curated recipe from the public Ready Apps listing when false. It cannot publish an unsafe, internal, or non-first-party recipe. |
+| featured_override | Boolean nullable | Optional override of the source recipe's `featured` flag. `NULL` keeps the source value. |
+| notes | Text | Operator/editorial notes; never part of the public catalog API. |
+| updated_by | nullable FK users.User | Optional operator attribution. |
+| created_at / updated_at | DateTime | Audit timestamps. |
+
+The authoritative application topology, image references, variants, fields and deployment behavior remain in the source-controlled catalog definition. This model only provides an operator publication layer.
+
 ## ApplicationInstanceService
 
 Binds one catalog service definition to its concrete Service and Deploy records.
