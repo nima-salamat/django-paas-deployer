@@ -1780,9 +1780,10 @@ class SwarmRuntime:
             return self.inspect_service(name) or SwarmServiceState(
                 name=name,
                 service_id=None,
-                service_image=expected_image or image_ref,
                 replicas_desired=replicas,
                 replicas_running=0,
+                tasks=(),
+                service_image=expected_image or image_ref,
             )
         startup_timeout = max(
             180.0,
