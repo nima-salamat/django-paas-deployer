@@ -13,3 +13,5 @@ Wagtail Page already supplies page identity/tree fields. HomePage intentionally 
 Deletion follows Wagtail Page semantics. Do not move Service/Deploy business state into this model merely because it is editable from Wagtail.
 
 Source: src/cms/models.py.
+
+> **Complete field reference:** [field-reference.md](field-reference.md) lists every field explicitly declared in `src/cms/models.py`, including type, null/blank behavior, defaults, constraints and purpose.
