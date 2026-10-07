@@ -223,7 +223,7 @@ If the graph has no process list, a default web process is synthesized.
 
 ### Replica invariant
 
-Every enabled process currently requires one replica. The runtime explicitly rejects anything other than 1.
+Each enabled process may run from 1 through 8 replicas. The runtime and revision validator share the same upper bound.
 
 ## Network behavior
 
