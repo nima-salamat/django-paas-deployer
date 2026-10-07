@@ -1050,6 +1050,10 @@ class DeploymentOrchestrator:
                 "rollback_failed": rollback_failed,
                 "error": underlying_error or "",
                 "error_type": error_type or "",
+                "reason_code": str((exc.details or {}).get("reason_code") or ""),
+                "http_status": (exc.details or {}).get("http_status"),
+                "docker_api_reached": (exc.details or {}).get("docker_api_reached"),
+                "docker_runtime": (exc.details or {}).get("docker_runtime"),
             },
         )
         return DeploymentResult(
