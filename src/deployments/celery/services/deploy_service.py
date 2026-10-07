@@ -36,7 +36,7 @@ from services.models import Volume  # type: ignore
 from services.revisioning import ensure_revision_for_deploy, activate_revision_locked, materialize_revision_config, mark_revision_failed
 
 from deployments.common import parse_config, as_bool, as_int
-from deployments.common.docker_identity import canonical_image_tag
+from deployments.common.docker_identity import canonical_image_ref, canonical_image_tag
 from deployments.common.deadline import DeploymentDeadline
 from deployments.common.deployment_profile import normalize_profile
 from deployments.common.resource_policy import runtime_limits, worker_count as derive_worker_count, build_limits
@@ -1215,7 +1215,7 @@ class DeployService:
             graph=runtime_graph,
             selection=selection,
             resolved=resolved,
-            image_ref=f"{container_name}:{_docker_tag_from_deploy(deploy_item.version)}",
+            image_ref=canonical_image_ref(container_name, deploy_item.version),
         )
 
     # ------------------------------------------------------------------
