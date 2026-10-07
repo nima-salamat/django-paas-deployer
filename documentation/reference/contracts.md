@@ -212,9 +212,7 @@ The detailed app documentation remains the narrative contract. This file answers
 | `plans` | `src/plans/urls.py` | explicit | `admin/plans/` | [app API docs](../apps/plans/api-reference.md) |
 | `plans` | `src/plans/urls.py` | explicit | `plans/<uuid:planId>/apply/` | [app API docs](../apps/plans/api-reference.md) |
 | `plans` | `src/plans/urls.py` | explicit | `platforms/` | [app API docs](../apps/plans/api-reference.md) |
-| `services` | `src/config/urls.py` | explicit | `api/networks/` | [app API docs](../apps/services/api-reference.md) |
-| `services` | `src/config/urls.py` | explicit | `api/services/service_status/` | [app API docs](../apps/services/api-reference.md) |
-| `services` | `src/config/urls.py` | explicit | `api/volumes/` | [app API docs](../apps/services/api-reference.md) |
+| `config` | `src/config/urls.py` | explicit | `api/services/service_status/` | [services API docs](../apps/services/api-reference.md) |
 | `services` | `src/services/urls.py` | explicit | `admin/logging/health/` | [app API docs](../apps/services/api-reference.md) |
 | `services` | `src/services/urls.py` | explicit | `admin/purge_service_runtime/` | [app API docs](../apps/services/api-reference.md) |
 | `services` | `src/services/urls.py` | explicit | `admin/start_service/` | [app API docs](../apps/services/api-reference.md) |
