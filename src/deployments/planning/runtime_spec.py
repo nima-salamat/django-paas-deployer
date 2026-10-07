@@ -86,9 +86,10 @@ class RuntimeSpec:
     def from_plan(cls, plan: Any, *, image_digest: str = "") -> "RuntimeSpec":
         """Build the immutable runtime snapshot directly from a native plan."""
         graph = getattr(plan, "process_graph", None)
-        processes = []
-        for item in getattr(graph, "processes", ()) or ():
-            processes.append(_json_value(item))
+        processes = tuple(
+            _json_value(item)
+            for item in (getattr(graph, "processes", ()) or ())
+        )
         environment = {
             str(k): str(v)
             for k, v in dict(getattr(plan, "environment", {}) or {}).items()
@@ -99,6 +100,8 @@ class RuntimeSpec:
         for key in list(environment):
             if _is_sensitive_key(key):
                 environment[key] = "[SECRET_REF]"
+        runtime_options = dict(getattr(plan, "runtime_options", {}) or {})
+        runtime_options["processes"] = processes
         return cls(
             image_ref=str(getattr(plan, "image_ref", "") or ""),
             image_digest=str(image_digest or getattr(plan, "artifact_digest", "") or ""),
@@ -108,21 +111,18 @@ class RuntimeSpec:
             entrypoint=None,
             labels={
                 str(k): str(v)
-                for k, v in dict(getattr(plan, "identity", None).__dict__.items() if getattr(getattr(plan, "identity", None), "__dict__", None) else {}).items()
+                for k, v in dict(getattr(plan, "labels", {}) or {}).items()
             },
             networks=tuple(_json_value(value) for value in (getattr(plan, "networks", ()) or ())),
             volumes=tuple(_json_value(value) for value in (getattr(plan, "volumes", ()) or ())),
             endpoints=tuple(_json_value(value) for value in (getattr(plan, "endpoints", ()) or ())),
-            read_only=bool((getattr(plan, "resources", {}) or {}).get("read_only", True)),
+            read_only=bool(runtime_options.get("read_only", True)),
             resources=_json_value(dict(getattr(plan, "resources", {}) or {})),
             health=_json_value(dict(getattr(plan, "health_policy", {}) or {})),
-            restart_policy=_json_value(dict((getattr(plan, "rollout_policy", {}) or {}).get("restart_policy") or {})),
-            host_config={},
-            routing=_json_value({"endpoints": list(getattr(plan, "endpoints", ()) or ())}),
-            runtime_options=_json_value({
-                "placement": list(getattr(plan, "placement", ()) or ()),
-                "rollout": dict(getattr(plan, "rollout_policy", {}) or {}),
-            }),
+            restart_policy=_json_value(dict(runtime_options.get("restart_policy") or {})),
+            host_config=_json_value(dict(runtime_options.get("host_config") or {})),
+            routing=_json_value(dict(runtime_options.get("routing") or {})),
+            runtime_options=_json_value(runtime_options),
             source_revision=str(getattr(getattr(plan, "identity", None), "revision_id", "") or ""),
             revision_id=str(getattr(getattr(plan, "identity", None), "revision_id", "") or ""),
         )
