@@ -263,7 +263,7 @@ class SwarmRuntimeAdapter:
                 details=availability.details,
             )
 
-    def apply(self, plan: Any, *, operation_key: str) -> RuntimeOperationResult:
+    def apply(self, plan: Any, *, operation_key: str, cancel_check: Callable[[], bool] | None = None) -> RuntimeOperationResult:
         self._ensure_available(self)
         config, image_ref = self._plan_config(plan)
         identity = self._identity(plan)
