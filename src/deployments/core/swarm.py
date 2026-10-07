@@ -1406,7 +1406,8 @@ class SwarmRuntime:
                     replicas=replicas,
                     operation_key=f"{operation_key}:process:{process_name}" if operation_key else None,
                     cancel_check=cancel_check,
-                    prepared_image_ref=prepared_image_ref,
+                    prepared_image_ref=prepared_ref,
+                    wait_for_ready=False,
                 )
                 if self._last_apply_operation:
                     recovery_operations.append(dict(self._last_apply_operation))
@@ -1677,7 +1678,7 @@ class SwarmRuntime:
             expected_image=expected_image,
         )
 
-    def apply(self, config, *, image_ref: str, replicas: int = 1, operation_key: str | None = None, prepared_image_ref: str | None = None, cancel_check: Callable[[], bool] | None = None) -> SwarmServiceState:
+    def apply(self, config, *, image_ref: str, replicas: int = 1, operation_key: str | None = None, prepared_image_ref: str | None = None, cancel_check: Callable[[], bool] | None = None, wait_for_ready: bool = True) -> SwarmServiceState:
         replicas = _validate_replicas(replicas)
         if cancel_check is not None and cancel_check():
             raise DeploymentError("Swarm apply was cancelled before runtime mutation.", stage="swarm_apply", code="SWARM_OPERATION_CANCELLED", user_message="Deployment was cancelled.")
@@ -1775,6 +1776,14 @@ class SwarmRuntime:
         # attachment and container startup. This is a different clock from the
         # application healthcheck and must not be cut off at 60s simply because
         # health_timeout is 60s.
+        if not wait_for_ready:
+            return self.inspect_service(name) or SwarmServiceState(
+                name=name,
+                service_id=None,
+                service_image=expected_image or image_ref,
+                replicas_desired=replicas,
+                replicas_running=0,
+            )
         startup_timeout = max(
             180.0,
             float(getattr(config, "start_timeout", 45) or 45),
