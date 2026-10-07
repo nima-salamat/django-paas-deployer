@@ -1863,7 +1863,19 @@ class SwarmRuntime:
         api._result(response, json=True)
         return True
 
-    def stop(self, name: str) -> None:
+    def stop(
+        self,
+        name: str,
+        *,
+        operation_key: str | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> None:
+        if cancel_check is not None and cancel_check():
+            raise DeploymentError(
+                "Swarm stop was cancelled before runtime mutation.",
+                stage="swarm_stop",
+                code="SWARM_OPERATION_CANCELLED",
+            )
         try:
             self.client.services.get(_validate_service_name(name)).scale(0)
         except docker.errors.NotFound:
@@ -1890,14 +1902,6 @@ class SwarmRuntime:
                 return True
             if time.monotonic() >= deadline:
                 return False
-            if cancel_check is not None and cancel_check():
-                raise DeploymentError(
-                    "Swarm readiness was cancelled.",
-                    stage="swarm_startup",
-                    code="SWARM_OPERATION_CANCELLED",
-                    user_message="Deployment readiness was cancelled.",
-                    details={"service": name},
-                )
             time.sleep(0.25)
 
     def service_names_for_service(self, service_id: str) -> list[str]:
@@ -2082,7 +2086,19 @@ class SwarmRuntime:
 
             time.sleep(0.25)
 
-    def remove(self, name: str) -> None:
+    def remove(
+        self,
+        name: str,
+        *,
+        operation_key: str | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> None:
+        if cancel_check is not None and cancel_check():
+            raise DeploymentError(
+                "Swarm removal was cancelled before runtime mutation.",
+                stage="swarm_remove",
+                code="SWARM_OPERATION_CANCELLED",
+            )
         try:
             self.client.services.get(_validate_service_name(name)).remove()
         except docker.errors.NotFound:
