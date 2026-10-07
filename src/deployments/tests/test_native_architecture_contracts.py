@@ -59,7 +59,7 @@ def test_release_and_artifact_are_separate_from_cache_artifacts():
     assert "class BuildArtifact(" in models
     assert "class Release(" in models
     assert "class BuildCacheArtifact(" in models
-    assert 'release = models.ForeignKey(' in models
+    assert 'release_reference = models.ForeignKey(' in models
     assert 'artifact = models.ForeignKey(' in models
 
 
