@@ -36,3 +36,8 @@ System settings are admin-only; secret metadata is not a substitute for secure s
 ## Reading order
 
 models.md -> api.md -> background.md -> consuming app documentation.
+
+## Contract references
+
+- [API reference](api.md)
+- [Complete model field reference](field-reference.md)
