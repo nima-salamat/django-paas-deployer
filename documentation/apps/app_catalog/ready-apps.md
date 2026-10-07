@@ -196,7 +196,7 @@ Secret plaintext is never returned.
 
 The resource summary includes aggregate CPU/RAM/storage and per-service allocation. Its aggregate contract includes `service_count`, `volume_count`, `storage_mb`, `cpu_vcpu`, `ram_mb`, `hourly_price` and `allocation_kind=plan_limits`.
 
-For current recipes, an omitted catalog volume size resolves to 1024 MB. This is a backend rule and must not be recalculated in the browser.
+For current recipes, an omitted catalog volume size resolves to 1024 MB. Resource CPU/RAM/hourly price for a service are multiplied by its desired replica count. Storage is counted once per declared persistent volume because replicas share the logical volume contract. These are backend rules and must not be recalculated in the browser.
 
 ### Install
 
@@ -362,13 +362,17 @@ Coordinator state and child Deploy state remain separate.
 
 - Catalog id: `wordpress`
 - Software version: `7.1.2`
-- Application image: `wordpress:7.1.2-php8.3-apache`
+- PHP choices: `8.3`, `8.4`, `8.5`
 - Database image: `mariadb:11.8.9`
 - Persistent data: WordPress files + MariaDB data
 - Public output: platform HTTPS URL
-- User deployment-time secret input: none
+- WP-CLI: pinned `2.12.0`, installed at `/usr/local/bin/wp`
+- Initialization: automatic `wp core install` during first startup
+- Managed WP-Cron: configurable interval, disabled browser-triggered WP-Cron when managed mode is enabled
+- Web replicas: `1..8`, with CPU/RAM allocation multiplied per replica
+- Agent operations: status, core update, cron execution, site configuration, search/replace and persisted web scaling
 
-After deployment, the user completes the WordPress setup wizard.
+The install flow creates the WordPress administrator from the supplied Ready App credentials and waits for the WordPress database to become usable before marking the service healthy.
 
 ### Uptime Kuma
 
