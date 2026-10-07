@@ -371,6 +371,7 @@ class DeploymentLifecycleExecutor:
                 plan,
                 operation_key=context.operation("rollback"),
                 target_plan=target_plan,
+                cancel_check=context.cancellation_requested,
             )
             return True, False
         except Exception:
