@@ -130,3 +130,46 @@ def test_reconciliation_executor_requires_handle_for_stop():
             runtime=runtime,
             context=context,
         )
+
+
+def test_reconciliation_executor_passes_cancellation_to_native_runtime():
+    runtime = FakeRuntime()
+    desired = DesiredRuntimeState(
+        service_id="service-1",
+        revision_id="revision-2",
+        desired_state="running",
+        runtime_name="service-1",
+        metadata={"readiness_timeout": 1},
+    )
+    cancelled = {"value": True}
+    context = ReconciliationExecutionContext(
+        service_id="service-1",
+        lifecycle_generation=3,
+        active_revision_id="revision-2",
+        owns_execution=lambda: True,
+        cancellation_requested=lambda: cancelled["value"],
+        current_generation=lambda: 3,
+    )
+    plan = SimpleNamespace(
+        identity=RuntimeIdentity(
+            service_id="service-1",
+            deployment_id="repair-2",
+            revision_id="revision-2",
+            runtime_name="service-1",
+        ),
+        required_capabilities=frozenset(),
+        image_ref="demo@sha256:artifact",
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        ReconciliationExecutor().execute(
+            _decision(ReconciliationAction.REPAIR),
+            desired=desired,
+            selection=_selection(runtime),
+            runtime=runtime,
+            context=context,
+            plan=plan,
+        )
+
+    assert getattr(exc_info.value, "code", "") == "runtime_cancelled"
+    assert runtime.apply_count == 0
