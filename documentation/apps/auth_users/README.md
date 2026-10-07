@@ -50,3 +50,8 @@ Wagtail exposes login policy, invite-link metadata, invite usage and login audit
 
 - src/auth_users/device_metadata.py — normalize and present browser/device metadata for authentication audit records.
 - src/auth_users/admin_permissions.py — staff/superuser permission classes for managing authentication administration rules.
+
+## Contract references
+
+- [API reference](api.md)
+- [Complete model field reference](field-reference.md)
