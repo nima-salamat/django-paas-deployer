@@ -88,6 +88,10 @@ class SwarmArtifactRegistry:
         tag: str,
         operation_key: str,
     ) -> ArtifactReference:
+        registry = str(__import__("os").environ.get("SWARM_IMAGE_REGISTRY") or "").strip().rstrip("/")
+        image_ref = str(artifact.image_ref or "")
+        if registry and image_ref.startswith(registry + "/"):
+            return artifact
         return self.publish(
             artifact,
             service_name=service_name,
