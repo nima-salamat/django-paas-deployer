@@ -796,3 +796,15 @@ def test_cached_laravel_frontend_stage_sees_composer_vendor():
     assert "FROM deployer-backend AS deployer-final" in out
     assert "COPY --from=deployer-frontend-builder /frontend/" in out
     assert "/var/www/html/" in out
+
+
+def test_laravel_migration_failure_is_fatal_before_apache():
+    script = d._php_entrypoint_script(
+        is_laravel=True,
+        schema_files=[],
+        doc_root_rel="",
+    )
+    assert 'php artisan migrate --force || {' in script
+    assert 'return 1' in script
+    assert 'non-fatal' not in script
+    assert script.index('php artisan migrate --force') < script.index('exec apache2-foreground')
