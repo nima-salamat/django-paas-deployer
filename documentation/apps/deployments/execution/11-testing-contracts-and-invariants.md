@@ -48,7 +48,7 @@ Read it before adding a new lifecycle state or transition.
 
 **`test_lifecycle_executor.py`**
 
-Protects the framework-neutral lifecycle seam:
+Protects the production lifecycle executor:
 
 - planning -> apply -> readiness -> activate -> success;
 - cancellation before side effects;
