@@ -25,7 +25,7 @@ Two layers coexist:
 - `ReconciliationPlanner` is a pure, runtime-neutral decision model.
 - `deployments.celery.schedules` builds desired/observed inputs; actionable Swarm repair goes through `ReconciliationExecutor` -> `RuntimeContract` -> `SwarmRuntimeAdapter`.
 
-The planner is an architectural contract and test target, not yet the only production reconciliation engine.
+The planner is the pure decision engine for active-service drift, and `ReconciliationExecutor` is its production runtime-action boundary. Separate monitor paths still handle Deploy timeout/recovery and base-image recovery.
 
 ## DesiredRuntimeState
 
