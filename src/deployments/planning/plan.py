@@ -28,6 +28,7 @@ class DeploymentPlan:
     release_id: str | None = None
     strategy_kind: str = "application"
     environment: Mapping[str, str] = field(default_factory=dict)
+    labels: Mapping[str, str] = field(default_factory=dict)
     secret_references: tuple[str, ...] = ()
     networks: tuple[NetworkSpec, ...] = ()
     volumes: tuple[VolumeSpec, ...] = ()
@@ -63,6 +64,7 @@ class DeploymentPlan:
             "artifact_digest": self.artifact_digest,
             "release_id": self.release_id,
             "environment": {"keys": sorted(self.environment)},
+            "labels": sorted(self.labels.keys()),
             "networks": [network.name for network in self.networks],
             "volumes": [volume.target for volume in self.volumes],
             "endpoints": [endpoint.name for endpoint in self.endpoints],
@@ -168,6 +170,7 @@ class DeploymentPlanCompiler:
             image_ref=str(image_ref),
             strategy_kind=strategy_kind,
             environment={str(key): str(value) for key, value in environment.items()},
+            labels={str(key): str(value) for key, value in dict(resolved.get("labels") or {}).items()},
             secret_references=tuple(
                 str(value) for value in (resolved.get("secret_references") or ())
             ),
