@@ -83,6 +83,28 @@ def test_lifecycle_executor_runs_pending_running_succeeded():
     ]
 
 
+def test_lifecycle_executor_requires_runtime_handle_before_readiness():
+    runtime = FakeRuntime()
+    identity = RuntimeIdentity(service_id="service-1", runtime_name="app-service-1")
+
+    def apply_without_handle(plan, *, operation_key):
+        from deployments.runtime.contract import RuntimeOperationResult
+        return RuntimeOperationResult(success=True, changed=True, handle=None)
+
+    runtime.apply = apply_without_handle
+    strategy = _Strategy(_plan(identity))
+    store = InMemoryLifecycleStore()
+
+    result = DeploymentLifecycleExecutor(store).execute(
+        _context(identity), strategy, runtime
+    )
+
+    assert result.success is False
+    assert result.status == sm.DEPLOY_FAILED
+    assert result.error.code == "runtime_handle_missing"
+    assert strategy.activated == 0
+
+
 def test_lifecycle_executor_classifies_retryable_runtime_failure():
     runtime = FakeRuntime()
     identity = RuntimeIdentity(service_id="service-1", runtime_name="app-service-1")
