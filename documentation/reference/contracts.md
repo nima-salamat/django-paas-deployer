@@ -327,4 +327,34 @@ The detailed app documentation remains the narrative contract. This file answers
 | `users` | `src/users/urls.py` | explicit | `profile/set/` | [app API docs](../apps/users/api-reference.md) |
 | `users` | `src/users/urls.py` | explicit | `user/` | [app API docs](../apps/users/api-reference.md) |
 
+## Router actions
+
+| App | Source | ViewSet | Prefix | Detail | Methods | URL path | Kind |
+|---|---|---|---|---|---|---|---|
+| `services` | `src/services/urls.py` | `ServiceViewSet` | `service` | false | GET,POST | `/service/` | CRUD list/create |
+| `services` | `src/services/urls.py` | `ServiceViewSet` | `service` | true | GET,PUT,PATCH,DELETE | `/service/{pk}/` | CRUD detail |
+| `services` | `src/services/urls.py` | `PrivateNetworkViewSet` | `networks` | false | GET,POST | `/networks/` | CRUD list/create |
+| `services` | `src/services/urls.py` | `PrivateNetworkViewSet` | `networks` | true | GET,PUT,PATCH,DELETE | `/networks/{pk}/` | CRUD detail |
+| `services` | `src/services/urls.py` | `VolumeViewSet` | `volume` | false | GET,POST | `/volume/` | CRUD list/create |
+| `services` | `src/services/urls.py` | `VolumeViewSet` | `volume` | true | GET,PUT,PATCH,DELETE | `/volume/{pk}/` | CRUD detail |
+| `services` | `src/services/urls.py` | `AdminServiceViewSet` | `admin/services` | false | GET,POST | `/admin/services/` | Admin CRUD list/create |
+| `services` | `src/services/urls.py` | `AdminServiceViewSet` | `admin/services` | true | GET,PUT,PATCH,DELETE | `/admin/services/{pk}/` | Admin CRUD detail |
+| `services` | `src/services/urls.py` | `AdminPrivateNetworkViewSet` | `admin/networks` | false | GET,POST | `/admin/networks/` | Admin CRUD list/create |
+| `services` | `src/services/urls.py` | `AdminPrivateNetworkViewSet` | `admin/networks` | true | GET,PUT,PATCH,DELETE | `/admin/networks/{pk}/` | Admin CRUD detail |
+| `services` | `src/services/urls.py` | `AdminVolumeViewSet` | `admin/volumes` | false | GET,POST | `/admin/volumes/` | Admin CRUD list/create |
+| `services` | `src/services/urls.py` | `AdminVolumeViewSet` | `admin/volumes` | true | GET,PUT,PATCH,DELETE | `/admin/volumes/{pk}/` | Admin CRUD detail |
+| `services` | `src/services/api/user_services.py` | `VolumeViewSet` | `volume` | true | POST | `/volume/{pk}/detach/` | custom action |
+| `services` | `src/services/api/user_services.py` | `VolumeViewSet` | `volume` | true | POST | `/volume/{pk}/attach/` | custom action |
+| `services` | `src/services/volume_api_urls.py` | `VolumeViewSet` | `` | false | GET,POST | `/{pk?}/` | Alias router root; standard detail paths under /api/volumes/ |
+| `services` | `src/services/network_api_urls.py` | `PrivateNetworkViewSet` | `` | false | GET,POST | `/{pk?}/` | Alias router root; standard detail paths under /api/networks/ |
+| `docs` | `src/docs/urls.py` | `DocumentAdminViewSet` | `admin/documents` | false | GET,POST | `/admin/documents/` | CRUD list/create |
+| `docs` | `src/docs/urls.py` | `DocumentAdminViewSet` | `admin/documents` | true | GET,PUT,PATCH,DELETE | `/admin/documents/{pk}/` | CRUD detail |
+| `docs` | `src/docs/apis.py` | `DocumentAdminViewSet` | `admin/documents` | false | POST | `/admin/documents/reorder/` | custom action |
+| `docs` | `src/docs/apis.py` | `DocumentAdminViewSet` | `admin/documents` | true | POST | `/admin/documents/{pk}/publish/` | custom action |
+| `docs` | `src/docs/apis.py` | `DocumentAdminViewSet` | `admin/documents` | true | POST | `/admin/documents/{pk}/unpublish/` | custom action |
+| `docs` | `src/docs/urls.py` | `CategoryAdminViewSet` | `admin/categories` | false | GET,POST | `/admin/categories/` | CRUD list/create |
+| `docs` | `src/docs/urls.py` | `CategoryAdminViewSet` | `admin/categories` | true | GET,PUT,PATCH,DELETE | `/admin/categories/{pk}/` | CRUD detail |
+| `docs` | `src/docs/apis.py` | `CategoryAdminViewSet` | `admin/categories` | false | POST | `/admin/categories/reorder/` | custom action |
+| `docs` | `src/docs/apis.py` | `CategoryAdminViewSet` | `admin/categories` | false | GET | `/admin/categories/tree/` | custom action |
+
 
