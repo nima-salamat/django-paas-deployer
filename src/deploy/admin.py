@@ -4,7 +4,7 @@ from django.utils import timezone
 from django.urls import reverse
 from django.utils.safestring import mark_safe
 
-from .models import Deploy, DeployLog
+from .models import Deploy, DeployLog, BuildArtifact, Release
 
 
 # ─────────────────────────────────────────────────────────────
@@ -488,3 +488,42 @@ class SwarmNodeAdmin(AuditReadOnlyAdmin):
     list_filter = ("role", "desired_availability", "observed_availability", "observed_state", "manager_reachable")
     search_fields = ("docker_id", "hostname", "address")
     raw_id_fields = ("cluster",)
+
+ 
+@admin.register(BuildArtifact)
+class BuildArtifactAdmin(admin.ModelAdmin):
+    list_display = ("digest", "image_ref", "builder_backend", "platform_architecture", "created_at")
+    search_fields = ("digest", "image_ref", "source_digest", "build_definition_digest")
+    list_filter = ("builder_backend", "platform_architecture", "created_at")
+    readonly_fields = tuple(field.name for field in BuildArtifact._meta.fields)
+    ordering = ("-created_at",)
+    date_hierarchy = "created_at"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(Release)
+class ReleaseAdmin(admin.ModelAdmin):
+    list_display = ("service", "revision", "status", "identity_fingerprint", "artifact", "promoted_at", "created_at")
+    search_fields = ("identity_fingerprint", "service__name", "revision__id", "artifact__digest")
+    list_filter = ("status", "created_at", "promoted_at")
+    readonly_fields = tuple(field.name for field in Release._meta.fields)
+    raw_id_fields = ("service", "revision", "artifact", "previous_release", "created_by")
+    ordering = ("-created_at",)
+    date_hierarchy = "created_at"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
