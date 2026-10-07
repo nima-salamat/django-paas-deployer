@@ -49,40 +49,48 @@ The deployment subsystem owns execution, not the business definition of the Serv
 | Desired/observed repair choice | `deployments/reconciliation/` and current monitor | Reconciliation must not silently redefine desired state. |
 | Async execution | `deployments/celery/` | Long-running work, retries and worker ownership belong at the async boundary. |
 
-## Current architecture versus migration seams
+## Production architecture
 
-There is an intentional incomplete migration.
+The normal Swarm path is now the single native lifecycle:
 
-### Current production application path
-
-```text
+~~~text
 Celery deploy task
   -> DeployService.execute()
-  -> advisory lock
-  -> StateManager.lock_and_get_deployment()
-  -> ensure_revision_for_deploy()
-  -> _process_deployment()
-  -> ServiceRuntimeGraph.from_revision()
-  -> _compile_compatibility_plan()
-       -> ConfigurationResolver
-       -> DjangoRuntimeSelectionResolver
-       -> DeploymentPlanCompiler
-  -> Deploy facade
-  -> DeploymentOrchestrator
-  -> SwarmRuntime (when enabled)
-```
+  -> service advisory lock + durable ownership
+  -> immutable ServiceRevision
+  -> native DeploymentPlan
+  -> DeploymentLifecycleExecutor
+  -> RuntimeContract
+  -> SwarmRuntimeAdapter
+  -> SwarmRuntime
+  -> readiness
+  -> canonical activation + terminalization
+~~~
 
-This means the newer planning/runtime/application contracts are **already real**, but they are not yet the only path.
+DeployService remains the Django/application integration boundary. The native
+lifecycle executor owns the sequencing of planning, runtime application,
+readiness, activation and terminal error handling.
 
-### Migration seams
+A transient DeploymentConfig may still be created for the Dockerfile generator
+and build subsystem. It is not the runtime contract and is never passed to
+SwarmRuntimeAdapter.
 
-- `DeploymentPlanCompatibilityCompiler` translates a plan back into the legacy `DeploymentConfig`.
-- `core/deploy.py::Deploy` remains a compatibility facade around `DeploymentOrchestrator`.
-- `runtime/swarm/adapter.py::SwarmRuntimeAdapter` wraps `core/swarm.py::SwarmRuntime`.
-- `application/lifecycle.py::DeploymentLifecycleExecutor` is the framework-neutral lifecycle seam; the main `DeployService` path has not yet replaced the concrete orchestrator with it.
-- `reconciliation/planner.py::ReconciliationPlanner` is a pure decision model; the scheduled monitor still contains concrete Docker/Swarm repair logic.
+### Compatibility boundaries
 
-Do not “finish” these migrations accidentally while fixing an unrelated bug.
+The legacy Deploy facade and DeploymentOrchestrator remain only for the
+explicit non-Swarm compatibility path. They are not part of the normal
+SWARM-enabled execution path.
+
+DeploymentPlanCompatibilityCompiler remains available only for legacy callers
+and tests. The native runtime adapter accepts DeploymentPlan directly.
+
+The runtime adapter still delegates the concrete Docker API implementation to
+core.swarm. That delegation is an infrastructure boundary, not a second
+deployment lifecycle.
+
+ReconciliationPlanner remains pure. Concrete scheduled monitoring still owns
+compatibility-only observation/repair integration and must preserve the
+fail-closed identity rules.
 
 ## Dependency direction
 
