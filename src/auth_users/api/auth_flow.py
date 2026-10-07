@@ -8,6 +8,7 @@ from django.utils.translation import gettext as _
 from django.db.models import Q
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+from core.throttling import AuthenticationAccountRateThrottle, AuthenticationIPRateThrottle
 
 from users.serializers import CreateUserSerializer
 from ..models import LoginSettings, AuthCode, InviteLink, InviteUsage, LoginLog
@@ -88,6 +89,9 @@ class StartAuthAPIView(APIView):
 
     authentication_classes = []
     permission_classes = [AllowAny]
+    throttle_classes = [AuthenticationIPRateThrottle, AuthenticationAccountRateThrottle]
+    throttle_ip_rate = "20/min"
+    throttle_account_rate = "10/min"
 
     def post(self, request):
         settings = LoginSettings.get_solo()
@@ -204,6 +208,9 @@ class StartAuthAPIView(APIView):
 class ValidateOTPAPIView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
+    throttle_classes = [AuthenticationIPRateThrottle, AuthenticationAccountRateThrottle]
+    throttle_ip_rate = "20/min"
+    throttle_account_rate = "5/min"
 
     def post(self, request):
         settings = LoginSettings.get_solo()
@@ -303,6 +310,9 @@ class ValidateOTPAPIView(APIView):
 class FinalAuthAPIView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
+    throttle_classes = [AuthenticationIPRateThrottle, AuthenticationAccountRateThrottle]
+    throttle_ip_rate = "20/min"
+    throttle_account_rate = "5/min"
 
     def post(self, request):
         settings = LoginSettings.get_solo()
@@ -372,6 +382,9 @@ class FinalAuthAPIView(APIView):
 # Set password
 # ---------------------------------------------------------------------------
 class SetPasswordAPIView(APIView):
+    throttle_classes = [AuthenticationIPRateThrottle, AuthenticationAccountRateThrottle]
+    throttle_ip_rate = "20/min"
+    throttle_account_rate = "10/min"
     """
     Set password for a newly created user.
 
