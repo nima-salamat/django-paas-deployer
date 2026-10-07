@@ -299,6 +299,8 @@ Every production source surface must be mapped to its owning canonical document 
 - `src/deployments/runtime/swarm/__init__.py` → [deployments](./deployments/README.md)
 - `src/deployments/runtime/swarm/adapter.py` → [deployments](./deployments/README.md)
 
+- `src/deployments/common/docker_identity.py` → [deployments](./deployments/README.md)
+
 #### logs
 
 - `src/logs/__init__.py` → [logs](./logs/README.md)
@@ -318,7 +320,41 @@ Every production source surface must be mapped to its owning canonical document 
 #### agent
 
 - `src/agent/admin.py` → [agent](./agent/README.md)
+- `src/agent/admin_actions.py` → [agent](./agent/README.md)
+- `src/agent/apis.py` → [agent](./agent/README.md)
+- `src/agent/apis/base.py` → [agent](./agent/README.md)
+- `src/agent/apis/configuration.py` → [agent](./agent/README.md)
+- `src/agent/apis/deployments.py` → [agent](./agent/README.md)
+- `src/agent/apis/helpers.py` → [agent](./agent/README.md)
+- `src/agent/apis/identity.py` → [agent](./agent/README.md)
+- `src/agent/apis/networks.py` → [agent](./agent/README.md)
+- `src/agent/apis/plans.py` → [agent](./agent/README.md)
+- `src/agent/apis/runtime_tools.py` → [agent](./agent/README.md)
+- `src/agent/apis/services.py` → [agent](./agent/README.md)
+- `src/agent/apis/shell.py` → [agent](./agent/README.md)
+- `src/agent/apis/skills.py` → [agent](./agent/README.md)
+- `src/agent/apis/volumes.py` → [agent](./agent/README.md)
+- `src/agent/application.py` → [agent](./agent/README.md)
+- `src/agent/apps.py` → [agent](./agent/README.md)
+- `src/agent/authentication.py` → [agent](./agent/README.md)
+- `src/agent/contracts.py` → [agent](./agent/README.md)
+- `src/agent/errors.py` → [agent](./agent/README.md)
+- `src/agent/manifest.py` → [agent](./agent/README.md)
 - `src/agent/models.py` → [agent](./agent/README.md)
+- `src/agent/openapi.py` → [agent](./agent/README.md)
+- `src/agent/permissions.py` → [agent](./agent/README.md)
+- `src/agent/runtime_tools.py` → [agent](./agent/README.md)
+- `src/agent/scopes.py` → [agent](./agent/README.md)
+- `src/agent/security.py` → [agent](./agent/README.md)
+- `src/agent/skills.py` → [agent](./agent/README.md)
+- `src/agent/tasks.py` → [agent](./agent/README.md)
+- `src/agent/throttling.py` → [agent](./agent/README.md)
+- `src/agent/urls.py` → [agent](./agent/README.md)
+- `src/agent/user_api.py` → [agent](./agent/README.md)
+- `src/agent/user_urls.py` → [agent](./agent/README.md)
+- `src/agent/views.py` → [agent](./agent/README.md)
+- `src/agent/wagtail_admin/models.py` → [agent](./agent/README.md)
+- `src/agent/wagtail_hooks.py` → [agent](./agent/README.md)
 
 #### app_catalog
 
