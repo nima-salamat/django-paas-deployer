@@ -267,6 +267,14 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+# API abuse-prevention defaults. Keep these in Redis-backed Django cache so all
+# web workers/replicas share the same counters.
+API_GLOBAL_IP_RATE = os.environ.get("API_GLOBAL_IP_RATE", "600/min")
+API_GLOBAL_USER_RATE = os.environ.get("API_GLOBAL_USER_RATE", "1200/min")
+AUTH_IP_RATE = os.environ.get("AUTH_IP_RATE", "30/min")
+AUTH_ACCOUNT_RATE = os.environ.get("AUTH_ACCOUNT_RATE", "10/min")
+API_SENSITIVE_USER_RATE = os.environ.get("API_SENSITIVE_USER_RATE", "30/min")
+
 # Rest Framework settings
 REST_FRAMEWORK = {
  
@@ -282,6 +290,10 @@ REST_FRAMEWORK = {
         'core.api_renderers.ProductionJSONRenderer',
     ),
     'EXCEPTION_HANDLER': 'core.api_renderers.production_exception_handler',
+    'DEFAULT_THROTTLE_CLASSES': (
+        'core.throttling.GlobalIPRateThrottle',
+        'core.throttling.GlobalUserRateThrottle',
+    ),
 
 }
 
