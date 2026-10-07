@@ -211,9 +211,10 @@ class Deploy(BaseModel):
     version = models.DecimalField(_("Version"), max_digits=5, decimal_places=2, default=0.00, help_text=_("Deployment version, e.g., 1.0"))
     release_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
     # release_id remains the historical per-attempt UUID; release is the reusable immutable aggregate.
-    release = models.ForeignKey(
+    release_reference = models.ForeignKey(
         "deploy.Release", null=True, blank=True, on_delete=models.SET_NULL,
         related_name="deployment_attempts",
+        help_text=_("Reusable immutable Release referenced by this execution attempt."),
     )
     artifact = models.ForeignKey(
         "deploy.BuildArtifact", null=True, blank=True, on_delete=models.SET_NULL,
