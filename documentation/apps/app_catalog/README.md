@@ -69,3 +69,7 @@ Installed catalog applications are exposed in Wagtail under **Applications** as 
 - [Complete model field reference](field-reference.md)
 
 For installation and Ready App specifics, also read [ready-apps.md](ready-apps.md) and [architecture.md](architecture.md).
+
+## Detailed contracts
+
+- [Detailed API reference](api-reference.md)
