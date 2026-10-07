@@ -57,13 +57,26 @@ Domain APIs retain authorization and durable state. They do not become alternate
 
 ~~~text
 Service desired state
- -> ServiceRevision (immutable)
- -> Deploy (execution/provenance)
- -> deployments planning/build/runtime
- -> Docker/Swarm observation
+ -> ServiceRevision (immutable executable snapshot)
+ -> Release (immutable promotable unit)
+ -> Deploy (execution attempt)
+ -> DeploymentLifecycleExecutor
+ -> RuntimeContract
+ -> SwarmRuntimeAdapter
+ -> SwarmRuntime
+ -> readiness
+ -> canonical activation
 ~~~
 
-Service.active_revision is the current executable release. selected_deploy remains compatibility projection. See apps/services and apps/deploy plus deployments/01-system-model.md and 03-execution-lifecycle.md.
+`Service.active_revision` remains the current executable authority. Release is
+immutable release/provenance metadata and Deploy records one execution attempt;
+neither replaces the Service revision pointer.
+
+The normal Swarm execution path does not construct `DeploymentOrchestrator` and
+does not require `DeploymentPlanCompatibilityCompiler` or `DeploymentConfig`
+as the semantic RuntimeContract input. Compatibility code remains isolated for
+legacy/non-Swarm callers.
+
 
 ## Runtime truth versus desired state
 
