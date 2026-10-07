@@ -17,6 +17,7 @@ import logging
 from functools import wraps
 from typing import Callable, Optional
 
+from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
 from rest_framework import status
@@ -48,10 +49,23 @@ def check_scope(
     if window_seconds <= 0:
         return True
     cache_key = _key(scope)
+    # Redis-backed Django caches provide an atomic add for the first counter.
+    try:
+        if cache.add(cache_key, cost, timeout=window_seconds):
+            return True
+    except Exception:
+        pass
     current = cache.get(cache_key)
     if current is None:
-        cache.set(cache_key, cost, timeout=window_seconds)
-        return True
+        try:
+            if cache.add(cache_key, cost, timeout=window_seconds):
+                return True
+        except Exception:
+            pass
+        current = cache.get(cache_key)
+        if current is None:
+            cache.set(cache_key, cost, timeout=window_seconds)
+            return True
     try:
         current_int = int(current)
     except (TypeError, ValueError):
@@ -147,6 +161,149 @@ def asyncio_iscoroutinefunction(fn) -> bool:
         return False
 
 
+
+def _request_ip(request) -> str:
+    forwarded = str(request.META.get("HTTP_X_FORWARDED_FOR") or "").split(",")[0].strip()
+    return forwarded or str(request.META.get("REMOTE_ADDR") or "0.0.0.0")
+
+
+def _parse_rate(rate: str):
+    if not rate:
+        return None, 60
+    try:
+        num, period = str(rate).split("/", 1)
+        num = int(num)
+        period = period.strip().lower()
+        mapping = {
+            "s": 1,
+            "sec": 1,
+            "second": 1,
+            "seconds": 1,
+            "m": 60,
+            "min": 60,
+            "minute": 60,
+            "minutes": 60,
+            "h": 3600,
+            "hour": 3600,
+            "hours": 3600,
+            "d": 86400,
+            "day": 86400,
+            "days": 86400,
+        }
+        for key, seconds in mapping.items():
+            if period.startswith(key):
+                return num, seconds
+        return num, 60
+    except Exception:
+        return None, 60
+
+
+class _ConfiguredRateThrottle(BaseThrottle):
+    rate_setting = None
+    default_rate = "60/min"
+
+    def _rate(self, view):
+        view_rate = getattr(view, "throttle_rate", None)
+        if view_rate:
+            return view_rate
+        if self.rate_setting:
+            return getattr(settings, self.rate_setting, self.default_rate)
+        return self.default_rate
+
+    def _check(self, scope: str, rate: str) -> bool:
+        limit, window = _parse_rate(rate)
+        self._scope = scope
+        self._limit = limit
+        self._window = window
+        if limit is None:
+            return True
+        return check_scope(scope, limit, window)
+
+    def wait(self):
+        return getattr(self, "_window", 60)
+
+
+class GlobalIPRateThrottle(_ConfiguredRateThrottle):
+    rate_setting = "API_GLOBAL_IP_RATE"
+    default_rate = "600/min"
+
+    def allow_request(self, request, view) -> bool:
+        return self._check(f"global:ip:{_request_ip(request)}", self._rate(view))
+
+
+class GlobalUserRateThrottle(_ConfiguredRateThrottle):
+    rate_setting = "API_GLOBAL_USER_RATE"
+    default_rate = "1200/min"
+
+    def allow_request(self, request, view) -> bool:
+        user = getattr(request, "user", None)
+        if user is None or not getattr(user, "is_authenticated", False):
+            return True
+        return self._check(f"global:user:{user.pk}", self._rate(view))
+
+
+class AuthenticationIPRateThrottle(_ConfiguredRateThrottle):
+    rate_setting = "AUTH_IP_RATE"
+    default_rate = "30/min"
+
+    def allow_request(self, request, view) -> bool:
+        rate = getattr(view, "throttle_ip_rate", None) or self._rate(view)
+        return self._check(f"auth:ip:{_request_ip(request)}", rate)
+
+
+class AuthenticationAccountRateThrottle(_ConfiguredRateThrottle):
+    rate_setting = "AUTH_ACCOUNT_RATE"
+    default_rate = "10/min"
+
+    @staticmethod
+    def _identifiers(request) -> list[str]:
+        data = request.data if hasattr(request, "data") else {}
+        values = []
+        for field in ("email", "phone_number", "username"):
+            value = data.get(field) if hasattr(data, "get") else None
+            value = str(value or "").strip()
+            if not value:
+                continue
+            normalized = value.lower() if field in {"email", "username"} else value
+            values.append(f"{field}:{normalized[:255]}")
+        return values
+
+    def allow_request(self, request, view) -> bool:
+        identifiers = self._identifiers(request)
+        if not identifiers:
+            return True
+        rate = getattr(view, "throttle_account_rate", None) or getattr(
+            settings, self.rate_setting, self.default_rate
+        )
+        limit, window = _parse_rate(rate)
+        self._limit = limit
+        self._window = window
+        if limit is None:
+            return True
+        for identifier in identifiers:
+            digest = hashlib.sha256(identifier.encode("utf-8")).hexdigest()
+            if not check_scope(f"auth:account:{digest}", limit, window):
+                return False
+        return True
+
+
+class UserScopedRateThrottle(_ConfiguredRateThrottle):
+    rate_setting = "API_SENSITIVE_USER_RATE"
+    default_rate = "30/min"
+
+    def allow_request(self, request, view) -> bool:
+        user = getattr(request, "user", None)
+        if user is None or not getattr(user, "is_authenticated", False):
+            return True
+        scope_name = (
+            getattr(view, "throttle_scope", None)
+            or getattr(getattr(request, "resolver_match", None), "url_name", None)
+            or request.path
+        )
+        rate = getattr(view, "throttle_user_rate", None) or self._rate(view)
+        return self._check(f"user-operation:{scope_name}:user:{user.pk}", rate)
+
+
 class ScopedRateThrottle(BaseThrottle):
     """
     DRF throttle class configurable per-view via:
@@ -182,36 +339,7 @@ class ScopedRateThrottle(BaseThrottle):
 
     @staticmethod
     def parse_rate(rate: str):
-        if not rate:
-            return None, 60
-        try:
-            num, period = rate.split("/")
-            num = int(num)
-            period = period.strip().lower()
-            mapping = {
-                "s": 1,
-                "sec": 1,
-                "second": 1,
-                "seconds": 1,
-                "m": 60,
-                "min": 60,
-                "minute": 60,
-                "minutes": 60,
-                "h": 3600,
-                "hour": 3600,
-                "hours": 3600,
-                "d": 86400,
-                "day": 86400,
-                "days": 86400,
-            }
-            # allow "10/min" or "10/minute"
-            unit = period
-            for key, seconds in mapping.items():
-                if period.startswith(key):
-                    return num, seconds
-            return num, 60
-        except Exception:
-            return None, 60
+        return _parse_rate(rate)
 
 
 # Convenience builders
