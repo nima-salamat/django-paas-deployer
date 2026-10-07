@@ -3,6 +3,7 @@ import tempfile
 
 import pytest
 
+from deployments.core.platforms import loader  # noqa: F401
 from deployments.core.platforms.registry import (
     PlatformDetectionPolicyError,
     PlatformRegistry,
