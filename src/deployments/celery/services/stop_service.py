@@ -33,7 +33,7 @@ from deployments.reconciliation import (
     ReconciliationExecutor,
 )
 from deployments.runtime.contract import RuntimeHandle
-from deployments.runtime.identity import RuntimeIdentity
+from deployments.runtime.contract import RuntimeIdentity
 
 from ..service_status import ServiceStateManager
 from ..helpers import MockOrchestratorResult
