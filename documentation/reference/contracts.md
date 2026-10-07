@@ -77,6 +77,38 @@ The detailed app documentation remains the narrative contract. This file answers
 | `deploy` | `src/deploy/models.py` | `BaseRuntimeImage` | project model/abstract class | [field reference](../apps/deploy/field-reference.md#baseruntimeimage) |
 | `deploy` | `src/deploy/models.py` | `SwarmCluster` | project model/abstract class | [field reference](../apps/deploy/field-reference.md#swarmcluster) |
 | `deploy` | `src/deploy/models.py` | `SwarmNode` | project model/abstract class | [field reference](../apps/deploy/field-reference.md#swarmnode) |
+| `docs` | `src/docs/models.py` | `DocumentCategory` | project model/abstract class | [field reference](../apps/docs/field-reference.md#documentcategory) |
+| `docs` | `src/docs/models.py` | `Document` | project model/abstract class | [field reference](../apps/docs/field-reference.md#document) |
+| `docs` | `src/docs/models.py` | `DocumentAsset` | project model/abstract class | [field reference](../apps/docs/field-reference.md#documentasset) |
+| `logs` | `src/logs/models.py` | `ServiceLogStream` | project model/abstract class | [field reference](../apps/logs/field-reference.md#servicelogstream) |
+| `logs` | `src/logs/models.py` | `ServiceLogEntry` | project model/abstract class | [field reference](../apps/logs/field-reference.md#servicelogentry) |
+| `logs` | `src/logs/models.py` | `ServiceLogUsage` | project model/abstract class | [field reference](../apps/logs/field-reference.md#servicelogusage) |
+| `logs` | `src/logs/models.py` | `LogUsageDaily` | project model/abstract class | [field reference](../apps/logs/field-reference.md#logusagedaily) |
+| `logs` | `src/logs/models.py` | `CollectorHeartbeat` | project model/abstract class | [field reference](../apps/logs/field-reference.md#collectorheartbeat) |
+| `messenger` | `src/messenger/models.py` | `UserBio` | project model/abstract class | [field reference](../apps/messenger/field-reference.md#userbio) |
+| `messenger` | `src/messenger/models.py` | `Contact` | project model/abstract class | [field reference](../apps/messenger/field-reference.md#contact) |
+| `messenger` | `src/messenger/models.py` | `Block` | project model/abstract class | [field reference](../apps/messenger/field-reference.md#block) |
+| `messenger` | `src/messenger/models.py` | `ProfilePhotoPrivacy` | project model/abstract class | [field reference](../apps/messenger/field-reference.md#profilephotoprivacy) |
+| `messenger` | `src/messenger/models.py` | `ProfilePhotoAllowed` | project model/abstract class | [field reference](../apps/messenger/field-reference.md#profilephotoallowed) |
+| `messenger` | `src/messenger/models.py` | `Conversation` | project model/abstract class | [field reference](../apps/messenger/field-reference.md#conversation) |
+| `messenger` | `src/messenger/models.py` | `ConversationParticipant` | project model/abstract class | [field reference](../apps/messenger/field-reference.md#conversationparticipant) |
+| `messenger` | `src/messenger/models.py` | `GroupInviteLink` | project model/abstract class | [field reference](../apps/messenger/field-reference.md#groupinvitelink) |
+| `messenger` | `src/messenger/models.py` | `JoinRequest` | project model/abstract class | [field reference](../apps/messenger/field-reference.md#joinrequest) |
+| `messenger` | `src/messenger/models.py` | `Message` | project model/abstract class | [field reference](../apps/messenger/field-reference.md#message) |
+| `messenger` | `src/messenger/models.py` | `MessengerEvent` | project model/abstract class | [field reference](../apps/messenger/field-reference.md#messengerevent) |
+| `messenger` | `src/messenger/models.py` | `MessageReaction` | project model/abstract class | [field reference](../apps/messenger/field-reference.md#messagereaction) |
+| `messenger` | `src/messenger/models.py` | `MessageReadReceipt` | project model/abstract class | [field reference](../apps/messenger/field-reference.md#messagereadreceipt) |
+| `messenger` | `src/messenger/models.py` | `MessageAttachment` | project model/abstract class | [field reference](../apps/messenger/field-reference.md#messageattachment) |
+| `messenger` | `src/messenger/models.py` | `AttachmentViewOnceOpen` | project model/abstract class | [field reference](../apps/messenger/field-reference.md#attachmentviewonceopen) |
+| `messenger` | `src/messenger/models.py` | `PinnedMessage` | project model/abstract class | [field reference](../apps/messenger/field-reference.md#pinnedmessage) |
+| `messenger` | `src/messenger/models.py` | `CallSession` | project model/abstract class | [field reference](../apps/messenger/field-reference.md#callsession) |
+| `messenger` | `src/messenger/models.py` | `CallSessionParticipant` | project model/abstract class | [field reference](../apps/messenger/field-reference.md#callsessionparticipant) |
+| `tickets` | `src/tickets/models.py` | `Department` | project model/abstract class | [field reference](../apps/tickets/field-reference.md#department) |
+| `tickets` | `src/tickets/models.py` | `DepartmentMembership` | project model/abstract class | [field reference](../apps/tickets/field-reference.md#departmentmembership) |
+| `tickets` | `src/tickets/models.py` | `Ticket` | project model/abstract class | [field reference](../apps/tickets/field-reference.md#ticket) |
+| `tickets` | `src/tickets/models.py` | `TicketMessage` | project model/abstract class | [field reference](../apps/tickets/field-reference.md#ticketmessage) |
+| `tickets` | `src/tickets/models.py` | `TicketReadState` | project model/abstract class | [field reference](../apps/tickets/field-reference.md#ticketreadstate) |
+| `tickets` | `src/tickets/models.py` | `TicketAttachment` | project model/abstract class | [field reference](../apps/tickets/field-reference.md#ticketattachment) |
 
 ## Model field inventory
 
