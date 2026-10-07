@@ -106,15 +106,16 @@ def test_revision_graph_preserves_process_environment_and_runtime_resources():
     ]
 
 
-def test_revision_graph_rejects_the_currently_unsupported_replica_shape():
-    with pytest.raises(ValueError, match="exactly one replica"):
-        ServiceRuntimeGraph.from_revision(
-            _revision(
-                process_snapshot=[
-                    {"name": "worker", "process_type": "worker", "replicas": 2}
-                ]
-            )
+def test_revision_graph_preserves_supported_replica_shape():
+    graph = ServiceRuntimeGraph.from_revision(
+        _revision(
+            process_snapshot=[
+                {"name": "worker", "process_type": "worker", "replicas": 2}
+            ]
         )
+    )
+    assert graph.processes[0].replicas == 2
+
 
 
 def test_swarm_compilation_preserves_current_runtime_identity_and_resources():
