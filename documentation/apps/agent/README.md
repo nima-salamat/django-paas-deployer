@@ -62,3 +62,7 @@ Important mutating operations support durable `Idempotency-Key` semantics. Agent
 - [Complete model field reference](field-reference.md)
 
 The API reference is source-defined from `src/agent/contracts.py`; the machine-readable OpenAPI document remains the runtime schema.
+
+## Detailed contracts
+
+- [Detailed API reference](api.md)
