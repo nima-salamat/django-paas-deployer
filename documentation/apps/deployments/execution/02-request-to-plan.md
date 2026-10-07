@@ -36,7 +36,8 @@ It:
 6. validates tenant customizations;
 7. obtains Dockerfile text;
 8. validates the deployment;
-9. calls the orchestrator composition path.
+9. compiles the native DeploymentPlan;
+10. enters the shared DeploymentLifecycleExecutor when Swarm is enabled.
 
 ## How revisioning is used
 
@@ -134,7 +135,7 @@ The main path still performs additional concrete normalization in `_process_depl
 
 ### How it is used
 
-**Called by:** current plan compatibility compiler.
+**Called by:** `DeployService._compile_native_plan()`.
 
 **Preconditions:** inputs are already normalized enough to be represented as configuration layers.
 
@@ -336,11 +337,11 @@ Current `core/deploy.py::Deploy._config()`.
 
 ### Input
 
-DeploymentPlan + existing DeploymentConfig.
+DeploymentPlan + existing legacy `DeploymentConfig` when a legacy/non-Swarm caller explicitly needs the compatibility facade.
 
 ### Output
 
-DeploymentConfig with plan-derived environment/networks/volumes/endpoints/resources/labels/placement and supported Docker healthcheck fields.
+Legacy `DeploymentConfig` with plan-derived values for the compatibility facade. This path is not used by the native Swarm runtime adapter.
 
 ### Why
 
