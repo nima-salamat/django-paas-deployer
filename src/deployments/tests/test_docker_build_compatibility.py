@@ -115,8 +115,11 @@ def test_build_falls_back_when_engine_rejects_optional_build_controls(monkeypatc
         def build(self, **kwargs):
             self.calls.append(kwargs)
             if len(self.calls) == 1:
-                raise _UnsupportedBuildOption("unsupported container_limits parameter")
-            return [{"aux": {"ID": "sha256:0123456789abcdef"}}]
+                def fail_before_stream():
+                    raise _UnsupportedBuildOption("unsupported container_limits parameter")
+                    yield  # pragma: no cover
+                return fail_before_stream()
+            return iter([{"aux": {"ID": "sha256:0123456789abcdef"}}])
 
         def tag(self, *args, **kwargs):
             return True
@@ -149,7 +152,10 @@ def test_transient_build_transport_failure_refreshes_client_once(monkeypatch):
 
         def build(self, **kwargs):
             self.calls += 1
-            raise ConnectionError("connection reset by peer")
+            def fail_before_stream():
+                raise ConnectionError("connection reset by peer")
+                yield  # pragma: no cover
+            return fail_before_stream()
 
     class WorkingApi:
         def __init__(self):
@@ -157,7 +163,7 @@ def test_transient_build_transport_failure_refreshes_client_once(monkeypatch):
 
         def build(self, **kwargs):
             self.calls += 1
-            return [{"aux": {"ID": "sha256:0123456789abcdef"}}]
+            return iter([{"aux": {"ID": "sha256:0123456789abcdef"}}])
 
         def tag(self, *args, **kwargs):
             return True
@@ -230,3 +236,68 @@ def test_docker_diagnostics_report_client_and_server_api_versions():
     assert result["server_version"] == "29.0.0"
     assert result["server_api_version"] == "1.52"
     assert result["server_min_api_version"] == "1.40"
+
+
+def test_generator_build_request_errors_are_recovered_before_stream(monkeypatch):
+    class FakeApi:
+        def __init__(self):
+            self.calls = []
+
+        def build(self, **kwargs):
+            self.calls.append(kwargs)
+            def fail_before_stream():
+                raise _UnsupportedBuildOption("unsupported shmsize parameter")
+                yield  # pragma: no cover
+            if len(self.calls) == 1:
+                return fail_before_stream()
+            return iter([{"aux": {"ID": "sha256:0123456789abcdef"}}])
+
+        def tag(self, *args, **kwargs):
+            return True
+
+    api = FakeApi()
+    client = _FakeDockerClient(api)
+    _patch_image_client(monkeypatch, [client])
+
+    image = image_manager.Image(
+        "test/repo",
+        "v1",
+        "FROM alpine\nCMD [\"true\"]",
+        _empty_tar(),
+    )
+
+    image.create()
+
+    assert len(api.calls) == 2
+    assert "shmsize" in api.calls[0]
+    assert "shmsize" not in api.calls[1]
+
+
+def test_generator_transport_error_is_retried_before_stream(monkeypatch):
+    class FailingApi:
+        def build(self, **kwargs):
+            def fail_before_stream():
+                raise ConnectionError("connection reset by peer")
+                yield  # pragma: no cover
+            return fail_before_stream()
+
+    class WorkingApi:
+        def build(self, **kwargs):
+            return iter([{"aux": {"ID": "sha256:0123456789abcdef"}}])
+
+        def tag(self, *args, **kwargs):
+            return True
+
+    first = _FakeDockerClient(FailingApi())
+    second = _FakeDockerClient(WorkingApi())
+    _patch_image_client(monkeypatch, [first, second])
+
+    image = image_manager.Image(
+        "test/repo",
+        "v1",
+        "FROM alpine\nCMD [\"true\"]",
+        _empty_tar(),
+    )
+    image.create()
+
+    assert first.closed is True
