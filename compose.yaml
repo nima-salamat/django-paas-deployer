@@ -505,50 +505,6 @@ services:
 
 
   # ============================================================
-  # DOCKER EVENT CONSUMER
-  # ============================================================
-  deployment-events:
-    image: ${BACKEND_IMAGE:-passdeployer-backend:local}
-    # Legacy container-runtime event consumer. Swarm runtime uses the
-    # Service/Task reconciler instead and does not run this by default.
-    profiles: ["legacy-runtime"]
-
-    container_name: deploy-events
-    restart: unless-stopped
-    command: python manage.py consume_docker_events
-
-    volumes:
-      - .:/app
-      - /var/run/docker.sock:/var/run/docker.sock
-
-    depends_on:
-      db:
-        condition: service_healthy
-      deployment-log-db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
-    env_file:
-      - .env
-
-    environment:
-      DB_HOST: db
-      DB_PORT: 5432
-      DEPLOYMENT_LOG_DB_HOST: deployment-log-db
-      DEPLOYMENT_LOG_DB_PORT: 5432
-      REDIS_URL: redis://redis:6379
-      CHANNEL_REDIS_URL: redis://redis:6379
-      API_DOMAIN_NAME: ${API_DOMAIN_NAME}
-      DEPLOYMENT_DOMAIN: ${DEPLOYMENT_DOMAIN}
-
-    networks:
-      - app-network
-
-
-
-
-  # ============================================================
   # RUNTIME LOG COLLECTOR
   # Continuous Docker log follow → persistent ServiceLogEntry.
   # Independent of Celery (retention/reconcile only).
