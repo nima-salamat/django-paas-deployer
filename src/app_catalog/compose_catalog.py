@@ -117,13 +117,13 @@ def _infer_variable_fields(document: dict[str, Any]) -> dict[str, dict[str, Any]
             **({"required": True} if required else {}),
         })
 
-    def walk(value: Any):
+    def walk(value: Any, *, in_dockerfile: bool = False):
         if isinstance(value, dict):
-            for item in value.values():
-                walk(item)
+            for key, item in value.items():
+                walk(item, in_dockerfile=in_dockerfile or str(key).lower() == "dockerfile")
         elif isinstance(value, list):
             for item in value:
-                walk(item)
+                walk(item, in_dockerfile=in_dockerfile)
         elif isinstance(value, str):
             for bare in re.finditer(r"\bSERVICE_(URL|FQDN|USER|PASSWORD)_([A-Za-z0-9_-]+)", value):
                 kind, suffix = bare.group(1), bare.group(2)
@@ -135,6 +135,11 @@ def _infer_variable_fields(document: dict[str, Any]) -> dict[str, dict[str, Any]
                     add_field(f"service_user_{suffix.lower()}", default="app")
             for explicit in re.finditer(r"\$\{(config|secret)\.([A-Za-z_][A-Za-z0-9_]*)\}", value):
                 add_field(explicit.group(2), explicit_kind=explicit.group(1))
+            # Inline Dockerfiles have their own shell/BuildKit variable scope
+            # (ARG/ENV variables such as ${WP_CLI_VERSION}). Those variables
+            # are not catalog inputs and must not become inferred fields.
+            if in_dockerfile:
+                return
             for match in _VAR_RE.finditer(value):
                 name = match.group(1) or match.group(4)
                 op = match.group(2)
@@ -156,11 +161,36 @@ def _infer_variable_fields(document: dict[str, Any]) -> dict[str, dict[str, Any]
     return found
 
 
-def _transform(value: Any, resolved: dict[str, Any], aliases: dict[str, str], secrets: dict[str, Any] | None = None) -> Any:
+def _transform(
+    value: Any,
+    resolved: dict[str, Any],
+    aliases: dict[str, str],
+    secrets: dict[str, Any] | None = None,
+    *,
+    preserve_native_variables: bool = False,
+) -> Any:
     if isinstance(value, dict):
-        return {str(k): _transform(v, resolved, aliases, secrets) for k, v in value.items()}
+        return {
+            str(k): _transform(
+                v,
+                resolved,
+                aliases,
+                secrets,
+                preserve_native_variables=preserve_native_variables,
+            )
+            for k, v in value.items()
+        }
     if isinstance(value, list):
-        return [_transform(v, resolved, aliases, secrets) for v in value]
+        return [
+            _transform(
+                v,
+                resolved,
+                aliases,
+                secrets,
+                preserve_native_variables=preserve_native_variables,
+            )
+            for v in value
+        ]
     if not isinstance(value, str):
         return value
 
@@ -198,7 +228,9 @@ def _transform(value: Any, resolved: dict[str, Any], aliases: dict[str, str], se
             return ""
         return str(value)
 
-    return _VAR_RE.sub(replace, value).replace("$$", "$")
+    if preserve_native_variables:
+        return value
+    return _VAR_RE.sub(replace, value).replace("$", "$")
 
 
 def _service_url_keys(document: dict[str, Any]) -> set[str]:
@@ -407,7 +439,17 @@ def compose_to_resolved(*, document: dict[str, Any], metadata: dict[str, Any], c
             "plan_type": plan_type,
             "depends_on": depends,
             "image_template": _transform(raw.get("image"), render_context, aliases, secrets) if raw.get("image") else "",
-            "dockerfile": _transform(str(inline_dockerfile), render_context, aliases, secrets) if inline_dockerfile else None,
+            "dockerfile": (
+                _transform(
+                    str(inline_dockerfile),
+                    render_context,
+                    aliases,
+                    secrets,
+                    preserve_native_variables=True,
+                )
+                if inline_dockerfile
+                else None
+            ),
             "files": {},
             "environment": _transform(env, render_context, aliases, secrets),
             "ports": raw.get("ports") or raw.get("expose") or [],
