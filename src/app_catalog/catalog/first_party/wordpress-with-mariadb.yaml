@@ -10,17 +10,21 @@ x-passdeployer:
   name: WordPress
   version: "7.1.2"
   software_version: "7.1.2"
-  definition_version: "1.0"
+  definition_version: "1.1"
   visibility: public
   featured: true
   features:
     - Managed WordPress application
+    - Automatic WordPress installation
+    - WP-CLI management
     - Managed MariaDB database
     - Persistent WordPress storage
+    - Managed WP-Cron
     - HTTPS platform address
   requirements:
-    - Complete the WordPress setup wizard after deployment
+    - WordPress is installed automatically during first startup
     - Use the platform-provided HTTPS address
+    - Admin credentials are configured in the Ready App setup
   outputs:
     - url
   managed_components:
@@ -39,16 +43,87 @@ x-passdeployer:
       type: choice
       required: true
       default: "7.1.2"
-      options:
-        - "7.1.2"
-        - "7.1.1"
-        - "7.1.0"
+      options: ["7.1.2", "7.1.1", "7.1.0"]
       option_labels:
         "7.1.2": "7.1.2 — Recommended"
         "7.1.1": "7.1.1 — Previous patch"
         "7.1.0": "7.1.0 — Previous patch"
       ui:
-        helper_text: "Choose a pinned official WordPress Docker release. PassDeployer uses the exact selected version."
+        helper_text: "Choose a pinned official WordPress Docker release."
+    - id: php_version
+      label: PHP version
+      type: choice
+      required: true
+      default: "8.4"
+      options: ["8.3", "8.4", "8.5"]
+      option_labels:
+        "8.3": "PHP 8.3"
+        "8.4": "PHP 8.4 — Recommended"
+        "8.5": "PHP 8.5"
+    - id: wordpress_site_title
+      label: Site title
+      type: string
+      required: true
+      default: "My WordPress Site"
+    - id: wordpress_admin_user
+      label: Admin username
+      type: string
+      required: true
+      default: admin
+      pattern: "^[A-Za-z0-9._-]{1,60}$"
+    - id: wordpress_admin_email
+      label: Admin email
+      type: string
+      required: true
+      pattern: "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$"
+    - id: wordpress_admin_password
+      label: Admin password
+      type: secret
+      secret: true
+      generate: password:32
+      required: true
+    - id: wordpress_locale
+      label: WordPress language
+      type: choice
+      default: en_US
+      options: [en_US, fa_IR, de_DE, tr_TR, ar]
+    - id: wordpress_timezone
+      label: Timezone
+      type: string
+      default: UTC
+    - id: wordpress_permalink_structure
+      label: Permalink structure
+      type: choice
+      default: "/%postname%/"
+      options:
+        - "/%postname%/"
+        - "/%year%/%monthnum%/%postname%/"
+        - "/%category%/%postname%/"
+    - id: wordpress_table_prefix
+      label: Database table prefix
+      type: string
+      required: true
+      default: wp_
+      pattern: "^wp_[A-Za-z0-9_]{0,30}$"
+    - id: wordpress_managed_cron
+      label: Managed WP-Cron
+      type: boolean
+      default: true
+      ui:
+        helper_text: "PassDeployer runs due WP-Cron events inside the managed runtime."
+    - id: wordpress_cron_interval
+      label: WP-Cron interval (seconds)
+      type: integer
+      default: 300
+      pattern: "^[1-9][0-9]{1,3}$"
+    - id: wordpress_replicas
+      label: Web replicas
+      type: integer
+      required: true
+      default: 1
+      pattern: "^[1-8]$"
+      ui:
+        helper_text: "CPU/RAM allocation is multiplied per replica. Local persistent storage keeps replicas on its owning Swarm node."
     - id: service_user_wordpress
       label: WordPress database user
       type: string
@@ -69,12 +144,9 @@ x-passdeployer:
 
 services:
   wordpress:
-    image: wordpress:${config.software_version}-php8.3-apache
+    image: wordpress:${config.software_version}-php${config.php_version}-apache
     dockerfile: |
-      FROM wordpress:${config.software_version}-php8.3-apache
-      
-      # WP-CLI is part of the Ready App runtime so Agent/Shell can manage
-      # pages, plugins, themes and database operations without ad-hoc installs.
+      FROM wordpress:${config.software_version}-php${config.php_version}-apache
       ARG WP_CLI_VERSION=2.12.0
       RUN set -eux; \
           apt-get update; \
@@ -84,11 +156,16 @@ services:
           chmod 0755 /usr/local/bin/wp; \
           wp --info --allow-root; \
           rm -rf /var/lib/apt/lists/*
+      RUN echo 'IyEvYmluL3NoCnNldCAtZXUKQVBQX1JPT1Q9IiR7V09SRFBSRVNTX1JPT1Q6LS92YXIvd3d3L2h0bWx9IgpSRUFEWV9NQVJLRVI9Ii90bXAvcGFzc2RlcGxveWVyLXdvcmRwcmVzcy1yZWFkeSIKTE9DS19ESVI9IiR7QVBQX1JPT1R9Ly5wYXNzZGVwbG95ZXItd3AtaW5zdGFsbC5sb2NrIgpVUFNUUkVBTV9QSUQ9IiIKbG9nKCkgeyBlY2hvICJbcGFzc2RlcGxveWVyLXdvcmRwcmVzc10gJCoiOyB9CmNsZWFudXBfbG9jaygpIHsgcm1kaXIgIiRMT0NLX0RJUiIgMj4vZGV2L251bGwgfHwgdHJ1ZTsgfQp3YWl0X2Zvcl9kYXRhYmFzZSgpIHsKICBhdHRlbXB0cz0wCiAgd2hpbGUgWyAiJGF0dGVtcHRzIiAtbHQgMTIwIF07IGRvCiAgICBpZiB3cCBkYiBjaGVjayAtLWFsbG93LXJvb3QgPi9kZXYvbnVsbCAyPiYxOyB0aGVuIHJldHVybiAwOyBmaQogICAgYXR0ZW1wdHM9JCgoYXR0ZW1wdHMgKyAxKSkKICAgIHNsZWVwIDEKICBkb25lCiAgcmV0dXJuIDEKfQpjb25maWd1cmVfc2l0ZSgpIHsKICB3cCBvcHRpb24gdXBkYXRlIGJsb2duYW1lICIke1dPUkRQUkVTU19TSVRFX1RJVExFfSIgLS1hbGxvdy1yb290ID4vZGV2L251bGwgMj4mMSB8fCB0cnVlCiAgd3Agb3B0aW9uIHVwZGF0ZSB0aW1lem9uZV9zdHJpbmcgIiR7V09SRFBSRVNTX1RJTUVaT05FfSIgLS1hbGxvdy1yb290ID4vZGV2L251bGwgMj4mMSB8fCB0cnVlCiAgd3Agb3B0aW9uIHVwZGF0ZSBXUExBTkcgIiR7V09SRFBSRVNTX0xPQ0FMRX0iIC0tYWxsb3ctcm9vdCA+L2Rldi9udWxsIDI+JjEgfHwgdHJ1ZQogIHdwIHJld3JpdGUgc3RydWN0dXJlICIke1dPUkRQUkVTU19QRVJNQUxJTktfU1RSVUNUVVJFfSIgLS1hbGxvdy1yb290ID4vZGV2L251bGwgMj4mMSB8fCB0cnVlCiAgd3AgcmV3cml0ZSBmbHVzaCAtLWFsbG93LXJvb3QgPi9kZXYvbnVsbCAyPiYxIHx8IHRydWUKfQppbnN0YWxsX3dvcmRwcmVzcygpIHsKICBpZiBbICIke1dPUkRQUkVTU19BVVRPX0lOU1RBTEw6LTF9IiAhPSAiMSIgXTsgdGhlbiB0b3VjaCAiJFJFQURZX01BUktFUiI7IHJldHVybiAwOyBmaQogIGlmICEgd2FpdF9mb3JfZGF0YWJhc2U7IHRoZW4KICAgIGxvZyAiRVJST1I6IFdvcmRQcmVzcyBkYXRhYmFzZSBkaWQgbm90IGJlY29tZSByZWFkeSB3aXRoaW4gMTIwIHNlY29uZHMuIgogICAgcmV0dXJuIDEKICBmaQogIGlmIHdwIGNvcmUgaXMtaW5zdGFsbGVkIC0tYWxsb3ctcm9vdCA+L2Rldi9udWxsIDI+JjE7IHRoZW4KICAgIGNvbmZpZ3VyZV9zaXRlCiAgICB0b3VjaCAiJFJFQURZX01BUktFUiIKICAgIGxvZyAiRXhpc3RpbmcgV29yZFByZXNzIGluc3RhbGxhdGlvbiBkZXRlY3RlZC4iCiAgICByZXR1cm4gMAogIGZpCiAgaWYgbWtkaXIgIiRMT0NLX0RJUiIgMj4vZGV2L251bGw7IHRoZW4KICAgIHRyYXAgY2xlYW51cF9sb2NrIEVYSVQgSU5UIFRFUk0KICAgIGlmICEgd3AgY29yZSBpcy1pbnN0YWxsZWQgLS1hbGxvdy1yb290ID4vZGV2L251bGwgMj4mMTsgdGhlbgogICAgICBsb2cgIkluc3RhbGxpbmcgV29yZFByZXNzIHRocm91Z2ggV1AtQ0xJLi4uIgogICAgICB3cCBjb3JlIGluc3RhbGwgXAogICAgICAgIC0tdXJsPSIke1dPUkRQUkVTU19TSVRFX1VSTH0iIFwKICAgICAgICAtLXRpdGxlPSIke1dPUkRQUkVTU19TSVRFX1RJVExFfSIgXAogICAgICAgIC0tYWRtaW5fdXNlcj0iJHtXT1JEUFJFU1NfQURNSU5fVVNFUn0iIFwKICAgICAgICAtLWFkbWluX3Bhc3N3b3JkPSIke1dPUkRQUkVTU19BRE1JTl9QQVNTV09SRH0iIFwKICAgICAgICAtLWFkbWluX2VtYWlsPSIke1dPUkRQUkVTU19BRE1JTl9FTUFJTH0iIFwKICAgICAgICAtLWxvY2FsZT0iJHtXT1JEUFJFU1NfTE9DQUxFfSIgXAogICAgICAgIC0tc2tpcC1lbWFpbCBcCiAgICAgICAgLS1hbGxvdy1yb290CiAgICBmaQogICAgY29uZmlndXJlX3NpdGUKICAgIHRvdWNoICIkUkVBRFlfTUFSS0VSIgogICAgbG9nICJXb3JkUHJlc3MgaW5zdGFsbGF0aW9uIGlzIHJlYWR5LiIKICAgIHRyYXAgLSBFWElUIElOVCBURVJNCiAgICBjbGVhbnVwX2xvY2sKICAgIHJldHVybiAwCiAgZmkKICBsb2cgIkFub3RoZXIgcmVwbGljYSBpcyBjb21wbGV0aW5nIHRoZSBXb3JkUHJlc3MgaW5zdGFsbGF0aW9uOyB3YWl0aW5nLi4uIgogIGF0dGVtcHRzPTAKICB3aGlsZSBbICIkYXR0ZW1wdHMiIC1sdCAxODAgXTsgZG8KICAgIGlmIHdwIGNvcmUgaXMtaW5zdGFsbGVkIC0tYWxsb3ctcm9vdCA+L2Rldi9udWxsIDI+JjE7IHRoZW4KICAgICAgY29uZmlndXJlX3NpdGUKICAgICAgdG91Y2ggIiRSRUFEWV9NQVJLRVIiCiAgICAgIHJldHVybiAwCiAgICBmaQogICAgYXR0ZW1wdHM9JCgoYXR0ZW1wdHMgKyAxKSkKICAgIHNsZWVwIDEKICBkb25lCiAgbG9nICJFUlJPUjogV29yZFByZXNzIGluc3RhbGxhdGlvbiBkaWQgbm90IGNvbnZlcmdlLiIKICByZXR1cm4gMQp9CnJ1bl9tYW5hZ2VkX2Nyb24oKSB7CiAgWyAiJHtXT1JEUFJFU1NfTUFOQUdFRF9DUk9OOi0xfSIgPSAiMSIgXSB8fCByZXR1cm4gMAogIGludGVydmFsPSIke1dPUkRQUkVTU19DUk9OX0lOVEVSVkFMOi0zMDB9IgogIGNhc2UgIiRpbnRlcnZhbCIgaW4gJyd8KlshMC05XSopIGludGVydmFsPTMwMCA7OyBlc2FjCiAgWyAiJGludGVydmFsIiAtZ2UgMTUgXSAyPi9kZXYvbnVsbCB8fCBpbnRlcnZhbD0xNQogIHdoaWxlIFsgLW4gIiRVUFNUUkVBTV9QSUQiIF0gJiYga2lsbCAtMCAiJFVQU1RSRUFNX1BJRCIgMj4vZGV2L251bGw7IGRvCiAgICB3cCBjcm9uIGV2ZW50IHJ1biAtLWR1ZS1ub3cgLS1xdWlldCAtLWFsbG93LXJvb3QgPi9kZXYvbnVsbCAyPiYxIHx8IHRydWUKICAgIHNsZWVwICIkaW50ZXJ2YWwiCiAgZG9uZQp9CmxvZyAiU3RhcnRpbmcgdGhlIG9mZmljaWFsIFdvcmRQcmVzcyBlbnRyeXBvaW50Li4uIgovdXNyL2xvY2FsL2Jpbi9kb2NrZXItZW50cnlwb2ludC5zaCAiJEAiICYKVVBTVFJFQU1fUElEPSQhCmlmICEgaW5zdGFsbF93b3JkcHJlc3M7IHRoZW4KICBsb2cgIkVSUk9SOiBhdXRvbWF0aWMgV29yZFByZXNzIGluaXRpYWxpemF0aW9uIGZhaWxlZC4iCiAga2lsbCAiJFVQU1RSRUFNX1BJRCIgMj4vZGV2L251bGwgfHwgdHJ1ZQogIHdhaXQgIiRVUFNUUkVBTV9QSUQiIDI+L2Rldi9udWxsIHx8IHRydWUKICBleGl0IDEKZmkKcnVuX21hbmFnZWRfY3JvbiAmCndhaXQgIiRVUFNUUkVBTV9QSUQiCg==' | base64 -d > /usr/local/bin/passdeployer-wordpress-entrypoint.sh && \
+          chmod 0755 /usr/local/bin/passdeployer-wordpress-entrypoint.sh
       ENV WP_CLI_ALLOW_ROOT=1
       WORKDIR /var/www/html
+      ENTRYPOINT ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh"]
+      CMD ["apache2-foreground"]
     ports:
       - 80
     working_dir: /var/www/html
+    replicas: ${config.wordpress_replicas}
     volumes:
       - wordpress-files:/var/www/html
     environment:
@@ -97,21 +174,31 @@ services:
       WORDPRESS_DB_USER: ${config.service_user_wordpress}
       WORDPRESS_DB_PASSWORD: ${secret.service_password_wordpress}
       WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_TABLE_PREFIX: ${config.wordpress_table_prefix}
+      WORDPRESS_SITE_URL: https://${config.domain}
+      WORDPRESS_SITE_TITLE: ${config.wordpress_site_title}
+      WORDPRESS_ADMIN_USER: ${config.wordpress_admin_user}
+      WORDPRESS_ADMIN_PASSWORD: ${secret.wordpress_admin_password}
+      WORDPRESS_ADMIN_EMAIL: ${config.wordpress_admin_email}
+      WORDPRESS_LOCALE: ${config.wordpress_locale}
+      WORDPRESS_TIMEZONE: ${config.wordpress_timezone}
+      WORDPRESS_PERMALINK_STRUCTURE: ${config.wordpress_permalink_structure}
+      WORDPRESS_AUTO_INSTALL: "1"
+      WORDPRESS_MANAGED_CRON: ${config.wordpress_managed_cron}
+      WORDPRESS_CRON_INTERVAL: ${config.wordpress_cron_interval}
       WORDPRESS_CONFIG_EXTRA: |
         define( 'WP_HOME', 'https://${config.domain}' );
         define( 'WP_SITEURL', 'https://${config.domain}' );
         define( 'FORCE_SSL_ADMIN', true );
+        if ( getenv( 'WORDPRESS_MANAGED_CRON' ) === '1' ) { define( 'DISABLE_WP_CRON', true ); }
     depends_on:
       - mariadb
     healthcheck:
-      # Probe Apache at the TCP layer so Docker can verify readiness without
-      # generating an HTTP access-log entry every interval. WordPress may
-      # legitimately return a 3xx redirect before its setup wizard is complete.
-      test: ["CMD", "php", "-r", "$socket=@fsockopen(\"127.0.0.1\", 80, $errno, $errstr, 2); if ($socket) { fclose($socket); exit(0); } exit(1);"]
+      test: ["CMD-SHELL", "test -f /tmp/passdeployer-wordpress-ready && wp core is-installed --allow-root >/dev/null 2>&1"]
       interval: 5s
-      timeout: 3s
-      start_period: 10s
-      retries: 6
+      timeout: 5s
+      start_period: 15s
+      retries: 24
   mariadb:
     image: mariadb:11.8.9
     volumes:
