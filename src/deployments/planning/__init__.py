@@ -10,13 +10,9 @@ from .plan import DeploymentPlan, DeploymentPlanCompiler
 from .runtime_spec import RuntimeSpec
 from .provenance import ConfigurationProvenance, ProvenanceRecord
 from .bridge import DeploymentPlanCompatibilityCompiler
-
 from .policies import HealthPolicy, ReleaseSpec, RolloutStrategy
 
 __all__ = [
-    "HealthPolicy",
-    "ReleaseSpec",
-    "RolloutStrategy",
     "ConfigurationLayer",
     "ConfigurationProvenance",
     "ConfigurationResolutionError",
@@ -27,6 +23,7 @@ __all__ = [
     "DeploymentPlanCompatibilityCompiler",
     "ProvenanceRecord",
     "ResolvedConfiguration",
+    "HealthPolicy",
+    "ReleaseSpec",
+    "RolloutStrategy",
 ]
-
-__all__ = [*globals().get("__all__", []), "HealthPolicy", "ReleaseSpec", "RolloutStrategy"]
