@@ -66,3 +66,5 @@ The API reference is source-defined from `src/agent/contracts.py`; the machine-r
 ## Detailed contracts
 
 - [Detailed API reference](api.md)
+
+- [Browser Agent management API](user-api.md)
