@@ -39,3 +39,8 @@ Log access is authorized by the owning Service/share boundary before log query/e
 ## Reading order
 
 models.md -> background.md -> owning API documentation.
+
+## Contract references
+
+- [API reference](api.md)
+- [Complete model field reference](field-reference.md)
