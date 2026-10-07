@@ -298,11 +298,29 @@ class StateManager:
             release_id = getattr(deploy, "release_reference_id", None)
             if release_id:
                 from deploy.models import Release
-                Release.objects.filter(pk=release_id, revision_id=revision_id).update(
+                previous_promoted = list(
+                    Release.objects
+                    .select_for_update()
+                    .filter(service_id=service.pk, status="promoted")
+                    .exclude(pk=release_id)
+                )
+                Release.objects.filter(
+                    pk=release_id,
+                    revision_id=revision_id,
+                ).update(
                     status="promoted",
                     promoted_at=now,
+                    retired_at=None,
                     updated_at=now,
                 )
+                if previous_promoted:
+                    Release.objects.filter(
+                        pk__in=[row.pk for row in previous_promoted]
+                    ).update(
+                        status="retired",
+                        retired_at=now,
+                        updated_at=now,
+                    )
 
             if event_payload is not None:
                 payload = dict(event_payload)
