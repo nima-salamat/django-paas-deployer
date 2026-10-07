@@ -392,12 +392,12 @@ class SwarmRuntimeAdapter:
 
     def stop(self, handle: RuntimeHandle, *, operation_key: str) -> RuntimeOperationResult:
         self._ensure_available(self)
-        self.runtime.stop(handle.resource_name or handle.identity.resource_name(), operation_key=operation_key)
+        self.runtime.stop(handle.resource_name or handle.identity.resource_name(), service_id=handle.identity.service_id, operation_key=operation_key)
         return RuntimeOperationResult(success=True, changed=True, handle=handle, details={"operation_key": operation_key})
 
     def remove(self, handle: RuntimeHandle, *, operation_key: str) -> RuntimeOperationResult:
         self._ensure_available(self)
-        self.runtime.remove(handle.resource_name or handle.identity.resource_name(), operation_key=operation_key)
+        self.runtime.remove(handle.resource_name or handle.identity.resource_name(), service_id=handle.identity.service_id, operation_key=operation_key)
         return RuntimeOperationResult(success=True, changed=True, handle=handle, details={"operation_key": operation_key})
 
     def rollback(
