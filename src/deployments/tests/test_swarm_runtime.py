@@ -147,6 +147,24 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         spec = compile_compose_service(_config(), image_ref="demo:r1", replicas=3)
         self.assertEqual(spec["services"]["demo"]["deploy"]["replicas"], 3)
 
+    def test_apply_forwards_requested_replica_count_to_compiler(self):
+        client = MagicMock()
+        client.services.get.side_effect = docker.errors.NotFound("missing")
+        client.services.create.return_value = MagicMock()
+        runtime = SwarmRuntime(client)
+        config = _config(networks=[], endpoints=[])
+
+        with patch.object(runtime, "assert_active"), \
+             patch.object(runtime, "prepare_image", return_value="demo:r1"), \
+             patch.object(runtime, "inspect_service", return_value=SimpleNamespace(service_image="demo:r1")), \
+             patch.object(runtime, "wait_ready", return_value=SimpleNamespace(replicas_desired=3)), \
+             patch.object(runtime, "_create_kwargs", return_value={"name": "demo"}), \
+             patch("deployments.core.swarm.compile_compose_service", wraps=compile_compose_service) as compiler:
+            runtime.apply(config, image_ref="demo:r1", replicas=3)
+
+        compiler.assert_called_once()
+        self.assertEqual(compiler.call_args.kwargs["replicas"], 3)
+
     def test_compiles_healthcheck_resource_and_process_placement(self):
         config = _config(
             runtime_options={
