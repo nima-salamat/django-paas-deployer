@@ -263,6 +263,9 @@ class Service(BaseModel):
 
 
 
+MAX_SERVICE_PROCESS_REPLICAS = 8
+
+
 class ServiceProcess(BaseModel):
     """Mutable desired process definition owned by a Service."""
     service = models.ForeignKey(Service, related_name="processes", on_delete=models.CASCADE)
@@ -270,7 +273,7 @@ class ServiceProcess(BaseModel):
     process_type = models.CharField(max_length=32, default="custom")
     command = models.TextField(blank=True, null=True)
     entrypoint = models.TextField(blank=True, null=True)
-    replicas = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1), MaxValueValidator(1)])
+    replicas = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1), MaxValueValidator(MAX_SERVICE_PROCESS_REPLICAS)])
     enabled = models.BooleanField(default=True)
     environment = models.JSONField(default=dict, blank=True)
     healthcheck = models.JSONField(default=dict, blank=True)
