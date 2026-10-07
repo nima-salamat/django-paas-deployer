@@ -143,6 +143,10 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         )
 
 
+    def test_compile_accepts_requested_replica_count(self):
+        spec = compile_compose_service(_config(), image_ref="demo:r1", replicas=3)
+        self.assertEqual(spec["services"]["demo"]["deploy"]["replicas"], 3)
+
     def test_compiles_healthcheck_resource_and_process_placement(self):
         config = _config(
             runtime_options={
@@ -401,9 +405,13 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "SWARM_NETWORK_DRIVER_MISMATCH")
         legacy.remove.assert_not_called()
 
-    def test_rejects_more_than_one_replica(self):
+    def test_accepts_up_to_eight_replicas(self):
+        self.assertEqual(_validate_replicas(1), 1)
+        self.assertEqual(_validate_replicas(8), 8)
+
+    def test_rejects_more_than_eight_replicas(self):
         with self.assertRaises(Exception):
-            _validate_replicas(2)
+            _validate_replicas(9)
 
     @override_settings(DEPLOYMENT_DOMAIN="deploy.echonode.website")
     def test_legacy_port_without_endpoint_gets_public_route_and_proxy_network(self):
