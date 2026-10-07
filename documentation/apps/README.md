@@ -2,7 +2,7 @@
 
 Start with the [high-level backend overview](./OVERVIEW.md) for the end-to-end request → service → revision → deployment → runtime flow. This page then maps the individual application boundaries and source-of-truth rules.
 
-This directory is the canonical architectural index for the fourteen first-party Django applications installed by src/config/settings.py. It is more implementation-aware than the system overview in ../architecture.md.
+This directory is the canonical architectural index for the fifteen first-party Django applications installed by src/config/settings.py. It is more implementation-aware than the system overview in ../architecture.md.
 
 ## Canonical application set
 
@@ -16,6 +16,7 @@ This directory is the canonical architectural index for the fourteen first-party
 | deployments | Planning, build, runtime, lifecycle, reconciliation | src/deployments/ |
 | logs | Runtime service-log ingestion, persistence and retention | src/logs/ |
 | app_catalog | Catalog definitions and multi-service installation coordination | src/app_catalog/ |
+| agent | Machine control-plane identity, credentials, scopes, API contracts, audit and delegated operations | src/agent/ |
 | messenger | Conversations, membership, messages, media and calls | src/messenger/ |
 | tickets | Customer support workflow | src/tickets/ |
 | custom_emails | Admin-managed email templates and asynchronous delivery | src/custom_emails/ |
