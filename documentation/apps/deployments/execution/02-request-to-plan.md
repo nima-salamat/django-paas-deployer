@@ -19,7 +19,7 @@ runtime graph
    ->
 DeploymentPlan
    ->
-current compatibility DTO
+native DeploymentPlan
 ```
 
 ## Current production path
