@@ -191,3 +191,5 @@ JSON fields are structured contracts. Do not introduce keys by observation from 
 Device/UserSession last_seen_at is a server-observed activity timestamp. Normal authenticated HTTP/WS traffic remains a fallback signal, while browser sessions also send a dedicated session-bound activity heartbeat when a tab is visible. The heartbeat is rate-limited server-side so the database is not written on every browser event.
 
 The session API exposes server_now with session listings. Consumers should calculate relative times from server_now rather than trusting the browser clock alone.
+
+> **Complete field reference:** [field-reference.md](field-reference.md) lists every field explicitly declared in `src/auth_users/models.py`, including type, null/blank behavior, defaults, constraints and purpose.
