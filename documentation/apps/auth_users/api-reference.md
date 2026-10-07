@@ -226,3 +226,18 @@ The URL module also declares these trailing-slash forms explicitly:
 - `GET /api/admin/auth-codes/{pk}/` — `pk` required and admin permission applies.
 
 The project also retains both slash and no-slash token refresh/verify compatibility mounts where declared by `src/auth_users/urls.py`.
+ 
+## Administrative AuthCode endpoints
+
+### GET/POST `/api/admin/auth-codes/`
+
+Administrative inspection/management of `AuthCode` records. Authentication-code plaintext is not exposed as a normal read field.
+
+### POST `/api/admin/auth-codes/purge/`
+
+Privileged cleanup operation for purgeable authentication codes. No tenant credential is returned.
+
+### GET/DELETE `/api/admin/auth-codes/{pk}/`
+
+`pk` is required and identifies one `AuthCode` row. Responses expose sanitized lifecycle metadata only.
+
