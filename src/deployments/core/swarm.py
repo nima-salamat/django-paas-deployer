@@ -18,6 +18,7 @@ import yaml
 from django.conf import settings
 from django.utils import timezone
 
+from deployments.common.docker_identity import canonical_remote_image_ref, canonical_swarm_service_name
 from deployments.common.exceptions import DeploymentError
 from deployments.core.manager.client_manager import get_docker_client
 from deployments.core.routing import public_http_endpoints, resolve_public_host
@@ -82,22 +83,16 @@ def _namespace() -> str:
 
 
 def _service_image_name(service_name: str, tag: str) -> str:
-    registry = _registry()
-    if not registry:
-        return f"{service_name}:{tag}"
-    return f"{registry}/{_namespace()}/{service_name}:{tag}"
+    return canonical_remote_image_ref(
+        service_name,
+        tag,
+        registry=_registry(),
+        namespace=_namespace(),
+    )
 
 
 def _validate_service_name(name: str) -> str:
-    value = str(name or "").strip().lower()
-    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9_.-]{0,62})", value):
-        raise DeploymentError(
-            f"Invalid Swarm service name: {name!r}",
-            stage="swarm_validation",
-            code="SWARM_INVALID_SERVICE_NAME",
-            user_message="The generated Docker Swarm service name is invalid.",
-        )
-    return value
+    return canonical_swarm_service_name(name)
 
 
 def _validate_replicas(value: Any) -> int:
