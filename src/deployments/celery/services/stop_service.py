@@ -143,9 +143,9 @@ class StopService:
                         lifecycle_generation=generation,
                         active_revision_id=desired.revision_id,
                         owns_execution=lambda sid=str(service.pk), gen=generation: bool(
-                            ServiceStateManager.get_service_generation(sid) == gen
+                            Service.objects.filter(pk=sid, lifecycle_generation=gen).exists()
                         ),
-                        current_generation=lambda sid=str(service.pk): ServiceStateManager.get_service_generation(sid),
+                        current_generation=lambda sid=str(service.pk): Service.objects.filter(pk=sid).values_list("lifecycle_generation", flat=True).first(),
                     )
                     ReconciliationExecutor().execute(
                         decision,
@@ -155,7 +155,12 @@ class StopService:
                         context=context,
                         handle=runtime_handle,
                     )
-                    stopped = runtime_resolver.registry.resolve_adapter(selection).wait_service_group_stopped(str(service_id), timeout=30.0) if hasattr(runtime_resolver.registry.resolve_adapter(selection), "wait_service_group_stopped") else True
+                    backend_runtime = getattr(runtime, "runtime", None)
+                    stopped = (
+                        backend_runtime.wait_service_group_stopped(str(service_id), timeout=30.0)
+                        if backend_runtime is not None and hasattr(backend_runtime, "wait_service_group_stopped")
+                        else True
+                    )
                     if not stopped:
                         logger.warning("Swarm service group for %s is still draining after stop timeout.", service_id)
                 else:
