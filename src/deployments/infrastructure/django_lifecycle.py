@@ -80,7 +80,6 @@ class DjangoDeploymentLifecycleStore:
                 "progress": 100,
                 "details": dict(details or {}),
             }
-            from deployments.core.state.manager import StateManager
             return StateManager.activate_revision_and_succeed(
                 int(self.deployment_id),
                 context.revision_id,

@@ -39,6 +39,18 @@ def test_deployment_claim_establishes_service_owner_for_heartbeat_fence():
     assert 'service.save(update_fields=["status", "deploy_started", "task_id"])' in method
 
 
+def test_django_lifecycle_transition_does_not_shadow_state_manager_with_local_import():
+    source = (ROOT / "deployments/infrastructure/django_lifecycle.py").read_text(encoding="utf-8")
+    transition = source.split("def transition(", 1)[1].split(
+        "def journal_runtime_resource", 1
+    )[0]
+
+    assert "from deployments.core.state.manager import StateManager" not in transition
+    assert "from deployments.core.state.manager import StateManager" in source.split(
+        "class DjangoDeploymentLifecycleStore", 1
+    )[0]
+
+
 def test_django_lifecycle_store_does_not_continue_after_cancel_wins_start_race():
     source = (ROOT / "deployments/infrastructure/django_lifecycle.py").read_text(
         encoding="utf-8"
