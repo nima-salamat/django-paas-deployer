@@ -139,7 +139,7 @@ If revision creation fails, no runtime execution should continue.
 
 ## _process_deployment()
 
-This is the compatibility-heavy application composition layer.
+This is the Django application composition layer. It performs source normalization and then enters the native lifecycle for the production Swarm runtime.
 
 It:
 
@@ -151,13 +151,13 @@ It:
 6. gets Dockerfile text;
 7. runs `DeploymentValidator.validate_for_deploy()`;
 8. uses a legacy restart-only fast path only when Swarm is disabled;
-9. otherwise enters `_execute_orchestrator()`.
+9. on Swarm, calls `_execute_native_swarm_lifecycle()` and the shared `DeploymentLifecycleExecutor`; on legacy Docker mode, uses the compatibility orchestrator path.
 
 ### Why this layer exists
 
-It is the current bridge between service/revision semantics and the legacy concrete orchestrator. It is not the long-term runtime contract itself.
+The native branch is the production lifecycle entry. The compatibility orchestrator remains isolated to legacy/non-Swarm execution.
 
-## _execute_orchestrator()
+## _execute_orchestrator() — legacy/non-Swarm
 
 This layer combines the final resolved runtime graph and compatibility DTO.
 
@@ -175,13 +175,13 @@ Important inputs:
 
 The deployment constructs the configuration passed to the orchestrator once and passes it explicitly. Downstream code must not secretly reparse mutable `Deploy.config` to discover a different policy.
 
-## DeploymentOrchestrator.deploy()
+## DeploymentOrchestrator.deploy() — legacy/non-Swarm
 
 **Module:** `core/orchestrator.py`
 
 ### Called by
 
-`core/deploy.py::Deploy.deploy_result()` / deploy facade.
+`core/deploy.py::Deploy.deploy_result()` only on the legacy/non-Swarm compatibility branch.
 
 ### Preconditions
 
@@ -237,7 +237,7 @@ No Service activation should happen until runtime readiness succeeds.
 
 ### Swarm mode
 
-`_deploy_swarm_runtime()` delegates to `SwarmRuntime` and process application.
+The native Swarm branch no longer enters this orchestrator. `_execute_native_swarm_lifecycle()` uses `DeploymentLifecycleExecutor` -> `RuntimeContract` -> `SwarmRuntimeAdapter` -> `SwarmRuntime`.
 
 ### Runtime handle contract
 
