@@ -44,3 +44,8 @@ models.md -> serializers.md -> api.md -> background.md -> tests.md. Read ../auth
 ## Wagtail administration
 
 The canonical user editor is Wagtail's built-in **Settings → Users** surface using the project's custom user forms. `Profile` remains editable. `Receipt` is read-only in Wagtail; payment mutation remains in Django Admin. `Rule` is now read-only in Wagtail because its values are used as staff capability grants by other applications.
+
+## Contract references
+
+- [API reference](api.md)
+- [Complete model field reference](field-reference.md)
