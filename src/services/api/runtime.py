@@ -540,7 +540,8 @@ def _force_cancel_runtime_cleanup(service, *, container_name: str, deploy=None) 
     version = str(getattr(deploy, "version", "latest")) if deploy is not None else "latest"
     try:
         from deployments.celery.services.deploy_service import _docker_tag_from_deploy
-        target_image = f"{container_name}:{_docker_tag_from_deploy(version)}"
+        from deployments.common.docker_identity import canonical_image_ref
+        target_image = canonical_image_ref(container_name, _docker_tag_from_deploy(version))
     except Exception:
         target_image = None
 
