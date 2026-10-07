@@ -1196,6 +1196,420 @@ class DeployService:
             )
         return result
 
+    def _execute_native_swarm_lifecycle(
+        self,
+        deploy_item,
+        container_name: str,
+        state_tracker: DjangoDeploymentState,
+        *,
+        cfg: dict,
+        execution_plan,
+        dockerfile_text: str,
+        zip_path: str,
+        platform: str,
+        resource_limits: dict,
+        build_resource_policy: dict,
+        build_options: dict,
+        runtime_options: dict,
+        networks: list[tuple[str, str]],
+        volume_specs: list[VolumeSpec],
+        endpoint_specs: list[EndpointSpec],
+        environment: dict[str, str],
+        port: int | None,
+        server_type,
+        celery: bool,
+        celery_beat: bool,
+        entry_point,
+        worker_count: int,
+        runtime_version,
+        package_manager,
+        working_directory: str,
+        build_dir,
+        install_command,
+        build_command,
+        start_command,
+        frontend: dict,
+        document_root,
+        static_dir,
+        media_dir,
+        url_handling: dict,
+        healthcheck_path,
+        healthcheck_expected_status,
+        healthcheck_timeout: float,
+    ):
+        """Execute the production Swarm path through the native lifecycle contract."""
+        import hashlib
+        import json
+        import platform as platform_module
+        from dataclasses import replace
+
+        from deployments.runtime.identity import RuntimeIdentity
+        from deployments.runtime.runtime_spec import RuntimeSpec
+        from deploy.models import BuildArtifact, Release
+
+        resolver = DjangoRuntimeSelectionResolver()
+        selection = resolver.resolve(
+            service=deploy_item.service,
+            revision=getattr(deploy_item, "revision", None),
+            deployment=deploy_item,
+            probe=True,
+        )
+        if selection.backend != RuntimeBackend.SWARM.value:
+            raise RuntimeUnavailableError(
+                "The selected runtime backend is not Docker Swarm.",
+                code="runtime_backend_mismatch",
+                details={"backend": selection.backend},
+            )
+
+        tag = _docker_tag_from_deploy(deploy_item.version)
+        build_networks = [
+            NetworkSpec(name=str(name), driver=str(driver or "overlay"))
+            for name, driver in networks
+        ]
+        build_config = DeploymentConfig(
+            name=container_name,
+            tag=tag,
+            zip_path=zip_path,
+            dockerfile_template=dockerfile_text,
+            max_cpu=float(resource_limits.get("cpu") or 1.0),
+            max_ram=int(resource_limits.get("memory_mb") or 512),
+            networks=build_networks,
+            volumes=list(volume_specs),
+            port=port,
+            read_only=bool(runtime_options.get("read_only", getattr(deploy_item.service, "read_only", True))),
+            platform=platform,
+            platform_type=str(getattr(getattr(deploy_item.service, "plan", None), "plan_type", "") or ""),
+            runtime_version=runtime_version,
+            package_manager=package_manager,
+            working_directory=working_directory,
+            build_dir=build_dir,
+            install_command=install_command,
+            build_command=build_command,
+            start_command=start_command,
+            frontend=dict(frontend or {}),
+            static_dir=static_dir,
+            media_dir=media_dir,
+            environment=dict(environment),
+            server_type=server_type,
+            celery=celery,
+            celery_beat=celery_beat,
+            entry_point=entry_point,
+            worker_count=int(worker_count or 1),
+            resource_limits=dict(resource_limits),
+            build_options=dict(build_options),
+            build_resource_policy=dict(build_resource_policy),
+            runtime_options=dict(runtime_options),
+            labels={
+                **dict(cfg.get("labels") or {}),
+                "deployment.id": str(deploy_item.pk),
+                "service.id": str(deploy_item.service_id),
+                "revision.id": str(getattr(deploy_item, "revision_id", "") or ""),
+                "managed-by": "django-paas-deployer",
+            },
+            public_host=cfg.get("public_host") or cfg.get("domain"),
+            health_timeout=int(float(cfg.get("health_timeout") or 60)),
+            health_interval=float(cfg.get("health_interval") or 1.0),
+            healthcheck_path=healthcheck_path,
+            healthcheck_expected_status=tuple(healthcheck_expected_status or (200, 204)),
+            healthcheck_timeout=float(healthcheck_timeout or 5.0),
+            document_root=document_root,
+            url_handling=dict(url_handling or {}),
+            endpoints=list(endpoint_specs),
+        )
+
+        def publish(event: DeploymentExecutionEvent) -> None:
+            state_tracker.event_sink(
+                DeploymentEvent(
+                    stage=event.stage,
+                    message=event.message,
+                    level=event.level,
+                    progress=event.progress,
+                    details=dict(event.details or {}),
+                )
+            )
+
+        operation_key = (
+            f"deploy:{deploy_item.pk}:"
+            f"revision:{getattr(deploy_item, 'revision_id', '') or 'none'}"
+        )
+        context = DeploymentExecutionContext(
+            deployment_id=str(deploy_item.pk),
+            service_id=str(deploy_item.service_id),
+            revision_id=str(getattr(deploy_item, "revision_id", "") or "") or None,
+            worker_task_id=str(getattr(deploy_item, "execution_task_id", "") or "") or None,
+            operation_key=operation_key,
+            runtime_selection=replace(
+                selection,
+                required_capabilities=execution_plan.required_capabilities,
+            ),
+            owns_execution=lambda: StateManager.heartbeat_deploy(
+                deploy_item.pk,
+                task_id=getattr(deploy_item, "execution_task_id", None),
+                stage="native_execution",
+            ),
+            cancellation_requested=lambda: bool(
+                Deploy.objects.filter(pk=deploy_item.pk)
+                .values_list("cancel_requested", flat=True)
+                .first()
+            ),
+            publish=publish,
+        )
+        store = DjangoDeploymentLifecycleStore(
+            int(deploy_item.pk),
+            task_id=getattr(deploy_item, "execution_task_id", None),
+        )
+
+        def build_plan(current_context):
+            current_context.assert_can_continue()
+            current_context.emit(
+                "prepare_resources",
+                "Preparing the immutable application artifact.",
+                progress=15,
+            )
+
+            from deploy.base_images import ensure_base_images
+            from deployments.core.converter import convert_zip_to_tar
+            from deployments.core.dockerfile import DockerfileGenerator
+            from deployments.core.manager.image_manager import Image
+            from deploy.build_cache import get_build_cache_sources
+
+            resolved_bases = ensure_base_images(
+                build_config,
+                build_policy=dict(build_resource_policy),
+                logger_sink=None,
+                deployment_id=deploy_item.pk,
+            )
+            build_config.base_images = dict(resolved_bases or {})
+
+            tar_stream = convert_zip_to_tar(zip_path)
+            rendered_dockerfile = DockerfileGenerator().render(
+                platform=platform,
+                dockerfile_template=dockerfile_text,
+                tar_stream=tar_stream,
+                config=build_config,
+                logger=None,
+            )
+            current_context.assert_can_continue()
+            current_context.emit(
+                "image_build",
+                "Building the immutable application artifact.",
+                progress=25,
+            )
+
+            cache_sources = get_build_cache_sources(str(deploy_item.pk))
+            image = Image(
+                container_name,
+                tag,
+                rendered_dockerfile,
+                tar_stream,
+                max_cpu=build_config.max_cpu,
+                max_ram=build_config.max_ram,
+                build_options=dict(build_options),
+                build_resource_policy=dict(build_resource_policy),
+                deployment_id=deploy_item.pk,
+                cache_sources=cache_sources,
+                build_labels={
+                    "io.passdeployer.deployment": str(deploy_item.pk),
+                    "io.passdeployer.service": str(deploy_item.service_id),
+                    "io.passdeployer.revision": str(deploy_item.revision_id or ""),
+                },
+            )
+            built_image = image.create(
+                cancel_check=current_context.cancellation_requested,
+                timeout_seconds=3600.0,
+            )
+            current_context.assert_can_continue()
+
+            attrs = getattr(built_image, "attrs", {}) or {}
+            repo_digests = list(attrs.get("RepoDigests") or ())
+            artifact_digest = str(
+                str(repo_digests[0]).split("@", 1)[-1]
+                if repo_digests and "@" in str(repo_digests[0])
+                else getattr(built_image, "id", "") or ""
+            )
+            if not artifact_digest:
+                raise DeploymentValidationError(
+                    "The Docker builder returned no immutable artifact digest.",
+                    stage="image_build",
+                    code="ARTIFACT_DIGEST_MISSING",
+                    user_message="The application artifact could not be given an immutable identity.",
+                )
+
+            source_hasher = hashlib.sha256()
+            with open(zip_path, "rb") as source_file:
+                for chunk in iter(lambda: source_file.read(1024 * 1024), b""):
+                    source_hasher.update(chunk)
+            source_digest = source_hasher.hexdigest()
+            build_definition_digest = hashlib.sha256(
+                json.dumps(
+                    {
+                        "platform": platform,
+                        "dockerfile": rendered_dockerfile,
+                        "build_options": dict(build_options),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                ).encode("utf-8")
+            ).hexdigest()
+            base_image_digests = sorted({
+                str(value).split("@", 1)[-1]
+                for value in dict(build_config.base_images or {}).values()
+                if "@sha256:" in str(value)
+            })
+
+            artifact, _ = BuildArtifact.objects.get_or_create(
+                digest=artifact_digest,
+                defaults={
+                    "image_ref": str(container_name + ":" + tag),
+                    "source_digest": source_digest,
+                    "build_definition_digest": build_definition_digest,
+                    "base_image_digests": base_image_digests,
+                    "build_context_identity": source_digest,
+                    "builder_backend": "docker-engine-buildkit",
+                    "platform_architecture": str(platform_module.machine() or ""),
+                    "provenance": {
+                        "deployment_id": str(deploy_item.pk),
+                        "service_id": str(deploy_item.service_id),
+                        "revision_id": str(deploy_item.revision_id or ""),
+                    },
+                    "created_by_id": getattr(deploy_item, "created_by_id", None),
+                },
+            )
+
+            runtime_plan = replace(
+                execution_plan,
+                runtime_selection=replace(
+                    execution_plan.runtime_selection,
+                    availability=selection.availability,
+                ),
+                image_ref=str(artifact.image_ref),
+                artifact_digest=str(artifact.digest),
+                release_id=None,
+                labels={
+                    **dict(getattr(execution_plan, "labels", {}) or {}),
+                    "deployment.id": str(deploy_item.pk),
+                    "service.id": str(deploy_item.service_id),
+                    "revision.id": str(deploy_item.revision_id or ""),
+                    "artifact.digest": str(artifact.digest),
+                    "managed-by": "django-paas-deployer",
+                },
+            )
+            runtime_spec = RuntimeSpec.from_plan(
+                runtime_plan,
+                image_digest=str(artifact.digest),
+            )
+            previous_release = (
+                Release.objects.filter(
+                    service_id=deploy_item.service_id,
+                    status="promoted",
+                )
+                .order_by("-promoted_at", "-created_at")
+                .first()
+            )
+            release_spec = dict(getattr(runtime_plan, "release_spec", {}) or {})
+            fingerprint = Release.fingerprint(
+                service_id=deploy_item.service_id,
+                revision_id=deploy_item.revision_id,
+                artifact_digest=artifact.digest,
+                runtime_spec=runtime_spec.as_dict(),
+                rollout_policy=dict(getattr(runtime_plan, "rollout_policy", {}) or {}),
+                health_policy=dict(getattr(runtime_plan, "health_policy", {}) or {}),
+                release_command=release_spec,
+            )
+            release, _ = Release.objects.get_or_create(
+                identity_fingerprint=fingerprint,
+                defaults={
+                    "service_id": deploy_item.service_id,
+                    "revision_id": deploy_item.revision_id,
+                    "artifact_id": artifact.pk,
+                    "runtime_spec": runtime_spec.as_dict(),
+                    "rollout_policy": dict(getattr(runtime_plan, "rollout_policy", {}) or {}),
+                    "health_policy": dict(getattr(runtime_plan, "health_policy", {}) or {}),
+                    "release_command": release_spec,
+                    "previous_release_id": getattr(previous_release, "pk", None),
+                    "provenance": {
+                        "source_digest": source_digest,
+                        "build_definition_digest": build_definition_digest,
+                        "artifact_digest": artifact.digest,
+                    },
+                    "created_by_id": getattr(deploy_item, "created_by_id", None),
+                },
+            )
+            runtime_plan = replace(runtime_plan, release_id=str(release.pk))
+            runtime_spec = RuntimeSpec.from_plan(
+                runtime_plan,
+                image_digest=str(artifact.digest),
+            )
+            Deploy.objects.filter(pk=deploy_item.pk).update(
+                release=release,
+                artifact=artifact,
+                image_ref=artifact.image_ref,
+                image_digest=artifact.digest,
+                runtime_revision_id=str(deploy_item.revision_id or ""),
+                runtime_spec=runtime_spec.as_dict(),
+                runtime_spec_sha256=runtime_spec.sha256,
+                source_revision=source_digest,
+            )
+            current_context.emit(
+                "artifact",
+                "Immutable artifact and Release prepared.",
+                progress=40,
+                details={
+                    "artifact_digest": str(artifact.digest),
+                    "release_id": str(release.pk),
+                },
+            )
+            return runtime_plan
+
+        strategy = CallbackDeploymentStrategy(build_plan=build_plan)
+        runtime = resolver.registry.resolve_adapter(selection)
+        result = DeploymentLifecycleExecutor(store).execute(
+            context,
+            strategy,
+            runtime,
+            readiness_timeout=float(cfg.get("health_timeout") or healthcheck_timeout or 60.0),
+        )
+        if result.success:
+            state_tracker.finish(
+                MockOrchestratorResult(
+                    success=True,
+                    status="succeeded",
+                    stage="deployment_completed",
+                    message="Deployment completed successfully.",
+                )
+            )
+            return result
+        if result.status == "cancelled":
+            state_tracker.finish(
+                MockOrchestratorResult(
+                    success=False,
+                    status="cancelled",
+                    stage="cancelled",
+                    message=str(
+                        getattr(result.error, "user_message", None)
+                        or "Deployment cancelled."
+                    ),
+                )
+            )
+            return result
+        error = result.error
+        raise OrchestratorDeploymentError(
+            str(getattr(error, "user_message", None) or "Native deployment failed."),
+            stage=str(getattr(error, "stage", None) or "deployment_execution"),
+            user_message=str(getattr(error, "user_message", None) or "Deployment failed."),
+            technical_message=str(
+                getattr(error, "technical_message", None)
+                or getattr(error, "message", None)
+                or error
+                or ""
+            ),
+            code=str(getattr(error, "code", None) or "DEPLOYMENT_NATIVE_FAILED"),
+            category=str(getattr(error, "category", None) or "deployment_error"),
+            recoverable=bool(getattr(error, "recoverable", False)),
+            details=dict(result.details or {}),
+        )
+
     @staticmethod
     def _compile_compatibility_plan(
         *,
