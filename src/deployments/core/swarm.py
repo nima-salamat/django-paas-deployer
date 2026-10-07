@@ -1301,7 +1301,7 @@ class SwarmRuntime:
             "constraints": constraints,
         }
 
-    def apply_processes(self, config, *, image_ref: str, operation_key: str | None = None, cancel_check: Callable[[], bool] | None = None) -> dict[str, SwarmServiceState]:
+    def apply_processes(self, config, *, image_ref: str, operation_key: str | None = None, cancel_check: Callable[[], bool] | None = None, prepared_image_ref: str | None = None) -> dict[str, SwarmServiceState]:
         """Apply the ServiceProcess graph as independent Swarm services."""
         from dataclasses import replace
 
@@ -1344,6 +1344,7 @@ class SwarmRuntime:
 
         self._last_apply_recovery = build_recovery()
         self.assert_active()
+        prepared_ref = prepared_image_ref or self.prepare_image(image_ref, config.name, config.tag)
         if cancel_check is not None and cancel_check():
             raise DeploymentError("Swarm process application was cancelled.", stage="swarm_apply", code="SWARM_OPERATION_CANCELLED")
         results: dict[str, SwarmServiceState] = {}
@@ -1405,6 +1406,7 @@ class SwarmRuntime:
                     replicas=replicas,
                     operation_key=f"{operation_key}:process:{process_name}" if operation_key else None,
                     cancel_check=cancel_check,
+                    prepared_image_ref=prepared_image_ref,
                 )
                 if self._last_apply_operation:
                     recovery_operations.append(dict(self._last_apply_operation))
