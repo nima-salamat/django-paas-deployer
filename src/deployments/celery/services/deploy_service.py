@@ -1235,9 +1235,8 @@ class DeployService:
         import platform as platform_module
         from dataclasses import replace
 
-        from deployments.runtime.identity import RuntimeIdentity
-        from deployments.runtime.runtime_spec import RuntimeSpec
-        from deploy.models import BuildArtifact, Release
+        from deployments.runtime.contract import RuntimeIdentity
+                from deploy.models import BuildArtifact, Release
 
         resolver = DjangoRuntimeSelectionResolver()
         selection = resolver.resolve(
