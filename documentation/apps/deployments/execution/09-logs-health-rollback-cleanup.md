@@ -167,7 +167,7 @@ Rollback errors are surfaced as `RollbackError`.
 
 `DeploymentLifecycleExecutor` can call `RuntimeContract.rollback()` with an explicit rollback_plan.
 
-This is a migration seam, not the only current production rollback path.
+This is the native production rollback path for the Swarm runtime; the legacy rollback helper remains only for explicit legacy/non-Swarm compatibility callers.
 
 ## Why rollback is before terminal success
 
