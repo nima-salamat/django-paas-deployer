@@ -295,6 +295,15 @@ class StateManager:
             updates["execution_task_id"] = ""
             Deploy.objects.filter(pk=deploy_id).update(**updates)
 
+            release_id = getattr(deploy, "release_id", None)
+            if release_id:
+                from deploy.models import Release
+                Release.objects.filter(pk=release_id, revision_id=revision_id).update(
+                    status="promoted",
+                    promoted_at=now,
+                    updated_at=now,
+                )
+
             if event_payload is not None:
                 payload = dict(event_payload)
                 payload.setdefault("event_id", str(uuid.uuid4()))
