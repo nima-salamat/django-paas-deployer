@@ -1351,6 +1351,7 @@ class DeployService:
             int(deploy_item.pk),
             task_id=getattr(deploy_item, "execution_task_id", None),
         )
+        runtime = resolver.registry.resolve_adapter(selection)
 
         def build_plan(current_context):
             current_context.assert_can_continue()
@@ -1451,10 +1452,25 @@ class DeployService:
                 if "@sha256:" in str(value)
             })
 
+            from deployments.runtime.artifacts import ArtifactReference
+
+            current_context.assert_can_continue()
+            published = runtime.artifact_registry.ensure_available(
+                ArtifactReference(
+                    digest=artifact_digest,
+                    image_ref=str(container_name + ":" + tag),
+                    source_digest=source_digest,
+                ),
+                service_name=container_name,
+                tag=tag,
+                operation_key=current_context.operation_key,
+            )
+            published_image_ref = str(published.image_ref)
+
             artifact, _ = BuildArtifact.objects.get_or_create(
                 digest=artifact_digest,
                 defaults={
-                    "image_ref": str(container_name + ":" + tag),
+                    "image_ref": published_image_ref,
                     "source_digest": source_digest,
                     "build_definition_digest": build_definition_digest,
                     "base_image_digests": base_image_digests,
@@ -1634,7 +1650,6 @@ class DeployService:
             return runtime_plan
 
         strategy = CallbackDeploymentStrategy(build_plan=build_plan)
-        runtime = resolver.registry.resolve_adapter(selection)
         result = DeploymentLifecycleExecutor(store).execute(
             context,
             strategy,
