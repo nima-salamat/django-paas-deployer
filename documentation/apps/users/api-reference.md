@@ -79,8 +79,8 @@ All request fields are optional individually, but a non-empty request must use t
 |---|---:|---|
 | `username` | No | Max 150 characters; updated directly. |
 | `birthdate` | No | Date; `null` is accepted by the serializer. |
-| `theme` | No | Must match `User.ThemeChoices`. |
-| `color` | No | Must match configured color choices. |
+| `theme` | Yes | Must match `User.ThemeChoices`; the serializer does not set `required=False`. |
+| `color` | Yes | Must match configured color choices; the serializer does not set `required=False`. |
 | `email` | No | Rejected when supplied; use contact-change flow. |
 | `phone_number` | No | Rejected when supplied; use contact-change flow. |
 
