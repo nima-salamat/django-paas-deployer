@@ -6,6 +6,7 @@ from rest_framework.test import APIClient
 
 from users.models import User
 from auth_users.models import LoginSettings
+from auth_users.api.auth_flow import StartAuthAPIView
 
 
 @override_settings(
@@ -28,6 +29,7 @@ class AuthenticationRateLimitTests(TestCase):
             password="password123",
         )
 
+    @patch.object(StartAuthAPIView, "throttle_account_rate", "2/min")
     @patch("auth_users.api.auth_flow.send_otp", return_value="12345678")
     def test_login_is_limited_per_account_even_when_ip_changes(self, send_otp):
         first_client = APIClient()
@@ -58,7 +60,8 @@ class AuthenticationRateLimitTests(TestCase):
         self.assertEqual(blocked_from_other_ip.status_code, 429)
         self.assertEqual(send_otp.call_count, 2)
 
-    @override_settings(AUTH_ACCOUNT_RATE="100/min", AUTH_IP_RATE="2/min")
+    @patch.object(StartAuthAPIView, "throttle_account_rate", "100/min")
+    @patch.object(StartAuthAPIView, "throttle_ip_rate", "2/min")
     @patch("auth_users.api.auth_flow.send_otp", return_value="12345678")
     def test_login_ip_limit_blocks_identifier_rotation(self, send_otp):
         client = APIClient()
@@ -95,6 +98,7 @@ class AuthenticationRateLimitTests(TestCase):
         self.assertEqual(blocked.status_code, 429)
         self.assertEqual(send_otp.call_count, 2)
 
+    @patch.object(StartAuthAPIView, "throttle_account_rate", "2/min")
     @patch("auth_users.api.auth_flow.send_otp", return_value="12345678")
     def test_login_legacy_alias_inherits_the_same_account_limit(self, send_otp):
         client = APIClient()
@@ -108,3 +112,17 @@ class AuthenticationRateLimitTests(TestCase):
         self.assertEqual(second.status_code, 200)
         self.assertEqual(blocked.status_code, 429)
         self.assertEqual(send_otp.call_count, 2)
+
+    @override_settings(API_GLOBAL_USER_RATE="2/min")
+    def test_global_default_throttle_protects_a_regular_authenticated_api(self):
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+        first = self.client.get("/api/users/user/")
+        second = self.client.get("/api/users/user/")
+        third = self.client.get("/api/users/user/")
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(third.status_code, 429)
+
