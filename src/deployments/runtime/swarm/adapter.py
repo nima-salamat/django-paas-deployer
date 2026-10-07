@@ -268,12 +268,17 @@ class SwarmRuntimeAdapter:
         config, image_ref = self._plan_config(plan)
         identity = self._identity(plan)
         try:
-            state = self.runtime.apply(
+            states = self.runtime.apply_processes(
                 config,
                 image_ref=image_ref,
                 operation_key=operation_key,
-                cancel_check=None,
+                cancel_check=cancel_check,
             )
+            process_names = tuple(
+                str(state.name) for state in states.values()
+                if getattr(state, "name", None)
+            )
+            state = states.get("web") or next(iter(states.values()))
         except DeploymentError as exc:
             raise RuntimeOperationError(
                 str(exc),
@@ -289,13 +294,14 @@ class SwarmRuntimeAdapter:
             identity=identity,
             runtime_id=observation.runtime_id,
             resource_name=identity.resource_name(),
+            metadata={"service_names": process_names},
         )
         return RuntimeOperationResult(
             success=True,
             changed=True,
             handle=handle,
             observation=observation,
-            details={"operation_key": operation_key},
+            details={"operation_key": operation_key, "service_names": process_names},
         )
 
     def inspect(self, identity: RuntimeIdentity) -> RuntimeObservation:
