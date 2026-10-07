@@ -332,6 +332,50 @@ def _wordpress_status(service, user, payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _wordpress_inspect(service, user, payload: dict[str, Any]) -> dict[str, Any]:
+    from services.shell import _platform_for_service
+
+    if _platform_for_service(service) != "wordpress":
+        raise ValueError("wordpress.inspect is only available for WordPress services.")
+
+    checks = _run_tool_commands(service, user, [
+        ["wp", "core", "is-installed"],
+        ["wp", "core", "version"],
+        ["wp", "option", "get", "home"],
+        ["wp", "option", "get", "siteurl"],
+        ["wp", "option", "get", "blogname"],
+        ["wp", "theme", "list", "--status=active", "--field=name"],
+        ["wp", "plugin", "list", "--status=active", "--field=name"],
+        ["wp", "db", "check"],
+    ])
+
+    def output(name: str) -> str:
+        row = next((x for x in checks if " ".join(x["command"]) == name), None)
+        return str((row or {}).get("stdout") or "").strip()
+
+    installed_row = next(
+        (x for x in checks if " ".join(x["command"]) == "wp core is-installed"),
+        {},
+    )
+    return {
+        "platform": "wordpress",
+        "installed": int(installed_row.get("exit_code") or 1) == 0,
+        "core_version": output("wp core version"),
+        "home": output("wp option get home"),
+        "siteurl": output("wp option get siteurl"),
+        "site_title": output("wp option get blogname"),
+        "active_theme": output("wp theme list --status=active --field=name"),
+        "active_plugins": [
+            x for x in output("wp plugin list --status=active --field=name").splitlines() if x
+        ],
+        "database": next(
+            (x for x in checks if " ".join(x["command"]) == "wp db check"),
+            {},
+        ),
+        "checks": checks,
+    }
+
+
 def _wordpress_page_create(service, user, payload: dict[str, Any]) -> dict[str, Any]:
     from services.shell import _platform_for_service
 
