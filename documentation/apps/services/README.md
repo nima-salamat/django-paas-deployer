@@ -76,3 +76,7 @@ The Wagtail Services surface keeps `Service`, `PrivateNetwork` and `Volume` as t
 
 - [API reference](api.md)
 - [Complete model field reference](field-reference.md)
+
+## Detailed contracts
+
+- [Detailed API reference](api-reference.md)
