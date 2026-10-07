@@ -3,6 +3,7 @@ from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from users.models import User
+from app_catalog.apis import CatalogPermissionMixin
 
 
 @override_settings(
@@ -21,6 +22,9 @@ class ReadyAppRateLimitTests(TestCase):
         self.client.force_authenticate(user=self.user)
 
     def test_catalog_resolve_is_throttled_as_a_mutation(self):
+        original_rate = CatalogPermissionMixin.throttle_user_rate
+        CatalogPermissionMixin.throttle_user_rate = "2/min"
+        self.addCleanup(setattr, CatalogPermissionMixin, "throttle_user_rate", original_rate)
         url = "/api/application-catalog/apps/does-not-exist/resolve/"
         first = self.client.post(url, {}, format="json")
         second = self.client.post(url, {}, format="json")
