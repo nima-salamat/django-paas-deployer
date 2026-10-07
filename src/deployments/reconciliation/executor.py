@@ -90,7 +90,7 @@ class ReconciliationExecutor:
                 raise StaleDeploymentWorkerError(
                     "Runtime resource identity does not belong to the desired service."
                 )
-            result = runtime.stop(handle, operation_key=operation_key)
+            result = runtime.stop(handle, operation_key=operation_key, cancel_check=context.cancellation_requested)
         elif action in {
             ReconciliationAction.CREATE,
             ReconciliationAction.UPDATE,
