@@ -1,3 +1,5 @@
+"""Runtime boundary package."""
+
 from .artifacts import ArtifactReference, ArtifactRegistry, SwarmArtifactRegistry
 """Runtime contracts and adapters for deployment execution.
 
