@@ -29,7 +29,7 @@ Docker/Swarm runtime execution belongs to deployments. Long-term Service configu
 
 Catalog definitions are validated before child creation. Unsupported privileged/host-escape semantics fail closed. secret_config is sensitive and never returned raw.
 
-Ready Apps add a second publication boundary: an application is public only when its definition declares `visibility: public` and its source is directly under `src/app_catalog/catalog/first_party/`. Public serializers expose only safe product metadata and user-editable configuration fields.
+Ready Apps add a publication boundary: an application is public only when its definition declares `visibility: public`, its source is directly under `src/app_catalog/catalog/first_party/`, and every executable image reference satisfies the pinned-image policy. `CatalogPublication` can additionally hide a safe curated entry or override its featured flag. Public serializers expose only safe product metadata and user-editable configuration fields.
 
 ## Main lifecycle
 
@@ -61,4 +61,4 @@ For the public application product, read ready-apps.md after api.md and serializ
 
 ## Wagtail administration
 
-Installed catalog applications are exposed in Wagtail under **Applications** as read-only coordinator records. `ApplicationInstance` shows safe identity/config/status/error metadata; `secret_config` is not exposed. `ApplicationInstanceService` is read-only coordinator provenance. **Cancel installation** requires `app_catalog.change_applicationinstance` and delegates to the existing `cancel_application_installation` task, with its established synchronous executor fallback.
+Installed catalog applications are exposed in Wagtail under **Applications** as read-only coordinator records. `ApplicationInstance` shows safe identity/config/status/error metadata; `secret_config` is not exposed. `ApplicationInstanceService` is read-only coordinator provenance. **Cancel installation** requires `app_catalog.change_applicationinstance` and delegates to the existing `cancel_application_installation` task, with its established synchronous executor fallback.\n\nThe **Ready App publication** surface is the operator/editorial control for curated catalog visibility. It changes only `CatalogPublication.enabled` / `featured_override` / `notes`; the executable YAML/Compose recipe remains source-controlled.
