@@ -154,8 +154,8 @@ def test_current_swarm_service_path_compiles_a_plan_before_the_legacy_facade():
     root = Path(__file__).resolve().parents[2]
     source = (root / "deployments" / "celery" / "services" / "deploy_service.py").read_text()
 
-    assert "def _compile_compatibility_plan(" in source
-    assert "execution_plan = self._compile_compatibility_plan(" in source
+    assert "def _compile_native_plan(" in source
+    assert "execution_plan = self._compile_native_plan(" in source
     assert "execution_plan=execution_plan" in source
     assert "DjangoRuntimeSelectionResolver().resolve(" in source
     assert "DeploymentPlanCompiler().compile(" in source
