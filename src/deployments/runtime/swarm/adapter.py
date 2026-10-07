@@ -406,13 +406,17 @@ class SwarmRuntimeAdapter:
         observation = self._observation(handle.identity, state, assume_identity_revision=True)
         return RuntimeOperationResult(success=True, changed=True, handle=handle, observation=observation, details={"processes": sorted(process_names)})
 
-    def stop(self, handle: RuntimeHandle, *, operation_key: str) -> RuntimeOperationResult:
+    def stop(self, handle: RuntimeHandle, *, operation_key: str, cancel_check: Callable[[], bool] | None = None) -> RuntimeOperationResult:
         self._ensure_available(self)
+        if cancel_check is not None and cancel_check():
+            raise RuntimeOperationError("Runtime stop was cancelled.", code="runtime_cancelled", category="cancellation")
         self.runtime.stop(handle.resource_name or handle.identity.resource_name(), service_id=handle.identity.service_id, operation_key=operation_key)
         return RuntimeOperationResult(success=True, changed=True, handle=handle, details={"operation_key": operation_key})
 
-    def remove(self, handle: RuntimeHandle, *, operation_key: str) -> RuntimeOperationResult:
+    def remove(self, handle: RuntimeHandle, *, operation_key: str, cancel_check: Callable[[], bool] | None = None) -> RuntimeOperationResult:
         self._ensure_available(self)
+        if cancel_check is not None and cancel_check():
+            raise RuntimeOperationError("Runtime remove was cancelled.", code="runtime_cancelled", category="cancellation")
         self.runtime.remove(handle.resource_name or handle.identity.resource_name(), service_id=handle.identity.service_id, operation_key=operation_key)
         return RuntimeOperationResult(success=True, changed=True, handle=handle, details={"operation_key": operation_key})
 
