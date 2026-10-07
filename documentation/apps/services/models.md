@@ -30,7 +30,7 @@ user owns the network; name is the logical human name, description is presentati
 
 ## ServiceProcess
 
-service/name is unique. process_type, command, entrypoint, replicas, enabled and structured environment/healthcheck/resources/metadata describe desired process behavior. replicas is currently constrained to 1 and Swarm rejects other values. to_snapshot() is the source for revision process_snapshot.
+service/name is unique. process_type, command, entrypoint, replicas, enabled and structured environment/healthcheck/resources/metadata describe desired process behavior. replicas is constrained to 1..8 and is applied to the managed Swarm service. to_snapshot() is the source for revision process_snapshot.
 
 ## ServiceRevision
 
