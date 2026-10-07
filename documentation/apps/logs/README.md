@@ -44,3 +44,7 @@ models.md -> background.md -> owning API documentation.
 
 - [API reference](api.md)
 - [Complete model field reference](field-reference.md)
+
+## Detailed contracts
+
+- [Detailed API reference](api.md)
