@@ -17,6 +17,11 @@ from docker.errors import BuildError, ImageNotFound
 
 from deployments.core.exceptions import CleanupError, DockerClientError, ImageBuildError, InternalPlatformError
 from deployments.common.build_slots import BuildSlot
+from deployments.common.docker_identity import (
+    canonical_image_ref,
+    canonical_image_tag,
+    validate_image_repository,
+)
 from deployments.common.retry import classify_docker_exception
 from .client_manager import Client, docker_client_diagnostics
 
@@ -234,39 +239,21 @@ def flatten_single_toplevel(build_root: str) -> str | None:
 # provides the repository/container name and ``Deploy.version`` provides the tag.
 # We validate those values but never invent a staging name or rewrite the version.
 
-_VALID_NAME_COMPONENT_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
-_VALID_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
-
-
+# ---------------------------------------------------------------------------
+# Docker image naming compatibility wrappers
+# ---------------------------------------------------------------------------
+# Older tests/internal callers may still import these private helpers. Keep
+# their names stable while making the central identity module authoritative.
 def _validate_image_name(name: str) -> str:
-    if not name or not isinstance(name, str):
-        raise ValueError("Image name must not be empty")
-    value = name.strip()
-    if value != name:
-        raise ValueError(f"Image name contains surrounding whitespace: {name!r}")
-    if len(value) > 255:
-        raise ValueError(f"Invalid Docker image repository name: {value!r}")
-
-    # Docker repository names may contain multiple lowercase namespace
-    # components separated by '/'. Validate every component individually
-    # instead of rejecting valid repositories such as 'paas-base/php-apache'.
-    parts = value.split("/")
-    if any(not part or not _VALID_NAME_COMPONENT_RE.fullmatch(part) for part in parts):
-        raise ValueError(f"Invalid Docker image repository name: {value!r}")
-    return value
+    return validate_image_repository(name)
 
 
 def _validate_image_tag(tag: Any) -> str:
-    value = "latest" if tag is None else str(tag).strip()
-    if not value:
-        value = "latest"
-    if len(value) > 128 or not _VALID_TAG_RE.fullmatch(value):
-        raise ValueError(f"Invalid Docker image tag: {value!r}")
-    return value
+    return canonical_image_tag(tag)
 
 
 def _make_image_ref(name: str, tag: Any) -> str:
-    return f"{_validate_image_name(name)}:{_validate_image_tag(tag)}"
+    return canonical_image_ref(name, tag)
 
 
 # ---------------------------------------------------------------------------
