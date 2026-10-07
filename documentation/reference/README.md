@@ -5,6 +5,8 @@ This directory contains source-aligned navigation and cross-app contract indexes
 ## Start here
 
 - [Backend API contracts](api-contracts.md) — API layers, ownership, authentication and main request flows.
+- [Canonical source contract inventory](contracts.md) — one standardized table set for API routes, router registrations, models and fields.
+- [Global contract coverage test](../../scripts/validate_documentation_contracts.py) — compares that inventory against source in CI.
 - [Model field reference](model-field-reference.md) — field-by-field navigation across first-party models.
 - [Documentation completeness](documentation-completeness.md) — source-derived documentation coverage policy.
 - [Django/Wagtail admin audit](wagtail-admin-audit.md) — operator/admin exposure decisions.
