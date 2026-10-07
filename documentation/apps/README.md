@@ -1,5 +1,7 @@
 # Django application architecture map
 
+Start with the [high-level backend overview](./OVERVIEW.md) for the end-to-end request → service → revision → deployment → runtime flow. This page then maps the individual application boundaries and source-of-truth rules.
+
 This directory is the canonical architectural index for the fourteen first-party Django applications installed by src/config/settings.py. It is more implementation-aware than the system overview in ../architecture.md.
 
 ## Canonical application set
