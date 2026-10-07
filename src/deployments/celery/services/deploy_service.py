@@ -1,18 +1,9 @@
-"""
-deployments/celery/services/deploy_service.py
----------------------------------------------
-App-deploy service — the layer between the Celery ``deploy`` task and
-the ``DeploymentOrchestrator``.
+"""Django application boundary for deployment execution.
 
-Key changes vs. legacy:
-  * Uses ``deployments.common.parse_config`` instead of a local
-    ``_parse_config`` copy (the codebase had THREE copies).
-  * Acquires a per-service advisory lock for the WHOLE deploy so two
-    deploys targeting the same Service cannot race.
-  * Wires ``cancel_check`` into the orchestrator so a user-requested
-    cancel between stages is honoured (legacy code only checked at start).
-  * Reports ``rollback_failed`` distinctly from ``rollback_performed``
-    in the final state transition.
+The normal Swarm path composes immutable revision state into a native
+DeploymentPlan and delegates sequencing to DeploymentLifecycleExecutor and
+RuntimeContract. The legacy Deploy facade remains only for explicit
+non-Swarm compatibility execution.
 """
 
 from __future__ import annotations
