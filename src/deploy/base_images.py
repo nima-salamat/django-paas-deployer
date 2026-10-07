@@ -71,7 +71,9 @@ def _normalize_version(value: Any, default: str) -> str:
 
 
 def _tag_token(value: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_.-]+", "-", value).strip(".-_") or "default"
+    # Base-image versions have already been normalized; the central identity
+    # policy owns the final Docker tag validation without adding prefixes.
+    return canonical_image_tag(value, default="default")
 
 
 @dataclass(frozen=True)
@@ -86,7 +88,7 @@ class BaseImageSpec:
 
     @property
     def image_ref(self) -> str:
-        return f"{self.repository}:{self.tag}"
+        return canonical_image_ref(self.repository, self.tag)
 
 
 def _spec_fingerprint(spec: BaseImageSpec) -> str:
@@ -401,7 +403,8 @@ def _build_spec(
     ownership_check=None,
     timeout_seconds: float | None = None,
 ):
-    from deployments.common.resource_policy import resolve_build_policy
+    from deployments.common.docker_identity import canonical_image_ref, canonical_image_tag
+from deployments.common.resource_policy import resolve_build_policy
 
     effective_policy = resolve_build_policy(build_policy)
     logger.info("Building base runtime image %s from %s", spec.image_ref, spec.source_image)
