@@ -214,6 +214,17 @@ Boolean fields are coerced to boolean. Integer policy fields must be >= 1. Staff
 
 First-party browser WebSockets carry a session-bound access JWT in the `token` query parameter. The JWT `sid` must resolve to an active UserSession. A revoked live session is closed with application code `4401`.
 
+## Rate limiting
+
+Public authentication, OTP and recovery endpoints use stricter client-IP and
+account/identifier buckets than the global API policy. The exact current
+limits and environment overrides are maintained in
+[the API rate-limiting reference](../../reference/rate-limiting.md).
+
+The account bucket is based on submitted identifiers and hashed before it is
+used as a cache key. OTP expiry and wrong-attempt limits remain separate from
+HTTP request throttling.
+ 
 ## Legacy aliases
 
 `/api/login/` and `/api/signup/` delegate into the same unified authentication flow rather than implementing a second credential model.
