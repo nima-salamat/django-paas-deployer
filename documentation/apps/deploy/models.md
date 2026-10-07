@@ -178,3 +178,5 @@ policy when left unset.
 The cache policy engine is implemented in `src/deploy/build_cache.py`.
 Physical Docker BuildKit storage is global; these models provide logical
 tenant accounting and safe application-image retention.
+
+> **Complete field reference:** [field-reference.md](field-reference.md) lists every field explicitly declared in `src/deploy/models.py`, including type, null/blank behavior, defaults, constraints and purpose.
