@@ -1537,6 +1537,54 @@ class DeployService:
                 },
             )
             runtime_plan = replace(runtime_plan, release_id=str(release.pk))
+            if release.status != "ready":
+                Release.objects.filter(pk=release.pk).update(
+                    status="ready",
+                    updated_at=__import__("django.utils.timezone", fromlist=["now"]).now(),
+                )
+
+            if previous_release is not None and getattr(previous_release, "artifact_id", None):
+                previous_graph = ServiceRuntimeGraph.from_revision(previous_release.revision)
+                previous_identity = replace(
+                    runtime_plan.identity,
+                    revision_id=str(previous_release.revision_id),
+                )
+                previous_runtime = dict(previous_release.runtime_spec or {})
+                previous_options = dict(
+                    previous_runtime.get("runtime_options")
+                    or runtime_plan.runtime_options
+                    or {}
+                )
+                rollback_plan = replace(
+                    runtime_plan,
+                    identity=previous_identity,
+                    process_graph=previous_graph,
+                    image_ref=str(previous_release.artifact.image_ref),
+                    artifact_digest=str(previous_release.artifact.digest),
+                    release_id=str(previous_release.pk),
+                    environment=dict(previous_graph.runtime_environment),
+                    runtime_options=previous_options,
+                    release_spec=dict(previous_release.release_command or {}),
+                    health_policy=dict(previous_release.health_policy or {}),
+                    rollout_policy=dict(previous_release.rollout_policy or {}),
+                    labels={
+                        **dict(getattr(runtime_plan, "labels", {}) or {}),
+                        "release.id": str(previous_release.pk),
+                        "revision.id": str(previous_release.revision_id),
+                        "artifact.digest": str(previous_release.artifact.digest),
+                        "deployment.id": str(deploy_item.pk),
+                        "service.id": str(deploy_item.service_id),
+                        "managed-by": "django-paas-deployer",
+                    },
+                    rollback_plan=None,
+                )
+            else:
+                rollback_plan = None
+
+            runtime_plan = replace(
+                runtime_plan,
+                rollback_plan=rollback_plan,
+            )
             runtime_spec = RuntimeSpec.from_plan(
                 runtime_plan,
                 image_digest=str(artifact.digest),
