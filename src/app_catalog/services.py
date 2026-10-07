@@ -114,13 +114,15 @@ def resource_summary_for_resolved(resolved: dict, base_plan: Plan) -> dict:
                 f"but its selected plan allows {limit_mb} MB."
             )
         total_storage += storage_mb
-        total_cpu += float(assigned.max_cpu or 0)
-        total_ram += float(assigned.max_ram or 0)
-        total_price += float(assigned.price_per_hour or 0)
+        replicas = max(1, int(spec.replicas or 1))
+        total_cpu += float(assigned.max_cpu or 0) * replicas
+        total_ram += float(assigned.max_ram or 0) * replicas
+        total_price += float(assigned.price_per_hour or 0) * replicas
         services.append({
             "name": _display_catalog_component_name(spec.key),
             "role": "database" if spec.role == "database" or spec.plan_type == str(PlanTypeChoices.DB) else "application",
             "platform": spec.platform,
+            "replicas": int(spec.replicas or 1),
             "plan": {
                 "name": str(assigned.name),
                 "plan_type": str(assigned.plan_type),
@@ -784,6 +786,7 @@ def _create_application_installation(
             "restart_policy": dict(spec.get("restart_policy") or {}),
             "working_directory": spec.get("working_directory"),
             "port": int(port) if port else None,
+            "replicas": int(spec.get("replicas") or 1),
             "public": public,
             "public_host": service_public_host if public else None,
             "healthcheck": healthcheck,
@@ -855,6 +858,7 @@ def _create_application_installation(
                 "healthcheck": healthcheck or {},
                 "resources": {},
                 "metadata": {"catalog_service_key": key},
+                "replicas": int(spec.get("replicas") or 1),
             },
         )
 
