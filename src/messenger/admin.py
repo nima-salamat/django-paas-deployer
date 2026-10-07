@@ -12,6 +12,7 @@ from .models import (
     MessageAttachment,
     GroupInviteLink,
     ProfilePhotoPrivacy,
+    ProfilePhotoAllowed,
     PinnedMessage,
 )
 
@@ -357,3 +358,11 @@ class AttachmentViewOnceOpenAdmin(AuditReadOnlyAdmin):
 class CallSessionParticipantAdmin(AuditReadOnlyAdmin):
     list_display = ("id", "call", "user", "joined_at", "left_at")
     raw_id_fields = ("call", "user")
+
+ 
+@admin.register(ProfilePhotoAllowed)
+class ProfilePhotoAllowedAdmin(admin.ModelAdmin):
+    list_display = ("id", "privacy", "user", "created_at")
+    search_fields = ("user__username", "user__email", "privacy__user__username")
+    raw_id_fields = ("privacy", "user")
+    readonly_fields = ("created_at",)
