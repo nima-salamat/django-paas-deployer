@@ -165,7 +165,11 @@ class DeploymentLifecycleExecutor:
 
             context.emit("runtime_apply", "Applying the deployment plan.", progress=45)
             with deployment_span("runtime.apply", attributes={"deployment.id": context.deployment_id, "runtime.backend": runtime.backend}):
-                applied = runtime.apply(plan, operation_key=context.operation("apply"))
+                applied = runtime.apply(
+                    plan,
+                    operation_key=context.operation("apply"),
+                    cancel_check=context.cancellation_requested,
+                )
             handle = applied.handle
             if handle is None:
                 raise RuntimeOperationError(
