@@ -29,6 +29,7 @@ from .exceptions import (
 )
 from .retry import retry_with_backoff, is_retryable_exception
 from . import security
+from . import docker_identity
 from . import state_machine
 
 __all__ = [
@@ -62,6 +63,7 @@ __all__ = [
     "is_retryable_exception",
     # submodules
     "security",
+    "docker_identity",
     "state_machine",
 ]
 
