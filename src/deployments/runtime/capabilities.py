@@ -25,6 +25,7 @@ class RuntimeCapability(str, Enum):
     SERVICE_LOGS = "service_logs"
     HEALTH_CHECKS = "health_checks"
     PROCESS_GRAPH = "process_graph"
+    TRAFFIC_SPLITTING = "traffic_splitting"
 
 
 class StorageCapability(str, Enum):
