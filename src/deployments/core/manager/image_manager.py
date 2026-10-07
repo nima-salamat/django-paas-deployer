@@ -472,6 +472,7 @@ class Image(Client):
         lease_check: Optional[Callable[[], None]] = None,
         ownership_check: Optional[Callable[[], None]] = None,
         timeout_seconds: Optional[float] = None,
+        stream_started_callback: Optional[Callable[[], None]] = None,
     ) -> Optional[str]:
         """Consume build stream and actively close it when cancellation is requested."""
         import threading
@@ -536,6 +537,11 @@ class Image(Client):
 
         try:
             for chunk in self._iter_build_stream(response):
+                if stream_started_callback is not None:
+                    try:
+                        stream_started_callback()
+                    except Exception:
+                        logger.debug("Build stream-start callback failed", exc_info=True)
                 if timed_out.is_set():
                     raise TimeoutError("Docker image build exceeded the configured build timeout.")
                 if lease_check is not None:
@@ -801,47 +807,103 @@ class Image(Client):
                         dict(common_build),
                     ]
 
-                    response = None
                     last_err = None
                     refreshed_after_transport_failure = False
+
                     for i, kwargs in enumerate(attempt_kwargs):
+                        stream_started = False
+
+                        def _mark_stream_started() -> None:
+                            nonlocal stream_started
+                            stream_started = True
+                            nonlocal docker_api_reached
+                            docker_api_reached = True
+
                         try:
                             build_slot.assert_owned()
                             if ownership_check is not None:
                                 ownership_check()
+
                             logger.info(
                                 "api.build attempt %d kwargs=%s",
                                 i + 1,
                                 sorted(k for k in kwargs if k != "path"),
                             )
+
+                            # IMPORTANT: docker-py APIClient.build() is a generator.
+                            # The actual HTTP request is executed only when that
+                            # generator is iterated. Calling build() alone therefore
+                            # cannot catch daemon/API/transport errors. Consume the
+                            # stream inside the attempt so compatibility and transport
+                            # recovery operate on the real request.
                             response = self.client.api.build(**kwargs)
-                            docker_api_reached = True
-                            last_err = None
-                            break
+                            image_id = self._handle_build_stream_collect_id(
+                                response,
+                                on_build_output=on_build_output,
+                                cancel_check=cancel_check,
+                                lease_check=build_slot.assert_owned,
+                                ownership_check=ownership_check,
+                                timeout_seconds=timeout_seconds,
+                                stream_started_callback=_mark_stream_started,
+                            )
+
+                            if not image_id:
+                                raise ImageBuildError(
+                                    "Docker build finished but no image ID was returned by the build stream.",
+                                    details={"image": target_ref, "docker_api_reached": docker_api_reached},
+                                )
+
+                            # The build is complete. Tagging is a separate Docker
+                            # operation and must never cause the entire build to be
+                            # retried as if the build transport had failed.
+                            self._tag_image(image_id)
+                            logger.info("Docker image built and tagged: %s", target_ref)
+                            try:
+                                return self.client.images.get(target_ref)
+                            except ImageNotFound:
+                                return self.client.images.get(image_id)
+
+                        except BuildError:
+                            # A real build stream error means the builder started
+                            # processing the request. Re-running the build may
+                            # duplicate side effects, so never retry it as transport.
+                            raise
+                        except ImageBuildError:
+                            raise
                         except TypeError as exc:
                             last_err = exc
                             logger.warning(
                                 "api.build attempt %d TypeError: %s",
                                 i + 1, exc,
                             )
-                            if i + 1 < len(attempt_kwargs):
+                            if i + 1 < len(attempt_kwargs) and not stream_started:
                                 continue
                             break
-                        except Exception as exc:
+                        except docker.errors.APIError as exc:
+                            # docker-py raises APIError while consuming the build
+                            # generator for HTTP error responses. This proves that
+                            # the daemon was reached even though no build chunk may
+                            # have been produced yet.
+                            docker_api_reached = True
                             last_err = exc
                             compatibility_error = _is_build_option_compatibility_error(exc)
                             failure = classify_docker_exception(exc, stage="image_build")
 
-                            if compatibility_error and i + 1 < len(attempt_kwargs):
+                            if compatibility_error and i + 1 < len(attempt_kwargs) and not stream_started:
                                 logger.warning(
                                     "api.build attempt %d rejected optional build parameters; "
                                     "retrying compatibility profile: %s: %s",
                                     i + 1, type(exc).__name__, str(exc),
                                 )
+                                try:
+                                    response.close()
+                                except Exception:
+                                    pass
                                 continue
 
                             if (
                                 failure.reason_code in {"transient_transport", "transient_http"}
+                                and not stream_started
                                 and not refreshed_after_transport_failure
                             ):
                                 refreshed_after_transport_failure = True
@@ -850,6 +912,51 @@ class Image(Client):
                                     "refreshing client and retrying once: %s: %s",
                                     i + 1, type(exc).__name__, str(exc),
                                 )
+                                try:
+                                    response.close()
+                                except Exception:
+                                    pass
+                                self.refresh()
+                                continue
+
+                            logger.warning(
+                                "api.build attempt %d failed: %s: %s",
+                                i + 1, type(exc).__name__, str(exc),
+                            )
+                            try:
+                                response.close()
+                            except Exception:
+                                pass
+                            break
+                        except docker.errors.DockerException as exc:
+                            # Non-API DockerException failures (for example local
+                            # docker-py validation) happen before a request reaches
+                            # the daemon and must not be reported as Docker transport
+                            # failures.
+                            last_err = exc
+                            logger.warning(
+                                "api.build attempt %d failed before Docker API request: %s: %s",
+                                i + 1, type(exc).__name__, str(exc),
+                            )
+                            break
+                        except Exception as exc:
+                            last_err = exc
+                            failure = classify_docker_exception(exc, stage="image_build")
+                            if (
+                                failure.reason_code in {"transient_transport", "transient_http"}
+                                and not stream_started
+                                and not refreshed_after_transport_failure
+                            ):
+                                refreshed_after_transport_failure = True
+                                logger.warning(
+                                    "api.build attempt %d hit transient Docker transport failure; "
+                                    "refreshing client and retrying once: %s: %s",
+                                    i + 1, type(exc).__name__, str(exc),
+                                )
+                                try:
+                                    response.close()
+                                except Exception:
+                                    pass
                                 self.refresh()
                                 continue
 
@@ -859,63 +966,52 @@ class Image(Client):
                             )
                             break
 
-                    if response is None:
-                        if last_err is not None:
-                            failure = classify_docker_exception(last_err, stage="image_build")
-                            details = _build_diagnostics({
-                                "error": str(last_err),
-                                "error_type": type(last_err).__name__,
-                                "reason_code": failure.reason_code,
-                                "http_status": failure.http_status,
-                                "stage": failure.stage,
-                                "docker_runtime": docker_client_diagnostics(
-                                    self.client, include_version=True,
-                                ),
-                            })
-                            if isinstance(last_err, docker.errors.DockerException):
-                                raise DockerClientError(
-                                    "Docker could not execute the image build request.",
-                                    recoverable=failure.retryable,
-                                    details=details,
-                                ) from last_err
-                            if failure.retryable:
-                                raise DockerClientError(
-                                    "Docker could not execute the image build request.",
-                                    recoverable=True,
-                                    details=details,
-                                ) from last_err
-                            failure = classify_docker_exception(last_err, stage="image_build")
+                    if last_err is not None:
+                        failure = classify_docker_exception(last_err, stage="image_build")
+                        details = _build_diagnostics({
+                            "error": str(last_err),
+                            "error_type": type(last_err).__name__,
+                            "reason_code": failure.reason_code,
+                            "http_status": failure.http_status,
+                            "stage": failure.stage,
+                            "docker_runtime": docker_client_diagnostics(
+                                self.client, include_version=True,
+                            ),
+                        })
+
+                        # Server/API failures are different from local SDK
+                        # validation failures. Preserve the distinction so the
+                        # user sees a real image-build error instead of a false
+                        # "could not communicate with Docker" diagnosis.
+                        if isinstance(last_err, docker.errors.APIError):
+                            raise DockerClientError(
+                                "Docker rejected the image build request.",
+                                recoverable=failure.retryable,
+                                details=details,
+                            ) from last_err
+
+                        if isinstance(last_err, docker.errors.DockerException):
+                            raise ImageBuildError(
+                                "Docker image build request is invalid.",
+                                details=details,
+                            ) from last_err
+
+                        if failure.retryable:
+                            raise DockerClientError(
+                                "Docker could not execute the image build request.",
+                                recoverable=True,
+                                details=details,
+                            ) from last_err
+
                         raise ImageBuildError(
                             "Docker image build could not be started.",
-                            details={
-                                "image": target_ref,
-                                "error": str(last_err) if last_err else "unknown error",
-                                "error_type": type(last_err).__name__ if last_err else None,
-                            },
+                            details=details,
                         ) from last_err
 
-                    image_id = self._handle_build_stream_collect_id(
-                        response,
-                        on_build_output=on_build_output,
-                        cancel_check=cancel_check,
-                        lease_check=build_slot.assert_owned,
-                        ownership_check=ownership_check,
-                        timeout_seconds=timeout_seconds,
+                    raise ImageBuildError(
+                        "Docker image build could not be started.",
+                        details=_build_diagnostics({"error": "unknown build request failure"}),
                     )
-                    if not image_id:
-                        raise ImageBuildError(
-                            "Docker build finished but no image ID was returned by the build stream.",
-                            details={"image": target_ref},
-                        )
-
-                    # Preserve the exact repository and exact Deploy.version tag.
-                    self._tag_image(image_id)
-                    logger.info("Docker image built and tagged: %s", target_ref)
-                    try:
-                        return self.client.images.get(target_ref)
-                    except ImageNotFound:
-                        return self.client.images.get(image_id)
-
         except BuildError as exc:
             docker_api_reached = True
             details = _build_diagnostics({"error": str(exc), "error_type": type(exc).__name__})
