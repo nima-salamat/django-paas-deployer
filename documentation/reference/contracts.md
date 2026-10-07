@@ -113,7 +113,7 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `auth_users` | `src/auth_users/urls.py` | explicit | `api/settings/` | [app API docs](../apps/auth_users/api-reference.md) |
 | `auth_users` | `src/auth_users/urls.py` | explicit | `api/signup/` | [app API docs](../apps/auth_users/api-reference.md) |
 | `auth_users` | `src/auth_users/urls.py` | explicit | `api/validateToken/` | [app API docs](../apps/auth_users/api-reference.md) |
-| `config` | `src/config/urls.py` | explicit | `media/` | [services API docs](../apps/services/api-reference.md) |
+| `config` | `src/config/urls.py` | explicit | `api/services/service_status/` | [services API docs](../apps/services/api-reference.md) |
 | `core` | `src/core/settings_urls.py` | explicit | `settings/<str:key>/` | [app API docs](../apps/core/api-reference.md) |
 | `core` | `src/core/settings_urls.py` | explicit | `settings/` | [app API docs](../apps/core/api-reference.md) |
 | `core` | `src/core/settings_urls.py` | explicit | `settings/seed/` | [app API docs](../apps/core/api-reference.md) |
@@ -345,6 +345,8 @@ Source code is authoritative. App-level API/model references explain behavior; t
 ## Router actions
 
 | App | Source | ViewSet | Prefix | Detail | Methods | URL path | Kind |
+| `services` | `src/services/api/user_services.py` | `VolumeViewSet` |  | true | POST | attach | custom action |
+| `services` | `src/services/api/user_services.py` | `VolumeViewSet` |  | true | POST | detach | custom action |
 |---|---|---|---|---|---|---|---|
 | `docs` | `src/docs/apis.py` | `DocumentAdminViewSet` | `admin/documents` | false | `POST` | `reorder` | custom action |
 | `docs` | `src/docs/apis.py` | `DocumentAdminViewSet` | `admin/documents` | true | `POST` | `publish` | custom action |
@@ -382,6 +384,8 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `deploy` | `src/deploy/models.py` | `BaseRuntimeImageLease` | project model class | [field reference](../apps/deploy/field-reference.md#baseruntimeimagelease) |
 | `deploy` | `src/deploy/models.py` | `BaseRuntimeImage` | project model class | [field reference](../apps/deploy/field-reference.md#baseruntimeimage) |
 | `deploy` | `src/deploy/models.py` | `BuildCacheArtifact` | project model class | [field reference](../apps/deploy/field-reference.md#buildcacheartifact) |
+| `deploy` | `src/deploy/models.py` | `BuildArtifact` | project model class | [field reference](../apps/deploy/field-reference.md#buildartifact) |
+| `deploy` | `src/deploy/models.py` | `Release` | project model class | [field reference](../apps/deploy/field-reference.md#release) |
 | `deploy` | `src/deploy/models.py` | `BuildCacheQuota` | project model class | [field reference](../apps/deploy/field-reference.md#buildcachequota) |
 | `deploy` | `src/deploy/models.py` | `DeployLog` | project model class | [field reference](../apps/deploy/field-reference.md#deploylog) |
 | `deploy` | `src/deploy/models.py` | `Deploy` | project model class | [field reference](../apps/deploy/field-reference.md#deploy) |
@@ -450,6 +454,53 @@ Source code is authoritative. App-level API/model references explain behavior; t
 ## Model field inventory
 
 | App | Source | Model | Field | Django type | Documentation |
+| `agent` | `src/agent/models.py` | `Agent` | `revoked_at` | `DateTimeField` | [field reference](../apps/agent/field-reference.md#agent) |
+| `agent` | `src/agent/models.py` | `AgentAuditEvent` | `certainty` | `CharField` | [field reference](../apps/agent/field-reference.md#agentauditevent) |
+| `agent` | `src/agent/models.py` | `AgentAuditEvent` | `error_code` | `CharField` | [field reference](../apps/agent/field-reference.md#agentauditevent) |
+| `agent` | `src/agent/models.py` | `AgentAuditEvent` | `metadata` | `JSONField` | [field reference](../apps/agent/field-reference.md#agentauditevent) |
+| `agent` | `src/agent/models.py` | `AgentAuditEvent` | `occurred_at` | `DateTimeField` | [field reference](../apps/agent/field-reference.md#agentauditevent) |
+| `agent` | `src/agent/models.py` | `AgentAuditEvent` | `resource_effect` | `CharField` | [field reference](../apps/agent/field-reference.md#agentauditevent) |
+| `agent` | `src/agent/models.py` | `AgentAuditEvent` | `resource_id` | `CharField` | [field reference](../apps/agent/field-reference.md#agentauditevent) |
+| `agent` | `src/agent/models.py` | `AgentAuditEvent` | `resource_type` | `CharField` | [field reference](../apps/agent/field-reference.md#agentauditevent) |
+| `agent` | `src/agent/models.py` | `AgentAuditEvent` | `retryability` | `CharField` | [field reference](../apps/agent/field-reference.md#agentauditevent) |
+| `agent` | `src/agent/models.py` | `AgentAuditEvent` | `success` | `BooleanField` | [field reference](../apps/agent/field-reference.md#agentauditevent) |
+| `agent` | `src/agent/models.py` | `AgentCredential` | `last_used_ip` | `GenericIPAddressField` | [field reference](../apps/agent/field-reference.md#agentcredential) |
+| `agent` | `src/agent/models.py` | `AgentCredential` | `revoked_at` | `DateTimeField` | [field reference](../apps/agent/field-reference.md#agentcredential) |
+| `agent` | `src/agent/models.py` | `AgentEnrollmentToken` | `issued_from_ip` | `GenericIPAddressField` | [field reference](../apps/agent/field-reference.md#agentenrollmenttoken) |
+| `agent` | `src/agent/models.py` | `AgentEnrollmentToken` | `token_hash` | `CharField` | [field reference](../apps/agent/field-reference.md#agentenrollmenttoken) |
+| `agent` | `src/agent/models.py` | `AgentEnrollmentToken` | `used_at` | `DateTimeField` | [field reference](../apps/agent/field-reference.md#agentenrollmenttoken) |
+| `agent` | `src/agent/models.py` | `AgentIdempotencyRecord` | `expires_at` | `DateTimeField` | [field reference](../apps/agent/field-reference.md#agentidempotencyrecord) |
+| `agent` | `src/agent/models.py` | `AgentIdempotencyRecord` | `method` | `CharField` | [field reference](../apps/agent/field-reference.md#agentidempotencyrecord) |
+| `agent` | `src/agent/models.py` | `AgentIdempotencyRecord` | `path` | `CharField` | [field reference](../apps/agent/field-reference.md#agentidempotencyrecord) |
+| `agent` | `src/agent/models.py` | `AgentIdempotencyRecord` | `request_hash` | `CharField` | [field reference](../apps/agent/field-reference.md#agentidempotencyrecord) |
+| `agent` | `src/agent/models.py` | `AgentIdempotencyRecord` | `response_body` | `JSONField` | [field reference](../apps/agent/field-reference.md#agentidempotencyrecord) |
+| `agent` | `src/agent/models.py` | `AgentIdempotencyRecord` | `status_code` | `PositiveSmallIntegerField` | [field reference](../apps/agent/field-reference.md#agentidempotencyrecord) |
+| `deploy` | `src/deploy/models.py` | `BuildArtifact` | `base_image_digests` | `JSONField` | [field reference](../apps/deploy/field-reference.md#buildartifact) |
+| `deploy` | `src/deploy/models.py` | `BuildArtifact` | `build_context_identity` | `CharField` | [field reference](../apps/deploy/field-reference.md#buildartifact) |
+| `deploy` | `src/deploy/models.py` | `BuildArtifact` | `build_definition_digest` | `CharField` | [field reference](../apps/deploy/field-reference.md#buildartifact) |
+| `deploy` | `src/deploy/models.py` | `BuildArtifact` | `builder_backend` | `CharField` | [field reference](../apps/deploy/field-reference.md#buildartifact) |
+| `deploy` | `src/deploy/models.py` | `BuildArtifact` | `created_by` | `ForeignKey` | [field reference](../apps/deploy/field-reference.md#buildartifact) |
+| `deploy` | `src/deploy/models.py` | `BuildArtifact` | `digest` | `CharField` | [field reference](../apps/deploy/field-reference.md#buildartifact) |
+| `deploy` | `src/deploy/models.py` | `BuildArtifact` | `image_ref` | `CharField` | [field reference](../apps/deploy/field-reference.md#buildartifact) |
+| `deploy` | `src/deploy/models.py` | `BuildArtifact` | `platform_architecture` | `CharField` | [field reference](../apps/deploy/field-reference.md#buildartifact) |
+| `deploy` | `src/deploy/models.py` | `BuildArtifact` | `provenance` | `JSONField` | [field reference](../apps/deploy/field-reference.md#buildartifact) |
+| `deploy` | `src/deploy/models.py` | `BuildArtifact` | `source_digest` | `CharField` | [field reference](../apps/deploy/field-reference.md#buildartifact) |
+| `deploy` | `src/deploy/models.py` | `Deploy` | `artifact` | `ForeignKey` | [field reference](../apps/deploy/field-reference.md#deploy) |
+| `deploy` | `src/deploy/models.py` | `Deploy` | `release_reference` | `ForeignKey` | [field reference](../apps/deploy/field-reference.md#deploy) |
+| `deploy` | `src/deploy/models.py` | `Release` | `artifact` | `ForeignKey` | [field reference](../apps/deploy/field-reference.md#release) |
+| `deploy` | `src/deploy/models.py` | `Release` | `created_by` | `ForeignKey` | [field reference](../apps/deploy/field-reference.md#release) |
+| `deploy` | `src/deploy/models.py` | `Release` | `health_policy` | `JSONField` | [field reference](../apps/deploy/field-reference.md#release) |
+| `deploy` | `src/deploy/models.py` | `Release` | `identity_fingerprint` | `CharField` | [field reference](../apps/deploy/field-reference.md#release) |
+| `deploy` | `src/deploy/models.py` | `Release` | `previous_release` | `ForeignKey` | [field reference](../apps/deploy/field-reference.md#release) |
+| `deploy` | `src/deploy/models.py` | `Release` | `promoted_at` | `DateTimeField` | [field reference](../apps/deploy/field-reference.md#release) |
+| `deploy` | `src/deploy/models.py` | `Release` | `provenance` | `JSONField` | [field reference](../apps/deploy/field-reference.md#release) |
+| `deploy` | `src/deploy/models.py` | `Release` | `release_command` | `JSONField` | [field reference](../apps/deploy/field-reference.md#release) |
+| `deploy` | `src/deploy/models.py` | `Release` | `retired_at` | `DateTimeField` | [field reference](../apps/deploy/field-reference.md#release) |
+| `deploy` | `src/deploy/models.py` | `Release` | `revision` | `ForeignKey` | [field reference](../apps/deploy/field-reference.md#release) |
+| `deploy` | `src/deploy/models.py` | `Release` | `rollout_policy` | `JSONField` | [field reference](../apps/deploy/field-reference.md#release) |
+| `deploy` | `src/deploy/models.py` | `Release` | `runtime_spec` | `JSONField` | [field reference](../apps/deploy/field-reference.md#release) |
+| `deploy` | `src/deploy/models.py` | `Release` | `service` | `ForeignKey` | [field reference](../apps/deploy/field-reference.md#release) |
+| `deploy` | `src/deploy/models.py` | `Release` | `status` | `CharField` | [field reference](../apps/deploy/field-reference.md#release) |
 |---|---|---|---|---|---|
 | `agent` | `src/agent/models.py` | `AgentAuditEvent` | `action` | `CharField` | [field reference](../apps/agent/field-reference.md#agentauditevent) |
 | `agent` | `src/agent/models.py` | `AgentAuditEvent` | `agent` | `ForeignKey` | [field reference](../apps/agent/field-reference.md#agentauditevent) |
