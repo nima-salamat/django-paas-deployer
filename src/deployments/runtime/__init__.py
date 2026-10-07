@@ -1,3 +1,10 @@
+"""Runtime contracts and adapters for deployment execution.
+
+The runtime package is intentionally dependency-light. Domain and planning
+code should depend on these value objects and protocols rather than on a
+Docker SDK client or a concrete Swarm implementation.
+"""
+
 """Runtime boundary package."""
 
 from .artifacts import ArtifactReference, ArtifactRegistry, SwarmArtifactRegistry
