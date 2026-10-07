@@ -154,7 +154,4 @@ The native Swarm lifecycle is the primary execution path, but the repository
 still contains the legacy non-Swarm facade and concrete scheduler compatibility
 code. They are not alternate sources of Service authority.
 
-Release command execution, canary/blue-green traffic splitting and a generic
-artifact-registry backend remain explicitly unsupported until runtime-neutral
-implementation and tests exist. Unsupported requests must be blocked rather
-than simulated.
+Generic release-command execution outside the supported runtime-entrypoint path, canary/blue-green traffic splitting, and remote-only artifact-registry pulls remain explicitly unsupported. The native Laravel migration is represented as a `ReleaseSpec` and runs in the candidate runtime entrypoint; unsupported generic backends are blocked rather than simulated.
