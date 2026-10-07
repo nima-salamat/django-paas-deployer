@@ -151,25 +151,26 @@ networks:
         self.assertIn("class CatalogPublication(models.Model):", source)
         self.assertIn('catalog_id = models.CharField(max_length=64, unique=True)', source)
         self.assertIn("featured_override = models.BooleanField(", source)
-    def test_wordpress_public_service_uses_port_80_silent_healthcheck_and_https_config(self):
+    def test_wordpress_public_service_uses_ready_marker_healthcheck_and_https_config(self):
         definition = ApplicationCatalog.get("wordpress")
         resolved = resolve_variant(definition, "default", {"domain": "app.example.com"})
         wordpress = next(item for item in resolved["services"] if item["key"] == "wordpress")
         self.assertEqual(wordpress["port"], 80)
         self.assertTrue(wordpress["public"])
         healthcheck = wordpress["healthcheck"]
-        self.assertEqual(healthcheck["test"][0], "CMD")
-        self.assertEqual(healthcheck["test"][1], "php")
-        self.assertIn("fsockopen", healthcheck["test"][3])
+        self.assertEqual(healthcheck["test"][0], "CMD-SHELL")
+        self.assertIn("passdeployer-wordpress-ready", healthcheck["test"][1])
+        self.assertIn("wp core is-installed", healthcheck["test"][1])
         self.assertEqual(healthcheck["interval"], "5s")
-        self.assertEqual(healthcheck["timeout"], "3s")
-        self.assertEqual(healthcheck["start_period"], "10s")
-        self.assertEqual(healthcheck["retries"], 6)
+        self.assertEqual(healthcheck["timeout"], "5s")
+        self.assertEqual(healthcheck["start_period"], "15s")
+        self.assertEqual(healthcheck["retries"], 24)
         self.assertEqual(
             wordpress["environment"]["WORDPRESS_CONFIG_EXTRA"],
             "define( 'WP_HOME', 'https://app.example.com' );\n"
             "define( 'WP_SITEURL', 'https://app.example.com' );\n"
             "define( 'FORCE_SSL_ADMIN', true );\n"
+            "if ( getenv( 'WORDPRESS_MANAGED_CRON' ) === '1' ) { define( 'DISABLE_WP_CRON', true ); }"
         )
         self.assertIn("FROM wordpress:7.1.2-php8.3-apache", wordpress["dockerfile"])
         self.assertIn("ARG WP_CLI_VERSION=2.12.0", wordpress["dockerfile"])
@@ -178,6 +179,10 @@ networks:
         self.assertIn("wp-cli-${WP_CLI_VERSION}.phar", wordpress["dockerfile"])
         self.assertIn("sha512sum -c -", wordpress["dockerfile"])
         self.assertFalse(wordpress.get("command"))
+        self.assertIn("WORDPRESS_ADMIN_USER", wordpress["environment"])
+        self.assertIn("WORDPRESS_ADMIN_PASSWORD", wordpress["environment"])
+        self.assertIn("WORDPRESS_ADMIN_EMAIL", wordpress["environment"])
+        self.assertNotIn("wp_cli_version", {field["id"] for field in resolved["fields"]})
 
     def test_inline_dockerfile_preserves_native_build_variables(self):
         resolved = compose_to_resolved(
