@@ -10,6 +10,11 @@ from core.base.BaseModel import BaseModel
 from django.conf import settings
 
 from core.global_settings.config import SERVICE_STATUS_CHOICES, VOLUME_MODE_CHOICES
+from deployments.common.docker_identity import (
+    canonical_network_name,
+    canonical_service_name,
+    canonical_volume_name,
+)
 
 
 class PrivateNetwork(BaseModel):
@@ -25,7 +30,7 @@ class PrivateNetwork(BaseModel):
         return self.name
 
     def get_docker_network_name(self):
-        return f"net-{self.id.hex[:8]}-{self.name}"
+        return canonical_network_name(self.id, self.name)
 
 
 class Service(BaseModel):
@@ -161,7 +166,7 @@ class Service(BaseModel):
         super().save(*args, **kwargs)
 
     def get_docker_service_name(self):
-        return f"app-{self.id.hex[:8]}-{self.name.lower()}"
+        return canonical_service_name(self.id, self.name)
 
     @property
     def get_service_name(self):
@@ -957,7 +962,7 @@ class Volume(BaseModel):
         return str(self.service_id) in atts
 
     def get_docker_volume_name(self):
-        return f"vol-{self.id.hex[:8]}-{self.name}"
+        return canonical_volume_name(self.id, self.name)
 
     def __str__(self):
         return f"Volume: {self.name} ({self.size_mb} MB)"
