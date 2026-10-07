@@ -15,6 +15,7 @@ from services.ports import sync_endpoint_reservation
 from services.models import (
     Service,
     ServiceProcess,
+    MAX_SERVICE_PROCESS_REPLICAS,
     ServiceRevision,
     ServiceEnvironmentVariable,
     ServiceSecret,
@@ -89,8 +90,10 @@ def _normalize_process_specs(service: Service, config: dict[str, Any]) -> list[d
             if not name:
                 continue
             replicas = int(item.get("replicas") or 1)
-            if replicas != 1:
-                raise ValueError("PassDeployer currently supports exactly one replica per process.")
+            if not 1 <= replicas <= MAX_SERVICE_PROCESS_REPLICAS:
+                raise ValueError(
+                    f"Process replicas must be between 1 and {MAX_SERVICE_PROCESS_REPLICAS}."
+                )
             normalized.append(
                 {
                     "name": name[:64],
@@ -158,6 +161,96 @@ def _normalize_process_specs(service: Service, config: dict[str, Any]) -> list[d
             )
     return specs
 
+
+def scale_service_process(service: Service, process_name: str, replicas: int, *, created_by=None):
+    """Scale one process through a new immutable runtime revision."""
+    replicas = int(replicas)
+    if not 1 <= replicas <= MAX_SERVICE_PROCESS_REPLICAS:
+        raise ValueError(
+            f"Process replicas must be between 1 and {MAX_SERVICE_PROCESS_REPLICAS}."
+        )
+    process_name = str(process_name or "web").strip().lower()
+
+    with transaction.atomic():
+        locked = Service.objects.select_for_update().get(pk=service.pk)
+        active = get_active_revision(locked, for_update=True)
+        if active is None:
+            raise ValueError("The service has no active revision to scale.")
+        base_revision_id = active.pk
+        process_specs = deepcopy(active.process_snapshot or [])
+        target = next(
+            (item for item in process_specs if str(item.get("name") or "").strip().lower() == process_name),
+            None,
+        )
+        if target is None:
+            raise ValueError(f"Process {process_name!r} does not exist on this service.")
+        current = int(target.get("replicas") or 1)
+        if current == replicas:
+            return active, current, replicas
+        target["replicas"] = replicas
+
+        latest = ServiceRevision.objects.filter(service=locked).order_by("-revision_number").first()
+        revision_number = (latest.revision_number if latest else 0) + 1
+        graph = deepcopy(active.graph_snapshot or {})
+        graph["processes"] = deepcopy(process_specs)
+        revision = ServiceRevision.objects.create(
+            service=locked,
+            revision_number=revision_number,
+            state=ServiceRevision.State.CREATED,
+            source_deploy=active.source_deploy,
+            artifact_file=active.artifact_file.name if active.artifact_file else None,
+            created_by=created_by,
+            config_snapshot=deepcopy(active.config_snapshot or {}),
+            process_snapshot=process_specs,
+            secret_keys=deepcopy(active.secret_keys or []),
+            secret_refs=deepcopy(active.secret_refs or []),
+            source_snapshot=deepcopy(active.source_snapshot or {}),
+            build_snapshot=deepcopy(active.build_snapshot or {}),
+            runtime_snapshot=deepcopy(active.runtime_snapshot or {}),
+            environment_snapshot=deepcopy(active.environment_snapshot or {}),
+            endpoint_snapshot=deepcopy(active.endpoint_snapshot or []),
+            volume_snapshot=deepcopy(active.volume_snapshot or []),
+            network_snapshot=deepcopy(active.network_snapshot or []),
+            graph_snapshot=graph,
+        )
+
+    docker_name = (
+        locked.get_docker_service_name()
+        if process_name == "web"
+        else f"{locked.get_docker_service_name()}-{process_name}"
+    )
+    try:
+        from deployments.core.swarm import SwarmRuntime, swarm_enabled
+        if not swarm_enabled():
+            raise ValueError("Runtime scaling requires the Docker Swarm backend.")
+        SwarmRuntime().scale_service(docker_name, replicas)
+    except Exception:
+        ServiceRevision.objects.filter(pk=revision.pk, state=ServiceRevision.State.CREATED).update(
+            state=ServiceRevision.State.FAILED, updated_at=timezone.now()
+        )
+        raise
+
+    try:
+        with transaction.atomic():
+            latest_service = Service.objects.select_for_update().get(pk=service.pk)
+            current_active = get_active_revision(latest_service, for_update=True)
+            if current_active is None or str(current_active.pk) != str(base_revision_id):
+                ServiceRevision.objects.filter(pk=revision.pk, state=ServiceRevision.State.CREATED).update(
+                    state=ServiceRevision.State.FAILED, updated_at=timezone.now()
+                )
+                try:
+                    SwarmRuntime().scale_service(docker_name, current)
+                except Exception:
+                    pass
+                raise ValueError("The service changed while scaling was in progress; the runtime change was reverted.")
+            _sync_processes(latest_service, process_specs)
+            activated = activate_revision_locked(latest_service, revision.pk)
+            return activated, current, replicas
+    except Exception:
+        ServiceRevision.objects.filter(pk=revision.pk, state=ServiceRevision.State.CREATED).update(
+            state=ServiceRevision.State.FAILED, updated_at=timezone.now()
+        )
+        raise
 
 def _sync_processes(service: Service, specs: list[dict[str, Any]]) -> None:
     for spec in specs:
