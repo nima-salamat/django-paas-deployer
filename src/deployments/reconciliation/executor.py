@@ -19,6 +19,7 @@ class ReconciliationExecutionContext:
     lifecycle_generation: int | str
     active_revision_id: str | None
     owns_execution: Callable[[], bool]
+    cancellation_requested: Callable[[], bool] = lambda: False
     current_generation: Callable[[], int | str] | None = None
 
     def assert_current(self) -> None:
@@ -107,9 +108,24 @@ class ReconciliationExecutor:
             result = runtime.apply(
                 plan,
                 operation_key=operation_key,
+                cancel_check=context.cancellation_requested,
             )
         else:
             raise ValueError(f"Unsupported reconciliation action: {action.value}")
+
+        if result.success and result.handle is not None and action in {
+            ReconciliationAction.CREATE,
+            ReconciliationAction.UPDATE,
+            ReconciliationAction.REPAIR,
+        }:
+            context.assert_current()
+            ready = runtime.wait_ready(
+                result.handle,
+                timeout=float(desired.metadata.get("readiness_timeout", 60.0) or 60.0),
+                cancel_check=context.cancellation_requested,
+            )
+            context.assert_current()
+            return ready
 
         context.assert_current()
         return result
