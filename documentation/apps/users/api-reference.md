@@ -64,3 +64,109 @@ flowchart LR
 ## Source of truth
 
 The URL declaration, handler implementation and serializer validation are authoritative. This reference deliberately does not invent requiredness when the code makes it conditional on login settings, ownership, resource state or another field.
+
+## Personal account endpoints
+
+### GET `/user/`
+
+No body. Returns the authenticated User representation.
+
+### PUT `/user/`
+
+All request fields are optional individually, but a non-empty request must use the supported fields below. `email` and `phone_number` are deliberately rejected here because contact changes require OTP verification.
+
+| Field | Required | Notes |
+|---|---:|---|
+| `username` | No | Max 150 characters; updated directly. |
+| `birthdate` | No | Date; `null` is accepted by the serializer. |
+| `theme` | No | Must match `User.ThemeChoices`. |
+| `color` | No | Must match configured color choices. |
+| `email` | No | Rejected when supplied; use contact-change flow. |
+| `phone_number` | No | Rejected when supplied; use contact-change flow. |
+
+### POST `/user/contact-change/`
+
+Exactly one of `email` or `phone_number` is required.
+
+The existing contact is not changed until the destination OTP is successfully verified. An earlier pending contact change is cancelled before a new one is created.
+
+### POST `/user/contact-change/{change_id}/confirm/`
+
+| Field | Required |
+|---|---:|
+| `code` | Yes |
+
+`change_id` is a UUID path parameter. Successful confirmation updates the contact, marks it verified and invalidates all sessions.
+
+## Password endpoints
+
+### POST `/password/set/`
+
+| Field | Required | Contract |
+|---|---:|---|
+| `new_password` | Yes | Minimum 8 characters and Django password validation. |
+| `new_confirm_password` | Yes | Must equal `new_password`. |
+
+The operation fails when the account already has a usable password.
+
+### POST `/password/change/`
+
+Requires all three fields:
+
+`current_password`, `new_password`, `new_confirm_password`.
+
+The current password must validate; the new password is checked against Django password validation and confirmation.
+
+### DELETE `/password/remove/`
+
+| Field | Required |
+|---|---:|
+| `current_password` | Yes |
+
+The operation requires a valid current password and an existing usable password.
+
+## Profile endpoints
+
+### POST `/profile/set/`
+
+Multipart/form-data:
+
+| Field | Required |
+|---|---:|
+| `image` | Yes |
+| `order` | Yes |
+
+The Profile model limits each user to five images and validates image size/dimensions.
+
+### POST `/profile/order/`
+
+JSON body:
+
+`order` is required and must be a non-empty object whose keys are numeric Profile ids and whose values are integers.
+
+### POST `/profile/delete/`
+
+Body:
+
+`id` is required and must identify a Profile belonging to the authenticated user.
+
+## Administrative route aliases declared by `src/users/api_urls.py`
+
+These are additional HTTP mounts that must not be confused with the shorter routes in `users.urls`:
+
+| Method | Route |
+|---|---|
+| POST | `/api/users/user/contact-change/` |
+| POST | `/api/users/user/contact-change/{change_id}/confirm/` |
+| GET | `/api/users/password-status/` |
+| POST | `/api/users/set-password/` |
+| POST | `/api/users/change-password/` |
+| DELETE | `/api/users/remove-password/` |
+| GET/POST | `/api/users/admin/tables/` |
+| GET | `/api/users/admin/tables/{model_key}/` |
+| GET | `/api/users/admin/tables/{model_key}/fk-search/` |
+| GET/PATCH/DELETE | `/api/users/admin/tables/{model_key}/{pk}/` |
+| GET/POST | `/api/users/admin/users/{pk}/profiles/` |
+| POST | `/api/users/admin/users/{pk}/profiles/reorder/` |
+| PATCH/DELETE | `/api/users/admin/users/{pk}/profiles/{profile_id}/` |
+
