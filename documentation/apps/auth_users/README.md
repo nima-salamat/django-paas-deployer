@@ -55,3 +55,7 @@ Wagtail exposes login policy, invite-link metadata, invite usage and login audit
 
 - [API reference](api.md)
 - [Complete model field reference](field-reference.md)
+
+## Detailed contracts
+
+- [Detailed API reference](api-reference.md)
