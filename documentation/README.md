@@ -13,6 +13,7 @@ This directory is the canonical engineering documentation for the repository. Th
 
 Every first-party Django application has a canonical architectural entry point under [apps/](apps/):
 
+- [agent](apps/agent/README.md)
 - [users](apps/users/README.md)
 - [auth_users](apps/auth_users/README.md)
 - [services](apps/services/README.md)
