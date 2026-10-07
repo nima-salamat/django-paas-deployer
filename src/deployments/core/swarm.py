@@ -1904,6 +1904,8 @@ class SwarmRuntime:
         """Restart every managed process service for one application in order."""
         states: dict[str, SwarmServiceState] = {}
         for name in self.service_names_for_service(service_id):
+            current = self.inspect_service(name)
+            target_replicas = max(1, int(current.replicas_desired or 1)) if current is not None else 1
             self.stop(name)
             deadline = time.monotonic() + float(timeout)
             while time.monotonic() < deadline:
@@ -1912,7 +1914,7 @@ class SwarmRuntime:
                     break
                 time.sleep(0.5)
             service = self.client.services.get(_validate_service_name(name))
-            service.scale(1)
+            service.scale(target_replicas)
             states[name] = self.wait_ready(name, timeout=timeout)
         return states
 
