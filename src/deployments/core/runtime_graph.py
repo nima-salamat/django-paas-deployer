@@ -109,10 +109,10 @@ class ServiceRuntimeGraph:
                 runtime_environment[str(key)] = value
 
         for process in process_rows:
-            if process.replicas != 1:
+            if not 1 <= process.replicas <= 8:
                 raise ValueError(
                     f"Unsupported replica count {process.replicas!r} for process {process.name!r}; "
-                    "PassDeployer currently supports exactly one replica."
+                    "PassDeployer supports between 1 and 8 replicas per process."
                 )
 
         return cls(
