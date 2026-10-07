@@ -24,6 +24,8 @@ class DeploymentPlan:
     runtime_selection: RuntimeSelection
     process_graph: ServiceRuntimeGraph
     image_ref: str
+    artifact_digest: str = ""
+    release_id: str | None = None
     strategy_kind: str = "application"
     environment: Mapping[str, str] = field(default_factory=dict)
     secret_references: tuple[str, ...] = ()
@@ -56,6 +58,8 @@ class DeploymentPlan:
             "strategy": self.strategy_kind,
             "cluster": self.runtime_selection.cluster,
             "image_ref": self.image_ref,
+            "artifact_digest": self.artifact_digest,
+            "release_id": self.release_id,
             "environment": {"keys": sorted(self.environment)},
             "networks": [network.name for network in self.networks],
             "volumes": [volume.target for volume in self.volumes],
