@@ -327,10 +327,32 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `users` | `src/users/urls.py` | explicit | `profile/set/` | [app API docs](../apps/users/api-reference.md) |
 | `users` | `src/users/urls.py` | explicit | `user/` | [app API docs](../apps/users/api-reference.md) |
 
+## Router registrations
+
+| App | Source | Kind | Prefix | ViewSet | Documentation |
+|---|---|---|---|---|---|
+| `docs` | `src/docs/urls.py` | router | `admin/documents` | `DocumentAdminViewSet` | [docs API](../apps/docs/api-reference.md) |
+| `docs` | `src/docs/urls.py` | router | `admin/categories` | `CategoryAdminViewSet` | [docs API](../apps/docs/api-reference.md) |
+| `services` | `src/services/urls.py` | router | `service` | `ServiceViewSet` | [services API](../apps/services/api-reference.md) |
+| `services` | `src/services/urls.py` | router | `networks` | `PrivateNetworkViewSet` | [services API](../apps/services/api-reference.md) |
+| `services` | `src/services/urls.py` | router | `volume` | `VolumeViewSet` | [services API](../apps/services/api-reference.md) |
+| `services` | `src/services/urls.py` | router | `admin/services` | `AdminServiceViewSet` | [services API](../apps/services/api-reference.md) |
+| `services` | `src/services/urls.py` | router | `admin/networks` | `AdminPrivateNetworkViewSet` | [services API](../apps/services/api-reference.md) |
+| `services` | `src/services/urls.py` | router | `admin/volumes` | `AdminVolumeViewSet` | [services API](../apps/services/api-reference.md) |
+| `services` | `src/services/volume_api_urls.py` | router | `<empty-prefix>` | `VolumeViewSet` | [services API](../apps/services/api-reference.md) |
+| `services` | `src/services/network_api_urls.py` | router | `<empty-prefix>` | `PrivateNetworkViewSet` | [services API](../apps/services/api-reference.md) |
+
 ## Router actions
 
 | App | Source | ViewSet | Prefix | Detail | Methods | URL path | Kind |
 |---|---|---|---|---|---|---|---|
+| `docs` | `src/docs/apis.py` | `DocumentAdminViewSet` | `admin/documents` | false | `POST` | `reorder` | custom action |
+| `docs` | `src/docs/apis.py` | `DocumentAdminViewSet` | `admin/documents` | true | `POST` | `publish` | custom action |
+| `docs` | `src/docs/apis.py` | `DocumentAdminViewSet` | `admin/documents` | true | `POST` | `unpublish` | custom action |
+| `docs` | `src/docs/apis.py` | `CategoryAdminViewSet` | `admin/categories` | false | `POST` | `reorder` | custom action |
+| `docs` | `src/docs/apis.py` | `CategoryAdminViewSet` | `admin/categories` | false | `GET` | `tree` | custom action |
+| `services` | `src/services/api/user_services.py` | `VolumeViewSet` | `volume` | true | `POST` | `detach` | custom action |
+| `services` | `src/services/api/user_services.py` | `VolumeViewSet` | `volume` | true | `POST` | `attach` | custom action |
 
 ## Model inventory
 
