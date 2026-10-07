@@ -128,3 +128,36 @@ Configuration changes are declarative. They are not runtime mutation by themselv
 ## Authorization invariants
 
 Owner access is allowed when the caller owns the Service. Shared access is action-specific (`can_view`, `can_change_config`, `can_start`, `can_stop`, `can_restart`, `can_rebuild`, `can_shell`, `can_view_logs`, `can_view_db_credentials`, and similar). Staff/superuser privileges do not automatically bypass tenant share semantics in all operations.
+
+## Router-generated endpoints
+
+The top-level Services URL module also registers DRF routers.
+
+### Tenant router
+
+| Method | Endpoint | Required / meaning |
+|---|---|---|
+| GET | `/services/service/` | Lists caller-owned Services; no body. |
+| POST | `/services/service/` | Service create payload. Ownership comes from the authenticated user. |
+| GET | `/services/service/{pk}/` | Path `pk` required. |
+| PUT/PATCH | `/services/service/{pk}/` | Path `pk` required; PATCH is partial. |
+| DELETE | `/services/service/{pk}/` | Path `pk` required; deletion follows Service lifecycle cleanup. |
+| GET/POST | `/services/networks/` | Tenant-owned PrivateNetwork list/create. |
+| GET/PUT/PATCH/DELETE | `/services/networks/{pk}/` | Tenant-owned network detail; `pk` required. |
+| GET/POST | `/services/volume/` | Tenant-owned Volume list/create. |
+| GET/PUT/PATCH/DELETE | `/services/volume/{pk}/` | Tenant-owned volume detail; `pk` required. |
+
+### Admin router
+
+| Method | Endpoint | Permission |
+|---|---|---|
+| GET/POST | `/services/admin/services/` | `services.view` for read, `services.manage` for create. |
+| GET/PUT/PATCH/DELETE | `/services/admin/services/{pk}/` | `services.view` for read, `services.manage` for mutation. |
+| GET/POST | `/services/admin/networks/` | `services.view` / `services.manage`. |
+| GET/PUT/PATCH/DELETE | `/services/admin/networks/{pk}/` | `services.view` / `services.manage`. |
+| GET/POST | `/services/admin/volumes/` | `services.view` / `services.manage`. |
+| GET/PUT/PATCH/DELETE | `/services/admin/volumes/{pk}/` | `services.view` / `services.manage`. |
+
+### External aliases
+
+`src/config/urls.py` also mounts the network and volume routers at `/api/networks/` and `/api/volumes/`. They expose the corresponding tenant-owned CRUD surfaces.
