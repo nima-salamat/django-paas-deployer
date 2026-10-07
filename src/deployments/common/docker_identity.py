@@ -187,6 +187,29 @@ def canonical_volume_name(volume_id: Any, volume_name: Any) -> str:
     )
 
 
+def canonical_runtime_process_service_name(service_name: Any, process_name: Any) -> str:
+    """Canonical Swarm service identity for a non-web process."""
+    base = canonical_swarm_service_name(service_name)
+    process = _raw(process_name).strip().lower()
+    if not process:
+        raise DeploymentSecurityError(
+            "Process name is empty.",
+            stage="identity_validation",
+            code="DOCKER_PROCESS_NAME_EMPTY",
+            user_message="The deployment generated an empty process name.",
+        )
+    process = validate_docker_component(
+        process,
+        field="process_name",
+        max_length=32,
+    )
+    return validate_docker_component(
+        f"{base}-{process}",
+        field="swarm_process_service_name",
+        max_length=63,
+    )
+
+
 def canonical_process_name(
     service_name: Any,
     process_name: Any,
@@ -275,7 +298,7 @@ def canonical_remote_image_ref(
                 details={"repository": namespace_repo},
             )
         repo = namespace_repo
-    return canonical_image_ref(repo, tag)
+    return f"{repo}:{canonical_image_tag(tag)}"
 
 
 def candidate_image_refs(service_id: Any, service_name: Any, tag: Any) -> tuple[str, ...]:
@@ -296,6 +319,7 @@ __all__ = [
     "canonical_network_name",
     "canonical_volume_name",
     "canonical_process_name",
+    "canonical_runtime_process_service_name",
     "canonical_swarm_service_name",
     "canonical_remote_image_ref",
     "candidate_image_refs",
