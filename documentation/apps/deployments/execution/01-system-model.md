@@ -278,7 +278,7 @@ It is deliberately outside the ServiceRevision model because it is shared infras
 
 Swarm Service is the long-lived runtime resource; Task is an individual scheduled instance.
 
-The current runtime supports one running replica per enabled process.
+The current runtime supports the platform-defined replica count per enabled process, up to the enforced Swarm ceiling of 8; stopped services are represented as desired state and runtime scale-to-zero.
 
 Runtime labels carry deployment/revision identity used by activation recovery and reconciliation.
 
