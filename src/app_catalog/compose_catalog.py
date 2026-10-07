@@ -365,7 +365,7 @@ def compose_to_resolved(*, document: dict[str, Any], metadata: dict[str, Any], c
             else:
                 role = "internal"
 
-        raw_replicas = pd_meta.get("replicas", 1)
+        raw_replicas = raw.get("replicas", pd_meta.get("replicas", 1))
         try:
             replicas = int(_transform(str(raw_replicas), render_context, aliases, secrets))
         except (TypeError, ValueError) as exc:
