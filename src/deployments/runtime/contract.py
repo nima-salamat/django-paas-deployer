@@ -96,12 +96,12 @@ class RuntimeContract(Protocol):
         ...
 
     def stop(
-        self, handle: RuntimeHandle, *, operation_key: str
+        self, handle: RuntimeHandle, *, operation_key: str, cancel_check: Callable[[], bool] | None = None
     ) -> RuntimeOperationResult:
         ...
 
     def remove(
-        self, handle: RuntimeHandle, *, operation_key: str
+        self, handle: RuntimeHandle, *, operation_key: str, cancel_check: Callable[[], bool] | None = None
     ) -> RuntimeOperationResult:
         ...
 
