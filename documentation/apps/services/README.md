@@ -26,6 +26,18 @@ Docker/Swarm resource creation is deployments. Deploy history/base-image registr
 
 ## Authority chain
 
+```mermaid
+flowchart LR
+    Intent[Service desired state] --> Rev[Immutable ServiceRevision]
+    Rev --> Dep[Deploy execution record]
+    Dep --> Engine[Deployments engine]
+    Engine --> Runtime[Docker / Swarm]
+    Runtime --> Observe[Runtime observation]
+    Observe --> Recon[Reconciliation]
+    Recon --> Intent
+```
+
+
 ~~~text
 Service desired state
  -> ServiceRevision (immutable)
