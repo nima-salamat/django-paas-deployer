@@ -127,8 +127,12 @@ class FakeRuntime:
             runtime_name=str(getattr(identity, "runtime_name", "") or ""),
         )
 
-    def apply(self, plan: Any, *, operation_key: str) -> RuntimeOperationResult:
+    def apply(self, plan: Any, *, operation_key: str, cancel_check: Callable[[], bool] | None = None) -> RuntimeOperationResult:
         self._ensure_usable(plan)
+        if cancel_check is not None and cancel_check():
+            raise RuntimeOperationError(
+                "Runtime apply was cancelled.", code="runtime_cancelled", category="cancellation"
+            )
         if operation_key in self._operations:
             return replace(self._operations[operation_key], idempotent=True, changed=False)
 
