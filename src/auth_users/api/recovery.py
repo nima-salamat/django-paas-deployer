@@ -8,6 +8,7 @@ from django.utils.translation import gettext as _
 from django.db.models import Q
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+from core.throttling import AuthenticationAccountRateThrottle, AuthenticationIPRateThrottle
 
 from users.serializers import CreateUserSerializer
 from ..models import LoginSettings, AuthCode, InviteLink, InviteUsage, LoginLog
@@ -45,6 +46,10 @@ def ok(msg, data=None, http_status=status.HTTP_200_OK):
 class RecoveryRequestAPIView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
+
+    throttle_classes = [AuthenticationIPRateThrottle, AuthenticationAccountRateThrottle]
+    throttle_ip_rate = "20/min"
+    throttle_account_rate = "5/min"
 
     def post(self, request):
         settings = LoginSettings.get_solo()
@@ -97,6 +102,10 @@ class RecoveryRequestAPIView(APIView):
 class RecoveryConfirmAPIView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
+
+    throttle_classes = [AuthenticationIPRateThrottle, AuthenticationAccountRateThrottle]
+    throttle_ip_rate = "20/min"
+    throttle_account_rate = "5/min"
 
     def post(self, request):
         settings = LoginSettings.get_solo()
@@ -159,6 +168,10 @@ class PasswordRecoveryRequestAPIView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
 
+    throttle_classes = [AuthenticationIPRateThrottle, AuthenticationAccountRateThrottle]
+    throttle_ip_rate = "20/min"
+    throttle_account_rate = "5/min"
+
     def post(self, request):
         settings = LoginSettings.get_solo()
         if not settings.allow_login:
@@ -213,6 +226,10 @@ class PasswordRecoveryConfirmAPIView(APIView):
     """
     authentication_classes = []
     permission_classes = [AllowAny]
+
+    throttle_classes = [AuthenticationIPRateThrottle, AuthenticationAccountRateThrottle]
+    throttle_ip_rate = "20/min"
+    throttle_account_rate = "5/min"
 
     def post(self, request):
         settings = LoginSettings.get_solo()
