@@ -116,7 +116,7 @@ class DeploymentPlanCompiler:
                 code="RELEASE_COMMAND_BACKEND_UNSUPPORTED",
                 details={
                     "backend": release_spec.execution_backend,
-                    "runtime": effective_selection.backend,
+                    "runtime": selection.backend,
                 },
             )
         rollout_kind = str(rollout_policy_raw.get("kind") or "RECREATE").strip().upper()
