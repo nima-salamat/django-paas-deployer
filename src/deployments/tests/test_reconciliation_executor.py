@@ -1,0 +1,131 @@
+
+from types import SimpleNamespace
+
+import pytest
+
+from deployments.reconciliation import (
+    DesiredRuntimeState,
+    ReconciliationAction,
+    ReconciliationDecision,
+    ReconciliationExecutionContext,
+    ReconciliationExecutor,
+)
+from deployments.runtime import RuntimeRegistry, RuntimeIdentity
+from deployments.runtime.fake import FakeRuntime
+from deployments.common.exceptions import StaleDeploymentWorkerError
+
+
+def _selection(runtime):
+    return RuntimeRegistry({"swarm": runtime}).resolve(
+        policy={"backend": "swarm"},
+        probe=True,
+    )
+
+
+def _decision(action):
+    return ReconciliationDecision(
+        action=action,
+        reason_code="test",
+        message="test",
+        service_id="service-1",
+        runtime_name="service-1",
+    )
+
+
+def test_reconciliation_executor_applies_native_plan_with_generation_operation_key():
+    runtime = FakeRuntime()
+    desired = DesiredRuntimeState(
+        service_id="service-1",
+        revision_id="revision-2",
+        desired_state="running",
+        runtime_name="service-1",
+    )
+    context = ReconciliationExecutionContext(
+        service_id="service-1",
+        lifecycle_generation=7,
+        active_revision_id="revision-2",
+        owns_execution=lambda: True,
+        current_generation=lambda: 7,
+    )
+    plan = SimpleNamespace(
+        identity=RuntimeIdentity(
+            service_id="service-1",
+            deployment_id="repair-1",
+            revision_id="revision-2",
+            runtime_name="service-1",
+        ),
+        required_capabilities=frozenset(),
+        image_ref="demo@sha256:artifact",
+    )
+
+    result = ReconciliationExecutor().execute(
+        _decision(ReconciliationAction.CREATE),
+        desired=desired,
+        selection=_selection(runtime),
+        runtime=runtime,
+        context=context,
+        plan=plan,
+    )
+
+    assert result is not None
+    assert result.success is True
+    assert result.handle is not None
+    assert runtime.apply_count == 1
+    assert runtime.operations[-1][0].startswith(
+        "reconcile:service-1:generation:7:revision:revision-2:action:create"
+    )
+
+
+def test_reconciliation_executor_fences_stale_generation_before_mutation():
+    runtime = FakeRuntime()
+    desired = DesiredRuntimeState(
+        service_id="service-1",
+        revision_id="revision-2",
+        desired_state="running",
+        runtime_name="service-1",
+    )
+    context = ReconciliationExecutionContext(
+        service_id="service-1",
+        lifecycle_generation=7,
+        active_revision_id="revision-2",
+        owns_execution=lambda: True,
+        current_generation=lambda: 8,
+    )
+
+    with pytest.raises(StaleDeploymentWorkerError):
+        ReconciliationExecutor().execute(
+            _decision(ReconciliationAction.CREATE),
+            desired=desired,
+            selection=_selection(runtime),
+            runtime=runtime,
+            context=context,
+            plan=SimpleNamespace(image_ref="demo@sha256:artifact"),
+        )
+
+    assert runtime.apply_count == 0
+
+
+def test_reconciliation_executor_requires_handle_for_stop():
+    runtime = FakeRuntime()
+    desired = DesiredRuntimeState(
+        service_id="service-1",
+        revision_id=None,
+        desired_state="stopped",
+        runtime_name="service-1",
+    )
+    context = ReconciliationExecutionContext(
+        service_id="service-1",
+        lifecycle_generation=1,
+        active_revision_id=None,
+        owns_execution=lambda: True,
+        current_generation=lambda: 1,
+    )
+
+    with pytest.raises(ValueError):
+        ReconciliationExecutor().execute(
+            _decision(ReconciliationAction.STOP),
+            desired=desired,
+            selection=_selection(runtime),
+            runtime=runtime,
+            context=context,
+        )
