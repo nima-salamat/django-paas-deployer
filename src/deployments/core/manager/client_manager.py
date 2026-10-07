@@ -87,9 +87,9 @@ def get_docker_client(base_url: Optional[str] = None, *, backend: str = "docker"
 
         timeout = _resolve_timeout()
         client = (
-            docker.DockerClient(base_url=resolved_url, timeout=timeout)
+            docker.DockerClient(base_url=resolved_url, timeout=timeout, version="auto")
             if resolved_url
-            else docker.from_env(timeout=timeout)
+            else docker.from_env(timeout=timeout, version="auto")
         )
         retry_with_backoff(
             client.ping,
@@ -102,6 +102,32 @@ def get_docker_client(base_url: Optional[str] = None, *, backend: str = "docker"
         _client_pool[key] = client
         logger.info("Docker client initialised backend=%s cluster=%s endpoint=%s timeout=%s", key[0], key[1], key[2], timeout)
         return client
+
+def docker_client_diagnostics(client: docker.DockerClient, *, include_version: bool = False) -> dict[str, object]:
+    """Return safe daemon/client diagnostics without exposing Docker credentials."""
+    diagnostics: dict[str, object] = {
+        "sdk_version": str(getattr(docker, "__version__", "") or ""),
+        "client_api_version": str(getattr(getattr(client, "api", None), "_version", "") or ""),
+    }
+    if not include_version:
+        return diagnostics
+    try:
+        version = client.version() or {}
+    except Exception as exc:
+        diagnostics["version_error"] = f"{type(exc).__name__}: {str(exc)}"[:400]
+        return diagnostics
+    for source, target in (
+        ("Version", "server_version"),
+        ("ApiVersion", "server_api_version"),
+        ("MinAPIVersion", "server_min_api_version"),
+        ("Os", "server_os"),
+        ("Arch", "server_arch"),
+        ("BuildTime", "server_build_time"),
+    ):
+        value = version.get(source)
+        if value not in (None, ""):
+            diagnostics[target] = str(value)
+    return diagnostics
 
 def reset_docker_client() -> None:
     """Close and clear all cached runtime-aware Docker clients."""
@@ -136,12 +162,38 @@ class Client:
         cluster: str | None = None,
         endpoint: str | None = None,
     ):
+        self._docker_client_options = {
+            "base_url": base_url,
+            "backend": backend,
+            "cluster": cluster,
+            "endpoint": endpoint,
+        }
         self._client = get_docker_client(
             base_url,
             backend=backend,
             cluster=cluster,
             endpoint=endpoint,
         )
+
+    def refresh(self) -> docker.DockerClient:
+        """Evict this cached client and create a fresh negotiated Docker client."""
+        old_client = self._client
+        with _pool_lock:
+            stale_keys = [key for key, value in _client_pool.items() if value is old_client]
+            for key in stale_keys:
+                _client_pool.pop(key, None)
+        try:
+            old_client.close()
+        except Exception:
+            pass
+        options = dict(self._docker_client_options)
+        self._client = get_docker_client(
+            options.pop("base_url", None),
+            backend=options.get("backend", "docker"),
+            cluster=options.get("cluster"),
+            endpoint=options.get("endpoint"),
+        )
+        return self._client
 
     @property
     def client(self) -> docker.DockerClient:
@@ -153,4 +205,4 @@ class Client:
         return self._client
 
 
-__all__ = ["Client", "get_docker_client", "reset_docker_client"]
+__all__ = ["Client", "get_docker_client", "reset_docker_client", "docker_client_diagnostics"]
