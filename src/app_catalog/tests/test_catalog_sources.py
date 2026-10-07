@@ -263,7 +263,7 @@ networks:
         )
         wordpress = next(item for item in resolved["services"] if item["key"] == "wordpress")
         self.assertEqual(wordpress["replicas"], 3)
-        self.assertIn("wp-cli-\${WP_CLI_VERSION}.phar", wordpress["dockerfile"])
+        self.assertIn("wp-cli-" + "${WP_CLI_VERSION}.phar", wordpress["dockerfile"])
         self.assertIn("passdeployer-wordpress-entrypoint.sh", wordpress["dockerfile"])
         self.assertIn("wp core install", wordpress["dockerfile"])
         self.assertIn("WORDPRESS_ADMIN_EMAIL", wordpress["environment"])
