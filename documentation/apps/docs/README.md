@@ -38,3 +38,8 @@ Public reads are published-only. Admin mutation uses docs.manage policy. Assets 
 ## Reading order
 
 models.md -> api.md -> serializers.md -> tests.md.
+
+## Contract references
+
+- [API reference](api.md)
+- [Complete model field reference](field-reference.md)
