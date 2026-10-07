@@ -24,6 +24,16 @@ from deployments.core.swarm import SwarmRuntime, swarm_enabled
 from deployments.core.state.locks import acquire_service_deployment_lock
 from deployments.common.exceptions import InvalidServiceStateError
 from services.revisioning import get_active_deploy
+from deployments.infrastructure.django_runtime import DjangoRuntimeSelectionResolver
+from deployments.reconciliation import (
+    DesiredRuntimeState,
+    ReconciliationAction,
+    ReconciliationDecision,
+    ReconciliationExecutionContext,
+    ReconciliationExecutor,
+)
+from deployments.runtime.contract import RuntimeHandle
+from deployments.runtime.identity import RuntimeIdentity
 
 from ..service_status import ServiceStateManager
 from ..helpers import MockOrchestratorResult
@@ -83,12 +93,69 @@ class StopService:
 
         try:
             if swarm_enabled():
-                runtime = SwarmRuntime()
-                state = runtime.inspect_service(container_name)
-                if state and state.replicas_running:
-                    logger.info("Stopping Swarm service group for service: %s", service_id)
-                    runtime.stop_service_group(str(service_id))
-                    stopped = runtime.wait_service_group_stopped(str(service_id), timeout=30.0)
+                runtime_resolver = DjangoRuntimeSelectionResolver()
+                selection = runtime_resolver.resolve(
+                    service=service,
+                    revision=getattr(service, "active_revision", None),
+                    deployment=active_deploy,
+                    probe=True,
+                )
+                runtime = runtime_resolver.registry.resolve_adapter(selection)
+                state = runtime.inspect(
+                    RuntimeIdentity(
+                        service_id=str(service.pk),
+                        deployment_id=str(getattr(active_deploy, "pk", "") or "") or None,
+                        revision_id=str(getattr(getattr(service, "active_revision", None), "pk", "") or "") or None,
+                        process_name="web",
+                        runtime_name=container_name,
+                    )
+                )
+                if state.status.value not in {"missing", "stopped"}:
+                    logger.info("Stopping Swarm service group through reconciliation boundary: %s", service_id)
+                    runtime_handle = RuntimeHandle(
+                        backend=selection.backend,
+                        identity=RuntimeIdentity(
+                            service_id=str(service.pk),
+                            deployment_id=str(getattr(active_deploy, "pk", "") or "") or None,
+                            revision_id=str(getattr(getattr(service, "active_revision", None), "pk", "") or "") or None,
+                            process_name="web",
+                            runtime_name=container_name,
+                        ),
+                        runtime_id=str(state.runtime_id or ""),
+                        resource_name=container_name,
+                    )
+                    desired = DesiredRuntimeState(
+                        service_id=str(service.pk),
+                        revision_id=str(getattr(getattr(service, "active_revision", None), "pk", "") or "") or None,
+                        desired_state="stopped",
+                        runtime_name=container_name,
+                    )
+                    decision = ReconciliationDecision(
+                        action=ReconciliationAction.STOP,
+                        reason_code="stop_requested",
+                        message="Service desired state is stopped.",
+                        service_id=desired.service_id,
+                        runtime_name=desired.runtime_name,
+                    )
+                    generation = getattr(service, "lifecycle_generation", 0)
+                    context = ReconciliationExecutionContext(
+                        service_id=str(service.pk),
+                        lifecycle_generation=generation,
+                        active_revision_id=desired.revision_id,
+                        owns_execution=lambda sid=str(service.pk), gen=generation: bool(
+                            ServiceStateManager.get_service_generation(sid) == gen
+                        ),
+                        current_generation=lambda sid=str(service.pk): ServiceStateManager.get_service_generation(sid),
+                    )
+                    ReconciliationExecutor().execute(
+                        decision,
+                        desired=desired,
+                        selection=selection,
+                        runtime=runtime,
+                        context=context,
+                        handle=runtime_handle,
+                    )
+                    stopped = runtime_resolver.registry.resolve_adapter(selection).wait_service_group_stopped(str(service_id), timeout=30.0) if hasattr(runtime_resolver.registry.resolve_adapter(selection), "wait_service_group_stopped") else True
                     if not stopped:
                         logger.warning("Swarm service group for %s is still draining after stop timeout.", service_id)
                 else:
