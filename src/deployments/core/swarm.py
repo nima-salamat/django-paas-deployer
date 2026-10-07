@@ -1678,6 +1678,40 @@ class SwarmRuntime:
             expected_image=expected_image,
         )
 
+    @staticmethod
+    def _managed_service_labels(service) -> dict[str, str]:
+        attrs = service.attrs or {}
+        spec = attrs.get("Spec") or {}
+        labels = spec.get("Labels") or {}
+        return {str(key): str(value) for key, value in dict(labels).items()}
+
+    def _assert_service_owned(
+        self,
+        service,
+        *,
+        service_id: str | None = None,
+    ) -> None:
+        expected = str(service_id or "").strip()
+        if not expected:
+            return
+        labels = self._managed_service_labels(service)
+        if (
+            labels.get("managed-by") != "django-paas-deployer"
+            or labels.get("passdeployer.service") != expected
+        ):
+            raise DeploymentError(
+                f"Refusing to mutate unowned Swarm service {getattr(service, 'name', '')!r}.",
+                stage="swarm_ownership",
+                code="SWARM_RESOURCE_OWNERSHIP_UNKNOWN",
+                user_message="The existing runtime resource cannot be proven to belong to this service.",
+                details={
+                    "service": str(getattr(service, "name", "") or ""),
+                    "service_id": expected,
+                    "managed_by": labels.get("managed-by"),
+                    "runtime_service_id": labels.get("passdeployer.service"),
+                },
+            )
+
     def apply(self, config, *, image_ref: str, replicas: int = 1, operation_key: str | None = None, prepared_image_ref: str | None = None, cancel_check: Callable[[], bool] | None = None, wait_for_ready: bool = True) -> SwarmServiceState:
         replicas = _validate_replicas(replicas)
         if cancel_check is not None and cancel_check():
@@ -1709,6 +1743,10 @@ class SwarmRuntime:
             service = self.client.services.get(name)
             operation["preexisting"] = True
             service.reload()
+            self._assert_service_owned(
+                service,
+                service_id=str((config.labels or {}).get("service.id") or ""),
+            )
             operation["mutation_started"] = True
             service.update(
                 image=image_ref,
@@ -1877,6 +1915,7 @@ class SwarmRuntime:
         self,
         name: str,
         *,
+        service_id: str | None = None,
         operation_key: str | None = None,
         cancel_check: Callable[[], bool] | None = None,
     ) -> None:
@@ -1887,7 +1926,10 @@ class SwarmRuntime:
                 code="SWARM_OPERATION_CANCELLED",
             )
         try:
-            self.client.services.get(_validate_service_name(name)).scale(0)
+            service = self.client.services.get(_validate_service_name(name))
+            service.reload()
+            self._assert_service_owned(service, service_id=service_id)
+            service.scale(0)
         except docker.errors.NotFound:
             return
 
@@ -2100,6 +2142,7 @@ class SwarmRuntime:
         self,
         name: str,
         *,
+        service_id: str | None = None,
         operation_key: str | None = None,
         cancel_check: Callable[[], bool] | None = None,
     ) -> None:
@@ -2110,7 +2153,10 @@ class SwarmRuntime:
                 code="SWARM_OPERATION_CANCELLED",
             )
         try:
-            self.client.services.get(_validate_service_name(name)).remove()
+            service = self.client.services.get(_validate_service_name(name))
+            service.reload()
+            self._assert_service_owned(service, service_id=service_id)
+            service.remove()
         except docker.errors.NotFound:
             return
 
