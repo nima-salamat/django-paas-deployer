@@ -75,16 +75,17 @@ stateDiagram-v2
     deploying --> failed
     pending --> cancelled
     deploying --> cancelled
-    running --> deleting: DELETE
-    failed --> deleting: DELETE
-    cancelled --> deleting: DELETE
-    deleting --> [*]
+    pending --> pending_cleanup: DELETE
+    deploying --> pending_cleanup: DELETE
+    running --> pending_cleanup: DELETE
+    failed --> pending_cleanup: DELETE
+    cancelled --> pending_cleanup: DELETE
+    pending_cleanup --> [*]: child runtime + DB cleanup complete
 ```
 
-`cancel_requested` is durable intent and is checked before dispatching more children. Reconciliation may requeue lost task delivery, but it never re-resolves the catalog or regenerates secrets.
+`cancel_requested` and the deletion stage are durable coordinator intent. Deletion may begin from any current application status; the parent commonly remains in its current status while `stage=deletion_pending` until child cleanup converges.
 
-Deletion is self-healing: an owner DELETE can start/finalize cleanup even when the earlier asynchronous cancellation/cleanup path was missed. Child Services are removed before the application-owned network so Docker attachments can be released safely.
-
+Reconciliation may requeue lost task delivery, but it never re-resolves the catalog or regenerates secrets. Child Services are removed before the application-owned network so Docker attachments can be released safely.
 ## Public response rules
 
 The public catalog serializer exposes safe metadata and user-editable fields, not arbitrary Compose, raw secrets or privileged host configuration. Installation detail exposes the final `application_url` only after the application reaches `running`.
