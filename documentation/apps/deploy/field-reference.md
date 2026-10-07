@@ -7,7 +7,7 @@ Source of truth: `src/deploy/models.py`. Django/Django-contrib inherited fields 
 ## Deploy
 
 **Bases:** `BaseModel`  
-**Declared fields:** 43
+**Declared fields:** 45
 
 | Field | Django type | DB nullable | Blank | Default | Constraints / relation | Purpose / contract |
 |---|---|---:|---:|---|---|---|
@@ -171,7 +171,7 @@ Source of truth: `src/deploy/models.py`. Django/Django-contrib inherited fields 
 ## DeployLog
 
 **Bases:** `BaseModel`  
-**Declared fields:** 11
+**Declared fields:** 10
 
 | Field | Django type | DB nullable | Blank | Default | Constraints / relation | Purpose / contract |
 |---|---|---:|---:|---|---|---|
@@ -357,7 +357,7 @@ Source of truth: `src/deploy/models.py`. Django/Django-contrib inherited fields 
 ## SwarmNode
 
 **Bases:** `BaseModel`  
-**Declared fields:** 15
+**Declared fields:** 14
 
 | Field | Django type | DB nullable | Blank | Default | Constraints / relation | Purpose / contract |
 |---|---|---:|---:|---|---|---|
