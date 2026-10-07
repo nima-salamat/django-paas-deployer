@@ -853,10 +853,25 @@ class Image(Client):
                                     details={"image": target_ref, "docker_api_reached": docker_api_reached},
                                 )
 
-                            # The build is complete. Tagging is a separate Docker
-                            # operation and must never cause the entire build to be
-                            # retried as if the build transport had failed.
-                            self._tag_image(image_id)
+                            # The build itself is complete. Tagging is a separate
+                            # Docker operation and must not be interpreted as a
+                            # failed build or trigger another build attempt.
+                            try:
+                                self._tag_image(image_id)
+                            except docker.errors.DockerException as exc:
+                                failure = classify_docker_exception(exc, stage="image_tag")
+                                raise DockerClientError(
+                                    "Docker built the image but could not apply its image tag.",
+                                    recoverable=failure.retryable,
+                                    details=_build_diagnostics({
+                                        "error": str(exc),
+                                        "error_type": type(exc).__name__,
+                                        "reason_code": failure.reason_code,
+                                        "http_status": failure.http_status,
+                                        "stage": "image_tag",
+                                        "image_id": image_id,
+                                    }),
+                                ) from exc
                             logger.info("Docker image built and tagged: %s", target_ref)
                             try:
                                 return self.client.images.get(target_ref)
