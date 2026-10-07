@@ -18,7 +18,7 @@ from docker.errors import BuildError, ImageNotFound
 from deployments.core.exceptions import CleanupError, DockerClientError, ImageBuildError, InternalPlatformError
 from deployments.common.build_slots import BuildSlot
 from deployments.common.retry import classify_docker_exception
-from .client_manager import Client
+from .client_manager import Client, docker_client_diagnostics
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +99,19 @@ def _build_container_limits(
         "cpushares": cpu_shares,
     }
 
+
+def _is_build_option_compatibility_error(exc: BaseException) -> bool:
+    """Return True when a Docker response rejects optional build parameters."""
+    status = getattr(exc, "status_code", None)
+    if status not in {400, 404, 422}:
+        return False
+    text = str(exc).lower()
+    markers = (
+        "unsupported", "not supported", "unknown parameter", "unknown option",
+        "invalid parameter", "unexpected keyword", "container_limits",
+        "shmsize", "shm_size", "cache_from", "cachefrom", "networkmode",
+    )
+    return any(marker in text for marker in markers)
 
 # ---------------------------------------------------------------------------
 # Safe tar extraction
@@ -651,6 +664,26 @@ class Image(Client):
             self.name, self.tag, effective_cpu, effective_ram,
         )
 
+        try:
+            self.client.ping()
+        except Exception as exc:
+            logger.warning(
+                "Docker build preflight ping failed; refreshing client: %s: %s",
+                type(exc).__name__, str(exc),
+            )
+            self.refresh()
+
+        docker_runtime = docker_client_diagnostics(self.client, include_version=True)
+        logger.info(
+            "Docker build preflight sdk=%s client_api=%s server=%s server_api=%s min_api=%s os=%s arch=%s",
+            docker_runtime.get("sdk_version") or "unknown",
+            docker_runtime.get("client_api_version") or "unknown",
+            docker_runtime.get("server_version") or "unknown",
+            docker_runtime.get("server_api_version") or "unknown",
+            docker_runtime.get("server_min_api_version") or "unknown",
+            docker_runtime.get("server_os") or "unknown",
+            docker_runtime.get("server_arch") or "unknown",
+        )
         buildargs = {"BUILDKIT_INLINE_CACHE": "1"}
         tenant_build_args = dict((self.build_options or {}).get("build_args") or {})
         for key, value in tenant_build_args.items():
@@ -730,57 +763,128 @@ class Image(Client):
                     if bool(build_options.get("pull")):
                         extra_build["pull"] = True
 
+                    common_build = dict(
+                        path=build_path,
+                        tag=self.tag,
+                        rm=True,
+                        forcerm=True,
+                        decode=True,
+                        buildargs=buildargs,
+                        labels=build_labels,
+                        **extra_build,
+                    )
+                    cache_kwargs = (
+                        {"cache_from": self.cache_sources}
+                        if self.cache_sources
+                        else {}
+                    )
+
+                    # Docker/BuildKit versions do not all accept the same
+                    # optional build controls through the low-level API.
+                    # Start with the resource-constrained request, then
+                    # progressively remove optional controls only when Docker
+                    # explicitly rejects them.  Do not send an explicit
+                    # network_mode="default": that is already the BuildKit
+                    # default and omitting it is more portable across Engine
+                    # and builder implementations.
                     attempt_kwargs = [
-                        dict(path=build_path, tag=self.tag, rm=True, forcerm=True, decode=True,
-                             container_limits=limits, shmsize=build_shm_size, buildargs=buildargs,
-                             labels=build_labels, cache_from=self.cache_sources,
-                             network_mode="default", **extra_build),
-                        dict(path=build_path, tag=self.tag, rm=True, forcerm=True, decode=True,
-                             shmsize=build_shm_size, buildargs=buildargs, labels=build_labels,
-                             cache_from=self.cache_sources, **extra_build),
-                        dict(path=build_path, tag=self.tag, rm=True, forcerm=True, decode=True,
-                             labels=build_labels, cache_from=self.cache_sources, **extra_build),
+                        {
+                            **common_build,
+                            "container_limits": limits,
+                            "shmsize": build_shm_size,
+                            **cache_kwargs,
+                        },
+                        {
+                            **common_build,
+                            **cache_kwargs,
+                        },
+                        dict(common_build),
                     ]
 
                     response = None
                     last_err = None
+                    refreshed_after_transport_failure = False
                     for i, kwargs in enumerate(attempt_kwargs):
                         try:
                             build_slot.assert_owned()
                             if ownership_check is not None:
                                 ownership_check()
-                            logger.info("api.build attempt %d kwargs=%s", i + 1, sorted(k for k in kwargs if k != "path"))
+                            logger.info(
+                                "api.build attempt %d kwargs=%s",
+                                i + 1,
+                                sorted(k for k in kwargs if k != "path"),
+                            )
                             response = self.client.api.build(**kwargs)
                             docker_api_reached = True
                             last_err = None
                             break
                         except TypeError as exc:
                             last_err = exc
-                            logger.warning("api.build attempt %d TypeError: %s", i + 1, exc)
-                        except docker.errors.DockerException as exc:
-                            last_err = exc
-                            logger.warning("api.build attempt %d DockerException: %s: %s", i + 1, type(exc).__name__, exc)
+                            logger.warning(
+                                "api.build attempt %d TypeError: %s",
+                                i + 1, exc,
+                            )
+                            if i + 1 < len(attempt_kwargs):
+                                continue
                             break
                         except Exception as exc:
                             last_err = exc
-                            logger.warning("api.build attempt %d %s: %s", i + 1, type(exc).__name__, exc)
+                            compatibility_error = _is_build_option_compatibility_error(exc)
+                            failure = classify_docker_exception(exc, stage="image_build")
+
+                            if compatibility_error and i + 1 < len(attempt_kwargs):
+                                logger.warning(
+                                    "api.build attempt %d rejected optional build parameters; "
+                                    "retrying compatibility profile: %s: %s",
+                                    i + 1, type(exc).__name__, str(exc),
+                                )
+                                continue
+
+                            if (
+                                failure.reason_code in {"transient_transport", "transient_http"}
+                                and not refreshed_after_transport_failure
+                            ):
+                                refreshed_after_transport_failure = True
+                                logger.warning(
+                                    "api.build attempt %d hit transient Docker transport failure; "
+                                    "refreshing client and retrying once: %s: %s",
+                                    i + 1, type(exc).__name__, str(exc),
+                                )
+                                self.refresh()
+                                continue
+
+                            logger.warning(
+                                "api.build attempt %d failed: %s: %s",
+                                i + 1, type(exc).__name__, str(exc),
+                            )
                             break
 
                     if response is None:
-                        if isinstance(last_err, docker.errors.DockerException):
+                        if last_err is not None:
                             failure = classify_docker_exception(last_err, stage="image_build")
-                            raise DockerClientError(
-                                "Docker could not execute the image build request.",
-                                recoverable=failure.retryable,
-                                details={
-                                    "image": target_ref,
-                                    "error": str(last_err),
-                                    "error_type": type(last_err).__name__,
-                                    "reason_code": failure.reason_code,
-                                    "http_status": failure.http_status,
-                                    "stage": failure.stage,
-                                },
-                            ) from last_err
+                            details = _build_diagnostics({
+                                "error": str(last_err),
+                                "error_type": type(last_err).__name__,
+                                "reason_code": failure.reason_code,
+                                "http_status": failure.http_status,
+                                "stage": failure.stage,
+                                "docker_runtime": docker_client_diagnostics(
+                                    self.client, include_version=True,
+                                ),
+                            })
+                            if isinstance(last_err, docker.errors.DockerException):
+                                raise DockerClientError(
+                                    "Docker could not execute the image build request.",
+                                    recoverable=failure.retryable,
+                                    details=details,
+                                ) from last_err
+                            if failure.retryable:
+                                raise DockerClientError(
+                                    "Docker could not execute the image build request.",
+                                    recoverable=True,
+                                    details=details,
+                                ) from last_err
+                            failure = classify_docker_exception(last_err, stage="image_build")
                         raise ImageBuildError(
                             "Docker image build could not be started.",
                             details={
