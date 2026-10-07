@@ -508,7 +508,7 @@ services:
   # RUNTIME LOG COLLECTOR
   # Continuous Docker log follow → persistent ServiceLogEntry.
   # Independent of Celery (retention/reconcile only).
-  # Same Docker socket + image pattern as deployment-events.
+  # Same Docker socket + backend image pattern as the deployment workers.
   # ============================================================
   log-collector:
     image: ${BACKEND_IMAGE:-passdeployer-backend:local}
