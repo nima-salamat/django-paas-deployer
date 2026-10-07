@@ -6,7 +6,7 @@ import uuid
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("deploy", "0027_deploylog_event_id"),
+        ("deploy", "0031_align_model_indexes_and_base_fields"),
         ("services", "0031_service_process_replicas"),
     ]
 
