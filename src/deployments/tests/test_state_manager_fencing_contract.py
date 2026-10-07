@@ -41,7 +41,7 @@ def test_django_lifecycle_store_does_not_continue_after_cancel_wins_start_race()
 def test_public_transition_has_no_terminal_outbox_authority():
     source = (ROOT / "deployments/core/state/manager.py").read_text(encoding="utf-8")
     public_method = source.split("def transition_deploy(", 1)[1].split(
-        "def transition_deploy_system_terminal", 1
+        "def activate_revision_and_succeed", 1
     )[0]
     assert "DeploymentEventOutbox.objects.create" not in public_method
 
