@@ -128,6 +128,53 @@ class DBDeployResult:
 def _clean(value: Any) -> str:
     return str(value or "").strip()
 
+
+def _resolve_db_replicas(cfg: dict[str, Any], default: int = 1) -> int:
+    """Resolve the database Swarm replica count from the immutable runtime config.
+
+    Ready App/runtime revisions store replica intent in their process graph. A
+    top-level ``replicas`` value is accepted for compatibility, then the
+    enabled web process (the canonical DB process name) is used, finally the
+    safe default of one replica is applied.
+    """
+    raw = cfg.get("replicas") if isinstance(cfg, dict) else None
+    if raw in (None, ""):
+        processes = cfg.get("processes") or [] if isinstance(cfg, dict) else []
+        if isinstance(processes, dict):
+            processes = [processes]
+        if isinstance(processes, (list, tuple)):
+            preferred = next(
+                (
+                    item for item in processes
+                    if isinstance(item, dict)
+                    and str(item.get("name") or "").strip().lower() == "web"
+                    and bool(item.get("enabled", True))
+                ),
+                None,
+            )
+            candidate = preferred or next(
+                (
+                    item for item in processes
+                    if isinstance(item, dict) and bool(item.get("enabled", True))
+                ),
+                None,
+            )
+            if candidate is not None:
+                raw = candidate.get("replicas")
+    if raw in (None, ""):
+        raw = default
+    try:
+        replicas = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise DeploymentError("Database replicas must be an integer.", stage="swarm_validation") from exc
+    if not 1 <= replicas <= 8:
+        raise DeploymentError(
+            "Database services support between 1 and 8 replicas.",
+            stage="swarm_validation",
+            user_message="Database services support between 1 and 8 replicas.",
+        )
+    return replicas
+
 def _format_image_pull_failure(full_image: str, exc: BaseException) -> tuple[str, dict[str, Any]]:
     """Translate registry/Docker pull failures into safe user-facing diagnostics."""
     failure = classify_docker_exception(exc, stage="image_pull")
@@ -1472,6 +1519,7 @@ class DBDeployer:
         registry_volume_rows: dict[str, Any],
     ) -> DBDeployResult:
         runtime = SwarmRuntime()
+        replicas = _resolve_db_replicas(cfg)
         labels = {
             "managed-by": "django-paas-deployer",
             "passdeployer.service": str(service_id),
@@ -1557,6 +1605,7 @@ class DBDeployer:
                     "memory_mb": cfg.get("max_ram"),
                 },
                 labels=labels,
+                replicas=replicas,
             )
         except DeploymentError as exc:
             log.error(
