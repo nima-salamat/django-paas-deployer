@@ -20,30 +20,51 @@ The detailed app documentation remains the narrative contract. This file answers
 
 | App | Source | Model | Model kind | Documentation |
 |---|---|---|---|---|
+| `custom_emails` | `src/custom_emails/models.py` | `EmailTemplate` | `models.Model` | [field reference](../apps/custom_emails/field-reference.md#emailtemplate) |
+| `custom_emails` | `src/custom_emails/models.py` | `EmailLog` | `models.Model` | [field reference](../apps/custom_emails/field-reference.md#emaillog) |
+| `deploy` | `src/deploy/models.py` | `Deploy` | `BaseModel` | [field reference](../apps/deploy/field-reference.md#deploy) |
+| `deploy` | `src/deploy/models.py` | `DeploymentResource` | `BaseModel` | [field reference](../apps/deploy/field-reference.md#deploymentresource) |
+| `deploy` | `src/deploy/models.py` | `DeploymentEventOutbox` | `BaseModel` | [field reference](../apps/deploy/field-reference.md#deploymenteventoutbox) |
+| `deploy` | `src/deploy/models.py` | `DeployLog` | `BaseModel` | [field reference](../apps/deploy/field-reference.md#deploylog) |
+| `deploy` | `src/deploy/models.py` | `BuildCacheArtifact` | `BaseModel` | [field reference](../apps/deploy/field-reference.md#buildcacheartifact) |
+| `deploy` | `src/deploy/models.py` | `BuildCacheQuota` | `BaseModel` | [field reference](../apps/deploy/field-reference.md#buildcachequota) |
+| `deploy` | `src/deploy/models.py` | `BaseRuntimeImageLease` | `BaseModel` | [field reference](../apps/deploy/field-reference.md#baseruntimeimagelease) |
+| `deploy` | `src/deploy/models.py` | `BaseRuntimeImage` | `BaseModel` | [field reference](../apps/deploy/field-reference.md#baseruntimeimage) |
+| `deploy` | `src/deploy/models.py` | `SwarmCluster` | `BaseModel` | [field reference](../apps/deploy/field-reference.md#swarmcluster) |
+| `deploy` | `src/deploy/models.py` | `SwarmNode` | `BaseModel` | [field reference](../apps/deploy/field-reference.md#swarmnode) |
+| `docs` | `src/docs/models.py` | `DocumentCategory` | `models.Model` | [field reference](../apps/docs/field-reference.md#documentcategory) |
+| `docs` | `src/docs/models.py` | `Document` | `models.Model` | [field reference](../apps/docs/field-reference.md#document) |
+| `docs` | `src/docs/models.py` | `DocumentAsset` | `models.Model` | [field reference](../apps/docs/field-reference.md#documentasset) |
+| `logs` | `src/logs/models.py` | `ServiceLogStream` | `models.Model` | [field reference](../apps/logs/field-reference.md#servicelogstream) |
+| `logs` | `src/logs/models.py` | `ServiceLogEntry` | `models.Model` | [field reference](../apps/logs/field-reference.md#servicelogentry) |
+| `logs` | `src/logs/models.py` | `ServiceLogUsage` | `models.Model` | [field reference](../apps/logs/field-reference.md#servicelogusage) |
+| `logs` | `src/logs/models.py` | `LogUsageDaily` | `models.Model` | [field reference](../apps/logs/field-reference.md#logusagedaily) |
+| `logs` | `src/logs/models.py` | `CollectorHeartbeat` | `models.Model` | [field reference](../apps/logs/field-reference.md#collectorheartbeat) |
+| `messenger` | `src/messenger/models.py` | `UserBio` | `models.Model` | [field reference](../apps/messenger/field-reference.md#userbio) |
+| `messenger` | `src/messenger/models.py` | `Contact` | `models.Model` | [field reference](../apps/messenger/field-reference.md#contact) |
+| `messenger` | `src/messenger/models.py` | `Block` | `models.Model` | [field reference](../apps/messenger/field-reference.md#block) |
+| `messenger` | `src/messenger/models.py` | `ProfilePhotoPrivacy` | `models.Model` | [field reference](../apps/messenger/field-reference.md#profilephotoprivacy) |
+| `messenger` | `src/messenger/models.py` | `ProfilePhotoAllowed` | `models.Model` | [field reference](../apps/messenger/field-reference.md#profilephotoallowed) |
+| `messenger` | `src/messenger/models.py` | `Conversation` | `models.Model` | [field reference](../apps/messenger/field-reference.md#conversation) |
+| `messenger` | `src/messenger/models.py` | `ConversationParticipant` | `models.Model` | [field reference](../apps/messenger/field-reference.md#conversationparticipant) |
+| `messenger` | `src/messenger/models.py` | `GroupInviteLink` | `models.Model` | [field reference](../apps/messenger/field-reference.md#groupinvitelink) |
+| `messenger` | `src/messenger/models.py` | `JoinRequest` | `models.Model` | [field reference](../apps/messenger/field-reference.md#joinrequest) |
+| `messenger` | `src/messenger/models.py` | `Message` | `models.Model` | [field reference](../apps/messenger/field-reference.md#message) |
+| `messenger` | `src/messenger/models.py` | `MessengerEvent` | `models.Model` | [field reference](../apps/messenger/field-reference.md#messengerevent) |
+| `messenger` | `src/messenger/models.py` | `MessageReaction` | `models.Model` | [field reference](../apps/messenger/field-reference.md#messagereaction) |
+| `messenger` | `src/messenger/models.py` | `MessageReadReceipt` | `models.Model` | [field reference](../apps/messenger/field-reference.md#messagereadreceipt) |
+| `messenger` | `src/messenger/models.py` | `MessageAttachment` | `models.Model` | [field reference](../apps/messenger/field-reference.md#messageattachment) |
+| `messenger` | `src/messenger/models.py` | `AttachmentViewOnceOpen` | `models.Model` | [field reference](../apps/messenger/field-reference.md#attachmentviewonceopen) |
+| `messenger` | `src/messenger/models.py` | `PinnedMessage` | `models.Model` | [field reference](../apps/messenger/field-reference.md#pinnedmessage) |
+| `messenger` | `src/messenger/models.py` | `CallSession` | `models.Model` | [field reference](../apps/messenger/field-reference.md#callsession) |
+| `messenger` | `src/messenger/models.py` | `CallSessionParticipant` | `models.Model` | [field reference](../apps/messenger/field-reference.md#callsessionparticipant) |
 
 ## Model field inventory
 
 | App | Source | Model | Field | Django type | Documentation |
 |---|---|---|---|---|---|
-| `agent` | `src/agent/models.py` | `Agent` | `BaseModel` | [field reference](../apps/agent/field-reference.md#agent) |
-| `agent` | `src/agent/models.py` | `AgentCredential` | `BaseModel` | [field reference](../apps/agent/field-reference.md#agentcredential) |
-| `agent` | `src/agent/models.py` | `AgentEnrollmentToken` | `BaseModel` | [field reference](../apps/agent/field-reference.md#agentenrollmenttoken) |
-| `agent` | `src/agent/models.py` | `AgentAuditEvent` | `BaseModel` | [field reference](../apps/agent/field-reference.md#agentauditevent) |
-| `agent` | `src/agent/models.py` | `AgentIdempotencyRecord` | `BaseModel` | [field reference](../apps/agent/field-reference.md#agentidempotencyrecord) |
-| `app_catalog` | `src/app_catalog/models.py` | `ApplicationInstance` | `models.Model` | [field reference](../apps/app_catalog/field-reference.md#applicationinstance) |
-| `app_catalog` | `src/app_catalog/models.py` | `ApplicationInstanceService` | `models.Model` | [field reference](../apps/app_catalog/field-reference.md#applicationinstanceservice) |
-| `app_catalog` | `src/app_catalog/models.py` | `CatalogPublication` | `models.Model` | [field reference](../apps/app_catalog/field-reference.md#catalogpublication) |
-| `auth_users` | `src/auth_users/models.py` | `LoginSettings` | `models.Model` | [field reference](../apps/auth_users/field-reference.md#loginsettings) |
-| `auth_users` | `src/auth_users/models.py` | `Device` | `models.Model` | [field reference](../apps/auth_users/field-reference.md#device) |
-| `auth_users` | `src/auth_users/models.py` | `UserSession` | `models.Model` | [field reference](../apps/auth_users/field-reference.md#usersession) |
-| `auth_users` | `src/auth_users/models.py` | `UserContactChange` | `models.Model` | [field reference](../apps/auth_users/field-reference.md#usercontactchange) |
-| `auth_users` | `src/auth_users/models.py` | `InviteLink` | `models.Model` | [field reference](../apps/auth_users/field-reference.md#invitelink) |
-| `auth_users` | `src/auth_users/models.py` | `InviteUsage` | `models.Model` | [field reference](../apps/auth_users/field-reference.md#inviteusage) |
-| `auth_users` | `src/auth_users/models.py` | `AuthCode` | `models.Model` | [field reference](../apps/auth_users/field-reference.md#authcode) |
-| `auth_users` | `src/auth_users/models.py` | `LoginLog` | `models.Model` | [field reference](../apps/auth_users/field-reference.md#loginlog) |
-| `cms` | `src/cms/models.py` | `HomePage` | `Page` | [field reference](../apps/cms/field-reference.md#homepage) |
-| `core` | `src/core/models.py` | `SystemSetting` | `models.Model` | [field reference](../apps/core/field-reference.md#systemsetting) |
-| `core` | `src/core/models.py` | `CoreSettings` | `BaseGenericSetting` | [field reference](../apps/core/field-reference.md#coresettings) |
+
+
 ## Inheritance
 
 Project-wide inherited fields are documented separately in [inherited-model-fields.md](inherited-model-fields.md). The field inventory intentionally records fields declared by each concrete/project model source; inherited framework fields are not duplicated once per model.
