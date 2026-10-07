@@ -889,6 +889,23 @@ class Image(Client):
                             compatibility_error = _is_build_option_compatibility_error(exc)
                             failure = classify_docker_exception(exc, stage="image_build")
 
+                            # The Engine's /build endpoint returns HTTP 400 for
+                            # malformed/unsupported query parameters, and some
+                            # Engine/builder combinations expose no useful
+                            # keyword in the response text. When we have not
+                            # received any build output yet, safely probe the
+                            # next compatibility profile. A genuine Dockerfile
+                            # validation error will simply fail again on the
+                            # minimum profile and its original message is then
+                            # preserved.
+                            if (
+                                isinstance(exc, docker.errors.APIError)
+                                and getattr(exc, "status_code", None) in {400, 404, 422}
+                                and i + 1 < len(attempt_kwargs)
+                                and not stream_started
+                            ):
+                                compatibility_error = True
+
                             if compatibility_error and i + 1 < len(attempt_kwargs) and not stream_started:
                                 logger.warning(
                                     "api.build attempt %d rejected optional build parameters; "
@@ -984,6 +1001,20 @@ class Image(Client):
                         # user sees a real image-build error instead of a false
                         # "could not communicate with Docker" diagnosis.
                         if isinstance(last_err, docker.errors.APIError):
+                            explanation = getattr(last_err, "explanation", None)
+                            if explanation:
+                                details["docker_explanation"] = str(explanation)[:4000]
+                            response = getattr(last_err, "response", None)
+                            try:
+                                response_json = response.json() if response is not None else None
+                            except Exception:
+                                response_json = None
+                            if isinstance(response_json, dict):
+                                details["docker_response"] = {
+                                    str(key): str(value)[:4000]
+                                    for key, value in response_json.items()
+                                    if key not in {"auth", "authorization"}
+                                }
                             raise DockerClientError(
                                 "Docker rejected the image build request.",
                                 recoverable=failure.retryable,
