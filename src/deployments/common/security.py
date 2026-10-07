@@ -22,6 +22,7 @@ import os
 import re
 from typing import Iterable
 
+from .docker_identity import validate_docker_component
 from .exceptions import DeploymentSecurityError
 
 
@@ -160,16 +161,8 @@ _SHELL_TOKEN_RE = re.compile(r"^[A-Za-z0-9_@./:=,+~-]+$")
 
 
 def validate_docker_name(name: str, *, field: str = "name") -> str:
-    if not name or not isinstance(name, str):
-        raise DeploymentSecurityError(f"Invalid {field}: empty.")
-    if len(name) > 256:
-        raise DeploymentSecurityError(f"Invalid {field}: too long.")
-    if not _DOCKER_NAME_RE.match(name):
-        raise DeploymentSecurityError(
-            f"Invalid {field} '{name}': must match [a-zA-Z0-9][a-zA-Z0-9_.-]*.",
-            details={field: name},
-        )
-    return name
+    """Backward-compatible wrapper around the canonical Docker identifier policy."""
+    return validate_docker_component(name, field=field, max_length=256)
 
 
 def validate_celery_app(value: str) -> str:
