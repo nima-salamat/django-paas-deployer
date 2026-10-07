@@ -107,6 +107,34 @@ class DjangoDeploymentLifecycleStore:
             event_payload=event_payload,
         )
 
+    def journal_runtime_resource(
+        self,
+        context: DeploymentExecutionContext,
+        *,
+        kind: str,
+        name: str,
+        runtime_id: str = "",
+        state: str = "active",
+        metadata: Mapping[str, object] | None = None,
+    ) -> None:
+        """Record external runtime ownership without opening a long transaction."""
+        from deploy.models import DeploymentResource
+
+        if not name:
+            return
+        DeploymentResource.objects.update_or_create(
+            deployment_id=int(self.deployment_id),
+            kind=str(kind)[:64],
+            name=str(name)[:255],
+            defaults={
+                "runtime_id": str(runtime_id or "")[:255],
+                "state": str(state)[:32],
+                "owned": True,
+                "metadata": dict(metadata or {}),
+                "last_error": "",
+            },
+        )
+
     def is_terminal(self) -> bool:
         return sm.is_deploy_terminal(self.status)
 
