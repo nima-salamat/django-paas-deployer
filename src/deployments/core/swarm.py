@@ -1520,8 +1520,10 @@ class SwarmRuntime:
         labels: dict[str, str] | None = None,
         placement_constraints: Iterable[str] = (),
         healthcheck: dict[str, Any] | None = None,
+        replicas: int = 1,
     ) -> SwarmServiceState:
         """Run a prebuilt external image as a managed Swarm Service."""
+        replicas = _validate_replicas(replicas)
         from types import SimpleNamespace
 
         network_specs = [
@@ -1674,7 +1676,7 @@ class SwarmRuntime:
             self.ensure_network("proxy_net", attachable=True)
 
         image_ref = self.prepare_image(image_ref, config.name, config.tag)
-        spec = compile_compose_service(config, image_ref=image_ref, replicas=1)
+        spec = compile_compose_service(config, image_ref=image_ref, replicas=replicas)
         name = _validate_service_name(config.name)
         spec["services"][name]["deploy"]["placement"]["constraints"] = (
             self._apply_local_volume_pin(
