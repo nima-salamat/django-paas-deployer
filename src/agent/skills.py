@@ -401,22 +401,31 @@ persistent volume merely to fix a code/configuration issue.
 1. Inspect service status, shell metadata and runtime logs.
 2. Inspect `wp-content` before editing anything.
 3. Prefer the managed workspace file API for edits and verify each important write.
-4. This Ready App image includes WP-CLI 2.12.0 on PATH. Use `wp --info` or
-   `wp cli version` for a cheap runtime verification before CMS mutations.
-5. Use the interactive PTY for commands that need a persistent stdin session.
-6. After changes, verify PHP/Apache logs and request the affected public URL.
-7. Use a PassDeployer deployment/rebuild operation only when the change belongs
+4. The Ready App image includes a pinned WP-CLI runtime. Use `wordpress.status`
+or `wp --info` before CMS mutations so the Agent can distinguish a missing
+CLI from an uninstalled WordPress database.
+5. Prefer first-class WordPress tools for CMS actions; use the advanced WP-CLI
+   tool only when no structured operation exists.
+6. Use the interactive PTY for commands that need a persistent stdin session.
+7. After changes, verify WordPress status, PHP/Apache logs and request the affected public URL.
+8. Use a PassDeployer deployment/rebuild operation only when the change belongs
    to the immutable deployment/runtime configuration rather than persistent
    WordPress content.
 
 ## First-class tools
 
 Prefer these Agent tools when they are available:
-- `wordpress.inspect` for a structured site snapshot before making changes.
-- `wordpress.page.create` for creating Pages without manually building WP-CLI arguments.
+- `wordpress.status` for a structured readiness report and WP-CLI capability check.
+- `wordpress.inspect` for a structured CMS snapshot before making changes.
+- `wordpress.page.create` and `wordpress.page.update` for Page lifecycle.
 - `wordpress.plugin.manage` and `wordpress.theme.manage` for plugin/theme lifecycle operations.
+- `wordpress.core.update` for controlled core updates.
+- `wordpress.site.configure` for supported site options such as title, timezone, locale and permalinks.
+- `wordpress.cron.run` for running due cron events.
+- `wordpress.search_replace` for URL/content migrations; it is dry-run by default.
+- `wordpress.scale` for persisted web-replica scaling.
 - `wordpress.cache.flush` after cache-sensitive changes.
-- `wordpress.wp_cli` for other supported non-interactive WP-CLI operations.
+- `wordpress.wp_cli` for advanced supported non-interactive WP-CLI operations.
 
 The tool list is runtime- and scope-filtered. Do not assume a tool is enabled
 only because it is documented; call `/services/{service_id}/tools` first.
