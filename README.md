@@ -59,7 +59,7 @@ The `src/docs/` directory is a Django application for product document/public-as
 
 A Service is the durable user-owned workload. A ServiceRevision is immutable executable state. A Deploy records an execution operation and provenance; it is not the runtime owner.
 
-Each enabled ServiceProcess becomes one actual Swarm Service and the platform currently permits exactly one replica. Stop is represented by desired state plus scaling managed Swarm Services to zero; start/redeploy converges back to one replica.
+Each enabled ServiceProcess becomes one actual Swarm Service and the platform permits 1-8 running replicas. Stop is represented by desired state plus scaling managed Swarm Services to zero; start/redeploy restores the process's persisted replica count.
 
 Observed runtime comes from Docker Swarm Service/Task state. The database stores desired state and provenance.
 
