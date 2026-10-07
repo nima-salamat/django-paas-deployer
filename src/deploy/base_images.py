@@ -403,8 +403,7 @@ def _build_spec(
     ownership_check=None,
     timeout_seconds: float | None = None,
 ):
-    from deployments.common.docker_identity import canonical_image_ref, canonical_image_tag
-from deployments.common.resource_policy import resolve_build_policy
+    from deployments.common.resource_policy import resolve_build_policy
 
     effective_policy = resolve_build_policy(build_policy)
     logger.info("Building base runtime image %s from %s", spec.image_ref, spec.source_image)
