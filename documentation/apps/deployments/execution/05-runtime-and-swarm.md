@@ -95,58 +95,37 @@ Availability describes:
 
 ## RuntimeContract
 
-**Path:** `runtime/contract.py`
+Path: runtime/contract.py
 
 This is the semantic interface for a runtime backend.
 
-### `apply(plan, operation_key)`
+### apply(plan, operation_key, cancel_check)
 
-**Preconditions**
+The input is a native DeploymentPlan. The adapter must not require
+DeploymentConfig.
 
-- caller has a resolved plan;
-- plan capabilities are supported;
-- caller has execution ownership;
-- runtime is available.
+The operation key is part of the backend mutation boundary, and cancellation
+is passed into the runtime operation instead of being checked only by the
+caller before entering a blocking call.
 
-**Semantics**
+### inspect(identity)
 
-Make the external runtime represent the plan and return a RuntimeHandle.
+Returns observed runtime state and never invents desired state.
 
-**Postcondition**
+### wait_ready(handle, timeout, cancel_check)
 
-A handle is returned if the operation succeeded.
+Readiness is an interruptible polling operation. Swarm checks cancellation
+inside the polling loop and preserves the distinction between cancellation,
+timeout and runtime failure.
 
-### `inspect(identity)`
+### stop(handle) / remove(handle)
 
-Returns observed runtime state for the requested identity.
+Perform explicit mutations against the identified managed resource.
 
-It is observational and must not silently mutate desired state.
+### rollback(plan, operation_key, target_plan, cancel_check)
 
-### `wait_ready(handle, timeout, cancel_check)`
-
-Waits until backend-specific readiness is satisfied.
-
-The caller must not treat a handle returned by apply as automatically ready.
-
-### `stop(handle)` / `remove(handle)`
-
-Perform explicit lifecycle actions against the identified runtime resource.
-
-### `rollback(plan, target_plan)`
-
-Restore a known-good target plan. A runtime backend should reject rollback when no explicit target is available.
-
-### `logs(identity)`
-
-Returns runtime logs/diagnostics; it is observational.
-
-### Idempotency and operation keys
-
-Runtime results expose `changed` and `idempotent`.
-
-The fake runtime contract tests require repeating the same application operation to be recognized as idempotent rather than creating a duplicate logical resource.
-
-The operation key is a stable correlation/idempotency input. A backend may use it to make repeated calls safe.
+Rollback requires an explicit known-good target. The target plan carries the
+historical immutable artifact reference; rollback does not rebuild source.
 
 ## RuntimeHandle
 
