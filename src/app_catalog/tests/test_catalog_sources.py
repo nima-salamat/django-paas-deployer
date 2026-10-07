@@ -190,7 +190,7 @@ networks:
                 "services": {
                     "web": {
                         "x-passdeployer": {
-                            "dockerfile": "FROM alpine:3.20\\nARG TOOL_VERSION=1.2.3\\nRUN echo \\"${TOOL_VERSION}\\" > /version",
+                            "dockerfile": "FROM alpine:3.20\\nARG TOOL_VERSION=1.2.3\\nRUN echo \"${TOOL_VERSION}\" > /version",
                         },
                         "image": "example/web:1",
                     }
