@@ -60,6 +60,7 @@ class ApplicationStackExecutor:
                 plan_type=str(spec.get("plan_type") or "APP"),
                 dependencies=tuple(str(dep) for dep in (spec.get("depends_on") or ())),
                 required=bool(spec.get("required", True)),
+                replicas=int(spec.get("replicas") or 1),
             )
             for spec in specs
         ]
