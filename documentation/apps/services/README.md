@@ -71,3 +71,8 @@ models.md -> serializers.md -> api.md -> background.md -> tests.md. Then ../depl
 ## Wagtail administration
 
 The Wagtail Services surface keeps `Service`, `PrivateNetwork` and `Volume` as the configuration entry points and adds a read-only **Service inspection** view. It consolidates process definitions, endpoint/network/database bindings, volumes, revision/deployment history, sharing metadata, logical storage allocation and redacted security metadata. Secret values, encrypted secret ciphertext, database credential material and shell command/output are not displayed. The inspection view requires staff access plus `services.view_service`.
+
+## Contract references
+
+- [API reference](api.md)
+- [Complete model field reference](field-reference.md)
