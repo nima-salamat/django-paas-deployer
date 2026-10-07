@@ -6,6 +6,8 @@ from services.models import Service
 from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 import uuid
+import hashlib
+import json
 
 
 def zip_file_path(instance, filename):
@@ -45,6 +47,146 @@ class DeploymentResourceStateChoices(models.TextChoices):
     CLEANUP_PENDING = "cleanup_pending", _("Cleanup pending")
 
 
+class ReleaseStatusChoices(models.TextChoices):
+    PREPARED = "prepared", _("Prepared")
+    READY = "ready", _("Ready")
+    PROMOTED = "promoted", _("Promoted")
+    RETIRED = "retired", _("Retired")
+    FAILED = "failed", _("Failed")
+    ROLLED_BACK = "rolled_back", _("Rolled back")
+
+
+class BuildArtifact(BaseModel):
+    """Immutable application build identity, separate from cache retention."""
+
+    digest = models.CharField(max_length=255, unique=True, db_index=True)
+    image_ref = models.CharField(max_length=384)
+    source_digest = models.CharField(max_length=64, blank=True, default="")
+    build_definition_digest = models.CharField(max_length=64, blank=True, default="")
+    base_image_digests = models.JSONField(default=list, blank=True)
+    build_context_identity = models.CharField(max_length=255, blank=True, default="")
+    builder_backend = models.CharField(max_length=64, blank=True, default="")
+    platform_architecture = models.CharField(max_length=64, blank=True, default="")
+    provenance = models.JSONField(default=dict, blank=True)
+    created_by = models.ForeignKey(
+        "users.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="build_artifacts",
+    )
+
+    class Meta:
+        verbose_name = _("Build Artifact")
+        verbose_name_plural = _("Build Artifacts")
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ValidationError("BuildArtifact is immutable after creation.")
+        super().save(*args, **kwargs)
+
+
+class Release(BaseModel):
+    """Immutable promotable release; lifecycle status is mutable metadata."""
+
+    service = models.ForeignKey(
+        Service,
+        on_delete=models.CASCADE,
+        related_name="releases",
+    )
+    revision = models.ForeignKey(
+        "services.ServiceRevision",
+        on_delete=models.PROTECT,
+        related_name="releases",
+    )
+    artifact = models.ForeignKey(
+        "deploy.BuildArtifact",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="releases",
+    )
+    identity_fingerprint = models.CharField(max_length=64, unique=True, db_index=True)
+    runtime_spec = models.JSONField(default=dict, blank=True)
+    rollout_policy = models.JSONField(default=dict, blank=True)
+    health_policy = models.JSONField(default=dict, blank=True)
+    release_command = models.JSONField(default=dict, blank=True)
+    previous_release = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="successor_releases",
+    )
+    status = models.CharField(
+        max_length=24,
+        choices=ReleaseStatusChoices.choices,
+        default=ReleaseStatusChoices.PREPARED,
+        db_index=True,
+    )
+    provenance = models.JSONField(default=dict, blank=True)
+    promoted_at = models.DateTimeField(null=True, blank=True)
+    retired_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        "users.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="releases",
+    )
+
+    class Meta:
+        verbose_name = _("Release")
+        verbose_name_plural = _("Releases")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("service", "revision", "identity_fingerprint"),
+                name="uniq_release_identity_per_revision",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            original = type(self).objects.filter(pk=self.pk).values(
+                "service_id", "revision_id", "artifact_id", "identity_fingerprint",
+                "runtime_spec", "rollout_policy", "health_policy",
+                "release_command", "previous_release_id", "provenance", "created_by_id",
+            ).first()
+            if original:
+                immutable = {
+                    "service_id": self.service_id,
+                    "revision_id": self.revision_id,
+                    "artifact_id": self.artifact_id,
+                    "identity_fingerprint": self.identity_fingerprint,
+                    "runtime_spec": self.runtime_spec,
+                    "rollout_policy": self.rollout_policy,
+                    "health_policy": self.health_policy,
+                    "release_command": self.release_command,
+                    "previous_release_id": self.previous_release_id,
+                    "provenance": self.provenance,
+                    "created_by_id": self.created_by_id,
+                }
+                for key, old_value in original.items():
+                    if immutable[key] != old_value:
+                        raise ValidationError(f"Release immutable field changed: {key}")
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def fingerprint(cls, *, service_id, revision_id, artifact_digest, runtime_spec, rollout_policy, health_policy, release_command):
+        payload = {
+            "service_id": str(service_id),
+            "revision_id": str(revision_id),
+            "artifact_digest": str(artifact_digest or ""),
+            "runtime_spec": runtime_spec or {},
+            "rollout_policy": rollout_policy or {},
+            "health_policy": health_policy or {},
+            "release_command": release_command or {},
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+        ).hexdigest()
+
+
 class Deploy(BaseModel):
     name = models.CharField(verbose_name=_("Name"), max_length=50)
     service = models.ForeignKey(Service, verbose_name=_("Service"), on_delete=models.CASCADE)
@@ -68,6 +210,15 @@ class Deploy(BaseModel):
     )
     version = models.DecimalField(_("Version"), max_digits=5, decimal_places=2, default=0.00, help_text=_("Deployment version, e.g., 1.0"))
     release_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
+    # release_id remains the historical per-attempt UUID; release is the reusable immutable aggregate.
+    release = models.ForeignKey(
+        "deploy.Release", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="deployment_attempts",
+    )
+    artifact = models.ForeignKey(
+        "deploy.BuildArtifact", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="deployment_attempts",
+    )
     source_revision = models.CharField(max_length=255, blank=True, default="", db_index=True)
     image_ref = models.CharField(max_length=384, blank=True, default="")
     image_digest = models.CharField(max_length=255, blank=True, default="")
