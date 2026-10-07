@@ -217,3 +217,12 @@ First-party browser WebSockets carry a session-bound access JWT in the `token` q
 ## Legacy aliases
 
 `/api/login/` and `/api/signup/` delegate into the same unified authentication flow rather than implementing a second credential model.
+
+## Additional exact URL aliases
+
+The URL module also declares these trailing-slash forms explicitly:
+
+- `DELETE /api/sessions/{session_id}/` — `session_id` required.
+- `GET /api/admin/auth-codes/{pk}/` — `pk` required and admin permission applies.
+
+The project also retains both slash and no-slash token refresh/verify compatibility mounts where declared by `src/auth_users/urls.py`.
