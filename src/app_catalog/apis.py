@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from auth_users.authentication import SessionJWTAuthentication as JWTAuthentication
+from core.throttling import GlobalIPRateThrottle, GlobalUserRateThrottle, UserScopedRateThrottle
 from .catalog import ApplicationCatalog, CatalogValidationError
 from .models import ApplicationInstance, ApplicationStatus
 from .serializers import (
@@ -90,6 +91,14 @@ def _queue_ready_app_deletion(instance_id: str) -> bool:
 class CatalogPermissionMixin:
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
+    throttle_classes = [GlobalIPRateThrottle, GlobalUserRateThrottle, UserScopedRateThrottle]
+    throttle_user_rate = "10/min"
+    throttle_scope = "catalog.mutation"
+
+    def get_throttles(self):
+        if self.request.method in {"POST", "DELETE"}:
+            return [throttle() for throttle in self.throttle_classes]
+        return [GlobalIPRateThrottle(), GlobalUserRateThrottle()]
 
 
 class CatalogListAPIView(CatalogPermissionMixin, APIView):
