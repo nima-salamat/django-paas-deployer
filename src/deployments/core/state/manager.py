@@ -295,7 +295,7 @@ class StateManager:
             updates["execution_task_id"] = ""
             Deploy.objects.filter(pk=deploy_id).update(**updates)
 
-            release_id = getattr(deploy, "release_id", None)
+            release_id = getattr(deploy, "release_reference_id", None)
             if release_id:
                 from deploy.models import Release
                 Release.objects.filter(pk=release_id, revision_id=revision_id).update(
