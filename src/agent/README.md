@@ -8,7 +8,7 @@ Agent authentication, scopes, API contracts, rate limiting, idempotency and audi
 
 The Agent app does not become a Docker runtime owner, deployment orchestrator, second share/permission model, second log database, or second shell security system.
 
-The current production deployment path remains the audited `Celery task -> DeployService -> DeployFacade -> DeploymentOrchestrator` path. The newer `DeploymentLifecycleExecutor -> RuntimeContract -> RuntimeAdapter` architecture remains an underlying migration concern.
+The current production Swarm deployment path is the audited `Celery task -> DeployService -> DeploymentLifecycleExecutor -> RuntimeContract -> SwarmRuntimeAdapter` path. `DeployFacade`/`DeploymentOrchestrator` remain isolated compatibility components for legacy/non-Swarm callers.
 
 ## Authentication
 
