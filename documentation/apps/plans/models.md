@@ -34,3 +34,5 @@ Admin CRUD invalidates plan caches. Applying a plan to a Service is an explicit 
 Resource ceilings are enforced by consumers. A tenant cannot use a serializer or JSON config field to raise max_cpu/max_ram/max_storage. Logging limits are separate from Service disk quota.
 
 Source: src/plans/models.py.
+
+> **Complete field reference:** [field-reference.md](field-reference.md) lists every field explicitly declared in `src/plans/models.py`, including type, null/blank behavior, defaults, constraints and purpose.
