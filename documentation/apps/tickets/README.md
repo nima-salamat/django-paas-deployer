@@ -50,3 +50,7 @@ Ticket models are intentionally **not registered in Wagtail**. The existing staf
 
 - [API reference](api.md)
 - [Complete model field reference](field-reference.md)
+
+## Detailed contracts
+
+- [Detailed API reference](api-reference.md)
