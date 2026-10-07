@@ -39,6 +39,7 @@ class ServicePlan:
     required: bool = True
     networks: tuple[str, ...] = ()
     working_directory: str | None = None
+    replicas: int = 1
 
     @property
     def build_kind(self) -> str:
@@ -166,6 +167,7 @@ def plan_from_resolved(resolved: dict[str, Any]) -> ApplicationPlan:
                 required=bool(raw.get("required", True)),
                 networks=tuple(str(x) for x in (raw.get("networks") or ("default",))),
                 working_directory=(str(raw.get("working_directory")) if raw.get("working_directory") else None),
+                 replicas=int(raw.get("replicas") or 1),
             )
         )
     plan = ApplicationPlan(
