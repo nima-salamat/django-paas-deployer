@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 from .common import *  # noqa
 
 def _docker_volume_names(volume) -> list:
-    """Candidate Docker volume names (canonical first)."""
+    """Return canonical first, with the logical row name as legacy fallback."""
     names = []
     try:
         canonical = volume.get_docker_volume_name()
@@ -55,13 +55,6 @@ def _docker_volume_names(volume) -> list:
         pass
     if volume.name and volume.name not in names:
         names.append(volume.name)
-    # legacy patterns sometimes used
-    try:
-        short = f"vol-{volume.id.hex[:8]}-{volume.name}"
-        if short not in names:
-            names.append(short)
-    except Exception:
-        pass
     return names
 
 
