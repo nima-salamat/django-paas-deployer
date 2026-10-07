@@ -55,7 +55,7 @@ def _uuid8(value: Any, *, field: str) -> str:
 
 def validate_docker_component(value: Any, *, field: str, max_length: int = 256) -> str:
     """Validate one Docker name component without rewriting it."""
-    cleaned = _text(value)
+    cleaned = _raw(value)
     if not cleaned:
         raise DeploymentSecurityError(
             f"Invalid {field}: value is empty.",
@@ -157,7 +157,7 @@ def canonical_service_name(service_id: Any, service_name: Any) -> str:
 def legacy_service_name_candidates(service_id: Any, service_name: Any) -> tuple[str, ...]:
     """Return canonical + historical service/container names for lookup only."""
     sid = _uuid8(service_id, field="service_id")
-    raw_name = _text(service_name).lower()
+    raw_name = _raw(service_name).lower()
     canonical = canonical_service_name(sid, raw_name)
     # These are historical names used by the project before the current
     # app-<id8>-<name> contract was stabilized.
