@@ -11,11 +11,12 @@ import zipfile
 from django.http import FileResponse, Http404
 from django.utils import timezone
 from services.models import Service
-from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated
 from auth_users.authentication import SessionJWTAuthentication as JWTAuthentication
 from rest_framework.response import Response
 from rest_framework import status
+from core.throttling import GlobalIPRateThrottle, GlobalUserRateThrottle, UserScopedRateThrottle
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 from .common import _get_service_for_user_or_share
@@ -133,6 +134,7 @@ def shell_catalog_apiview(request, service_id):
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
+@throttle_classes([GlobalIPRateThrottle, GlobalUserRateThrottle, UserScopedRateThrottle])
 def shell_create_apiview(request, service_id):
     try:
         service = _resolve(request, service_id, action="can_shell")
@@ -186,6 +188,7 @@ def shell_create_apiview(request, service_id):
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
+@throttle_classes([GlobalIPRateThrottle, GlobalUserRateThrottle, UserScopedRateThrottle])
 def shell_replace_apiview(request, service_id):
     """Replace the only active shell session after a privileged confirmation."""
     try:
@@ -256,6 +259,7 @@ def _shell_error_response(exc):
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
+@throttle_classes([GlobalIPRateThrottle, GlobalUserRateThrottle, UserScopedRateThrottle])
 def shell_command_apiview(request, service_id):
     try:
         service = _resolve(request, service_id, action="can_shell")
@@ -290,6 +294,7 @@ def shell_close_apiview(request, service_id):
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
+@throttle_classes([GlobalIPRateThrottle, GlobalUserRateThrottle, UserScopedRateThrottle])
 def shell_tree_apiview(request, service_id):
     """Fast directory listing. Expensive permission metadata is deferred."""
     try:
@@ -353,6 +358,7 @@ def shell_tree_apiview(request, service_id):
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
+@throttle_classes([GlobalIPRateThrottle, GlobalUserRateThrottle, UserScopedRateThrottle])
 def shell_tree_meta_apiview(request, service_id):
     """Batch effective RW metadata after the fast tree has rendered."""
     try:
@@ -627,6 +633,7 @@ def _download_single_docker_file(container, path: str, filename: str):
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
+@throttle_classes([GlobalIPRateThrottle, GlobalUserRateThrottle, UserScopedRateThrottle])
 def shell_download_apiview(request, service_id):
     try:
         service = _resolve(request, service_id, action="can_shell")
@@ -703,6 +710,7 @@ def shell_download_apiview(request, service_id):
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
+@throttle_classes([GlobalIPRateThrottle, GlobalUserRateThrottle, UserScopedRateThrottle])
 def shell_file_apiview(request, service_id):
     """Read/write a text file inside the restricted work directory without a TTY editor."""
     try:
