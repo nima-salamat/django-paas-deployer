@@ -179,6 +179,28 @@ networks:
         self.assertIn("sha512sum -c -", wordpress["dockerfile"])
         self.assertFalse(wordpress.get("command"))
 
+    def test_inline_dockerfile_preserves_native_build_variables(self):
+        resolved = compose_to_resolved(
+            document={
+                "services": {
+                    "web": {
+                        "x-passdeployer": {
+                            "dockerfile": "FROM alpine:3.20\\nARG TOOL_VERSION=1.2.3\\nRUN echo \\"${TOOL_VERSION}\\" > /version",
+                        },
+                        "image": "example/web:1",
+                    }
+                }
+            },
+            metadata={},
+            config={},
+            secrets={},
+            catalog_id="native-dockerfile-vars",
+            version="1",
+        )
+        dockerfile = resolved["services"][0]["dockerfile"]
+        self.assertIn("${TOOL_VERSION}", dockerfile)
+        self.assertNotIn("tool_version", {field["id"] for field in resolved["fields"]})
+
     def test_wordpress_version_is_selectable_and_pinned_to_official_tags(self):
         definition = ApplicationCatalog.get("wordpress")
         variant = definition.variants["default"]
