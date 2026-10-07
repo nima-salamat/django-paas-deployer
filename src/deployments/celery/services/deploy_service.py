@@ -1266,6 +1266,7 @@ class DeployService:
             NetworkSpec(name=str(name), driver=str(driver or "overlay"))
             for name, driver in networks
         ]
+        deployment_deadline = DeploymentDeadline.from_deployment(deploy_item)
         build_config = DeploymentConfig(
             name=container_name,
             tag=tag,
@@ -1416,7 +1417,7 @@ class DeployService:
             )
             built_image = image.create(
                 cancel_check=current_context.cancellation_requested,
-                timeout_seconds=3600.0,
+                timeout_seconds=deployment_deadline.bound(3600.0) or 0.0,
             )
             current_context.assert_can_continue()
 
@@ -1616,7 +1617,12 @@ class DeployService:
             context,
             strategy,
             runtime,
-            readiness_timeout=float(cfg.get("health_timeout") or healthcheck_timeout or 60.0),
+            readiness_timeout=(
+                deployment_deadline.bound(
+                    float(cfg.get("health_timeout") or healthcheck_timeout or 60.0)
+                )
+                or 0.0
+            ),
         )
         if result.success:
             return result
