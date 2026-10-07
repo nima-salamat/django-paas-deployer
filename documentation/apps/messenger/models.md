@@ -69,3 +69,5 @@ Do not treat cached presence, online flags or WebSocket membership as durable au
 MessengerEvent.payload is the main JSON contract: producers write event-specific bounded keys and consumers render/broadcast them. Do not expose arbitrary payload keys as public API without a corresponding event contract.
 
 Source: src/messenger/models.py.
+
+> **Complete field reference:** [field-reference.md](field-reference.md) lists every field explicitly declared in `src/messenger/models.py`, including type, null/blank behavior, defaults, constraints and purpose.
