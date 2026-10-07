@@ -45,6 +45,7 @@ The `src/docs/` directory is a Django application for product document/public-as
 - `src/deploy`: deployment operation/history and lifecycle metadata.
 - `src/deployments`: build/execution engine, Swarm runtime, readiness, reconciliation and cleanup.
 - `src/app_catalog`: declarative catalog definitions, Compose normalization and multi-service installation planning.
+- `src/agent`: machine control-plane authentication, scopes, API contracts, audit and delegated operations.
 - `src/plans`: resource/execution policy.
 - `src/logs`: runtime/deployment log ingestion and retention.
 - `src/core`: cross-cutting platform facilities.
