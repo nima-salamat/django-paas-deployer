@@ -1671,8 +1671,10 @@ class SwarmRuntime:
             expected_image=expected_image,
         )
 
-    def apply(self, config, *, image_ref: str, replicas: int = 1, operation_key: str | None = None, prepared_image_ref: str | None = None) -> SwarmServiceState:
+    def apply(self, config, *, image_ref: str, replicas: int = 1, operation_key: str | None = None, prepared_image_ref: str | None = None, cancel_check: Callable[[], bool] | None = None) -> SwarmServiceState:
         replicas = _validate_replicas(replicas)
+        if cancel_check is not None and cancel_check():
+            raise DeploymentError("Swarm apply was cancelled before runtime mutation.", stage="swarm_apply", code="SWARM_OPERATION_CANCELLED", user_message="Deployment was cancelled.")
         self.assert_active()
         for network in config.networks or ():
             self.ensure_network(network.name, attachable=True)
@@ -1776,6 +1778,7 @@ class SwarmRuntime:
             name,
             timeout=startup_timeout,
             expected_image=expected_image,
+            cancel_check=cancel_check,
         )
 
     def scale_service(self, name: str, replicas: int, *, timeout: float = 180.0) -> SwarmServiceState:
