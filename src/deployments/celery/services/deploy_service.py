@@ -607,8 +607,11 @@ class DeployService:
         # A catalog Dockerfile owns its image-level ENTRYPOINT. Legacy Deploy
         # rows may still carry that path in the compatibility entry_point field;
         # never let that stale value replace/duplicate the image bootstrap command.
+        # _execute_orchestrator receives the already-normalized cfg from
+        # _process_deployment; do not reach back into that method's local
+        # revision snapshot. cfg/source_kind is the same immutable value here.
         catalog_source_kind = str(
-            (revision_snapshot or {}).get("source_kind")
+            cfg.get("source_kind")
             or getattr(service, "source_kind", "")
         ).strip().lower()
         if (
