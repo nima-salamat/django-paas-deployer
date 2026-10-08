@@ -55,3 +55,13 @@ def test_activation_callback_is_forwarded_through_the_service_orchestrator_bound
     assert "*, cfg: dict, activation_callback=None," in source
     assert "cfg=cfg, activation_callback=activation_callback," in source
     assert "activation_callback=activation_callback," in source
+
+def test_revision_snapshot_is_local_and_catalog_warning_uses_service_from_deploy_item():
+    """Catalog build normalization must not reference undefined legacy locals."""
+    source = _source("deployments/celery/services/deploy_service.py")
+
+    assert "revision_config" not in source
+    assert 'revision_snapshot = (' in source
+    assert 'materialize_revision_config(deploy_item.revision)' in source
+    assert 'using immutable revision Dockerfile for build. deployment=%s service=%s' in source
+    assert '                    deploy_item.pk,\n                    deploy_item.service.pk,\n' in source
