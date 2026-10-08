@@ -61,13 +61,14 @@ jobs:
           set -eux
           ENTRYPOINT_JSON="$(docker image inspect passdeployer-wordpress-contract:test --format '{{json .Config.Entrypoint}}')"
           CMD_JSON="$(docker image inspect passdeployer-wordpress-contract:test --format '{{json .Config.Cmd}}')"
-          test "$ENTRYPOINT_JSON" = '["/usr/local/bin/passdeployer-wordpress-entrypoint.sh"]'
-          test "$CMD_JSON" = '["apache2-foreground"]'
+          test "$ENTRYPOINT_JSON" = '["docker-ensure-installed.sh"]'
+          test "$CMD_JSON" = '["/usr/local/bin/passdeployer-wordpress-entrypoint.sh","apache2-foreground"]'
 
-      - name: Assert WordPress bootstrap uses the official preparation hook
+      - name: Assert WordPress uses the official preparation entrypoint
         run: |
           set -eux
-          docker run --rm --entrypoint sh passdeployer-wordpress-contract:test -c             'grep -F "/usr/local/bin/docker-ensure-installed.sh true" /usr/local/bin/passdeployer-wordpress-entrypoint.sh'
+          docker run --rm --entrypoint sh passdeployer-wordpress-contract:test -c             'test "$(readlink -f /usr/local/bin/docker-ensure-installed.sh)" = "/usr/local/bin/docker-entrypoint.sh"'
+          docker run --rm --entrypoint sh passdeployer-wordpress-contract:test -c             '! grep -Fq "docker-ensure-installed.sh true" /usr/local/bin/passdeployer-wordpress-entrypoint.sh'
 
       - name: Run MariaDB and WordPress
         run: |
