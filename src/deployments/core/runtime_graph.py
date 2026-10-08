@@ -151,12 +151,12 @@ class ServiceRuntimeGraph:
             command = raw.get("command")
             entrypoint = raw.get("entrypoint")
 
-            # Ready App executable semantics are owned by the immutable catalog
-            # artifact and runtime snapshot, not by stale mutable ServiceProcess rows.
-            # When a catalog Dockerfile owns ENTRYPOINT but an older revision did
-            # not persist an explicit CMD, recover that exact CMD from the revision's
-            # Dockerfile so the image-owned Swarm contract receives deterministic Args.
-            if catalog_managed and not catalog_command_is_explicit:
+            # For a catalog image that owns ENTRYPOINT, Dockerfile CMD is the
+            # executable authority. Legacy ServiceProcess/runtime snapshots can
+            # contain an explicit but stale shell wrapper (for example /bin/sh -lc
+            # ...) that shadows the immutable image CMD and makes Swarm execute a
+            # command that is absent from the artifact.
+            if catalog_managed and dockerfile_owns_entrypoint and dockerfile_default_cmd:
                 command = dockerfile_default_cmd
 
             if dockerfile_owns_entrypoint:
@@ -182,8 +182,6 @@ class ServiceRuntimeGraph:
             contract_options = runtime
             if stored_contract and not (catalog_managed and dockerfile_owns_entrypoint):
                 contract_options = {**runtime, "execution_contract": stored_contract}
-            if catalog_managed and dockerfile_owns_entrypoint and dockerfile_default_cmd:
-                command = dockerfile_default_cmd
             execution_contracts[process.name] = RuntimeExecutionContract.from_runtime(
                 process_name=process.name,
                 process_command=process.command,
