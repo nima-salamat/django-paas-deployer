@@ -8,7 +8,7 @@ from typing import Any, Callable, Mapping
 
 from deployments.common.exceptions import StaleDeploymentWorkerError
 from deployments.runtime.contract import RuntimeContract, RuntimeHandle, RuntimeOperationResult, RuntimeSelection
-from deployments.runtime.errors import RuntimeUnavailableError, RuntimeUnsupportedError
+from deployments.runtime.errors import RuntimeOperationError, RuntimeUnavailableError, RuntimeUnsupportedError
 
 from .planner import DesiredRuntimeState, ReconciliationAction, ReconciliationDecision
 
