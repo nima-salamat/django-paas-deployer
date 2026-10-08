@@ -1332,6 +1332,9 @@ def _reconcile_service_runtime_swarm(service: Service) -> None:
             )
             if locked is None:
                 return
+            # Everything below must operate on the row re-read after the
+            # per-service advisory lock is acquired. The monitor input may be stale.
+            service = locked
             # DeploymentLifecycleExecutor owns runtime mutation while an attempt is
             # active. The service-level reconciler must not invent a second plan from
             # the pre-activation state (active_revision can still point to the previous
