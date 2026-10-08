@@ -369,7 +369,7 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             service_doc["args"],
             [
                 "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-                "apache2-foreground",
+                "/usr/local/bin/apache2-foreground",
             ],
         )
 
@@ -386,7 +386,7 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             kwargs["args"],
             [
                 "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-                "apache2-foreground",
+                "/usr/local/bin/apache2-foreground",
             ],
         )
 
@@ -397,7 +397,7 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             dockerfile_template=(
                 "FROM wordpress:7.1.2-php8.4-apache\n"
                 'ENTRYPOINT ["/usr/local/bin/docker-ensure-installed.sh"]\n'
-                'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "apache2-foreground"]\n'
+                'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "/usr/local/bin/apache2-foreground"]\n'
             ),
             runtime_options={
                 "catalog_managed": True,
@@ -412,7 +412,7 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             service_doc["args"],
             [
                 "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-                "apache2-foreground",
+                "/usr/local/bin/apache2-foreground",
             ],
         )
 
@@ -429,7 +429,7 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             kwargs["args"],
             [
                 "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-                "apache2-foreground",
+                "/usr/local/bin/apache2-foreground",
             ],
         )
 
@@ -453,7 +453,7 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             service_doc["args"],
             [
                 "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-                "apache2-foreground",
+                "/usr/local/bin/apache2-foreground",
             ],
         )
 
@@ -470,7 +470,7 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             kwargs["args"],
             [
                 "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-                "apache2-foreground",
+                "/usr/local/bin/apache2-foreground",
             ],
         )
 
