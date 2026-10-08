@@ -69,6 +69,11 @@ class ReadyApplicationRuntimeTests(TestCase):
                 "plan_id": app_plan.pk,
                 "config": {
                     "domain": "wordpress.integration.test",
+                    "wordpress_site_title": "Runtime WordPress Integration",
+                    "wordpress_admin_user": "runtime-admin",
+                    "wordpress_admin_email": "runtime-wordpress-integration@example.invalid",
+                    "wordpress_admin_password": "runtime-admin-password-123",
+                    "wordpress_table_prefix": "wp_",
                 },
             },
         )
