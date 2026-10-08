@@ -59,6 +59,29 @@ class DeploymentActivationConsistencyContractTests(unittest.TestCase):
     def test_deploy_worker_does_not_overwrite_lifecycle_intent(self):
         self.assertNotIn("objects.filter(pk=deploy_item.service_id).update(desired_state=\"running\")", self.service)
 
+    def test_native_activation_passes_lifecycle_and_previous_deploy_fences(self):
+        state_manager = (ROOT / "deployments/core/state/manager.py").read_text()
+        store = (ROOT / "deployments/infrastructure/django_lifecycle.py").read_text()
+        self.assertIn("expected_lifecycle_generation", state_manager)
+        self.assertIn("expected_previous_deploy_id", state_manager)
+        self.assertIn("enforce_previous_deploy", state_manager)
+        self.assertIn("get_authoritative_deploy(service)", state_manager)
+        self.assertIn("expected_lifecycle_generation=context.expected_lifecycle_generation", store)
+        self.assertIn("expected_previous_deploy_id=context.expected_previous_deploy_id", store)
+        self.assertIn("enforce_previous_deploy=context.enforce_previous_deploy", store)
+        self.assertIn("enforce_previous_deploy=True", self.service)
+
+    def test_runtime_graph_has_no_service_domain_dependency(self):
+        graph = (ROOT / "deployments/core/runtime_graph.py").read_text()
+        self.assertNotIn("from services.revisioning import", graph)
+        self.assertNotIn("from services.", graph)
+
+    def test_initial_failure_has_runtime_cleanup_contract(self):
+        lifecycle = (ROOT / "deployments/application/lifecycle.py").read_text()
+        self.assertIn("cleanup_attempted", lifecycle)
+        self.assertIn("runtime.remove", lifecycle)
+        self.assertIn("There is no previous release to roll back to", lifecycle)
+
     def test_activation_is_fenced_by_service_lifecycle_generation(self):
         self.assertIn("expected_lifecycle_generation", self.service)
         self.assertIn("actual_lifecycle_generation != expected_lifecycle_generation", self.service)
