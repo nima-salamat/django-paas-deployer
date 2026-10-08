@@ -407,6 +407,52 @@ def test_cross_platform_runtime_contract_matrix(
         assert service["args"] == list(contract.args)
 
 
+def test_artifact_preflight_rejects_missing_image_owned_executable():
+    client = MagicMock()
+    image = MagicMock()
+    image.attrs = {
+        "Id": "sha256:artifact",
+        "RepoDigests": ["registry.example/wordpress@sha256:artifact"],
+        "Config": {
+            "Entrypoint": ["docker-ensure-installed.sh"],
+            "Cmd": [
+                "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+                "apache2-foreground",
+            ],
+        },
+        "Os": "linux",
+        "Architecture": "amd64",
+    }
+    client.images.get.return_value = image
+    probe = MagicMock()
+    probe.wait.return_value = {"StatusCode": 41}
+    client.containers.create.return_value = probe
+    runtime = SwarmRuntime(client)
+    contract = RuntimeExecutionContract(
+        entrypoint_source="IMAGE",
+        image_entrypoint=("docker-ensure-installed.sh",),
+        image_cmd=(
+            "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+            "apache2-foreground",
+        ),
+        command=None,
+        args=(
+            "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+            "apache2-foreground",
+        ),
+        catalog_managed=True,
+        image_entrypoint_owned=True,
+    )
+
+    with pytest.raises(DeploymentError) as exc:
+        runtime._validate_image_artifact("wordpress:r1", contract=contract)
+
+    assert exc.value.code == "RUNTIME_ARTIFACT_FILE_MISSING"
+    assert exc.value.details["required_executables"] == [
+        "/usr/local/bin/passdeployer-wordpress-entrypoint.sh"
+    ]
+
+
 def test_runtime_contract_fingerprint_is_deterministic_and_boundary_specific():
     contract = RuntimeExecutionContract(
         entrypoint_source="IMAGE",
