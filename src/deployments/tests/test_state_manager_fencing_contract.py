@@ -98,3 +98,15 @@ def test_deploy_runtime_routing_fails_closed_instead_of_running_app_path():
     assert "raise translated from exc" in guard
     assert "continuing app path" not in guard
 
+
+
+def test_db_success_uses_same_activation_fence_as_native_lifecycle():
+    source = (ROOT / "deployments/celery/tasks.py").read_text(encoding="utf-8")
+    method = source.split("def _mark_success", 1)[1].split(
+        "def _mark_failure", 1
+    )[0]
+    assert "expected_lifecycle_generation" in method
+    assert "expected_previous_deploy_id" in method
+    assert "enforce_previous_deploy=True" in method
+    assert "getattr(service, " + ""lifecycle_generation"" + ", 0)" in method
+
