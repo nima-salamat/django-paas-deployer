@@ -249,7 +249,7 @@ class ServiceRuntimeGraph:
                 "definition_version": source_snapshot.get("definition_version"),
                 "runtime_contract_hashes": runtime_contract_hashes,
                 "runtime_contract_hash": (
-                    primary_contract.fingerprint(boundary="revision")
+                    primary_contract.contract_hash()
                     if primary_contract is not None
                     else ""
                 ),
