@@ -64,6 +64,11 @@ jobs:
           test "$ENTRYPOINT_JSON" = '["/usr/local/bin/passdeployer-wordpress-entrypoint.sh"]'
           test "$CMD_JSON" = '["apache2-foreground"]'
 
+      - name: Assert WordPress bootstrap uses the official preparation hook
+        run: |
+          set -eux
+          docker run --rm --entrypoint sh passdeployer-wordpress-contract:test -c             'grep -F "/usr/local/bin/docker-ensure-installed.sh true" /usr/local/bin/passdeployer-wordpress-entrypoint.sh'
+
       - name: Run MariaDB and WordPress
         run: |
           set -eux
