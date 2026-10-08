@@ -1,5 +1,6 @@
 import io
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -37,6 +38,94 @@ def _detection():
         confidence=1.0,
         matched_files=["Dockerfile"],
     )
+
+
+def test_restart_only_refuses_stale_catalog_image_entrypoint(monkeypatch):
+    from deployments.celery.helpers import DeploymentHelper
+
+    service = SimpleNamespace(
+        pk="service-1",
+        deployed_at=SimpleNamespace(),
+        source_kind="catalog",
+        active_revision=SimpleNamespace(
+            pk="revision-current",
+            activated_at=None,
+            config_snapshot={"source_kind": "catalog"},
+            build_snapshot={
+                "dockerfile": (
+                    "FROM wordpress:7.1.2-php8.4-apache\n"
+                    'ENTRYPOINT ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh"]\n'
+                    'CMD ["apache2-foreground"]\n'
+                )
+            },
+        ),
+    )
+    deploy = SimpleNamespace(
+        service=service,
+        revision_id="revision-current",
+        updated_file_at=None,
+    )
+
+    container = MagicMock()
+    container.exists.return_value = True
+    container.get_image_identifier.return_value = "sha256:old"
+    client_container = MagicMock()
+    client_container.image.attrs = {
+        "Config": {
+            "Entrypoint": None,
+            "Labels": {"io.passdeployer.revision": "revision-current"},
+        }
+    }
+    container.client.containers.get.return_value = client_container
+
+    monkeypatch.setattr("deployments.celery.helpers.Container", lambda name: container)
+    monkeypatch.setattr("deployments.celery.helpers.Image.check_exists", lambda image: True)
+
+    assert DeploymentHelper.is_restart_only(deploy, "wordpress") is False
+
+
+def test_restart_only_accepts_current_catalog_image(monkeypatch):
+    from deployments.celery.helpers import DeploymentHelper
+
+    service = SimpleNamespace(
+        pk="service-1",
+        deployed_at=SimpleNamespace(),
+        source_kind="catalog",
+        active_revision=SimpleNamespace(
+            pk="revision-current",
+            activated_at=None,
+            config_snapshot={"source_kind": "catalog"},
+            build_snapshot={
+                "dockerfile": (
+                    "FROM wordpress:7.1.2-php8.4-apache\n"
+                    'ENTRYPOINT ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh"]\n'
+                    'CMD ["apache2-foreground"]\n'
+                )
+            },
+        ),
+    )
+    deploy = SimpleNamespace(
+        service=service,
+        revision_id="revision-current",
+        updated_file_at=None,
+    )
+
+    container = MagicMock()
+    container.exists.return_value = True
+    container.get_image_identifier.return_value = "sha256:current"
+    client_container = MagicMock()
+    client_container.image.attrs = {
+        "Config": {
+            "Entrypoint": ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh"],
+            "Labels": {"io.passdeployer.revision": "revision-current"},
+        }
+    }
+    container.client.containers.get.return_value = client_container
+
+    monkeypatch.setattr("deployments.celery.helpers.Container", lambda name: container)
+    monkeypatch.setattr("deployments.celery.helpers.Image.check_exists", lambda image: True)
+
+    assert DeploymentHelper.is_restart_only(deploy, "wordpress") is True
 
 
 def test_legacy_catalog_revision_drops_dockerfile_owned_process_entrypoint():
