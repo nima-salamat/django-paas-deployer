@@ -20,7 +20,12 @@ from django.conf import settings
 from django.utils import timezone
 
 from deployments.common.docker_identity import canonical_remote_image_ref, canonical_swarm_service_name
-from deployments.common.exceptions import DeploymentError
+from deployments.common.exceptions import (
+    DeploymentError,
+    FailureCertainty,
+    FailureDomain,
+    Retryability,
+)
 from deployments.core.manager.client_manager import get_docker_client
 from deployments.core.routing import public_http_endpoints, resolve_public_host
 from deployments.runtime.execution_contract import (
@@ -399,7 +404,9 @@ def compile_compose_service(config, *, image_ref: str, replicas: int = 1) -> dic
                 "Swarm ContainerSpec runtime contract mismatch: "
                 f"expected={validation['expected']!r}; actual={validation['actual']!r}"
             ),
-            certainty="OBSERVED",
+            certainty=FailureCertainty.OBSERVED,
+            failure_domain=FailureDomain.INTERNAL_BUG,
+            retryability=Retryability.NEVER,
             details={
                 "boundary": validation["boundary"],
                 "expected_entrypoint": contract.image_entrypoint,
@@ -828,7 +835,16 @@ class SwarmRuntime:
         diagnostics = {
             **provenance,
             "image_ref": image_ref,
-            "image_digest": str(getattr(image, "id", "") or ""),
+            "image_digest": (
+                next(
+                    (
+                        str(value)
+                        for value in (getattr(image, "attrs", {}) or {}).get("RepoDigests") or ()
+                        if str(value).strip()
+                    ),
+                    str(getattr(image, "id", "") or ""),
+                )
+            ),
             "image_entrypoint": list(observed_entrypoint),
             "image_cmd": list(observed_cmd),
             "os": str(attrs.get("Os") or ""),
@@ -845,7 +861,7 @@ class SwarmRuntime:
                     stage="image_validation",
                     code="RUNTIME_ARTIFACT_ENTRYPOINT_MISMATCH",
                     user_message="The application artifact has invalid executable metadata and was stopped before Swarm startup.",
-                    certainty="OBSERVED",
+                    certainty=FailureCertainty.OBSERVED,
                     details=diagnostics | {
                         "failure_reason": "image_entrypoint_mismatch",
                         "observed_entrypoint": list(observed_entrypoint),
@@ -890,7 +906,7 @@ class SwarmRuntime:
                     code = "RUNTIME_ARTIFACT_FILE_MISSING"
                     certainty = FailureCertainty.OBSERVED
                 elif "not executable" in message:
-                    code = "RUNTIME_ARTIFACT_EXECUTION_INVALID"
+                    code = "RUNTIME_ARTIFACT_EXECUTION_PERMISSION_DENIED"
                     certainty = FailureCertainty.OBSERVED
                 else:
                     code = "RUNTIME_ARTIFACT_EXECUTION_INVALID"
