@@ -390,6 +390,47 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             ],
         )
 
+    def test_image_owned_entrypoint_ignores_stale_config_entry_point(self):
+        config = _config(
+            entry_point="/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+            start_command="/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground",
+            runtime_options={
+                "placement_constraints": ["node.labels.region == eu"],
+                "image_entrypoint_owned": True,
+            },
+        )
+        spec = compile_compose_service(config, image_ref="wordpress:test")
+        service_doc = spec["services"]["demo"]
+
+        # The image's ENTRYPOINT must be inherited; a stale compatibility
+        # value must not replace it with /bin/sh -lc at the Swarm boundary.
+        self.assertIsNone(service_doc["command"])
+        self.assertIsNone(service_doc["entrypoint"])
+        self.assertEqual(
+            service_doc["args"],
+            [
+                "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+                "apache2-foreground",
+            ],
+        )
+
+        runtime = SwarmRuntime.__new__(SwarmRuntime)
+        with patch.object(runtime, "_apply_local_volume_pin", return_value=[]):
+            kwargs = runtime._create_kwargs(
+                config,
+                image_ref="wordpress:test",
+                compose_spec=spec,
+            )
+
+        self.assertIsNone(kwargs["command"])
+        self.assertEqual(
+            kwargs["args"],
+            [
+                "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+                "apache2-foreground",
+            ],
+        )
+
     def test_create_kwargs_preserve_effective_start_command(self):
         config = _config(
             entry_point="python app.py --port 8000",
