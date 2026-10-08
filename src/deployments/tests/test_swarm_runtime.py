@@ -355,7 +355,7 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
     def test_image_owned_entrypoint_uses_swarm_args_instead_of_command(self):
         config = _config(
             entry_point=None,
-            start_command="/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground",
+            start_command="/usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground",
             runtime_options={
                 "placement_constraints": ["node.labels.region == eu"],
                 "image_entrypoint_owned": True,
@@ -393,7 +393,7 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
     def test_catalog_managed_dockerfile_entrypoint_is_inferred_at_swarm_boundary(self):
         config = _config(
             entry_point="/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-            start_command="/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground",
+            start_command="/usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground",
             dockerfile_template=(
                 "FROM wordpress:7.1.2-php8.4-apache\n"
                 'ENTRYPOINT ["/usr/local/bin/docker-ensure-installed.sh"]\n'
@@ -436,7 +436,7 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
     def test_image_owned_entrypoint_ignores_stale_config_entry_point(self):
         config = _config(
             entry_point="/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-            start_command="/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground",
+            start_command="/usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground",
             runtime_options={
                 "placement_constraints": ["node.labels.region == eu"],
                 "image_entrypoint_owned": True,
