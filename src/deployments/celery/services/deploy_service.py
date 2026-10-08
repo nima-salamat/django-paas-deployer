@@ -70,6 +70,25 @@ def _docker_tag_from_deploy(version) -> str:
 
 
 
+def _native_swarm_image_tag(version, release_id) -> str:
+    """Create an immutable runtime tag for one native Swarm artifact.
+
+    Deploy.version remains a compatibility/display version such as ``1.00``.
+    Native Swarm tasks must never reuse that mutable tag because Docker Swarm
+    may keep resolving an older image digest associated with the same tag.
+    """
+    base = _docker_tag_from_deploy(version)
+    release_token = str(getattr(release_id, "hex", release_id) or "").replace("-", "")
+    release_token = re.sub(r"[^0-9A-Fa-f]", "", release_token)[:12].lower()
+    if not release_token:
+        raise DeploymentValidationError(
+            "Native Swarm deployments require a release identity before image build.",
+            stage="image_build",
+            code="SWARM_RELEASE_ID_MISSING",
+            user_message="The deployment could not create an immutable runtime image identity.",
+        )
+    return canonical_image_tag(f"{base}-r{release_token}")
+
 # Backward-compatible symbol for older internal callers/tests. It does not
 # transform the version; it returns the model value unchanged.
 _docker_safe_tag = _docker_tag_from_deploy
@@ -1378,7 +1397,7 @@ class DeployService:
                 details={"backend": selection.backend},
             )
 
-        tag = _docker_tag_from_deploy(deploy_item.version)
+        tag = _native_swarm_image_tag(deploy_item.version, deploy_item.release_id)
         build_networks = [
             NetworkSpec(name=str(name), driver=str(driver or "overlay"))
             for name, driver in networks
@@ -1898,7 +1917,10 @@ class DeployService:
             graph=runtime_graph,
             selection=selection,
             resolved=resolved,
-            image_ref=canonical_image_ref(container_name, deploy_item.version),
+            image_ref=canonical_image_ref(
+                container_name,
+                _native_swarm_image_tag(deploy_item.version, deploy_item.release_id),
+            ),
         )
 
     # ------------------------------------------------------------------
