@@ -27,7 +27,7 @@ from ..contract import (
     RuntimeOperationResult,
 )
 from ..errors import RuntimeOperationError, RuntimeUnavailableError, RuntimeUnsupportedError
-from ..execution_contract import RuntimeExecutionContract
+from ..execution_contract import RuntimeExecutionContract, worker_provenance
 from ..observations import (
     RuntimeObservation,
     RuntimeObservedStatus,
@@ -228,6 +228,26 @@ class SwarmRuntimeAdapter:
             "revision_contract_hash": primary_contract.fingerprint(boundary="revision"),
             "plan_contract_hash": primary_contract.fingerprint(boundary="plan", image_ref=image_ref),
         }
+        graph_metadata = dict(getattr(graph, "metadata", {}) or {})
+        deployment_provenance = {
+            **worker_provenance(),
+            "deployment_id": identity.deployment_id,
+            "service_id": identity.service_id,
+            "revision_id": identity.revision_id,
+            "revision_number": graph_metadata.get("revision"),
+            "release_id": getattr(plan, "release_id", None),
+            "runtime_backend": self.backend,
+            "process_name": primary_contract.process_name,
+            "source_kind": graph_metadata.get("source_kind") or primary_contract.source_kind,
+            "catalog_id": graph_metadata.get("catalog_id"),
+            "variant_id": graph_metadata.get("variant_id"),
+            "definition_version": graph_metadata.get("definition_version"),
+        }
+        runtime_options["worker_provenance"] = {
+            key: deployment_provenance[key]
+            for key in ("worker_code_revision", "worker_started_at", "worker_instance_id")
+        }
+        runtime_options["deployment_provenance"] = deployment_provenance
         if graph_runtime.get("image_entrypoint_owned"):
             runtime_options["catalog_managed"] = True
             runtime_options["image_entrypoint_owned"] = True
@@ -382,8 +402,10 @@ class SwarmRuntimeAdapter:
                 },
                 "expected_image": image_ref,
                 "execution_contract": primary_contract.as_dict(),
+                "artifact_digest": artifact_digest,
                 "execution_contract_hashes": dict(runtime_options.get("execution_contract_hashes") or {}),
                 "worker_provenance": dict(runtime_options.get("worker_provenance") or {}),
+                "deployment_provenance": dict(runtime_options.get("deployment_provenance") or {}),
                 "stale_service_names": tuple(
                     str(name)
                     for name in (recovery.get("stale_service_names") or ())
