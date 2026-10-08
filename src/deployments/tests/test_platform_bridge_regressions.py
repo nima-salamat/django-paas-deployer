@@ -129,13 +129,7 @@ def test_restart_only_accepts_current_catalog_image(monkeypatch):
 
 
 def test_revision_build_files_are_preserved_in_execution_config():
-    from deployments.celery.services.deploy_service import DeployService
-
-    # Reproduce the deployment boundary: revision build files are resolved
-    # before native execution and must remain available in cfg["build_options"].
-    service = SimpleNamespace(plan=SimpleNamespace(max_cpu=1.0, max_ram=512))
-    deploy_item = SimpleNamespace(service=service)
-    deploy_service = DeployService()
+    from deployments.celery.services.deploy_service import _preserve_revision_build_files
 
     revision_snapshot = {
         "source_kind": "catalog",
@@ -150,22 +144,33 @@ def test_revision_build_files_are_preserved_in_execution_config():
         },
     }
 
-    # Exercise the same normalization boundary used by _process_deployment
-    # without running Docker or touching the database.
-    cfg = {"build_options": {"secure_docker_source": True}}
-    build_options = dict(cfg["build_options"])
-    revision_build = dict(revision_snapshot["build"])
-    revision_files = revision_build.get("files")
-    if isinstance(revision_files, dict) and revision_files:
-        build_options["revision_build_files"] = {
-            str(name): str(value)
-            for name, value in revision_files.items()
-            if str(name).strip()
-        }
-    cfg["build_options"] = dict(build_options)
+    result = _preserve_revision_build_files(
+        {"secure_docker_source": True},
+        revision_snapshot,
+    )
 
-    assert cfg["build_options"]["revision_build_files"]["passdeployer-wordpress-entrypoint.sh"].startswith("#!/bin/sh")
+    assert result["secure_docker_source"] is True
+    assert result["revision_build_files"] == {
+        "passdeployer-wordpress-entrypoint.sh": "#!/bin/sh\nset -eu\n",
+    }
 
+
+def test_revision_build_files_are_not_added_for_non_catalog_revisions():
+    from deployments.celery.services.deploy_service import _preserve_revision_build_files
+
+    result = _preserve_revision_build_files(
+        {"secure_docker_source": True},
+        {
+            "source_kind": "dockerfile",
+            "build": {
+                "files": {
+                    "script.sh": "#!/bin/sh\n",
+                },
+            },
+        },
+    )
+
+    assert result == {"secure_docker_source": True}
 
 def test_swarm_process_graph_does_not_resurrect_catalog_entrypoint_override(monkeypatch):
     from deployments.core.swarm import SwarmRuntime
