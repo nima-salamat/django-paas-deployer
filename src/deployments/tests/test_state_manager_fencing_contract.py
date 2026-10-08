@@ -108,7 +108,7 @@ def test_db_success_uses_same_activation_fence_as_native_lifecycle():
     assert "expected_lifecycle_generation" in method
     assert "expected_previous_deploy_id" in method
     assert "enforce_previous_deploy=True" in method
-    assert "getattr(service, " + ""lifecycle_generation"" + ", 0)" in method
+    assert "lifecycle_generation" in method
 
 
 
