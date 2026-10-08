@@ -197,7 +197,13 @@ networks:
         self.assertIn("WP_CLI_ALLOW_ROOT=1", wordpress["dockerfile"])
         self.assertIn("wp-cli-${WP_CLI_VERSION}.phar", wordpress["dockerfile"])
         self.assertIn("sha256sum -c -", wordpress["dockerfile"])
-        self.assertFalse(wordpress.get("command"))
+        self.assertIn("COPY passdeployer-wordpress-entrypoint.sh /usr/local/bin/passdeployer-wordpress-entrypoint.sh", wordpress["dockerfile"])
+        self.assertIn("passdeployer-wordpress-entrypoint.sh", wordpress.get("files") or {})
+        self.assertIn("set -eu", wordpress["files"]["passdeployer-wordpress-entrypoint.sh"])
+        self.assertEqual(
+            wordpress.get("command"),
+            ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "apache2-foreground"],
+        )
         self.assertIn("WORDPRESS_ADMIN_USER", wordpress["environment"])
         self.assertIn("WORDPRESS_ADMIN_PASSWORD", wordpress["environment"])
         self.assertIn("WORDPRESS_ADMIN_EMAIL", wordpress["environment"])
