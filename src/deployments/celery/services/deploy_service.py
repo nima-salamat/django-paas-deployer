@@ -587,7 +587,7 @@ class DeployService:
         if (
             catalog_source_kind == "catalog"
             and re.search(
-                r"^\\s*ENTRYPOINT\\s+",
+                r"^\s*ENTRYPOINT\s+",
                 dockerfile_text,
                 flags=re.MULTILINE | re.IGNORECASE,
             )
