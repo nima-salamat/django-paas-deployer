@@ -15,7 +15,7 @@ from deployments.core.state.manager import StateManager
 from deployments.core.swarm import swarm_enabled
 
 from .models import ApplicationInstance, ApplicationInstanceService, ApplicationStatus
-from services.models import Service, ServiceNetworkAttachment
+from services.models import Service, ServiceEndpoint, ServiceNetworkAttachment
 from services.signals import cleanup_service_resources, delete_service_row_after_cleanup
 from .plan import ApplicationPlan, ServicePlan, ready_service_keys
 
@@ -78,13 +78,24 @@ class ApplicationStackExecutor:
             raise ValueError("Application service bindings do not match the immutable application graph.")
         return instance, plan
     def _ensure_public_endpoints(self, instance: ApplicationInstance, plan: ApplicationPlan) -> int:
-        """Repair missing platform-managed public endpoints from the current catalog definition."""
-        from .catalog import ApplicationCatalog
+        """Repair missing platform-managed public endpoints from persisted installation metadata.
 
-        definition = ApplicationCatalog.get(instance.catalog_id)
-        variant = definition.variants.get(str(instance.variant_id)) or {}
+        Recovery must remain tied to the installation-time contract. The current
+        catalog may have changed since this application was installed.
+        """
+        snapshot = dict(instance.definition_snapshot or {})
+        variant = (snapshot.get("variants") or {}).get(str(instance.variant_id)) or {}
         document = variant.get("compose_document") if isinstance(variant, dict) else None
-        raw_services = (document or {}).get("services") if isinstance(document, dict) else None
+        raw_services = (
+            (document or {}).get("services")
+            if isinstance(document, dict)
+            else None
+        )
+        legacy_services = {
+            str(raw.get("key") or ""): raw
+            for raw in (variant.get("services") or [])
+            if isinstance(raw, dict) and raw.get("key")
+        }
 
         repaired = 0
         for spec in plan.services:
@@ -109,6 +120,9 @@ class ApplicationStackExecutor:
 
             public = False
             target_port = None
+
+            # Read public endpoint metadata from the exact definition captured
+            # when this application was installed.
             if isinstance(raw_services, dict) and spec.key in raw_services:
                 raw = raw_services.get(spec.key) or {}
                 metadata = raw.get("x-passdeployer") or {}
@@ -121,30 +135,40 @@ class ApplicationStackExecutor:
                     elif isinstance(first, int):
                         target_port = first
                     else:
-                        text = str(first)
-                        target_port = int(text.split(":")[-1].split("/")[0])
+                        text_value = str(first)
+                        target_port = int(text_value.split(":")[-1].split("/")[0])
                 if not public:
                     public = spec.key in set(
-                        str(item) for item in ((variant.get("compose_metadata") or {}).get("public_services") or [])
+                        str(item)
+                        for item in (
+                            (variant.get("compose_metadata") or {}).get("public_services")
+                            or []
+                        )
                     )
             else:
-                for raw in variant.get("services") or []:
-                    if str(raw.get("key") or "") != spec.key:
-                        continue
+                raw = legacy_services.get(spec.key)
+                if raw is not None:
                     public = bool(raw.get("public"))
                     target_port = raw.get("port")
-                    break
+
+            # Older installations may not have retained a full catalog variant.
+            # Their already-materialized runtime_config is still installation
+            # state and is safer than loading today's catalog.
+            runtime_config = dict(service.runtime_config or {})
+            if not public and runtime_config.get("public") is not None:
+                public = bool(runtime_config.get("public"))
+            if target_port in (None, ""):
+                target_port = runtime_config.get("port")
 
             if not public:
                 continue
 
             try:
-                target_port = int(target_port or service.runtime_config.get("port") or 0)
+                target_port = int(target_port or 0)
             except (TypeError, ValueError):
                 target_port = 0
 
-            # WordPress/Apache and other HTTP catalog recipes should declare
-            # their public port. Missing target_port is not safe to repair.
+            # Never invent a target port during recovery.
             if target_port <= 0:
                 continue
 
@@ -166,7 +190,10 @@ class ApplicationStackExecutor:
                     "path": "",
                     "tls": True,
                     "enabled": True,
-                    "metadata": {"catalog_service_key": spec.key, "repaired_by": "ready_app_supervisor"},
+                    "metadata": {
+                        "catalog_service_key": spec.key,
+                        "repaired_by": "ready_app_supervisor",
+                    },
                 },
             )
             sync_endpoint_reservation(endpoint)
@@ -180,7 +207,10 @@ class ApplicationStackExecutor:
                     from deployments.core.swarm import SwarmRuntime
                     SwarmRuntime().reconcile_public_routing(
                         service_name=service.get_docker_service_name(),
-                        endpoints=service.endpoints.filter(enabled=True, exposure="public").order_by("name"),
+                        endpoints=service.endpoints.filter(
+                            enabled=True,
+                            exposure="public",
+                        ).order_by("name"),
                         networks=(
                             [service.network.get_docker_network_name()]
                             if getattr(service, "network", None) is not None
