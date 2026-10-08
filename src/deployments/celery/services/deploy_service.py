@@ -582,7 +582,19 @@ class DeployService:
                     **dict(docker_runtime.get("labels") or {}),
                     **dict(cfg.get("labels") or {}),
                 }
-            cfg["source_kind"] = docker_source_resolution.source_kind
+            # A Ready App revision remains catalog-owned even though its
+            # immutable Dockerfile is temporarily inspected through the generic
+            # Docker-source validator. Do not downgrade the execution identity
+            # from "catalog" to "dockerfile"; later runtime safeguards depend on
+            # the persisted catalog source kind.
+            revision_source_kind = str(
+                (revision_snapshot or {}).get("source_kind") or ""
+            ).strip().lower()
+            cfg["source_kind"] = (
+                "catalog"
+                if revision_source_kind == "catalog"
+                else docker_source_resolution.source_kind
+            )
             cfg.setdefault("build_options", {})["secure_docker_source"] = True
             # Keep the normalized result on the in-memory Deploy compatibility
             # object so volume resolution later in this same execution sees it.
