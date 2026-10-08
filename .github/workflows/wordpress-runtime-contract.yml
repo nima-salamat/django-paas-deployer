@@ -17,6 +17,7 @@ on:
       - "src/deployments/tests/test_platform_bridge_regressions.py"
       - "src/deployments/tests/test_execution_contract.py"
       - "src/deployments/tests/test_swarm_runtime.py"
+      - "src/deployments/tests/test_wordpress_runtime_path_trace.py"
       - "src/app_catalog/tests/integration/test_ready_app_runtime.py"
       - ".github/workflows/wordpress-runtime-contract.yml"
   workflow_dispatch:
@@ -83,6 +84,34 @@ jobs:
           docker run --rm --entrypoint sh passdeployer-wordpress-contract:test -c             'test "$(readlink -f /usr/local/bin/docker-ensure-installed.sh)" = "/usr/local/bin/docker-entrypoint.sh"'
           docker run --rm --entrypoint sh passdeployer-wordpress-contract:test -c             '! grep -Fq "docker-ensure-installed.sh true" /usr/local/bin/passdeployer-wordpress-entrypoint.sh'
 
+      - name: Trace every executable path in the immutable image
+        run: |
+          set -euxo pipefail
+          docker run --rm --entrypoint /bin/sh passdeployer-wordpress-contract:test -ec '
+            check_exec() {
+              path="$1"
+              printf "\n--- executable path: %s ---\n" "$path"
+              ls -l "$path"
+              test -f "$path"
+              test -x "$path"
+              readlink -f "$path"
+            }
+            check_exec /usr/local/bin/docker-ensure-installed.sh
+            check_exec /usr/local/bin/docker-entrypoint.sh
+            check_exec /usr/local/bin/passdeployer-wordpress-entrypoint.sh
+            check_exec /usr/local/bin/apache2-foreground
+            check_exec /usr/local/bin/wp
+            printf "\n--- script interpreter ---\n"
+            head -n 1 /usr/local/bin/passdeployer-wordpress-entrypoint.sh
+            sh -n /usr/local/bin/passdeployer-wordpress-entrypoint.sh
+            printf "\n--- PATH and PHP/WP-CLI resolution ---\n"
+            printf "PATH=%s\n" "$PATH"
+            command -v php
+            php --version
+            command -v wp
+            wp --info --allow-root
+          '
+
       - name: Run MariaDB and WordPress
         run: |
           set -eux
@@ -119,12 +148,26 @@ jobs:
             -p 18080:80 \
             passdeployer-wordpress-contract:test
 
-      - name: Inspect WordPress runtime process
+      - name: Trace command path into the running WordPress container
         run: |
-          set -eux
-          docker inspect -f 'Path={{json .Path}} Args={{json .Args}} Entrypoint={{json .Config.Entrypoint}} Cmd={{json .Config.Cmd}}' passdeployer-wp
-          docker exec passdeployer-wp sh -c 'printf "pid1="; tr "\\0" " " </proc/1/cmdline; echo; printf "script="; ls -l /usr/local/bin/passdeployer-wordpress-entrypoint.sh; head -n 3 /usr/local/bin/passdeployer-wordpress-entrypoint.sh'
-          docker exec passdeployer-wp sh -c 'test -f /tmp/passdeployer-wordpress-ready; echo ready_marker=$?'
+          set -euxo pipefail
+          path_json="$(docker inspect -f '{{json .Path}}' passdeployer-wp)"
+          args_json="$(docker inspect -f '{{json .Args}}' passdeployer-wp)"
+          printf 'container.Path=%s\ncontainer.Args=%s\n' "$path_json" "$args_json"
+          test "$path_json" = '"/usr/local/bin/docker-ensure-installed.sh"'
+          test "$args_json" = '["/usr/local/bin/passdeployer-wordpress-entrypoint.sh","/usr/local/bin/apache2-foreground"]'
+          docker exec passdeployer-wp sh -ec '
+            printf "pid1="; tr "\0" " " </proc/1/cmdline; echo
+            for path in /usr/local/bin/docker-ensure-installed.sh /usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground; do
+              printf "\n--- runtime path: %s ---\n" "$path"
+              ls -l "$path"
+              test -f "$path"
+              test -x "$path"
+            done
+            sh -n /usr/local/bin/passdeployer-wordpress-entrypoint.sh
+            printf "PATH=%s\n" "$PATH"
+            test -f /tmp/passdeployer-wordpress-ready
+          '
           docker logs passdeployer-wp || true
 
       - name: Wait for WordPress health
@@ -160,7 +203,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --disable-pip-version-check -r requirements.txt
-          pytest -q src/deployments/tests/test_execution_contract.py src/deployments/tests/test_swarm_runtime.py
+          pytest -q src/deployments/tests/test_execution_contract.py src/deployments/tests/test_swarm_runtime.py src/deployments/tests/test_wordpress_runtime_path_trace.py
 
       - name: Assert WP-CLI installation completed
         run: |
@@ -201,7 +244,7 @@ jobs:
             sleep 1
           done
 
-          docker service create             --name passdeployer-wp-swarm             --network passdeployer-wp-swarm             --mount type=volume,source=passdeployer-wp-swarm-files,target=/var/www/html             --env WORDPRESS_DB_HOST=passdeployer-wp-swarm-db             --env WORDPRESS_DB_USER=app             --env WORDPRESS_DB_PASSWORD=app-swarm-password             --env WORDPRESS_DB_NAME=wordpress             --env WORDPRESS_TABLE_PREFIX=wp_             --env WORDPRESS_SITE_URL=http://127.0.0.1:18081             --env WORDPRESS_SITE_TITLE="Swarm Contract Site"             --env WORDPRESS_ADMIN_USER=swarm-admin             --env WORDPRESS_ADMIN_PASSWORD="swarm-admin-password-123"             --env WORDPRESS_ADMIN_EMAIL=swarm@example.invalid             --env WORDPRESS_LOCALE=en_US             --env WORDPRESS_TIMEZONE=UTC             --env WORDPRESS_PERMALINK_STRUCTURE="/%postname%/"             --env WORDPRESS_AUTO_INSTALL=1             --env WORDPRESS_MANAGED_CRON=0             --env WORDPRESS_CRON_INTERVAL=300             --env WORDPRESS_CONFIG_EXTRA="define( 'WP_HOME', 'http://127.0.0.1:18081' ); define( 'WP_SITEURL', 'http://127.0.0.1:18081' );"             --health-cmd='test -f /tmp/passdeployer-wordpress-ready && wp core is-installed --allow-root >/dev/null 2>&1'             --health-interval=5s             --health-timeout=10s             --health-start-period=60s             --health-retries=36             --entrypoint /usr/local/bin/docker-ensure-installed.sh             passdeployer-wordpress-contract:test             /usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground
+          docker service create             --name passdeployer-wp-swarm             --network passdeployer-wp-swarm             --mount type=volume,source=passdeployer-wp-swarm-files,target=/var/www/html             --env WORDPRESS_DB_HOST=passdeployer-wp-swarm-db             --env WORDPRESS_DB_USER=app             --env WORDPRESS_DB_PASSWORD=app-swarm-password             --env WORDPRESS_DB_NAME=wordpress             --env WORDPRESS_TABLE_PREFIX=wp_             --env WORDPRESS_SITE_URL=http://127.0.0.1:18081             --env WORDPRESS_SITE_TITLE="Swarm Contract Site"             --env WORDPRESS_ADMIN_USER=swarm-admin             --env WORDPRESS_ADMIN_PASSWORD="swarm-admin-password-123"             --env WORDPRESS_ADMIN_EMAIL=swarm@example.invalid             --env WORDPRESS_LOCALE=en_US             --env WORDPRESS_TIMEZONE=UTC             --env WORDPRESS_PERMALINK_STRUCTURE="/%postname%/"             --env WORDPRESS_AUTO_INSTALL=1             --env WORDPRESS_MANAGED_CRON=0             --env WORDPRESS_CRON_INTERVAL=300             --env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin --env WORDPRESS_CONFIG_EXTRA="define( 'WP_HOME', 'http://127.0.0.1:18081' ); define( 'WP_SITEURL', 'http://127.0.0.1:18081' );"             --health-cmd='test -f /tmp/passdeployer-wordpress-ready && wp core is-installed --allow-root >/dev/null 2>&1'             --health-interval=5s             --health-timeout=10s             --health-start-period=60s             --health-retries=36             --entrypoint /usr/local/bin/docker-ensure-installed.sh             passdeployer-wordpress-contract:test             /usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground
 
           for i in $(seq 1 240); do
             state="$(docker service ps --no-trunc --format '{{.CurrentState}}' passdeployer-wp-swarm | head -n1)"
@@ -213,6 +256,15 @@ jobs:
                 status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cid")"
                 echo "health=$status"
                 if [ "$status" = "healthy" ]; then
+                  task_spec="$(docker service inspect --format '{{json .Spec.TaskTemplate.ContainerSpec}}' passdeployer-wp-swarm)"
+                  printf 'Swarm ContainerSpec=%s\n' "$task_spec"
+                  printf '%s' "$task_spec" | python3 -c 'import json,sys; s=json.load(sys.stdin); assert s.get("Command") in (None, []), s; assert s.get("Args") == ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "/usr/local/bin/apache2-foreground"], s'
+                  path_json="$(docker inspect -f '{{json .Path}}' "$cid")"
+                  args_json="$(docker inspect -f '{{json .Args}}' "$cid")"
+                  printf 'task-container.Path=%s\ntask-container.Args=%s\n' "$path_json" "$args_json"
+                  test "$path_json" = '"/usr/local/bin/docker-ensure-installed.sh"'
+                  test "$args_json" = '["/usr/local/bin/passdeployer-wordpress-entrypoint.sh","/usr/local/bin/apache2-foreground"]'
+                  docker exec "$cid" sh -ec 'for path in /usr/local/bin/docker-ensure-installed.sh /usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground; do ls -l "$path"; test -f "$path"; test -x "$path"; done; sh -n /usr/local/bin/passdeployer-wordpress-entrypoint.sh; test -f /tmp/passdeployer-wordpress-ready'
                   docker exec "$cid" wp core is-installed --allow-root
                   docker logs "$cid"
                   exit 0
@@ -223,6 +275,7 @@ jobs:
           done
 
           docker service ps --no-trunc passdeployer-wp-swarm || true
+          docker service inspect --format '{{json .Spec.TaskTemplate.ContainerSpec}}' passdeployer-wp-swarm || true
           docker service inspect passdeployer-wp-swarm || true
           cid="$(docker ps -aq --filter label=com.docker.swarm.service.name=passdeployer-wp-swarm | head -n1 || true)"
           if [ -n "$cid" ]; then
