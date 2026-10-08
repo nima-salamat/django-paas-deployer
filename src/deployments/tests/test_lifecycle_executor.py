@@ -105,6 +105,71 @@ def test_lifecycle_executor_requires_runtime_handle_before_readiness():
     assert strategy.activated == 0
 
 
+def test_initial_runtime_failure_cleans_owned_runtime():
+    runtime = FakeRuntime()
+    identity = RuntimeIdentity(service_id="service-1", runtime_name="app-service-1")
+    runtime.set_readiness_error(
+        identity,
+        RuntimeOperationError(
+            "readiness failed",
+            code="runtime_not_ready",
+            recoverable=False,
+        ),
+    )
+    store = InMemoryLifecycleStore()
+
+    result = DeploymentLifecycleExecutor(store).execute(
+        _context(identity),
+        _Strategy(_plan(identity)),
+        runtime,
+    )
+
+    assert result.success is False
+    assert result.status == sm.DEPLOY_FAILED
+    assert result.cleanup_performed is True
+    assert result.cleanup_failed is False
+    assert runtime.remove_count == 1
+    assert runtime.inspect(identity).status.value == "missing"
+
+
+def test_replacement_failure_uses_explicit_rollback_plan():
+    runtime = FakeRuntime()
+    identity = RuntimeIdentity(service_id="service-1", runtime_name="app-service-1")
+    runtime.set_readiness_error(
+        identity,
+        RuntimeOperationError(
+            "replacement readiness failed",
+            code="runtime_not_ready",
+            recoverable=False,
+        ),
+    )
+    store = InMemoryLifecycleStore()
+    strategy = _Strategy(
+        _plan(
+            identity,
+            rollback_plan=_plan(
+                RuntimeIdentity(
+                    service_id="service-1",
+                    deployment_id="previous-deploy",
+                    revision_id="previous-revision",
+                    runtime_name="app-service-1",
+                )
+            ),
+        )
+    )
+
+    result = DeploymentLifecycleExecutor(store).execute(
+        _context(identity),
+        strategy,
+        runtime,
+    )
+
+    assert result.success is False
+    assert result.status == sm.DEPLOY_FAILED
+    assert result.rollback_performed is True
+    assert result.rollback_failed is False
+
+
 def test_lifecycle_executor_classifies_retryable_runtime_failure():
     runtime = FakeRuntime()
     identity = RuntimeIdentity(service_id="service-1", runtime_name="app-service-1")
