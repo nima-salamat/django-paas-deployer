@@ -832,6 +832,19 @@ class SwarmRuntime:
         image_config = dict(attrs.get("Config") or {})
         observed_entrypoint = tuple(str(item) for item in (image_config.get("Entrypoint") or ()))
         observed_cmd = tuple(str(item) for item in (image_config.get("Cmd") or ()))
+        required_executables = list(dict.fromkeys(
+            [
+                *contract.required_executables,
+                (
+                    str(contract.args[0])
+                    if contract.entrypoint_source == "IMAGE"
+                    and contract.args
+                    and str(contract.args[0]).startswith("/")
+                    else ""
+                ),
+            ]
+        ))
+        required_executables = [value for value in required_executables if value]
         diagnostics = {
             **provenance,
             "image_ref": image_ref,
@@ -851,7 +864,7 @@ class SwarmRuntime:
             "architecture": str(attrs.get("Architecture") or ""),
             "expected_entrypoint": list(contract.image_entrypoint),
             "expected_cmd": list(contract.image_cmd),
-            "required_executables": list(contract.required_executables),
+            "required_executables": required_executables,
             "contract_hash": contract.contract_hash(),
         }
         if contract.entrypoint_source == "IMAGE" and contract.image_entrypoint:
