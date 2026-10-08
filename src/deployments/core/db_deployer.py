@@ -1706,6 +1706,7 @@ class DBDeployer:
                     last_error = str(exc)
                 time.sleep(1)
             else:
+                recovery = recover_runtime("sql_readiness_timeout")
                 return DBDeployResult(
                     success=False,
                     message=(
@@ -1715,18 +1716,27 @@ class DBDeployer:
                     container_name=container_name,
                     platform=platform,
                     error=last_error,
-                    details={"runtime": "docker-swarm", "service": container_name},
+                    details={
+                        "runtime": "docker-swarm",
+                        "service": container_name,
+                        **recovery,
+                    },
                 )
 
 
             if container is None:
+                recovery = recover_runtime("db_task_container_unavailable")
                 return DBDeployResult(
                     success=False,
                     message="The running MySQL Swarm task container is not accessible from the connected manager.",
                     container_name=container_name,
                     platform=platform,
                     error="missing_local_task_container",
-                    details={"runtime": "docker-swarm", "service": container_name},
+                    details={
+                        "runtime": "docker-swarm",
+                        "service": container_name,
+                        **recovery,
+                    },
                 )
 
             username = _clean(cfg.get("username"))
@@ -1747,13 +1757,17 @@ class DBDeployer:
                 container_obj=container,
             )
             if not ok:
+                recovery = recover_runtime("credential_reconciliation")
                 return DBDeployResult(
                     success=False,
                     message=f"MySQL credential reconciliation failed: {credential_message}",
                     container_name=container_name,
                     platform=platform,
                     error=credential_message,
-                    details={"runtime": "docker-swarm"},
+                    details={
+                        "runtime": "docker-swarm",
+                        **recovery,
+                    },
                 )
 
         log.info(
