@@ -434,6 +434,29 @@ def test_release_application_image_rejects_unknown_shared_reference_ownership():
     assert "none could be proven" in detail
 
 
+def test_service_cleanup_deletes_release_rows_before_protected_revisions():
+    source = (ROOT / "services" / "signals.py").read_text(encoding="utf-8")
+
+    helper = source.split("def _cleanup_service_releases", 1)[1].split(
+        "def cleanup_service_resources", 1
+    )[0]
+    cleanup = source.split("def cleanup_service_resources", 1)[1].split(
+        "def delete_service_row_after_cleanup", 1
+    )[0]
+
+    assert 'Release.objects.filter(service_id=service.pk)' in helper
+    assert "release.delete()" in helper
+    assert "_cleanup_service_releases(service)" in cleanup
+
+
+def test_release_deletion_does_not_relax_revision_protection():
+    from deploy.models import Release
+    from services.models import ServiceRevision
+
+    assert Release._meta.get_field("revision").remote_field.on_delete.__name__ == "PROTECT"
+    assert ServiceRevision._meta.get_field("service").remote_field.on_delete.__name__ == "CASCADE"
+
+
 def test_precleaned_service_delete_skips_duplicate_runtime_cleanup():
     source = (ROOT / "services" / "signals.py").read_text(encoding="utf-8")
 
