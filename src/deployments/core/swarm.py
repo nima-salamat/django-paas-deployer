@@ -2352,6 +2352,7 @@ class SwarmRuntime:
         if cancel_check is not None and cancel_check():
             raise DeploymentError("Swarm apply was cancelled before runtime mutation.", stage="swarm_apply", code="SWARM_OPERATION_CANCELLED", user_message="Deployment was cancelled.")
         self.assert_active()
+        local_artifact_ref = str(image_ref)
         image_ref = prepared_image_ref or self.prepare_image(image_ref, config.name, config.tag)
         runtime_options = dict(config.runtime_options or {})
         stored_contract = runtime_options.get("execution_contract")
@@ -2368,7 +2369,7 @@ class SwarmRuntime:
             )
         )
         artifact_diagnostics = self._validate_image_artifact(
-            image_ref,
+            local_artifact_ref,
             contract=contract,
             provenance={
                 **worker_provenance(),
