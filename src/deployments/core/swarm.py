@@ -1835,6 +1835,7 @@ class SwarmRuntime:
                     "release_id": (config.labels or {}).get("release.id"),
                     "process_name": (config.labels or {}).get("process.name"),
                     "runtime_backend": "swarm",
+                    **worker_provenance(),
                 },
             )
 
