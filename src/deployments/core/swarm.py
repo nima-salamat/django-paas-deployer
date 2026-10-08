@@ -306,7 +306,7 @@ def compile_compose_service(config, *, image_ref: str, replicas: int = 1) -> dic
     runtime_options["execution_contract"] = contract.as_dict()
     runtime_options["execution_contract_hashes"] = {
         **dict(runtime_options.get("execution_contract_hashes") or {}),
-        "revision_contract_hash": contract.fingerprint(boundary="revision"),
+        "revision_contract_hash": contract.contract_hash(),
         "compiled_swarm_contract_hash": contract.fingerprint(
             boundary="swarm_compile",
             image_ref=image_ref,
