@@ -87,3 +87,14 @@ def test_deployment_cancellation_preserves_reason_without_second_error_event():
     assert 'current.get("status_message")' in source
     assert 'current.get("error_message")' in source
     assert 'not isinstance(exception, DeploymentCancelled)' in source
+
+
+def test_deploy_runtime_routing_fails_closed_instead_of_running_app_path():
+    source = (ROOT / "deployments/celery/tasks.py").read_text(encoding="utf-8")
+    guard = source.split("    # Guard: never run the app/zip pipeline for DB platforms", 1)[1].split(
+        "    try:\n        # A cancelled deployment", 1
+    )[0]
+    assert "refusing app-path fallback" in guard
+    assert "raise translated from exc" in guard
+    assert "continuing app path" not in guard
+
