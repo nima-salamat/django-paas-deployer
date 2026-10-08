@@ -105,11 +105,42 @@ class ReconciliationExecutor:
                 raise StaleDeploymentWorkerError(
                     "Reconciliation plan identity does not belong to the desired service."
                 )
-            result = runtime.apply(
-                plan,
-                operation_key=operation_key,
-                cancel_check=context.cancellation_requested,
-            )
+            try:
+                result = runtime.apply(
+                    plan,
+                    operation_key=operation_key,
+                    cancel_check=context.cancellation_requested,
+                )
+            except Exception as exc:
+                # A multi-process runtime may have applied earlier process
+                # services before a later process failed. Give the backend a
+                # typed recovery boundary so reconciliation never strands a
+                # partial runtime mutation.
+                context.assert_current()
+                recover = getattr(runtime, "recover_failed_apply", None)
+                if callable(recover):
+                    try:
+                        recovery = recover(
+                            dict(getattr(exc, "details", {}) or {}),
+                            operation_key=f"{operation_key}:recovery",
+                            cancel_check=lambda: False,
+                        )
+                        if isinstance(exc, RuntimeOperationError):
+                            exc.details = {
+                                **dict(getattr(exc, "details", {}) or {}),
+                                "recovery": dict(recovery or {}),
+                            }
+                    except Exception as recovery_exc:
+                        if isinstance(exc, RuntimeOperationError):
+                            exc.details = {
+                                **dict(getattr(exc, "details", {}) or {}),
+                                "recovery_error": str(
+                                    getattr(recovery_exc, "technical_message", None)
+                                    or recovery_exc
+                                ),
+                                "reconciliation_required": True,
+                            }
+                raise
         else:
             raise ValueError(f"Unsupported reconciliation action: {action.value}")
 
@@ -124,6 +155,14 @@ class ReconciliationExecutor:
                 timeout=float(desired.metadata.get("readiness_timeout", 60.0) or 60.0),
                 cancel_check=context.cancellation_requested,
             )
+            context.assert_current()
+            finalize = getattr(runtime, "finalize_success", None)
+            if callable(finalize):
+                finalize(
+                    result.handle,
+                    operation_key=f"{operation_key}:finalize",
+                    cancel_check=context.cancellation_requested,
+                )
             context.assert_current()
             return ready
 
