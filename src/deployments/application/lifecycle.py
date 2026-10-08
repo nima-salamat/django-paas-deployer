@@ -75,6 +75,8 @@ class DeploymentLifecycleResult:
     error: DeploymentError | None = None
     rollback_performed: bool = False
     rollback_failed: bool = False
+    cleanup_performed: bool = False
+    cleanup_failed: bool = False
     details: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -260,12 +262,14 @@ class DeploymentLifecycleExecutor:
                     DeploymentCancelled(exc.user_message, details=exc.details),
                 )
             error = exc if isinstance(exc, DeploymentError) else to_deployment_error(exc, stage="deployment_execution")
-            rollback_performed, rollback_failed = self._recover_failure(
+            rollback_performed, rollback_failed, cleanup_details = self._recover_failure(
                 context,
                 runtime,
                 plan,
                 handle,
             )
+            cleanup_failed = bool(cleanup_details.get("cleanup_failed"))
+            cleanup_performed = bool(cleanup_details.get("cleanup_attempted"))
             transitioned = self.store.transition(
                 context,
                 sm.DEPLOY_FAILED,
@@ -276,7 +280,10 @@ class DeploymentLifecycleExecutor:
                     "recoverable": error.recoverable,
                     "rollback_performed": rollback_performed,
                     "rollback_failed": rollback_failed,
-                    "reconciliation_required": bool(rollback_failed),
+                    "cleanup_performed": cleanup_performed,
+                    "cleanup_failed": cleanup_failed,
+                    "reconciliation_required": bool(rollback_failed or cleanup_failed),
+                    **cleanup_details,
                 },
             )
             if not transitioned:
@@ -400,19 +407,33 @@ class DeploymentLifecycleExecutor:
         runtime: RuntimeContract,
         plan: Any,
         handle: RuntimeHandle | None,
-    ) -> tuple[bool, bool]:
+    ) -> tuple[bool, bool, dict[str, Any]]:
         if plan is None or handle is None or not context.owns_execution():
-            return False, False
+            return False, False, {}
+
         target_plan = getattr(plan, "rollback_plan", None)
-        if target_plan is None:
-            return False, False
-        try:
-            runtime.rollback(
-                plan,
-                operation_key=context.operation("rollback"),
-                target_plan=target_plan,
-                cancel_check=context.cancellation_requested,
-            )
-            return True, False
-        except Exception:
-            return False, True
+        if target_plan is not None:
+            try:
+                runtime.rollback(
+                    plan,
+                    operation_key=context.operation("rollback"),
+                    target_plan=target_plan,
+                    cancel_check=context.cancellation_requested,
+                )
+                return True, False, {"cleanup_attempted": False}
+            except Exception as exc:
+                return False, True, {
+                    "cleanup_attempted": False,
+                    "rollback_error": str(getattr(exc, "technical_message", None) or exc),
+                    "reconciliation_required": True,
+                }
+
+        # Initial deployments have no previous release. If runtime.apply()
+        # succeeded but readiness later fails, the new resource is still owned
+        # by this deployment and must not be stranded in the runtime.
+        cleanup = DeploymentLifecycleExecutor._cancel_runtime(context, runtime, handle)
+        cleanup = {
+            "cleanup_attempted": True,
+            **dict(cleanup or {}),
+        }
+        return False, False, cleanup
