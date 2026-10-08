@@ -260,10 +260,18 @@ class StateManager:
                     )
                     return False
 
+            already_active = (
+                service.active_revision_id is not None
+                and str(service.active_revision_id) == str(revision_id)
+            )
+
             # The deployment was created as a replacement for a specific
             # authoritative deployment. Never allow a stale attempt to activate
             # over a newer release that won the race while this worker was busy.
-            if enforce_previous_deploy:
+            # Once this exact revision is already authoritative, however, the
+            # operation is an idempotent duplicate and the historical previous
+            # pointer is no longer a conflict.
+            if enforce_previous_deploy and not already_active:
                 from services.lifecycle.authority import get_authoritative_deploy
                 authoritative = get_authoritative_deploy(service)
                 actual_previous = getattr(authoritative, "pk", None)
@@ -276,10 +284,7 @@ class StateManager:
                     )
                     return False
 
-            if (
-                service.active_revision_id is not None
-                and str(service.active_revision_id) != str(revision_id)
-            ):
+            if service.active_revision_id is not None and not already_active:
                 return False
 
             activate_revision_locked(service, revision_id)
