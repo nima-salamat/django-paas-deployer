@@ -878,6 +878,54 @@ class SwarmRuntime:
         except Exception as exc:
             return f"<unable to collect Swarm service logs: {exc}>"
 
+    def _task_container_diagnostics(self, task: SwarmTaskState) -> dict[str, Any]:
+        """Collect safe local container state for a Swarm readiness failure."""
+        result: dict[str, Any] = {
+            "task_id": task.task_id,
+            "container_id": task.container_id,
+            "health_status": task.health_status,
+        }
+        if not task.container_id:
+            return result
+        try:
+            container = self.client.containers.get(task.container_id)
+            container.reload()
+            attrs = container.attrs or {}
+            state = attrs.get("State") or {}
+            config = attrs.get("Config") or {}
+            health = state.get("Health") or {}
+            health_log = health.get("Log") or []
+            recent_health = []
+            for item in health_log[-5:]:
+                recent_health.append(
+                    {
+                        "start": item.get("Start"),
+                        "end": item.get("End"),
+                        "exit_code": item.get("ExitCode"),
+                        "output": str(item.get("Output") or "")[-2000:],
+                    }
+                )
+            result.update(
+                {
+                    "container_status": str(attrs.get("State", {}).get("Status") or ""),
+                    "running": state.get("Running"),
+                    "restarting": state.get("Restarting"),
+                    "exit_code": state.get("ExitCode"),
+                    "oom_killed": state.get("OOMKilled"),
+                    "error": str(state.get("Error") or ""),
+                    "started_at": str(state.get("StartedAt") or ""),
+                    "finished_at": str(state.get("FinishedAt") or ""),
+                    "path": str(attrs.get("Path") or ""),
+                    "args": list(attrs.get("Args") or []),
+                    "entrypoint": list(config.get("Entrypoint") or []),
+                    "cmd": list(config.get("Cmd") or []),
+                    "health_log": recent_health,
+                }
+            )
+        except Exception as exc:
+            result["inspection_error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
     def wait_ready(
         self,
         name: str,
@@ -1204,13 +1252,27 @@ class SwarmRuntime:
             for item in task_summary
         )
         service_logs = self._service_logs_for_failure(name)
+        task_diagnostics = [
+            self._task_container_diagnostics(task)
+            for task in (latest.tasks if latest else ())
+        ]
+        health_summary = "; ".join(
+            (
+                f"{item.get('task_id')}: health={item.get('health_status') or '-'} "
+                f"container={item.get('container_status') or '-'} "
+                f"exit={item.get('exit_code')!r}"
+            )
+            for item in task_diagnostics
+        )
         technical = (
-            f"Swarm service {name!r} did not reach a running task within {timeout:.0f}s. "
+            f"Swarm service {name!r} did not reach a healthy/running task within {timeout:.0f}s. "
             f"expected_image={expected_image!r}; "
             f"service_image={latest.service_image if latest else None!r}; "
             f"update_state={latest.update_state if latest else None!r}; "
             f"update_message={latest.update_message if latest else None!r}; "
             f"tasks={concise_tasks or 'none'}; "
+            f"health={health_summary or 'none'}; "
+            f"task_diagnostics={task_diagnostics!r}; "
             f"service_logs={service_logs[-12000:]}"
         )
         raise DeploymentError(
@@ -1227,6 +1289,7 @@ class SwarmRuntime:
                 "replicas_running": latest.replicas_running if latest else None,
                 "healthcheck_configured": latest.healthcheck_configured if latest else False,
                 "tasks": task_summary,
+                "task_container_diagnostics": task_diagnostics,
                 "service_logs": service_logs[-12000:],
             },
         )
