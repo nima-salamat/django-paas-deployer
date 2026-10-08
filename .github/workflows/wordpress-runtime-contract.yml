@@ -143,6 +143,7 @@ jobs:
             -e WORDPRESS_AUTO_INSTALL=1 \
             -e WORDPRESS_MANAGED_CRON=0 \
             -e WORDPRESS_CRON_INTERVAL=300 \
+            -e PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             -e WORDPRESS_CONFIG_EXTRA="define( 'WP_HOME', 'http://127.0.0.1:18080' ); define( 'WP_SITEURL', 'http://127.0.0.1:18080' );" \
             -v passdeployer-wp-files:/var/www/html \
             -p 18080:80 \
@@ -244,7 +245,7 @@ jobs:
             sleep 1
           done
 
-          docker service create             --name passdeployer-wp-swarm             --network passdeployer-wp-swarm             --mount type=volume,source=passdeployer-wp-swarm-files,target=/var/www/html             --env WORDPRESS_DB_HOST=passdeployer-wp-swarm-db             --env WORDPRESS_DB_USER=app             --env WORDPRESS_DB_PASSWORD=app-swarm-password             --env WORDPRESS_DB_NAME=wordpress             --env WORDPRESS_TABLE_PREFIX=wp_             --env WORDPRESS_SITE_URL=http://127.0.0.1:18081             --env WORDPRESS_SITE_TITLE="Swarm Contract Site"             --env WORDPRESS_ADMIN_USER=swarm-admin             --env WORDPRESS_ADMIN_PASSWORD="swarm-admin-password-123"             --env WORDPRESS_ADMIN_EMAIL=swarm@example.invalid             --env WORDPRESS_LOCALE=en_US             --env WORDPRESS_TIMEZONE=UTC             --env WORDPRESS_PERMALINK_STRUCTURE="/%postname%/"             --env WORDPRESS_AUTO_INSTALL=1             --env WORDPRESS_MANAGED_CRON=0             --env WORDPRESS_CRON_INTERVAL=300             --env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin --env WORDPRESS_CONFIG_EXTRA="define( 'WP_HOME', 'http://127.0.0.1:18081' ); define( 'WP_SITEURL', 'http://127.0.0.1:18081' );"             --health-cmd='test -f /tmp/passdeployer-wordpress-ready && wp core is-installed --allow-root >/dev/null 2>&1'             --health-interval=5s             --health-timeout=10s             --health-start-period=60s             --health-retries=36             --entrypoint /usr/local/bin/docker-ensure-installed.sh             passdeployer-wordpress-contract:test             /usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground
+          docker service create             --name passdeployer-wp-swarm             --network passdeployer-wp-swarm             --mount type=volume,source=passdeployer-wp-swarm-files,target=/var/www/html             --env WORDPRESS_DB_HOST=passdeployer-wp-swarm-db             --env WORDPRESS_DB_USER=app             --env WORDPRESS_DB_PASSWORD=app-swarm-password             --env WORDPRESS_DB_NAME=wordpress             --env WORDPRESS_TABLE_PREFIX=wp_             --env WORDPRESS_SITE_URL=http://127.0.0.1:18081             --env WORDPRESS_SITE_TITLE="Swarm Contract Site"             --env WORDPRESS_ADMIN_USER=swarm-admin             --env WORDPRESS_ADMIN_PASSWORD="swarm-admin-password-123"             --env WORDPRESS_ADMIN_EMAIL=swarm@example.invalid             --env WORDPRESS_LOCALE=en_US             --env WORDPRESS_TIMEZONE=UTC             --env WORDPRESS_PERMALINK_STRUCTURE="/%postname%/"             --env WORDPRESS_AUTO_INSTALL=1             --env WORDPRESS_MANAGED_CRON=0             --env WORDPRESS_CRON_INTERVAL=300             --env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin --env WORDPRESS_CONFIG_EXTRA="define( 'WP_HOME', 'http://127.0.0.1:18081' ); define( 'WP_SITEURL', 'http://127.0.0.1:18081' );"             --health-cmd='test -f /tmp/passdeployer-wordpress-ready && wp core is-installed --allow-root >/dev/null 2>&1'             --health-interval=5s             --health-timeout=10s             --health-start-period=60s             --health-retries=36             passdeployer-wordpress-contract:test             /usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground
 
           for i in $(seq 1 240); do
             state="$(docker service ps --no-trunc --format '{{.CurrentState}}' passdeployer-wp-swarm | head -n1)"
@@ -257,8 +258,7 @@ jobs:
                 echo "health=$status"
                 if [ "$status" = "healthy" ]; then
                   task_spec="$(docker service inspect --format '{{json .Spec.TaskTemplate.ContainerSpec}}' passdeployer-wp-swarm)"
-                  printf 'Swarm ContainerSpec=%s\n' "$task_spec"
-                  printf '%s' "$task_spec" | python3 -c 'import json,sys; s=json.load(sys.stdin); assert s.get("Command") in (None, []), s; assert s.get("Args") == ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "/usr/local/bin/apache2-foreground"], s'
+                  printf '%s' "$task_spec" | python3 -c 'import json,sys; s=json.load(sys.stdin); print("Swarm.Image=", s.get("Image")); print("Swarm.Command=", s.get("Command")); print("Swarm.Args=", s.get("Args")); print("Swarm.PATH=", next((x.partition("=")[2] for x in s.get("Env", []) if x.startswith("PATH=")), "<unset>")); assert s.get("Command") in (None, []), s.get("Command"); assert s.get("Args") == ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "/usr/local/bin/apache2-foreground"], s.get("Args")'
                   path_json="$(docker inspect -f '{{json .Path}}' "$cid")"
                   args_json="$(docker inspect -f '{{json .Args}}' "$cid")"
                   printf 'task-container.Path=%s\ntask-container.Args=%s\n' "$path_json" "$args_json"
@@ -275,11 +275,10 @@ jobs:
           done
 
           docker service ps --no-trunc passdeployer-wp-swarm || true
-          docker service inspect --format '{{json .Spec.TaskTemplate.ContainerSpec}}' passdeployer-wp-swarm || true
-          docker service inspect passdeployer-wp-swarm || true
+          docker service inspect --format '{{json .Spec.TaskTemplate.ContainerSpec}}' passdeployer-wp-swarm | python3 -c 'import json,sys; s=json.load(sys.stdin); print("Swarm.Image=", s.get("Image")); print("Swarm.Command=", s.get("Command")); print("Swarm.Args=", s.get("Args")); print("Swarm.PATH=", next((x.partition("=")[2] for x in s.get("Env", []) if x.startswith("PATH=")), "<unset>"))' || true
           cid="$(docker ps -aq --filter label=com.docker.swarm.service.name=passdeployer-wp-swarm | head -n1 || true)"
           if [ -n "$cid" ]; then
-            docker inspect "$cid" || true
+            docker inspect -f 'Path={{json .Path}} Args={{json .Args}} Entrypoint={{json .Config.Entrypoint}} Cmd={{json .Config.Cmd}}' "$cid" || true
             docker logs "$cid" || true
           fi
           exit 1
