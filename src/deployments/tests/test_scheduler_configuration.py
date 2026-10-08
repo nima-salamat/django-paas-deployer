@@ -210,6 +210,18 @@ def test_mariadb_readiness_uses_image_compatible_admin_client_with_fallback():
 
 
 
+def test_ready_app_retries_do_not_duplicate_original_task_arguments():
+    tasks = (ROOT / "src" / "app_catalog" / "tasks.py").read_text(encoding="utf-8")
+    delete = tasks.split("def delete_application_installation", 1)[1].split(
+        "def reconcile_application_installations", 1
+    )[0]
+    cancel = tasks.split("def cancel_application_installation", 1)[1].split(
+        "def delete_application_installation", 1
+    )[0]
+    assert 'kwargs={"instance_id"' not in delete
+    assert 'kwargs={"instance_id"' not in cancel
+
+
 def test_ready_app_deletion_task_is_routed_and_reconciled():
     settings = (ROOT / "src" / "config" / "settings.py").read_text(encoding="utf-8")
     tasks = (ROOT / "src" / "app_catalog" / "tasks.py").read_text(encoding="utf-8")

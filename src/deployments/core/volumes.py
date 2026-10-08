@@ -69,7 +69,10 @@ class VolumeMountManager:
                     from services.models import Volume as RegistryVolume
                     registry_volume = None
                     for candidate in RegistryVolume.objects.filter(service_id=service_id):
-                        if candidate.get_docker_volume_name() == volume.source:
+                        if (
+                            candidate.get_docker_volume_name() == volume.source
+                            or str(candidate.name or "") == str(volume.source)
+                        ):
                             registry_volume = candidate
                             break
                     if registry_volume is None:
@@ -119,6 +122,7 @@ class VolumeMountManager:
                         driver=volume.driver or "local",
                         driver_opts=dict(volume.driver_opts or {}),
                         require_managed=bool(service_id),
+                        service_id=str(service_id) if service_id else None,
                     ).ensure()
                 binds[volume.source] = {"bind": target, "mode": mode}
 

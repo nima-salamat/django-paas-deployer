@@ -314,19 +314,62 @@ def _cleanup_service_volumes(service: Service) -> None:
     volumes = list(Volume.objects.filter(service_id=service.pk))
 
     for volume in volumes:
-        # Remove Docker volume first
-        docker_name = volume.get_docker_volume_name()
+        # New resources use the canonical Docker identity derived from the
+        # registry row. Older catalog/Compose installs may have persisted the
+        # generated DB name directly as the Docker name. Resolve both forms.
+        canonical_name = volume.get_docker_volume_name()
+        stored_name = str(getattr(volume, "name", "") or "").strip()
+        service_id_text = str(service.pk).replace("-", "").lower()
+        legacy_prefixes = (
+            f"cat-{service_id_text[:8]}-",
+            f"dv-{service_id_text[:8]}-",
+        )
+        candidate_names = tuple(
+            dict.fromkeys(
+                name
+                for name in (canonical_name, stored_name)
+                if name
+                and (
+                    name == canonical_name
+                    or (
+                        name == stored_name
+                        and any(name.startswith(prefix) for prefix in legacy_prefixes)
+                    )
+                )
+            )
+        )
         try:
-            docker_volume = DockerVolume(docker_name)
-            try:
-                raw_volume = docker_volume.client.volumes.get(docker_name)
-            except docker.errors.NotFound:
-                raw_volume = None
+            docker_volume = None
+            docker_name = ""
+            raw_volume = None
+            for candidate in candidate_names:
+                probe = DockerVolume(candidate)
+                try:
+                    raw = probe.client.volumes.get(candidate)
+                except docker.errors.NotFound:
+                    continue
+                docker_volume = probe
+                docker_name = candidate
+                raw_volume = raw
+                break
+
             if raw_volume is not None:
                 labels = dict(getattr(raw_volume, "attrs", {}).get("Labels") or {})
-                if labels.get("managed-by") != "django-paas-deployer":
+                managed = labels.get("managed-by") in {"django-paas-deployer", "passdeployer"}
+                labeled_owner = str(
+                    labels.get("passdeployer.service") or labels.get("service.id") or ""
+                ).strip()
+                legacy_db_proof = (
+                    docker_name == stored_name
+                    and any(docker_name.startswith(prefix) for prefix in legacy_prefixes)
+                )
+                if not managed and not legacy_db_proof:
                     raise RuntimeError(
-                        f"Refusing to remove Docker volume '{volume.name}': ownership label is missing or unexpected."
+                        f"Refusing to remove Docker volume '{volume.name}': ownership cannot be proven."
+                    )
+                if labeled_owner and labeled_owner != str(service.pk):
+                    raise RuntimeError(
+                        f"Refusing to remove Docker volume '{volume.name}': ownership label belongs to another service."
                     )
                 _remove_owned_docker_volume(
                     service,
@@ -334,9 +377,10 @@ def _cleanup_service_volumes(service: Service) -> None:
                     docker_name,
                 )
                 logger.info(
-                    "Removed Docker volume '%s' for deleted service '%s'.",
+                    "Removed Docker volume '%s' for deleted service '%s' (docker=%s).",
                     volume.name,
                     service.name,
+                    docker_name,
                 )
         except docker.errors.NotFound:
             pass

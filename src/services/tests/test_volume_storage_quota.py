@@ -116,6 +116,21 @@ def test_volume_warning_uses_existing_deployment_event_pipeline():
     assert "92.0% full" in args[1]
     assert kwargs["details"]["usage_state"] == "warning"
 
+def test_native_volume_provisioning_accepts_legacy_registry_name_and_emits_owner_label():
+    source = ( __import__("pathlib").Path(__file__).resolve().parents[2]
+        / "deployments" / "core" / "volumes.py"
+    ).read_text(encoding="utf-8")
+    manager = ( __import__("pathlib").Path(__file__).resolve().parents[2]
+        / "deployments" / "core" / "manager" / "volume_manager.py"
+    ).read_text(encoding="utf-8")
+    swarm = ( __import__("pathlib").Path(__file__).resolve().parents[2]
+        / "deployments" / "core" / "swarm.py"
+    ).read_text(encoding="utf-8")
+    assert 'str(candidate.name or "") == str(volume.source)' in source
+    assert '"passdeployer.service": self.service_id' in manager
+    assert "VolumeMountManager().prepare(config.volumes" in swarm
+
+
 def test_volume_usage_reconciliation_detects_docker_orphan_and_missing_registry_volume():
     from deployments.core.volume_storage import reconcile_managed_volumes
     from unittest.mock import patch

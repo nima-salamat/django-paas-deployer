@@ -1742,6 +1742,15 @@ class SwarmRuntime:
             )
         )
         kwargs = self._create_kwargs(config, image_ref=image_ref, compose_spec=spec)
+
+        # Native runtime execution must provision registry-backed named
+        # volumes before asking Swarm to create/update a service. Otherwise
+        # Docker may auto-create an unlabelled local volume, leaving storage
+        # outside the platform's ownership contract.
+        service_id = str((config.labels or {}).get("service.id") or "").strip()
+        if config.volumes:
+            from deployments.core.volumes import VolumeMountManager
+            VolumeMountManager().prepare(config.volumes, service_id=service_id or None)
         operation = {
             "name": name,
             "preexisting": False,

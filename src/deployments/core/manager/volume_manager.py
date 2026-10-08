@@ -32,6 +32,7 @@ class Volume(Client):
         driver: str = "local",
         driver_opts: dict = None,
         require_managed: bool = False,
+        service_id: str | None = None,
     ):
         super().__init__()
         self.name = name
@@ -39,6 +40,7 @@ class Volume(Client):
         self.size_mb = size_mb
         self.driver_opts = dict(driver_opts or {})
         self.require_managed = bool(require_managed)
+        self.service_id = str(service_id or "").strip()
 
     def _options(self) -> dict:
         """
@@ -132,7 +134,11 @@ class Volume(Client):
                 name=self.name,
                 driver=self.driver,
                 driver_opts=opts or None,
-                labels={"managed-by": "django-paas-deployer", "volume.name": self.name},
+                labels={
+                    "managed-by": "django-paas-deployer",
+                    "volume.name": self.name,
+                    **({"passdeployer.service": self.service_id} if self.service_id else {}),
+                },
             )
             logger.info(
                 "Volume '%s' created with driver '%s' opts=%s (host free ~%s MB)",

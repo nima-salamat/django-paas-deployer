@@ -253,10 +253,7 @@ def cancel_application_installation(
         executor.cancel(reason=reason)
         if executor._cleanup_cancelled_children():
             return {"cancelled": True}
-        return self.retry(
-            countdown=10,
-            kwargs={"instance_id": str(instance_id), "reason": reason},
-        )
+        return self.retry(countdown=10)
     except ApplicationInstance.DoesNotExist:
         return {"cancelled": True, "reason": "already_absent"}
     except Exception as exc:
@@ -272,11 +269,7 @@ def cancel_application_installation(
             )
         except Exception:
             logger.exception("Unable to persist cancellation-cleanup state for %s", instance_id)
-        raise self.retry(
-            exc=exc,
-            countdown=10,
-            kwargs={"instance_id": str(instance_id), "reason": reason},
-        )
+        raise self.retry(exc=exc, countdown=10)
 
 
 @shared_task(
@@ -294,10 +287,7 @@ def delete_application_installation(self, instance_id: str):
         deleted = ApplicationStackExecutor(str(instance_id)).cleanup_terminal_application()
         if deleted:
             return {"deleted": True}
-        return self.retry(
-            countdown=15,
-            kwargs={"instance_id": str(instance_id)},
-        )
+        return self.retry(countdown=15)
     except ApplicationInstance.DoesNotExist:
         return {"deleted": True, "reason": "already_absent"}
     except Exception as exc:
@@ -310,11 +300,7 @@ def delete_application_installation(self, instance_id: str):
             )
         except Exception:
             logger.exception("Unable to persist deletion-pending state for %s", instance_id)
-        raise self.retry(
-            exc=exc,
-            countdown=15,
-            kwargs={"instance_id": str(instance_id)},
-        )
+        raise self.retry(exc=exc, countdown=15)
 
 
 @shared_task(name="app_catalog.reconcile_application_installations")
