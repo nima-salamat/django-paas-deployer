@@ -93,6 +93,64 @@ Availability describes:
 
 “Backend cannot do this” and “backend could do this but Docker is currently unavailable” have different recovery behavior.
 
+## Runtime Execution Contract
+
+Path: `runtime/execution_contract.py`
+
+The Runtime Execution Contract is the canonical executable semantics carried
+from the immutable revision graph into the concrete runtime adapter.
+
+It records only non-secret execution intent:
+
+- `entrypoint_source`: `IMAGE`, `PLATFORM` or `USER`;
+- image-level `Entrypoint` and `Cmd`;
+- final Swarm `Command` and `Args`;
+- catalog/image ownership flags;
+- process name and contract version;
+- required absolute executable paths that can be checked before startup.
+
+### Docker ENTRYPOINT ownership
+
+For an image-owned ENTRYPOINT:
+
+```text
+ContainerSpec.Command = None
+ContainerSpec.Args    = effective application arguments
+```
+
+A compatibility `entry_point` must never become `/bin/sh -lc ...`
+when the immutable image owns ENTRYPOINT.
+
+For a user/platform-owned entrypoint, `Command` represents the effective
+entrypoint and `Args` represents the command arguments. This preserves the
+Docker distinction between entrypoint and command instead of flattening both
+into one shell string.
+
+### Contract boundaries
+
+The same contract is compared at:
+
+```text
+Revision snapshot
+    -> Runtime Graph
+    -> Deployment Plan
+    -> Swarm compile
+    -> Docker/Swarm service ContainerSpec
+    -> failed task/container observation
+```
+
+Each boundary may carry a deterministic non-secret fingerprint:
+`revision_contract_hash`, `plan_contract_hash`,
+and `compiled_swarm_contract_hash`. When they disagree, diagnostics should
+name the first boundary where the drift became observable.
+
+### Provenance
+
+Runtime diagnostics retain deployment, service, revision, release and process
+identity plus worker provenance such as the deployed code/build SHA,
+worker start time and worker instance identifier. Current repository HEAD is
+not sufficient evidence for a long-lived Celery worker.
+
 ## RuntimeContract
 
 Path: runtime/contract.py
@@ -266,15 +324,25 @@ Runtime does not rebuild the application image.
 
 ## Readiness
 
-Current Swarm-level readiness is:
+Swarm readiness is a state machine, not a fixed timeout.
 
-```text
-replicas_desired == 1
-AND
-replicas_running == 1
-```
+Before waiting on task health, the runtime checks for:
 
-If a desired-running task fails/rejects, wait_ready raises a runtime error with task diagnostics.
+- service image drift or rollback;
+- failed/rejected/terminal tasks with no replacement;
+- observed ContainerSpec drift from the Runtime Execution Contract;
+- container exit/error diagnostics;
+- configured healthcheck failure.
+
+Deterministic failures should terminate immediately with a structured runtime
+error. `SWARM_START_TIMEOUT` is reserved for cases where the evidence still
+shows an active/provisioning runtime and no stronger failure can be established.
+
+An observed `exit_code=127` plus a shell `not found` message is reported as
+an application-process startup failure when the observed Swarm contract is
+valid. The diagnostic explicitly states that this evidence alone does not
+prove whether the artifact filesystem or its interpreter is missing.
+
 
 This is backend readiness, not necessarily application HTTP readiness.
 
@@ -307,6 +375,30 @@ The event consumer is also legacy-only in Compose under the `legacy-runtime` pro
 Compatibility, not architectural preference.
 
 Do not add new Swarm semantics to the legacy container manager or assume legacy snapshot behavior exists in Swarm.
+
+## Failure diagnostics
+
+The deployment event/log sink should surface concise fields such as:
+
+```text
+error_code
+failure_domain
+retryability
+certainty
+boundary
+first_detected_boundary
+expected_command
+expected_args
+actual_command
+actual_args
+revision_id
+release_id
+worker_code_revision
+```
+
+Large task/container inspections remain structured diagnostic details rather
+than being flattened into every worker log line. Operators should identify the
+first failing boundary before inspecting lower-level Docker logs.
 
 ## How to use this layer
 
