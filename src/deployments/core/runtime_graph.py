@@ -102,8 +102,12 @@ class ServiceRuntimeGraph:
         config_snapshot = dict(getattr(revision, "config_snapshot", None) or {})
         build_snapshot = dict(getattr(revision, "build_snapshot", None) or {})
         runtime_snapshot = dict(getattr(revision, "runtime_snapshot", None) or {})
+        source_snapshot = dict(getattr(revision, "source_snapshot", None) or {})
+        source_kind = str(config_snapshot.get("source_kind") or "").strip().lower()
         catalog_managed = (
-            str(config_snapshot.get("source_kind") or "").strip().lower() == "catalog"
+            source_kind == "catalog"
+            or bool(config_snapshot.get("catalog_managed"))
+            or bool(source_snapshot.get("catalog_id"))
         )
         dockerfile = str(
             build_snapshot.get("dockerfile")
@@ -120,6 +124,11 @@ class ServiceRuntimeGraph:
                 flags=re.MULTILINE | re.IGNORECASE,
             )
         )
+
+        runtime = dict(runtime_snapshot)
+        if dockerfile_owns_entrypoint:
+            runtime["catalog_managed"] = True
+            runtime["image_entrypoint_owned"] = True
 
         dockerfile_default_cmd = (
             _dockerfile_default_cmd(dockerfile)
@@ -195,9 +204,9 @@ class ServiceRuntimeGraph:
         revision_id = getattr(revision, "pk", None)
         revision_number = getattr(revision, "revision_number", None)
         return cls(
-            source=dict(getattr(revision, "source_snapshot", None) or {}),
-            build=dict(getattr(revision, "build_snapshot", None) or {}),
-            runtime=dict(getattr(revision, "runtime_snapshot", None) or {}),
+            source=source_snapshot,
+            build=build_snapshot,
+            runtime=runtime,
             build_environment=build_environment,
             runtime_environment=runtime_environment,
             environment=runtime_environment,
