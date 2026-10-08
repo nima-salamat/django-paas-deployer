@@ -1,4 +1,7 @@
+import io
 from types import SimpleNamespace
+
+import pytest
 
 from deployments.core.platform_bridge import enrich_config_from_project
 from deployments.core.types import DeploymentConfig
@@ -99,13 +102,11 @@ def test_catalog_profile_removes_stale_dockerfile_entrypoint_override():
     assert normalized["start_command"] == "apache2-foreground"
 
 
-def test_catalog_dockerfile_entrypoint_survives_renderer():
+def test_catalog_dockerfile_entrypoint_survives_renderer(monkeypatch):
     from deployments.core import dockerfile
 
-    monkeypatch = __import__("pytest").MonkeyPatch()
-    try:
-        monkeypatch.setattr(dockerfile, "check_requirements_txt", lambda *args, **kwargs: None)
-        monkeypatch.setattr(dockerfile, "check_package_json", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dockerfile, "check_requirements_txt", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dockerfile, "check_package_json", lambda *args, **kwargs: None)
         config = DeploymentConfig(
             name="blog-wordpress-docker",
             tag="1.00",
@@ -128,13 +129,11 @@ def test_catalog_dockerfile_entrypoint_survives_renderer():
         rendered = dockerfile.DockerfileGenerator().render(
             platform="docker",
             dockerfile_template=config.dockerfile_template,
-            tar_stream=__import__("io").BytesIO(b""),
+            tar_stream=io.BytesIO(b""),
             config=config,
         )
         assert 'ENTRYPOINT ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh"]' in rendered
         assert 'CMD ["apache2-foreground"]' in rendered
-    finally:
-        monkeypatch.undo()
 
 
 def test_catalog_managed_docker_does_not_promote_detected_default_command(monkeypatch):
