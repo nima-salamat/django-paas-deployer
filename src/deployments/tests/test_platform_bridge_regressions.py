@@ -42,7 +42,8 @@ def _detection():
 def test_legacy_catalog_revision_drops_dockerfile_owned_process_entrypoint():
     from deployments.core.runtime_graph import ServiceRuntimeGraph
 
-    stale_entrypoint = "/usr/local/bin/passdeployer-wordpress-entrypoint.sh"
+    # Reproduce the legacy bad value that bypassed the catalog bootstrap.
+    stale_entrypoint = "/usr/local/bin/docker-entrypoint.sh"
     revision = SimpleNamespace(
         pk="revision-1",
         config_snapshot={"source_kind": "catalog"},
