@@ -24,6 +24,7 @@ from django.utils import timezone
 from .models import BaseRuntimeImage, BaseRuntimeImageLease
 from deployments.core.manager.client_manager import get_docker_client
 from deployments.core.manager.image_manager import Image
+from deployments.common.docker_identity import canonical_image_tag
 
 logger = logging.getLogger(__name__)
 
