@@ -175,7 +175,15 @@ class ServiceRuntimeGraph:
             )
             process_rows.append(process)
             stored_contract = raw.get("execution_contract")
-            contract_options = {**runtime, "execution_contract": stored_contract} if stored_contract else runtime
+            # Catalog Dockerfiles are the immutable executable authority. A stored
+            # execution_contract may come from a legacy revision generated before
+            # the catalog runtime contract was corrected, so never let it override
+            # the current Dockerfile ENTRYPOINT/CMD.
+            contract_options = runtime
+            if stored_contract and not (catalog_managed and dockerfile_owns_entrypoint):
+                contract_options = {**runtime, "execution_contract": stored_contract}
+            if catalog_managed and dockerfile_owns_entrypoint and dockerfile_default_cmd:
+                command = dockerfile_default_cmd
             execution_contracts[process.name] = RuntimeExecutionContract.from_runtime(
                 process_name=process.name,
                 process_command=process.command,
