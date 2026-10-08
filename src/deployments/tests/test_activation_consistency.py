@@ -64,6 +64,34 @@ class DeploymentActivationConsistencyContractTests(unittest.TestCase):
         self.assertIn("actual_lifecycle_generation != expected_lifecycle_generation", self.service)
         self.assertIn("Service lifecycle changed while this deployment was preparing to activate.", self.service)
 
+    def test_swarm_monitor_compares_runtime_release_to_reusable_release_reference(self):
+        active_deploy = self.scheduler.split("def _reconcile_active_deploy_swarm", 1)[1].split(
+            "def _reconcile_desired_state", 1
+        )[0]
+        self.assertIn("release_reference_id", active_deploy)
+        self.assertIn("Deploy.release_id", self.scheduler)
+        self.assertIn("historical per-attempt UUID", self.scheduler)
+
+    def test_swarm_service_reconciliation_does_not_race_active_deployment(self):
+        helper = self.scheduler.split("def _service_has_active_native_deployment", 1)[1].split(
+            "def _reconcile_service_runtime_swarm", 1
+        )[0]
+        reconcile = self.scheduler.split("def _reconcile_service_runtime_swarm", 1)[1].split(
+            "def _native_reconciliation_plan", 1
+        )[0]
+        self.assertIn("ACTIVE_DEPLOY_STATUSES", helper)
+        self.assertIn("cancel_requested=False", helper)
+        self.assertIn("_service_has_active_native_deployment(service)", reconcile)
+        self.assertIn("active_revision can still point to the previous", reconcile)
+
+    def test_swarm_service_reconciliation_does_not_execute_without_plan(self):
+        reconcile = self.scheduler.split("def _reconcile_service_runtime_swarm", 1)[1].split(
+            "def _native_reconciliation_plan", 1
+        )[0]
+        self.assertIn("if plan is not None:", reconcile)
+        self.assertIn("no native DeploymentPlan could be reconstructed", reconcile)
+
+
     def test_swarm_recovery_uses_revision_activation_boundary(self):
         self.assertIn("activate_revision_locked", self.scheduler)
         self.assertNotIn(
