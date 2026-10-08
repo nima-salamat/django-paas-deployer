@@ -115,11 +115,17 @@ def deploy(self, deploy_id) -> None:
                     task_id=str(self.request.id),
                 )
                 return
-    except Exception:
+    except Exception as exc:
+        # Runtime-family detection is a routing safety boundary. Never fall
+        # through to the application build path after that boundary failed:
+        # a database deployment could otherwise be treated as a normal app.
+        translated = to_deployment_error(exc, stage="deployment_routing")
         logger.exception(
-            "DB platform guard failed for deploy_id=%s; continuing app path",
+            "DB platform guard failed for deploy_id=%s; refusing app-path fallback: %s",
             deploy_id,
+            translated.technical_message,
         )
+        raise translated from exc
 
     try:
         # A cancelled deployment must never be resurrected by Celery retry
