@@ -872,7 +872,15 @@ def _create_deploy_log(
         )
 
 
-def _mark_success(deploy: Deploy, service: Service, result_message: str, *, task_id: str | None = None) -> None:
+def _mark_success(
+    deploy: Deploy,
+    service: Service,
+    result_message: str,
+    *,
+    task_id: str | None = None,
+    expected_lifecycle_generation: int | None = None,
+    expected_previous_deploy_id: str | None = None,
+) -> None:
     message = result_message or "Database deployed successfully."
     event_payload = {
         "event_id": str(uuid.uuid4()),
@@ -893,6 +901,9 @@ def _mark_success(deploy: Deploy, service: Service, result_message: str, *, task
         deploy.pk,
         deploy.revision_id,
         task_id=task_id,
+        expected_lifecycle_generation=expected_lifecycle_generation,
+        expected_previous_deploy_id=expected_previous_deploy_id,
+        enforce_previous_deploy=True,
         update_fields={
             "stage": "finished",
             "progress": 100,
@@ -1227,7 +1238,18 @@ def run_db_deploy(self, deploy_id: str | int, force_reinit: bool = False) -> Non
         return
 
     if result.success:
-        _mark_success(deploy, service, result.message, task_id=str(self.request.id))
+        _mark_success(
+            deploy,
+            service,
+            result.message,
+            task_id=str(self.request.id),
+            expected_lifecycle_generation=(
+                int(getattr(service, "lifecycle_generation", 0) or 0)
+            ),
+            expected_previous_deploy_id=(
+                str(getattr(deploy, "previous_deploy_id", "") or "") or None
+            ),
+        )
     else:
         failure_message = (
             result.message
