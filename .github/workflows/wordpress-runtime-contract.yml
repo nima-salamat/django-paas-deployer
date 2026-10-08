@@ -137,16 +137,16 @@ jobs:
         run: |
           set -euo pipefail
           logs="$(docker logs passdeployer-wp)"
-          prep_line="$(printf '%s\n' "$logs" | grep -nF "[passdeployer-wordpress] Preparing the official WordPress entrypoint..." | head -n1 | cut -d: -f1)"
           install_line="$(printf '%s\n' "$logs" | grep -nF "[passdeployer-wordpress] Installing WordPress through WP-CLI..." | head -n1 | cut -d: -f1)"
           ready_line="$(printf '%s\n' "$logs" | grep -nF "[passdeployer-wordpress] WordPress installation is ready." | head -n1 | cut -d: -f1)"
+          start_line="$(printf '%s\n' "$logs" | grep -nF "[passdeployer-wordpress] Starting WordPress foreground command:" | head -n1 | cut -d: -f1)"
           apache_line="$(printf '%s\n' "$logs" | grep -nF "Apache/2." | grep -F "resuming normal operations" | head -n1 | cut -d: -f1)"
-          test -n "$prep_line"
           test -n "$install_line"
           test -n "$ready_line"
+          test -n "$start_line"
           test -n "$apache_line"
-          test "$prep_line" -lt "$install_line"
           test "$install_line" -lt "$ready_line"
-          test "$ready_line" -lt "$apache_line"
+          test "$ready_line" -lt "$start_line"
+          test "$start_line" -lt "$apache_line"
           docker exec passdeployer-wp wp core is-installed --allow-root
           docker exec passdeployer-wp wp option get blogname --allow-root
