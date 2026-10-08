@@ -1,5 +1,6 @@
 """Deployment profile normalization for the public Deploy.config contract."""
 from __future__ import annotations
+import re
 from typing import Any
 
 from .config import as_bool, as_int, sanitize_tenant_config
