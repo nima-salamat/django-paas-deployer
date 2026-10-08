@@ -1263,6 +1263,14 @@ class SwarmRuntime:
                     },
                 )
 
+            contract_failure = self._runtime_contract_failure(
+                name,
+                contract=expected_runtime_contract,
+                expected_image=expected_image,
+                provenance=provenance,
+            )
+            if contract_failure is not None:
+                raise contract_failure
             if (
                 expected_image
                 and latest.service_image
@@ -2538,6 +2546,16 @@ class SwarmRuntime:
             timeout=startup_timeout,
             expected_image=expected_image,
             cancel_check=cancel_check,
+            expected_runtime_contract=contract,
+            provenance=dict(runtime_options.get("deployment_provenance") or {
+                **worker_provenance(),
+                "deployment_id": (config.labels or {}).get("deployment.id"),
+                "service_id": (config.labels or {}).get("service.id"),
+                "revision_id": (config.labels or {}).get("revision.id"),
+                "release_id": (config.labels or {}).get("release.id"),
+                "runtime_backend": "swarm",
+                "process_name": contract.process_name,
+            }),
         )
 
     def scale_service(self, name: str, replicas: int, *, timeout: float = 180.0) -> SwarmServiceState:
