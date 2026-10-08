@@ -390,6 +390,49 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             ],
         )
 
+    def test_catalog_managed_dockerfile_entrypoint_is_inferred_at_swarm_boundary(self):
+        config = _config(
+            entry_point="/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+            start_command="/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground",
+            dockerfile_template=(
+                "FROM wordpress:7.1.2-php8.4-apache\n"
+                'ENTRYPOINT ["docker-ensure-installed.sh"]\n'
+                'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "apache2-foreground"]\n'
+            ),
+            runtime_options={
+                "catalog_managed": True,
+            },
+        )
+        spec = compile_compose_service(config, image_ref="wordpress:test")
+        service_doc = spec["services"]["demo"]
+
+        self.assertIsNone(service_doc["command"])
+        self.assertIsNone(service_doc["entrypoint"])
+        self.assertEqual(
+            service_doc["args"],
+            [
+                "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+                "apache2-foreground",
+            ],
+        )
+
+        runtime = SwarmRuntime.__new__(SwarmRuntime)
+        with patch.object(runtime, "_apply_local_volume_pin", return_value=[]):
+            kwargs = runtime._create_kwargs(
+                config,
+                image_ref="wordpress:test",
+                compose_spec=spec,
+            )
+
+        self.assertIsNone(kwargs["command"])
+        self.assertEqual(
+            kwargs["args"],
+            [
+                "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+                "apache2-foreground",
+            ],
+        )
+
     def test_image_owned_entrypoint_ignores_stale_config_entry_point(self):
         config = _config(
             entry_point="/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
