@@ -112,6 +112,7 @@ def _enforce_catalog_dockerfile_entrypoint_contract(
         )
     ):
         runtime_options["catalog_managed"] = True
+        runtime_options["image_entrypoint_owned"] = True
         cfg.pop("entry_point", None)
         runtime_options.pop("entry_point", None)
         runtime_options.pop("entrypoint", None)
