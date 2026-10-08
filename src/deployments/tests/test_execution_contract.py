@@ -327,6 +327,7 @@ def test_observed_bad_swarm_contract_is_classified_as_runtime_contract_violation
         "/bin/sh", "-lc",
         "/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground",
     ]
+    assert error.details["expected_contract_hash"] != error.details["actual_contract_hash"]
 
 
 @pytest.mark.parametrize(
