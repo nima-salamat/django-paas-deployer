@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import shlex
+import socket
 from typing import Any, Mapping
 
 
@@ -257,7 +258,7 @@ def worker_provenance() -> dict[str, str]:
     return {
         "worker_code_revision": str(revision),
         "worker_started_at": started,
-        "worker_instance_id": f"{__import__("socket").gethostname()}:{os.getpid()}",
+        "worker_instance_id": f"{socket.gethostname()}:{os.getpid()}",
     }
 
 
