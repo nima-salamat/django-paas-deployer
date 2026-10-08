@@ -32,6 +32,9 @@ class DeploymentExecutionContext:
     worker_task_id: str | None
     operation_key: str
     runtime_selection: RuntimeSelection
+    expected_lifecycle_generation: int | None = None
+    expected_previous_deploy_id: str | None = None
+    enforce_previous_deploy: bool = False
     owns_execution: Callable[[], bool] = field(default=lambda: True, compare=False, repr=False)
     cancellation_requested: Callable[[], bool] = field(default=lambda: False, compare=False, repr=False)
     publish: Callable[[DeploymentExecutionEvent], None] = field(
