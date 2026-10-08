@@ -1976,6 +1976,13 @@ class SwarmRuntime:
                 or process_runtime_options.get("placement_constraints")
                 or []
             )
+            process_contract = raw.get("execution_contract")
+            if process_contract:
+                process_runtime_options["execution_contract"] = process_contract
+                process_runtime_options["execution_contracts"] = {
+                    process_name: process_contract,
+                }
+            process_runtime_options["process_name"] = process_name
             process_endpoints = [
                 endpoint for endpoint in (config.endpoints or ())
                 if endpoint.process in (None, "", process_name)
