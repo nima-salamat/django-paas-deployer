@@ -75,6 +75,39 @@ def _docker_tag_from_deploy(version) -> str:
 _docker_safe_tag = _docker_tag_from_deploy
 
 
+def _apply_explicit_docker_source_process_override(
+    cfg: dict,
+    runtime_options: dict,
+    docker_runtime_source: dict,
+) -> None:
+    """Apply only explicit Docker-source process commands to the runtime graph.
+
+    The immutable ServiceRevision remains authoritative when a Dockerfile does
+    not declare a runtime command. A stale compatibility start_command must
+    never be promoted into runtime_options["processes"].
+    """
+    source = dict(docker_runtime_source or {})
+    source_entrypoint = source.get("entrypoint")
+    source_command = source.get("command")
+    if source_entrypoint and source_command:
+        source_command = f"{source_entrypoint} {source_command}".strip()
+    else:
+        source_command = source_entrypoint or source_command
+    if not source_command:
+        return
+
+    cfg["processes"] = [{
+        "name": "web",
+        "process_type": "web",
+        "command": source_command,
+        "entrypoint": None,
+        "replicas": 1,
+        "enabled": True,
+        "environment": {},
+    }]
+    runtime_options["processes"] = list(cfg["processes"])
+
+
 
 class DeployService:
     """Orchestrates deployment execution flows coupled with state logging."""
@@ -1010,18 +1043,16 @@ class DeployService:
                 )
 
         if platform == "docker" and docker_runtime_source:
-            source_command = cfg.get("start_command")
-            if source_command:
-                cfg["processes"] = [{
-                    "name": "web",
-                    "process_type": "web",
-                    "command": source_command,
-                    "entrypoint": None,
-                    "replicas": 1,
-                    "enabled": True,
-                    "environment": {},
-                }]
-                runtime_options["processes"] = list(cfg["processes"])
+            # Only an explicitly declared command/entrypoint from the Docker
+            # source may replace the immutable revision process graph. Never
+            # fall back to cfg["start_command"]: it may be stale compatibility
+            # data from an older revision and can change the image's PID 1
+            # semantics (for example, WordPress's bootstrap wrapper).
+            _apply_explicit_docker_source_process_override(
+                cfg,
+                runtime_options,
+                docker_runtime_source,
+            )
 
         networks: list[tuple[str, str]] = []
         if getattr(service, "network", None) is not None and getattr(service.network, "name", None):
