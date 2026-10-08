@@ -14,6 +14,7 @@ from ..serializers import (
     VolumeSerializer,
     GetServiceSerializer,
 )
+from .common import _purge_service_runtime
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.response import Response
 from rest_framework import status
