@@ -14,6 +14,8 @@ from core.global_settings.config import MAX_DEPLOY_TIME_MINUTE, SERVICE_STATUS_C
 from deployments.core.manager.container_manager import Container
 from deployments.core.swarm import SwarmRuntime, swarm_enabled
 from deployments.core.state.manager import StateManager
+from deployments.core.state.locks import acquire_service_deployment_lock
+from deployments.common.exceptions import DeploymentLockError
 from deploy.models import (
     Deploy,
     DeployLog,
@@ -1004,7 +1006,14 @@ def _reconcile_desired_state(service: Service) -> bool:
             if service.status != SERVICE_STATUS_CHOICES.STOPPING:
                 try:
                     from deployments.celery.tasks import stop as stop_service
-                    stop_service.delay(str(service.pk))
+                    stop_service.apply_async(
+                        args=[str(service.pk)],
+                        kwargs={
+                            "expected_lifecycle_generation": int(
+                                getattr(service, "lifecycle_generation", 0) or 0
+                            ),
+                        },
+                    )
                     return True
                 except Exception:
                     logger.exception("Could not queue Swarm stop reconciliation for service %s", service.pk)
@@ -1312,179 +1321,197 @@ def _service_has_active_native_deployment(service: Service) -> bool:
 
 
 def _reconcile_service_runtime_swarm(service: Service) -> None:
-    # DeploymentLifecycleExecutor owns runtime mutation while an attempt is
-    # active. The service-level reconciler must not invent a second plan from
-    # the pre-activation state (active_revision can still point to the previous
-    # release or be empty).
-    if _service_has_active_native_deployment(service):
-        logger.debug(
-            "Skipping service runtime reconciliation for %s while an active deployment owns the runtime.",
-            service.pk,
-        )
-        return
-
-    resolver = DjangoRuntimeSelectionResolver()
-    selection = resolver.resolve(
-        service=service,
-        revision=getattr(service, "active_revision", None),
-        deployment=get_authoritative_deploy(service),
-        probe=True,
-    )
-    runtime = resolver.registry.resolve_adapter(selection)
-    service_name = service.get_docker_service_name()
-    deploy = get_authoritative_deploy(service)
 
     try:
-        observed = runtime.inspect(
-            RuntimeIdentity(
-                service_id=str(service.pk),
-                deployment_id=str(getattr(deploy, "pk", "") or "") or None,
-                revision_id=str(getattr(getattr(service, "active_revision", None), "pk", "") or "") or None,
-                process_name="web",
-                runtime_name=service_name,
+        with acquire_service_deployment_lock(service.pk):
+            locked = (
+                Service.objects
+                .select_related("active_revision")
+                .filter(pk=service.pk)
+                .first()
             )
-        )
-    except Exception as exc:
-        logger.warning("Swarm runtime observation failed for service %s: %s", service.pk, exc)
-        return
-
-    desired_state = str(getattr(service, "desired_state", "") or "").lower()
-    if desired_state not in {"running", "stopped"}:
-        desired_state = (
-            "stopped"
-            if service.status in {SERVICE_STATUS_CHOICES.STOPPING, SERVICE_STATUS_CHOICES.STOPPED}
-            else "running"
-        )
-    desired = DesiredRuntimeState(
-        service_id=str(service.pk),
-        revision_id=str(getattr(getattr(service, "active_revision", None), "pk", "") or "") or None,
-        desired_state=desired_state,
-        runtime_name=service_name,
-        metadata={
-            "readiness_timeout": int(runtime_policies().get("queued_timeout_minutes", 10) or 10) * 60,
-        },
-    )
-    plan = None
-    try:
-        if desired_state == "running" and deploy is not None:
-            plan = _native_reconciliation_plan(service, deploy, selection)
-    except Exception:
-        logger.exception("Could not construct native reconciliation plan for service %s", service.pk)
-        return
-
-    if plan is not None:
-        desired = __import__("dataclasses").replace(
-            desired,
-            required_capabilities=plan.required_capabilities,
-        )
-    elif desired_state == "running" and observed.status.value != "missing":
-        # An existing runtime without a reconstructable native plan is not
-        # safely actionable. Treat it as manual intervention instead of
-        # reaching ReconciliationExecutor with an invalid None plan.
-        logger.warning(
-            "Skipping Swarm runtime reconciliation for service=%s: no native DeploymentPlan could be reconstructed.",
-            service.pk,
-        )
-        return
-
-    decision = ReconciliationPlanner().decide(desired, observed, selection)
-    logger.info(
-        "Swarm reconciliation decision service=%s action=%s reason=%s",
-        service.pk,
-        decision.action.value,
-        decision.reason_code,
-    )
-
-    if decision.action in {
-        ReconciliationAction.CONVERGED,
-        ReconciliationAction.BLOCKED,
-        ReconciliationAction.MANUAL_INTERVENTION,
-    }:
-        if decision.action is ReconciliationAction.BLOCKED:
-            logger.warning(
-                "Swarm reconciliation blocked service=%s reason=%s details=%s",
-                service.pk, decision.reason_code, decision.details,
-            )
-        with transaction.atomic():
-            locked = Service.objects.select_for_update().filter(pk=service.pk).first()
-            if not locked:
+            if locked is None:
                 return
-            if (
-                decision.action is ReconciliationAction.CONVERGED
-                and locked.status == SERVICE_STATUS_CHOICES.SUCCEEDED
-            ):
-                mark_service_running(locked, deploy=get_authoritative_deploy(locked))
-        return
+            # DeploymentLifecycleExecutor owns runtime mutation while an attempt is
+            # active. The service-level reconciler must not invent a second plan from
+            # the pre-activation state (active_revision can still point to the previous
+            # release or be empty).
+            if _service_has_active_native_deployment(service):
+                logger.debug(
+                    "Skipping service runtime reconciliation for %s while an active deployment owns the runtime.",
+                    service.pk,
+                )
+                return
 
-    generation = getattr(service, "lifecycle_generation", 0)
-    context = ReconciliationExecutionContext(
-        service_id=str(service.pk),
-        lifecycle_generation=generation,
-        active_revision_id=desired.revision_id,
-        owns_execution=lambda sid=str(service.pk), gen=generation: (
-            Service.objects.filter(
-                pk=sid, lifecycle_generation=gen,
-            ).exists()
-            and not Deploy.objects.filter(
-                service_id=sid,
-                status__in=ACTIVE_DEPLOY_STATUSES,
-                cancel_requested=False,
-            ).exists()
-        ),
-        current_generation=lambda sid=str(service.pk): Service.objects.filter(
-            pk=sid
-        ).values_list("lifecycle_generation", flat=True).first(),
-        cancellation_requested=lambda sid=str(service.pk): (
-            str(Service.objects.filter(pk=sid).values_list("desired_state", flat=True).first() or "").lower()
-            != "running"
-            if desired_state == "running"
-            else False
-        ),
-    )
+            resolver = DjangoRuntimeSelectionResolver()
+            selection = resolver.resolve(
+                service=service,
+                revision=getattr(service, "active_revision", None),
+                deployment=get_authoritative_deploy(service),
+                probe=True,
+            )
+            runtime = resolver.registry.resolve_adapter(selection)
+            service_name = service.get_docker_service_name()
+            deploy = get_authoritative_deploy(service)
 
-    handle = None
-    if decision.action is ReconciliationAction.STOP:
-        handle = RuntimeHandle(
-            backend=selection.backend,
-            identity=observed.identity,
-            runtime_id=observed.runtime_id,
-            resource_name=observed.identity.resource_name(),
+            try:
+                observed = runtime.inspect(
+                    RuntimeIdentity(
+                        service_id=str(service.pk),
+                        deployment_id=str(getattr(deploy, "pk", "") or "") or None,
+                        revision_id=str(getattr(getattr(service, "active_revision", None), "pk", "") or "") or None,
+                        process_name="web",
+                        runtime_name=service_name,
+                    )
+                )
+            except Exception as exc:
+                logger.warning("Swarm runtime observation failed for service %s: %s", service.pk, exc)
+                return
+
+            desired_state = str(getattr(service, "desired_state", "") or "").lower()
+            if desired_state not in {"running", "stopped"}:
+                desired_state = (
+                    "stopped"
+                    if service.status in {SERVICE_STATUS_CHOICES.STOPPING, SERVICE_STATUS_CHOICES.STOPPED}
+                    else "running"
+                )
+            desired = DesiredRuntimeState(
+                service_id=str(service.pk),
+                revision_id=str(getattr(getattr(service, "active_revision", None), "pk", "") or "") or None,
+                desired_state=desired_state,
+                runtime_name=service_name,
+                metadata={
+                    "readiness_timeout": int(runtime_policies().get("queued_timeout_minutes", 10) or 10) * 60,
+                },
+            )
+            plan = None
+            try:
+                if desired_state == "running" and deploy is not None:
+                    plan = _native_reconciliation_plan(service, deploy, selection)
+            except Exception:
+                logger.exception("Could not construct native reconciliation plan for service %s", service.pk)
+                return
+
+            if plan is not None:
+                desired = __import__("dataclasses").replace(
+                    desired,
+                    required_capabilities=plan.required_capabilities,
+                )
+            elif desired_state == "running" and observed.status.value != "missing":
+                # An existing runtime without a reconstructable native plan is not
+                # safely actionable. Treat it as manual intervention instead of
+                # reaching ReconciliationExecutor with an invalid None plan.
+                logger.warning(
+                    "Skipping Swarm runtime reconciliation for service=%s: no native DeploymentPlan could be reconstructed.",
+                    service.pk,
+                )
+                return
+
+            decision = ReconciliationPlanner().decide(desired, observed, selection)
+            logger.info(
+                "Swarm reconciliation decision service=%s action=%s reason=%s",
+                service.pk,
+                decision.action.value,
+                decision.reason_code,
+            )
+
+            if decision.action in {
+                ReconciliationAction.CONVERGED,
+                ReconciliationAction.BLOCKED,
+                ReconciliationAction.MANUAL_INTERVENTION,
+            }:
+                if decision.action is ReconciliationAction.BLOCKED:
+                    logger.warning(
+                        "Swarm reconciliation blocked service=%s reason=%s details=%s",
+                        service.pk, decision.reason_code, decision.details,
+                    )
+                with transaction.atomic():
+                    locked = Service.objects.select_for_update().filter(pk=service.pk).first()
+                    if not locked:
+                        return
+                    if (
+                        decision.action is ReconciliationAction.CONVERGED
+                        and locked.status == SERVICE_STATUS_CHOICES.SUCCEEDED
+                    ):
+                        mark_service_running(locked, deploy=get_authoritative_deploy(locked))
+                return
+
+            generation = getattr(service, "lifecycle_generation", 0)
+            context = ReconciliationExecutionContext(
+                service_id=str(service.pk),
+                lifecycle_generation=generation,
+                active_revision_id=desired.revision_id,
+                owns_execution=lambda sid=str(service.pk), gen=generation: (
+                    Service.objects.filter(
+                        pk=sid, lifecycle_generation=gen,
+                    ).exists()
+                    and not Deploy.objects.filter(
+                        service_id=sid,
+                        status__in=ACTIVE_DEPLOY_STATUSES,
+                        cancel_requested=False,
+                    ).exists()
+                ),
+                current_generation=lambda sid=str(service.pk): Service.objects.filter(
+                    pk=sid
+                ).values_list("lifecycle_generation", flat=True).first(),
+                cancellation_requested=lambda sid=str(service.pk): (
+                    str(Service.objects.filter(pk=sid).values_list("desired_state", flat=True).first() or "").lower()
+                    != "running"
+                    if desired_state == "running"
+                    else False
+                ),
+            )
+
+            handle = None
+            if decision.action is ReconciliationAction.STOP:
+                handle = RuntimeHandle(
+                    backend=selection.backend,
+                    identity=observed.identity,
+                    runtime_id=observed.runtime_id,
+                    resource_name=observed.identity.resource_name(),
+                )
+            try:
+                result = ReconciliationExecutor().execute(
+                    decision,
+                    desired=desired,
+                    selection=selection,
+                    runtime=runtime,
+                    context=context,
+                    plan=plan,
+                    handle=handle,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Swarm reconciliation execution failed service=%s action=%s reason=%s",
+                    service.pk, decision.action.value, decision.reason_code,
+                )
+                return
+
+            if result is None:
+                return
+            with transaction.atomic():
+                locked = Service.objects.select_for_update().filter(pk=service.pk).first()
+                if not locked:
+                    return
+                if decision.action is ReconciliationAction.STOP:
+                    mark_service_stopped(locked, deploy=get_authoritative_deploy(locked))
+                elif result.success and decision.action in {
+                    ReconciliationAction.CREATE,
+                    ReconciliationAction.UPDATE,
+                    ReconciliationAction.REPAIR,
+                }:
+                    mark_service_running(locked, deploy=get_authoritative_deploy(locked))
+
+
+
+        # ---- (removed old handlers, replaced by monitoring.actions) ----
+
+    except DeploymentLockError:
+        logger.debug(
+            "Skipping Swarm service runtime reconciliation for %s because "
+            "the per-service deployment lock is held.",
+            service.pk,
         )
-    try:
-        result = ReconciliationExecutor().execute(
-            decision,
-            desired=desired,
-            selection=selection,
-            runtime=runtime,
-            context=context,
-            plan=plan,
-            handle=handle,
-        )
-    except Exception as exc:
-        logger.exception(
-            "Swarm reconciliation execution failed service=%s action=%s reason=%s",
-            service.pk, decision.action.value, decision.reason_code,
-        )
-        return
-
-    if result is None:
-        return
-    with transaction.atomic():
-        locked = Service.objects.select_for_update().filter(pk=service.pk).first()
-        if not locked:
-            return
-        if decision.action is ReconciliationAction.STOP:
-            mark_service_stopped(locked, deploy=get_authoritative_deploy(locked))
-        elif result.success and decision.action in {
-            ReconciliationAction.CREATE,
-            ReconciliationAction.UPDATE,
-            ReconciliationAction.REPAIR,
-        }:
-            mark_service_running(locked, deploy=get_authoritative_deploy(locked))
-
-
-
-# ---- (removed old handlers, replaced by monitoring.actions) ----
 
 
 def _reconcile_base_runtime_builds(policies: dict) -> None:
