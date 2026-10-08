@@ -126,42 +126,15 @@ class ServiceRuntimeGraph:
                 )
             )
 
-        # Environment snapshots intentionally omit secret-backed values.
-        # When this revision references versioned secrets, materialize only
-        # those environment values into memory for runtime execution. Missing
-        # or invalid secret versions must surface as a deployment error instead
-        # of silently producing an incomplete environment.
-        materialized = {}
-        if getattr(revision, "secret_refs", None):
-            from services.revisioning import materialize_revision_config
-            materialized = materialize_revision_config(revision)
-
         build_environment: dict[str, str] = {}
         runtime_environment: dict[str, str] = {}
-        snapshot_environment = dict(getattr(revision, "environment_snapshot", None) or {})
-        resolved_environment = dict(
-            (materialized.get("env") or {})
-            if isinstance(materialized, dict) else {}
-        )
-        resolved_build_environment = dict(
-            (materialized.get("build_env") or {})
-            if isinstance(materialized, dict) else {}
-        )
-
-        for key, item in snapshot_environment.items():
+        for key, item in (getattr(revision, "environment_snapshot", None) or {}).items():
             value = str(item.get("value") if isinstance(item, dict) else item)
             scope = str(item.get("scope") if isinstance(item, dict) else "runtime").lower()
             if scope in {"build", "both"}:
                 build_environment[str(key)] = value
             if scope in {"runtime", "both"}:
                 runtime_environment[str(key)] = value
-
-        # Secret refs materialized through env.<KEY> are authoritative and must
-        # not disappear merely because the redacted snapshot has no plaintext.
-        for key, value in resolved_environment.items():
-            runtime_environment[str(key)] = str(value)
-        for key, value in resolved_build_environment.items():
-            build_environment[str(key)] = str(value)
 
         for process in process_rows:
             if not 1 <= process.replicas <= 8:
