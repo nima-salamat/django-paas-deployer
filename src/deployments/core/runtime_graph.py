@@ -7,6 +7,7 @@ desired runtime semantics only; Docker API objects never appear here.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Any, Iterable
 
 
@@ -63,14 +64,41 @@ class ServiceRuntimeGraph:
 
     @classmethod
     def from_revision(cls, revision) -> "ServiceRuntimeGraph":
+        # Catalog Dockerfiles may own an image-level ENTRYPOINT. Older
+        # revisions stored that Dockerfile instruction in ServiceProcess.entrypoint,
+        # but the native Swarm contract treats process.entrypoint as an effective
+        # runtime command override. Detect and discard that stale value here so
+        # existing installations converge to the same semantics as new ones.
+        config_snapshot = dict(revision.config_snapshot or {})
+        build_snapshot = dict(revision.build_snapshot or {})
+        catalog_managed = (
+            str(config_snapshot.get("source_kind") or "").strip().lower() == "catalog"
+        )
+        dockerfile = str(
+            build_snapshot.get("dockerfile")
+            or config_snapshot.get("dockerfile")
+            or ""
+        )
+        dockerfile_owns_entrypoint = bool(
+            catalog_managed
+            and re.search(
+                r"^\s*ENTRYPOINT\s+",
+                dockerfile,
+                flags=re.MULTILINE | re.IGNORECASE,
+            )
+        )
+
         process_rows = []
         for raw in revision.process_snapshot or []:
+            entrypoint = raw.get("entrypoint")
+            if dockerfile_owns_entrypoint:
+                entrypoint = None
             process_rows.append(
                 RuntimeProcess(
                     name=str(raw.get("name") or "web"),
                     process_type=str(raw.get("process_type") or "custom"),
                     command=raw.get("command"),
-                    entrypoint=raw.get("entrypoint"),
+                    entrypoint=entrypoint,
                     replicas=int(raw.get("replicas") or 1),
                     enabled=bool(raw.get("enabled", True)),
                     environment={str(k): str(v) for k, v in (raw.get("environment") or {}).items()},
