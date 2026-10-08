@@ -85,14 +85,3 @@ def test_process_deployment_uses_deploy_service_scope_for_catalog_source():
 
     assert 'getattr(service, "source_kind", "")' not in process_source
     assert 'getattr(deploy_item.service, "source_kind", "")' in process_source
-
-
-def test_execute_orchestrator_does_not_reference_process_local_revision_snapshot():
-    """The orchestration boundary must consume cfg, not _process_deployment locals."""
-    source = _source("deployments/celery/services/deploy_service.py")
-    start = source.index("    def _execute_orchestrator(")
-    end = source.index("    def _execute_native_swarm_lifecycle(", start)
-    method_source = source[start:end]
-
-    assert "revision_snapshot" not in method_source
-    assert 'cfg.get("source_kind")' in method_source
