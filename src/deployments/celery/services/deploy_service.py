@@ -577,6 +577,27 @@ class DeployService:
 
         DeploymentValidator.validate_for_deploy(deploy_item, dockerfile_text)
 
+        # A catalog Dockerfile owns its image-level ENTRYPOINT. Legacy Deploy
+        # rows may still carry that path in the compatibility entry_point field;
+        # never let that stale value replace/duplicate the image bootstrap command.
+        catalog_source_kind = str(
+            (revision_config or {}).get("source_kind")
+            or getattr(service, "source_kind", "")
+        ).strip().lower()
+        if (
+            catalog_source_kind == "catalog"
+            and re.search(
+                r"^\\s*ENTRYPOINT\\s+",
+                dockerfile_text,
+                flags=re.MULTILINE | re.IGNORECASE,
+            )
+        ):
+            entry_point = None
+            cfg.pop("entry_point", None)
+            runtime_options.pop("entry_point", None)
+            runtime_options.pop("entrypoint", None)
+            cfg["runtime_options"] = runtime_options
+
         if not swarm_enabled() and DeploymentHelper.is_restart_only(deploy_item, container_name):
             logger.info(
                 "Fast-path conditions met. Restarting existing container: %s",
