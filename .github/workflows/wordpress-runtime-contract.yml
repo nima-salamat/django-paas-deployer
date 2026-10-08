@@ -17,6 +17,7 @@ on:
       - "src/deployments/tests/test_platform_bridge_regressions.py"
       - "src/deployments/tests/test_execution_contract.py"
       - "src/deployments/tests/test_swarm_runtime.py"
+      - "src/app_catalog/tests/integration/test_ready_app_runtime.py"
       - ".github/workflows/wordpress-runtime-contract.yml"
   workflow_dispatch:
 
