@@ -336,7 +336,19 @@ class DeployService:
                     exception=translated,
                     traceback_text=traceback_text,
                 )
-            ServiceStateManager.sync_legacy_failure(service_id, deploy_id=deploy_item.pk)
+            final_status = (
+                Deploy.objects
+                .filter(pk=deploy_item.pk)
+                .values_list("status", flat=True)
+                .first()
+            )
+            if final_status != "cancelled":
+                ServiceStateManager.sync_legacy_failure(service_id, deploy_id=deploy_item.pk)
+            else:
+                logger.info(
+                    "Skipping legacy failure projection for cancelled deploy=%s.",
+                    deploy_item.pk,
+                )
             raise translated from exc
 
     def _process_deployment(
