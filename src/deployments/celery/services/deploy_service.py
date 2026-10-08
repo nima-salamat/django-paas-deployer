@@ -56,6 +56,7 @@ from deployments.planning.policies import ReleaseSpec
 from deployments.runtime import RuntimeBackend, RuntimeIdentity
 from deployments.infrastructure.django_runtime import DjangoRuntimeSelectionResolver
 from deployments.runtime.errors import RuntimeUnavailableError
+from deployments.runtime.execution_contract import worker_provenance
 
 from ..service_status import ServiceStateManager
 from ..validators import DeploymentValidator
@@ -2024,6 +2025,34 @@ class DeployService:
 
         if runtime_graph is None:
             return None
+
+        graph_metadata = dict(getattr(runtime_graph, "metadata", {}) or {})
+        primary_contract = getattr(runtime_graph, "execution_contract", None)
+        provenance = {
+            **worker_provenance(),
+            "deployment_id": str(deploy_item.pk),
+            "service_id": str(service.pk),
+            "revision_id": str(getattr(deploy_item, "revision_id", "") or ""),
+            "revision_number": graph_metadata.get("revision"),
+            "release_id": str(getattr(deploy_item, "release_id", "") or "") or None,
+            "runtime_backend": RuntimeBackend.SWARM.value,
+            "process_name": getattr(primary_contract, "process_name", None) or "web",
+            "source_kind": graph_metadata.get("source_kind") or "",
+            "catalog_id": graph_metadata.get("catalog_id"),
+            "variant_id": graph_metadata.get("variant_id"),
+            "definition_version": graph_metadata.get("definition_version"),
+        }
+        runtime_options = {
+            **dict(runtime_options or {}),
+            "source_kind": provenance["source_kind"],
+            "deployment_provenance": provenance,
+            "worker_provenance": {
+                key: provenance[key]
+                for key in ("worker_code_revision", "worker_started_at", "worker_instance_id")
+            },
+        }
+        if primary_contract is not None:
+            runtime_options["execution_contract"] = primary_contract.as_dict()
 
         network_specs = [
             NetworkSpec(name=str(name), driver=str(driver or "overlay"))
