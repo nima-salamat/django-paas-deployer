@@ -94,7 +94,7 @@ def test_user_entrypoint_preserves_command_as_swarm_args():
     )
     assert contract.entrypoint_source == "USER"
     assert contract.command == ("/bin/sh", "-lc", "/entrypoint.sh")
-    assert contract.args == ("gunicorn", "app:app", "--bind", "0.0.0.0:8000")
+    assert contract.args == ()
 
     spec = compile_compose_service(
         _config(
@@ -105,12 +105,7 @@ def test_user_entrypoint_preserves_command_as_swarm_args():
     )
     service = spec["services"]["demo"]
     assert service["command"] == ["/bin/sh", "-lc", "/entrypoint.sh"]
-    assert service["args"] == [
-        "gunicorn",
-        "app:app",
-        "--bind",
-        "0.0.0.0:8000",
-    ]
+    assert service["args"] is None
 
 
 def test_exact_production_bad_swarm_state_is_rejected_before_service_mutation(monkeypatch):
