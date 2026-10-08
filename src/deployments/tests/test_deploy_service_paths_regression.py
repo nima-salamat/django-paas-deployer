@@ -65,3 +65,13 @@ def test_revision_snapshot_is_local_and_catalog_warning_uses_service_from_deploy
     assert 'materialize_revision_config(deploy_item.revision)' in source
     assert 'using immutable revision Dockerfile for build. deployment=%s service=%s' in source
     assert '                    deploy_item.pk,\n                    deploy_item.service.pk,\n' in source
+
+def test_execute_orchestrator_does_not_reference_process_local_revision_snapshot():
+    """The orchestration boundary must consume cfg, not _process_deployment locals."""
+    source = _source("deployments/celery/services/deploy_service.py")
+    start = source.index("    def _execute_orchestrator(")
+    end = source.index("    def _execute_native_swarm_lifecycle(", start)
+    method_source = source[start:end]
+
+    assert "revision_snapshot" not in method_source
+    assert 'cfg.get("source_kind")' in method_source
