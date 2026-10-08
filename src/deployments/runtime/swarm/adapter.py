@@ -203,6 +203,10 @@ class SwarmRuntimeAdapter:
             processes[0] if processes else None,
         )
         runtime_options = dict(getattr(plan, "runtime_options", {}) or {})
+        graph_runtime = dict(getattr(graph, "runtime", {}) or {})
+        if graph_runtime.get("image_entrypoint_owned"):
+            runtime_options["catalog_managed"] = True
+            runtime_options["image_entrypoint_owned"] = True
         runtime_options.setdefault(
             "processes",
             [
