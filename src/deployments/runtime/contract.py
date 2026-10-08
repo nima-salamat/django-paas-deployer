@@ -104,6 +104,15 @@ class RuntimeContract(Protocol):
     ) -> Mapping[str, Any]:
         ...
 
+    def recover_failed_apply(
+        self,
+        details: Mapping[str, Any],
+        *,
+        operation_key: str,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> Mapping[str, Any]:
+        ...
+
     def stop(
         self, handle: RuntimeHandle, *, operation_key: str, cancel_check: Callable[[], bool] | None = None
     ) -> RuntimeOperationResult:
