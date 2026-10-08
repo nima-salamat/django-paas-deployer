@@ -462,7 +462,14 @@ def test_runtime_contract_fingerprint_is_deterministic_and_boundary_specific():
         args=("app", "serve"),
         image_entrypoint_owned=True,
     )
-    assert contract.fingerprint(boundary="revision") == contract.fingerprint(boundary="revision")
+    assert contract.contract_hash() == contract.contract_hash()
+    assert contract.contract_hash() == RuntimeExecutionContract(
+        entrypoint_source="IMAGE",
+        image_entrypoint=("docker-ensure-installed.sh",),
+        image_cmd=("app", "serve"),
+        args=("app", "serve"),
+        image_entrypoint_owned=True,
+    ).contract_hash()
     assert contract.fingerprint(boundary="revision") != contract.fingerprint(boundary="plan")
     assert contract.fingerprint(boundary="revision", image_ref="a:r1") != contract.fingerprint(
         boundary="revision", image_ref="a:r2"
