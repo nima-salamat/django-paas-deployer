@@ -36,6 +36,44 @@ def _detection():
     )
 
 
+def test_legacy_catalog_revision_drops_dockerfile_owned_process_entrypoint():
+    from deployments.core.runtime_graph import ServiceRuntimeGraph
+
+    stale_entrypoint = "/usr/local/bin/passdeployer-wordpress-entrypoint.sh"
+    revision = SimpleNamespace(
+        config_snapshot={"source_kind": "catalog"},
+        build_snapshot={
+            "dockerfile": (
+                "FROM wordpress:7.1.2-php8.4-apache\\n"
+                f'ENTRYPOINT ["{stale_entrypoint}"]\\n'
+                'CMD ["apache2-foreground"]\\n'
+            )
+        },
+        runtime_snapshot={},
+        process_snapshot=[
+            {
+                "name": "web",
+                "process_type": "application",
+                "command": "apache2-foreground",
+                "entrypoint": stale_entrypoint,
+                "replicas": 1,
+                "enabled": True,
+            }
+        ],
+        environment_snapshot={},
+        source_snapshot={},
+        endpoint_snapshot=[],
+        volume_snapshot=[],
+        network_snapshot=[],
+        revision_number=1,
+    )
+
+    graph = ServiceRuntimeGraph.from_revision(revision)
+
+    assert graph.processes[0].command == "apache2-foreground"
+    assert graph.processes[0].entrypoint is None
+
+
 def test_catalog_profile_removes_stale_dockerfile_entrypoint_override():
     from deployments.common.deployment_profile import normalize_profile
 
