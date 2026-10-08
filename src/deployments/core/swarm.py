@@ -36,6 +36,7 @@ class SwarmTaskState:
     error: str
     message: str
     image: str | None = None
+    container_id: str | None = None
     status_timestamp: str | None = None
     health_status: str | None = None
 
@@ -783,6 +784,7 @@ class SwarmRuntime:
                     error=str(status.get("Err") or ""),
                     message=str(status.get("Message") or ""),
                     image=task_image,
+                    container_id=str((status.get("ContainerStatus") or {}).get("ContainerID") or "") or None,
                     status_timestamp=str(status.get("Timestamp") or "") or None,
                     health_status=(
                         str(
@@ -964,11 +966,13 @@ class SwarmRuntime:
                     },
                 )
 
+            # The service spec is validated against expected_image above. Do not
+            # compare task image strings literally: Swarm may resolve a mutable
+            # repo:tag into a digest-qualified task reference.
             running = [
                 task for task in latest.tasks
                 if task.state.lower() == "running"
                 and task.desired_state.lower() == "running"
-                and (not expected_image or task.image == expected_image)
             ]
             desired = latest.replicas_desired
             if desired > 0 and len(running) >= desired:
@@ -1090,6 +1094,7 @@ class SwarmRuntime:
                     f"service={name!r}; task_id={task.task_id}; state={task.state}; "
                     f"desired_state={task.desired_state}; exit_code={exit_code!r}; "
                     f"node={task.node_name or task.node_id or ''}; "
+                    f"container_id={task.container_id or ''}; "
                     f"replicas_desired={latest.replicas_desired}; "
                     f"replicas_running={latest.replicas_running}; "
                     f"expected_image={expected_image!r}; task_image={task.image!r}; "
@@ -1111,6 +1116,8 @@ class SwarmRuntime:
                         "exit_code": exit_code,
                         "node_id": task.node_id,
                         "node_name": task.node_name,
+                        "container_id": task.container_id,
+                        "task_image": task.image,
                         "replicas_desired": latest.replicas_desired,
                         "replicas_running": latest.replicas_running,
                         "expected_image": expected_image,
