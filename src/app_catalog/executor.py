@@ -1058,7 +1058,15 @@ class ApplicationStackExecutor:
         if current.status in {
             ApplicationStatus.FAILED,
             ApplicationStatus.RUNNING,
+            ApplicationStatus.CANCELLED,
         }:
+            return []
+
+        # Child dispatch is an execution side effect. It is legal only after
+        # the coordinator has claimed the parent in DEPLOYING state. A recovery
+        # scan must requeue a lost parent start task instead of creating child
+        # deployments with no coordinator owner.
+        if current.status != ApplicationStatus.DEPLOYING:
             return []
 
         instance, plan = self._load()
