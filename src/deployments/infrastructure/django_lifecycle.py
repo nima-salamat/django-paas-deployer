@@ -60,8 +60,12 @@ class DjangoDeploymentLifecycleStore:
             if "reconciliation_required" in details:
                 updates["reconciliation_required"] = bool(details.get("reconciliation_required"))
             if "cleanup_failed" in details:
+                cleanup_failed = bool(details.get("cleanup_failed"))
+                cleanup_attempted = bool(details.get("cleanup_attempted"))
                 updates["cleanup_status"] = (
-                    "failed" if details.get("cleanup_failed") else "not_required"
+                    "critical"
+                    if cleanup_failed
+                    else ("clean" if cleanup_attempted else "not_required")
                 )
                 updates["cleanup_failures"] = list(details.get("cleanup_failures") or [])
         terminal = sm.is_deploy_terminal(target)
