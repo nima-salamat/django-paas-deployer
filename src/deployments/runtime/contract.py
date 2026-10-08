@@ -95,6 +95,15 @@ class RuntimeContract(Protocol):
     ) -> RuntimeOperationResult:
         ...
 
+    def finalize_success(
+        self,
+        handle: RuntimeHandle,
+        *,
+        operation_key: str,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> Mapping[str, Any]:
+        ...
+
     def stop(
         self, handle: RuntimeHandle, *, operation_key: str, cancel_check: Callable[[], bool] | None = None
     ) -> RuntimeOperationResult:
