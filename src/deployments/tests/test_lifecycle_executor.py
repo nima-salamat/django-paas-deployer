@@ -315,6 +315,54 @@ def test_unsupported_runtime_capability_is_blocked_before_planning():
     assert result.error.code == "runtime_capability_unsupported"
 
 
+def test_replacement_cancellation_rolls_back_instead_of_removing_runtime():
+    runtime = FakeRuntime()
+    identity = RuntimeIdentity(service_id="service-1", runtime_name="app-service-1")
+    runtime.set_readiness_error(
+        identity,
+        RuntimeOperationError(
+            "cancelled during readiness",
+            code="runtime_cancelled",
+            category="cancellation",
+        ),
+    )
+
+    rollback_calls = {"count": 0}
+    original_rollback = runtime.rollback
+
+    def rollback(*args, **kwargs):
+        rollback_calls["count"] += 1
+        return original_rollback(*args, **kwargs)
+
+    runtime.rollback = rollback
+    strategy = _Strategy(
+        _plan(
+            identity,
+            rollback_plan=_plan(
+                RuntimeIdentity(
+                    service_id="service-1",
+                    deployment_id="previous-deploy",
+                    revision_id="previous-revision",
+                    runtime_name="app-service-1",
+                )
+            ),
+        )
+    )
+    store = InMemoryLifecycleStore()
+
+    result = DeploymentLifecycleExecutor(store).execute(
+        _context(identity),
+        strategy,
+        runtime,
+    )
+
+    assert result.status == sm.DEPLOY_CANCELLED
+    assert result.success is False
+    assert rollback_calls["count"] == 1
+    assert runtime.remove_count == 0
+    assert result.details["rollback_performed"] is True
+
+
 def test_cancellation_cleanup_failure_requires_reconciliation():
     runtime = FakeRuntime()
     identity = RuntimeIdentity(service_id="service-1", runtime_name="app-service-1")
