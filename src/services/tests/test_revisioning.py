@@ -11,7 +11,11 @@ from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
-from services.revisioning import redact_config, _normalize_process_specs
+from services.revisioning import (
+    redact_config,
+    _catalog_revision_requires_refresh,
+    _normalize_process_specs,
+)
 
 
 class RevisioningContractTests(SimpleTestCase):
@@ -29,6 +33,28 @@ class RevisioningContractTests(SimpleTestCase):
         self.assertIn("password", keys)
         self.assertIn("env.DATABASE_URL", keys)
         self.assertEqual(source["password"], "top-secret")
+
+    def test_catalog_revision_refreshes_when_existing_file_content_is_stale(self):
+        service = SimpleNamespace(
+            source_kind="catalog",
+            build_config={"files": {"passdeployer-wordpress-entrypoint.sh": "#!/bin/sh\\necho new\\n"}},
+        )
+        revision = SimpleNamespace(
+            config_snapshot={"source_kind": "catalog"},
+            build_snapshot={"files": {"passdeployer-wordpress-entrypoint.sh": "#!/bin/sh\\necho old\\n"}},
+        )
+
+        self.assertTrue(_catalog_revision_requires_refresh(service, revision))
+
+    def test_catalog_revision_does_not_refresh_identical_build_files(self):
+        files = {"passdeployer-wordpress-entrypoint.sh": "#!/bin/sh\\necho same\\n"}
+        service = SimpleNamespace(source_kind="catalog", build_config={"files": files})
+        revision = SimpleNamespace(
+            config_snapshot={"source_kind": "catalog"},
+            build_snapshot={"files": dict(files)},
+        )
+
+        self.assertFalse(_catalog_revision_requires_refresh(service, revision))
 
     @patch("services.revisioning.ServiceProcess.objects")
     def test_legacy_config_derives_web_and_celery_processes(self, objects):
