@@ -896,7 +896,7 @@ class SwarmRuntime:
                             f"if [ ! -x {shlex.quote(executable)} ]; then exit 42; fi; "
                             f"shebang=$(head -n 1 {shlex.quote(executable)} 2>/dev/null || true); "
                             "case \"$shebang\" in "
-                            "#!*) "
+                            "'#!'*) "
                             "interpreter=$(printf '%s\\n' \"$shebang\" | awk '{print $1}' | sed 's/^#!//'); "
                             "if [ \"$interpreter\" = '/usr/bin/env' ]; then "
                             "interpreter_name=$(printf '%s\\n' \"$shebang\" | awk '{print $2}'); "
