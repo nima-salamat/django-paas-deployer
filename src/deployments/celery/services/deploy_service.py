@@ -575,6 +575,18 @@ class DeployService:
                 or (revision_snapshot or {}).get("dockerfile")
                 or ""
             )
+            revision_source_kind = str(
+                (revision_snapshot or {}).get("source_kind") or ""
+            ).strip().lower()
+            if revision_source_kind == "catalog":
+                revision_files = revision_build.get("files")
+                if isinstance(revision_files, dict) and revision_files:
+                    build_options["revision_build_files"] = {
+                        str(name): str(value)
+                        for name, value in revision_files.items()
+                        if str(name).strip()
+                    }
+
             if (
                 str((revision_snapshot or {}).get("source_kind") or "").strip().lower() == "catalog"
                 and catalog_dockerfile.strip()
@@ -632,9 +644,6 @@ class DeployService:
             # Docker-source validator. Do not downgrade the execution identity
             # from "catalog" to "dockerfile"; later runtime safeguards depend on
             # the persisted catalog source kind.
-            revision_source_kind = str(
-                (revision_snapshot or {}).get("source_kind") or ""
-            ).strip().lower()
             cfg["source_kind"] = (
                 "catalog"
                 if revision_source_kind == "catalog"
