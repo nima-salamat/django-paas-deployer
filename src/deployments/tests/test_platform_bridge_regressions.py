@@ -225,11 +225,13 @@ def test_legacy_catalog_revision_drops_stale_process_command_when_catalog_does_n
     assert graph.processes[0].command is None
     assert graph.processes[0].entrypoint is None
 
-def test_legacy_catalog_revision_drops_dockerfile_owned_process_entrypoint():
+def test_legacy_catalog_revision_drops_dockerfile_owned_process_overrides():
     from deployments.core.runtime_graph import ServiceRuntimeGraph
 
-    # Reproduce the legacy auto-detected value that bypassed the catalog bootstrap.
-    # Docker/Apache detection reports the image CMD as "apache2-foreground".
+    # Reproduce the legacy auto-detected process values that bypassed the
+    # catalog bootstrap. The catalog itself declares no runtime command, so
+    # both process-level overrides must be removed and Docker's image metadata
+    # must supply the executable.
     stale_entrypoint = "apache2-foreground"
     revision = SimpleNamespace(
         pk="revision-1",
@@ -241,7 +243,10 @@ def test_legacy_catalog_revision_drops_dockerfile_owned_process_entrypoint():
                 'CMD ["apache2-foreground"]\n'
             )
         },
-        runtime_snapshot={},
+        runtime_snapshot={
+            "start_command": None,
+            "entry_point": None,
+        },
         process_snapshot=[
             {
                 "name": "web",
@@ -262,7 +267,7 @@ def test_legacy_catalog_revision_drops_dockerfile_owned_process_entrypoint():
 
     graph = ServiceRuntimeGraph.from_revision(revision)
 
-    assert graph.processes[0].command == "apache2-foreground"
+    assert graph.processes[0].command is None
     assert graph.processes[0].entrypoint is None
 
 
