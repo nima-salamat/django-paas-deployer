@@ -41,12 +41,13 @@ def test_legacy_catalog_revision_drops_dockerfile_owned_process_entrypoint():
 
     stale_entrypoint = "/usr/local/bin/passdeployer-wordpress-entrypoint.sh"
     revision = SimpleNamespace(
+        pk="revision-1",
         config_snapshot={"source_kind": "catalog"},
         build_snapshot={
             "dockerfile": (
-                "FROM wordpress:7.1.2-php8.4-apache\\n"
-                f'ENTRYPOINT ["{stale_entrypoint}"]\\n'
-                'CMD ["apache2-foreground"]\\n'
+                "FROM wordpress:7.1.2-php8.4-apache\n"
+                f'ENTRYPOINT ["{stale_entrypoint}"]\n'
+                'CMD ["apache2-foreground"]\n'
             )
         },
         runtime_snapshot={},
@@ -79,9 +80,9 @@ def test_catalog_profile_removes_stale_dockerfile_entrypoint_override():
 
     stale_entrypoint = "/usr/local/bin/passdeployer-wordpress-entrypoint.sh"
     dockerfile = (
-        "FROM wordpress:7.1.2-php8.4-apache\\n"
-        f'ENTRYPOINT ["{stale_entrypoint}"]\\n'
-        'CMD ["apache2-foreground"]\\n'
+        "FROM wordpress:7.1.2-php8.4-apache\n"
+        f'ENTRYPOINT ["{stale_entrypoint}"]\n'
+        'CMD ["apache2-foreground"]\n'
     )
     normalized = normalize_profile(
         {
@@ -96,6 +97,44 @@ def test_catalog_profile_removes_stale_dockerfile_entrypoint_override():
     assert normalized.get("entry_point") is None
     assert normalized["runtime_options"].get("entry_point") is None
     assert normalized["start_command"] == "apache2-foreground"
+
+
+def test_catalog_dockerfile_entrypoint_survives_renderer():
+    from deployments.core import dockerfile
+
+    monkeypatch = __import__("pytest").MonkeyPatch()
+    try:
+        monkeypatch.setattr(dockerfile, "check_requirements_txt", lambda *args, **kwargs: None)
+        monkeypatch.setattr(dockerfile, "check_package_json", lambda *args, **kwargs: None)
+        config = DeploymentConfig(
+            name="blog-wordpress-docker",
+            tag="1.00",
+            zip_path="/tmp/wordpress.zip",
+            dockerfile_template=(
+                "FROM wordpress:7.1.2-php8.4-apache\n"
+                'ENTRYPOINT ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh"]\n'
+                'CMD ["apache2-foreground"]\n'
+            ),
+            max_cpu=1.0,
+            max_ram=512,
+            networks=[],
+            volumes=[],
+            port=80,
+            read_only=False,
+            platform="docker",
+            platform_type="APP",
+            runtime_options={"catalog_managed": True},
+        )
+        rendered = dockerfile.DockerfileGenerator().render(
+            platform="docker",
+            dockerfile_template=config.dockerfile_template,
+            tar_stream=__import__("io").BytesIO(b""),
+            config=config,
+        )
+        assert 'ENTRYPOINT ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh"]' in rendered
+        assert 'CMD ["apache2-foreground"]' in rendered
+    finally:
+        monkeypatch.undo()
 
 
 def test_catalog_managed_docker_does_not_promote_detected_default_command(monkeypatch):
@@ -130,9 +169,9 @@ def test_catalog_managed_docker_does_not_promote_detected_default_command(monkey
         tag="1.00",
         zip_path="/tmp/wordpress.zip",
         dockerfile_template=(
-            "FROM wordpress:latest\\n"
-            'ENTRYPOINT ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh"]\\n'
-            'CMD ["apache2-foreground"]\\n'
+            "FROM wordpress:latest\n"
+            'ENTRYPOINT ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh"]\n'
+            'CMD ["apache2-foreground"]\n'
         ),
         max_cpu=1.0,
         max_ram=512,
@@ -182,7 +221,7 @@ def test_non_catalog_docker_still_promotes_detected_default_command(monkeypatch)
         name="generic-docker",
         tag="1.00",
         zip_path="/tmp/app.zip",
-        dockerfile_template='FROM alpine:latest\\nCMD ["sleep", "infinity"]\\n',
+        dockerfile_template='FROM alpine:latest\nCMD ["sleep", "infinity"]\n',
         max_cpu=1.0,
         max_ram=512,
         networks=[],
@@ -197,3 +236,4 @@ def test_non_catalog_docker_still_promotes_detected_default_command(monkeypatch)
     enriched = enrich_config_from_project(config, "/tmp")
 
     assert enriched.entry_point == "apache2-foreground"
+    
