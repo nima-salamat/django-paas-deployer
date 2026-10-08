@@ -881,7 +881,7 @@ class SwarmRuntime:
                     },
                 )
 
-        for executable in contract.required_executables:
+        for executable in required_executables:
             if not executable.startswith("/"):
                 continue
             container = None
