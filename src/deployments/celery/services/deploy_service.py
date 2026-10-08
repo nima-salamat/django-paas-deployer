@@ -538,8 +538,15 @@ class DeployService:
         # Docker platform is source-driven: a tenant Dockerfile or single-service
         # Compose file is inspected and normalized before any Docker build starts.
         # Never execute docker compose itself and never import host paths from it.
+        revision_source_kind = str(
+            (revision_snapshot or {}).get("source_kind")
+            or getattr(deploy_item.service, "source_kind", "")
+            or ""
+        ).strip().lower()
+        is_catalog_source = revision_source_kind == "catalog"
+
         docker_source_resolution = None
-        if platform == "docker" and getattr(deploy_item, "zip_file", None):
+        if platform == "docker" and getattr(deploy_item, "zip_file", None) and not is_catalog_source:
             inspect_dir = None
             try:
                 archive_path = deploy_item.zip_file.path
@@ -609,11 +616,6 @@ class DeployService:
                 or (revision_snapshot or {}).get("dockerfile")
                 or ""
             )
-            revision_source_kind = str(
-                (revision_snapshot or {}).get("source_kind")
-                or getattr(deploy_item.service, "source_kind", "")
-                or ""
-            ).strip().lower()
             build_options = _preserve_revision_build_files(
                 build_options,
                 revision_snapshot,
@@ -696,6 +698,59 @@ class DeployService:
                 deploy_item.config = raw_cfg
             except Exception:
                 pass
+
+        elif platform == "docker" and getattr(deploy_item, "zip_file", None) and is_catalog_source:
+            # Ready Apps are server-owned executable artifacts. Their archive is
+            # only the transport/build context; the immutable ServiceRevision
+            # owns the Dockerfile, auxiliary build files, and runtime identity.
+            revision_build = (
+                dict((revision_snapshot or {}).get("build") or {})
+                if isinstance((revision_snapshot or {}).get("build"), dict)
+                else {}
+            )
+            catalog_dockerfile = str(
+                revision_build.get("dockerfile")
+                or (revision_snapshot or {}).get("dockerfile")
+                or ""
+            )
+            if not catalog_dockerfile.strip():
+                raise DeploymentValidationError(
+                    "The catalog deployment revision has no Dockerfile.",
+                    stage="revision",
+                    code="CATALOG_REVISION_DOCKERFILE_MISSING",
+                    user_message="The Ready App executable artifact is incomplete. Create a new deployment.",
+                    details={
+                        "deployment_id": str(deploy_item.pk),
+                        "service_id": str(deploy_item.service_id),
+                        "revision_id": str(getattr(deploy_item, "revision_id", "") or ""),
+                        "source_kind": revision_source_kind,
+                    },
+                )
+            dockerfile_text = catalog_dockerfile
+            build_options = _preserve_revision_build_files(
+                build_options,
+                revision_snapshot,
+            )
+            cfg["build_options"] = dict(build_options)
+            cfg["source_kind"] = "catalog"
+            cfg.setdefault("runtime_options", {})["catalog_managed"] = True
+            cfg["runtime_options"]["image_entrypoint_owned"] = bool(
+                re.search(
+                    r"^\s*ENTRYPOINT\s+",
+                    dockerfile_text,
+                    flags=re.MULTILINE | re.IGNORECASE,
+                )
+            )
+            cfg.setdefault("build_options", {})["secure_docker_source"] = True
+            logger.info(
+                "Using immutable catalog runtime artifact: deployment=%s service=%s "
+                "revision=%s dockerfile_entrypoint_owned=%s build_files=%d",
+                deploy_item.pk,
+                deploy_item.service_id,
+                getattr(deploy_item, "revision_id", None),
+                cfg["runtime_options"]["image_entrypoint_owned"],
+                len(dict(build_options.get("revision_build_files") or {})),
+            )
 
         # Explicit config always wins over detector output.
         detected_project_cfg = runtime_options.get("project_cfg") or {}
