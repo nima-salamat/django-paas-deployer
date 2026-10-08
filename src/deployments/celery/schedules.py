@@ -980,6 +980,15 @@ def _reconcile_active_deploy_swarm(deploy: Deploy) -> None:
 
 def _reconcile_desired_state(service: Service) -> bool:
     """Drive observed runtime toward Service.desired_state."""
+    if swarm_enabled() and _service_has_active_native_deployment(service):
+        # A native deployment owns runtime mutation until it commits a terminal
+        # state. Never queue a stop/start reconciliation from a stale Service
+        # projection while that deployment is applying its revision.
+        logger.debug(
+            "Skipping desired-state reconciliation for service %s while deployment owns runtime.",
+            service.pk,
+        )
+        return False
     if swarm_enabled():
         runtime = SwarmRuntime()
         try:
