@@ -162,7 +162,7 @@ services:
       WORKDIR /var/www/html
       # The official WordPress image exposes docker-ensure-installed.sh under
       # /usr/local/bin. Use the absolute path so Swarm does not depend on PATH
-      # the immutable PID 1 wrapper and pass the PassDeployer bootstrap as CMD.
+      # Keep it as the immutable PID 1 wrapper and pass the PassDeployer bootstrap as CMD.
       # This keeps official WordPress initialization ahead of application setup
       # without making the platform depend on a custom ENTRYPOINT override.
       ENTRYPOINT ["/usr/local/bin/docker-ensure-installed.sh"]
