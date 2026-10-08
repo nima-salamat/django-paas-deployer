@@ -226,7 +226,7 @@ class ServiceRuntimeGraph:
             next(iter(execution_contracts.values())) if execution_contracts else None
         )
         runtime_contract_hashes = {
-            name: contract.fingerprint(boundary="revision")
+            name: contract.contract_hash()
             for name, contract in execution_contracts.items()
         }
         return cls(
