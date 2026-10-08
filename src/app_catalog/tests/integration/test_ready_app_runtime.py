@@ -116,7 +116,7 @@ class ReadyApplicationRuntimeTests(TestCase):
             container_spec.get("Args"),
             [
                 "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-                "apache2-foreground",
+                "/usr/local/bin/apache2-foreground",
             ],
         )
 
