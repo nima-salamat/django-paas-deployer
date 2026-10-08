@@ -248,7 +248,7 @@ class DeploymentLifecycleExecutor:
                 runtime_result=ready,
             )
         except DeploymentCancelled as exc:
-            return self._finish_cancellation(context, runtime, handle, exc)
+            return self._finish_cancellation(context, runtime, plan, handle, exc)
         except StaleDeploymentWorkerError as exc:
             # A stale worker must not clean up or transition a resource that a
             # newer owner may already be using.
@@ -258,6 +258,7 @@ class DeploymentLifecycleExecutor:
                 return self._finish_cancellation(
                     context,
                     runtime,
+                    plan,
                     handle,
                     DeploymentCancelled(exc.user_message, details=exc.details),
                 )
@@ -342,10 +343,17 @@ class DeploymentLifecycleExecutor:
         self,
         context: DeploymentExecutionContext,
         runtime: RuntimeContract,
+        plan: Any,
         handle: RuntimeHandle | None,
         error: DeploymentCancelled,
     ) -> DeploymentLifecycleResult:
-        cleanup = self._cancel_runtime(context, runtime, handle)
+        rollback_plan = getattr(plan, "rollback_plan", None) if plan is not None else None
+        cleanup = self._cancel_runtime(
+            context,
+            runtime,
+            handle,
+            rollback_plan=rollback_plan,
+        )
         details = {**dict(error.details or {}), **cleanup}
         transitioned = self.store.transition(
             context,
@@ -374,9 +382,41 @@ class DeploymentLifecycleExecutor:
         context: DeploymentExecutionContext,
         runtime: RuntimeContract,
         handle: RuntimeHandle | None,
+        *,
+        rollback_plan: Any | None = None,
     ) -> dict[str, Any]:
         if handle is None or not context.owns_execution():
             return {}
+
+        # Replacement cancellation must restore the previously active release.
+        # The Swarm backend updates the existing canonical service name in place;
+        # stopping/removing that handle would therefore destroy production state.
+        if rollback_plan is not None:
+            try:
+                runtime.rollback(
+                    rollback_plan,
+                    operation_key=context.operation("cancel-rollback"),
+                    target_plan=rollback_plan,
+                    cancel_check=lambda: False,
+                )
+                return {
+                    "cleanup_failed": False,
+                    "rollback_performed": True,
+                    "cleanup_attempted": False,
+                }
+            except Exception as exc:
+                return {
+                    "cleanup_failed": True,
+                    "reconciliation_required": True,
+                    "rollback_failed": True,
+                    "cleanup_attempted": False,
+                    "cleanup_failures": [{
+                        "operation": "rollback",
+                        "error_code": str(getattr(exc, "code", "") or "runtime_rollback_failed"),
+                        "error": str(getattr(exc, "technical_message", None) or exc),
+                    }],
+                }
+
         failures = []
         for action, suffix in (("stop", "cancel-stop"), ("remove", "cancel-remove")):
             try:
