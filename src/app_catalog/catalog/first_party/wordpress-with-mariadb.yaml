@@ -170,6 +170,11 @@ services:
     ports:
       - 80
     working_dir: /var/www/html
+    # Swarm's ContainerSpec.Command must be deterministic. Mirror the image CMD
+    # explicitly so native Swarm execution does not depend on null CMD inheritance.
+    command:
+      - /usr/local/bin/passdeployer-wordpress-entrypoint.sh
+      - apache2-foreground
     replicas: ${config.wordpress_replicas}
     volumes:
       - wordpress-files:/var/www/html
