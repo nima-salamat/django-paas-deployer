@@ -121,8 +121,11 @@ def deploy(self, deploy_id) -> None:
         DeployService().execute(deploy_id, task_id=str(self.request.id))
     except (InvalidServiceStateError, DeploymentValidationError,
             OrchestratorDeploymentError, ContainerTimeoutError):
-        # Permanent errors — log but do NOT retry.
+        # These are permanent deployment failures. The DB deployment state has
+        # already been terminalized by DeployService; re-raise so Celery records
+        # the task as FAILED and Ready App link_error handlers can run.
         logger.exception("Deployment did not complete for deploy_id: %s", deploy_id)
+        raise
     except DeploymentError as exc:
         # DeploymentError with recoverable=True MAY be retried.  Others
         # are permanent.  Legacy code retried on ANY DeploymentError,
@@ -134,6 +137,7 @@ def deploy(self, deploy_id) -> None:
             )
             raise self.retry(exc=exc)
         logger.exception("Permanent deployment error for deploy_id: %s", deploy_id)
+        raise
     except Exception as exc:
         # Unknown Python exceptions are platform bugs by default, not
         # transient deployment failures.  Translate them at the worker
@@ -148,7 +152,7 @@ def deploy(self, deploy_id) -> None:
             "Non-recoverable deployment exception for deploy_id=%s: code=%s technical=%s",
             deploy_id, translated.code, translated.technical_message,
         )
-        return
+        raise translated from exc
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=10)
