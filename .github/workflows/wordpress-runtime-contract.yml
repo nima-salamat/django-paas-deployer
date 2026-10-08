@@ -15,6 +15,8 @@ on:
       - "src/deployments/core/swarm.py"
       - "src/deployments/celery/services/deploy_service.py"
       - "src/deployments/tests/test_platform_bridge_regressions.py"
+      - "src/deployments/tests/test_execution_contract.py"
+      - "src/deployments/tests/test_swarm_runtime.py"
       - ".github/workflows/wordpress-runtime-contract.yml"
   workflow_dispatch:
 
