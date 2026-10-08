@@ -105,6 +105,10 @@ class DeploymentPlanCompiler:
 
         rollout_policy_raw = dict(resolved.get("rollout_policy") or {})
         runtime_options = dict(resolved.get("runtime_options") or {})
+        graph_runtime = dict(graph.runtime or {})
+        if graph_runtime.get("image_entrypoint_owned"):
+            runtime_options["catalog_managed"] = True
+            runtime_options["image_entrypoint_owned"] = True
         RolloutStrategy.from_mapping(rollout_policy_raw)
         HealthPolicy.from_mapping(
             dict(resolved.get("health_policy") or runtime_options.get("healthcheck") or {})
