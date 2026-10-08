@@ -83,6 +83,51 @@ def test_lifecycle_executor_runs_pending_running_succeeded():
     ]
 
 
+def test_partial_apply_failure_uses_runtime_recovery_without_handle():
+    runtime = FakeRuntime()
+    identity = RuntimeIdentity(service_id="service-1", runtime_name="app-service-1")
+    recovered = []
+
+    def failed_apply(plan, *, operation_key, cancel_check=None):
+        raise RuntimeOperationError(
+            "second process failed",
+            code="runtime_process_apply_failed",
+            recoverable=False,
+            details={
+                "swarm_recovery": {
+                    "remove_services": ["app-service-1-worker"],
+                    "rollback_services": ["app-service-1-web"],
+                }
+            },
+        )
+
+    def recover_failed_apply(details, *, operation_key, cancel_check=None):
+        recovered.append((details, operation_key))
+        return {
+            "cleanup_attempted": True,
+            "cleanup_failed": False,
+            "removed_services": ["app-service-1-worker"],
+            "rolled_back_services": ["app-service-1-web"],
+        }
+
+    runtime.apply = failed_apply
+    runtime.recover_failed_apply = recover_failed_apply
+    store = InMemoryLifecycleStore()
+
+    result = DeploymentLifecycleExecutor(store).execute(
+        _context(identity),
+        _Strategy(_plan(identity)),
+        runtime,
+    )
+
+    assert result.success is False
+    assert result.status == sm.DEPLOY_FAILED
+    assert result.cleanup_performed is True
+    assert result.cleanup_failed is False
+    assert recovered
+    assert recovered[0][0]["swarm_recovery"]["remove_services"] == ["app-service-1-worker"]
+
+
 def test_lifecycle_executor_requires_runtime_handle_before_readiness():
     runtime = FakeRuntime()
     identity = RuntimeIdentity(service_id="service-1", runtime_name="app-service-1")
