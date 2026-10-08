@@ -28,6 +28,7 @@ from services.revisioning import ensure_revision_for_deploy, get_active_deploy, 
 
 from .monitoring.policies import ACTIVE_DEPLOY_STATUSES, ACTIVE_SERVICE_STATUSES, runtime_policies
 from deployments.planning import ConfigurationResolver, DeploymentPlanCompiler
+from deployments.common.resource_policy import runtime_limits
 from deployments.reconciliation import (
     DesiredRuntimeState,
     ReconciliationAction,

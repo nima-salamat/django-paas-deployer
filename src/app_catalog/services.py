@@ -402,15 +402,24 @@ def _dockerfile_healthcheck(healthcheck: dict | None) -> str:
         mode = parts[0] if parts else "CMD-SHELL"
         args = parts[1:]
         if mode == "CMD-SHELL":
-            command = " ".join(args)
-            return "HEALTHCHECK " + " ".join(opts) + " CMD-SHELL " + command
+            # Compose's CMD-SHELL healthcheck maps to Dockerfile's shell-form
+            # HEALTHCHECK, whose Dockerfile keyword is CMD. The Dockerfile
+            # parser converts this shell form to an internal CMD-SHELL test;
+            # emitting CMD-SHELL literally is invalid Dockerfile syntax.
+            command = " ".join(args).strip()
+            if not command:
+                raise CatalogValidationError("Catalog healthcheck CMD-SHELL requires a command.")
+            return "HEALTHCHECK " + " ".join(opts) + " CMD " + command
         if mode == "CMD":
             import json
             return "HEALTHCHECK " + " ".join(opts) + " CMD " + json.dumps(args)
         if mode == "NONE":
             return "HEALTHCHECK NONE"
     if isinstance(test, str):
-        return "HEALTHCHECK " + " ".join(opts) + " CMD-SHELL " + test
+        command = test.strip()
+        if not command:
+            raise CatalogValidationError("Catalog healthcheck command cannot be empty.")
+        return "HEALTHCHECK " + " ".join(opts) + " CMD " + command
     raise CatalogValidationError("Unsupported catalog healthcheck test format.")
 
 

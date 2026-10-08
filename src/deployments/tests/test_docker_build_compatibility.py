@@ -180,6 +180,37 @@ def test_build_sends_full_repository_and_tag_to_docker_api(monkeypatch):
 
 
 
+def test_docker_api_error_surfaces_daemon_explanation_as_user_message(monkeypatch):
+    class FakeApi:
+        def build(self, **kwargs):
+            def fail_before_stream():
+                error = docker.errors.APIError(
+                    "Bad Request",
+                    response=None,
+                    explanation='dockerfile parse error on line 2: Unknown type "CMD-SHELL" in HEALTHCHECK (try CMD)',
+                )
+                error.status_code = 400
+                raise error
+                yield  # pragma: no cover
+            return fail_before_stream()
+
+    api = FakeApi()
+    client = _FakeDockerClient(api)
+    _patch_image_client(monkeypatch, [client])
+
+    image = image_manager.Image(
+        "test/repo",
+        "v1",
+        "FROM alpine\nHEALTHCHECK CMD-SHELL true",
+        _empty_tar(),
+    )
+
+    with pytest.raises(image_manager.DockerClientError) as exc_info:
+        image.create()
+
+    assert 'Unknown type "CMD-SHELL"' in exc_info.value.user_message
+    assert exc_info.value.details["docker_explanation"].startswith("dockerfile parse error")
+
 def test_http_400_build_request_is_retried_with_minimal_profile(monkeypatch):
     class FakeApi:
         def __init__(self):

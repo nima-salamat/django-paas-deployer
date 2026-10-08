@@ -1019,10 +1019,20 @@ class Image(Client):
                                     for key, value in response_json.items()
                                     if key not in {"auth", "authorization"}
                                 }
+                            explanation = details.get("docker_explanation") or str(last_err)
+                            explanation = " ".join(str(explanation).split()).strip()
+                            if len(explanation) > 1000:
+                                explanation = explanation[:997] + "..."
+                            if explanation:
+                                user_message = f"Docker rejected the generated image build: {explanation}"
+                            else:
+                                user_message = "Docker rejected the generated image build request."
                             raise DockerClientError(
                                 "Docker rejected the image build request.",
                                 recoverable=failure.retryable,
                                 details=details,
+                                user_message=user_message,
+                                technical_message=str(last_err) or "Docker rejected the image build request.",
                             ) from last_err
 
                         if isinstance(last_err, docker.errors.DockerException):

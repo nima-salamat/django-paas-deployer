@@ -151,6 +151,25 @@ networks:
         self.assertIn("class CatalogPublication(models.Model):", source)
         self.assertIn('catalog_id = models.CharField(max_length=64, unique=True)', source)
         self.assertIn("featured_override = models.BooleanField(", source)
+    def test_catalog_healthcheck_translates_compose_cmd_shell_to_valid_dockerfile_cmd(self):
+        from app_catalog.services import _dockerfile_healthcheck
+
+        rendered = _dockerfile_healthcheck(
+            {
+                "test": ["CMD-SHELL", "test -f /tmp/ready"],
+                "interval": "5s",
+                "timeout": "5s",
+                "retries": 3,
+            }
+        )
+
+        self.assertEqual(
+            rendered,
+            "HEALTHCHECK --interval=5s --timeout=5s --retries=3 CMD test -f /tmp/ready",
+        )
+        self.assertNotIn("HEALTHCHECK", rendered.replace("HEALTHCHECK", "", 1))
+        self.assertNotIn("CMD-SHELL ", rendered)
+
     def test_wordpress_public_service_uses_ready_marker_healthcheck_and_https_config(self):
         definition = ApplicationCatalog.get("wordpress")
         resolved = resolve_variant(definition, "default", {"domain": "app.example.com"})
