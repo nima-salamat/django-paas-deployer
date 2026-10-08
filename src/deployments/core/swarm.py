@@ -1326,11 +1326,11 @@ class SwarmRuntime:
         ).lower()
 
         def _safe_diagnostic(value: Any, *, limit: int = 600) -> str:
-            text = str(value or "").replace("\\n", " ").replace("\\r", " ")
+            text = str(value or "").replace("\n", " ").replace("\r", " ")
             text = re.sub(
-                r"(?i)\\b(password|passwd|secret|token|api[_-]?key|authorization)\\b"
-                r"(\\s*[:=]\\s*|\\s+)[^\\s,;]+",
-                r"\\1=[REDACTED]",
+                r"(?i)\b(password|passwd|secret|token|api[_-]?key|authorization)\b"
+                r"(\s*[:=]\s*|\s+)[^\s,;]+",
+                r"\1=[REDACTED]",
                 text,
             )
             return text[:limit]
