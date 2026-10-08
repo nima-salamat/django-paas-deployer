@@ -1426,8 +1426,8 @@ class SwarmRuntime:
                         raise DeploymentError(
                             technical,
                             stage="swarm_startup",
-                            code="SWARM_TASK_UNHEALTHY",
-                            user_message="One or more Swarm replicas are unhealthy.",
+                            code="SWARM_HEALTHCHECK_FAILED",
+                            user_message="One or more Swarm replicas failed their configured healthcheck.",
                             technical_message=technical,
                             details={
                                 "replicas_desired": desired,
@@ -1701,7 +1701,7 @@ class SwarmRuntime:
         if final_contract_failure is not None:
             raise final_contract_failure
 
-        final_exit_127 = None
+        final_exit_failure = None
         final_task_diagnostics = []
         for final_task in (latest.tasks if latest else ()):
             diagnostics = self._task_container_diagnostics(final_task)
@@ -1715,43 +1715,20 @@ class SwarmRuntime:
                 )
                 if value
             ).lower()
-            if (
-                diagnostics.get("exit_code") == 127
-                and "not found" in final_combined
-            ):
-                final_exit_127 = {
-                    "task_id": final_task.task_id,
-                    "exit_code": 127,
-                    "task_diagnostics": diagnostics,
-                }
-                break
-        if final_exit_127 is not None:
-            technical = (
-                f"Swarm application process exited with code 127 and reported "
-                f"'not found' while waiting for service {name!r}. The observed "
-                f"runtime contract is valid, so the available evidence does not "
-                f"prove whether the artifact filesystem or its interpreter is missing. "
-                f"task={final_exit_127!r}; service_logs={service_logs[-12000:] if 'service_logs' in locals() else ''}"
-            )
-            raise DeploymentError(
-                technical,
-                stage="swarm_startup",
-                code="SWARM_APPLICATION_PROCESS_EXITED",
-                user_message=(
-                    "The application process exited during startup. "
-                    "Review deployment diagnostics for the exact executable error."
-                ),
-                technical_message=technical,
-                certainty=FailureCertainty.OBSERVED,
-                details={
-                    **dict(provenance or {}),
-                    "failure_reason": "exit_127_not_found",
-                    "boundary": "swarm_task_container",
-                    "expected_image": expected_image,
-                    "task": final_exit_127,
-                    "service_logs": service_logs[-12000:] if 'service_logs' in locals() else "",
-                },
-            )
+            if final_exit_failure is None:
+                final_exit_failure = self._startup_process_failure(
+                    service_name=name,
+                    task_id=final_task.task_id,
+                    exit_code=diagnostics.get("exit_code"),
+                    task_diagnostics=diagnostics,
+                    service_logs=self._service_logs_for_failure(name),
+                    expected_image=expected_image,
+                    provenance=provenance,
+                )
+                if final_exit_failure is not None:
+                    break
+        if final_exit_failure is not None:
+            raise final_exit_failure
 
         task_summary = [
             {
