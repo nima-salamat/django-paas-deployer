@@ -138,3 +138,14 @@ def test_ready_app_database_deploy_propagates_application_identity_labels():
     assert kwargs["labels"]["application.id"] == "app-123"
     assert kwargs["labels"]["application.service"] == "mariadb"
     assert kwargs["labels"]["passdeployer.process"] == "database"
+
+
+def test_db_misroute_preserves_original_celery_owner_and_plan_authority():
+    from deployments.celery.tasks import deploy
+    import inspect
+
+    source = inspect.getsource(deploy)
+    assert 'getattr(getattr(deploy_item.service, "plan", None), "platform", "")' in source
+    assert 'run_db_deploy.apply(' in source
+    assert 'task_id=str(self.request.id)' in source
+    assert 'run_db_deploy.delay(str(deploy_id))' not in source
