@@ -120,11 +120,17 @@ A terminal cancellation/installation returns HTTP 409 rather than applying an in
 
 ## Deletion
 
-Deletion requires the caller to own the installation and the application to be terminal.
+Deletion is owner-scoped and may be requested while the installation is active.
 
-The API rejects deletion while any child Deploy is in `pending`, `running`, or `rolling_back`.
+The API records durable deletion/cancellation intent and coordinates child/runtime
+cleanup asynchronously. It returns HTTP `202` while cleanup is still pending,
+and the `ApplicationInstance` remains durable until owned child resources and
+the application-owned network can be removed safely.
 
-Child Services are deleted before the installation-owned network. This ordering avoids leaving attached Docker resources behind.
+Child Services are deleted before the installation-owned network so attached
+Docker resources are released safely.
+
+A completed cleanup returns HTTP `204`.
 
 ## Error contract
 
@@ -135,8 +141,8 @@ Child Services are deleted before the installation-owned network. This ordering 
 | Same owner/name conflict | 409 | `application_name_conflict`, with `existing_installation_id` when available |
 | Worker queue unavailable | 503 | `APPLICATION_TASK_QUEUE_FAILED`; installation remains durable/pending |
 | Cancel terminal installation | 409 | serialized current installation |
-| Delete before terminal | 409 | `application_not_terminal` |
-| Delete with active child deployment | 409 | `application_children_active` |
+| Delete while cleanup remains pending | 202 | `application_cleanup_pending` |
+| Delete after cleanup converges | 204 | installation removed |
 
 ## Idempotency/concurrency
 
