@@ -124,10 +124,7 @@ class DeploymentPlanCompiler:
             }
             runtime_options["execution_contract_hashes"] = {
                 "revision_contract_hash": primary_contract.contract_hash(),
-                "plan_contract_hash": primary_contract.fingerprint(
-                    boundary="plan",
-                    image_ref=image_ref,
-                ),
+                "plan_contract_hash": primary_contract.contract_hash(),
             }
             runtime_options["catalog_managed"] = bool(primary_contract.catalog_managed)
             runtime_options["image_entrypoint_owned"] = bool(primary_contract.image_entrypoint_owned)
