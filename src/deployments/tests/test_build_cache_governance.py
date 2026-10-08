@@ -56,6 +56,38 @@ def test_build_cache_global_limit_prunes_with_storage_target(monkeypatch):
     assert api.prune_builds.call_args.kwargs["keep_storage"] == 8 * 1024 * 1024
 
 
+def test_build_cache_retention_uses_engine_duration(monkeypatch):
+    from deploy import build_cache
+
+    monkeypatch.setattr(
+        build_cache,
+        "build_cache_policy",
+        lambda: {
+            "enabled": True,
+            "global_limit_mb": 1024,
+            "user_quota_mb": 512,
+            "service_quota_mb": 256,
+            "retention_days": 30,
+            "keep_successful_deployments": 3,
+            "cleanup_target_percent": 80,
+            "batch_size": 50,
+        },
+    )
+    usage = iter([
+        {"total_size": 1, "reclaimable": 1, "active_count": 1, "total_count": 1},
+        {"total_size": 1, "reclaimable": 1, "active_count": 1, "total_count": 1},
+        {"total_size": 1, "reclaimable": 1, "active_count": 1, "total_count": 1},
+    ])
+    monkeypatch.setattr(build_cache, "get_global_build_cache_usage", lambda client=None: next(usage))
+    api = Mock()
+    api.prune_builds.return_value = {"CachesDeleted": [], "SpaceReclaimed": 0}
+    client = SimpleNamespace(api=api)
+
+    result = build_cache.prune_global_build_cache(client=client)
+
+    assert result["status"] == "cleaned"
+    assert api.prune_builds.call_args_list[0].kwargs["filters"] == {"until": "720h"}
+
 def test_build_cache_quota_requires_exactly_one_owner():
     from deploy.models import BuildCacheQuota
     from django.core.exceptions import ValidationError
