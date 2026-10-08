@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from .capabilities import (
     RuntimeAvailability,
