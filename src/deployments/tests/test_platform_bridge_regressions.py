@@ -107,33 +107,78 @@ def test_catalog_dockerfile_entrypoint_survives_renderer(monkeypatch):
 
     monkeypatch.setattr(dockerfile, "check_requirements_txt", lambda *args, **kwargs: None)
     monkeypatch.setattr(dockerfile, "check_package_json", lambda *args, **kwargs: None)
-        config = DeploymentConfig(
-            name="blog-wordpress-docker",
-            tag="1.00",
-            zip_path="/tmp/wordpress.zip",
-            dockerfile_template=(
-                "FROM wordpress:7.1.2-php8.4-apache\n"
-                'ENTRYPOINT ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh"]\n'
-                'CMD ["apache2-foreground"]\n'
-            ),
-            max_cpu=1.0,
-            max_ram=512,
-            networks=[],
-            volumes=[],
-            port=80,
-            read_only=False,
-            platform="docker",
-            platform_type="APP",
-            runtime_options={"catalog_managed": True},
-        )
-        rendered = dockerfile.DockerfileGenerator().render(
-            platform="docker",
-            dockerfile_template=config.dockerfile_template,
-            tar_stream=io.BytesIO(b""),
-            config=config,
-        )
-        assert 'ENTRYPOINT ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh"]' in rendered
-        assert 'CMD ["apache2-foreground"]' in rendered
+
+    stale_entrypoint = "/usr/local/bin/passdeployer-wordpress-entrypoint.sh"
+    config = DeploymentConfig(
+        name="blog-wordpress-docker",
+        tag="1.00",
+        zip_path="/tmp/wordpress.zip",
+        dockerfile_template=(
+            "FROM wordpress:7.1.2-php8.4-apache\n"
+            f'ENTRYPOINT ["{stale_entrypoint}"]\n'
+            'CMD ["apache2-foreground"]\n'
+        ),
+        max_cpu=1.0,
+        max_ram=512,
+        networks=[],
+        volumes=[],
+        port=80,
+        read_only=False,
+        platform="docker",
+        platform_type="APP",
+        entry_point=stale_entrypoint,
+        runtime_options={"catalog_managed": True},
+    )
+
+    rendered = dockerfile.DockerfileGenerator().render(
+        platform="docker",
+        dockerfile_template=config.dockerfile_template,
+        tar_stream=io.BytesIO(b""),
+        config=config,
+    )
+
+    # Regression: a stale compatibility entry_point must not make the generic
+    # renderer strip the Dockerfile-owned ENTRYPOINT/CMD.
+    assert f'ENTRYPOINT ["{stale_entrypoint}"]' in rendered
+    assert 'CMD ["apache2-foreground"]' in rendered
+
+
+def test_non_catalog_docker_entrypoint_still_overrides_dockerfile_cmd(monkeypatch):
+    from deployments.core import dockerfile
+
+    monkeypatch.setattr(dockerfile, "check_requirements_txt", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dockerfile, "check_package_json", lambda *args, **kwargs: None)
+
+    config = DeploymentConfig(
+        name="generic-docker",
+        tag="1.00",
+        zip_path="/tmp/generic.zip",
+        dockerfile_template=(
+            "FROM alpine:latest\n"
+            'ENTRYPOINT ["/bin/sh", "-c"]\n'
+            'CMD ["sleep infinity"]\n'
+        ),
+        max_cpu=1.0,
+        max_ram=512,
+        networks=[],
+        volumes=[],
+        port=80,
+        read_only=False,
+        platform="docker",
+        platform_type="APP",
+        entry_point="sleep 42",
+        runtime_options={},
+    )
+
+    rendered = dockerfile.DockerfileGenerator().render(
+        platform="docker",
+        dockerfile_template=config.dockerfile_template,
+        tar_stream=io.BytesIO(b""),
+        config=config,
+    )
+
+    assert "ENTRYPOINT" not in rendered
+    assert 'CMD ["sleep", "42"]' in rendered
 
 
 def test_catalog_managed_docker_does_not_promote_detected_default_command(monkeypatch):
