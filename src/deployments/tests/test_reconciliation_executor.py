@@ -78,6 +78,105 @@ def test_reconciliation_executor_applies_native_plan_with_generation_operation_k
     )
 
 
+def test_reconciliation_executor_recovers_partial_apply_without_handle():
+    runtime = FakeRuntime()
+    desired = DesiredRuntimeState(
+        service_id="service-1",
+        revision_id="revision-2",
+        desired_state="running",
+        runtime_name="service-1",
+    )
+    context = ReconciliationExecutionContext(
+        service_id="service-1",
+        lifecycle_generation=7,
+        active_revision_id="revision-2",
+        owns_execution=lambda: True,
+        current_generation=lambda: 7,
+    )
+    recovered = []
+
+    def failed_apply(plan, *, operation_key, cancel_check=None):
+        raise RuntimeOperationError(
+            "partial apply",
+            code="runtime_apply_failed",
+            details={"swarm_recovery": {"remove_services": ["service-1-worker"]}},
+        )
+
+    def recover(details, *, operation_key, cancel_check=None):
+        recovered.append(details)
+        return {"cleanup_attempted": True, "cleanup_failed": False}
+
+    runtime.apply = failed_apply
+    runtime.recover_failed_apply = recover
+
+    with pytest.raises(RuntimeOperationError):
+        ReconciliationExecutor().execute(
+            _decision(ReconciliationAction.CREATE),
+            desired=desired,
+            selection=_selection(runtime),
+            runtime=runtime,
+            context=context,
+            plan=SimpleNamespace(
+                identity=RuntimeIdentity(
+                    service_id="service-1",
+                    deployment_id="repair-1",
+                    revision_id="revision-2",
+                    runtime_name="service-1",
+                ),
+                required_capabilities=frozenset(),
+                image_ref="demo@sha256:artifact",
+            ),
+        )
+
+    assert recovered == [{"swarm_recovery": {"remove_services": ["service-1-worker"]}}]
+
+
+def test_reconciliation_executor_finalizes_successful_runtime_repair():
+    runtime = FakeRuntime()
+    desired = DesiredRuntimeState(
+        service_id="service-1",
+        revision_id="revision-2",
+        desired_state="running",
+        runtime_name="service-1",
+        metadata={"readiness_timeout": 1},
+    )
+    context = ReconciliationExecutionContext(
+        service_id="service-1",
+        lifecycle_generation=7,
+        active_revision_id="revision-2",
+        owns_execution=lambda: True,
+        current_generation=lambda: 7,
+    )
+    called = []
+
+    def finalize(handle, *, operation_key, cancel_check=None):
+        called.append((handle.identity.service_id, operation_key))
+        return {"cleanup_attempted": True, "cleanup_failed": False}
+
+    runtime.finalize_success = finalize
+
+    result = ReconciliationExecutor().execute(
+        _decision(ReconciliationAction.CREATE),
+        desired=desired,
+        selection=_selection(runtime),
+        runtime=runtime,
+        context=context,
+        plan=SimpleNamespace(
+            identity=RuntimeIdentity(
+                service_id="service-1",
+                deployment_id="repair-1",
+                revision_id="revision-2",
+                runtime_name="service-1",
+            ),
+            required_capabilities=frozenset(),
+            image_ref="demo@sha256:artifact",
+        ),
+    )
+
+    assert result is not None and result.success is True
+    assert called and called[0][0] == "service-1"
+
+
 def test_reconciliation_executor_fences_stale_generation_before_mutation():
     runtime = FakeRuntime()
     desired = DesiredRuntimeState(
