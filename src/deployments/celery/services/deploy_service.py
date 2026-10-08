@@ -348,15 +348,15 @@ class DeployService:
     ):
         # Revision is now the executable source of truth. Deploy.config remains
         # only the compatibility input used when the revision is first created.
-        revision_config = (
+        revision_snapshot = (
             materialize_revision_config(deploy_item.revision)
             if getattr(deploy_item, "revision_id", None)
             else None
         )
         cfg = normalize_profile(
             parse_config(
-                revision_config
-                if isinstance(revision_config, dict)
+                revision_snapshot
+                if isinstance(revision_snapshot, dict)
                 else getattr(deploy_item, "config", None)
             ),
             plan_cpu=getattr(getattr(deploy_item.service, "plan", None), "max_cpu", None),
@@ -474,17 +474,17 @@ class DeployService:
             # archive for build context, but never let an older archived Dockerfile
             # silently override the revision's Dockerfile.
             revision_build = (
-                dict((revision_config or {}).get("build") or {})
-                if isinstance((revision_config or {}).get("build"), dict)
+                dict((revision_snapshot or {}).get("build") or {})
+                if isinstance((revision_snapshot or {}).get("build"), dict)
                 else {}
             )
             catalog_dockerfile = str(
                 revision_build.get("dockerfile")
-                or (revision_config or {}).get("dockerfile")
+                or (revision_snapshot or {}).get("dockerfile")
                 or ""
             )
             if (
-                str((revision_config or {}).get("source_kind") or "").strip().lower() == "catalog"
+                str((revision_snapshot or {}).get("source_kind") or "").strip().lower() == "catalog"
                 and catalog_dockerfile.strip()
                 and catalog_dockerfile != dockerfile_text
             ):
@@ -492,7 +492,7 @@ class DeployService:
                     "Catalog revision Dockerfile differs from legacy deploy archive; "
                     "using immutable revision Dockerfile for build. deployment=%s service=%s",
                     deploy_item.pk,
-                    service.pk,
+                    deploy_item.service.pk,
                 )
                 dockerfile_text = catalog_dockerfile
             docker_runtime = docker_source_resolution.runtime or {}
@@ -608,7 +608,7 @@ class DeployService:
         # rows may still carry that path in the compatibility entry_point field;
         # never let that stale value replace/duplicate the image bootstrap command.
         catalog_source_kind = str(
-            (revision_config or {}).get("source_kind")
+            (revision_snapshot or {}).get("source_kind")
             or getattr(service, "source_kind", "")
         ).strip().lower()
         if (
@@ -888,7 +888,7 @@ class DeployService:
             or getattr(service, "server_type", None)
         )
         catalog_source_kind = str(
-            (revision_config or {}).get("source_kind")
+            (revision_snapshot or {}).get("source_kind")
             or getattr(service, "source_kind", "")
         ).strip().lower()
         entry_point = (
