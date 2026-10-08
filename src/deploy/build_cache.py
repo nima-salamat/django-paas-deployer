@@ -104,8 +104,12 @@ def prune_global_build_cache(*, force: bool = False, client=None) -> dict[str, A
     try:
         # TTL cleanup works independently from the size ceiling.
         if retention_days > 0:
+            # Docker Engine parses build-cache until as a Go duration.
+            # Unlike some other prune filters, values such as 30d are not
+            # accepted here; express retention in hours for compatibility.
+            retention_duration = f"{retention_days * 24}h"
             result = client.api.prune_builds(
-                filters={"until": f"{retention_days}d"},
+                filters={"until": retention_duration},
                 all=False,
             ) or {}
             calls += 1
