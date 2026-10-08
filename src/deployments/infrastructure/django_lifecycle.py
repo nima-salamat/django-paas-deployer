@@ -84,6 +84,9 @@ class DjangoDeploymentLifecycleStore:
                 int(self.deployment_id),
                 context.revision_id,
                 task_id=self.task_id or context.worker_task_id,
+                expected_lifecycle_generation=context.expected_lifecycle_generation,
+                expected_previous_deploy_id=context.expected_previous_deploy_id,
+                enforce_previous_deploy=context.enforce_previous_deploy,
                 update_fields={**updates, "stage": "finished", "progress": 100},
                 event_payload=event_payload,
             )
