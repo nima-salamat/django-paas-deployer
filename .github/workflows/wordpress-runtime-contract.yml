@@ -106,6 +106,14 @@ jobs:
             -p 18080:80 \
             passdeployer-wordpress-contract:test
 
+      - name: Inspect WordPress runtime process
+        run: |
+          set -eux
+          docker inspect -f 'Path={{json .Path}} Args={{json .Args}} Entrypoint={{json .Config.Entrypoint}} Cmd={{json .Config.Cmd}}' passdeployer-wp
+          docker exec passdeployer-wp sh -c 'printf "pid1="; tr "\\0" " " </proc/1/cmdline; echo; printf "script="; ls -l /usr/local/bin/passdeployer-wordpress-entrypoint.sh; head -n 3 /usr/local/bin/passdeployer-wordpress-entrypoint.sh'
+          docker exec passdeployer-wp sh -c 'test -f /tmp/passdeployer-wordpress-ready; echo ready_marker=$?'
+          docker logs passdeployer-wp || true
+
       - name: Wait for WordPress health
         run: |
           set -eu
