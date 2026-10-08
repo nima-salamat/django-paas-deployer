@@ -130,9 +130,13 @@ class RuntimeExecutionContract:
             args = ()
 
         required: list[str] = []
-        executable = (args[0] if args else (command[0] if command else ""))
-        if executable.startswith("/"):
-            required.append(executable)
+        # Only image-owned absolute application commands are safe to preflight
+        # generically. Platform/user shell-wrapped commands may intentionally
+        # resolve an executable from PATH and must preserve existing semantics.
+        if image_entrypoint_owned:
+            executable = args[0] if args else ""
+            if executable.startswith("/"):
+                required.append(executable)
 
         return cls(
             entrypoint_source=source,
