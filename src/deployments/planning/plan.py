@@ -11,6 +11,7 @@ from deployments.core.types import EndpointSpec, NetworkSpec, VolumeSpec
 from deployments.runtime.capabilities import RuntimeCapability, StorageCapability
 from deployments.runtime.contract import RuntimeIdentity, RuntimeSelection
 from deployments.runtime.errors import RuntimeUnsupportedError
+from deployments.runtime.execution_contract import RuntimeExecutionContract
 
 from .configuration import ResolvedConfiguration
 from .provenance import ConfigurationProvenance
@@ -24,6 +25,7 @@ class DeploymentPlan:
     identity: RuntimeIdentity
     runtime_selection: RuntimeSelection
     process_graph: ServiceRuntimeGraph
+    execution_contracts: Mapping[str, RuntimeExecutionContract] = field(default_factory=dict)
     image_ref: str
     artifact_digest: str = ""
     release_id: str | None = None
@@ -70,6 +72,9 @@ class DeploymentPlan:
             "volumes": [volume.target for volume in self.volumes],
             "endpoints": [endpoint.name for endpoint in self.endpoints],
             "runtime_options": {"keys": sorted(self.runtime_options)},
+            "execution_contracts": {
+                name: contract.as_dict() for name, contract in self.execution_contracts.items()
+            },
             "release_spec": {"configured": bool(self.release_spec)},
             "provenance": self.provenance.as_dict(),
         }
@@ -106,7 +111,27 @@ class DeploymentPlanCompiler:
         rollout_policy_raw = dict(resolved.get("rollout_policy") or {})
         runtime_options = dict(resolved.get("runtime_options") or {})
         graph_runtime = dict(graph.runtime or {})
-        if graph_runtime.get("image_entrypoint_owned"):
+        execution_contracts = dict(getattr(graph, "execution_contracts", {}) or {})
+        primary_contract = (
+            execution_contracts.get("web")
+            or (next(iter(execution_contracts.values())) if execution_contracts else None)
+        )
+        if primary_contract is not None:
+            runtime_options["execution_contract"] = primary_contract.as_dict()
+            runtime_options["execution_contracts"] = {
+                name: contract.as_dict()
+                for name, contract in execution_contracts.items()
+            }
+            runtime_options["execution_contract_hashes"] = {
+                "revision_contract_hash": primary_contract.fingerprint(boundary="revision"),
+                "plan_contract_hash": primary_contract.fingerprint(
+                    boundary="plan",
+                    image_ref=image_ref,
+                ),
+            }
+            runtime_options["catalog_managed"] = bool(primary_contract.catalog_managed)
+            runtime_options["image_entrypoint_owned"] = bool(primary_contract.image_entrypoint_owned)
+        elif graph_runtime.get("image_entrypoint_owned"):
             runtime_options["catalog_managed"] = True
             runtime_options["image_entrypoint_owned"] = True
         RolloutStrategy.from_mapping(rollout_policy_raw)
@@ -193,6 +218,7 @@ class DeploymentPlanCompiler:
             identity=identity,
             runtime_selection=effective_selection,
             process_graph=graph,
+            execution_contracts=execution_contracts,
             image_ref=str(image_ref),
             strategy_kind=strategy_kind,
             environment={str(key): str(value) for key, value in environment.items()},
