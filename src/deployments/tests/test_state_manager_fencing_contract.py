@@ -110,3 +110,15 @@ def test_db_success_uses_same_activation_fence_as_native_lifecycle():
     assert "enforce_previous_deploy=True" in method
     assert "getattr(service, " + ""lifecycle_generation"" + ", 0)" in method
 
+
+
+def test_db_cancellation_uses_cancelled_deploy_state():
+    source = (ROOT / "deployments/celery/tasks.py").read_text(encoding="utf-8")
+    method = source.split("def _mark_failure", 1)[1].split(
+        "def ", 1
+    )[0]
+    assert "target_status = (" in method
+    assert "DeploymentStatusChoices.CANCELLED" in method
+    assert 'str(stage or "").strip().lower() == "cancelled"' in method
+    assert '"Database deployment cancelled."' in method
+
