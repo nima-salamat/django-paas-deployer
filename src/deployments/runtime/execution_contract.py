@@ -7,7 +7,8 @@ from the immutable Runtime Graph through plan compilation to Swarm ContainerSpec
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+import re
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -29,12 +30,20 @@ def _tokens(value: Any) -> tuple[str, ...]:
     return tuple(shlex.split(str(value)))
 
 
+def _command_tokens(value: Any) -> tuple[str, ...]:
+    if value in (None, "", []):
+        return ()
+    if isinstance(value, (list, tuple)):
+        return tuple(str(item) for item in value)
+    return ("/bin/sh", "-lc", str(value))
+
+
 def _dockerfile_instruction(dockerfile: str, instruction: str) -> tuple[str, ...]:
     matches = list(
-        __import__("re").finditer(
+        re.finditer(
             rf"^\s*{instruction}\s+(.+)$",
             dockerfile or "",
-            flags=__import__("re").MULTILINE | __import__("re").IGNORECASE,
+            flags=re.MULTILINE | re.IGNORECASE,
         )
     )
     if not matches:
@@ -116,8 +125,12 @@ class RuntimeExecutionContract:
             args = _tokens(process_command) or image_cmd
         else:
             source = "USER" if process_entrypoint not in (None, "", []) else "PLATFORM"
-            command = _tokens(process_entrypoint) or _tokens(process_command) or None
-            args = ()
+            if process_entrypoint not in (None, "", []):
+                command = _command_tokens(process_entrypoint)
+                args = _tokens(process_command)
+            else:
+                command = _command_tokens(process_command) or None
+                args = ()
 
         required: list[str] = []
         executable = (args[0] if args else (command[0] if command else ""))
@@ -205,19 +218,17 @@ def validate_swarm_contract(
     actual_command = service_doc.get("command")
     actual_args = service_doc.get("args")
     expected = contract.expected_swarm_spec()
-    actual_effective_command = actual_entrypoint if actual_entrypoint not in (None, "", []) else actual_command
-
-    mismatch = (
-        actual_entrypoint not in (None, "", [])
-        if contract.entrypoint_source == "IMAGE"
-        else False
+    actual_effective_command = (
+        actual_entrypoint if actual_entrypoint not in (None, "", []) else actual_command
     )
-    if contract.entrypoint_source == "IMAGE":
-        mismatch = mismatch or actual_command not in (None, "", [])
-        mismatch = mismatch or list(actual_args or []) != list(expected["Args"])
-    else:
-        mismatch = mismatch or _tokens(actual_effective_command) != tuple(expected["Command"] or ())
-        mismatch = mismatch or bool(actual_args)
+    expected_command = tuple(expected["Command"] or ())
+    expected_args = tuple(expected["Args"] or ())
+    mismatch = (
+        contract.entrypoint_source == "IMAGE"
+        and actual_entrypoint not in (None, "", [])
+    )
+    mismatch = mismatch or _tokens(actual_effective_command) != expected_command
+    mismatch = mismatch or _tokens(actual_args) != expected_args
 
     return {
         "valid": not mismatch,
@@ -246,7 +257,7 @@ def worker_provenance() -> dict[str, str]:
     return {
         "worker_code_revision": str(revision),
         "worker_started_at": started,
-        "worker_instance_id": f"{os.uname().nodename}:{os.getpid()}",
+        "worker_instance_id": f"{__import__("socket").gethostname()}:{os.getpid()}",
     }
 
 
