@@ -341,6 +341,42 @@ def test_docker_source_process_override_uses_explicit_source_command():
     assert cfg["processes"][0]["command"] == "apache2-foreground"
     assert runtime_options["processes"][0]["command"] == "apache2-foreground"
 
+def test_native_catalog_entrypoint_contract_sets_renderer_identity():
+    from deployments.celery.services.deploy_service import (
+        _enforce_catalog_dockerfile_entrypoint_contract,
+    )
+
+    cfg = {"entry_point": "/usr/local/bin/passdeployer-wordpress-entrypoint.sh"}
+    runtime_options = {
+        "processes": [{
+            "name": "web",
+            "command": "apache2-foreground",
+            "entrypoint": None,
+            "replicas": 1,
+            "enabled": True,
+        }]
+    }
+    dockerfile = (
+        "FROM wordpress:7.1.2-php8.4-apache\n"
+        'ENTRYPOINT ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh"]\n'
+        'CMD ["apache2-foreground"]\n'
+    )
+
+    entry_point = _enforce_catalog_dockerfile_entrypoint_contract(
+        cfg,
+        runtime_options,
+        source_kind="catalog",
+        dockerfile_text=dockerfile,
+        entry_point=cfg["entry_point"],
+    )
+
+    assert entry_point is None
+    assert runtime_options["catalog_managed"] is True
+    assert "entry_point" not in cfg
+    assert "entry_point" not in runtime_options
+    assert "entrypoint" not in runtime_options
+
+
 def test_catalog_dockerfile_entrypoint_survives_renderer(monkeypatch):
     from deployments.core import dockerfile
 
