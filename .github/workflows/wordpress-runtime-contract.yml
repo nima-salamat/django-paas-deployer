@@ -300,6 +300,7 @@ jobs:
 
       - name: Start dedicated deployment worker
         run: |
+          export PYTHONPATH="$GITHUB_WORKSPACE/src:$PYTHONPATH"
           nohup celery -A config worker --loglevel=info --pool=solo --concurrency=1 -Q deployments,operations > /tmp/deployment-worker.log 2>&1 &
           echo $! > /tmp/deployment-worker.pid
           for i in $(seq 1 30); do
