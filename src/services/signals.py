@@ -373,18 +373,41 @@ def _cleanup_service_volumes(service: Service) -> None:
                     docker_name == stored_name
                     and any(docker_name.startswith(prefix) for prefix in legacy_prefixes)
                 )
-                if not managed and not legacy_db_proof:
+                canonical_db_proof = (
+                    docker_name == canonical_name
+                    and docker_name == volume.get_docker_volume_name()
+                )
+                ownership_proof = (
+                    "managed-label"
+                    if managed
+                    else (
+                        "legacy-db-name"
+                        if legacy_db_proof
+                        else ("canonical-db-identity" if canonical_db_proof else "")
+                    )
+                )
+                if not ownership_proof:
                     raise RuntimeError(
-                        f"Refusing to remove Docker volume '{volume.name}': ownership cannot be proven."
+                        f"Refusing to remove Docker volume '{docker_name}' "
+                        f"(registry='{stored_name}', canonical='{canonical_name}'): "
+                        "ownership cannot be proven."
                     )
                 if labeled_owner and labeled_owner != str(service.pk):
                     raise RuntimeError(
-                        f"Refusing to remove Docker volume '{volume.name}': ownership label belongs to another service."
+                        f"Refusing to remove Docker volume '{docker_name}': "
+                        "ownership label belongs to another service."
                     )
                 _remove_owned_docker_volume(
                     service,
                     docker_volume,
                     docker_name,
+                )
+                setattr(volume, "_docker_cleanup_completed", True)
+                logger.info(
+                    "Docker volume '%s' for service '%s' passed ownership proof '%s'.",
+                    docker_name,
+                    service.name,
+                    ownership_proof,
                 )
                 logger.info(
                     "Removed Docker volume '%s' for deleted service '%s' (docker=%s).",
@@ -412,6 +435,9 @@ def _cleanup_service_volumes(service: Service) -> None:
 @receiver(pre_delete, sender=Volume)
 def cleanup_volume_on_delete(sender, instance: Volume, **kwargs):
     """Remove the underlying Docker volume when a Volume row is deleted."""
+    if getattr(instance, "_docker_cleanup_completed", False):
+        return
+
     logger.info(
         "pre_delete Volume '%s' → removing Docker volume", instance.name
     )
