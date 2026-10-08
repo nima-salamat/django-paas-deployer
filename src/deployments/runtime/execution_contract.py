@@ -126,12 +126,8 @@ class RuntimeExecutionContract:
             args = _tokens(process_command) or image_cmd
         else:
             source = "USER" if process_entrypoint not in (None, "", []) else "PLATFORM"
-            if process_entrypoint not in (None, "", []):
-                command = _command_tokens(process_entrypoint)
-                args = _tokens(process_command)
-            else:
-                command = _command_tokens(process_command) or None
-                args = ()
+            command = _command_tokens(process_entrypoint) or _command_tokens(process_command) or None
+            args = ()
 
         required: list[str] = []
         executable = (args[0] if args else (command[0] if command else ""))
