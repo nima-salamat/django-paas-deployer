@@ -266,12 +266,12 @@ def test_legacy_catalog_revision_drops_stale_process_command_when_catalog_does_n
 
     graph = ServiceRuntimeGraph.from_revision(revision)
 
-    assert graph.processes[0].command == "/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground"
+    assert graph.processes[0].command == "/usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground"
     assert graph.processes[0].entrypoint is None
     assert graph.execution_contract.entrypoint_source == "IMAGE"
     assert graph.execution_contract.args == (
         "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-        "apache2-foreground",
+        "/usr/local/bin/apache2-foreground",
     )
 
 def test_legacy_catalog_revision_drops_dockerfile_owned_process_overrides():
@@ -332,7 +332,7 @@ def test_catalog_revision_ignores_stale_stored_execution_contract():
             "dockerfile": (
                 "FROM wordpress:7.1.2-php8.4-apache\n"
                 'ENTRYPOINT ["/usr/local/bin/docker-ensure-installed.sh"]\n'
-                'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "apache2-foreground"]\n'
+                'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "/usr/local/bin/apache2-foreground"]\n'
             )
         },
         runtime_snapshot={
@@ -376,7 +376,7 @@ def test_catalog_revision_ignores_stale_stored_execution_contract():
     assert graph.execution_contract.image_entrypoint == ("/usr/local/bin/docker-ensure-installed.sh",)
     assert graph.execution_contract.args == (
         "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-        "apache2-foreground",
+        "/usr/local/bin/apache2-foreground",
     )
 
 def test_catalog_swarm_boundary_drops_legacy_process_execution_contract():
@@ -389,7 +389,7 @@ def test_catalog_swarm_boundary_drops_legacy_process_execution_contract():
             "dockerfile": (
                 "FROM wordpress:7.1.2-php8.4-apache\n"
                 'ENTRYPOINT ["/usr/local/bin/docker-ensure-installed.sh"]\n'
-                'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "apache2-foreground"]\n'
+                'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "/usr/local/bin/apache2-foreground"]\n'
             )
         },
         runtime_snapshot={
@@ -431,14 +431,14 @@ def test_catalog_swarm_boundary_drops_legacy_process_execution_contract():
     graph = ServiceRuntimeGraph.from_revision(revision)
 
     assert graph.processes[0].command == (
-        "/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground"
+        "/usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground"
     )
     assert graph.execution_contract.image_entrypoint == (
         "/usr/local/bin/docker-ensure-installed.sh",
     )
     assert graph.execution_contract.args == (
         "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-        "apache2-foreground",
+        "/usr/local/bin/apache2-foreground",
     )
 
 def test_catalog_profile_removes_stale_dockerfile_entrypoint_override():
@@ -738,7 +738,7 @@ def test_legacy_catalog_revision_infers_image_entrypoint_ownership():
             "dockerfile": (
                 "FROM wordpress:7.1.2-php8.4-apache\n"
                 'ENTRYPOINT ["/usr/local/bin/docker-ensure-installed.sh"]\n'
-                'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "apache2-foreground"]\n'
+                'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "/usr/local/bin/apache2-foreground"]\n'
             )
         },
         runtime_snapshot={"start_command": None, "entry_point": None},
@@ -764,7 +764,7 @@ def test_legacy_catalog_revision_infers_image_entrypoint_ownership():
     assert graph.runtime["image_entrypoint_owned"] is True
     assert graph.processes[0].entrypoint is None
     assert graph.processes[0].command == (
-        "/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground"
+        "/usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground"
     )
 
 
