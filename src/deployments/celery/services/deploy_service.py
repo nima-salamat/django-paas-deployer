@@ -1074,6 +1074,25 @@ class DeployService:
                     )
                 )
 
+        # Keep catalog executable identity explicit in the runtime options.
+        # This is intentionally repeated after Docker-source normalization because
+        # the source kind is resolved there, while the renderer receives only the
+        # assembled DeploymentConfig. A catalog Dockerfile-owned ENTRYPOINT must
+        # never depend on legacy Service/Deploy entry_point fields.
+        if (
+            catalog_source_kind == "catalog"
+            and re.search(
+                r"^\s*ENTRYPOINT\s+",
+                dockerfile_text,
+                flags=re.MULTILINE | re.IGNORECASE,
+            )
+        ):
+            runtime_options["catalog_managed"] = True
+            entry_point = None
+            cfg.pop("entry_point", None)
+            runtime_options.pop("entry_point", None)
+            runtime_options.pop("entrypoint", None)
+
         if platform == "docker" and docker_runtime_source:
             # Only an explicitly declared command/entrypoint from the Docker
             # source may replace the immutable revision process graph. Never
@@ -1537,6 +1556,33 @@ class DeployService:
                 config=resolved_build_config,
                 logger=None,
             )
+
+            # The catalog Dockerfile owns its image-level ENTRYPOINT. Validate
+            # the rendered artifact before building so renderer regressions are
+            # caught at the artifact boundary rather than surfacing as a
+            # misleading 180-second runtime-readiness timeout.
+            catalog_entrypoint_expected = None
+            if str(cfg.get("source_kind") or "").strip().lower() == "catalog":
+                import json as _json
+                entrypoint_match = re.search(
+                    r"^\s*ENTRYPOINT\s+(\[.*\])\s*$",
+                    rendered_dockerfile,
+                    flags=re.MULTILINE | re.IGNORECASE,
+                )
+                if entrypoint_match:
+                    try:
+                        parsed_entrypoint = _json.loads(entrypoint_match.group(1))
+                    except Exception:
+                        parsed_entrypoint = None
+                    if isinstance(parsed_entrypoint, list):
+                        catalog_entrypoint_expected = [str(item) for item in parsed_entrypoint]
+
+            if catalog_entrypoint_expected is not None:
+                logger.info(
+                    "Catalog artifact contract: rendered ENTRYPOINT=%r",
+                    catalog_entrypoint_expected,
+                )
+
             current_context.assert_can_continue()
             current_context.emit(
                 "image_build",
@@ -1569,6 +1615,32 @@ class DeployService:
             current_context.assert_can_continue()
 
             attrs = getattr(built_image, "attrs", {}) or {}
+            if catalog_entrypoint_expected is not None:
+                image_config = dict(attrs.get("Config") or {})
+                observed_entrypoint = image_config.get("Entrypoint")
+                observed_cmd = image_config.get("Cmd")
+                logger.info(
+                    "Catalog artifact contract: built Config.Entrypoint=%r Config.Cmd=%r",
+                    observed_entrypoint,
+                    observed_cmd,
+                )
+                if [str(item) for item in (observed_entrypoint or [])] != catalog_entrypoint_expected:
+                    raise DeploymentValidationError(
+                        "The built catalog image does not preserve its Dockerfile ENTRYPOINT.",
+                        stage="image_build",
+                        code="CATALOG_IMAGE_ENTRYPOINT_MISMATCH",
+                        user_message=(
+                            "The application artifact was built with an invalid runtime entrypoint. "
+                            "The deployment was stopped before Swarm startup."
+                        ),
+                        details={
+                            "expected_entrypoint": catalog_entrypoint_expected,
+                            "observed_entrypoint": observed_entrypoint,
+                            "observed_cmd": observed_cmd,
+                            "source_kind": str(cfg.get("source_kind") or ""),
+                            "dockerfile_entrypoint_present": True,
+                        },
+                    )
             repo_digests = list(attrs.get("RepoDigests") or ())
             artifact_digest = str(
                 str(repo_digests[0]).split("@", 1)[-1]
