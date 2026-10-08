@@ -398,15 +398,7 @@ def reconcile_application_installations():
             fresh = ApplicationInstance.objects.only(
                 "status", "cancel_requested", "execution_task_id", "stage"
             ).get(pk=instance.pk)
-            if (
-                fresh.status == ApplicationStatus.PENDING
-                and not fresh.cancel_requested
-                and not fresh.execution_task_id
-            ):
-                if fresh.created_at < pending_cutoff:
-                    start_application_installation.delay(str(instance.pk))
-                    pending_requeued += 1
-            elif fresh.status == ApplicationStatus.DEPLOYING:
+            if fresh.status == ApplicationStatus.DEPLOYING:
                 _schedule_next(str(instance.pk))
         except Exception:
             logger.exception("Application reconciliation failed for %s", instance.pk)
