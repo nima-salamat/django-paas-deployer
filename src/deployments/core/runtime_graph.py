@@ -127,15 +127,14 @@ class ServiceRuntimeGraph:
             )
 
         # Environment snapshots intentionally omit secret-backed values.
-        # A revision still owns the exact secret versions for this deployment,
-        # so resolve those references before constructing the runtime graph.
-        try:
+        # When this revision references versioned secrets, materialize only
+        # those environment values into memory for runtime execution. Missing
+        # or invalid secret versions must surface as a deployment error instead
+        # of silently producing an incomplete environment.
+        materialized = {}
+        if getattr(revision, "secret_refs", None):
             from services.revisioning import materialize_revision_config
             materialized = materialize_revision_config(revision)
-        except Exception:
-            # Lightweight revision doubles used by dependency-free tests may
-            # not have the Django secret store available.
-            materialized = {}
 
         build_environment: dict[str, str] = {}
         runtime_environment: dict[str, str] = {}
