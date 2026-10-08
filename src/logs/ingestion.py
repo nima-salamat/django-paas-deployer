@@ -120,8 +120,39 @@ def get_or_create_stream(
     if existing:
         return existing
 
+    # Reuse the most recent closed/lost stream for the same immutable runtime
+    # resource. Swarm reconnects and collector restarts must continue from the
+    # existing checkpoint; creating a fresh stream would replay the catch-up
+    # window and defeat stream-level fingerprint deduplication.
     try:
         with transaction.atomic(using=alias):
+            existing = (
+                ServiceLogStream.objects.using(alias)
+                .select_for_update()
+                .filter(
+                    service_id=str(service_id),
+                    container_id=container_id,
+                )
+                .exclude(status=ServiceLogStream.Status.ACTIVE)
+                .order_by("-started_at", "-id")
+                .first()
+            )
+            if existing:
+                existing.status = ServiceLogStream.Status.ACTIVE
+                existing.ended_at = None
+                existing.owner_id = ""
+                existing.lease_until = None
+                existing.lease_token = ""
+                existing.heartbeat_at = None
+                existing.container_name = container_name or existing.container_name
+                existing.deploy_id = str(deploy_id) if deploy_id else existing.deploy_id
+                existing.save(update_fields=[
+                    "status", "ended_at", "owner_id", "lease_until",
+                    "lease_token", "heartbeat_at", "container_name",
+                    "deploy_id", "updated_at",
+                ])
+                return existing
+
             return ServiceLogStream.objects.using(alias).create(
                 service_id=str(service_id),
                 deploy_id=str(deploy_id) if deploy_id else None,
