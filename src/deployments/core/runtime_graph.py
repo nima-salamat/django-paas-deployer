@@ -49,6 +49,36 @@ class RuntimeProcess:
 
 
 @dataclass(frozen=True)
+def _dockerfile_default_cmd(dockerfile: str) -> str | None:
+    """Extract the final Dockerfile CMD without executing or mutating the artifact."""
+    matches = list(
+        re.finditer(
+            r"^\s*CMD\s+(.+)$",
+            dockerfile or "",
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
+    )
+    if not matches:
+        return None
+
+    raw = matches[-1].group(1).strip()
+    if not raw:
+        return None
+
+    if raw.startswith("["):
+        try:
+            import json
+            import shlex
+            values = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        if isinstance(values, list) and values and all(isinstance(item, str) for item in values):
+            return shlex.join(values)
+        return None
+
+    return raw
+
+
 class ServiceRuntimeGraph:
     source: dict[str, Any] = field(default_factory=dict)
     build: dict[str, Any] = field(default_factory=dict)
@@ -91,20 +121,24 @@ class ServiceRuntimeGraph:
             )
         )
 
+        dockerfile_default_cmd = (
+            _dockerfile_default_cmd(dockerfile)
+            if dockerfile_owns_entrypoint
+            else None
+        )
+
         process_rows = []
         for raw in (getattr(revision, "process_snapshot", None) or []):
             command = raw.get("command")
             entrypoint = raw.get("entrypoint")
 
-            # Ready App executable semantics are owned by the catalog runtime
-            # snapshot plus the image artifact, not by stale mutable
-            # ServiceProcess rows. A catalog service with no explicit catalog
-            # command must let Docker's image CMD execute. This is especially
-            # important for WordPress: an old detected command such as
-            # "true" or "apache2-foreground" would override the custom
-            # WordPress bootstrap ENTRYPOINT and can make PID 1 exit 0.
+            # Ready App executable semantics are owned by the immutable catalog
+            # artifact and runtime snapshot, not by stale mutable ServiceProcess rows.
+            # When a catalog Dockerfile owns ENTRYPOINT but an older revision did
+            # not persist an explicit CMD, recover that exact CMD from the revision's
+            # Dockerfile so Swarm receives deterministic ContainerSpec.Command.
             if catalog_managed and not catalog_command_is_explicit:
-                command = None
+                command = dockerfile_default_cmd
 
             if dockerfile_owns_entrypoint:
                 entrypoint = None
