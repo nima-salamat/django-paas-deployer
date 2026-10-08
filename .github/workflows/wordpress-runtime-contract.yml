@@ -9,6 +9,8 @@ on:
       - "src/deployments/common/deployment_profile.py"
       - "src/deployments/core/platform_bridge.py"
       - "src/deployments/core/runtime_graph.py"
+      - "src/deployments/runtime/execution_contract.py"
+      - "src/deployments/runtime/swarm/adapter.py"
       - "src/deployments/core/dockerfile.py"
       - "src/deployments/core/swarm.py"
       - "src/deployments/celery/services/deploy_service.py"
@@ -141,6 +143,12 @@ jobs:
           docker inspect passdeployer-wp || true
           exit 1
 
+      - name: Run native runtime contract regressions
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check pytest
+          pytest -q src/deployments/tests/test_execution_contract.py src/deployments/tests/test_swarm_runtime.py
+
       - name: Assert WP-CLI installation completed
         run: |
           set -euo pipefail
@@ -160,6 +168,7 @@ jobs:
           docker exec passdeployer-wp wp option get blogname --allow-root
 
       - name: Run WordPress through single-node Swarm
+        if: always()
         run: |
           set -euxo pipefail
           docker swarm init --advertise-addr 127.0.0.1
