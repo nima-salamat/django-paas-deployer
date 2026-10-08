@@ -277,7 +277,7 @@ services:
         fi
         
         if [ "$#" -eq 0 ]; then
-          set -- apache2-foreground
+          set -- /usr/local/bin/apache2-foreground
         fi
         
         log "Starting WordPress foreground command: $*"
