@@ -51,6 +51,42 @@ class RevisioningContractTests(SimpleTestCase):
 
 
 class RuntimeGraphContractTests(SimpleTestCase):
+    @patch("services.revisioning.materialize_revision_config")
+    def test_secret_environment_is_resolved_from_revision_before_runtime_graph(self, materialize):
+        from deployments.core.runtime_graph import ServiceRuntimeGraph
+
+        materialize.return_value = {
+            "env": {
+                "PUBLIC": "ok",
+                "WORDPRESS_DB_PASSWORD": "revision-secret",
+            },
+            "build_env": {},
+        }
+        revision = SimpleNamespace(
+            pk="revision-secret-env",
+            revision_number=4,
+            source_snapshot={},
+            build_snapshot={},
+            runtime_snapshot={},
+            secret_refs=[
+                {"path": "env.WORDPRESS_DB_PASSWORD", "key": "service_password_wordpress", "version": 1}
+            ],
+            environment_snapshot={
+                "PUBLIC": {"value": "ok", "scope": "runtime"},
+            },
+            process_snapshot=[
+                {"name": "web", "process_type": "web", "replicas": 1, "enabled": True}
+            ],
+            endpoint_snapshot=[],
+            volume_snapshot=[],
+            network_snapshot=[],
+        )
+
+        graph = ServiceRuntimeGraph.from_revision(revision)
+
+        assert graph.runtime_environment["WORDPRESS_DB_PASSWORD"] == "revision-secret"
+        materialize.assert_called_once_with(revision)
+
     def test_environment_scope_is_preserved(self):
         from deployments.core.runtime_graph import ServiceRuntimeGraph
 
