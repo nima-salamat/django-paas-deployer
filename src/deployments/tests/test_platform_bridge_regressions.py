@@ -42,8 +42,9 @@ def _detection():
 def test_legacy_catalog_revision_drops_dockerfile_owned_process_entrypoint():
     from deployments.core.runtime_graph import ServiceRuntimeGraph
 
-    # Reproduce the legacy bad value that bypassed the catalog bootstrap.
-    stale_entrypoint = "/usr/local/bin/docker-entrypoint.sh"
+    # Reproduce the legacy auto-detected value that bypassed the catalog bootstrap.
+    # Docker/Apache detection reports the image CMD as "apache2-foreground".
+    stale_entrypoint = "apache2-foreground"
     revision = SimpleNamespace(
         pk="revision-1",
         config_snapshot={"source_kind": "catalog"},
