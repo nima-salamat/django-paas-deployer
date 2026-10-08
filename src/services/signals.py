@@ -324,16 +324,26 @@ def _cleanup_service_volumes(service: Service) -> None:
             f"cat-{service_id_text[:8]}-",
             f"dv-{service_id_text[:8]}-",
         )
+        is_legacy_stored_name = (
+            any(stored_name.startswith(prefix) for prefix in legacy_prefixes)
+            if stored_name
+            else False
+        )
+        ordered_names = (
+            (stored_name, canonical_name)
+            if is_legacy_stored_name
+            else (canonical_name, stored_name)
+        )
         candidate_names = tuple(
             dict.fromkeys(
                 name
-                for name in (canonical_name, stored_name)
+                for name in ordered_names
                 if name
                 and (
                     name == canonical_name
                     or (
                         name == stored_name
-                        and any(name.startswith(prefix) for prefix in legacy_prefixes)
+                        and is_legacy_stored_name
                     )
                 )
             )
