@@ -187,7 +187,7 @@ jobs:
             sleep 1
           done
           docker logs passdeployer-wp || true
-          docker inspect passdeployer-wp || true
+          docker inspect -f 'Path={{json .Path}} Args={{json .Args}} Entrypoint={{json .Config.Entrypoint}} Cmd={{json .Config.Cmd}}' passdeployer-wp || true
           exit 1
 
       - name: Run native runtime contract regressions
