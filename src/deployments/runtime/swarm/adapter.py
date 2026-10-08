@@ -360,7 +360,8 @@ class SwarmRuntimeAdapter:
                 "operation.key": str(operation_key),
             },
         )
-        execution_contract_value = dict(config.runtime_options or {}).get("execution_contract")
+        runtime_options = dict(config.runtime_options or {})
+        execution_contract_value = runtime_options.get("execution_contract")
         execution_contract = (
             RuntimeExecutionContract.from_dict(execution_contract_value)
             if isinstance(execution_contract_value, Mapping)
