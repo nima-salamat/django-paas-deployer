@@ -90,7 +90,7 @@ class ReadyApplicationArchitectureTests(TestCase):
         assert "ServerName localhost" in dockerfile
 
         start_command = str((app.runtime_config or {}).get("start_command") or "")
-        assert start_command == "/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground"
+        assert start_command == "/usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground"
         # The Dockerfile owns the bootstrap ENTRYPOINT; only its CMD is mirrored
         # as the explicit Swarm runtime command.
         assert (app.runtime_config or {}).get("entry_point") in (None, "")
@@ -116,7 +116,7 @@ class ReadyApplicationArchitectureTests(TestCase):
         graph = ServiceRuntimeGraph.from_revision(deployment.revision)
         assert graph.processes
         assert graph.processes[0].entrypoint is None
-        assert graph.processes[0].command == "/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground"
+        assert graph.processes[0].command == "/usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground"
 
     def test_ready_app_mariadb_accepts_mysql_env_aliases_for_user_database_and_password(self):
         instance = self.install(catalog_id="wordpress", variant="default", name="mariadb-alias-contract")
