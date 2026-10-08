@@ -83,6 +83,19 @@ class DeploymentActivationConsistencyContractTests(unittest.TestCase):
         self.assertIn("cancel_requested=False", helper)
         self.assertIn("_service_has_active_native_deployment(service)", reconcile)
         self.assertIn("active_revision can still point to the previous", reconcile)
+        self.assertIn("with acquire_service_deployment_lock(service.pk):", reconcile)
+
+    def test_scheduler_stop_carries_lifecycle_generation(self):
+        desired = self.scheduler.split("def _reconcile_desired_state", 1)[1].split(
+            "def _reconcile_service_runtime", 1
+        )[0]
+        self.assertIn("expected_lifecycle_generation", desired)
+        self.assertIn("stop_service.apply_async(", desired)
+
+    def test_stop_worker_rejects_stale_scheduled_stop(self):
+        stop_service = (ROOT / "deployments/celery/services/stop_service.py").read_text()
+        self.assertIn("expected_lifecycle_generation", stop_service)
+        self.assertIn("Skipping stale stop", stop_service)
 
     def test_swarm_service_reconciliation_does_not_execute_without_plan(self):
         reconcile = self.scheduler.split("def _reconcile_service_runtime_swarm", 1)[1].split(
