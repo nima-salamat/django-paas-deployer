@@ -600,3 +600,86 @@ def test_non_catalog_docker_still_promotes_detected_default_command(monkeypatch)
 
     assert enriched.entry_point == "apache2-foreground"
     
+
+def test_legacy_catalog_revision_infers_image_entrypoint_ownership():
+    from deployments.core.runtime_graph import ServiceRuntimeGraph
+
+    revision = SimpleNamespace(
+        pk="revision-legacy-catalog",
+        config_snapshot={},
+        source_snapshot={"catalog_id": "wordpress", "service_key": "wordpress"},
+        build_snapshot={
+            "dockerfile": (
+                "FROM wordpress:7.1.2-php8.4-apache\n"
+                'ENTRYPOINT ["docker-ensure-installed.sh"]\n'
+                'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "apache2-foreground"]\n'
+            )
+        },
+        runtime_snapshot={"start_command": None, "entry_point": None},
+        process_snapshot=[{
+            "name": "web",
+            "process_type": "application",
+            "command": "stale-command",
+            "entrypoint": "/bin/sh -lc",
+            "replicas": 1,
+            "enabled": True,
+        }],
+        environment_snapshot={},
+        endpoint_snapshot=[],
+        volume_snapshot=[],
+        network_snapshot=[],
+        graph_snapshot={},
+        revision_number=1,
+    )
+
+    graph = ServiceRuntimeGraph.from_revision(revision)
+
+    assert graph.runtime["catalog_managed"] is True
+    assert graph.runtime["image_entrypoint_owned"] is True
+    assert graph.processes[0].entrypoint is None
+    assert graph.processes[0].command == (
+        "/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground"
+    )
+
+
+def test_catalog_revision_refresh_is_requested_when_build_files_are_missing():
+    from services.revisioning import _catalog_revision_requires_refresh
+
+    service = SimpleNamespace(
+        source_kind="catalog",
+        build_config={
+            "files": {
+                "passdeployer-wordpress-entrypoint.sh": "#!/bin/sh\n"
+            }
+        },
+    )
+    revision = SimpleNamespace(
+        config_snapshot={"source_kind": "catalog"},
+        build_snapshot={"dockerfile": "FROM wordpress:latest\n"},
+    )
+
+    assert _catalog_revision_requires_refresh(service, revision) is True
+
+
+def test_complete_catalog_revision_does_not_trigger_compatibility_refresh():
+    from services.revisioning import _catalog_revision_requires_refresh
+
+    service = SimpleNamespace(
+        source_kind="catalog",
+        build_config={
+            "files": {
+                "passdeployer-wordpress-entrypoint.sh": "#!/bin/sh\n"
+            }
+        },
+    )
+    revision = SimpleNamespace(
+        config_snapshot={"source_kind": "catalog"},
+        build_snapshot={
+            "dockerfile": "FROM wordpress:latest\n",
+            "files": {
+                "passdeployer-wordpress-entrypoint.sh": "#!/bin/sh\n"
+            },
+        },
+    )
+
+    assert _catalog_revision_requires_refresh(service, revision) is False
