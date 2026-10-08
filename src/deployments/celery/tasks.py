@@ -92,9 +92,11 @@ def deploy(self, deploy_id) -> None:
         )
         if deploy_item is not None:
             cfg = parse_config(deploy_item.config)
+            # The Service Plan is the authoritative runtime family.
+            # Deploy.config is only a compatibility fallback for older rows.
             platform = (
-                (cfg.get("platform") or "")
-                or getattr(getattr(deploy_item.service, "plan", None), "platform", "")
+                getattr(getattr(deploy_item.service, "plan", None), "platform", "")
+                or cfg.get("platform")
                 or ""
             )
             platform = str(platform).lower().strip()
