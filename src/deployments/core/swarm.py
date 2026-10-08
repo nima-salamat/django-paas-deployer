@@ -1007,7 +1007,7 @@ class SwarmRuntime:
                 if task.desired_state.lower() == "running"
             ]
             terminal = [
-                task for task in desired_running
+                task for task in latest.tasks
                 if task.state.lower() in {"complete", "shutdown", "dead", "orphaned"}
             ]
             active = [
@@ -1023,35 +1023,78 @@ class SwarmRuntime:
                     "running",
                 }
             ]
-            if terminal and not active and not running:
-                task = terminal[-1]
+            update_in_progress = str(latest.update_state or "").lower() in {
+                "updating",
+                "rollback_started",
+                "rollback_paused",
+            }
+
+            # A terminal task whose DesiredState is already shutdown is still
+            # evidence that the only task Swarm had for the desired service
+            # lifecycle has died/replaced. The previous implementation filtered
+            # terminal tasks down to DesiredState=running and then waited for the
+            # full timeout when Swarm had no replacement task. That hid the real
+            # failure and made WordPress/Apache shutdowns look like a hang.
+            terminal_without_replacement = (
+                terminal
+                and not active
+                and not running
+                and desired > 0
+                and not update_in_progress
+            )
+            service_scaled_to_zero = (
+                desired <= 0
+                and not active
+                and not running
+                and not update_in_progress
+                and bool(latest.tasks)
+            )
+
+            if terminal_without_replacement or service_scaled_to_zero:
+                task = terminal[-1] if terminal else latest.tasks[-1]
                 service_logs = self._service_logs_for_failure(name)
                 exit_code = None
                 status_attrs = {}
                 try:
                     service = self.client.services.get(_validate_service_name(name))
-                    raw_tasks = service.tasks(filters={"desired-state": "running"}) or []
+                    raw_tasks = service.tasks() or []
                     for raw in raw_tasks:
-                        raw_status = raw.get("Status") or {}
-                        if str(raw.get("ID") or "") == str(task.task_id):
-                            status_attrs = raw_status
-                            break
-                    exit_code = status_attrs.get("ContainerStatus", {}).get("ExitCode")
+                        if str(raw.get("ID") or "") != str(task.task_id):
+                            continue
+                        status_attrs = raw.get("Status") or {}
+                        break
+                    exit_code = (status_attrs.get("ContainerStatus") or {}).get("ExitCode")
                 except Exception:
                     pass
+
+                code = (
+                    "SWARM_SERVICE_SCALED_TO_ZERO"
+                    if service_scaled_to_zero
+                    else "SWARM_TASK_TERMINATED"
+                )
+                user_message = (
+                    "The Swarm service was scaled to zero before the deployment became ready."
+                    if service_scaled_to_zero
+                    else "The Swarm task terminated before the service became ready."
+                )
                 technical = (
-                    f"Swarm task terminated before reaching running state: "
-                    f"task_id={task.task_id}; state={task.state}; desired_state={task.desired_state}; "
-                    f"exit_code={exit_code!r}; node={task.node_name or task.node_id or ''}; "
+                    f"Swarm readiness ended before a running task was available: "
+                    f"service={name!r}; task_id={task.task_id}; state={task.state}; "
+                    f"desired_state={task.desired_state}; exit_code={exit_code!r}; "
+                    f"node={task.node_name or task.node_id or ''}; "
+                    f"replicas_desired={latest.replicas_desired}; "
+                    f"replicas_running={latest.replicas_running}; "
                     f"expected_image={expected_image!r}; task_image={task.image!r}; "
                     f"service_image={latest.service_image!r}; "
+                    f"update_state={latest.update_state!r}; "
+                    f"update_message={latest.update_message or ''!r}; "
                     f"service_logs={service_logs[-12000:]}"
                 )
                 raise DeploymentError(
                     technical,
                     stage="swarm_startup",
-                    code="SWARM_TASK_TERMINATED",
-                    user_message="The Swarm task terminated before the service became ready.",
+                    code=code,
+                    user_message=user_message,
                     technical_message=technical,
                     details={
                         "task_id": task.task_id,
@@ -1060,8 +1103,12 @@ class SwarmRuntime:
                         "exit_code": exit_code,
                         "node_id": task.node_id,
                         "node_name": task.node_name,
+                        "replicas_desired": latest.replicas_desired,
+                        "replicas_running": latest.replicas_running,
                         "expected_image": expected_image,
                         "service_image": latest.service_image,
+                        "update_state": latest.update_state,
+                        "update_message": latest.update_message,
                         "service_logs": service_logs[-12000:],
                     },
                 )

@@ -52,6 +52,16 @@ def _redact(text: str) -> str:
         return text or ""
 
 
+def lease_is_current(stream: ServiceLogStream, owner_id: str, *, now=None) -> bool:
+    """Return True only while this exact collector still owns a live lease."""
+    now = now or timezone.now()
+    return (
+        str(getattr(stream, "owner_id", "") or "") == str(owner_id)
+        and getattr(stream, "lease_until", None) is not None
+        and stream.lease_until > now
+    )
+
+
 def acquire_lease(stream: ServiceLogStream, owner_id: str, *, lease_seconds: int = 30) -> bool:
     alias = _alias()
     now = timezone.now()
@@ -295,6 +305,17 @@ def ingest_lines(
                 "bytes": 0,
                 "persisted": False,
                 "inserted_entries": [],
+            }
+        # The pre-check above is only an optimization. The locked row is the
+        # authority because another collector can acquire the lease between
+        # the pre-check and this transaction.
+        if owner_id and not lease_is_current(locked, owner_id):
+            return {
+                "inserted": 0,
+                "duplicates": 0,
+                "dropped": 0,
+                "bytes": 0,
+                "lease_denied": True,
             }
         next_seq = int(locked.last_seq or 0)
         for p in prepared:

@@ -265,10 +265,17 @@ def monitor_services(self):
             return {"status": "locked"}
         r.set(run_key, now_ts, ex=max(lock_seconds * 3, int(policies["monitor_interval_seconds"]) * 3))
     except Exception as exc:
-        logger.warning("Monitor scheduler gate unavailable: %s", exc)
-        lock_key = None
-        r = None
-        token = None
+        # The monitor is a mutating reconciliation loop. If its distributed
+        # coordination store is unavailable, running anyway allows every worker
+        # to reconcile the same Swarm resources concurrently.
+        logger.warning(
+            "Monitor scheduler gate unavailable; skipping mutation tick: %s",
+            exc,
+        )
+        return {
+            "status": "scheduler_unavailable",
+            "error": str(exc)[:500],
+        }
 
     # Finalize cancellations that never reached a worker. This is especially
     # important for timeout requests raised while a deployment is still pending.
@@ -1405,9 +1412,16 @@ def _reconcile_service_runtime_swarm(service: Service) -> None:
         service_id=str(service.pk),
         lifecycle_generation=generation,
         active_revision_id=desired.revision_id,
-        owns_execution=lambda sid=str(service.pk), gen=generation: Service.objects.filter(
-            pk=sid, lifecycle_generation=gen,
-        ).exists(),
+        owns_execution=lambda sid=str(service.pk), gen=generation: (
+            Service.objects.filter(
+                pk=sid, lifecycle_generation=gen,
+            ).exists()
+            and not Deploy.objects.filter(
+                service_id=sid,
+                status__in=ACTIVE_DEPLOY_STATUSES,
+                cancel_requested=False,
+            ).exists()
+        ),
         current_generation=lambda sid=str(service.pk): Service.objects.filter(
             pk=sid
         ).values_list("lifecycle_generation", flat=True).first(),

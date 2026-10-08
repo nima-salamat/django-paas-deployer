@@ -152,6 +152,56 @@ class SwarmFailureRecoveryTests(unittest.TestCase):
         self.assertIn("application traceback", exc.details["service_logs"])
         self.assertIn("non-zero exit (1)", exc.technical_message)
 
+    def test_shutdown_desired_terminal_task_fails_without_waiting_for_timeout(self):
+        image = "demo:r1@sha256:new"
+        service = FakeService(
+            image=image,
+            tasks=[
+                {
+                    "ID": "task-1",
+                    "DesiredState": "shutdown",
+                    "Status": {
+                        "State": "complete",
+                        "Message": "finished",
+                        "ContainerStatus": {"ExitCode": 0},
+                    },
+                    "Spec": {"ContainerSpec": {"Image": image}},
+                }
+            ],
+        )
+        runtime = SwarmRuntime(FakeClient(service))
+
+        with self.assertRaises(DeploymentError) as ctx:
+            runtime.wait_ready("demo", timeout=1, expected_image=image)
+
+        exc = ctx.exception
+        self.assertEqual(exc.code, "SWARM_TASK_TERMINATED")
+        self.assertEqual(exc.details["desired_state"], "shutdown")
+        self.assertEqual(exc.details["exit_code"], 0)
+        self.assertIn("application traceback", exc.details["service_logs"])
+
+    def test_service_scaled_to_zero_during_readiness_is_terminal(self):
+        image = "demo:r1@sha256:new"
+        service = FakeService(
+            image=image,
+            tasks=[
+                {
+                    "ID": "task-1",
+                    "DesiredState": "shutdown",
+                    "Status": {"State": "shutdown", "Message": "finished"},
+                    "Spec": {"ContainerSpec": {"Image": image}},
+                }
+            ],
+        )
+        service.attrs["Spec"]["Mode"]["Replicated"]["Replicas"] = 0
+        runtime = SwarmRuntime(FakeClient(service))
+
+        with self.assertRaises(DeploymentError) as ctx:
+            runtime.wait_ready("demo", timeout=1, expected_image=image)
+
+        self.assertEqual(ctx.exception.code, "SWARM_SERVICE_SCALED_TO_ZERO")
+        self.assertEqual(ctx.exception.details["replicas_desired"], 0)
+
     def test_old_running_image_after_swarm_rollback_is_not_success(self):
         old_image = "demo:r0@sha256:old"
         new_image = "demo:r1@sha256:new"

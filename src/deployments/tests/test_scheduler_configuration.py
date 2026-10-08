@@ -14,6 +14,27 @@ def test_swarm_sync_uses_django_timezone_api():
     assert '__import__("django.utils.timezone", fromlist=["timezone"]).timezone.now()' not in source
 
 
+def test_monitor_does_not_reconcile_without_distributed_scheduler_gate():
+    source = (ROOT / "src" / "deployments" / "celery" / "schedules.py").read_text(encoding="utf-8")
+
+    gate = source.split("def monitor_services(", 1)[1].split(
+        "# Finalize cancellations that never reached a worker.", 1
+    )[0]
+    assert 'status": "scheduler_unavailable"' in gate
+    assert "skipping mutation tick" in gate
+
+
+def test_service_runtime_reconciliation_fences_against_active_deployments():
+    source = (ROOT / "src" / "deployments" / "celery" / "schedules.py").read_text(encoding="utf-8")
+
+    section = source.split("def _reconcile_service_runtime_swarm", 1)[1].split(
+        "def _reconcile_service_runtime(", 1
+    )[0]
+    assert "status__in=ACTIVE_DEPLOY_STATUSES" in section
+    assert "cancel_requested=False" in section
+    assert "lifecycle_generation=gen" in section
+
+
 def test_application_catalog_reconcile_schedule_matches_registered_task_name():
     settings = (ROOT / "src" / "config" / "settings.py").read_text(encoding="utf-8")
     tasks = (ROOT / "src" / "app_catalog" / "tasks.py").read_text(encoding="utf-8")
