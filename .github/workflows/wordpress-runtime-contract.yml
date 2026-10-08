@@ -49,12 +49,20 @@ jobs:
               + f"\nHEALTHCHECK --interval={interval} --timeout={timeout} "
                 f"--start-period={start_period} --retries={retries} CMD {command}\n"
           )
-          Path("/tmp/wordpress.Dockerfile").write_text(dockerfile)
+          build_context = Path("/tmp/wordpress-build-context")
+          build_context.mkdir(parents=True, exist_ok=True)
+          (build_context / "Dockerfile").write_text(dockerfile)
+          files = data["services"]["wordpress"].get("files") or {}
+          for name, content in files.items():
+              target = build_context / str(name)
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_text(str(content))
           print(dockerfile)
+          print("Build-context files:", sorted(str(name) for name in files))
           PY
 
       - name: Build WordPress image
-        run: docker build --pull -f /tmp/wordpress.Dockerfile -t passdeployer-wordpress-contract:test .
+        run: docker build --pull -f /tmp/wordpress-build-context/Dockerfile -t passdeployer-wordpress-contract:test /tmp/wordpress-build-context
 
       - name: Assert image command contract
         run: |
