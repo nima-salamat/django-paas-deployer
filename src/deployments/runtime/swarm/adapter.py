@@ -335,6 +335,7 @@ class SwarmRuntimeAdapter:
                 user_message=getattr(exc, "user_message", None),
             ) from exc
         observation = self._observation(identity, state, assume_identity_revision=True)
+        recovery = dict(getattr(self.runtime, "_last_apply_recovery", {}) or {})
         handle = RuntimeHandle(
             backend=self.backend,
             identity=identity,
@@ -347,6 +348,11 @@ class SwarmRuntimeAdapter:
                     for name, result in states.items()
                 },
                 "expected_image": image_ref,
+                "stale_service_names": tuple(
+                    str(name)
+                    for name in (recovery.get("stale_service_names") or ())
+                    if str(name).strip()
+                ),
             },
         )
         return RuntimeOperationResult(
@@ -356,6 +362,85 @@ class SwarmRuntimeAdapter:
             observation=observation,
             details={"operation_key": operation_key, "service_names": process_names},
         )
+
+    def finalize_success(
+        self,
+        handle: RuntimeHandle,
+        *,
+        operation_key: str,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        self._ensure_available(self)
+        if cancel_check is not None and cancel_check():
+            raise RuntimeOperationError(
+                "Runtime finalization was cancelled.",
+                code="runtime_cancelled",
+                category="cancellation",
+            )
+
+        service_id = str(handle.identity.service_id or "").strip()
+        desired_names = tuple(
+            str(name)
+            for name in (handle.metadata.get("service_names") or ())
+            if str(name).strip()
+        )
+        stale_names = tuple(
+            str(name)
+            for name in (handle.metadata.get("stale_service_names") or ())
+            if str(name).strip()
+        )
+        removed_stale: list[str] = []
+        failures: list[dict[str, str]] = []
+
+        if service_id and stale_names:
+            try:
+                removed_stale, stale_failures = self.runtime.cleanup_stale_process_services(
+                    service_id=service_id,
+                    desired_service_names=desired_names,
+                )
+                failures.extend(
+                    {
+                        "operation": "remove_stale_process",
+                        "service": str(item.get("service") or ""),
+                        "error": str(item.get("error") or "cleanup failed"),
+                    }
+                    for item in stale_failures
+                )
+            except Exception as exc:
+                failures.append({
+                    "operation": "remove_stale_process",
+                    "error": str(exc),
+                })
+
+        removed_legacy = 0
+        if service_id:
+            try:
+                removed_legacy = int(
+                    self.runtime.cleanup_legacy_containers(service_id=service_id)
+                    or 0
+                )
+            except Exception as exc:
+                failures.append({
+                    "operation": "remove_legacy_container",
+                    "error": str(exc),
+                })
+
+        result = {
+            "cleanup_attempted": bool(stale_names or service_id),
+            "cleanup_failed": bool(failures),
+            "removed_stale_services": list(removed_stale),
+            "removed_legacy_containers": removed_legacy,
+            "cleanup_failures": failures,
+        }
+        if failures:
+            raise RuntimeOperationError(
+                "Post-readiness runtime cleanup failed.",
+                code="runtime_finalize_cleanup_failed",
+                category="runtime_cleanup",
+                recoverable=True,
+                details=result,
+            )
+        return result
 
     def inspect(self, identity: RuntimeIdentity) -> RuntimeObservation:
         self._ensure_available(self)
