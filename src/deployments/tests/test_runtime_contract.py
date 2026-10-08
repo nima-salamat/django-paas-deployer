@@ -164,7 +164,7 @@ class _StubSwarmRuntime:
     def inspect_service(self, name):
         return self.state
 
-    def wait_ready(self, name, *, timeout):
+    def wait_ready(self, name, *, timeout, expected_image=None, cancel_check=None):
         return self.state
 
     def stop(self, name):
