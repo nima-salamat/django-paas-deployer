@@ -7,6 +7,7 @@ import pytest
 from deployments.core.runtime_graph import ServiceRuntimeGraph
 from deployments.core.swarm import SwarmRuntime, compile_compose_service
 from deployments.core.types import DeploymentConfig
+from deployments.common.exceptions import DeploymentError
 from deployments.runtime.execution_contract import (
     RuntimeExecutionContract,
     validate_swarm_contract,
@@ -137,7 +138,7 @@ def test_exact_production_bad_swarm_state_is_rejected_before_service_mutation(mo
     runtime._last_apply_recovery = {}
 
     with patch.object(runtime, "_apply_local_volume_pin", return_value=[]):
-        with pytest.raises(Exception) as exc:
+        with pytest.raises(DeploymentError) as exc:
             runtime._create_kwargs(config, image_ref="wordpress:r1", compose_spec=spec)
 
     error = exc.value
@@ -206,6 +207,84 @@ def test_observed_bad_swarm_contract_is_classified_as_runtime_contract_violation
         "/bin/sh", "-lc",
         "/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground",
     ]
+
+
+@pytest.mark.parametrize(
+    ("name", "dockerfile", "entry_point", "start_command", "runtime_options"),
+    [
+        (
+            "catalog-image-owned",
+            'FROM app:latest\nENTRYPOINT ["docker-entrypoint.sh"]\nCMD ["serve"]\n',
+            "/bin/sh -lc stale",
+            "serve",
+            {"catalog_managed": True},
+        ),
+        (
+            "catalog-no-entrypoint",
+            "FROM python:3.12-slim\nCMD [\"python\", \"app.py\"]\n",
+            None,
+            "python app.py",
+            {"catalog_managed": True},
+        ),
+        (
+            "docker-entrypoint",
+            "FROM alpine:3.20\n",
+            "/entrypoint.sh",
+            "server --port 8000",
+            {},
+        ),
+        (
+            "docker-command",
+            "FROM alpine:3.20\n",
+            None,
+            "server --port 8000",
+            {},
+        ),
+        (
+            "docker-both",
+            "FROM alpine:3.20\n",
+            "/entrypoint.sh",
+            ["server", "--port", "8000"],
+            {},
+        ),
+        ("fastapi", "FROM python:3.12-slim\n", None, "uvicorn app:app --host 0.0.0.0", {}),
+        ("laravel", "FROM php:8.4-cli\n", None, "php artisan serve --host 0.0.0.0", {}),
+        ("mariadb", "FROM mariadb:11\n", None, "docker-entrypoint.sh mariadbd", {}),
+        ("postgresql", "FROM postgres:16\n", None, "docker-entrypoint.sh postgres", {}),
+        ("generic-docker", "FROM alpine:3.20\n", None, ["sh", "-c", "echo ready"], {}),
+    ],
+)
+def test_cross_platform_runtime_contract_matrix(
+    name, dockerfile, entry_point, start_command, runtime_options
+):
+    config = _config(
+        dockerfile_template=dockerfile,
+        entry_point=entry_point,
+        start_command=start_command,
+        runtime_options=runtime_options,
+        labels={
+            "service.id": name,
+            "deployment.id": "deployment-matrix",
+            "revision.id": "revision-matrix",
+            "release.id": "release-matrix",
+            "process.name": "web",
+        },
+    )
+    spec = compile_compose_service(config, image_ref=f"{name}:r1")
+    service = spec["services"]["demo"]
+    assert service["command"] is not None or service["args"] is not None or runtime_options.get("catalog_managed")
+    contract = RuntimeExecutionContract.from_runtime(
+        process_name="web",
+        process_command=start_command,
+        process_entrypoint=entry_point,
+        runtime_options=runtime_options,
+        dockerfile=dockerfile,
+    )
+    validation = validate_swarm_contract(contract, service_doc=service)
+    assert validation["valid"] is True
+    if contract.entrypoint_source == "IMAGE":
+        assert service["command"] is None
+        assert service["args"] == list(contract.args)
 
 
 def test_runtime_contract_fingerprint_is_deterministic_and_boundary_specific():
