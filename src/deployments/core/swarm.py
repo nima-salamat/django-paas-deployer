@@ -1382,12 +1382,28 @@ class SwarmRuntime:
                 endpoint for endpoint in (config.endpoints or ())
                 if endpoint.process == process_name
             ]
+            # None is a meaningful process value here: for catalog
+            # Dockerfiles it explicitly means "use the image-owned ENTRYPOINT".
+            # Using raw.get("entrypoint") or config.entry_point resurrects stale
+            # Deploy.entry_point compatibility data and overrides the image
+            # bootstrap on Swarm. Only fall back to the legacy scalar when the
+            # process graph does not contain an entrypoint key at all.
+            process_entrypoint = (
+                raw.get("entrypoint")
+                if "entrypoint" in raw
+                else (config.entry_point if process_name == "web" else None)
+            )
+            process_command = (
+                raw.get("command")
+                if "command" in raw
+                else (config.start_command if process_name == "web" else None)
+            )
             process_config = replace(
                 config,
                 name=docker_name,
                 environment=process_environment,
-                start_command=raw.get("command") or (config.start_command if process_name == "web" else None),
-                entry_point=raw.get("entrypoint") or (config.entry_point if process_name == "web" else None),
+                start_command=process_command,
+                entry_point=process_entrypoint,
                 endpoints=process_endpoints,
                 resource_limits=process_resources,
                 runtime_options=process_runtime_options,
