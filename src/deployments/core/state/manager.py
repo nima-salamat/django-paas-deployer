@@ -235,6 +235,18 @@ class StateManager:
                 return False
             if deploy.cancel_requested:
                 return False
+            # Activation is only valid for the immutable revision this Deploy
+            # actually executed. Without this check, a caller with a valid
+            # running task could accidentally promote an unrelated revision.
+            if not deploy.revision_id or str(deploy.revision_id) != str(revision_id):
+                logger.warning(
+                    "Refusing deploy activation with mismatched revision: "
+                    "deploy=%s deploy_revision=%s requested_revision=%s",
+                    deploy_id,
+                    getattr(deploy, "revision_id", None),
+                    revision_id,
+                )
+                return False
             try:
                 sm.check_deploy_transition(deploy.status, sm.DEPLOY_SUCCEEDED)
             except sm.InvalidTransition:
