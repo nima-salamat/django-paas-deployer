@@ -205,7 +205,19 @@ class SwarmRuntimeAdapter:
         )
         runtime_options = dict(getattr(plan, "runtime_options", {}) or {})
         graph_runtime = dict(getattr(graph, "runtime", {}) or {})
-        execution_contracts = dict(getattr(plan, "execution_contracts", {}) or getattr(graph, "execution_contracts", {}) or {})
+        raw_execution_contracts = dict(
+            getattr(plan, "execution_contracts", {})
+            or getattr(graph, "execution_contracts", {})
+            or {}
+        )
+        execution_contracts = {
+            name: (
+                RuntimeExecutionContract.from_dict(value)
+                if isinstance(value, Mapping)
+                else value
+            )
+            for name, value in raw_execution_contracts.items()
+        }
         primary_contract = (
             execution_contracts.get("web")
             or (next(iter(execution_contracts.values())) if execution_contracts else None)
