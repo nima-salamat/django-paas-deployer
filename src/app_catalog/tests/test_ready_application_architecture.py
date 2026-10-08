@@ -97,6 +97,26 @@ class ReadyApplicationArchitectureTests(TestCase):
         process = app.processes.get(name="web")
         assert process.entrypoint in (None, "")
 
+    def test_wordpress_revision_graph_keeps_dockerfile_entrypoint_out_of_runtime_process(self):
+        instance = self.install(
+            catalog_id="wordpress",
+            variant="default",
+            name="wordpress-revision-entrypoint-contract",
+        )
+        binding = instance.services.get(service_key="wordpress")
+        deployment = ensure_revision_for_deploy(binding.deploy, force_new=True)
+
+        snapshot = deployment.revision.process_snapshot
+        assert snapshot
+        assert snapshot[0]["entrypoint"] in (None, "")
+
+        from deployments.core.runtime_graph import ServiceRuntimeGraph
+
+        graph = ServiceRuntimeGraph.from_revision(deployment.revision)
+        assert graph.processes
+        assert graph.processes[0].entrypoint is None
+        assert graph.processes[0].command in (None, "")
+
     def test_ready_app_mariadb_accepts_mysql_env_aliases_for_user_database_and_password(self):
         instance = self.install(catalog_id="wordpress", variant="default", name="mariadb-alias-contract")
         binding = instance.services.get(service_key="mariadb")
