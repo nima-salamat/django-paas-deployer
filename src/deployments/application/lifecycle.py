@@ -157,6 +157,7 @@ class DeploymentLifecycleExecutor:
         plan = None
         handle: RuntimeHandle | None = None
         applied: RuntimeOperationResult | None = None
+        finalization: dict[str, Any] = {}
         try:
             context.assert_can_continue()
             self._assert_runtime_selection(context)
@@ -214,13 +215,32 @@ class DeploymentLifecycleExecutor:
                 )
             context.assert_can_continue()
 
+            # Runtime resources that existed only for the previous process graph
+            # are safe to remove now: the new revision has passed readiness, but
+            # the authoritative database activation has not committed yet. If
+            # cleanup fails, normal rollback can restore the previous release.
+            finalize = getattr(runtime, "finalize_success", None)
+            if callable(finalize):
+                finalization = dict(
+                    finalize(
+                        handle,
+                        operation_key=context.operation("finalize"),
+                        cancel_check=context.cancellation_requested,
+                    )
+                    or {}
+                )
+            context.assert_can_continue()
+
             with deployment_span("activation.commit", attributes={"deployment.id": context.deployment_id, "revision.id": context.revision_id}):
                 strategy.activate(context, plan, ready)
             transitioned = self.store.transition(
                 context,
                 sm.DEPLOY_SUCCEEDED,
                 message="Deployment completed successfully.",
-                details={"runtime": context.runtime_selection.backend},
+                details={
+                    "runtime": context.runtime_selection.backend,
+                    **finalization,
+                },
             )
             if not transitioned:
                 return self._stale_result(context)
