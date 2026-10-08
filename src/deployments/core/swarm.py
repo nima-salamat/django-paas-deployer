@@ -901,8 +901,11 @@ class SwarmRuntime:
                             "if [ \"$interpreter\" = '/usr/bin/env' ]; then "
                             "interpreter_name=$(printf '%s\\n' \"$shebang\" | awk '{print $2}'); "
                             "[ -n \"$interpreter_name\" ] && command -v \"$interpreter_name\" >/dev/null 2>&1 || exit 43; "
-                            "elif [ -n \"$interpreter\" ] && case \"$interpreter\" in /*) [ -x \"$interpreter\" ];; *) command -v \"$interpreter\" >/dev/null 2>&1;; esac; "
-                            "then :; else exit 43; fi;; "
+                            "elif [ -n \"$interpreter\" ]; then "
+                            "case \"$interpreter\" in "
+                            "/*) [ -x \"$interpreter\" ] || exit 43;; "
+                            "*) command -v \"$interpreter\" >/dev/null 2>&1 || exit 43;; "
+                            "esac; else exit 43; fi;; "
                             "esac"
                         ),
                     ],
