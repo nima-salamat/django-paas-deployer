@@ -53,12 +53,20 @@ def _should_remove_stopped_containers() -> bool:
 class StopService:
     """Orchestrates container stop actions, logging events if an active deploy plan is bound."""
 
-    def execute(self, service_id: int) -> None:
+    def execute(
+        self,
+        service_id: int,
+        *,
+        expected_lifecycle_generation: int | str | None = None,
+    ) -> None:
         # Acquire the per-service advisory lock so a stop cannot race
         # with an in-progress deploy for the same Service.
         try:
             with acquire_service_deployment_lock(service_id):
-                self._execute_locked(service_id)
+                self._execute_locked(
+                    service_id,
+                    expected_lifecycle_generation=expected_lifecycle_generation,
+                )
         except InvalidServiceStateError as exc:
             logger.info("Skipped stop execution for service ID %s: %s", service_id, str(exc))
             return
@@ -66,7 +74,39 @@ class StopService:
             logger.exception("Stop for service %s could not acquire deployment lock.", service_id)
             return
 
-    def _execute_locked(self, service_id: int) -> None:
+    def _execute_locked(
+        self,
+        service_id: int,
+        *,
+        expected_lifecycle_generation: int | str | None = None,
+    ) -> None:
+        if expected_lifecycle_generation is not None:
+            current = (
+                Service.objects
+                .filter(pk=service_id)
+                .values("lifecycle_generation", "desired_state", "status")
+                .first()
+            )
+            if current is None:
+                logger.info("Skipping stale stop for missing service %s.", service_id)
+                return
+            actual_generation = int(current.get("lifecycle_generation") or 0)
+            if str(actual_generation) != str(expected_lifecycle_generation):
+                logger.info(
+                    "Skipping stale stop for service %s: expected lifecycle generation=%s actual=%s.",
+                    service_id,
+                    expected_lifecycle_generation,
+                    actual_generation,
+                )
+                return
+            if str(current.get("desired_state") or "").lower() != "stopped":
+                logger.info(
+                    "Skipping stale stop for service %s: desired_state is now %s.",
+                    service_id,
+                    current.get("desired_state"),
+                )
+                return
+
         try:
             service = ServiceStateManager.lock_and_start_stopping(service_id)
         except InvalidServiceStateError as exc:
