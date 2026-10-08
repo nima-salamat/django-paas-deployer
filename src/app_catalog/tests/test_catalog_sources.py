@@ -202,7 +202,7 @@ networks:
         self.assertIn("set -eu", wordpress["files"]["passdeployer-wordpress-entrypoint.sh"])
         self.assertEqual(
             wordpress.get("command"),
-            ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "apache2-foreground"],
+            ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "/usr/local/bin/apache2-foreground"],
         )
         self.assertIn("WORDPRESS_ADMIN_USER", wordpress["environment"])
         self.assertIn("WORDPRESS_ADMIN_PASSWORD", wordpress["environment"])
