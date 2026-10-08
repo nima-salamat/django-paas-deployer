@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 import re
 from typing import Any, Iterable
 
+from deployments.runtime.execution_contract import RuntimeExecutionContract
+
 
 @dataclass(frozen=True)
 class RuntimeEndpoint:
@@ -91,6 +93,13 @@ class ServiceRuntimeGraph:
     volumes: tuple[dict[str, Any], ...] = ()
     networks: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
+    execution_contracts: dict[str, RuntimeExecutionContract] = field(default_factory=dict)
+
+    @property
+    def execution_contract(self) -> RuntimeExecutionContract | None:
+        if not self.execution_contracts:
+            return None
+        return self.execution_contracts.get("web") or next(iter(self.execution_contracts.values()))
 
     @classmethod
     def from_revision(cls, revision) -> "ServiceRuntimeGraph":
@@ -137,6 +146,7 @@ class ServiceRuntimeGraph:
         )
 
         process_rows = []
+        execution_contracts: dict[str, RuntimeExecutionContract] = {}
         for raw in (getattr(revision, "process_snapshot", None) or []):
             command = raw.get("command")
             entrypoint = raw.get("entrypoint")
@@ -151,9 +161,8 @@ class ServiceRuntimeGraph:
 
             if dockerfile_owns_entrypoint:
                 entrypoint = None
-            process_rows.append(
-                RuntimeProcess(
-                    name=str(raw.get("name") or "web"),
+            process = RuntimeProcess(
+                name=str(raw.get("name") or "web"),
                     process_type=str(raw.get("process_type") or "custom"),
                     command=command,
                     entrypoint=entrypoint,
@@ -164,6 +173,16 @@ class ServiceRuntimeGraph:
                     resources=dict(raw.get("resources") or {}),
                     metadata=dict(raw.get("metadata") or {}),
                 )
+            process_rows.append(process)
+            stored_contract = raw.get("execution_contract")
+            contract_options = {**runtime, "execution_contract": stored_contract} if stored_contract else runtime
+            execution_contracts[process.name] = RuntimeExecutionContract.from_runtime(
+                process_name=process.name,
+                process_command=process.command,
+                process_entrypoint=process.entrypoint,
+                runtime_options=contract_options,
+                source_kind=source_kind,
+                dockerfile=dockerfile,
             )
 
         endpoint_rows = []
@@ -203,6 +222,13 @@ class ServiceRuntimeGraph:
 
         revision_id = getattr(revision, "pk", None)
         revision_number = getattr(revision, "revision_number", None)
+        primary_contract = execution_contracts.get("web") or (
+            next(iter(execution_contracts.values())) if execution_contracts else None
+        )
+        runtime_contract_hashes = {
+            name: contract.fingerprint(boundary="revision")
+            for name, contract in execution_contracts.items()
+        }
         return cls(
             source=source_snapshot,
             build=build_snapshot,
@@ -214,7 +240,21 @@ class ServiceRuntimeGraph:
             endpoints=tuple(endpoint_rows),
             volumes=tuple(dict(v) for v in (getattr(revision, "volume_snapshot", None) or [])),
             networks=tuple(str(n) for n in (getattr(revision, "network_snapshot", None) or [])),
-            metadata={"revision_id": str(revision_id or ""), "revision": revision_number},
+            metadata={
+                "revision_id": str(revision_id or ""),
+                "revision": revision_number,
+                "source_kind": source_kind,
+                "catalog_id": source_snapshot.get("catalog_id"),
+                "variant_id": source_snapshot.get("variant_id"),
+                "definition_version": source_snapshot.get("definition_version"),
+                "runtime_contract_hashes": runtime_contract_hashes,
+                "runtime_contract_hash": (
+                    primary_contract.fingerprint(boundary="revision")
+                    if primary_contract is not None
+                    else ""
+                ),
+            },
+            execution_contracts=execution_contracts,
         )
 
     def enabled_endpoints(self) -> tuple[RuntimeEndpoint, ...]:
