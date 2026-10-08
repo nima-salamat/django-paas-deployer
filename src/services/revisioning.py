@@ -642,24 +642,26 @@ def _catalog_revision_requires_refresh(service: Service, revision: ServiceRevisi
         return True
 
     current_build = dict(getattr(service, "build_config", None) or {})
-    current_files = current_build.get("files")
-    if not isinstance(current_files, dict) or not current_files:
-        return False
-
     revision_build = dict(getattr(revision, "build_snapshot", None) or {})
+
+    # Check Dockerfile identity before considering auxiliary files. A legacy
+    # catalog Service may temporarily have an empty/missing files mapping even
+    # though its current Dockerfile has changed; that must not bypass refresh.
     revision_dockerfile = str(revision_build.get("dockerfile") or "")
     current_dockerfile = str(current_build.get("dockerfile") or "")
     if current_dockerfile and current_dockerfile != revision_dockerfile:
         return True
 
+    current_files = current_build.get("files")
     revision_files = revision_build.get("files")
-    if not isinstance(revision_files, dict):
-        return True
+    normalized_current_files = current_files if isinstance(current_files, dict) else {}
+    normalized_revision_files = revision_files if isinstance(revision_files, dict) else {}
 
     # Catalog build files are part of the immutable executable revision. A
     # filename-only check is insufficient: a legacy revision can contain the
-    # right path while still carrying stale or malformed file contents.
-    return current_files != revision_files
+    # right path while still carrying stale or malformed file contents. Treat
+    # missing current files as a real difference when the revision has files.
+    return normalized_current_files != normalized_revision_files
 
 
 @transaction.atomic
