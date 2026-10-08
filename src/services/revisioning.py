@@ -647,11 +647,16 @@ def _catalog_revision_requires_refresh(service: Service, revision: ServiceRevisi
         return False
 
     revision_build = dict(getattr(revision, "build_snapshot", None) or {})
+    revision_dockerfile = str(revision_build.get("dockerfile") or "")
+    current_dockerfile = str(current_build.get("dockerfile") or "")
+    if current_dockerfile and current_dockerfile != revision_dockerfile:
+        return True
+
     revision_files = revision_build.get("files")
     if not isinstance(revision_files, dict):
         return True
 
-    # Catalog build files are part of the immutable executable revision.  A
+    # Catalog build files are part of the immutable executable revision. A
     # filename-only check is insufficient: a legacy revision can contain the
     # right path while still carrying stale or malformed file contents.
     return current_files != revision_files
