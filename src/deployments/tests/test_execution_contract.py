@@ -46,13 +46,13 @@ def _config(**overrides):
 def test_wordpress_image_owned_contract_maps_cmd_to_swarm_args():
     contract = RuntimeExecutionContract.from_runtime(
         process_name="web",
-        process_command="/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground",
+        process_command="/usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground",
         process_entrypoint="/bin/sh -lc",
         runtime_options={"catalog_managed": True},
         dockerfile=(
             "FROM wordpress:7.1.2-php8.4-apache\n"
             'ENTRYPOINT ["/usr/local/bin/docker-ensure-installed.sh"]\n'
-            'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "apache2-foreground"]\n'
+            'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "/usr/local/bin/apache2-foreground"]\n'
         ),
         source_kind="catalog",
     )
@@ -62,7 +62,7 @@ def test_wordpress_image_owned_contract_maps_cmd_to_swarm_args():
     assert contract.command is None
     assert contract.args == (
         "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-        "apache2-foreground",
+        "/usr/local/bin/apache2-foreground",
     )
 
     spec = compile_compose_service(
@@ -70,10 +70,10 @@ def test_wordpress_image_owned_contract_maps_cmd_to_swarm_args():
             dockerfile_template=(
                 "FROM wordpress:7.1.2-php8.4-apache\n"
                 'ENTRYPOINT ["/usr/local/bin/docker-ensure-installed.sh"]\n'
-                'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "apache2-foreground"]\n'
+                'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "/usr/local/bin/apache2-foreground"]\n'
             ),
             entry_point="/bin/sh -lc",
-            start_command="/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground",
+            start_command="/usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground",
             runtime_options={"catalog_managed": True},
         ),
         image_ref="wordpress:r1",
@@ -82,7 +82,7 @@ def test_wordpress_image_owned_contract_maps_cmd_to_swarm_args():
     assert service["command"] is None
     assert service["args"] == [
         "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-        "apache2-foreground",
+        "/usr/local/bin/apache2-foreground",
     ]
 
 
@@ -113,10 +113,10 @@ def test_exact_production_bad_swarm_state_is_rejected_before_service_mutation(mo
         dockerfile_template=(
             "FROM wordpress:7.1.2-php8.4-apache\n"
             'ENTRYPOINT ["/usr/local/bin/docker-ensure-installed.sh"]\n'
-            'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "apache2-foreground"]\n'
+            'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "/usr/local/bin/apache2-foreground"]\n'
         ),
         entry_point=None,
-        start_command="/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground",
+        start_command="/usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground",
         runtime_options={"catalog_managed": True},
     )
     spec = compile_compose_service(config, image_ref="wordpress:r1")
@@ -124,8 +124,8 @@ def test_exact_production_bad_swarm_state_is_rejected_before_service_mutation(mo
 
     # Reproduce the production container contract exactly: the shell wrapper
     # was materialized as both the command and effective entrypoint.
-    service["entrypoint"] = ["/bin/sh", "-lc", "/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground"]
-    service["command"] = ["/bin/sh", "-lc", "/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground"]
+    service["entrypoint"] = ["/bin/sh", "-lc", "/usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground"]
+    service["command"] = ["/bin/sh", "-lc", "/usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground"]
     service["args"] = []
 
     runtime = SwarmRuntime.__new__(SwarmRuntime)
@@ -142,7 +142,7 @@ def test_exact_production_bad_swarm_state_is_rejected_before_service_mutation(mo
     assert error.details["expected_command"] is None
     assert error.details["expected_args"] == [
         "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-        "apache2-foreground",
+        "/usr/local/bin/apache2-foreground",
     ]
     assert error.details["actual_command"] == service["command"]
     assert error.details["actual_args"] == []
@@ -196,7 +196,7 @@ def test_wait_ready_rejects_observed_contract_drift_without_timeout():
     runtime.client = runtime.client or MagicMock()
     _runtime_service(
         runtime.client,
-        command=["/bin/sh", "-lc", "/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground"],
+        command=["/bin/sh", "-lc", "/usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground"],
         args=[],
         logs="/bin/sh: 1: /usr/local/bin/passdeployer-wordpress-entrypoint.sh: not found",
     )
@@ -205,12 +205,12 @@ def test_wait_ready_rejects_observed_contract_drift_without_timeout():
         image_entrypoint=("/usr/local/bin/docker-ensure-installed.sh",),
         image_cmd=(
             "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-            "apache2-foreground",
+            "/usr/local/bin/apache2-foreground",
         ),
         command=None,
         args=(
             "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-            "apache2-foreground",
+            "/usr/local/bin/apache2-foreground",
         ),
         catalog_managed=True,
         image_entrypoint_owned=True,
@@ -234,7 +234,7 @@ def test_wait_ready_rejects_observed_contract_drift_without_timeout():
     assert exc.value.details["first_detected_boundary"] == "swarm_container_spec"
     assert exc.value.details["actual"]["command"] == [
         "/bin/sh", "-lc",
-        "/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground",
+        "/usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground",
     ]
 
 
@@ -245,7 +245,7 @@ def test_wait_ready_reports_exit_127_not_found_when_contract_is_valid():
         command=None,
         args=[
             "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-            "apache2-foreground",
+            "/usr/local/bin/apache2-foreground",
         ],
         logs="/bin/sh: 1: /usr/local/bin/passdeployer-wordpress-entrypoint.sh: not found",
     )
@@ -255,12 +255,12 @@ def test_wait_ready_reports_exit_127_not_found_when_contract_is_valid():
         image_entrypoint=("/usr/local/bin/docker-ensure-installed.sh",),
         image_cmd=(
             "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-            "apache2-foreground",
+            "/usr/local/bin/apache2-foreground",
         ),
         command=None,
         args=(
             "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-            "apache2-foreground",
+            "/usr/local/bin/apache2-foreground",
         ),
         catalog_managed=True,
         image_entrypoint_owned=True,
@@ -286,7 +286,7 @@ def test_observed_bad_swarm_contract_is_classified_as_runtime_contract_violation
         "Spec": {
             "TaskTemplate": {
                 "ContainerSpec": {
-                    "Command": ["/bin/sh", "-lc", "/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground"],
+                    "Command": ["/bin/sh", "-lc", "/usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground"],
                     "Args": [],
                 }
             }
@@ -300,12 +300,12 @@ def test_observed_bad_swarm_contract_is_classified_as_runtime_contract_violation
         image_entrypoint=("/usr/local/bin/docker-ensure-installed.sh",),
         image_cmd=(
             "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-            "apache2-foreground",
+            "/usr/local/bin/apache2-foreground",
         ),
         command=None,
         args=(
             "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-            "apache2-foreground",
+            "/usr/local/bin/apache2-foreground",
         ),
         catalog_managed=True,
         image_entrypoint_owned=True,
@@ -325,7 +325,7 @@ def test_observed_bad_swarm_contract_is_classified_as_runtime_contract_violation
     assert error.details["expected"]["Command"] is None
     assert error.details["actual"]["command"] == [
         "/bin/sh", "-lc",
-        "/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground",
+        "/usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground",
     ]
     assert error.details["expected_contract_hash"] != error.details["actual_contract_hash"]
 
@@ -434,12 +434,12 @@ def test_artifact_preflight_rejects_missing_image_owned_executable():
         image_entrypoint=("/usr/local/bin/docker-ensure-installed.sh",),
         image_cmd=(
             "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-            "apache2-foreground",
+            "/usr/local/bin/apache2-foreground",
         ),
         command=None,
         args=(
             "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-            "apache2-foreground",
+            "/usr/local/bin/apache2-foreground",
         ),
         catalog_managed=True,
         image_entrypoint_owned=True,
@@ -482,12 +482,12 @@ def test_artifact_preflight_rejects_missing_relative_image_entrypoint():
         image_entrypoint=("docker-ensure-installed.sh",),
         image_cmd=(
             "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-            "apache2-foreground",
+            "/usr/local/bin/apache2-foreground",
         ),
         command=None,
         args=(
             "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-            "apache2-foreground",
+            "/usr/local/bin/apache2-foreground",
         ),
         catalog_managed=True,
         image_entrypoint_owned=True,
@@ -526,12 +526,12 @@ def test_artifact_preflight_rejects_invalid_image_owned_interpreter():
         image_entrypoint=("/usr/local/bin/docker-ensure-installed.sh",),
         image_cmd=(
             "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-            "apache2-foreground",
+            "/usr/local/bin/apache2-foreground",
         ),
         command=None,
         args=(
             "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-            "apache2-foreground",
+            "/usr/local/bin/apache2-foreground",
         ),
         catalog_managed=True,
         image_entrypoint_owned=True,
@@ -585,7 +585,7 @@ def test_legacy_catalog_revision_recovers_image_owned_cmd_and_discards_stale_ent
             "dockerfile": (
                 "FROM wordpress:7.1.2-php8.4-apache\n"
                 'ENTRYPOINT ["/usr/local/bin/docker-ensure-installed.sh"]\n'
-                'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "apache2-foreground"]\n'
+                'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "/usr/local/bin/apache2-foreground"]\n'
             )
         },
         runtime_snapshot={"start_command": None, "entry_point": "/bin/sh -lc"},
@@ -617,7 +617,7 @@ def test_legacy_catalog_revision_recovers_image_owned_cmd_and_discards_stale_ent
     assert contract.command is None
     assert contract.args == (
         "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-        "apache2-foreground",
+        "/usr/local/bin/apache2-foreground",
     )
     assert graph.processes[0].entrypoint is None
     assert graph.metadata["catalog_id"] == "wordpress"
