@@ -28,7 +28,7 @@ def test_desired_state_reconciliation_skips_while_active_deploy_owns_runtime():
     source = (ROOT / "src" / "deployments" / "celery" / "schedules.py").read_text(encoding="utf-8")
 
     section = source.split("def _reconcile_desired_state", 1)[1].split(
-        "def _reconcile_active_deploy", 1
+        "def _reconcile_service_runtime", 1
     )[0]
     assert "active_native_deployment" in section
     assert "if swarm_enabled() and _service_has_active_native_deployment(service):" in section
