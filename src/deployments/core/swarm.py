@@ -1308,11 +1308,15 @@ class SwarmRuntime:
         task_diagnostics: Mapping[str, Any],
         service_logs: str,
         expected_image: str | None,
+        task_error: str = "",
+        task_message: str = "",
         provenance: Mapping[str, Any] | None = None,
     ) -> DeploymentError | None:
         """Classify deterministic process-level startup failures from observed evidence."""
         combined = " ".join(
             value for value in (
+                str(task_error or ""),
+                str(task_message or ""),
                 str(task_diagnostics.get("error") or ""),
                 str(task_diagnostics.get("path") or ""),
                 str(task_diagnostics.get("args") or ""),
@@ -1320,6 +1324,27 @@ class SwarmRuntime:
             )
             if value
         ).lower()
+
+        def _safe_diagnostic(value: Any, *, limit: int = 600) -> str:
+            text = str(value or "").replace("\\n", " ").replace("\\r", " ")
+            text = re.sub(
+                r"(?i)\\b(password|passwd|secret|token|api[_-]?key|authorization)\\b"
+                r"(\\s*[:=]\\s*|\\s+)[^\\s,;]+",
+                r"\\1=[REDACTED]",
+                text,
+            )
+            return text[:limit]
+
+        matching_log_lines = [
+            _safe_diagnostic(line, limit=500)
+            for line in (service_logs or "").splitlines()
+            if re.search(
+                r"not found|no such file|exec:|error|fatal|permission denied|"
+                r"command not found|cannot execute|failed to start",
+                line,
+                flags=re.IGNORECASE,
+            )
+        ][-8:]
         details = {
             **dict(provenance or {}),
             "boundary": "swarm_task_container",
@@ -1327,8 +1352,11 @@ class SwarmRuntime:
             "task_id": task_id,
             "exit_code": exit_code,
             "expected_image": expected_image,
+            "task_error": _safe_diagnostic(task_error),
+            "task_message": _safe_diagnostic(task_message),
             "task_diagnostics": task_diagnostics,
             "service_logs": service_logs[-12000:],
+            "matching_service_log_lines": matching_log_lines,
         }
         if "exec format error" in combined:
             technical = (
@@ -1363,10 +1391,31 @@ class SwarmRuntime:
                 details={**details, "failure_reason": "permission_denied"},
             )
         if exit_code == 127 and "not found" in combined:
+            first_command = (
+                (task_diagnostics.get("args") or [""])[0]
+                if isinstance(task_diagnostics.get("args"), (list, tuple))
+                else task_diagnostics.get("args")
+            )
+            first_entrypoint = (
+                (task_diagnostics.get("entrypoint") or [""])[0]
+                if isinstance(task_diagnostics.get("entrypoint"), (list, tuple))
+                else task_diagnostics.get("entrypoint")
+            )
+            first_cmd = (
+                (task_diagnostics.get("cmd") or [""])[0]
+                if isinstance(task_diagnostics.get("cmd"), (list, tuple))
+                else task_diagnostics.get("cmd")
+            )
             technical = (
                 f"Swarm task {task_id!r} exited with code 127 and reported 'not found'. "
-                f"The available evidence does not prove whether the artifact filesystem "
-                f"or executable interpreter is missing."
+                f"task_error={_safe_diagnostic(task_error)!r}; "
+                f"task_message={_safe_diagnostic(task_message)!r}; "
+                f"container_error={_safe_diagnostic(task_diagnostics.get('error'))!r}; "
+                f"container_path={_safe_diagnostic(task_diagnostics.get('path'))!r}; "
+                f"entrypoint_executable={_safe_diagnostic(first_entrypoint)!r}; "
+                f"container_args_executable={_safe_diagnostic(first_command)!r}; "
+                f"image_cmd_executable={_safe_diagnostic(first_cmd)!r}; "
+                f"matching_service_log_lines={matching_log_lines!r}"
             )
             return DeploymentError(
                 technical,
@@ -1649,6 +1698,8 @@ class SwarmRuntime:
                     task_diagnostics=task_diagnostics,
                     service_logs=service_logs,
                     expected_image=expected_image,
+                    task_error=task.error,
+                    task_message=task.message,
                     provenance=provenance,
                 )
                 if startup_failure is not None:
