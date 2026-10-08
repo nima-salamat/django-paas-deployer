@@ -319,9 +319,12 @@ def reconcile_application_installations():
     except Exception:
         pass
     cutoff = timezone.now() - timedelta(seconds=stale_seconds)
+    # Recovery applies to every non-terminal coordinator, not only
+    # cancellations. A lost success/failure callback or broker interruption
+    # can leave a child claim stranded while the parent remains DEPLOYING.
     instances = ApplicationInstance.objects.filter(
-        Q(status__in=(ApplicationStatus.PENDING, ApplicationStatus.DEPLOYING), cancel_requested=True)
-        | Q(status=ApplicationStatus.CANCELLED, cancel_requested=True)
+        status__in=(ApplicationStatus.PENDING, ApplicationStatus.DEPLOYING, ApplicationStatus.CANCELLED),
+        cancel_requested__in=(False, True),
     ).only("pk")
     recovered = 0
 
@@ -375,13 +378,36 @@ def reconcile_application_installations():
         stale = ApplicationInstanceService.objects.filter(
             instance_id=instance.pk,
             dispatched_at__lt=cutoff,
-            deploy__status=DeploymentStatusChoices.PENDING,
+            deploy__status__in=(
+                DeploymentStatusChoices.PENDING,
+                DeploymentStatusChoices.SUCCEEDED,
+                DeploymentStatusChoices.FAILED,
+                DeploymentStatusChoices.ROLLED_BACK,
+                DeploymentStatusChoices.CANCELLED,
+            ),
         )
         if stale.exists():
+            count = stale.count()
             stale.update(dispatched_at=None, dispatch_task_id="")
-            recovered += stale.count()
+            recovered += count
         try:
-            _schedule_next(str(instance.pk))
+            # _schedule_next() is safe only after a coordinator has actually
+            # claimed execution. For an old PENDING coordinator, recover the
+            # missing start task first rather than dispatching child services
+            # without a coordinator owner.
+            fresh = ApplicationInstance.objects.only(
+                "status", "cancel_requested", "execution_task_id", "stage"
+            ).get(pk=instance.pk)
+            if (
+                fresh.status == ApplicationStatus.PENDING
+                and not fresh.cancel_requested
+                and not fresh.execution_task_id
+            ):
+                if fresh.created_at < pending_cutoff:
+                    start_application_installation.delay(str(instance.pk))
+                    pending_requeued += 1
+            elif fresh.status == ApplicationStatus.DEPLOYING:
+                _schedule_next(str(instance.pk))
         except Exception:
             logger.exception("Application reconciliation failed for %s", instance.pk)
 
