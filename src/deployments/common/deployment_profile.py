@@ -53,6 +53,29 @@ def normalize_profile(raw: Any, *, plan_cpu=None, plan_ram_mb=None) -> dict[str,
         if key in cfg and key not in runtime:
             runtime[key] = cfg[key]
 
+    # Catalog services are server-owned executable manifests. ``source_kind``
+    # is persisted by the revision compiler and is not tenant-controlled.
+    # Carry that identity into runtime_options so downstream build/render
+    # layers can distinguish a catalog Dockerfile from a generic tenant
+    # Dockerfile without trusting an arbitrary tenant flag.
+    catalog_managed = str(cfg.get("source_kind") or "").strip().lower() == "catalog"
+    if catalog_managed:
+        runtime["catalog_managed"] = True
+
+        # A catalog Dockerfile may intentionally own the Docker image
+        # ENTRYPOINT (WordPress is one example). The generic renderer entry_point
+        # means "replace Dockerfile CMD", so allowing the image-level
+        # ENTRYPOINT to leak into this field would cause the renderer to strip
+        # the real bootstrap ENTRYPOINT. Existing installations may still have
+        # that stale value persisted, so normalize it away when the catalog
+        # build context declares an explicit Dockerfile ENTRYPOINT.
+        dockerfile = str(cfg.get("dockerfile") or "")
+        if re.search(r"^\s*ENTRYPOINT\s+", dockerfile, flags=re.MULTILINE | re.IGNORECASE):
+            runtime.pop("entry_point", None)
+            runtime.pop("entrypoint", None)
+            cfg.pop("entry_point", None)
+            cfg.pop("entrypoint", None)
+
     out = dict(cfg)
     out.pop("resource_limits", None)
     out.pop("resources", None)
