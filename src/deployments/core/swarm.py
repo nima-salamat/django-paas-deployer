@@ -12,6 +12,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping
+import shlex
 
 import docker
 import yaml
@@ -22,6 +23,11 @@ from deployments.common.docker_identity import canonical_remote_image_ref, canon
 from deployments.common.exceptions import DeploymentError
 from deployments.core.manager.client_manager import get_docker_client
 from deployments.core.routing import public_http_endpoints, resolve_public_host
+from deployments.runtime.execution_contract import (
+    RuntimeExecutionContract,
+    validate_swarm_contract,
+    worker_provenance,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -284,24 +290,25 @@ def compile_compose_service(config, *, image_ref: str, replicas: int = 1) -> dic
         network_names.append("proxy_net")
 
     runtime_options = dict(config.runtime_options or {})
+    contract = RuntimeExecutionContract.from_runtime(
+        process_name=str((config.labels or {}).get("process.name") or "web"),
+        process_command=getattr(config, "start_command", None),
+        process_entrypoint=getattr(config, "entry_point", None),
+        runtime_options=runtime_options,
+        source_kind=str(runtime_options.get("source_kind") or ""),
+        dockerfile=str(getattr(config, "dockerfile_template", "") or ""),
+    )
+    runtime_options["execution_contract"] = contract.as_dict()
+    runtime_options["execution_contract_hashes"] = {
+        **dict(runtime_options.get("execution_contract_hashes") or {}),
+        "revision_contract_hash": contract.fingerprint(boundary="revision"),
+        "compiled_swarm_contract_hash": contract.fingerprint(
+            boundary="swarm_compile",
+            image_ref=image_ref,
+        ),
+    }
     catalog_managed = bool(runtime_options.get("catalog_managed"))
-    dockerfile_text = str(getattr(config, "dockerfile_template", "") or "")
-    dockerfile_owns_entrypoint = bool(
-        re.search(
-            r"^\s*ENTRYPOINT\s+",
-            dockerfile_text,
-            flags=re.MULTILINE | re.IGNORECASE,
-        )
-    )
-    # The Dockerfile is the authoritative final source for image-level
-    # ENTRYPOINT ownership. This protects catalog deployments when an older
-    # revision or compatibility layer omitted the derived runtime flag.
-    image_entrypoint_owned = bool(
-        runtime_options.get("image_entrypoint_owned")
-        or (catalog_managed and dockerfile_owns_entrypoint)
-    )
-    if image_entrypoint_owned:
-        runtime_options["image_entrypoint_owned"] = True
+    image_entrypoint_owned = contract.entrypoint_source == "IMAGE"
 
     service = {
         "image": image_ref,
@@ -361,8 +368,55 @@ def compile_compose_service(config, *, image_ref: str, replicas: int = 1) -> dic
                     "mode": "ingress",
                 }
             )
+    service["deploy"]["labels"].update({
+        "passdeployer.runtime.contract_version": contract.contract_version,
+        "passdeployer.runtime.entrypoint_source": contract.entrypoint_source,
+        "passdeployer.runtime.contract_hash": contract.fingerprint(
+            boundary="swarm_compile",
+            image_ref=image_ref,
+        ),
+    })
+
     if ports:
         service["ports"] = ports
+
+    validation = validate_swarm_contract(
+        contract,
+        service_doc=service,
+        boundary="swarm_container_spec",
+    )
+    if not validation["valid"]:
+        raise DeploymentError(
+            "Compiled Swarm ContainerSpec violates the canonical runtime execution contract.",
+            stage="swarm_validation",
+            code="RUNTIME_ENTRYPOINT_CONTRACT_VIOLATION",
+            user_message=(
+                "The deployment was stopped because the runtime execution contract "
+                "could not be represented safely in Docker Swarm."
+            ),
+            technical_message=(
+                "Swarm ContainerSpec runtime contract mismatch: "
+                f"expected={validation['expected']!r}; actual={validation['actual']!r}"
+            ),
+            certainty="OBSERVED",
+            details={
+                "boundary": validation["boundary"],
+                "expected_entrypoint": contract.image_entrypoint,
+                "expected_command": validation["expected"].get("Command"),
+                "expected_args": validation["expected"].get("Args"),
+                "actual_entrypoint": validation["actual"].get("entrypoint"),
+                "actual_command": validation["actual"].get("command"),
+                "actual_args": validation["actual"].get("args"),
+                "service_id": (config.labels or {}).get("service.id"),
+                "deployment_id": (config.labels or {}).get("deployment.id"),
+                "revision_id": (config.labels or {}).get("revision.id"),
+                "release_id": (config.labels or {}).get("release.id"),
+                "process_name": (config.labels or {}).get("process.name"),
+                "runtime_backend": "swarm",
+                "revision_contract_hash": validation["revision_contract_hash"],
+                "compiled_swarm_contract_hash": validation["compiled_swarm_contract_hash"],
+            },
+        )
 
     return {"version": "3.9", "services": {name: service}}
 
@@ -740,6 +794,134 @@ class SwarmRuntime:
                 code="SWARM_IMAGE_PUSH_FAILED",
                 recoverable=True,
             ) from exc
+
+    def _validate_image_artifact(
+        self,
+        image_ref: str,
+        *,
+        contract: RuntimeExecutionContract,
+        provenance: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Validate image metadata and required executable files before Swarm mutation."""
+        provenance = dict(provenance or {})
+        try:
+            image = self.client.images.get(image_ref)
+            attrs = getattr(image, "attrs", {}) or {}
+        except docker.errors.DockerException as exc:
+            raise DeploymentError(
+                f"Unable to inspect runtime artifact {image_ref!r} before Swarm startup.",
+                stage="image_validation",
+                code="RUNTIME_ARTIFACT_INSPECTION_FAILED",
+                recoverable=True,
+                details={
+                    **provenance,
+                    "image_ref": image_ref,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                },
+            ) from exc
+
+        image_config = dict(attrs.get("Config") or {})
+        observed_entrypoint = tuple(str(item) for item in (image_config.get("Entrypoint") or ()))
+        observed_cmd = tuple(str(item) for item in (image_config.get("Cmd") or ()))
+        diagnostics = {
+            **provenance,
+            "image_ref": image_ref,
+            "image_digest": str(getattr(image, "id", "") or ""),
+            "image_entrypoint": list(observed_entrypoint),
+            "image_cmd": list(observed_cmd),
+            "os": str(attrs.get("Os") or ""),
+            "architecture": str(attrs.get("Architecture") or ""),
+            "expected_entrypoint": list(contract.image_entrypoint),
+            "expected_cmd": list(contract.image_cmd),
+            "required_executables": list(contract.required_executables),
+            "contract_hash": contract.fingerprint(boundary="artifact", image_ref=image_ref),
+        }
+        if contract.entrypoint_source == "IMAGE" and contract.image_entrypoint:
+            if observed_entrypoint != contract.image_entrypoint:
+                raise DeploymentError(
+                    "The built runtime artifact does not preserve its image-owned ENTRYPOINT.",
+                    stage="image_validation",
+                    code="RUNTIME_ARTIFACT_ENTRYPOINT_MISMATCH",
+                    user_message="The application artifact has invalid executable metadata and was stopped before Swarm startup.",
+                    certainty="OBSERVED",
+                    details=diagnostics | {
+                        "failure_reason": "image_entrypoint_mismatch",
+                        "observed_entrypoint": list(observed_entrypoint),
+                    },
+                )
+
+        for executable in contract.required_executables:
+            if not executable.startswith("/"):
+                continue
+            container = None
+            probe_name = f"passdeployer-runtime-preflight-{os.getpid()}-{abs(hash(executable)) % 100000}"
+            try:
+                probe = self.client.containers.create(
+                    image_ref,
+                    command=[
+                        "-lc",
+                        (
+                            f"if [ ! -f {shlex.quote(executable)} ]; then exit 41; fi; "
+                            f"if [ ! -x {shlex.quote(executable)} ]; then exit 42; fi"
+                        ),
+                    ],
+                    entrypoint=["/bin/sh"],
+                    name=probe_name,
+                )
+                container = probe
+                container.start()
+                result = container.wait(timeout=15)
+                status_code = int(result.get("StatusCode", 1)) if isinstance(result, dict) else int(result or 1)
+                if status_code == 41:
+                    raise RuntimeError("runtime file missing")
+                if status_code == 42:
+                    raise RuntimeError("runtime executable is not executable")
+                if status_code != 0:
+                    raise RuntimeError(f"runtime executable probe failed with status {status_code}")
+                diagnostics.setdefault("validated_executables", []).append(executable)
+            except DeploymentError:
+                raise
+            except Exception as exc:
+                message = str(exc).lower()
+                from deployments.common.exceptions import FailureCertainty
+                if "file missing" in message:
+                    code = "RUNTIME_ARTIFACT_FILE_MISSING"
+                    certainty = FailureCertainty.OBSERVED
+                elif "not executable" in message:
+                    code = "RUNTIME_ARTIFACT_EXECUTION_INVALID"
+                    certainty = FailureCertainty.OBSERVED
+                else:
+                    code = "RUNTIME_ARTIFACT_EXECUTION_INVALID"
+                    certainty = FailureCertainty.UNKNOWN
+                raise DeploymentError(
+                    f"Required runtime executable {executable!r} could not be validated in the built artifact.",
+                    stage="image_validation",
+                    code=code,
+                    user_message="The application artifact is missing or has an invalid runtime executable.",
+                    certainty=certainty,
+                    details={**diagnostics, "executable": executable, "inspection_error": str(exc)},
+                ) from exc
+            finally:
+                if container is not None:
+                    try:
+                        container.remove(force=True)
+                    except Exception:
+                        pass
+
+        logger.info(
+            "runtime artifact preflight: image=%s digest=%s entrypoint=%r cmd=%r "
+            "os=%s arch=%s required_executables=%r contract_hash=%s",
+            image_ref,
+            diagnostics["image_digest"],
+            diagnostics["image_entrypoint"],
+            diagnostics["image_cmd"],
+            diagnostics["os"],
+            diagnostics["architecture"],
+            diagnostics["required_executables"],
+            diagnostics["contract_hash"],
+        )
+        return diagnostics
 
     def _apply_local_volume_pin(self, config, constraints: list[str]) -> list[str]:
         if not config.volumes or not _env_bool("SWARM_LOCAL_VOLUME_PIN", True):
@@ -1343,6 +1525,20 @@ class SwarmRuntime:
         name = _validate_service_name(config.name)
         service_doc = compose_spec["services"][name]
         deploy_doc = service_doc["deploy"]
+        runtime_options = dict(config.runtime_options or {})
+        stored_contract = runtime_options.get("execution_contract")
+        contract = (
+            RuntimeExecutionContract.from_dict(stored_contract)
+            if isinstance(stored_contract, Mapping)
+            else RuntimeExecutionContract.from_runtime(
+                process_name=str((config.labels or {}).get("process.name") or "web"),
+                process_command=getattr(config, "start_command", None),
+                process_entrypoint=getattr(config, "entry_point", None),
+                runtime_options=runtime_options,
+                source_kind=str(runtime_options.get("source_kind") or ""),
+                dockerfile=str(getattr(config, "dockerfile_template", "") or ""),
+            )
+        )
 
         mounts = [
             Mount(
@@ -1424,6 +1620,42 @@ class SwarmRuntime:
         # so expose the logical key as a network alias on the shared overlay.
         application_service = str(labels.get("application.service") or "").strip().lower()
         process_name = str(labels.get("passdeployer.process") or "web").strip().lower()
+
+        validation = validate_swarm_contract(
+            contract,
+            service_doc=service_doc,
+            boundary="swarm_container_spec",
+        )
+        if not validation["valid"]:
+            raise DeploymentError(
+                "Swarm ContainerSpec runtime contract mismatch detected before Docker mutation.",
+                stage="swarm_validation",
+                code="RUNTIME_ENTRYPOINT_CONTRACT_VIOLATION",
+                user_message=(
+                    "The deployment was stopped because the runtime execution contract "
+                    "did not match the Swarm service specification."
+                ),
+                technical_message=(
+                    "Pre-create Swarm contract validation failed: "
+                    f"expected={validation['expected']!r}; actual={validation['actual']!r}"
+                ),
+                certainty="OBSERVED",
+                details={
+                    **validation,
+                    "expected_entrypoint": contract.image_entrypoint,
+                    "expected_command": validation["expected"].get("Command"),
+                    "expected_args": validation["expected"].get("Args"),
+                    "actual_entrypoint": validation["actual"].get("entrypoint"),
+                    "actual_command": validation["actual"].get("command"),
+                    "actual_args": validation["actual"].get("args"),
+                    "service_id": (config.labels or {}).get("service.id"),
+                    "deployment_id": (config.labels or {}).get("deployment.id"),
+                    "revision_id": (config.labels or {}).get("revision.id"),
+                    "release_id": (config.labels or {}).get("release.id"),
+                    "process_name": (config.labels or {}).get("process.name"),
+                    "runtime_backend": "swarm",
+                },
+            )
 
         # Docker SDK service APIs model the Swarm ContainerSpec using
         # command + args. "entrypoint" is NOT a valid top-level keyword for
@@ -1933,12 +2165,43 @@ class SwarmRuntime:
         if cancel_check is not None and cancel_check():
             raise DeploymentError("Swarm apply was cancelled before runtime mutation.", stage="swarm_apply", code="SWARM_OPERATION_CANCELLED", user_message="Deployment was cancelled.")
         self.assert_active()
+        image_ref = prepared_image_ref or self.prepare_image(image_ref, config.name, config.tag)
+        runtime_options = dict(config.runtime_options or {})
+        stored_contract = runtime_options.get("execution_contract")
+        contract = (
+            RuntimeExecutionContract.from_dict(stored_contract)
+            if isinstance(stored_contract, Mapping)
+            else RuntimeExecutionContract.from_runtime(
+                process_name=str((config.labels or {}).get("process.name") or "web"),
+                process_command=getattr(config, "start_command", None),
+                process_entrypoint=getattr(config, "entry_point", None),
+                runtime_options=runtime_options,
+                source_kind=str(runtime_options.get("source_kind") or ""),
+                dockerfile=str(getattr(config, "dockerfile_template", "") or ""),
+            )
+        )
+        artifact_diagnostics = self._validate_image_artifact(
+            image_ref,
+            contract=contract,
+            provenance={
+                **worker_provenance(),
+                "deployment_id": (config.labels or {}).get("deployment.id"),
+                "service_id": (config.labels or {}).get("service.id"),
+                "revision_id": (config.labels or {}).get("revision.id"),
+                "release_id": (config.labels or {}).get("release.id"),
+                "process_name": contract.process_name,
+                "runtime_backend": "swarm",
+            },
+        )
+        runtime_options["artifact_preflight"] = artifact_diagnostics
+        config = __import__("dataclasses").replace(
+            config,
+            runtime_options=runtime_options,
+        )
         for network in config.networks or ():
             self.ensure_network(network.name, attachable=True)
         if public_http_endpoints(config):
             self.ensure_network("proxy_net", attachable=True)
-
-        image_ref = prepared_image_ref or self.prepare_image(image_ref, config.name, config.tag)
         spec = compile_compose_service(config, image_ref=image_ref, replicas=replicas)
         name = _validate_service_name(config.name)
         spec["services"][name]["deploy"]["placement"]["constraints"] = (
