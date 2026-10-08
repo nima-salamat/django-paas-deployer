@@ -85,3 +85,10 @@ def test_process_deployment_uses_deploy_service_scope_for_catalog_source():
 
     assert 'getattr(service, "source_kind", "")' not in process_source
     assert 'getattr(deploy_item.service, "source_kind", "")' in process_source
+
+
+def test_docker_source_inspection_does_not_downgrade_catalog_identity():
+    source = _source("deployments/celery/services/deploy_service.py")
+    assert 'revision_source_kind = str(' in source
+    assert 'if revision_source_kind == "catalog"' in source
+    assert 'else docker_source_resolution.source_kind' in source
