@@ -850,15 +850,6 @@ class SwarmRuntime:
             if contract.entrypoint_source == "IMAGE" and contract.image_entrypoint
             else ""
         )
-        # Image-owned ENTRYPOINT values are part of the runtime contract too.
-        # Absolute entrypoints can be checked through required_executables; a
-        # relative entrypoint still needs an explicit PATH-resolution probe.
-        if (
-            image_entrypoint_executable.startswith("/")
-            and image_entrypoint_executable
-            and image_entrypoint_executable not in required_executables
-        ):
-            required_executables.append(image_entrypoint_executable)
         diagnostics = {
             **provenance,
             "image_ref": image_ref,
@@ -906,40 +897,43 @@ class SwarmRuntime:
                 else:
                     resolve_expr = (
                         f"target={shlex.quote(executable)}; "
-                        "target=$(command -v "$target" 2>/dev/null || true); "
-                        "if [ -z "$target" ]; then exit 44; fi"
+                        'target=$(command -v "$target" 2>/dev/null || true); '
+                        'if [ -z "$target" ]; then exit 44; fi'
                     )
+
+                probe_script = (
+                    f"{resolve_expr}; "
+                    'if [ ! -f "$target" ]; then exit 41; fi; '
+                    'if [ ! -x "$target" ]; then exit 42; fi; '
+                    'shebang=$(head -n 1 "$target" 2>/dev/null || true); '
+                    'case "$shebang" in '
+                    "'#!'*) "
+                    "interpreter=$(printf '%s\\n' \"$shebang\" | awk '{print $1}' | sed 's/^#!//'); "
+                    'if [ "$interpreter" = "/usr/bin/env" ]; then '
+                    "interpreter_name=$(printf '%s\\n' \"$shebang\" | awk '{print $2}'); "
+                    '[ -n "$interpreter_name" ] && command -v "$interpreter_name" >/dev/null 2>&1 || exit 43; '
+                    'elif [ -n "$interpreter" ]; then '
+                    'case "$interpreter" in '
+                    '/*) [ -x "$interpreter" ] || exit 43;; '
+                    '*) command -v "$interpreter" >/dev/null 2>&1 || exit 43;; '
+                    'esac; else exit 43; fi;; '
+                    'esac'
+                )
 
                 probe = self.client.containers.create(
                     image_ref,
-                    command=[
-                        "-lc",
-                        (
-                            f"{resolve_expr}; "
-                            "if [ ! -f "$target" ]; then exit 41; fi; "
-                            "if [ ! -x "$target" ]; then exit 42; fi; "
-                            "shebang=$(head -n 1 "$target" 2>/dev/null || true); "
-                            "case "$shebang" in "
-                            "'#!'*) "
-                            "interpreter=$(printf '%s\n' "$shebang" | awk '{print $1}' | sed 's/^#!//'); "
-                            "if [ "$interpreter" = '/usr/bin/env' ]; then "
-                            "interpreter_name=$(printf '%s\n' "$shebang" | awk '{print $2}'); "
-                            "[ -n "$interpreter_name" ] && command -v "$interpreter_name" >/dev/null 2>&1 || exit 43; "
-                            "elif [ -n "$interpreter" ]; then "
-                            "case "$interpreter" in "
-                            "/*) [ -x "$interpreter" ] || exit 43;; "
-                            "*) command -v "$interpreter" >/dev/null 2>&1 || exit 43;; "
-                            "esac; else exit 43; fi;; "
-                            "esac"
-                        ),
-                    ],
+                    command=["-lc", probe_script],
                     entrypoint=["/bin/sh"],
                     name=probe_name,
                 )
                 container = probe
                 container.start()
                 result = container.wait(timeout=15)
-                status_code = int(result.get("StatusCode", 1)) if isinstance(result, dict) else int(result or 1)
+                status_code = (
+                    int(result.get("StatusCode", 1))
+                    if isinstance(result, dict)
+                    else int(result or 1)
+                )
                 if status_code == 41:
                     raise RuntimeError("runtime file missing")
                 if status_code == 42:
@@ -949,7 +943,9 @@ class SwarmRuntime:
                 if status_code == 44:
                     raise RuntimeError("runtime entrypoint is not resolvable in PATH")
                 if status_code != 0:
-                    raise RuntimeError(f"runtime executable probe failed with status {status_code}")
+                    raise RuntimeError(
+                        f"runtime executable probe failed with status {status_code}"
+                    )
                 diagnostics.setdefault(
                     "validated_executables" if role == "executable" else "validated_entrypoints",
                     [],
@@ -986,7 +982,12 @@ class SwarmRuntime:
                         "runtime executable."
                     ),
                     certainty=certainty,
-                    details={**diagnostics, "executable": executable, "role": role, "inspection_error": str(exc)},
+                    details={
+                        **diagnostics,
+                        "executable": executable,
+                        "role": role,
+                        "inspection_error": str(exc),
+                    },
                 ) from exc
             finally:
                 if container is not None:
@@ -1000,10 +1001,12 @@ class SwarmRuntime:
 
         if (
             image_entrypoint_executable
-            and not image_entrypoint_executable.startswith("/")
-            and image_entrypoint_executable not in observed_entrypoint
+            and image_entrypoint_executable not in required_executables
         ):
-            _validate_runtime_executable(image_entrypoint_executable, role="image ENTRYPOINT")
+            _validate_runtime_executable(
+                image_entrypoint_executable,
+                role="image ENTRYPOINT",
+            )
 
         logger.info(
             "runtime artifact preflight: image=%s digest=%s entrypoint=%r cmd=%r "
