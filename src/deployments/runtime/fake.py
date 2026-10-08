@@ -219,6 +219,15 @@ class FakeRuntime:
             )
         return {"cleanup_attempted": False, "cleanup_failed": False}
 
+    def recover_failed_apply(
+        self,
+        details: Mapping[str, Any],
+        *,
+        operation_key: str,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        return {"cleanup_attempted": False, "cleanup_failed": False}
+
     def stop(self, handle: RuntimeHandle, *, operation_key: str, cancel_check: Callable[[], bool] | None = None) -> RuntimeOperationResult:
         self._ensure_usable()
         if cancel_check is not None and cancel_check():
