@@ -152,10 +152,17 @@ def deploy(self, deploy_id) -> None:
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=10)
-def stop(self, service_id) -> None:
-    logger.info("Initializing stop for service_id: %s", service_id)
+def stop(self, service_id, expected_lifecycle_generation=None) -> None:
+    logger.info(
+        "Initializing stop for service_id: %s expected_lifecycle_generation=%s",
+        service_id,
+        expected_lifecycle_generation,
+    )
     try:
-        StopService().execute(service_id)
+        StopService().execute(
+            service_id,
+            expected_lifecycle_generation=expected_lifecycle_generation,
+        )
     except InvalidServiceStateError:
         pass
     except Exception as exc:
