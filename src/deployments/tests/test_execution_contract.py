@@ -51,14 +51,14 @@ def test_wordpress_image_owned_contract_maps_cmd_to_swarm_args():
         runtime_options={"catalog_managed": True},
         dockerfile=(
             "FROM wordpress:7.1.2-php8.4-apache\n"
-            'ENTRYPOINT ["docker-ensure-installed.sh"]\n'
+            'ENTRYPOINT ["/usr/local/bin/docker-ensure-installed.sh"]\n'
             'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "apache2-foreground"]\n'
         ),
         source_kind="catalog",
     )
 
     assert contract.entrypoint_source == "IMAGE"
-    assert contract.image_entrypoint == ("docker-ensure-installed.sh",)
+    assert contract.image_entrypoint == ("/usr/local/bin/docker-ensure-installed.sh",)
     assert contract.command is None
     assert contract.args == (
         "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
@@ -69,7 +69,7 @@ def test_wordpress_image_owned_contract_maps_cmd_to_swarm_args():
         _config(
             dockerfile_template=(
                 "FROM wordpress:7.1.2-php8.4-apache\n"
-                'ENTRYPOINT ["docker-ensure-installed.sh"]\n'
+                'ENTRYPOINT ["/usr/local/bin/docker-ensure-installed.sh"]\n'
                 'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "apache2-foreground"]\n'
             ),
             entry_point="/bin/sh -lc",
@@ -112,7 +112,7 @@ def test_exact_production_bad_swarm_state_is_rejected_before_service_mutation(mo
     config = _config(
         dockerfile_template=(
             "FROM wordpress:7.1.2-php8.4-apache\n"
-            'ENTRYPOINT ["docker-ensure-installed.sh"]\n'
+            'ENTRYPOINT ["/usr/local/bin/docker-ensure-installed.sh"]\n'
             'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "apache2-foreground"]\n'
         ),
         entry_point=None,
@@ -202,7 +202,7 @@ def test_wait_ready_rejects_observed_contract_drift_without_timeout():
     )
     contract = RuntimeExecutionContract(
         entrypoint_source="IMAGE",
-        image_entrypoint=("docker-ensure-installed.sh",),
+        image_entrypoint=("/usr/local/bin/docker-ensure-installed.sh",),
         image_cmd=(
             "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
             "apache2-foreground",
@@ -252,7 +252,7 @@ def test_wait_ready_reports_exit_127_not_found_when_contract_is_valid():
     runtime = SwarmRuntime(client)
     contract = RuntimeExecutionContract(
         entrypoint_source="IMAGE",
-        image_entrypoint=("docker-ensure-installed.sh",),
+        image_entrypoint=("/usr/local/bin/docker-ensure-installed.sh",),
         image_cmd=(
             "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
             "apache2-foreground",
@@ -297,7 +297,7 @@ def test_observed_bad_swarm_contract_is_classified_as_runtime_contract_violation
 
     contract = RuntimeExecutionContract(
         entrypoint_source="IMAGE",
-        image_entrypoint=("docker-ensure-installed.sh",),
+        image_entrypoint=("/usr/local/bin/docker-ensure-installed.sh",),
         image_cmd=(
             "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
             "apache2-foreground",
@@ -431,7 +431,7 @@ def test_artifact_preflight_rejects_missing_image_owned_executable():
     runtime = SwarmRuntime(client)
     contract = RuntimeExecutionContract(
         entrypoint_source="IMAGE",
-        image_entrypoint=("docker-ensure-installed.sh",),
+        image_entrypoint=("/usr/local/bin/docker-ensure-installed.sh",),
         image_cmd=(
             "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
             "apache2-foreground",
@@ -453,6 +453,52 @@ def test_artifact_preflight_rejects_missing_image_owned_executable():
         "/usr/local/bin/passdeployer-wordpress-entrypoint.sh"
     ]
 
+
+
+
+def test_artifact_preflight_rejects_missing_relative_image_entrypoint():
+    client = MagicMock()
+    image = MagicMock()
+    image.attrs = {
+        "Id": "sha256:artifact",
+        "RepoDigests": ["registry.example/wordpress@sha256:artifact"],
+        "Config": {
+            "Entrypoint": ["docker-ensure-installed.sh"],
+            "Cmd": [
+                "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+                "apache2-foreground",
+            ],
+        },
+        "Os": "linux",
+        "Architecture": "amd64",
+    }
+    client.images.get.return_value = image
+    probe = MagicMock()
+    probe.wait.return_value = {"StatusCode": 44}
+    client.containers.create.return_value = probe
+    runtime = SwarmRuntime(client)
+    contract = RuntimeExecutionContract(
+        entrypoint_source="IMAGE",
+        image_entrypoint=("docker-ensure-installed.sh",),
+        image_cmd=(
+            "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+            "apache2-foreground",
+        ),
+        command=None,
+        args=(
+            "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+            "apache2-foreground",
+        ),
+        catalog_managed=True,
+        image_entrypoint_owned=True,
+    )
+
+    with pytest.raises(DeploymentError) as exc:
+        runtime._validate_image_artifact("wordpress:r1", contract=contract)
+
+    assert exc.value.code == "RUNTIME_ARTIFACT_ENTRYPOINT_NOT_FOUND"
+    assert exc.value.details["role"] == "image ENTRYPOINT"
+    assert exc.value.details["executable"] == "docker-ensure-installed.sh"
 
 def test_artifact_preflight_rejects_invalid_image_owned_interpreter():
     client = MagicMock()
@@ -477,7 +523,7 @@ def test_artifact_preflight_rejects_invalid_image_owned_interpreter():
     runtime = SwarmRuntime(client)
     contract = RuntimeExecutionContract(
         entrypoint_source="IMAGE",
-        image_entrypoint=("docker-ensure-installed.sh",),
+        image_entrypoint=("/usr/local/bin/docker-ensure-installed.sh",),
         image_cmd=(
             "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
             "apache2-foreground",
@@ -503,7 +549,7 @@ def test_artifact_preflight_rejects_invalid_image_owned_interpreter():
 def test_runtime_contract_fingerprint_is_deterministic_and_boundary_specific():
     contract = RuntimeExecutionContract(
         entrypoint_source="IMAGE",
-        image_entrypoint=("docker-ensure-installed.sh",),
+        image_entrypoint=("/usr/local/bin/docker-ensure-installed.sh",),
         image_cmd=("app", "serve"),
         args=("app", "serve"),
         image_entrypoint_owned=True,
@@ -511,7 +557,7 @@ def test_runtime_contract_fingerprint_is_deterministic_and_boundary_specific():
     assert contract.contract_hash() == contract.contract_hash()
     assert contract.contract_hash() == RuntimeExecutionContract(
         entrypoint_source="IMAGE",
-        image_entrypoint=("docker-ensure-installed.sh",),
+        image_entrypoint=("/usr/local/bin/docker-ensure-installed.sh",),
         image_cmd=("app", "serve"),
         args=("app", "serve"),
         image_entrypoint_owned=True,
@@ -538,7 +584,7 @@ def test_legacy_catalog_revision_recovers_image_owned_cmd_and_discards_stale_ent
         build_snapshot={
             "dockerfile": (
                 "FROM wordpress:7.1.2-php8.4-apache\n"
-                'ENTRYPOINT ["docker-ensure-installed.sh"]\n'
+                'ENTRYPOINT ["/usr/local/bin/docker-ensure-installed.sh"]\n'
                 'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "apache2-foreground"]\n'
             )
         },
@@ -567,7 +613,7 @@ def test_legacy_catalog_revision_recovers_image_owned_cmd_and_discards_stale_ent
 
     assert contract is not None
     assert contract.entrypoint_source == "IMAGE"
-    assert contract.image_entrypoint == ("docker-ensure-installed.sh",)
+    assert contract.image_entrypoint == ("/usr/local/bin/docker-ensure-installed.sh",)
     assert contract.command is None
     assert contract.args == (
         "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
