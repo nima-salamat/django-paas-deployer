@@ -290,7 +290,9 @@ def compile_compose_service(config, *, image_ref: str, replicas: int = 1) -> dic
         "image": image_ref,
         "command": None if image_entrypoint_owned else _command(config.start_command),
         "args": _args(config.start_command) if image_entrypoint_owned else None,
-        "entrypoint": _command(config.entry_point),
+        # An image-owned ENTRYPOINT must remain image metadata. A stale
+        # compatibility entry_point is never allowed to become Swarm Command.
+        "entrypoint": None if image_entrypoint_owned else _command(config.entry_point),
         "working_dir": config.working_directory or "/app",
         "read_only": bool(config.read_only),
         "environment": _env_list(config.environment),
