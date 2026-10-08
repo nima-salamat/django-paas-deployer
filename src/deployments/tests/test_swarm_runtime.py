@@ -165,6 +165,34 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         compiler.assert_called_once()
         self.assertEqual(compiler.call_args.kwargs["replicas"], 3)
 
+    def test_existing_service_forces_new_task_generation_on_update(self):
+        client = MagicMock()
+        service = MagicMock()
+        service.attrs = {
+            "Spec": {
+                "TaskTemplate": {
+                    "ForceUpdate": 7,
+                },
+            },
+        }
+        service.reload.return_value = service
+        client.services.get.return_value = service
+        runtime = SwarmRuntime(client)
+        config = _config(networks=[], endpoints=[])
+
+        with patch.object(runtime, "assert_active"), \
+             patch.object(runtime, "prepare_image", return_value="demo:r1"), \
+             patch.object(runtime, "inspect_service", return_value=SimpleNamespace(service_image="demo:r1")), \
+             patch.object(runtime, "_create_kwargs", return_value={"name": "demo"}):
+            runtime.apply(
+                config,
+                image_ref="demo:r1",
+                wait_for_ready=False,
+            )
+
+        service.update.assert_called_once()
+        self.assertEqual(service.update.call_args.kwargs["force_update"], 8)
+
     def test_compiles_healthcheck_resource_and_process_placement(self):
         config = _config(
             runtime_options={
