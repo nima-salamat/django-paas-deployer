@@ -947,26 +947,40 @@ def _mark_failure(
         "details": event_details,
     }
 
+    target_status = (
+        DeploymentStatusChoices.CANCELLED
+        if str(stage or "").strip().lower() == "cancelled"
+        else DeploymentStatusChoices.FAILED
+    )
+    status_message = (
+        "Database deployment cancelled."
+        if target_status == DeploymentStatusChoices.CANCELLED
+        else "Database deployment failed."
+    )
     committed = (
         StateManager.transition_deploy_terminal_if_owned(
             deploy.pk,
-            DeploymentStatusChoices.FAILED,
+            target_status,
             task_id=task_id,
             update_fields={
                 "stage": stage,
-                "error_message": message,
-                "status_message": "Database deployment failed.",
+                "cancel_requested": target_status == DeploymentStatusChoices.CANCELLED,
+                "error_message": "" if target_status == DeploymentStatusChoices.CANCELLED else message,
+                "status_message": status_message,
+                "progress": 100,
             },
             event_payload=event_payload,
         )
         if task_id
         else StateManager.transition_deploy_system_terminal(
             deploy.pk,
-            DeploymentStatusChoices.FAILED,
+            target_status,
             update_fields={
                 "stage": stage,
-                "error_message": message,
-                "status_message": "Database deployment failed.",
+                "cancel_requested": target_status == DeploymentStatusChoices.CANCELLED,
+                "error_message": "" if target_status == DeploymentStatusChoices.CANCELLED else message,
+                "status_message": status_message,
+                "progress": 100,
             },
             event_payload=event_payload,
         )
@@ -985,7 +999,11 @@ def _mark_failure(
     if service.status not in (SERVICE_STATUS_CHOICES.STOPPED, SERVICE_STATUS_CHOICES.FAILED):
         StateManager.transition_service(
             service.pk,
-            SERVICE_STATUS_CHOICES.FAILED,
+            (
+                SERVICE_STATUS_CHOICES.STOPPED
+                if target_status == DeploymentStatusChoices.CANCELLED
+                else SERVICE_STATUS_CHOICES.FAILED
+            ),
             update_fields={"deploy_started": None, "task_id": None},
         )
 
