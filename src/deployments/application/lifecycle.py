@@ -303,7 +303,12 @@ class DeploymentLifecycleExecutor:
                 error=error,
                 rollback_performed=rollback_performed,
                 rollback_failed=rollback_failed,
-                details=error.details,
+                cleanup_performed=cleanup_performed,
+                cleanup_failed=cleanup_failed,
+                details={
+                    **dict(error.details or {}),
+                    **cleanup_details,
+                },
             )
 
     @staticmethod
