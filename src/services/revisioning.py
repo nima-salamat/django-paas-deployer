@@ -651,7 +651,10 @@ def _catalog_revision_requires_refresh(service: Service, revision: ServiceRevisi
     if not isinstance(revision_files, dict):
         return True
 
-    return any(str(name) not in revision_files for name in current_files)
+    # Catalog build files are part of the immutable executable revision.  A
+    # filename-only check is insufficient: a legacy revision can contain the
+    # right path while still carrying stale or malformed file contents.
+    return current_files != revision_files
 
 
 @transaction.atomic
