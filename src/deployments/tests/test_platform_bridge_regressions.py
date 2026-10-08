@@ -36,6 +36,30 @@ def _detection():
     )
 
 
+def test_catalog_profile_removes_stale_dockerfile_entrypoint_override():
+    from deployments.common.deployment_profile import normalize_profile
+
+    stale_entrypoint = "/usr/local/bin/passdeployer-wordpress-entrypoint.sh"
+    dockerfile = (
+        "FROM wordpress:7.1.2-php8.4-apache\\n"
+        f'ENTRYPOINT ["{stale_entrypoint}"]\\n'
+        'CMD ["apache2-foreground"]\\n'
+    )
+    normalized = normalize_profile(
+        {
+            "source_kind": "catalog",
+            "dockerfile": dockerfile,
+            "entry_point": stale_entrypoint,
+            "start_command": "apache2-foreground",
+        }
+    )
+
+    assert normalized["runtime_options"]["catalog_managed"] is True
+    assert normalized.get("entry_point") is None
+    assert normalized["runtime_options"].get("entry_point") is None
+    assert normalized["start_command"] == "apache2-foreground"
+
+
 def test_catalog_managed_docker_does_not_promote_detected_default_command(monkeypatch):
     from deployments.core.platforms.registry import PlatformRegistry
     from deployments.core import project_model
