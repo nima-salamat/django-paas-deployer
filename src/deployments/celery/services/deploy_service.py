@@ -1372,7 +1372,7 @@ class DeployService:
                 logger_sink=None,
                 deployment_id=deploy_item.pk,
             )
-            build_config = replace(
+            resolved_build_config = replace(
                 build_config,
                 base_images=dict(resolved_bases or {}),
             )
@@ -1382,7 +1382,7 @@ class DeployService:
                 platform=platform,
                 dockerfile_template=dockerfile_text,
                 tar_stream=tar_stream,
-                config=build_config,
+                config=resolved_build_config,
                 logger=None,
             )
             current_context.assert_can_continue()
@@ -1450,7 +1450,7 @@ class DeployService:
             ).hexdigest()
             base_image_digests = sorted({
                 str(value).split("@", 1)[-1]
-                for value in dict(build_config.base_images or {}).values()
+                for value in dict(resolved_build_config.base_images or {}).values()
                 if "@sha256:" in str(value)
             })
 

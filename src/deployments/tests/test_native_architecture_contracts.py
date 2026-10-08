@@ -32,11 +32,37 @@ def test_native_deploy_service_uses_lifecycle_executor_for_swarm():
     assert branch < legacy
 
 
-def test_native_build_uses_dataclass_replace_for_resolved_base_images():
+def test_native_build_resolves_base_images_without_shadowing_outer_config():
     source = _source("celery", "services", "deploy_service.py")
-    assert "build_config = replace(" in source
+    assert "resolved_build_config = replace(" in source
     assert 'base_images=dict(resolved_bases or {})' in source
     assert "build_config.base_images =" not in source
+
+    tree = ast.parse(source)
+    native = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_execute_native_swarm_lifecycle"
+    )
+    build_plan = next(
+        node
+        for node in native.body
+        if isinstance(node, ast.FunctionDef) and node.name == "build_plan"
+    )
+    assignments = [
+        target
+        for node in ast.walk(build_plan)
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        for target in (
+            node.targets if isinstance(node, ast.Assign) else [node.target]
+        )
+    ]
+    assert not any(
+        isinstance(target, ast.Name) and target.id == "build_config"
+        for target in assignments
+    )
+    assert "config=resolved_build_config" in source
 
 
 def test_native_plan_carries_artifact_and_release_identity():
