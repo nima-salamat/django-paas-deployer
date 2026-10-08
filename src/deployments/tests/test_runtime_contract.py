@@ -177,6 +177,49 @@ class _StubSwarmRuntime:
         return b"ready\n"
 
 
+def test_swarm_adapter_preserves_expected_image_and_startup_timeout_for_readiness():
+    class RecordingRuntime(_StubSwarmRuntime):
+        def __init__(self):
+            super().__init__()
+            self.wait_ready_calls = []
+
+        def wait_ready(self, name, *, timeout, expected_image=None):
+            self.wait_ready_calls.append(
+                {
+                    "name": name,
+                    "timeout": timeout,
+                    "expected_image": expected_image,
+                }
+            )
+            return self.state
+
+    runtime = RecordingRuntime()
+    adapter = SwarmRuntimeAdapter(runtime=runtime, operator_enabled=True)
+    identity = RuntimeIdentity(
+        service_id="service-1",
+        deployment_id="deployment-1",
+        revision_id="revision-1",
+        runtime_name="app-service-1",
+    )
+    plan = SimpleNamespace(
+        identity=identity,
+        deployment_config=SimpleNamespace(
+            image_ref="demo:r1",
+            start_timeout=45,
+            health_timeout=60,
+        ),
+        image_ref="demo:r1",
+    )
+
+    result = adapter.apply(plan, operation_key="deployment-1/apply")
+    adapter.wait_ready(result.handle, timeout=5)
+
+    assert result.handle.metadata["expected_image"] == "demo:r1"
+    assert result.handle.metadata["startup_timeout"] == 180.0
+    assert runtime.wait_ready_calls[-1]["expected_image"] == "demo:r1"
+    assert runtime.wait_ready_calls[-1]["timeout"] >= 180.0
+
+
 def test_swarm_adapter_translates_existing_runtime_state_without_exposing_sdk_types():
     adapter = SwarmRuntimeAdapter(runtime=_StubSwarmRuntime(), operator_enabled=True)
     identity = RuntimeIdentity(

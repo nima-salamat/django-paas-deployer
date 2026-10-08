@@ -340,6 +340,12 @@ class SwarmRuntimeAdapter:
                     str(name): str(getattr(result, "service_id", "") or "")
                     for name, result in states.items()
                 },
+                "expected_image": image_ref,
+                "startup_timeout": max(
+                    180.0,
+                    float(getattr(config, "start_timeout", 45) or 45),
+                    float(getattr(config, "health_timeout", 60) or 60),
+                ),
             },
         )
         return RuntimeOperationResult(
@@ -386,7 +392,12 @@ class SwarmRuntimeAdapter:
                 if str(item).strip()
             ) or (handle.resource_name or handle.identity.resource_name(),)
             import time
-            deadline = time.monotonic() + float(timeout or 60)
+            effective_timeout = max(
+                float(timeout or 0.0),
+                float(handle.metadata.get("startup_timeout") or 0.0),
+            )
+            deadline = time.monotonic() + max(effective_timeout, 1.0)
+            expected_image = str(handle.metadata.get("expected_image") or "").strip() or None
             states = {}
             for service_name in process_names:
                 remaining = max(0.0, deadline - time.monotonic())
@@ -399,6 +410,7 @@ class SwarmRuntimeAdapter:
                 states[service_name] = self.runtime.wait_ready(
                     service_name,
                     timeout=remaining,
+                    expected_image=expected_image,
                     cancel_check=cancel_check,
                 )
             state = states.get(handle.resource_name or "") or next(iter(states.values()))

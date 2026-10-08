@@ -1658,7 +1658,11 @@ class DeployService:
             runtime,
             readiness_timeout=(
                 deployment_deadline.bound(
-                    float(cfg.get("health_timeout") or healthcheck_timeout or 60.0)
+                    max(
+                        180.0,
+                        float(cfg.get("start_timeout") or 45.0),
+                        float(cfg.get("health_timeout") or healthcheck_timeout or 60.0),
+                    )
                 )
                 or 0.0
             ),
