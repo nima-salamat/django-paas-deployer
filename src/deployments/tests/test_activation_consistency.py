@@ -66,8 +66,8 @@ class DeploymentActivationConsistencyContractTests(unittest.TestCase):
         readiness = lifecycle.index("runtime.wait_ready(")
         finalization = lifecycle.index("finalize_success")
         activation = lifecycle.index("strategy.activate(context, plan, ready)")
-        self.assertLess(readiness, finalization)
-        self.assertLess(finalization, activation)
+        self.assertLess(readiness, activation)
+        self.assertLess(activation, finalization)
 
     def test_deploy_worker_does_not_overwrite_lifecycle_intent(self):
         self.assertNotIn("objects.filter(pk=deploy_item.service_id).update(desired_state=\"running\")", self.service)
