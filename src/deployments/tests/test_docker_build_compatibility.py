@@ -112,6 +112,26 @@ def test_docker_client_uses_api_version_negotiation(monkeypatch):
     client_manager.reset_docker_client()
 
 
+def test_revision_build_files_are_materialized_safely(tmp_path):
+    files = {
+        "passdeployer-wordpress-entrypoint.sh": "#!/bin/sh\necho ready\n",
+        "nested/helper.txt": "hello\n",
+    }
+
+    image_manager._materialize_build_files(str(tmp_path), files)
+
+    assert (tmp_path / "passdeployer-wordpress-entrypoint.sh").read_text() == "#!/bin/sh\necho ready\n"
+    assert (tmp_path / "nested" / "helper.txt").read_text() == "hello\n"
+
+
+def test_revision_build_files_reject_unsafe_paths(tmp_path):
+    with pytest.raises(image_manager.ImageBuildError):
+        image_manager._materialize_build_files(
+            str(tmp_path),
+            {"../escape.txt": "nope"},
+        )
+
+
 def test_build_falls_back_when_engine_rejects_optional_build_controls(monkeypatch):
     class FakeApi:
         def __init__(self):
