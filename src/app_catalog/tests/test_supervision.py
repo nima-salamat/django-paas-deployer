@@ -1,4 +1,6 @@
-from django.test import TestCase
+from unittest.mock import patch
+
+from django.test import TestCase, override_settings
 
 from app_catalog.executor import ApplicationStackExecutor
 from app_catalog.models import ApplicationInstance, ApplicationInstanceService, ApplicationStatus
@@ -41,6 +43,17 @@ class ReadyAppRuntimeSupervisorTests(TestCase):
             software_version="1",
             variant_id="default",
             definition_snapshot={
+                "variants": {
+                    "default": {
+                        "services": [
+                            {
+                                "key": "web",
+                                "public": True,
+                                "port": 8088,
+                            }
+                        ]
+                    }
+                },
                 "_application_orchestration": {
                     "services": [
                         {
@@ -88,6 +101,27 @@ class ReadyAppRuntimeSupervisorTests(TestCase):
             sequence=0,
         )
         return instance, service, deploy, network
+
+    @override_settings(DEPLOYMENT_DOMAIN="apps.example.test", SWARM_ENABLED=False)
+    def test_supervisor_repairs_public_endpoint_from_installation_snapshot(self):
+        instance, service, _deploy, _network = self._application()
+
+        service.runtime_config = {
+            "public": True,
+            "port": 80,
+        }
+        service.save(update_fields=["runtime_config", "updated_at"])
+
+        with patch(
+            "app_catalog.executor.ApplicationCatalog.get",
+            side_effect=AssertionError("recovery must not consult the current catalog"),
+        ):
+            result = ApplicationStackExecutor(str(instance.pk)).supervise_runtime()
+
+        self.assertEqual(result["status"], "healthy")
+        endpoint = service.endpoints.get(exposure="public")
+        self.assertEqual(endpoint.target_port, 8088)
+        self.assertEqual(endpoint.hostname, "supervised-web.apps.example.test")
 
     def test_healthy_running_application_is_reconciled_as_ready(self):
         instance, _service, _deploy, _network = self._application()
