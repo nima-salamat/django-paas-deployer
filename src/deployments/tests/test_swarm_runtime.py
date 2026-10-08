@@ -352,6 +352,44 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         self.assertEqual(aliases_by_network["net-demo"], ["wordpress"])
         self.assertEqual(aliases_by_network["proxy_net"], [])
 
+    def test_image_owned_entrypoint_uses_swarm_args_instead_of_command(self):
+        config = _config(
+            entry_point=None,
+            start_command="/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground",
+            runtime_options={
+                "placement_constraints": ["node.labels.region == eu"],
+                "image_entrypoint_owned": True,
+            },
+        )
+        spec = compile_compose_service(config, image_ref="wordpress:test")
+        service_doc = spec["services"]["demo"]
+
+        self.assertIsNone(service_doc["command"])
+        self.assertEqual(
+            service_doc["args"],
+            [
+                "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+                "apache2-foreground",
+            ],
+        )
+
+        runtime = SwarmRuntime.__new__(SwarmRuntime)
+        with patch.object(runtime, "_apply_local_volume_pin", return_value=[]):
+            kwargs = runtime._create_kwargs(
+                config,
+                image_ref="wordpress:test",
+                compose_spec=spec,
+            )
+
+        self.assertIsNone(kwargs["command"])
+        self.assertEqual(
+            kwargs["args"],
+            [
+                "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+                "apache2-foreground",
+            ],
+        )
+
     def test_create_kwargs_preserve_effective_start_command(self):
         config = _config(
             entry_point="python app.py --port 8000",
@@ -369,7 +407,7 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
 
         self.assertNotIn("entrypoint", kwargs)
         self.assertEqual(kwargs["command"], ["/bin/sh", "-lc", "python app.py --port 8000"])
-        self.assertNotIn("args", kwargs)
+        self.assertIsNone(kwargs["args"])
 
     def test_ensure_network_creates_overlay_when_swarm_is_active(self):
         client = MagicMock()
