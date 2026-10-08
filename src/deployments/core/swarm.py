@@ -1067,8 +1067,17 @@ class SwarmRuntime:
                 service_logs = self._service_logs_for_failure(name)
                 exit_code = None
                 status_attrs = {}
+                runtime_command = None
+                runtime_args = None
                 try:
                     service = self.client.services.get(_validate_service_name(name))
+                    service_spec = (service.attrs or {}).get("Spec") or {}
+                    container_spec = (
+                        (service_spec.get("TaskTemplate") or {}).get("ContainerSpec")
+                        or {}
+                    )
+                    runtime_command = container_spec.get("Command")
+                    runtime_args = container_spec.get("Args")
                     raw_tasks = service.tasks() or []
                     for raw in raw_tasks:
                         if str(raw.get("ID") or "") != str(task.task_id):
@@ -1097,6 +1106,7 @@ class SwarmRuntime:
                     f"container_id={task.container_id or ''}; "
                     f"replicas_desired={latest.replicas_desired}; "
                     f"replicas_running={latest.replicas_running}; "
+                    f"runtime_command={runtime_command!r}; runtime_args={runtime_args!r}; "
                     f"expected_image={expected_image!r}; task_image={task.image!r}; "
                     f"service_image={latest.service_image!r}; "
                     f"update_state={latest.update_state!r}; "
@@ -1120,6 +1130,8 @@ class SwarmRuntime:
                         "task_image": task.image,
                         "replicas_desired": latest.replicas_desired,
                         "replicas_running": latest.replicas_running,
+                        "runtime_command": runtime_command,
+                        "runtime_args": runtime_args,
                         "expected_image": expected_image,
                         "service_image": latest.service_image,
                         "update_state": latest.update_state,
