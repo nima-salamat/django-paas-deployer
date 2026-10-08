@@ -890,8 +890,10 @@ class DeployService:
             or cfg.get("server_type")
             or getattr(service, "server_type", None)
         )
+        # Consume the normalized source identity handed into this method;
+        # _process_deployment owns the revision snapshot local.
         catalog_source_kind = str(
-            (revision_snapshot or {}).get("source_kind")
+            cfg.get("source_kind")
             or getattr(service, "source_kind", "")
         ).strip().lower()
         entry_point = (
