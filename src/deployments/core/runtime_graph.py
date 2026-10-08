@@ -155,7 +155,7 @@ class ServiceRuntimeGraph:
             # artifact and runtime snapshot, not by stale mutable ServiceProcess rows.
             # When a catalog Dockerfile owns ENTRYPOINT but an older revision did
             # not persist an explicit CMD, recover that exact CMD from the revision's
-            # Dockerfile so Swarm receives deterministic ContainerSpec.Command.
+            # Dockerfile so the image-owned Swarm contract receives deterministic Args.
             if catalog_managed and not catalog_command_is_explicit:
                 command = dockerfile_default_cmd
 
@@ -163,16 +163,16 @@ class ServiceRuntimeGraph:
                 entrypoint = None
             process = RuntimeProcess(
                 name=str(raw.get("name") or "web"),
-                    process_type=str(raw.get("process_type") or "custom"),
-                    command=command,
-                    entrypoint=entrypoint,
-                    replicas=int(raw.get("replicas") or 1),
-                    enabled=bool(raw.get("enabled", True)),
-                    environment={str(k): str(v) for k, v in (raw.get("environment") or {}).items()},
-                    healthcheck=dict(raw.get("healthcheck") or {}),
-                    resources=dict(raw.get("resources") or {}),
-                    metadata=dict(raw.get("metadata") or {}),
-                )
+                process_type=str(raw.get("process_type") or "custom"),
+                command=command,
+                entrypoint=entrypoint,
+                replicas=int(raw.get("replicas") or 1),
+                enabled=bool(raw.get("enabled", True)),
+                environment={str(k): str(v) for k, v in (raw.get("environment") or {}).items()},
+                healthcheck=dict(raw.get("healthcheck") or {}),
+                resources=dict(raw.get("resources") or {}),
+                metadata=dict(raw.get("metadata") or {}),
+            )
             process_rows.append(process)
             stored_contract = raw.get("execution_contract")
             contract_options = {**runtime, "execution_contract": stored_contract} if stored_contract else runtime
