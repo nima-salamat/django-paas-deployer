@@ -1022,7 +1022,7 @@ class SwarmRuntime:
         )
         return diagnostics
 
-    def _apply_local_volume_pin    def _apply_local_volume_pin(self, config, constraints: list[str]) -> list[str]:
+    def _apply_local_volume_pin(self, config, constraints: list[str]) -> list[str]:
         if not config.volumes or not _env_bool("SWARM_LOCAL_VOLUME_PIN", True):
             return constraints
         if len(self.client.nodes.list()) <= 1:
