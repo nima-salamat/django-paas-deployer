@@ -254,6 +254,64 @@ class SwarmFailureRecoveryTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "SWARM_UPDATE_ROLLED_BACK")
         self.assertEqual(ctx.exception.details["expected_image"], new_image)
 
+    def test_digest_qualified_task_image_is_accepted_when_service_spec_matches(self):
+        service_image = "demo:r1"
+        task_image = "demo:r1@sha256:new"
+        service = FakeService(
+            image=service_image,
+            tasks=[
+                {
+                    "ID": "task-1",
+                    "DesiredState": "running",
+                    "Status": {
+                        "State": "running",
+                        "Message": "started",
+                        "ContainerStatus": {"ContainerID": "container-1"},
+                    },
+                    "Spec": {"ContainerSpec": {"Image": task_image}},
+                }
+            ],
+        )
+        state = SwarmRuntime(FakeClient(service)).wait_ready(
+            "demo",
+            timeout=1,
+            expected_image=service_image,
+        )
+        self.assertEqual(state.replicas_running, 1)
+        self.assertEqual(state.tasks[0].container_id, "container-1")
+
+    def test_terminal_task_diagnostic_contains_container_id(self):
+        image = "demo:r1"
+        service = FakeService(
+            image=image,
+            tasks=[
+                {
+                    "ID": "task-1",
+                    "DesiredState": "shutdown",
+                    "Status": {
+                        "State": "complete",
+                        "Message": "finished",
+                        "ContainerStatus": {
+                            "ExitCode": 0,
+                            "ContainerID": "container-1",
+                        },
+                    },
+                    "Spec": {"ContainerSpec": {"Image": image}},
+                }
+            ],
+        )
+        exc = None
+        try:
+            SwarmRuntime(FakeClient(service)).wait_ready(
+                "demo",
+                timeout=1,
+                expected_image=image,
+            )
+        except DeploymentError as error:
+            exc = error
+        self.assertIsNotNone(exc)
+        self.assertEqual(exc.details["container_id"], "container-1")
+
     def test_expected_running_image_is_required_for_readiness(self):
         image = "demo:r1@sha256:new"
         service = FakeService(
