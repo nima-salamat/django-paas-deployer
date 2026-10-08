@@ -279,6 +279,50 @@ _SECURE_CONTEXT_IGNORE_LINES = (
 )
 
 
+def _materialize_build_files(build_root: str, files: dict[str, Any] | None) -> None:
+    """Materialize immutable revision-owned auxiliary build files safely."""
+    if not files:
+        return
+
+    base = os.path.abspath(build_root)
+    total_bytes = 0
+    max_bytes = 16 * 1024 * 1024
+
+    for raw_name, raw_content in files.items():
+        name = str(raw_name or "").replace("\\", "/").lstrip("./")
+        if not name or name == "Dockerfile" or name.startswith("/") or "/../" in f"/{name}/" or name == ".." or name.startswith("../"):
+            raise ImageBuildError(
+                "The immutable build artifact contains an unsafe auxiliary file path.",
+                details={"file": str(raw_name)},
+            )
+
+        target = os.path.abspath(os.path.join(base, name))
+        try:
+            if os.path.commonpath([base, target]) != base:
+                raise ValueError
+        except ValueError as exc:
+            raise ImageBuildError(
+                "The immutable build artifact contains an unsafe auxiliary file path.",
+                details={"file": str(raw_name)},
+            ) from exc
+
+        if isinstance(raw_content, bytes):
+            content = raw_content
+        else:
+            content = str(raw_content or "").encode("utf-8")
+
+        total_bytes += len(content)
+        if total_bytes > max_bytes:
+            raise ImageBuildError(
+                "Immutable auxiliary build files exceed the allowed size.",
+                details={"max_bytes": max_bytes},
+            )
+
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "wb") as handle:
+            handle.write(content)
+
+
 def _ensure_secure_dockerignore(build_root: str) -> None:
     """Prevent common secret material from entering a tenant Docker build context.
 
@@ -715,6 +759,7 @@ class Image(Client):
                         # attach the mandatory Dockerfile ignore rules to the
                         # actual Docker build context.
                         build_path = tmpdir
+                        _materialize_build_files(build_path, build_files)
                         with open(
                             os.path.join(build_path, "Dockerfile"),
                             "w",
@@ -731,6 +776,7 @@ class Image(Client):
                             with open(os.path.join(tmpdir, "Dockerfile"), "w", encoding="utf-8") as f:
                                 f.write(self.dockerfile_text)
 
+                        _materialize_build_files(build_path, build_files)
                         df_path = os.path.join(build_path, "Dockerfile")
                         if not os.path.isfile(df_path):
                             with open(df_path, "w", encoding="utf-8") as f:
