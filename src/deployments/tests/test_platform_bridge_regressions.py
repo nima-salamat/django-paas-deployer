@@ -322,6 +322,63 @@ def test_legacy_catalog_revision_drops_dockerfile_owned_process_overrides():
     assert graph.execution_contract.args == ("apache2-foreground",)
 
 
+def test_catalog_revision_ignores_stale_stored_execution_contract():
+    from deployments.core.runtime_graph import ServiceRuntimeGraph
+
+    revision = SimpleNamespace(
+        pk="revision-stale-contract",
+        config_snapshot={"source_kind": "catalog"},
+        build_snapshot={
+            "dockerfile": (
+                "FROM wordpress:7.1.2-php8.4-apache\n"
+                'ENTRYPOINT ["/usr/local/bin/docker-ensure-installed.sh"]\n'
+                'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "apache2-foreground"]\n'
+            )
+        },
+        runtime_snapshot={
+            "start_command": "docker-entrypoint.sh apache2-foreground",
+            "entry_point": None,
+        },
+        process_snapshot=[
+            {
+                "name": "web",
+                "process_type": "application",
+                "command": "docker-entrypoint.sh apache2-foreground",
+                "entrypoint": None,
+                "replicas": 1,
+                "enabled": True,
+                "execution_contract": {
+                    "entrypoint_source": "IMAGE",
+                    "image_entrypoint": ["docker-entrypoint.sh"],
+                    "image_cmd": ["apache2-foreground"],
+                    "command": None,
+                    "args": ["apache2-foreground"],
+                    "catalog_managed": True,
+                    "image_entrypoint_owned": True,
+                    "process_name": "web",
+                    "contract_version": "1",
+                    "required_executables": [],
+                    "source_kind": "catalog",
+                },
+            }
+        ],
+        environment_snapshot={},
+        source_snapshot={"catalog_id": "wordpress"},
+        endpoint_snapshot=[],
+        volume_snapshot=[],
+        network_snapshot=[],
+        revision_number=1,
+    )
+
+    graph = ServiceRuntimeGraph.from_revision(revision)
+
+    assert graph.execution_contract.entrypoint_source == "IMAGE"
+    assert graph.execution_contract.image_entrypoint == ("/usr/local/bin/docker-ensure-installed.sh",)
+    assert graph.execution_contract.args == (
+        "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+        "apache2-foreground",
+    )
+
 def test_catalog_profile_removes_stale_dockerfile_entrypoint_override():
     from deployments.common.deployment_profile import normalize_profile
 
