@@ -342,12 +342,13 @@ class DeployService:
                 .values_list("status", flat=True)
                 .first()
             )
-            if final_status != "cancelled":
+            if final_status not in {"cancelled", "succeeded", "rolled_back"}:
                 ServiceStateManager.sync_legacy_failure(service_id, deploy_id=deploy_item.pk)
             else:
                 logger.info(
-                    "Skipping legacy failure projection for cancelled deploy=%s.",
+                    "Skipping legacy failure projection for terminal deploy=%s status=%s.",
                     deploy_item.pk,
+                    final_status,
                 )
             raise translated from exc
 
