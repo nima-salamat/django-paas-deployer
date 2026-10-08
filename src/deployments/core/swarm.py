@@ -881,14 +881,14 @@ class SwarmRuntime:
                         (
                             f"if [ ! -f {shlex.quote(executable)} ]; then exit 41; fi; "
                             f"if [ ! -x {shlex.quote(executable)} ]; then exit 42; fi; "
-                            f"shebang=\$(head -n 1 {shlex.quote(executable)} 2>/dev/null || true); "
+                            f"shebang=$(head -n 1 {shlex.quote(executable)} 2>/dev/null || true); "
                             "case \"$shebang\" in "
                             "#!*) "
-                            "interpreter=\$(printf '%s\\n' \"$shebang\" | awk '{print $1}' | sed 's/^#!//'); "
+                            "interpreter=$(printf '%s\\n' \"$shebang\" | awk '{print $1}' | sed 's/^#!//'); "
                             "if [ \"$interpreter\" = '/usr/bin/env' ]; then "
-                            "interpreter_name=\$(printf '%s\\n' \"$shebang\" | awk '{print $2}'); "
+                            "interpreter_name=$(printf '%s\\n' \"$shebang\" | awk '{print $2}'); "
                             "[ -n \"$interpreter_name\" ] && command -v \"$interpreter_name\" >/dev/null 2>&1 || exit 43; "
-                            "elif case \"$interpreter\" in /*) true;; *) command -v \"$interpreter\" >/dev/null 2>&1;; esac; "
+                            "elif [ -n \"$interpreter\" ] && case \"$interpreter\" in /*) [ -x \"$interpreter\" ];; *) command -v \"$interpreter\" >/dev/null 2>&1;; esac; "
                             "then :; else exit 43; fi;; "
                             "esac"
                         ),
