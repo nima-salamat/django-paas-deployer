@@ -13,6 +13,7 @@ on:
       - "src/deployments/core/swarm.py"
       - "src/deployments/celery/services/deploy_service.py"
       - "src/deployments/tests/test_platform_bridge_regressions.py"
+      - ".github/workflows/wordpress-runtime-contract.yml"
   workflow_dispatch:
 
 jobs:
