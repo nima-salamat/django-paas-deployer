@@ -204,6 +204,21 @@ class FakeRuntime:
         self._observations[key] = ready
         return RuntimeOperationResult(success=True, changed=True, handle=handle, observation=ready)
 
+    def finalize_success(
+        self,
+        handle: RuntimeHandle,
+        *,
+        operation_key: str,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        if cancel_check is not None and cancel_check():
+            raise RuntimeOperationError(
+                "Runtime finalization was cancelled.",
+                code="runtime_cancelled",
+                category="cancellation",
+            )
+        return {"cleanup_attempted": False, "cleanup_failed": False}
+
     def stop(self, handle: RuntimeHandle, *, operation_key: str, cancel_check: Callable[[], bool] | None = None) -> RuntimeOperationResult:
         self._ensure_usable()
         if cancel_check is not None and cancel_check():
