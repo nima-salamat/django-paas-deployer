@@ -324,6 +324,7 @@ class SwarmRuntimeAdapter:
                     image_ref=image_ref,
                 )
                 process_names = (str(getattr(state, "name", config.name)),)
+                states = {process_names[0]: state}
         except DeploymentError as exc:
             raise RuntimeOperationError(
                 str(exc),
@@ -403,11 +404,25 @@ class SwarmRuntimeAdapter:
                         code="runtime_cancelled",
                         category="cancellation",
                     )
+                wait_ready_kwargs = {
+                    "timeout": remaining,
+                    "expected_image": expected_image,
+                }
+                # Keep compatibility with older runtime implementations and
+                # lightweight adapters that predate the cancellation callback.
+                # Production SwarmRuntime accepts all three arguments.
+                try:
+                    import inspect
+                    parameters = inspect.signature(self.runtime.wait_ready).parameters
+                except (TypeError, ValueError):
+                    parameters = {}
+                if "cancel_check" in parameters and cancel_check is not None:
+                    wait_ready_kwargs["cancel_check"] = cancel_check
+                if "expected_image" not in parameters:
+                    wait_ready_kwargs.pop("expected_image", None)
                 states[service_name] = self.runtime.wait_ready(
                     service_name,
-                    timeout=remaining,
-                    expected_image=expected_image,
-                    cancel_check=cancel_check,
+                    **wait_ready_kwargs,
                 )
             state = states.get(handle.resource_name or "") or next(iter(states.values()))
         except DeploymentError as exc:
