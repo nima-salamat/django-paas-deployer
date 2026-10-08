@@ -312,11 +312,12 @@ def compile_compose_service(config, *, image_ref: str, replicas: int = 1) -> dic
 
     service = {
         "image": image_ref,
-        "command": None if image_entrypoint_owned else _command(config.start_command),
-        "args": _args(config.start_command) if image_entrypoint_owned else None,
-        # An image-owned ENTRYPOINT must remain image metadata. A stale
-        # compatibility entry_point is never allowed to become Swarm Command.
-        "entrypoint": None if image_entrypoint_owned else _command(config.entry_point),
+        "command": list(contract.command) if contract.command is not None else None,
+        "args": list(contract.args) if contract.args else None,
+        # Runtime executable semantics are represented by the canonical Swarm
+        # Command + Args contract. The intermediate Compose entrypoint field
+        # must never resurrect a stale compatibility override.
+        "entrypoint": None,
         "working_dir": config.working_directory or "/app",
         "read_only": bool(config.read_only),
         "environment": _env_list(config.environment),
