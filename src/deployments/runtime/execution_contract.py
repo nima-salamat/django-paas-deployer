@@ -183,7 +183,18 @@ class RuntimeExecutionContract:
             "source_kind": self.source_kind,
         }
 
+    def contract_hash(self) -> str:
+        """Stable hash of the non-secret runtime execution contract itself."""
+        encoded = json.dumps(
+            self.as_dict(),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
     def fingerprint(self, *, boundary: str = "", image_ref: str = "", artifact_digest: str = "") -> str:
+        """Contextual fingerprint for diagnostics; contract_hash is the drift key."""
         payload = self.as_dict()
         if boundary:
             payload["boundary"] = boundary
@@ -256,9 +267,9 @@ def validate_swarm_contract(
             "args": actual_args,
             "effective_command": actual_effective_command,
         },
-        "revision_contract_hash": contract.fingerprint(boundary="revision"),
-        "compiled_swarm_contract_hash": contract.fingerprint(boundary=boundary),
-        "expected_contract_hash": contract.fingerprint(boundary="expected"),
+        "revision_contract_hash": contract.contract_hash(),
+        "compiled_swarm_contract_hash": contract.contract_hash(),
+        "expected_contract_hash": contract.contract_hash(),
         "actual_contract_hash": actual_contract_hash,
     }
 
