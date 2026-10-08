@@ -120,6 +120,34 @@ def _enforce_catalog_dockerfile_entrypoint_contract(
     return entry_point
 
 
+
+
+
+def _preserve_revision_build_files(
+    build_options: dict[str, Any] | None,
+    revision_snapshot: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Carry immutable catalog build files into the actual image-build options."""
+    result = dict(build_options or {})
+    snapshot = revision_snapshot if isinstance(revision_snapshot, dict) else {}
+    source_kind = str(snapshot.get("source_kind") or "").strip().lower()
+    if source_kind != "catalog":
+        return result
+
+    build = snapshot.get("build")
+    if not isinstance(build, dict):
+        return result
+    files = build.get("files")
+    if not isinstance(files, dict) or not files:
+        return result
+
+    result["revision_build_files"] = {
+        str(name): str(value)
+        for name, value in files.items()
+        if str(name).strip()
+    }
+    return result
+
 def _apply_explicit_docker_source_process_override(
     cfg: dict,
     runtime_options: dict,
@@ -583,14 +611,11 @@ class DeployService:
             revision_source_kind = str(
                 (revision_snapshot or {}).get("source_kind") or ""
             ).strip().lower()
-            if revision_source_kind == "catalog":
-                revision_files = revision_build.get("files")
-                if isinstance(revision_files, dict) and revision_files:
-                    build_options["revision_build_files"] = {
-                        str(name): str(value)
-                        for name, value in revision_files.items()
-                        if str(name).strip()
-                    }
+            build_options = _preserve_revision_build_files(
+                build_options,
+                revision_snapshot,
+            )
+            cfg["build_options"] = dict(build_options)
 
             if (
                 str((revision_snapshot or {}).get("source_kind") or "").strip().lower() == "catalog"
