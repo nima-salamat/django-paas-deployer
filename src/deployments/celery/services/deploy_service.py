@@ -1163,7 +1163,18 @@ class DeployService:
             _docker_tag_from_deploy(deploy_item.version), container_name,
         )
 
-        if swarm_enabled() and execution_plan is not None:
+        if swarm_enabled():
+            if execution_plan is None:
+                raise RuntimeUnavailableError(
+                    "Docker Swarm is enabled, but the native deployment plan could not be compiled.",
+                    code="native_plan_unavailable",
+                    details={
+                        "service_id": str(deploy_item.service_id),
+                        "deployment_id": str(deploy_item.pk),
+                        "runtime_backend": "swarm",
+                        "runtime_graph_present": runtime_graph is not None,
+                    },
+                )
             return self._execute_native_swarm_lifecycle(
                 deploy_item,
                 container_name,
