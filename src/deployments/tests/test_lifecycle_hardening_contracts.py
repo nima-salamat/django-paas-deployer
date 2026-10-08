@@ -177,6 +177,15 @@ def test_outbox_retention_is_scheduled_and_operator_bounded():
     assert '"schedule": 3600.0' in settings_source
 
 
+def test_activation_requires_deploy_revision_identity_match():
+    source = (__import__("pathlib").Path(__file__).resolve().parents[2] / "deployments/core/state/manager.py").read_text(encoding="utf-8")
+    method = source.split("def activate_revision_and_succeed", 1)[1].split(
+        "def transition_deploy_system_terminal", 1
+    )[0]
+    assert "deploy.revision_id" in method
+    assert "requested_revision" in method
+    assert "Refusing deploy activation with mismatched revision" in method
+
 def test_db_success_primitive_updates_service_to_running_atomically():
     source = (__import__("pathlib").Path(__file__).resolve().parents[2] / "deployments/core/state/manager.py").read_text(encoding="utf-8")
     method = source.split("def activate_revision_and_succeed", 1)[1].split(
