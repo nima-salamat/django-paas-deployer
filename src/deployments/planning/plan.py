@@ -25,8 +25,8 @@ class DeploymentPlan:
     identity: RuntimeIdentity
     runtime_selection: RuntimeSelection
     process_graph: ServiceRuntimeGraph
-    execution_contracts: Mapping[str, RuntimeExecutionContract] = field(default_factory=dict)
     image_ref: str
+    execution_contracts: Mapping[str, RuntimeExecutionContract] = field(default_factory=dict)
     artifact_digest: str = ""
     release_id: str | None = None
     strategy_kind: str = "application"
