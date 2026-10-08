@@ -612,7 +612,7 @@ class DeployService:
         # revision snapshot. cfg/source_kind is the same immutable value here.
         catalog_source_kind = str(
             cfg.get("source_kind")
-            or getattr(service, "source_kind", "")
+            or getattr(deploy_item.service, "source_kind", "")
         ).strip().lower()
         if (
             catalog_source_kind == "catalog"
