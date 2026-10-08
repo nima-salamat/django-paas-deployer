@@ -1,0 +1,115 @@
+name: WordPress runtime contract
+
+on:
+  push:
+    branches: ["master"]
+    paths:
+      - "src/app_catalog/catalog/first_party/wordpress-with-mariadb.yaml"
+      - "src/app_catalog/services.py"
+      - "src/deployments/common/deployment_profile.py"
+      - "src/deployments/core/platform_bridge.py"
+      - "src/deployments/core/runtime_graph.py"
+      - "src/deployments/core/dockerfile.py"
+      - "src/deployments/core/swarm.py"
+      - "src/deployments/celery/services/deploy_service.py"
+      - "src/deployments/tests/test_platform_bridge_regressions.py"
+  workflow_dispatch:
+
+jobs:
+  wordpress-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install YAML parser
+        run: python3 -m pip install --disable-pip-version-check pyyaml
+
+      - name: Render catalog Dockerfile
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          source = Path("src/app_catalog/catalog/first_party/wordpress-with-mariadb.yaml")
+          data = yaml.safe_load(source.read_text())
+          dockerfile = data["services"]["wordpress"]["dockerfile"]
+          dockerfile = dockerfile.replace("${config.software_version}", "7.1.2")
+          dockerfile = dockerfile.replace("${config.php_version}", "8.4")
+          Path("/tmp/wordpress.Dockerfile").write_text(dockerfile)
+          print(dockerfile)
+          PY
+
+      - name: Build WordPress image
+        run: docker build --pull -f /tmp/wordpress.Dockerfile -t passdeployer-wordpress-contract:test .
+
+      - name: Assert image command contract
+        run: |
+          set -eux
+          ENTRYPOINT_JSON="$(docker image inspect passdeployer-wordpress-contract:test --format '{{json .Config.Entrypoint}}')"
+          CMD_JSON="$(docker image inspect passdeployer-wordpress-contract:test --format '{{json .Config.Cmd}}')"
+          test "$ENTRYPOINT_JSON" = '["/usr/local/bin/passdeployer-wordpress-entrypoint.sh"]'
+          test "$CMD_JSON" = '["apache2-foreground"]'
+
+      - name: Run MariaDB and WordPress
+        run: |
+          set -eux
+          docker network create passdeployer-wp-contract
+
+          docker run -d --name passdeployer-wp-db \
+            --network passdeployer-wp-contract \
+            -e MARIADB_ROOT_PASSWORD=root-contract-password \
+            -e MARIADB_DATABASE=wordpress \
+            -e MARIADB_USER=app \
+            -e MARIADB_PASSWORD=app-contract-password \
+            mariadb:11.8.9
+
+          docker run -d --name passdeployer-wp \
+            --network passdeployer-wp-contract \
+            -e WORDPRESS_DB_HOST=passdeployer-wp-db \
+            -e WORDPRESS_DB_USER=app \
+            -e WORDPRESS_DB_PASSWORD=app-contract-password \
+            -e WORDPRESS_DB_NAME=wordpress \
+            -e WORDPRESS_TABLE_PREFIX=wp_ \
+            -e WORDPRESS_SITE_URL=http://127.0.0.1:18080 \
+            -e WORDPRESS_SITE_TITLE="Contract Test Site" \
+            -e WORDPRESS_ADMIN_USER=contract-admin \
+            -e WORDPRESS_ADMIN_PASSWORD="contract-admin-password-123" \
+            -e WORDPRESS_ADMIN_EMAIL=contract@example.invalid \
+            -e WORDPRESS_LOCALE=en_US \
+            -e WORDPRESS_TIMEZONE=UTC \
+            -e WORDPRESS_PERMALINK_STRUCTURE="/%postname%/" \
+            -e WORDPRESS_AUTO_INSTALL=1 \
+            -e WORDPRESS_MANAGED_CRON=0 \
+            -e WORDPRESS_CRON_INTERVAL=300 \
+            -e WORDPRESS_CONFIG_EXTRA="define( 'WP_HOME', 'http://127.0.0.1:18080' ); define( 'WP_SITEURL', 'http://127.0.0.1:18080' );" \
+            -v passdeployer-wp-files:/var/www/html \
+            -p 18080:80 \
+            passdeployer-wordpress-contract:test
+
+      - name: Wait for WordPress health
+        run: |
+          set -eu
+          for i in $(seq 1 180); do
+            status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' passdeployer-wp)"
+            echo "health=$status attempt=$i"
+            if [ "$status" = "healthy" ]; then
+              exit 0
+            fi
+            if [ "$status" = "unhealthy" ]; then
+              docker logs passdeployer-wp || true
+              exit 1
+            fi
+            sleep 1
+          done
+          docker logs passdeployer-wp || true
+          docker inspect passdeployer-wp || true
+          exit 1
+
+      - name: Assert WP-CLI installation completed
+        run: |
+          set -eux
+          docker logs passdeployer-wp | grep -F "[passdeployer-wordpress] Installing WordPress through WP-CLI..."
+          docker logs passdeployer-wp | grep -F "[passdeployer-wordpress] WordPress installation is ready."
+          docker exec passdeployer-wp wp core is-installed --allow-root
+          docker exec passdeployer-wp wp option get blogname --allow-root
