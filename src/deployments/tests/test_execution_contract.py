@@ -154,6 +154,131 @@ def test_exact_production_bad_swarm_state_is_rejected_before_service_mutation(mo
     assert error.details["worker_instance_id"]
 
 
+def _runtime_service(client, *, command, args, task_state="failed", desired_state="shutdown", exit_code=127, logs=""):
+    service = MagicMock()
+    service.id = "swarm-service-1"
+    service.name = "demo"
+    service.attrs = {
+        "Spec": {
+            "Mode": {"Replicated": {"Replicas": 1}},
+            "TaskTemplate": {
+                "ContainerSpec": {
+                    "Image": "wordpress:r1",
+                    "Command": command,
+                    "Args": args,
+                },
+                "RestartPolicy": {},
+            },
+        },
+        "UpdateStatus": {},
+    }
+    service.tasks.return_value = [{
+        "ID": "task-1",
+        "NodeID": "",
+        "DesiredState": desired_state,
+        "Status": {
+            "State": task_state,
+            "Err": logs,
+            "Message": logs,
+            "ContainerStatus": {
+                "ExitCode": exit_code,
+                "ContainerID": "",
+            },
+        },
+    }]
+    service.logs.return_value = logs
+    client.services.get.return_value = service
+    return service
+
+
+def test_wait_ready_rejects_observed_contract_drift_without_timeout():
+    runtime = SwarmRuntime(MagicMock())
+    runtime.client = runtime.client or MagicMock()
+    _runtime_service(
+        runtime.client,
+        command=["/bin/sh", "-lc", "/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground"],
+        args=[],
+        logs="/bin/sh: 1: /usr/local/bin/passdeployer-wordpress-entrypoint.sh: not found",
+    )
+    contract = RuntimeExecutionContract(
+        entrypoint_source="IMAGE",
+        image_entrypoint=("docker-ensure-installed.sh",),
+        image_cmd=(
+            "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+            "apache2-foreground",
+        ),
+        command=None,
+        args=(
+            "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+            "apache2-foreground",
+        ),
+        catalog_managed=True,
+        image_entrypoint_owned=True,
+    )
+
+    with pytest.raises(DeploymentError) as exc:
+        runtime.wait_ready(
+            "demo",
+            timeout=1,
+            expected_image="wordpress:r1",
+            expected_runtime_contract=contract,
+            provenance={
+                "deployment_id": "deployment-1",
+                "service_id": "service-1",
+                "revision_id": "revision-1",
+                "worker_code_revision": "worker-sha",
+            },
+        )
+
+    assert exc.value.code == "RUNTIME_ENTRYPOINT_CONTRACT_VIOLATION"
+    assert exc.value.details["first_detected_boundary"] == "swarm_container_spec"
+    assert exc.value.details["actual"]["command"] == [
+        "/bin/sh", "-lc",
+        "/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground",
+    ]
+
+
+def test_wait_ready_reports_exit_127_not_found_when_contract_is_valid():
+    client = MagicMock()
+    _runtime_service(
+        client,
+        command=None,
+        args=[
+            "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+            "apache2-foreground",
+        ],
+        logs="/bin/sh: 1: /usr/local/bin/passdeployer-wordpress-entrypoint.sh: not found",
+    )
+    runtime = SwarmRuntime(client)
+    contract = RuntimeExecutionContract(
+        entrypoint_source="IMAGE",
+        image_entrypoint=("docker-ensure-installed.sh",),
+        image_cmd=(
+            "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+            "apache2-foreground",
+        ),
+        command=None,
+        args=(
+            "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+            "apache2-foreground",
+        ),
+        catalog_managed=True,
+        image_entrypoint_owned=True,
+    )
+
+    with pytest.raises(DeploymentError) as exc:
+        runtime.wait_ready(
+            "demo",
+            timeout=1,
+            expected_image="wordpress:r1",
+            expected_runtime_contract=contract,
+        )
+
+    assert exc.value.code == "SWARM_APPLICATION_PROCESS_EXITED"
+    assert exc.value.details["failure_reason"] == "exit_127_not_found"
+    assert exc.value.certainty == "OBSERVED"
+
+
 def test_observed_bad_swarm_contract_is_classified_as_runtime_contract_violation():
     runtime = SwarmRuntime.__new__(SwarmRuntime)
     service = MagicMock()
