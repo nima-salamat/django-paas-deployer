@@ -165,6 +165,27 @@ class DeploymentLifecycleExecutor:
             with deployment_span("revision.snapshot", attributes={"deployment.id": context.deployment_id, "service.id": context.service_id, "revision.id": context.revision_id}):
                 plan = strategy.plan(context)
             context.assert_can_continue()
+            contract_details = {}
+            contracts = dict(getattr(plan, "execution_contracts", {}) or {})
+            if contracts:
+                contract_details = {
+                    "execution_contracts": {
+                        name: contract.as_dict()
+                        for name, contract in contracts.items()
+                    },
+                    "execution_contract_hashes": dict(
+                        getattr(plan, "runtime_options", {}).get("execution_contract_hashes") or {}
+                    ),
+                    "deployment_provenance": dict(
+                        getattr(plan, "runtime_options", {}).get("deployment_provenance") or {}
+                    ),
+                }
+            context.emit(
+                "runtime_contract",
+                "Runtime execution contract resolved from the immutable revision.",
+                progress=30,
+                details=contract_details,
+            )
 
             context.emit("runtime_apply", "Applying the deployment plan.", progress=45)
             with deployment_span("runtime.apply", attributes={"deployment.id": context.deployment_id, "runtime.backend": runtime.backend}):
