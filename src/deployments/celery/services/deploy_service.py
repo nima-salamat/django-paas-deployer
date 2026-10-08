@@ -609,7 +609,9 @@ class DeployService:
                 or ""
             )
             revision_source_kind = str(
-                (revision_snapshot or {}).get("source_kind") or ""
+                (revision_snapshot or {}).get("source_kind")
+                or getattr(deploy_item.service, "source_kind", "")
+                or ""
             ).strip().lower()
             build_options = _preserve_revision_build_files(
                 build_options,
