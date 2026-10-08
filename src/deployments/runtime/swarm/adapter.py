@@ -237,7 +237,7 @@ class SwarmRuntimeAdapter:
         } if execution_contracts else {primary_contract.process_name: primary_contract.as_dict()}
         runtime_options["execution_contract_hashes"] = {
             **dict(runtime_options.get("execution_contract_hashes") or {}),
-            "revision_contract_hash": primary_contract.fingerprint(boundary="revision"),
+            "revision_contract_hash": primary_contract.contract_hash(),
             "plan_contract_hash": primary_contract.fingerprint(boundary="plan", image_ref=image_ref),
         }
         graph_metadata = dict(getattr(graph, "metadata", {}) or {})
