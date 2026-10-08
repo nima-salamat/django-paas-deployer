@@ -468,6 +468,33 @@ class DeployService:
             # Current execution uses the normalized Dockerfile as the sole build
             # input; Compose is only the declarative source for runtime options.
             dockerfile_text = docker_source_resolution.dockerfile_text
+            # Catalog revisions are immutable server-owned executable manifests.
+            # Their revision build snapshot is authoritative even when the legacy
+            # Deploy.zip_file was created before a runtime-artifact fix. Keep the
+            # archive for build context, but never let an older archived Dockerfile
+            # silently override the revision's Dockerfile.
+            revision_build = (
+                dict((revision_config or {}).get("build") or {})
+                if isinstance((revision_config or {}).get("build"), dict)
+                else {}
+            )
+            catalog_dockerfile = str(
+                revision_build.get("dockerfile")
+                or (revision_config or {}).get("dockerfile")
+                or ""
+            )
+            if (
+                str((revision_config or {}).get("source_kind") or "").strip().lower() == "catalog"
+                and catalog_dockerfile.strip()
+                and catalog_dockerfile != dockerfile_text
+            ):
+                logger.warning(
+                    "Catalog revision Dockerfile differs from legacy deploy archive; "
+                    "using immutable revision Dockerfile for build. deployment=%s service=%s",
+                    deploy_item.pk,
+                    service.pk,
+                )
+                dockerfile_text = catalog_dockerfile
             docker_runtime = docker_source_resolution.runtime or {}
             compose_env = dict(docker_runtime.get("environment") or {})
             explicit_env = dict(cfg.get("env") or cfg.get("environment") or {})
@@ -865,6 +892,18 @@ class DeployService:
             or cfg.get("entry_point")
             or getattr(service, "entry_point", None)
         )
+        # The assignment above intentionally preserves legacy compatibility data,
+        # but a catalog Dockerfile-owned ENTRYPOINT is immutable image metadata and
+        # must never be reintroduced into DeploymentConfig after normalization.
+        if (
+            catalog_source_kind == "catalog"
+            and re.search(
+                r"^\s*ENTRYPOINT\s+",
+                dockerfile_text,
+                flags=re.MULTILINE | re.IGNORECASE,
+            )
+        ):
+            entry_point = None
         celery = as_bool(
             getattr(deploy_item, "celery", False)
             or cfg.get("celery")
