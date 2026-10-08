@@ -1648,6 +1648,67 @@ class SwarmRuntime:
                 )
             time.sleep(1)
 
+        final_contract_failure = self._runtime_contract_failure(
+            name,
+            contract=expected_runtime_contract,
+            expected_image=expected_image,
+            provenance=provenance,
+        )
+        if final_contract_failure is not None:
+            raise final_contract_failure
+
+        final_exit_127 = None
+        final_task_diagnostics = []
+        for final_task in (latest.tasks if latest else ()):
+            diagnostics = self._task_container_diagnostics(final_task)
+            final_task_diagnostics.append(diagnostics)
+            final_combined = " ".join(
+                value for value in (
+                    str(final_task.error or ""),
+                    str(final_task.message or ""),
+                    str(diagnostics.get("error") or ""),
+                    str(service_logs[-4000:] if 'service_logs' in locals() else ""),
+                )
+                if value
+            ).lower()
+            if (
+                diagnostics.get("exit_code") == 127
+                and "not found" in final_combined
+            ):
+                final_exit_127 = {
+                    "task_id": final_task.task_id,
+                    "exit_code": 127,
+                    "task_diagnostics": diagnostics,
+                }
+                break
+        if final_exit_127 is not None:
+            technical = (
+                f"Swarm application process exited with code 127 and reported "
+                f"'not found' while waiting for service {name!r}. The observed "
+                f"runtime contract is valid, so the available evidence does not "
+                f"prove whether the artifact filesystem or its interpreter is missing. "
+                f"task={final_exit_127!r}; service_logs={service_logs[-12000:] if 'service_logs' in locals() else ''}"
+            )
+            raise DeploymentError(
+                technical,
+                stage="swarm_startup",
+                code="SWARM_APPLICATION_PROCESS_EXITED",
+                user_message=(
+                    "The application process exited during startup. "
+                    "Review deployment diagnostics for the exact executable error."
+                ),
+                technical_message=technical,
+                certainty=FailureCertainty.OBSERVED,
+                details={
+                    **dict(provenance or {}),
+                    "failure_reason": "exit_127_not_found",
+                    "boundary": "swarm_task_container",
+                    "expected_image": expected_image,
+                    "task": final_exit_127,
+                    "service_logs": service_logs[-12000:] if 'service_logs' in locals() else "",
+                },
+            )
+
         task_summary = [
             {
                 "task_id": task.task_id,
