@@ -1858,9 +1858,27 @@ class SwarmRuntime:
                 if current is not None:
                     return current
             operation["mutation_started"] = True
+            # Deploy versions are intentionally stable compatibility tags (for
+            # example "1.00").  When an existing Swarm service is updated with
+            # the same tag, force a new task generation so the manager resolves
+            # the freshly-built artifact instead of retaining the previous task
+            # generation associated with that tag.
+            task_template = (
+                (service.attrs or {}).get("Spec", {}).get("TaskTemplate", {})
+                if isinstance(getattr(service, "attrs", None), dict)
+                else {}
+            )
+            try:
+                current_force_update = int(task_template.get("ForceUpdate") or 0)
+            except (TypeError, ValueError):
+                current_force_update = 0
+            update_kwargs = {
+                key: value for key, value in kwargs.items() if key != "name"
+            }
+            update_kwargs["force_update"] = current_force_update + 1
             service.update(
                 image=image_ref,
-                **{key: value for key, value in kwargs.items() if key != "name"},
+                **update_kwargs,
             )
             operation["mutation_succeeded"] = True
             service.reload()
