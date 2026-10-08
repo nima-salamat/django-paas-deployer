@@ -91,6 +91,11 @@ class ReadyApplicationArchitectureTests(TestCase):
 
         start_command = str((app.runtime_config or {}).get("start_command") or "")
         assert start_command == ""
+        # The Dockerfile owns the bootstrap ENTRYPOINT; it must not leak into
+        # the ServiceProcess/runtime command override used by native Swarm.
+        assert (app.runtime_config or {}).get("entry_point") in (None, "")
+        process = app.processes.get(name="web")
+        assert process.entrypoint in (None, "")
 
     def test_ready_app_mariadb_accepts_mysql_env_aliases_for_user_database_and_password(self):
         instance = self.install(catalog_id="wordpress", variant="default", name="mariadb-alias-contract")
