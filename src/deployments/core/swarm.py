@@ -880,7 +880,17 @@ class SwarmRuntime:
                         "-lc",
                         (
                             f"if [ ! -f {shlex.quote(executable)} ]; then exit 41; fi; "
-                            f"if [ ! -x {shlex.quote(executable)} ]; then exit 42; fi"
+                            f"if [ ! -x {shlex.quote(executable)} ]; then exit 42; fi; "
+                            f"shebang=\$(head -n 1 {shlex.quote(executable)} 2>/dev/null || true); "
+                            "case \"$shebang\" in "
+                            "#!*) "
+                            "interpreter=\$(printf '%s\\n' \"$shebang\" | awk '{print $1}' | sed 's/^#!//'); "
+                            "if [ \"$interpreter\" = '/usr/bin/env' ]; then "
+                            "interpreter_name=\$(printf '%s\\n' \"$shebang\" | awk '{print $2}'); "
+                            "[ -n \"$interpreter_name\" ] && command -v \"$interpreter_name\" >/dev/null 2>&1 || exit 43; "
+                            "elif case \"$interpreter\" in /*) true;; *) command -v \"$interpreter\" >/dev/null 2>&1;; esac; "
+                            "then :; else exit 43; fi;; "
+                            "esac"
                         ),
                     ],
                     entrypoint=["/bin/sh"],
@@ -894,6 +904,8 @@ class SwarmRuntime:
                     raise RuntimeError("runtime file missing")
                 if status_code == 42:
                     raise RuntimeError("runtime executable is not executable")
+                if status_code == 43:
+                    raise RuntimeError("runtime executable interpreter is invalid or missing")
                 if status_code != 0:
                     raise RuntimeError(f"runtime executable probe failed with status {status_code}")
                 diagnostics.setdefault("validated_executables", []).append(executable)
@@ -907,6 +919,9 @@ class SwarmRuntime:
                     certainty = FailureCertainty.OBSERVED
                 elif "not executable" in message:
                     code = "RUNTIME_ARTIFACT_EXECUTION_PERMISSION_DENIED"
+                    certainty = FailureCertainty.OBSERVED
+                elif "interpreter is invalid or missing" in message:
+                    code = "RUNTIME_ARTIFACT_INTERPRETER_INVALID"
                     certainty = FailureCertainty.OBSERVED
                 else:
                     code = "RUNTIME_ARTIFACT_EXECUTION_INVALID"
