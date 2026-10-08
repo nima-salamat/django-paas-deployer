@@ -92,3 +92,12 @@ def test_docker_source_inspection_does_not_downgrade_catalog_identity():
     assert 'revision_source_kind = str(' in source
     assert 'if revision_source_kind == "catalog"' in source
     assert 'else docker_source_resolution.source_kind' in source
+
+
+def test_catalog_deployments_bypass_tenant_docker_source_detection():
+    source = _source("deployments/celery/services/deploy_service.py")
+    assert 'is_catalog_source = revision_source_kind == "catalog"' in source
+    assert 'and not is_catalog_source:' in source
+    assert 'elif platform == "docker" and getattr(deploy_item, "zip_file", None) and is_catalog_source:' in source
+    assert 'cfg["source_kind"] = "catalog"' in source
+    assert '["revision_build_files"]' in source or 'revision_build_files' in source
