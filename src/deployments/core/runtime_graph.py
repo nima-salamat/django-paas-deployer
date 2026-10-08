@@ -48,7 +48,6 @@ class RuntimeProcess:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
 def _dockerfile_default_cmd(dockerfile: str) -> str | None:
     """Extract the final Dockerfile CMD without executing or mutating the artifact."""
     matches = list(
@@ -79,6 +78,7 @@ def _dockerfile_default_cmd(dockerfile: str) -> str | None:
     return raw
 
 
+@dataclass(frozen=True)
 class ServiceRuntimeGraph:
     source: dict[str, Any] = field(default_factory=dict)
     build: dict[str, Any] = field(default_factory=dict)
