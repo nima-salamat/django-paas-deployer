@@ -50,19 +50,19 @@ def configure() -> None:
 
 @contextmanager
 def deployment_span(name: str, *, attributes: dict[str, Any] | None = None) -> Iterator[Any]:
-    # Keep optional tracing setup failures non-fatal, but never catch exceptions
-    # raised by the deployment body across the yield. Catching those exceptions
-    # and yielding a second time violates contextlib's generator protocol and
-    # masks the real deployment failure with "generator didn't stop after throw()".
+    # Only tracing setup happens inside this fallback boundary. Never catch
+    # exceptions thrown by the deployment body across yield: contextlib would
+    # interpret a second yield as a broken generator and mask the real error.
     try:
         from opentelemetry import trace
         tracer = trace.get_tracer("passdeployer.deployment")
         span_context = tracer.start_as_current_span(name)
+        span = span_context.__enter__()
     except Exception:
         yield None
         return
 
-    with span_context as span:
+    try:
         try:
             for key, value in _scrub(attributes or {}).items():
                 if value is not None:
@@ -71,6 +71,20 @@ def deployment_span(name: str, *, attributes: dict[str, Any] | None = None) -> I
             # Tracing attributes must never make a deployment fail.
             pass
         yield span
+    except BaseException:
+        # Preserve the original deployment exception while allowing tracing
+        # to record it. A failing optional exporter must not replace it.
+        import sys
+        try:
+            span_context.__exit__(*sys.exc_info())
+        except Exception:
+            pass
+        raise
+    else:
+        try:
+            span_context.__exit__(None, None, None)
+        except Exception:
+            pass
 
 def capture_exception(exc: BaseException, *, tags: dict[str, Any] | None = None, context: dict[str, Any] | None = None) -> None:
     try:
