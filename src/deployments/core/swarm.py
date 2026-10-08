@@ -2069,6 +2069,10 @@ class SwarmRuntime:
                 process_runtime_options["execution_contracts"] = {
                     process_name: process_contract,
                 }
+            else:
+                # Do not leak the primary web contract into another process.
+                process_runtime_options.pop("execution_contract", None)
+                process_runtime_options.pop("execution_contracts", None)
             process_runtime_options["process_name"] = process_name
             process_endpoints = [
                 endpoint for endpoint in (config.endpoints or ())
