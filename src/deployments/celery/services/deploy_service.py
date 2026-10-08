@@ -95,6 +95,7 @@ def _apply_explicit_docker_source_process_override(
         source_command = source_entrypoint or source_command
     if not source_command:
         return
+    source_command = str(source_command)
 
     cfg["processes"] = [{
         "name": "web",
