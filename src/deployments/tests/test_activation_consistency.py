@@ -92,8 +92,8 @@ class DeploymentActivationConsistencyContractTests(unittest.TestCase):
     def test_initial_failure_has_runtime_cleanup_contract(self):
         lifecycle = (ROOT / "deployments/application/lifecycle.py").read_text()
         self.assertIn("cleanup_attempted", lifecycle)
-        self.assertIn("runtime.remove", lifecycle)
-        self.assertIn("There is no previous release to roll back to", lifecycle)
+        self.assertIn("DeploymentLifecycleExecutor._cancel_runtime(context, runtime, handle)", lifecycle)
+        self.assertIn("rollback_plan is not None", lifecycle)
 
     def test_activation_is_fenced_by_service_lifecycle_generation(self):
         self.assertIn("expected_lifecycle_generation", self.service)
