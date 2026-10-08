@@ -226,15 +226,32 @@ def enrich_config_from_project(
     _effective_platform = (
         (project_cfg.platform or config.platform or "")
     ).lower()
-    if (
+
+    # Catalog applications are executable manifests, not generic source
+    # projects. Their Dockerfile may intentionally define its own ENTRYPOINT
+    # (for example the WordPress bootstrap that wraps the official image
+    # entrypoint). A detector can still report the image's default
+    # start command (e.g. "apache2-foreground"), but promoting that value to
+    # DeploymentConfig.entry_point would cause the generic Docker renderer to
+    # replace CMD *and* strip the Dockerfile ENTRYPOINT. Runtime process
+    # semantics already live in the catalog ServiceProcess/revision graph, so
+    # the detected command must remain metadata rather than an override.
+    runtime_options = getattr(config, "runtime_options", None) or {}
+    catalog_managed = bool(
+        isinstance(runtime_options, dict)
+        and runtime_options.get("catalog_managed")
+    )
+    should_promote_start_command = (
         not config.entry_point
-        and project_cfg.start_command
+        and bool(project_cfg.start_command)
+        and not catalog_managed
         and _effective_platform not in _NO_ENTRYPOINT_PROMOTE
-    ):
+    )
+    if should_promote_start_command:
         updates["entry_point"] = project_cfg.start_command
     else:
         # Still record detected start_command in sources for debugging, but
-        # leave entry_point empty so the renderer keeps its own CMD.
+        # leave entry_point empty so the renderer keeps its own CMD/ENTRYPOINT.
         pass
 
     if not config.server_type and project_cfg.server_type:
