@@ -900,7 +900,13 @@ def _reconcile_active_deploy_swarm(deploy: Deploy) -> None:
         labels = dict(getattr(state, "labels", {}) or {})
         observed_release = str(labels.get("release.id") or "")
         observed_revision = str(labels.get("revision.id") or "")
-        expected_release = str(getattr(locked, "release_id", "") or "")
+        # Native Swarm runtime labels use the reusable Release primary key.
+        # Deploy.release_id is only the historical per-attempt UUID.
+        expected_release = str(
+            getattr(locked, "release_reference_id", None)
+            or getattr(locked, "release_id", "")
+            or ""
+        )
         expected_revision = str(getattr(locked, "revision_id", "") or "")
         if expected_release and observed_release and observed_release != expected_release:
             current = {
@@ -1280,7 +1286,27 @@ def _native_reconciliation_plan(
     )
 
 
+def _service_has_active_native_deployment(service: Service) -> bool:
+    """Return whether an active deployment worker currently owns runtime mutation."""
+    return Deploy.objects.filter(
+        service_id=service.pk,
+        status__in=ACTIVE_DEPLOY_STATUSES,
+        cancel_requested=False,
+    ).exists()
+
+
 def _reconcile_service_runtime_swarm(service: Service) -> None:
+    # DeploymentLifecycleExecutor owns runtime mutation while an attempt is
+    # active. The service-level reconciler must not invent a second plan from
+    # the pre-activation state (active_revision can still point to the previous
+    # release or be empty).
+    if _service_has_active_native_deployment(service):
+        logger.debug(
+            "Skipping service runtime reconciliation for %s while an active deployment owns the runtime.",
+            service.pk,
+        )
+        return
+
     resolver = DjangoRuntimeSelectionResolver()
     selection = resolver.resolve(
         service=service,
@@ -1335,6 +1361,15 @@ def _reconcile_service_runtime_swarm(service: Service) -> None:
             desired,
             required_capabilities=plan.required_capabilities,
         )
+    elif desired_state == "running" and observed.status.value != "missing":
+        # An existing runtime without a reconstructable native plan is not
+        # safely actionable. Treat it as manual intervention instead of
+        # reaching ReconciliationExecutor with an invalid None plan.
+        logger.warning(
+            "Skipping Swarm runtime reconciliation for service=%s: no native DeploymentPlan could be reconstructed.",
+            service.pk,
+        )
+        return
 
     decision = ReconciliationPlanner().decide(desired, observed, selection)
     logger.info(
