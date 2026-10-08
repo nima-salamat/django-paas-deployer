@@ -69,8 +69,8 @@ class ServiceRuntimeGraph:
         # but the native Swarm contract treats process.entrypoint as an effective
         # runtime command override. Detect and discard that stale value here so
         # existing installations converge to the same semantics as new ones.
-        config_snapshot = dict(revision.config_snapshot or {})
-        build_snapshot = dict(revision.build_snapshot or {})
+        config_snapshot = dict(getattr(revision, "config_snapshot", None) or {})
+        build_snapshot = dict(getattr(revision, "build_snapshot", None) or {})
         catalog_managed = (
             str(config_snapshot.get("source_kind") or "").strip().lower() == "catalog"
         )
@@ -89,7 +89,7 @@ class ServiceRuntimeGraph:
         )
 
         process_rows = []
-        for raw in revision.process_snapshot or []:
+        for raw in (getattr(revision, "process_snapshot", None) or []):
             entrypoint = raw.get("entrypoint")
             if dockerfile_owns_entrypoint:
                 entrypoint = None
@@ -109,7 +109,7 @@ class ServiceRuntimeGraph:
             )
 
         endpoint_rows = []
-        for raw in revision.endpoint_snapshot or []:
+        for raw in (getattr(revision, "endpoint_snapshot", None) or []):
             endpoint_rows.append(
                 RuntimeEndpoint(
                     name=str(raw.get("name") or "endpoint"),
@@ -128,7 +128,7 @@ class ServiceRuntimeGraph:
 
         build_environment: dict[str, str] = {}
         runtime_environment: dict[str, str] = {}
-        for key, item in (revision.environment_snapshot or {}).items():
+        for key, item in (getattr(revision, "environment_snapshot", None) or {}).items():
             value = str(item.get("value") if isinstance(item, dict) else item)
             scope = str(item.get("scope") if isinstance(item, dict) else "runtime").lower()
             if scope in {"build", "both"}:
@@ -143,19 +143,20 @@ class ServiceRuntimeGraph:
                     "PassDeployer supports between 1 and 8 replicas per process."
                 )
 
+        revision_id = getattr(revision, "pk", None)
+        revision_number = getattr(revision, "revision_number", None)
         return cls(
-            source=dict(revision.source_snapshot or {}),
-            build=dict(revision.build_snapshot or {}),
-            runtime=dict(revision.runtime_snapshot or {}),
+            source=dict(getattr(revision, "source_snapshot", None) or {}),
+            build=dict(getattr(revision, "build_snapshot", None) or {}),
+            runtime=dict(getattr(revision, "runtime_snapshot", None) or {}),
             build_environment=build_environment,
             runtime_environment=runtime_environment,
             environment=runtime_environment,
-
             processes=tuple(process_rows),
             endpoints=tuple(endpoint_rows),
-            volumes=tuple(dict(v) for v in (revision.volume_snapshot or [])),
-            networks=tuple(str(n) for n in (revision.network_snapshot or [])),
-            metadata={"revision_id": str(revision.pk), "revision": revision.revision_number},
+            volumes=tuple(dict(v) for v in (getattr(revision, "volume_snapshot", None) or [])),
+            networks=tuple(str(n) for n in (getattr(revision, "network_snapshot", None) or [])),
+            metadata={"revision_id": str(revision_id or ""), "revision": revision_number},
         )
 
     def enabled_endpoints(self) -> tuple[RuntimeEndpoint, ...]:
