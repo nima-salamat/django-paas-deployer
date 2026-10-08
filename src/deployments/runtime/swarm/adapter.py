@@ -27,6 +27,7 @@ from ..contract import (
     RuntimeOperationResult,
 )
 from ..errors import RuntimeOperationError, RuntimeUnavailableError, RuntimeUnsupportedError
+from ..execution_contract import RuntimeExecutionContract
 from ..observations import (
     RuntimeObservation,
     RuntimeObservedStatus,
@@ -204,6 +205,29 @@ class SwarmRuntimeAdapter:
         )
         runtime_options = dict(getattr(plan, "runtime_options", {}) or {})
         graph_runtime = dict(getattr(graph, "runtime", {}) or {})
+        execution_contracts = dict(getattr(plan, "execution_contracts", {}) or getattr(graph, "execution_contracts", {}) or {})
+        primary_contract = (
+            execution_contracts.get("web")
+            or (next(iter(execution_contracts.values())) if execution_contracts else None)
+        )
+        if primary_contract is None:
+            primary_contract = RuntimeExecutionContract.from_runtime(
+                process_name=str(getattr(primary, "name", "web") or "web"),
+                process_command=getattr(primary, "command", None) if primary is not None else None,
+                process_entrypoint=getattr(primary, "entrypoint", None) if primary is not None else None,
+                runtime_options=runtime_options,
+                source_kind=str(graph_runtime.get("source_kind") or ""),
+                dockerfile=str(getattr(graph, "build", {}).get("dockerfile") or ""),
+            )
+        runtime_options["execution_contract"] = primary_contract.as_dict()
+        runtime_options["execution_contracts"] = {
+            name: contract.as_dict() for name, contract in execution_contracts.items()
+        } if execution_contracts else {primary_contract.process_name: primary_contract.as_dict()}
+        runtime_options["execution_contract_hashes"] = {
+            **dict(runtime_options.get("execution_contract_hashes") or {}),
+            "revision_contract_hash": primary_contract.fingerprint(boundary="revision"),
+            "plan_contract_hash": primary_contract.fingerprint(boundary="plan", image_ref=image_ref),
+        }
         if graph_runtime.get("image_entrypoint_owned"):
             runtime_options["catalog_managed"] = True
             runtime_options["image_entrypoint_owned"] = True
@@ -221,6 +245,11 @@ class SwarmRuntimeAdapter:
                     "healthcheck": dict(getattr(item, "healthcheck", {}) or {}),
                     "resources": dict(getattr(item, "resources", {}) or {}),
                     "metadata": dict(getattr(item, "metadata", {}) or {}),
+                    "execution_contract": (
+                        execution_contracts.get(str(getattr(item, "name", "web") or "web")).as_dict()
+                        if execution_contracts.get(str(getattr(item, "name", "web") or "web"))
+                        else None
+                    ),
                 }
                 for item in processes
             ],
@@ -352,6 +381,9 @@ class SwarmRuntimeAdapter:
                     for name, result in states.items()
                 },
                 "expected_image": image_ref,
+                "execution_contract": primary_contract.as_dict(),
+                "execution_contract_hashes": dict(runtime_options.get("execution_contract_hashes") or {}),
+                "worker_provenance": dict(runtime_options.get("worker_provenance") or {}),
                 "stale_service_names": tuple(
                     str(name)
                     for name in (recovery.get("stale_service_names") or ())
@@ -565,6 +597,12 @@ class SwarmRuntimeAdapter:
                     "timeout": remaining,
                     "expected_image": expected_image,
                 }
+                contract_value = handle.metadata.get("execution_contract")
+                if contract_value:
+                    wait_ready_kwargs["expected_runtime_contract"] = RuntimeExecutionContract.from_dict(contract_value)
+                provenance = handle.metadata.get("deployment_provenance")
+                if provenance:
+                    wait_ready_kwargs["provenance"] = dict(provenance)
                 # Keep compatibility with older runtime implementations and
                 # lightweight adapters that predate the cancellation callback.
                 # Production SwarmRuntime accepts all three arguments.
@@ -577,6 +615,10 @@ class SwarmRuntimeAdapter:
                     wait_ready_kwargs["cancel_check"] = cancel_check
                 if "expected_image" not in parameters:
                     wait_ready_kwargs.pop("expected_image", None)
+                if "expected_runtime_contract" not in parameters:
+                    wait_ready_kwargs.pop("expected_runtime_contract", None)
+                if "provenance" not in parameters:
+                    wait_ready_kwargs.pop("provenance", None)
                 states[service_name] = self.runtime.wait_ready(
                     service_name,
                     **wait_ready_kwargs,
