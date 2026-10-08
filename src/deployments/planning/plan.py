@@ -123,7 +123,7 @@ class DeploymentPlanCompiler:
                 for name, contract in execution_contracts.items()
             }
             runtime_options["execution_contract_hashes"] = {
-                "revision_contract_hash": primary_contract.fingerprint(boundary="revision"),
+                "revision_contract_hash": primary_contract.contract_hash(),
                 "plan_contract_hash": primary_contract.fingerprint(
                     boundary="plan",
                     image_ref=image_ref,
