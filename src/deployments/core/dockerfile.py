@@ -3322,6 +3322,34 @@ def _render_generic(platform, dockerfile_template, tar_stream, config, logger):
 # ---------------------------------------------------------------------------
 
 
+def _normalize_dockerfile_healthcheck_syntax(dockerfile: str) -> str:
+    """Normalize Compose CMD-SHELL healthchecks into valid Dockerfile syntax.
+
+    Compose represents shell healthchecks as ``["CMD-SHELL", command]``.
+    Dockerfile has no ``CMD-SHELL`` instruction token; its shell-form
+    HEALTHCHECK uses the ``CMD`` keyword and Docker internally records the
+    resulting test as CMD-SHELL. This compatibility pass also repairs older
+    catalog archives that were generated before this distinction was fixed.
+    """
+    lines = dockerfile.splitlines(keepends=True)
+    normalized = []
+    pattern = re.compile(
+        r"^(?P<prefix>\s*HEALTHCHECK(?:\s+--[^\s]+(?:=[^\s]+)?)*)\s+"
+        r"CMD-SHELL\s+(?P<command>.+?)(?P<newline>\r?\n)?$",
+        flags=re.IGNORECASE,
+    )
+    for line in lines:
+        match = pattern.match(line)
+        if match:
+            newline = match.group("newline") or ""
+            line = (
+                f"{match.group('prefix')} CMD {match.group('command')}"
+                f"{newline}"
+            )
+        normalized.append(line)
+    return "".join(normalized)
+
+
 def _ensure_port_placeholder(dockerfile: str, port: int | None) -> str:
     """Replace residual ``{port}`` placeholders in the Dockerfile text."""
     if port is None:
@@ -3386,6 +3414,7 @@ class DockerfileGenerator:
         if config is not None and getattr(config, "port", None) is not None:
             port = config.port
         rendered = _ensure_port_placeholder(rendered, port)
+        rendered = _normalize_dockerfile_healthcheck_syntax(rendered)
         rendered = _apply_resolved_base_images(rendered, config)
         unresolved = re.findall(r"__[^\s]+__", rendered)
         if unresolved:
