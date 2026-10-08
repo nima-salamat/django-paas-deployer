@@ -887,6 +887,10 @@ class DeployService:
             or cfg.get("server_type")
             or getattr(service, "server_type", None)
         )
+        catalog_source_kind = str(
+            (revision_config or {}).get("source_kind")
+            or getattr(service, "source_kind", "")
+        ).strip().lower()
         entry_point = (
             getattr(deploy_item, "entry_point", None)
             or cfg.get("entry_point")
