@@ -288,7 +288,7 @@ def compile_compose_service(config, *, image_ref: str, replicas: int = 1) -> dic
     dockerfile_text = str(getattr(config, "dockerfile_template", "") or "")
     dockerfile_owns_entrypoint = bool(
         re.search(
-            r"^\\s*ENTRYPOINT\\s+",
+            r"^\s*ENTRYPOINT\s+",
             dockerfile_text,
             flags=re.MULTILINE | re.IGNORECASE,
         )
@@ -1440,7 +1440,7 @@ class SwarmRuntime:
                 or (
                     bool(runtime_options.get("catalog_managed"))
                     and re.search(
-                        r"^\\s*ENTRYPOINT\\s+",
+                        r"^\s*ENTRYPOINT\s+",
                         str(getattr(config, "dockerfile_template", "") or ""),
                         flags=re.MULTILINE | re.IGNORECASE,
                     )
