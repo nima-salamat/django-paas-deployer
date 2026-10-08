@@ -127,6 +127,25 @@ def _remove_owned_docker_volume(service: Service, docker_volume: DockerVolume, d
                 time.sleep(0.5)
 
 
+def _cleanup_service_releases(service: Service) -> None:
+    """Delete immutable Release rows before their protected ServiceRevision rows."""
+    from deploy.models import Release
+
+    releases = list(
+        Release.objects.filter(service_id=service.pk).only("pk", "revision_id")
+    )
+    if not releases:
+        return
+
+    for release in releases:
+        release.delete()
+        logger.info(
+            "Deleted Release '%s' for service '%s' before Service row cleanup.",
+            release.pk,
+            service.name,
+        )
+
+
 def cleanup_service_resources(service: Service) -> None:
     """Remove all Docker/log/volume resources owned by a Service, without deleting its DB row."""
     service_name = service.get_docker_service_name()
@@ -208,6 +227,7 @@ def cleanup_service_resources(service: Service) -> None:
 
     _cleanup_service_cache_images(service)
     _cleanup_service_volumes(service)
+    _cleanup_service_releases(service)
 
 
 def delete_service_row_after_cleanup(service: Service) -> None:
