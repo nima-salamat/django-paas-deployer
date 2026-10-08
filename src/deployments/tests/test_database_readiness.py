@@ -348,3 +348,22 @@ def test_mysql_exec_retries_transient_connection_115_before_failing():
     assert ok is True
     assert output == "1"
     assert container.calls == 4
+
+
+def test_swarm_db_failures_recover_runtime_after_apply():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1] / "core" / "db_deployer.py"
+    ).read_text(encoding="utf-8")
+    block = source.split(
+        "def _deploy_swarm_database(", 1
+    )[1].split(
+        "    def deploy(", 1
+    )[0]
+    assert "preexisting_runtime = runtime.inspect_service(container_name) is not None" in block
+    assert "def recover_runtime(reason: str)" in block
+    assert 'recover_runtime("sql_readiness_timeout")' in block
+    assert 'recover_runtime("credential_reconciliation")' in block
+    assert "runtime.rollback_service(container_name)" in block
+    assert "runtime.remove(container_name)" in block
