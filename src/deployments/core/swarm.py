@@ -127,6 +127,16 @@ def _command(value: Any) -> list[str] | None:
     return ["/bin/sh", "-lc", str(value)]
 
 
+def _args(value: Any) -> list[str] | None:
+    """Tokenize an effective command for use as Swarm Args to an image ENTRYPOINT."""
+    if value in (None, "", []):
+        return None
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value]
+    import shlex
+    return shlex.split(str(value))
+
+
 def _mount_strings(volume_specs: Iterable[Any]) -> list[str]:
     mounts: list[str] = []
     for volume in volume_specs or ():
@@ -273,9 +283,13 @@ def compile_compose_service(config, *, image_ref: str, replicas: int = 1) -> dic
     if public_http_endpoints(config) and "proxy_net" not in network_names:
         network_names.append("proxy_net")
 
+    runtime_options = dict(config.runtime_options or {})
+    image_entrypoint_owned = bool(runtime_options.get("image_entrypoint_owned"))
+
     service = {
         "image": image_ref,
-        "command": _command(config.start_command),
+        "command": None if image_entrypoint_owned else _command(config.start_command),
+        "args": _args(config.start_command) if image_entrypoint_owned else None,
         "entrypoint": _command(config.entry_point),
         "working_dir": config.working_directory or "/app",
         "read_only": bool(config.read_only),
@@ -1407,10 +1421,12 @@ class SwarmRuntime:
             if service_doc.get("entrypoint") not in (None, "", [])
             else service_doc.get("command")
         )
+        swarm_args = service_doc.get("args")
 
         return {
             "name": name,
             "command": swarm_command,
+            "args": swarm_args,
             "workdir": service_doc.get("working_dir"),
             "read_only": bool(service_doc.get("read_only")),
             "healthcheck": healthcheck,
