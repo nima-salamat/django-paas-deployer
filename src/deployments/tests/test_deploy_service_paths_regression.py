@@ -101,3 +101,16 @@ def test_catalog_deployments_bypass_tenant_docker_source_detection():
     assert 'elif platform == "docker" and getattr(deploy_item, "zip_file", None) and is_catalog_source:' in source
     assert 'cfg["source_kind"] = "catalog"' in source
     assert '["revision_build_files"]' in source or 'revision_build_files' in source
+
+
+def test_catalog_deployments_never_fall_back_to_legacy_archive_dockerfile():
+    source = _source("deployments/celery/services/deploy_service.py")
+    start = source.index("        if docker_source_resolution is not None:")
+    end = source.index("        DeploymentValidator.validate_for_deploy", start)
+    block = source[start:end]
+
+    catalog_branch = block.index("        elif is_catalog_source:")
+    archive_branch = block.index("        elif str(cfg.get(\"dockerfile_source\")", catalog_branch)
+
+    assert "Never fall back to the legacy Deploy ZIP here" in block[catalog_branch:archive_branch]
+    assert block[catalog_branch:].find("pass") >= 0
