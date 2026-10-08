@@ -215,22 +215,9 @@ class DeploymentLifecycleExecutor:
                 )
             context.assert_can_continue()
 
-            # Runtime resources that existed only for the previous process graph
-            # are safe to remove now: the new revision has passed readiness, but
-            # the authoritative database activation has not committed yet. If
-            # cleanup fails, normal rollback can restore the previous release.
-            finalize = getattr(runtime, "finalize_success", None)
-            if callable(finalize):
-                finalization = dict(
-                    finalize(
-                        handle,
-                        operation_key=context.operation("finalize"),
-                        cancel_check=context.cancellation_requested,
-                    )
-                    or {}
-                )
-            context.assert_can_continue()
-
+            # Activation is the authority boundary. Do not destructively clean
+            # previous-process resources before activation: a failed activation
+            # must still be able to restore the previous release completely.
             with deployment_span("activation.commit", attributes={"deployment.id": context.deployment_id, "revision.id": context.revision_id}):
                 strategy.activate(context, plan, ready)
             transitioned = self.store.transition(
@@ -239,11 +226,47 @@ class DeploymentLifecycleExecutor:
                 message="Deployment completed successfully.",
                 details={
                     "runtime": context.runtime_selection.backend,
-                    **finalization,
                 },
             )
             if not transitioned:
                 return self._stale_result(context)
+
+            # Cleanup is deliberately post-activation. A cleanup failure must
+            # never turn an already-activated deployment into FAILED; instead
+            # record reconciliation-required state and let the runtime monitor
+            # converge the stale resource later.
+            finalize = getattr(runtime, "finalize_success", None)
+            if callable(finalize):
+                try:
+                    finalization = dict(
+                        finalize(
+                            handle,
+                            operation_key=context.operation("finalize"),
+                            cancel_check=context.cancellation_requested,
+                        )
+                        or {}
+                    )
+                except Exception as finalize_exc:
+                    finalization = {
+                        "cleanup_attempted": True,
+                        "cleanup_failed": True,
+                        "reconciliation_required": True,
+                        "cleanup_failures": [{
+                            "operation": "post_activation_cleanup",
+                            "error": str(
+                                getattr(finalize_exc, "technical_message", None)
+                                or finalize_exc
+                            ),
+                        }],
+                    }
+                    context.emit(
+                        "runtime_cleanup_degraded",
+                        "Deployment activated successfully, but old runtime resources still require cleanup.",
+                        level="warning",
+                        progress=100,
+                        details=finalization,
+                    )
+            context.assert_can_continue()
             if self.store.status != sm.DEPLOY_SUCCEEDED:
                 # The terminal store may have won a cancellation race while
                 # this worker was finishing activation.  Treat that result as
@@ -271,6 +294,9 @@ class DeploymentLifecycleExecutor:
                 status=self.store.status,
                 success=True,
                 runtime_result=ready,
+                cleanup_performed=bool(finalization.get("cleanup_attempted")),
+                cleanup_failed=bool(finalization.get("cleanup_failed")),
+                details=finalization,
             )
         except DeploymentCancelled as exc:
             return self._finish_cancellation(context, runtime, plan, handle, exc)
