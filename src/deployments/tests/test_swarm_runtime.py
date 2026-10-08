@@ -396,7 +396,7 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             start_command="/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground",
             dockerfile_template=(
                 "FROM wordpress:7.1.2-php8.4-apache\n"
-                'ENTRYPOINT ["docker-ensure-installed.sh"]\n'
+                'ENTRYPOINT ["/usr/local/bin/docker-ensure-installed.sh"]\n'
                 'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "apache2-foreground"]\n'
             ),
             runtime_options={
