@@ -224,12 +224,27 @@ def validate_swarm_contract(
     )
     expected_command = tuple(expected["Command"] or ())
     expected_args = tuple(expected["Args"] or ())
+    actual_command_tokens = _tokens(actual_effective_command)
+    actual_args_tokens = _tokens(actual_args)
+    actual_payload = {
+        "entrypoint_source": contract.entrypoint_source,
+        "image_entrypoint": list(contract.image_entrypoint),
+        "image_cmd": list(contract.image_cmd),
+        "command": list(actual_command_tokens) if actual_command_tokens else None,
+        "args": list(actual_args_tokens),
+        "catalog_managed": contract.catalog_managed,
+        "image_entrypoint_owned": contract.image_entrypoint_owned,
+        "process_name": contract.process_name,
+        "contract_version": contract.contract_version,
+    }
+    actual_encoded = json.dumps(actual_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    actual_contract_hash = hashlib.sha256(actual_encoded.encode("utf-8")).hexdigest()
     mismatch = (
         contract.entrypoint_source == "IMAGE"
         and actual_entrypoint not in (None, "", [])
     )
-    mismatch = mismatch or _tokens(actual_effective_command) != expected_command
-    mismatch = mismatch or _tokens(actual_args) != expected_args
+    mismatch = mismatch or actual_command_tokens != expected_command
+    mismatch = mismatch or actual_args_tokens != expected_args
 
     return {
         "valid": not mismatch,
@@ -243,6 +258,8 @@ def validate_swarm_contract(
         },
         "revision_contract_hash": contract.fingerprint(boundary="revision"),
         "compiled_swarm_contract_hash": contract.fingerprint(boundary=boundary),
+        "expected_contract_hash": contract.fingerprint(boundary="expected", image_ref=image_ref if False else ""),
+        "actual_contract_hash": actual_contract_hash,
     }
 
 
