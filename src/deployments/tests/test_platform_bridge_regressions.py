@@ -128,6 +128,66 @@ def test_restart_only_accepts_current_catalog_image(monkeypatch):
     assert DeploymentHelper.is_restart_only(deploy, "wordpress") is True
 
 
+def test_swarm_process_graph_does_not_resurrect_catalog_entrypoint_override(monkeypatch):
+    from deployments.core.swarm import SwarmRuntime
+    from deployments.core.types import DeploymentConfig
+
+    config = DeploymentConfig(
+        name="wordpress-service",
+        tag="1.00",
+        zip_path="/tmp/wordpress.zip",
+        dockerfile_template=(
+            "FROM wordpress:7.1.2-php8.4-apache\n"
+            'ENTRYPOINT ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh"]\n'
+            'CMD ["apache2-foreground"]\n'
+        ),
+        max_cpu=1.0,
+        max_ram=512,
+        networks=[],
+        volumes=[],
+        port=80,
+        read_only=False,
+        platform="docker",
+        platform_type="APP",
+        entry_point="/usr/local/bin/docker-entrypoint.sh",
+        runtime_options={
+            "catalog_managed": True,
+            "processes": [{
+                "name": "web",
+                "process_type": "application",
+                "command": "apache2-foreground",
+                "entrypoint": None,
+                "replicas": 1,
+                "enabled": True,
+            }],
+        },
+        labels={"service.id": "service-1"},
+    )
+
+    runtime = object.__new__(SwarmRuntime)
+    runtime._last_apply_operation = None
+    runtime._last_apply_recovery = {}
+    runtime.service_names_for_service = lambda service_id: []
+    runtime.assert_active = lambda: None
+
+    captured = {}
+
+    def fake_apply(process_config, **kwargs):
+        captured["config"] = process_config
+        return SimpleNamespace(replicas_running=1)
+
+    runtime.apply = fake_apply
+    result = runtime.apply_processes(
+        config,
+        image_ref="registry/wordpress:1.00",
+        operation_key="deploy:1",
+    )
+
+    assert "web" in result
+    assert captured["config"].entry_point is None
+    assert captured["config"].start_command == "apache2-foreground"
+
+
 def test_legacy_catalog_revision_drops_dockerfile_owned_process_entrypoint():
     from deployments.core.runtime_graph import ServiceRuntimeGraph
 
