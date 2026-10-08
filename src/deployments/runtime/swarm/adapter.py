@@ -7,7 +7,7 @@ operations remain implemented by deployments.core.swarm.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from deployments.common.exceptions import DeploymentError
 from deployments.core.swarm import SwarmRuntime, SwarmServiceState, swarm_enabled
