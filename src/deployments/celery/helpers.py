@@ -1,6 +1,8 @@
 """deployments/celery/helpers.py — mirrors + versions from DB settings."""
 from dataclasses import dataclass
+import json
 import os
+import re
 import zipfile
 
 from deploy.models import Deploy
@@ -226,6 +228,85 @@ class DeploymentHelper:
             return out
 
     @staticmethod
+    def _restart_only_artifact_is_current(deploy_item: Deploy, container_name: str) -> bool:
+        """
+        Allow the non-build start fast-path only when the running image still
+        represents the active catalog revision and its Dockerfile-owned
+        ENTRYPOINT is intact.
+
+        Older catalog deployments can survive for a long time with a rendered
+        image that predates an entrypoint fix. Restarting such a container is
+        not a safe no-op: it would simply bring the broken artifact back.
+        """
+        service = deploy_item.service
+        active_revision = getattr(service, "active_revision", None)
+        source_kind = str(
+            getattr(service, "source_kind", "")
+            or ((getattr(active_revision, "config_snapshot", None) or {}).get("source_kind") if active_revision else "")
+            or ((getattr(deploy_item, "config", None) or {}).get("source_kind") if isinstance(getattr(deploy_item, "config", None), dict) else "")
+            or ""
+        ).strip().lower()
+
+        if source_kind != "catalog":
+            return True
+        if active_revision is None:
+            return False
+
+        expected_revision = str(
+            getattr(active_revision, "pk", "")
+            or getattr(deploy_item, "revision_id", "")
+            or ""
+        ).strip()
+
+        dockerfile = str(
+            (getattr(active_revision, "build_snapshot", None) or {}).get("dockerfile")
+            or ""
+        )
+        expected_entrypoint = None
+        match = re.search(
+            r"^\s*ENTRYPOINT\s+(.+?)\s*$",
+            dockerfile,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
+        if match:
+            raw = match.group(1).strip()
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                parsed = ["/bin/sh", "-c", raw]
+            if isinstance(parsed, list):
+                expected_entrypoint = [str(item) for item in parsed]
+
+        try:
+            existing = container.client.containers.get(container_name)
+            image = getattr(existing, "image", None)
+            image_attrs = dict(getattr(image, "attrs", None) or {})
+            image_config = dict(image_attrs.get("Config") or {})
+            image_labels = dict(image_config.get("Labels") or {})
+            container_labels = dict(getattr(existing, "labels", None) or {})
+
+            observed_revision = str(
+                container_labels.get("io.passdeployer.revision")
+                or container_labels.get("revision.id")
+                or image_labels.get("io.passdeployer.revision")
+                or image_labels.get("revision.id")
+                or ""
+            ).strip()
+            if expected_revision and observed_revision != expected_revision:
+                return False
+
+            if expected_entrypoint is not None:
+                actual_entrypoint = image_config.get("Entrypoint")
+                if actual_entrypoint != expected_entrypoint:
+                    return False
+        except Exception:
+            # A catalog artifact cannot safely use restart-only if its image
+            # identity/config cannot be verified.
+            return False
+
+        return True
+
+    @staticmethod
     def is_restart_only(deploy_item: Deploy, container_name: str) -> bool:
         service = deploy_item.service
 
@@ -256,6 +337,13 @@ class DeploymentHelper:
                 ):
                     return False
         except Exception:
+            return False
+
+        if not DeploymentHelper._restart_only_artifact_is_current(deploy_item, container_name):
+            logger.info(
+                "Skipping restart-only fast-path for service=%s: runtime artifact is stale or cannot be verified.",
+                getattr(service, "pk", ""),
+            )
             return False
 
         return True
