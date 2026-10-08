@@ -90,12 +90,13 @@ class ReadyApplicationArchitectureTests(TestCase):
         assert "ServerName localhost" in dockerfile
 
         start_command = str((app.runtime_config or {}).get("start_command") or "")
-        assert start_command == ""
-        # The Dockerfile owns the bootstrap ENTRYPOINT; it must not leak into
-        # the ServiceProcess/runtime command override used by native Swarm.
+        assert start_command == "/usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground"
+        # The Dockerfile owns the bootstrap ENTRYPOINT; only its CMD is mirrored
+        # as the explicit Swarm runtime command.
         assert (app.runtime_config or {}).get("entry_point") in (None, "")
         process = app.processes.get(name="web")
         assert process.entrypoint in (None, "")
+        assert process.command == start_command
 
     def test_wordpress_revision_graph_keeps_dockerfile_entrypoint_out_of_runtime_process(self):
         instance = self.install(
