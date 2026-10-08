@@ -323,7 +323,12 @@ def reconcile_application_installations():
     # cancellations. A lost success/failure callback or broker interruption
     # can leave a child claim stranded while the parent remains DEPLOYING.
     instances = ApplicationInstance.objects.filter(
-        status__in=(ApplicationStatus.PENDING, ApplicationStatus.DEPLOYING, ApplicationStatus.CANCELLED),
+        status__in=(
+            ApplicationStatus.PENDING,
+            ApplicationStatus.DEPLOYING,
+            ApplicationStatus.RUNNING,
+            ApplicationStatus.CANCELLED,
+        ),
         cancel_requested__in=(False, True),
     ).only("pk")
     recovered = 0
