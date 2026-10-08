@@ -92,6 +92,46 @@ class ReadyApplicationRuntimeTests(TestCase):
         self.assertEqual(statuses.get("mariadb"), "succeeded")
         self.assertEqual(statuses.get("wordpress"), "succeeded")
 
+        wordpress_binding = next(
+            binding
+            for binding in instance.services.select_related("service", "deploy")
+            if binding.service_key == "wordpress"
+        )
+        from deployments.core.manager.client_manager import get_docker_client
+
+        client = get_docker_client()
+        swarm_service = client.services.get(wordpress_binding.service.get_docker_service_name())
+        container_spec = (
+            (swarm_service.attrs.get("Spec") or {})
+            .get("TaskTemplate", {})
+            .get("ContainerSpec", {})
+        )
+        self.assertIsNone(container_spec.get("Command"))
+        self.assertEqual(
+            container_spec.get("Args"),
+            [
+                "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+                "apache2-foreground",
+            ],
+        )
+
+        tasks = swarm_service.tasks()
+        running_tasks = [
+            task for task in tasks
+            if str(task.get("Status", {}).get("State") or "").lower() == "running"
+        ]
+        self.assertTrue(running_tasks, "WordPress Swarm service has no running task.")
+        container_id = str(
+            (running_tasks[0].get("Status", {}).get("ContainerStatus") or {}).get("ContainerID") or ""
+        )
+        self.assertTrue(container_id, "Running WordPress task has no container ID.")
+        container = client.containers.get(container_id)
+        container.reload()
+        health = ((container.attrs.get("State") or {}).get("Health") or {}).get("Status")
+        self.assertEqual(health, "healthy")
+        result = container.exec_run(["wp", "core", "is-installed", "--allow-root"])
+        self.assertEqual(result.exit_code, 0, result.output.decode(errors="replace"))
+
     def test_mattermost_postgres_real_stack(self):
         user = User.objects.create_user(
             username="runtime-integration",
