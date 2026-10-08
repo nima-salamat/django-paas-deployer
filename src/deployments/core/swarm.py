@@ -284,7 +284,24 @@ def compile_compose_service(config, *, image_ref: str, replicas: int = 1) -> dic
         network_names.append("proxy_net")
 
     runtime_options = dict(config.runtime_options or {})
-    image_entrypoint_owned = bool(runtime_options.get("image_entrypoint_owned"))
+    catalog_managed = bool(runtime_options.get("catalog_managed"))
+    dockerfile_text = str(getattr(config, "dockerfile_template", "") or "")
+    dockerfile_owns_entrypoint = bool(
+        re.search(
+            r"^\\s*ENTRYPOINT\\s+",
+            dockerfile_text,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
+    )
+    # The Dockerfile is the authoritative final source for image-level
+    # ENTRYPOINT ownership. This protects catalog deployments when an older
+    # revision or compatibility layer omitted the derived runtime flag.
+    image_entrypoint_owned = bool(
+        runtime_options.get("image_entrypoint_owned")
+        or (catalog_managed and dockerfile_owns_entrypoint)
+    )
+    if image_entrypoint_owned:
+        runtime_options["image_entrypoint_owned"] = True
 
     service = {
         "image": image_ref,
@@ -1412,12 +1429,26 @@ class SwarmRuntime:
         # command + args. "entrypoint" is NOT a valid top-level keyword for
         # Service.create() or Service.update().
         #
-        # In PassDeployer's DeploymentConfig, entry_point is the effective
-        # application start command that replaces the generated Dockerfile CMD
-        # (not a separate Docker ENTRYPOINT). compile_compose_service therefore
-        # materializes it in the Compose-shaped "entrypoint" field. Prefer that
-        # effective command here so it is not accidentally combined with the
-        # generated start command a second time.
+        # Re-check image ENTRYPOINT ownership at the SDK boundary. This is
+        # intentionally redundant with compile_compose_service so a stale
+        # serialized Compose field can never replace an image-owned
+        # ENTRYPOINT with /bin/sh -lc.
+        if (
+            bool(service_doc.get("entrypoint"))
+            and bool(
+                runtime_options.get("image_entrypoint_owned")
+                or (
+                    bool(runtime_options.get("catalog_managed"))
+                    and re.search(
+                        r"^\\s*ENTRYPOINT\\s+",
+                        str(getattr(config, "dockerfile_template", "") or ""),
+                        flags=re.MULTILINE | re.IGNORECASE,
+                    )
+                )
+            )
+        ):
+            service_doc["entrypoint"] = None
+
         swarm_command = (
             service_doc.get("entrypoint")
             if service_doc.get("entrypoint") not in (None, "", [])
