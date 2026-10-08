@@ -196,7 +196,7 @@ networks:
         self.assertIn("mariadb-client", wordpress["dockerfile"])
         self.assertIn("WP_CLI_ALLOW_ROOT=1", wordpress["dockerfile"])
         self.assertIn("wp-cli-${WP_CLI_VERSION}.phar", wordpress["dockerfile"])
-        self.assertIn("sha512sum -c -", wordpress["dockerfile"])
+        self.assertIn("sha256sum -c -", wordpress["dockerfile"])
         self.assertFalse(wordpress.get("command"))
         self.assertIn("WORDPRESS_ADMIN_USER", wordpress["environment"])
         self.assertIn("WORDPRESS_ADMIN_PASSWORD", wordpress["environment"])
