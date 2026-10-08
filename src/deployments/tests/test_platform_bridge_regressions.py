@@ -253,6 +253,52 @@ def test_catalog_profile_removes_stale_dockerfile_entrypoint_override():
     assert normalized["start_command"] == "apache2-foreground"
 
 
+def test_docker_source_process_override_ignores_stale_compatibility_start_command():
+    from deployments.celery.services.deploy_service import (
+        _apply_explicit_docker_source_process_override,
+    )
+
+    cfg = {
+        "start_command": "true",
+        "processes": [{
+            "name": "web",
+            "process_type": "web",
+            "command": None,
+            "entrypoint": None,
+            "replicas": 1,
+            "enabled": True,
+            "environment": {},
+        }],
+    }
+    runtime_options = {"processes": list(cfg["processes"])}
+
+    _apply_explicit_docker_source_process_override(
+        cfg,
+        runtime_options,
+        {"source_kind": "dockerfile"},
+    )
+
+    assert cfg["processes"][0]["command"] is None
+    assert runtime_options["processes"][0]["command"] is None
+    assert cfg["start_command"] == "true"
+
+
+def test_docker_source_process_override_uses_explicit_source_command():
+    from deployments.celery.services.deploy_service import (
+        _apply_explicit_docker_source_process_override,
+    )
+
+    cfg = {"start_command": "true"}
+    runtime_options = {}
+    _apply_explicit_docker_source_process_override(
+        cfg,
+        runtime_options,
+        {"command": "apache2-foreground"},
+    )
+
+    assert cfg["processes"][0]["command"] == "apache2-foreground"
+    assert runtime_options["processes"][0]["command"] == "apache2-foreground"
+
 def test_catalog_dockerfile_entrypoint_survives_renderer(monkeypatch):
     from deployments.core import dockerfile
 
