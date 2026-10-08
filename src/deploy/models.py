@@ -81,7 +81,9 @@ class BuildArtifact(BaseModel):
         verbose_name_plural = _("Build Artifacts")
 
     def save(self, *args, **kwargs):
-        if self.pk:
+        # BaseModel assigns UUID primary keys before the first INSERT, so self.pk is already populated for a new artifact.
+        # Django model state is the correct creation-vs-update discriminator for immutable UUID-backed entities.
+        if not self._state.adding:
             raise ValidationError("BuildArtifact is immutable after creation.")
         super().save(*args, **kwargs)
 

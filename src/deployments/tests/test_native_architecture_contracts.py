@@ -87,6 +87,21 @@ def test_swarm_capability_matches_supported_replica_range():
     assert "1 <= replicas <= 8" in swarm or "0 <= replicas <= 8" in swarm
 
 
+def test_build_artifact_immutability_uses_django_adding_state_for_uuid_primary_keys():
+    models = ast.parse(_source("..", "deploy", "models.py"))
+    artifact = next(
+        node for node in models.body
+        if isinstance(node, ast.ClassDef) and node.name == "BuildArtifact"
+    )
+    save = next(
+        node for node in artifact.body
+        if isinstance(node, ast.FunctionDef) and node.name == "save"
+    )
+    source = ast.unparse(save)
+    assert "self._state.adding" in source
+    assert "if self.pk" not in source
+
+
 def test_release_and_artifact_are_separate_from_cache_artifacts():
     models = _source("..", "deploy", "models.py")
     assert "class BuildArtifact(" in models
