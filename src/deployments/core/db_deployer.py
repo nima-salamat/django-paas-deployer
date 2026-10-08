@@ -1582,6 +1582,43 @@ class DBDeployer:
                         error=str(exc),
                     )
 
+        # Runtime mutation must be recoverable if database-specific readiness
+        # or credential reconciliation fails after the Swarm service was changed.
+        # Capture whether a previous managed service existed before mutation so
+        # cleanup never deletes a healthy pre-existing DB runtime.
+        try:
+            preexisting_runtime = runtime.inspect_service(container_name) is not None
+        except DeploymentError as exc:
+            log.error("swarm_inspection", str(exc), progress=100)
+            return DBDeployResult(
+                success=False,
+                message=getattr(exc, "user_message", None) or str(exc),
+                container_name=container_name,
+                platform=platform,
+                error=str(exc),
+                details=getattr(exc, "details", {}) or {},
+            )
+
+        def recover_runtime(reason: str) -> dict[str, Any]:
+            details: dict[str, Any] = {
+                "runtime_recovery_attempted": True,
+                "runtime_preexisting": preexisting_runtime,
+                "runtime_recovery_reason": reason,
+            }
+            try:
+                if preexisting_runtime:
+                    rolled_back = bool(runtime.rollback_service(container_name))
+                    details["runtime_rolled_back"] = rolled_back
+                    details["runtime_removed"] = False
+                else:
+                    runtime.remove(container_name)
+                    details["runtime_rolled_back"] = False
+                    details["runtime_removed"] = True
+            except Exception as recovery_exc:
+                details["runtime_recovery_failed"] = True
+                details["runtime_recovery_error"] = str(recovery_exc)
+            return details
+
         try:
             state = runtime.apply_external_image_service(
                 name=container_name,
@@ -1608,10 +1645,12 @@ class DBDeployer:
                 replicas=replicas,
             )
         except DeploymentError as exc:
+            recovery = recover_runtime("swarm_apply")
             log.error(
                 "swarm_create",
                 str(exc),
                 progress=100,
+                details=recovery,
             )
             return DBDeployResult(
                 success=False,
@@ -1619,7 +1658,10 @@ class DBDeployer:
                 container_name=container_name,
                 platform=platform,
                 error=str(exc),
-                details=getattr(exc, "details", {}) or {},
+                details={
+                    **(getattr(exc, "details", {}) or {}),
+                    **recovery,
+                },
             )
 
         if platform in {"mysql", "mariadb"}:
