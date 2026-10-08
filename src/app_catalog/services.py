@@ -759,6 +759,18 @@ def _create_application_installation(
                 if port:
                     break
 
+        # An ENTRYPOINT declared inside a catalog Dockerfile belongs to the
+        # immutable image artifact. The Swarm runtime's ServiceProcess.entrypoint
+        # field means an effective runtime command override, so copying the
+        # Dockerfile ENTRYPOINT there would make Swarm pass the bootstrap script
+        # as the command and can execute it twice. Keep the image-level
+        # ENTRYPOINT solely in the Dockerfile and use the catalog command as CMD.
+        dockerfile_owns_entrypoint = bool(
+            not is_database
+            and re.search(r"^\s*ENTRYPOINT\s+", dockerfile_text, flags=re.MULTILINE | re.IGNORECASE)
+        )
+        runtime_entrypoint = None if dockerfile_owns_entrypoint else spec.get("entrypoint")
+
         runtime_config = {
             "platform": str(spec.get("platform") or "docker") if is_database else "docker",
             "catalog_platform": str(spec.get("platform") or "docker"),
@@ -789,9 +801,9 @@ def _create_application_installation(
                 )
             ),
             "entry_point": (
-                shlex.join([str(x) for x in (spec.get("entrypoint") or [])])
-                if isinstance(spec.get("entrypoint"), (list, tuple)) and spec.get("entrypoint")
-                else (str(spec.get("entrypoint")) if spec.get("entrypoint") else None)
+                shlex.join([str(x) for x in (runtime_entrypoint or [])])
+                if isinstance(runtime_entrypoint, (list, tuple)) and runtime_entrypoint
+                else (str(runtime_entrypoint) if runtime_entrypoint else None)
             ),
             "restart_policy": dict(spec.get("restart_policy") or {}),
             "working_directory": spec.get("working_directory"),
