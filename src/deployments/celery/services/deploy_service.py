@@ -94,6 +94,31 @@ def _native_swarm_image_tag(version, release_id) -> str:
 _docker_safe_tag = _docker_tag_from_deploy
 
 
+def _enforce_catalog_dockerfile_entrypoint_contract(
+    cfg: dict,
+    runtime_options: dict,
+    *,
+    source_kind: str,
+    dockerfile_text: str,
+    entry_point,
+):
+    """Make catalog Dockerfile ENTRYPOINT ownership explicit before rendering."""
+    if (
+        str(source_kind or "").strip().lower() == "catalog"
+        and re.search(
+            r"^\s*ENTRYPOINT\s+",
+            dockerfile_text,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
+    ):
+        runtime_options["catalog_managed"] = True
+        cfg.pop("entry_point", None)
+        runtime_options.pop("entry_point", None)
+        runtime_options.pop("entrypoint", None)
+        return None
+    return entry_point
+
+
 def _apply_explicit_docker_source_process_override(
     cfg: dict,
     runtime_options: dict,
@@ -1079,19 +1104,13 @@ class DeployService:
         # the source kind is resolved there, while the renderer receives only the
         # assembled DeploymentConfig. A catalog Dockerfile-owned ENTRYPOINT must
         # never depend on legacy Service/Deploy entry_point fields.
-        if (
-            catalog_source_kind == "catalog"
-            and re.search(
-                r"^\s*ENTRYPOINT\s+",
-                dockerfile_text,
-                flags=re.MULTILINE | re.IGNORECASE,
-            )
-        ):
-            runtime_options["catalog_managed"] = True
-            entry_point = None
-            cfg.pop("entry_point", None)
-            runtime_options.pop("entry_point", None)
-            runtime_options.pop("entrypoint", None)
+        entry_point = _enforce_catalog_dockerfile_entrypoint_contract(
+            cfg,
+            runtime_options,
+            source_kind=catalog_source_kind,
+            dockerfile_text=dockerfile_text,
+            entry_point=entry_point,
+        )
 
         if platform == "docker" and docker_runtime_source:
             # Only an explicitly declared command/entrypoint from the Docker
