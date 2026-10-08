@@ -184,6 +184,55 @@ def test_ready_app_delete_preflights_all_child_resources_before_deleting_rows():
 
 
 
+def test_legacy_catalog_volume_wins_over_stale_unowned_canonical_shadow():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock, patch
+
+    from services import signals
+
+    service_id = "8e572596-a3d4-4025-9d0e-16e938395c52"
+    legacy_name = "cat-8e572596-wordpress-files"
+    canonical_name = "vol-12345678-wordpress-files"
+
+    registry_volume = SimpleNamespace(
+        pk="vol-row-1",
+        name=legacy_name,
+        service_id=service_id,
+        get_docker_volume_name=lambda: canonical_name,
+        delete=MagicMock(),
+    )
+    service = SimpleNamespace(pk=service_id, name="blog-wordpress-docker")
+
+    canonical_raw = SimpleNamespace(attrs={"Labels": {}})
+    legacy_raw = SimpleNamespace(attrs={"Labels": {}})
+    probes = {}
+
+    def docker_volume(name):
+        probe = SimpleNamespace(client=SimpleNamespace(volumes=SimpleNamespace(get=MagicMock())))
+        if name == canonical_name:
+            probe.client.volumes.get.return_value = canonical_raw
+        elif name == legacy_name:
+            probe.client.volumes.get.return_value = legacy_raw
+        else:
+            raise AssertionError(f"unexpected Docker volume lookup: {name}")
+        probes[name] = probe
+        return probe
+
+    volumes_qs = MagicMock()
+    volumes_qs.__iter__.return_value = iter([registry_volume])
+
+    with (
+        patch.object(signals.Volume.objects, "filter", return_value=volumes_qs),
+        patch.object(signals, "DockerVolume", side_effect=docker_volume),
+        patch.object(signals, "_remove_owned_docker_volume") as remove_owned,
+    ):
+        signals._cleanup_service_volumes(service)
+
+    remove_owned.assert_called_once()
+    assert remove_owned.call_args.args[2] == legacy_name
+    registry_volume.delete.assert_called_once_with()
+
+
 def test_in_use_managed_volume_cleanup_removes_owned_task_container_then_retries():
     from types import SimpleNamespace
     from unittest.mock import Mock
