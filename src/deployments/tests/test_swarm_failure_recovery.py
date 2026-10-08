@@ -202,6 +202,34 @@ class SwarmFailureRecoveryTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "SWARM_SERVICE_SCALED_TO_ZERO")
         self.assertEqual(ctx.exception.details["replicas_desired"], 0)
 
+    def test_restartable_failed_task_can_remain_in_backoff(self):
+        image = "demo:r1@sha256:new"
+        service = FakeService(
+            image=image,
+            tasks=[
+                {
+                    "ID": "task-1",
+                    "DesiredState": "shutdown",
+                    "Status": {
+                        "State": "failed",
+                        "Err": "task: non-zero exit (1)",
+                        "Message": "replacement is pending",
+                    },
+                    "Spec": {"ContainerSpec": {"Image": image}},
+                }
+            ],
+        )
+        service.attrs["Spec"]["TaskTemplate"]["RestartPolicy"] = {
+            "Condition": "on-failure"
+        }
+        runtime = SwarmRuntime(FakeClient(service))
+
+        with self.assertRaises(DeploymentError) as ctx:
+            runtime.wait_ready("demo", timeout=0, expected_image=image)
+
+        self.assertEqual(ctx.exception.code, "SWARM_START_TIMEOUT")
+        self.assertIn("application traceback", ctx.exception.details["service_logs"])
+
     def test_old_running_image_after_swarm_rollback_is_not_success(self):
         old_image = "demo:r0@sha256:old"
         new_image = "demo:r1@sha256:new"

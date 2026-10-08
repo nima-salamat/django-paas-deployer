@@ -1184,13 +1184,15 @@ class SwarmRuntime:
             )
             for item in task_summary
         )
+        service_logs = self._service_logs_for_failure(name)
         technical = (
             f"Swarm service {name!r} did not reach a running task within {timeout:.0f}s. "
             f"expected_image={expected_image!r}; "
             f"service_image={latest.service_image if latest else None!r}; "
             f"update_state={latest.update_state if latest else None!r}; "
             f"update_message={latest.update_message if latest else None!r}; "
-            f"tasks={concise_tasks or 'none'}"
+            f"tasks={concise_tasks or 'none'}; "
+            f"service_logs={service_logs[-12000:]}"
         )
         raise DeploymentError(
             technical,
@@ -1206,6 +1208,7 @@ class SwarmRuntime:
                 "replicas_running": latest.replicas_running if latest else None,
                 "healthcheck_configured": latest.healthcheck_configured if latest else False,
                 "tasks": task_summary,
+                "service_logs": service_logs[-12000:],
             },
         )
 
