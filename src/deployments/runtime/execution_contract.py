@@ -258,7 +258,7 @@ def validate_swarm_contract(
         },
         "revision_contract_hash": contract.fingerprint(boundary="revision"),
         "compiled_swarm_contract_hash": contract.fingerprint(boundary=boundary),
-        "expected_contract_hash": contract.fingerprint(boundary="expected", image_ref=image_ref if False else ""),
+        "expected_contract_hash": contract.fingerprint(boundary="expected"),
         "actual_contract_hash": actual_contract_hash,
     }
 
