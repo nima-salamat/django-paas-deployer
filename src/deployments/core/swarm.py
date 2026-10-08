@@ -1141,6 +1141,65 @@ class SwarmRuntime:
             result["inspection_error"] = f"{type(exc).__name__}: {exc}"
         return result
 
+    def _service_container_spec(self, name: str) -> dict[str, Any]:
+        """Return the observed Swarm ContainerSpec using Docker-native fields."""
+        service = self.client.services.get(_validate_service_name(name))
+        attrs = getattr(service, "attrs", {}) or {}
+        return dict(
+            ((attrs.get("Spec") or {}).get("TaskTemplate") or {}).get("ContainerSpec")
+            or {}
+        )
+
+    def _runtime_contract_failure(
+        self,
+        name: str,
+        *,
+        contract: RuntimeExecutionContract | None,
+        expected_image: str | None,
+        provenance: Mapping[str, Any] | None = None,
+    ) -> DeploymentError | None:
+        if contract is None:
+            return None
+        try:
+            observed = self._service_container_spec(name)
+        except Exception:
+            return None
+        validation = validate_swarm_contract(
+            contract,
+            service_doc={
+                "entrypoint": None,
+                "command": observed.get("Command"),
+                "args": observed.get("Args"),
+            },
+            boundary="swarm_container_spec_observed",
+        )
+        if validation["valid"]:
+            return None
+        safe_provenance = dict(provenance or {})
+        return DeploymentError(
+            "The observed Swarm ContainerSpec does not match the canonical runtime execution contract.",
+            stage="swarm_startup",
+            code="RUNTIME_ENTRYPOINT_CONTRACT_VIOLATION",
+            user_message=(
+                "Deployment startup failed because the runtime execution contract "
+                "changed before the application process was started."
+            ),
+            technical_message=(
+                "Observed Swarm ContainerSpec differs from the expected runtime contract: "
+                f"expected={validation['expected']!r}; actual={validation['actual']!r}; "
+                f"service={name!r}"
+            ),
+            certainty="OBSERVED",
+            details={
+                **validation,
+                **safe_provenance,
+                "service": name,
+                "expected_image": expected_image,
+                "observed_container_spec": observed,
+                "first_detected_boundary": "swarm_container_spec",
+            },
+        )
+
     def wait_ready(
         self,
         name: str,
@@ -1148,10 +1207,13 @@ class SwarmRuntime:
         timeout: float = 60.0,
         expected_image: str | None = None,
         cancel_check: Callable[[], bool] | None = None,
+        expected_runtime_contract: RuntimeExecutionContract | None = None,
+        provenance: Mapping[str, Any] | None = None,
     ) -> SwarmServiceState:
         """Wait until a Swarm service is running and, when configured, healthy."""
         deadline = time.monotonic() + float(timeout)
         latest = None
+        restartable_failure_seen_at: float | None = None
         rollback_states = {
             "rollback_started",
             "rollback_paused",
@@ -1275,7 +1337,9 @@ class SwarmRuntime:
             ]
             terminal = [
                 task for task in latest.tasks
-                if task.state.lower() in {"complete", "shutdown", "dead", "orphaned"}
+                if task.state.lower() in {
+                    "complete", "shutdown", "dead", "orphaned", "failed", "rejected"
+                }
             ]
             active = [
                 task for task in desired_running
@@ -1309,6 +1373,14 @@ class SwarmRuntime:
                     for task in terminal
                 )
             )
+            if active or running:
+                restartable_failure_seen_at = None
+            elif restartable_backoff:
+                if restartable_failure_seen_at is None:
+                    restartable_failure_seen_at = time.monotonic()
+                if time.monotonic() - restartable_failure_seen_at < 8.0:
+                    time.sleep(1)
+                    continue
             terminal_without_replacement = (
                 terminal
                 and not active
@@ -1350,6 +1422,68 @@ class SwarmRuntime:
                     exit_code = (status_attrs.get("ContainerStatus") or {}).get("ExitCode")
                 except Exception:
                     pass
+
+                contract_failure = self._runtime_contract_failure(
+                    name,
+                    contract=expected_runtime_contract,
+                    expected_image=expected_image,
+                    provenance=provenance,
+                )
+                if contract_failure is not None:
+                    contract_failure.details = {
+                        **contract_failure.details,
+                        "task_id": task.task_id,
+                        "state": task.state,
+                        "desired_state": task.desired_state,
+                        "container_id": task.container_id,
+                        "exit_code": exit_code,
+                    }
+                    raise contract_failure
+
+                task_diagnostics = self._task_container_diagnostics(task)
+                combined_error = " ".join(
+                    value for value in (
+                        str(task.error or ""),
+                        str(task.message or ""),
+                        str(task_diagnostics.get("error") or ""),
+                        str(service_logs[-4000:] or ""),
+                    )
+                    if value
+                ).lower()
+                if exit_code == 127 and "not found" in combined_error:
+                    technical = (
+                        "Swarm application process exited with code 127 and reported "
+                        "'not found'. The observed ContainerSpec is contract-valid, "
+                        "so the available evidence does not prove whether the artifact "
+                        "filesystem or executable interpreter is the remaining cause. "
+                        f"service={name!r}; task_id={task.task_id}; "
+                        f"task_diagnostics={task_diagnostics!r}; "
+                        f"service_logs={service_logs[-12000:]}"
+                    )
+                    raise DeploymentError(
+                        technical,
+                        stage="swarm_startup",
+                        code="SWARM_APPLICATION_PROCESS_EXITED",
+                        user_message=(
+                            "The application process exited during startup. "
+                            "Review deployment diagnostics for the exact executable error."
+                        ),
+                        technical_message=technical,
+                        certainty="OBSERVED",
+                        details={
+                            **dict(provenance or {}),
+                            "failure_reason": "exit_127_not_found",
+                            "boundary": "swarm_task_container",
+                            "task_id": task.task_id,
+                            "state": task.state,
+                            "desired_state": task.desired_state,
+                            "exit_code": exit_code,
+                            "container_id": task.container_id,
+                            "task_diagnostics": task_diagnostics,
+                            "expected_image": expected_image,
+                            "service_logs": service_logs[-12000:],
+                        },
+                    )
 
                 code = (
                     "SWARM_SERVICE_SCALED_TO_ZERO"
@@ -1406,12 +1540,58 @@ class SwarmRuntime:
             failed = [
                 task for task in latest.tasks
                 if task.state.lower() in {"failed", "rejected"}
-                and task.desired_state.lower() == "running"
             ]
-            if failed:
+            if failed and not restartable_backoff:
                 task = failed[0]
                 task_detail = task.error or task.message or task.state
                 service_logs = self._service_logs_for_failure(name)
+                contract_failure = self._runtime_contract_failure(
+                    name,
+                    contract=expected_runtime_contract,
+                    expected_image=expected_image,
+                    provenance=provenance,
+                )
+                if contract_failure is not None:
+                    raise contract_failure
+                task_diagnostics = self._task_container_diagnostics(task)
+                exit_code = task_diagnostics.get("exit_code")
+                combined_error = " ".join(
+                    value for value in (
+                        str(task_detail or ""),
+                        str(task_diagnostics.get("error") or ""),
+                        str(service_logs[-4000:] or ""),
+                    )
+                    if value
+                ).lower()
+                if exit_code == 127 and "not found" in combined_error:
+                    technical = (
+                        f"Swarm application process exited with code 127 and reported "
+                        f"'not found': task_id={task.task_id}; service={name!r}; "
+                        f"task_diagnostics={task_diagnostics!r}; "
+                        f"expected_image={expected_image!r}; "
+                        f"service_logs={service_logs[-12000:]}"
+                    )
+                    raise DeploymentError(
+                        technical,
+                        stage="swarm_startup",
+                        code="SWARM_APPLICATION_PROCESS_EXITED",
+                        user_message=(
+                            "The application process exited during startup. "
+                            "Review deployment diagnostics for the exact executable error."
+                        ),
+                        technical_message=technical,
+                        certainty="OBSERVED",
+                        details={
+                            **dict(provenance or {}),
+                            "failure_reason": "exit_127_not_found",
+                            "boundary": "swarm_task_container",
+                            "task_id": task.task_id,
+                            "exit_code": exit_code,
+                            "task_diagnostics": task_diagnostics,
+                            "expected_image": expected_image,
+                            "service_logs": service_logs[-12000:],
+                        },
+                    )
                 technical = (
                     f"Swarm task failed: {task_detail}; "
                     f"task_id={task.task_id}; node={task.node_name or task.node_id or ''}; "
