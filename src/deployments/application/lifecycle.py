@@ -228,7 +228,12 @@ class DeploymentLifecycleExecutor:
                 # The terminal store may have won a cancellation race while
                 # this worker was finishing activation.  Treat that result as
                 # cancellation and clean up only while ownership is current.
-                self._cancel_runtime(context, runtime, handle)
+                self._cancel_runtime(
+                    context,
+                    runtime,
+                    handle,
+                    rollback_plan=getattr(plan, "rollback_plan", None) if plan is not None else None,
+                )
                 cancelled = DeploymentCancelled(
                     "Deployment cancellation won the completion race.",
                     details={"deployment_id": context.deployment_id},
