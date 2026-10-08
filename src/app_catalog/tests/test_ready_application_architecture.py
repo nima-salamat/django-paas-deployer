@@ -185,6 +185,25 @@ class ReadyApplicationArchitectureTests(TestCase):
 
         assert archived_dockerfile == dockerfile
         assert "FROM wordpress:7.1.1-php8.3-apache" in archived_dockerfile
+    def test_wordpress_revision_runtime_graph_keeps_secret_db_password(self):
+        instance = self.install(
+            catalog_id="wordpress",
+            variant="default",
+            name="wordpress-runtime-graph-secret",
+        )
+        wordpress = instance.services.get(service_key="wordpress")
+        deploy = ensure_revision_for_deploy(wordpress.deploy, force_new=True)
+
+        from deployments.core.runtime_graph import ServiceRuntimeGraph
+
+        graph = ServiceRuntimeGraph.from_revision(deploy.revision)
+        expected = wordpress.service.secrets.get(
+            key="service_password_wordpress"
+        ).get_current_value()
+
+        assert graph.runtime_environment["WORDPRESS_DB_PASSWORD"] == expected
+        assert "$"+"{secret.service_password_wordpress}" not in str(graph.runtime_environment)
+
     def test_wordpress_app_receives_materialized_mariadb_connection_contract(self):
         instance = self.install(
             catalog_id="wordpress",
