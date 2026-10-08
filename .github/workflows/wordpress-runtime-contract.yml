@@ -168,7 +168,7 @@ jobs:
             sh -n /usr/local/bin/passdeployer-wordpress-entrypoint.sh
             printf "PATH=%s\n" "$PATH"
             test -f /tmp/passdeployer-wordpress-ready
-          '
+          ' || { docker logs passdeployer-wp || true; exit 1; }
           docker logs passdeployer-wp || true
 
       - name: Wait for WordPress health
