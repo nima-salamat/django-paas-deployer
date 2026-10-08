@@ -1399,6 +1399,13 @@ class DeployService:
             revision_id=str(getattr(deploy_item, "revision_id", "") or "") or None,
             worker_task_id=str(getattr(deploy_item, "execution_task_id", "") or "") or None,
             operation_key=operation_key,
+            expected_lifecycle_generation=int(
+                getattr(getattr(deploy_item, "service", None), "lifecycle_generation", 0) or 0
+            ),
+            expected_previous_deploy_id=(
+                str(getattr(deploy_item, "previous_deploy_id", "") or "") or None
+            ),
+            enforce_previous_deploy=True,
             runtime_selection=replace(
                 selection,
                 required_capabilities=execution_plan.required_capabilities,
