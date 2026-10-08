@@ -204,6 +204,10 @@ networks:
             wordpress.get("command"),
             ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "/usr/local/bin/apache2-foreground"],
         )
+        self.assertEqual(
+            wordpress["environment"]["PATH"],
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        )
         self.assertIn("WORDPRESS_ADMIN_USER", wordpress["environment"])
         self.assertIn("WORDPRESS_ADMIN_PASSWORD", wordpress["environment"])
         self.assertIn("WORDPRESS_ADMIN_EMAIL", wordpress["environment"])
