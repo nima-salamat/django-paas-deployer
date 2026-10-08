@@ -845,6 +845,20 @@ class SwarmRuntime:
             ]
         ))
         required_executables = [value for value in required_executables if value]
+        image_entrypoint_executable = (
+            str(contract.image_entrypoint[0]).strip()
+            if contract.entrypoint_source == "IMAGE" and contract.image_entrypoint
+            else ""
+        )
+        # Image-owned ENTRYPOINT values are part of the runtime contract too.
+        # Absolute entrypoints can be checked through required_executables; a
+        # relative entrypoint still needs an explicit PATH-resolution probe.
+        if (
+            image_entrypoint_executable.startswith("/")
+            and image_entrypoint_executable
+            and image_entrypoint_executable not in required_executables
+        ):
+            required_executables.append(image_entrypoint_executable)
         diagnostics = {
             **provenance,
             "image_ref": image_ref,
@@ -865,6 +879,7 @@ class SwarmRuntime:
             "expected_entrypoint": list(contract.image_entrypoint),
             "expected_cmd": list(contract.image_cmd),
             "required_executables": required_executables,
+            "image_entrypoint_executable": image_entrypoint_executable,
             "contract_hash": contract.contract_hash(),
         }
         if contract.entrypoint_source == "IMAGE" and contract.image_entrypoint:
@@ -881,30 +896,39 @@ class SwarmRuntime:
                     },
                 )
 
-        for executable in required_executables:
-            if not executable.startswith("/"):
-                continue
+        def _validate_runtime_executable(executable: str, *, role: str = "executable") -> None:
             container = None
-            probe_name = f"passdeployer-runtime-preflight-{os.getpid()}-{abs(hash(executable)) % 100000}"
+            absolute = executable.startswith("/")
+            probe_name = f"passdeployer-runtime-preflight-{os.getpid()}-{abs(hash((role, executable))) % 100000}"
             try:
+                if absolute:
+                    resolve_expr = f"target={shlex.quote(executable)}"
+                else:
+                    resolve_expr = (
+                        f"target={shlex.quote(executable)}; "
+                        "target=$(command -v "$target" 2>/dev/null || true); "
+                        "if [ -z "$target" ]; then exit 44; fi"
+                    )
+
                 probe = self.client.containers.create(
                     image_ref,
                     command=[
                         "-lc",
                         (
-                            f"if [ ! -f {shlex.quote(executable)} ]; then exit 41; fi; "
-                            f"if [ ! -x {shlex.quote(executable)} ]; then exit 42; fi; "
-                            f"shebang=$(head -n 1 {shlex.quote(executable)} 2>/dev/null || true); "
-                            "case \"$shebang\" in "
+                            f"{resolve_expr}; "
+                            "if [ ! -f "$target" ]; then exit 41; fi; "
+                            "if [ ! -x "$target" ]; then exit 42; fi; "
+                            "shebang=$(head -n 1 "$target" 2>/dev/null || true); "
+                            "case "$shebang" in "
                             "'#!'*) "
-                            "interpreter=$(printf '%s\\n' \"$shebang\" | awk '{print $1}' | sed 's/^#!//'); "
-                            "if [ \"$interpreter\" = '/usr/bin/env' ]; then "
-                            "interpreter_name=$(printf '%s\\n' \"$shebang\" | awk '{print $2}'); "
-                            "[ -n \"$interpreter_name\" ] && command -v \"$interpreter_name\" >/dev/null 2>&1 || exit 43; "
-                            "elif [ -n \"$interpreter\" ]; then "
-                            "case \"$interpreter\" in "
-                            "/*) [ -x \"$interpreter\" ] || exit 43;; "
-                            "*) command -v \"$interpreter\" >/dev/null 2>&1 || exit 43;; "
+                            "interpreter=$(printf '%s\n' "$shebang" | awk '{print $1}' | sed 's/^#!//'); "
+                            "if [ "$interpreter" = '/usr/bin/env' ]; then "
+                            "interpreter_name=$(printf '%s\n' "$shebang" | awk '{print $2}'); "
+                            "[ -n "$interpreter_name" ] && command -v "$interpreter_name" >/dev/null 2>&1 || exit 43; "
+                            "elif [ -n "$interpreter" ]; then "
+                            "case "$interpreter" in "
+                            "/*) [ -x "$interpreter" ] || exit 43;; "
+                            "*) command -v "$interpreter" >/dev/null 2>&1 || exit 43;; "
                             "esac; else exit 43; fi;; "
                             "esac"
                         ),
@@ -922,15 +946,23 @@ class SwarmRuntime:
                     raise RuntimeError("runtime executable is not executable")
                 if status_code == 43:
                     raise RuntimeError("runtime executable interpreter is invalid or missing")
+                if status_code == 44:
+                    raise RuntimeError("runtime entrypoint is not resolvable in PATH")
                 if status_code != 0:
                     raise RuntimeError(f"runtime executable probe failed with status {status_code}")
-                diagnostics.setdefault("validated_executables", []).append(executable)
+                diagnostics.setdefault(
+                    "validated_executables" if role == "executable" else "validated_entrypoints",
+                    [],
+                ).append(executable)
             except DeploymentError:
                 raise
             except Exception as exc:
                 message = str(exc).lower()
                 from deployments.common.exceptions import FailureCertainty
-                if "file missing" in message:
+                if "not resolvable in path" in message:
+                    code = "RUNTIME_ARTIFACT_ENTRYPOINT_NOT_FOUND"
+                    certainty = FailureCertainty.OBSERVED
+                elif "file missing" in message:
                     code = "RUNTIME_ARTIFACT_FILE_MISSING"
                     certainty = FailureCertainty.OBSERVED
                 elif "not executable" in message:
@@ -943,12 +975,18 @@ class SwarmRuntime:
                     code = "RUNTIME_ARTIFACT_EXECUTION_INVALID"
                     certainty = FailureCertainty.UNKNOWN
                 raise DeploymentError(
-                    f"Required runtime executable {executable!r} could not be validated in the built artifact.",
+                    (
+                        f"Required runtime {role} {executable!r} could not be "
+                        "validated in the built artifact."
+                    ),
                     stage="image_validation",
                     code=code,
-                    user_message="The application artifact is missing or has an invalid runtime executable.",
+                    user_message=(
+                        "The application artifact is missing or has an invalid "
+                        "runtime executable."
+                    ),
                     certainty=certainty,
-                    details={**diagnostics, "executable": executable, "inspection_error": str(exc)},
+                    details={**diagnostics, "executable": executable, "role": role, "inspection_error": str(exc)},
                 ) from exc
             finally:
                 if container is not None:
@@ -956,6 +994,16 @@ class SwarmRuntime:
                         container.remove(force=True)
                     except Exception:
                         pass
+
+        for executable in required_executables:
+            _validate_runtime_executable(executable)
+
+        if (
+            image_entrypoint_executable
+            and not image_entrypoint_executable.startswith("/")
+            and image_entrypoint_executable not in observed_entrypoint
+        ):
+            _validate_runtime_executable(image_entrypoint_executable, role="image ENTRYPOINT")
 
         logger.info(
             "runtime artifact preflight: image=%s digest=%s entrypoint=%r cmd=%r "
@@ -971,7 +1019,7 @@ class SwarmRuntime:
         )
         return diagnostics
 
-    def _apply_local_volume_pin(self, config, constraints: list[str]) -> list[str]:
+    def _apply_local_volume_pin    def _apply_local_volume_pin(self, config, constraints: list[str]) -> list[str]:
         if not config.volumes or not _env_bool("SWARM_LOCAL_VOLUME_PIN", True):
             return constraints
         if len(self.client.nodes.list()) <= 1:
