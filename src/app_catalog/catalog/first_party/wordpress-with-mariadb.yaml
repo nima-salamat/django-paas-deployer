@@ -156,8 +156,8 @@ services:
           chmod 0755 /usr/local/bin/wp; \
           wp --info --allow-root; \
           rm -rf /var/lib/apt/lists/*
-      RUN echo 'IyEvYmluL3NoCnNldCAtZXUKQVBQX1JPT1Q9IiR7V09SRFBSRVNTX1JPT1Q6LS92YXIvd3d3L2h0bWx9IgpSRUFEWV9NQVJLRVI9Ii90bXAvcGFzc2RlcGxveWVyLXdvcmRwcmVzcy1yZWFkeSIKTE9DS19ESVI9IiR7QVBQX1JPT1R9Ly5wYXNzZGVwbG95ZXItd3AtaW5zdGFsbC5sb2NrIgpVUFNUUkVBTV9QSUQ9IiIKbG9nKCkgeyBlY2hvICJbcGFzc2RlcGxveWVyLXdvcmRwcmVzc10gJCoiID4mMjsgfQpjbGVhbnVwX2xvY2soKSB7IHJtZGlyICIkTE9DS19ESVIiIDI+L2Rldi9udWxsIHx8IHRydWU7IH0Kd2FpdF9mb3JfZGF0YWJhc2UoKSB7CiAgYXR0ZW1wdHM9MAogIHdoaWxlIFsgIiRhdHRlbXB0cyIgLWx0IDEyMCBdOyBkbwogICAgaWYgd3AgZGIgY2hlY2sgLS1hbGxvdy1yb290ID4vZGV2L251bGwgMj4mMTsgdGhlbiByZXR1cm4gMDsgZmkKICAgIGF0dGVtcHRzPSQoKGF0dGVtcHRzICsgMSkpCiAgICBzbGVlcCAxCiAgZG9uZQogIHJldHVybiAxCn0KY29uZmlndXJlX3NpdGUoKSB7CiAgd3Agb3B0aW9uIHVwZGF0ZSBibG9nbmFtZSAiJHtXT1JEUFJFU1NfU0lURV9USVRMRX0iIC0tYWxsb3ctcm9vdCA+L2Rldi9udWxsIDI+JjEgfHwgdHJ1ZQogIHdwIG9wdGlvbiB1cGRhdGUgdGltZXpvbmVfc3RyaW5nICIke1dPUkRQUkVTU19USU1FWk9ORX0iIC0tYWxsb3ctcm9vdCA+L2Rldi9udWxsIDI+JjEgfHwgdHJ1ZQogIHdwIG9wdGlvbiB1cGRhdGUgV1BMQU5HICIke1dPUkRQUkVTU19MT0NBTEV9IiAtLWFsbG93LXJvb3QgPi9kZXYvbnVsbCAyPiYxIHx8IHRydWUKICB3cCByZXdyaXRlIHN0cnVjdHVyZSAiJHtXT1JEUFJFU1NfUEVSTUFMSU5LX1NUUlVDVFVSRX0iIC0tYWxsb3ctcm9vdCA+L2Rldi9udWxsIDI+JjEgfHwgdHJ1ZQogIHdwIHJld3JpdGUgZmx1c2ggLS1hbGxvdy1yb290ID4vZGV2L251bGwgMj4mMSB8fCB0cnVlCn0KaW5zdGFsbF93b3JkcHJlc3MoKSB7CiAgaWYgWyAiJHtXT1JEUFJFU1NfQVVUT19JTlNUQUxMOi0xfSIgIT0gIjEiIF07IHRoZW4gdG91Y2ggIiRSRUFEWV9NQVJLRVIiOyByZXR1cm4gMDsgZmkKICBpZiAhIHdhaXRfZm9yX2RhdGFiYXNlOyB0aGVuCiAgICBsb2cgIkVSUk9SOiBXb3JkUHJlc3MgZGF0YWJhc2UgZGlkIG5vdCBiZWNvbWUgcmVhZHkgd2l0aGluIDEyMCBzZWNvbmRzLiIKICAgIHJldHVybiAxCiAgZmkKICBpZiB3cCBjb3JlIGlzLWluc3RhbGxlZCAtLWFsbG93LXJvb3QgPi9kZXYvbnVsbCAyPiYxOyB0aGVuCiAgICAjIFBlcnNpc3RlbnQgV29yZFByZXNzIHN0YXRlIGlzIGF1dGhvcml0YXRpdmUgYWZ0ZXIgZmlyc3QgaW5zdGFsbC4gRG8gbm90CiAgICAjIG92ZXJ3cml0ZSBzaXRlIHNldHRpbmdzIG9uIGV2ZXJ5IGNvbnRhaW5lciByZXN0YXJ0L3JlZGVwbG95LgogICAgdG91Y2ggIiRSRUFEWV9NQVJLRVIiCiAgICBsb2cgIkV4aXN0aW5nIFdvcmRQcmVzcyBpbnN0YWxsYXRpb24gZGV0ZWN0ZWQ7IHByZXNlcnZpbmcgcGVyc2lzdGVudCBzaXRlIHNldHRpbmdzLiIKICAgIHJldHVybiAwCiAgZmkKICBpZiBta2RpciAiJExPQ0tfRElSIiAyPi9kZXYvbnVsbDsgdGhlbgogICAgdHJhcCBjbGVhbnVwX2xvY2sgRVhJVCBJTlQgVEVSTQogICAgaWYgISB3cCBjb3JlIGlzLWluc3RhbGxlZCAtLWFsbG93LXJvb3QgPi9kZXYvbnVsbCAyPiYxOyB0aGVuCiAgICAgIGxvZyAiSW5zdGFsbGluZyBXb3JkUHJlc3MgdGhyb3VnaCBXUC1DTEkuLi4iCiAgICAgIGlmICEgd3AgY29yZSBpbnN0YWxsIFwKICAgICAgICAtLXVybD0iJHtXT1JEUFJFU1NfU0lURV9VUkx9IiBcCiAgICAgICAgLS10aXRsZT0iJHtXT1JEUFJFU1NfU0lURV9USVRMRX0iIFwKICAgICAgICAtLWFkbWluX3VzZXI9IiR7V09SRFBSRVNTX0FETUlOX1VTRVJ9IiBcCiAgICAgICAgLS1hZG1pbl9wYXNzd29yZD0iJHtXT1JEUFJFU1NfQURNSU5fUEFTU1dPUkR9IiBcCiAgICAgICAgLS1hZG1pbl9lbWFpbD0iJHtXT1JEUFJFU1NfQURNSU5fRU1BSUx9IiBcCiAgICAgICAgLS1sb2NhbGU9IiR7V09SRFBSRVNTX0xPQ0FMRX0iIFwKICAgICAgICAtLXNraXAtZW1haWwgXAogICAgICAgIC0tYWxsb3ctcm9vdDsgdGhlbgogICAgICAgIGxvZyAiRVJST1I6IFdQLUNMSSBjb3VsZCBub3QgY29tcGxldGUgdGhlIGluaXRpYWwgV29yZFByZXNzIGluc3RhbGxhdGlvbi4iCiAgICAgICAgcmV0dXJuIDEKICAgICAgZmkKICAgIGZpCiAgICBjb25maWd1cmVfc2l0ZQogICAgdG91Y2ggIiRSRUFEWV9NQVJLRVIiCiAgICBsb2cgIldvcmRQcmVzcyBpbnN0YWxsYXRpb24gaXMgcmVhZHkuIgogICAgdHJhcCAtIEVYSVQgSU5UIFRFUk0KICAgIGNsZWFudXBfbG9jawogICAgcmV0dXJuIDAKICBmaQogIGxvZyAiQW5vdGhlciByZXBsaWNhIGlzIGNvbXBsZXRpbmcgdGhlIFdvcmRQcmVzcyBpbnN0YWxsYXRpb247IHdhaXRpbmcuLi4iCiAgYXR0ZW1wdHM9MAogIHdoaWxlIFsgIiRhdHRlbXB0cyIgLWx0IDE4MCBdOyBkbwogICAgaWYgd3AgY29yZSBpcy1pbnN0YWxsZWQgLS1hbGxvdy1yb290ID4vZGV2L251bGwgMj4mMTsgdGhlbgogICAgICBjb25maWd1cmVfc2l0ZQogICAgICB0b3VjaCAiJFJFQURZX01BUktFUiIKICAgICAgcmV0dXJuIDAKICAgIGZpCiAgICBhdHRlbXB0cz0kKChhdHRlbXB0cyArIDEpKQogICAgc2xlZXAgMQogIGRvbmUKICBsb2cgIkVSUk9SOiBXb3JkUHJlc3MgaW5zdGFsbGF0aW9uIGRpZCBub3QgY29udmVyZ2UuIgogIHJldHVybiAxCn0KcnVuX21hbmFnZWRfY3JvbigpIHsKICBbICIke1dPUkRQUkVTU19NQU5BR0VEX0NST046LTF9IiA9ICIxIiBdIHx8IHJldHVybiAwCiAgaW50ZXJ2YWw9IiR7V09SRFBSRVNTX0NST05fSU5URVJWQUw6LTMwMH0iCiAgY2FzZSAiJGludGVydmFsIiBpbiAnJ3wqWyEwLTldKikgaW50ZXJ2YWw9MzAwIDs7IGVzYWMKICBbICIkaW50ZXJ2YWwiIC1nZSAxNSBdIDI+L2Rldi9udWxsIHx8IGludGVydmFsPTE1CiAgd2hpbGUgWyAtbiAiJFVQU1RSRUFNX1BJRCIgXSAmJiBraWxsIC0wICIkVVBTVFJFQU1fUElEIiAyPi9kZXYvbnVsbDsgZG8KICAgIHdwIGNyb24gZXZlbnQgcnVuIC0tZHVlLW5vdyAtLXF1aWV0IC0tYWxsb3ctcm9vdCA+L2Rldi9udWxsIDI+JjEgfHwgdHJ1ZQogICAgc2xlZXAgIiRpbnRlcnZhbCIKICBkb25lCn0KaWYgISBpbnN0YWxsX3dvcmRwcmVzczsgdGhlbgogIGxvZyAiRVJST1I6IGF1dG9tYXRpYyBXb3JkUHJlc3MgaW5pdGlhbGl6YXRpb24gZmFpbGVkLiIKICBleGl0IDEKZmkKaWYgWyAiJCMiIC1lcSAwIF07IHRoZW4KICBzZXQgLS0gYXBhY2hlMi1mb3JlZ3JvdW5kCmZpCmxvZyAiU3RhcnRpbmcgV29yZFByZXNzIGZvcmVncm91bmQgY29tbWFuZDogJCoiCiIkQCIgJgpVUFNUUkVBTV9QSUQ9JCEKcnVuX21hbmFnZWRfY3JvbiAmCndhaXQgIiRVUFNUUkVBTV9QSUQiCg==' | base64 -d > /usr/local/bin/passdeployer-wordpress-entrypoint.sh && \
-          chmod 0755 /usr/local/bin/passdeployer-wordpress-entrypoint.sh
+      COPY passdeployer-wordpress-entrypoint.sh /usr/local/bin/passdeployer-wordpress-entrypoint.sh
+      RUN chmod 0755 /usr/local/bin/passdeployer-wordpress-entrypoint.sh
       ENV WP_CLI_ALLOW_ROOT=1
       WORKDIR /var/www/html
       # The official WordPress image exposes docker-ensure-installed.sh as a
@@ -167,6 +167,121 @@ services:
       # without making the platform depend on a custom ENTRYPOINT override.
       ENTRYPOINT ["docker-ensure-installed.sh"]
       CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "apache2-foreground"]
+    files:
+      passdeployer-wordpress-entrypoint.sh: |
+        #!/bin/sh
+        set -eu
+        
+        APP_ROOT="${WORDPRESS_ROOT:-/var/www/html}"
+        READY_MARKER="/tmp/passdeployer-wordpress-ready"
+        LOCK_DIR="${APP_ROOT}/.passdeployer-wp-install.lock"
+        UPSTREAM_PID=""
+        
+        log() { echo "[passdeployer-wordpress] $*" >&2; }
+        cleanup_lock() { rmdir "$LOCK_DIR" 2>/dev/null || true; }
+        
+        wait_for_database() {
+          attempts=0
+          while [ "$attempts" -lt 120 ]; do
+            if wp db check --allow-root >/dev/null 2>&1; then return 0; fi
+            attempts=$((attempts + 1))
+            sleep 1
+          done
+          return 1
+        }
+        
+        configure_site() {
+          wp option update blogname "${WORDPRESS_SITE_TITLE}" --allow-root >/dev/null 2>&1 || true
+          wp option update timezone_string "${WORDPRESS_TIMEZONE}" --allow-root >/dev/null 2>&1 || true
+          wp option update WPLANG "${WORDPRESS_LOCALE}" --allow-root >/dev/null 2>&1 || true
+          wp rewrite structure "${WORDPRESS_PERMALINK_STRUCTURE}" --allow-root >/dev/null 2>&1 || true
+          wp rewrite flush --allow-root >/dev/null 2>&1 || true
+        }
+        
+        install_wordpress() {
+          if [ "${WORDPRESS_AUTO_INSTALL:-1}" != "1" ]; then
+            touch "$READY_MARKER"
+            return 0
+          fi
+        
+          if ! wait_for_database; then
+            log "ERROR: WordPress database did not become ready within 120 seconds."
+            return 1
+          fi
+        
+          if wp core is-installed --allow-root >/dev/null 2>&1; then
+            touch "$READY_MARKER"
+            log "Existing WordPress installation detected; preserving persistent site settings."
+            return 0
+          fi
+        
+          if mkdir "$LOCK_DIR" 2>/dev/null; then
+            trap cleanup_lock EXIT INT TERM
+            if ! wp core is-installed --allow-root >/dev/null 2>&1; then
+              log "Installing WordPress through WP-CLI..."
+              if ! wp core install \
+                --url="${WORDPRESS_SITE_URL}" \
+                --title="${WORDPRESS_SITE_TITLE}" \
+                --admin_user="${WORDPRESS_ADMIN_USER}" \
+                --admin_password="${WORDPRESS_ADMIN_PASSWORD}" \
+                --admin_email="${WORDPRESS_ADMIN_EMAIL}" \
+                --locale="${WORDPRESS_LOCALE}" \
+                --skip-email \
+                --allow-root; then
+                log "ERROR: WP-CLI could not complete the initial WordPress installation."
+                return 1
+              fi
+            fi
+            configure_site
+            touch "$READY_MARKER"
+            log "WordPress installation is ready."
+            trap - EXIT INT TERM
+            cleanup_lock
+            return 0
+          fi
+        
+          log "Another replica is completing the WordPress installation; waiting..."
+          attempts=0
+          while [ "$attempts" -lt 180 ]; do
+            if wp core is-installed --allow-root >/dev/null 2>&1; then
+              configure_site
+              touch "$READY_MARKER"
+              return 0
+            fi
+            attempts=$((attempts + 1))
+            sleep 1
+          done
+          log "ERROR: WordPress installation did not converge."
+          return 1
+        }
+        
+        run_managed_cron() {
+          [ "${WORDPRESS_MANAGED_CRON:-1}" = "1" ] || return 0
+          interval="${WORDPRESS_CRON_INTERVAL:-300}"
+          case "$interval" in ''|*[!0-9]*) interval=300 ;; esac
+          [ "$interval" -ge 15 ] 2>/dev/null || interval=15
+          while [ -n "$UPSTREAM_PID" ] && kill -0 "$UPSTREAM_PID" 2>/dev/null; do
+            wp cron event run --due-now --quiet --allow-root >/dev/null 2>&1 || true
+            sleep "$interval"
+          done
+        }
+        
+        if ! install_wordpress; then
+          log "ERROR: automatic WordPress initialization failed."
+          exit 1
+        fi
+        
+        if [ "$#" -eq 0 ]; then
+          set -- apache2-foreground
+        fi
+        
+        log "Starting WordPress foreground command: $*"
+        "$@" &
+        UPSTREAM_PID=$!
+        
+        run_managed_cron &
+        wait "$UPSTREAM_PID"
+        
     ports:
       - 80
     working_dir: /var/www/html
