@@ -629,6 +629,31 @@ def _sync_legacy_environment(service: Service, config: dict[str, Any], refs: lis
             defaults=defaults,
         )
 
+def _catalog_revision_requires_refresh(service: Service, revision: ServiceRevision | None) -> bool:
+    """Detect legacy catalog revisions that predate required executable metadata."""
+    if str(getattr(service, "source_kind", "") or "").strip().lower() != "catalog":
+        return False
+    if revision is None:
+        return True
+
+    config_snapshot = dict(getattr(revision, "config_snapshot", None) or {})
+    revision_source_kind = str(config_snapshot.get("source_kind") or "").strip().lower()
+    if revision_source_kind != "catalog":
+        return True
+
+    current_build = dict(getattr(service, "build_config", None) or {})
+    current_files = current_build.get("files")
+    if not isinstance(current_files, dict) or not current_files:
+        return False
+
+    revision_build = dict(getattr(revision, "build_snapshot", None) or {})
+    revision_files = revision_build.get("files")
+    if not isinstance(revision_files, dict):
+        return True
+
+    return any(str(name) not in revision_files for name in current_files)
+
+
 @transaction.atomic
 def ensure_revision_for_deploy(deploy, *, force_new: bool = False):
     """Compile the mutable Service domain into an immutable executable revision."""
@@ -639,10 +664,24 @@ def ensure_revision_for_deploy(deploy, *, force_new: bool = False):
     # join that PostgreSQL rejects under FOR UPDATE.
     deploy = Deploy.objects.select_for_update().get(pk=deploy.pk)
 
+    service = None
     if deploy.revision_id and not force_new:
-        return deploy
+        revision = (
+            ServiceRevision.objects
+            .filter(pk=deploy.revision_id, service_id=deploy.service_id)
+            .first()
+        )
+        service = Service.objects.select_for_update().get(pk=deploy.service_id)
+        if not _catalog_revision_requires_refresh(service, revision):
+            return deploy
+        # One-way compatibility repair: keep the old revision immutable, but
+        # create one fresh revision containing the current catalog executable
+        # metadata so the next deployment does not reuse an incomplete legacy
+        # artifact.
+        force_new = True
 
-    service = Service.objects.select_for_update().get(pk=deploy.service_id)
+    if service is None:
+        service = Service.objects.select_for_update().get(pk=deploy.service_id)
     legacy_config = deepcopy(deploy.config) if isinstance(deploy.config, dict) else {}
 
     # Service-owned configuration is authoritative. Legacy Deploy.config is
