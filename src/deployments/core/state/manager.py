@@ -216,10 +216,13 @@ class StateManager:
         revision_id,
         *,
         task_id: str | None = None,
+        expected_lifecycle_generation: int | None = None,
+        expected_previous_deploy_id: str | None = None,
+        enforce_previous_deploy: bool = False,
         update_fields: Optional[dict] = None,
         event_payload: Optional[dict] = None,
     ) -> bool:
-        """Atomically prove ownership, activate a revision, and commit success."""
+        """Atomically prove ownership, activation fences, and commit success."""
         from deploy.models import Deploy, DeploymentEventOutbox  # type: ignore
         from services.models import Service  # type: ignore
         from services.revisioning import activate_revision_locked
@@ -244,6 +247,34 @@ class StateManager:
             )
             if service is None:
                 return False
+
+            if expected_lifecycle_generation is not None:
+                actual_generation = int(getattr(service, "lifecycle_generation", 0) or 0)
+                if actual_generation != int(expected_lifecycle_generation):
+                    logger.info(
+                        "Refusing deploy activation after service lifecycle changed: "
+                        "deploy=%s expected_generation=%s actual_generation=%s",
+                        deploy_id,
+                        expected_lifecycle_generation,
+                        actual_generation,
+                    )
+                    return False
+
+            # The deployment was created as a replacement for a specific
+            # authoritative deployment. Never allow a stale attempt to activate
+            # over a newer release that won the race while this worker was busy.
+            if enforce_previous_deploy:
+                from services.lifecycle.authority import get_authoritative_deploy
+                authoritative = get_authoritative_deploy(service)
+                actual_previous = getattr(authoritative, "pk", None)
+                if str(actual_previous or "") != str(expected_previous_deploy_id or ""):
+                    logger.info(
+                        "Refusing stale deploy activation: deploy=%s expected_previous=%s actual_previous=%s",
+                        deploy_id,
+                        expected_previous_deploy_id,
+                        actual_previous,
+                    )
+                    return False
 
             if (
                 service.active_revision_id is not None
