@@ -1661,6 +1661,11 @@ class DeployService:
                 )
 
             if previous_release is not None and getattr(previous_release, "artifact_id", None):
+                # Rollback must use the previous revision's versioned secrets,
+                # not the current deployment environment. The graph remains
+                # runtime-neutral; resolved secret values are supplied at this
+                # Django/application boundary.
+                previous_config = materialize_revision_config(previous_release.revision)
                 previous_graph = ServiceRuntimeGraph.from_revision(previous_release.revision)
                 previous_identity = replace(
                     runtime_plan.identity,
@@ -1679,7 +1684,12 @@ class DeployService:
                     image_ref=str(previous_release.artifact.image_ref),
                     artifact_digest=str(previous_release.artifact.digest),
                     release_id=str(previous_release.pk),
-                    environment=dict(previous_graph.runtime_environment),
+                    environment=dict(
+                        previous_config.get("env")
+                        or previous_config.get("environment")
+                        or previous_graph.runtime_environment
+                        or {}
+                    ),
                     runtime_options=previous_options,
                     release_spec=dict(previous_release.release_command or {}),
                     health_policy=dict(previous_release.health_policy or {}),
