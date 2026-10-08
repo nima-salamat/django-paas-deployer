@@ -153,7 +153,9 @@ def test_exact_production_bad_swarm_state_is_rejected_before_service_mutation(mo
     assert error.details["deployment_id"] == "deployment-1"
     assert error.details["service_id"] == "service-1"
     assert error.details["revision_id"] == "revision-1"
-    assert "worker_code_revision" not in error.details or error.details["worker_code_revision"]
+    assert error.details["worker_code_revision"]
+    assert error.details["worker_started_at"]
+    assert error.details["worker_instance_id"]
 
 
 def test_observed_bad_swarm_contract_is_classified_as_runtime_contract_violation():
