@@ -71,6 +71,7 @@ class ServiceRuntimeGraph:
         # existing installations converge to the same semantics as new ones.
         config_snapshot = dict(getattr(revision, "config_snapshot", None) or {})
         build_snapshot = dict(getattr(revision, "build_snapshot", None) or {})
+        runtime_snapshot = dict(getattr(revision, "runtime_snapshot", None) or {})
         catalog_managed = (
             str(config_snapshot.get("source_kind") or "").strip().lower() == "catalog"
         )
@@ -79,6 +80,8 @@ class ServiceRuntimeGraph:
             or config_snapshot.get("dockerfile")
             or ""
         )
+        catalog_command = runtime_snapshot.get("start_command")
+        catalog_command_is_explicit = str(catalog_command or "").strip() != ""
         dockerfile_owns_entrypoint = bool(
             catalog_managed
             and re.search(
@@ -90,14 +93,26 @@ class ServiceRuntimeGraph:
 
         process_rows = []
         for raw in (getattr(revision, "process_snapshot", None) or []):
+            command = raw.get("command")
             entrypoint = raw.get("entrypoint")
+
+            # Ready App executable semantics are owned by the catalog runtime
+            # snapshot plus the image artifact, not by stale mutable
+            # ServiceProcess rows. A catalog service with no explicit catalog
+            # command must let Docker's image CMD execute. This is especially
+            # important for WordPress: an old detected command such as
+            # "true" or "apache2-foreground" would override the custom
+            # WordPress bootstrap ENTRYPOINT and can make PID 1 exit 0.
+            if catalog_managed and not catalog_command_is_explicit:
+                command = None
+
             if dockerfile_owns_entrypoint:
                 entrypoint = None
             process_rows.append(
                 RuntimeProcess(
                     name=str(raw.get("name") or "web"),
                     process_type=str(raw.get("process_type") or "custom"),
-                    command=raw.get("command"),
+                    command=command,
                     entrypoint=entrypoint,
                     replicas=int(raw.get("replicas") or 1),
                     enabled=bool(raw.get("enabled", True)),
