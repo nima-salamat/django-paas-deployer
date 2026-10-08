@@ -749,6 +749,9 @@ class Image(Client):
                     secure_docker_source = bool(
                         (self.build_options or {}).get("secure_docker_source")
                     )
+                    build_files = dict(
+                        (self.build_options or {}).get("revision_build_files") or {}
+                    )
 
                     if secure_docker_source:
                         # The security inspector validated the archive root as the
