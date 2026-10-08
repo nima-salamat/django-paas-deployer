@@ -177,6 +177,63 @@ class _StubSwarmRuntime:
         return b"ready\n"
 
 
+def test_swarm_adapter_apply_does_not_reference_out_of_scope_primary_contract():
+    runtime = _StubSwarmRuntime()
+    adapter = SwarmRuntimeAdapter(runtime=runtime, operator_enabled=True)
+    identity = RuntimeIdentity(
+        service_id="service-1",
+        deployment_id="deployment-1",
+        revision_id="revision-1",
+        runtime_name="app-service-1",
+    )
+    contract = SimpleNamespace(
+        as_dict=lambda: {
+            "entrypoint_source": "IMAGE",
+            "image_entrypoint": ["docker-ensure-installed.sh"],
+            "image_cmd": ["app", "serve"],
+            "command": None,
+            "args": ["app", "serve"],
+            "catalog_managed": True,
+            "image_entrypoint_owned": True,
+            "process_name": "web",
+            "contract_version": "1",
+            "required_executables": [],
+            "source_kind": "catalog",
+        }
+    )
+    plan = SimpleNamespace(
+        identity=identity,
+        deployment_config=SimpleNamespace(image_ref="demo:r1"),
+        image_ref="demo:r1",
+        execution_contracts={},
+        process_graph=SimpleNamespace(
+            processes=(
+                SimpleNamespace(
+                    name="web",
+                    command="app serve",
+                    entrypoint=None,
+                ),
+            ),
+            runtime={},
+            build={},
+        ),
+        runtime_options={"execution_contract": contract.as_dict()},
+        environment={},
+        resources={},
+        networks=(),
+        volumes=(),
+        endpoints=(),
+        labels={},
+        release_id=None,
+        health_policy={},
+    )
+
+    result = adapter.apply(plan, operation_key="deployment-1/apply")
+
+    assert result.success is True
+    assert result.handle.metadata["execution_contract"]["entrypoint_source"] == "IMAGE"
+
+
 def test_swarm_adapter_preserves_expected_image_and_startup_timeout_for_readiness():
     class RecordingRuntime(_StubSwarmRuntime):
         def __init__(self):
