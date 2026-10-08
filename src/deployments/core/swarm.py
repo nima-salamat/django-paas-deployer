@@ -852,7 +852,7 @@ class SwarmRuntime:
             "expected_entrypoint": list(contract.image_entrypoint),
             "expected_cmd": list(contract.image_cmd),
             "required_executables": list(contract.required_executables),
-            "contract_hash": contract.fingerprint(boundary="artifact", image_ref=image_ref),
+            "contract_hash": contract.contract_hash(),
         }
         if contract.entrypoint_source == "IMAGE" and contract.image_entrypoint:
             if observed_entrypoint != contract.image_entrypoint:
