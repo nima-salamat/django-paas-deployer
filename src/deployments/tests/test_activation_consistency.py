@@ -56,10 +56,10 @@ class DeploymentActivationConsistencyContractTests(unittest.TestCase):
         self.assertIn("service_item.lifecycle_generation = lifecycle_generation", stop_endpoint)
         self.assertIn("stop_service.apply_async(", stop_endpoint)
 
-    def test_execution_exception_never_projects_cancelled_deploy_as_failure(self):
-        self.assertIn('final_status = (', self.service)
-        self.assertIn('if final_status != "cancelled":', self.service)
-        self.assertIn("Skipping legacy failure projection for cancelled deploy=", self.service)
+    def test_stale_execution_exception_never_projects_terminal_deploy_as_failure(self):
+        self.assertIn("final_status = (", self.service)
+        self.assertIn('if final_status not in {"cancelled", "succeeded", "rolled_back"}:', self.service)
+        self.assertIn("Skipping legacy failure projection for terminal deploy=", self.service)
 
     def test_native_success_runs_runtime_finalization_before_activation(self):
         lifecycle = (ROOT / "deployments/application/lifecycle.py").read_text()
