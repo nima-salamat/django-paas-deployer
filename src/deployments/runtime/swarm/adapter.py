@@ -236,7 +236,7 @@ class SwarmRuntimeAdapter:
             "revision_id": identity.revision_id,
             "revision_number": graph_metadata.get("revision"),
             "release_id": getattr(plan, "release_id", None),
-            "runtime_backend": self.backend,
+            "runtime_backend": RuntimeBackend.SWARM.value,
             "process_name": primary_contract.process_name,
             "source_kind": graph_metadata.get("source_kind") or primary_contract.source_kind,
             "catalog_id": graph_metadata.get("catalog_id"),
