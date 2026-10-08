@@ -788,6 +788,12 @@ class DeployService:
             # Secure Docker source inspection above already selected and
             # validated the tenant Dockerfile / Compose build input.
             pass
+        elif is_catalog_source:
+            # Catalog artifacts were resolved exclusively from the immutable
+            # revision above. Never fall back to the legacy Deploy ZIP here:
+            # that archive is transport state and may contain a pre-contract
+            # Dockerfile from an older deployment.
+            pass
         elif str(cfg.get("dockerfile_source") or "").strip().lower() == "archive":
             try:
                 archive_path = deploy_item.zip_file.path if getattr(deploy_item, "zip_file", None) else ""
