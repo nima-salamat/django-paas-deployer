@@ -144,9 +144,19 @@ jobs:
           exit 1
 
       - name: Run native runtime contract regressions
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings
+          SECRET_KEY: ci-only-secret
+          DOMAIN_NAME: localhost
+          API_DOMAIN_NAME: localhost
+          DB_NAME: paas_ci
+          DB_USER: paas_ci
+          DB_PASSWORD: paas_ci
+          DB_HOST: 127.0.0.1
+          DB_PORT: "5432"
         run: |
           set -euo pipefail
-          python3 -m pip install --disable-pip-version-check pytest
+          python3 -m pip install --disable-pip-version-check -r requirements.txt
           pytest -q src/deployments/tests/test_execution_contract.py src/deployments/tests/test_swarm_runtime.py
 
       - name: Assert WP-CLI installation completed
