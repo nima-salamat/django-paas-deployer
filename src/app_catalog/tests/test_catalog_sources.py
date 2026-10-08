@@ -120,6 +120,12 @@ networks:
         wordpress = resolved["services"][0]
         self.assertEqual(wordpress["key"], "wordpress")
         self.assertEqual(wordpress["working_directory"], "/var/www/html")
+        self.assertIn("test -x /usr/local/bin/apache2-foreground", wordpress["dockerfile"])
+        self.assertIn(
+            'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "/usr/local/bin/apache2-foreground"]',
+            wordpress["dockerfile"],
+        )
+        self.assertEqual(ApplicationCatalog.get("wordpress").definition_version, "1.3")
         self.assertEqual(wordpress["volumes"][0]["target"], "/var/www/html")
 
     def test_wordpress_choice_image_template_is_public(self):
