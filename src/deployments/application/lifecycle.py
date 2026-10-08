@@ -293,6 +293,7 @@ class DeploymentLifecycleExecutor:
                 runtime,
                 plan,
                 handle,
+                error.details,
             )
             cleanup_failed = bool(cleanup_details.get("cleanup_failed"))
             cleanup_performed = bool(cleanup_details.get("cleanup_attempted"))
@@ -378,6 +379,7 @@ class DeploymentLifecycleExecutor:
             runtime,
             handle,
             rollback_plan=rollback_plan,
+            apply_failure_details=error.details,
         )
         details = {**dict(error.details or {}), **cleanup}
         transitioned = self.store.transition(
@@ -409,8 +411,22 @@ class DeploymentLifecycleExecutor:
         handle: RuntimeHandle | None,
         *,
         rollback_plan: Any | None = None,
+        apply_failure_details: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if handle is None or not context.owns_execution():
+        if not context.owns_execution():
+            return {}
+
+        if handle is None:
+            recovery = getattr(runtime, "recover_failed_apply", None)
+            if callable(recovery) and apply_failure_details:
+                return dict(
+                    recovery(
+                        dict(apply_failure_details),
+                        operation_key=context.operation("cancel-recovery"),
+                        cancel_check=lambda: False,
+                    )
+                    or {}
+                )
             return {}
 
         # Replacement cancellation must restore the previously active release.
@@ -477,8 +493,38 @@ class DeploymentLifecycleExecutor:
         runtime: RuntimeContract,
         plan: Any,
         handle: RuntimeHandle | None,
+        failure_details: Mapping[str, Any] | None = None,
     ) -> tuple[bool, bool, dict[str, Any]]:
-        if plan is None or handle is None or not context.owns_execution():
+        if not context.owns_execution():
+            return False, False, {}
+
+        if handle is None:
+            recovery = getattr(runtime, "recover_failed_apply", None)
+            if callable(recovery) and failure_details:
+                try:
+                    result = dict(
+                        recovery(
+                            dict(failure_details),
+                            operation_key=context.operation("apply-recovery"),
+                            cancel_check=lambda: False,
+                        )
+                        or {}
+                    )
+                    return (
+                        False,
+                        bool(result.get("rollback_failed")),
+                        result,
+                    )
+                except Exception as exc:
+                    return False, True, {
+                        "cleanup_attempted": True,
+                        "cleanup_failed": True,
+                        "reconciliation_required": True,
+                        "cleanup_failures": [{
+                            "operation": "partial_apply_recovery",
+                            "error": str(getattr(exc, "technical_message", None) or exc),
+                        }],
+                    }
             return False, False, {}
 
         target_plan = getattr(plan, "rollback_plan", None)
