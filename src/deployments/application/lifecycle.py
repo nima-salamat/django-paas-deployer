@@ -419,14 +419,25 @@ class DeploymentLifecycleExecutor:
         if handle is None:
             recovery = getattr(runtime, "recover_failed_apply", None)
             if callable(recovery) and apply_failure_details:
-                return dict(
-                    recovery(
-                        dict(apply_failure_details),
-                        operation_key=context.operation("cancel-recovery"),
-                        cancel_check=lambda: False,
+                try:
+                    return dict(
+                        recovery(
+                            dict(apply_failure_details),
+                            operation_key=context.operation("cancel-recovery"),
+                            cancel_check=lambda: False,
+                        )
+                        or {}
                     )
-                    or {}
-                )
+                except Exception as exc:
+                    return {
+                        "cleanup_attempted": True,
+                        "cleanup_failed": True,
+                        "reconciliation_required": True,
+                        "cleanup_failures": [{
+                            "operation": "partial_apply_recovery",
+                            "error": str(getattr(exc, "technical_message", None) or exc),
+                        }],
+                    }
             return {}
 
         # Replacement cancellation must restore the previously active release.
