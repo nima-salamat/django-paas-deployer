@@ -238,7 +238,7 @@ class SwarmRuntimeAdapter:
         runtime_options["execution_contract_hashes"] = {
             **dict(runtime_options.get("execution_contract_hashes") or {}),
             "revision_contract_hash": primary_contract.contract_hash(),
-            "plan_contract_hash": primary_contract.fingerprint(boundary="plan", image_ref=image_ref),
+            "plan_contract_hash": primary_contract.contract_hash(),
         }
         graph_metadata = dict(getattr(graph, "metadata", {}) or {})
         deployment_provenance = {
