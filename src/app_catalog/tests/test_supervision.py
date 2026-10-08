@@ -113,7 +113,7 @@ class ReadyAppRuntimeSupervisorTests(TestCase):
         service.save(update_fields=["runtime_config", "updated_at"])
 
         with patch(
-            "app_catalog.executor.ApplicationCatalog.get",
+            "app_catalog.catalog.ApplicationCatalog.get",
             side_effect=AssertionError("recovery must not consult the current catalog"),
         ):
             result = ApplicationStackExecutor(str(instance.pk)).supervise_runtime()
