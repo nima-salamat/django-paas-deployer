@@ -149,6 +149,34 @@ def test_build_falls_back_when_engine_rejects_optional_build_controls(monkeypatc
     assert "network_mode" not in api.calls[0]
     assert "network_mode" not in api.calls[1]
 
+def test_build_sends_full_repository_and_tag_to_docker_api(monkeypatch):
+    class FakeApi:
+        def __init__(self):
+            self.calls = []
+
+        def build(self, **kwargs):
+            self.calls.append(kwargs)
+            return iter([{"aux": {"ID": "sha256:0123456789abcdef"}}])
+
+        def tag(self, *args, **kwargs):
+            return True
+
+    api = FakeApi()
+    client = _FakeDockerClient(api)
+    _patch_image_client(monkeypatch, [client])
+
+    image = image_manager.Image(
+        "app/example-service",
+        "20261008",
+        "FROM alpine\nCMD [\"true\"]",
+        _empty_tar(),
+    )
+    image.create()
+
+    assert api.calls
+    assert api.calls[0]["tag"] == "app/example-service:20261008"
+
+
 
 
 

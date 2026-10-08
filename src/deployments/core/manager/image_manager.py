@@ -758,7 +758,7 @@ class Image(Client):
 
                     common_build = dict(
                         path=build_path,
-                        tag=self.tag,
+                        tag=target_ref,
                         rm=True,
                         forcerm=True,
                         decode=True,
@@ -812,8 +812,9 @@ class Image(Client):
                                 ownership_check()
 
                             logger.info(
-                                "api.build attempt %d kwargs=%s",
+                                "api.build attempt %d target=%s kwargs=%s",
                                 i + 1,
+                                target_ref,
                                 sorted(k for k in kwargs if k != "path"),
                             )
 
@@ -996,6 +997,7 @@ class Image(Client):
                             "docker_runtime": docker_client_diagnostics(
                                 self.client, include_version=True,
                             ),
+                            "build_request_tag": target_ref,
                         })
 
                         # Server/API failures are different from local SDK
