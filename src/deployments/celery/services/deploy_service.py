@@ -459,6 +459,11 @@ class DeployService:
         for _k in ("build_command", "install_command", "package_manager", "build_dir", "build_target", "build_args", "build_network", "no_cache", "pull"):
             if _k in cfg and _k not in build_options:
                 build_options[_k] = cfg[_k]
+        # Keep the normalized build options in the execution config. Native
+        # Swarm execution reconstructs its build options from cfg later; dropping
+        # revision_build_files here would make immutable catalog auxiliary files
+        # disappear before Image.create() can materialize them.
+        cfg["build_options"] = dict(build_options)
         runtime_options = dict(cfg.get("runtime_options") or {})
         plan = getattr(deploy_item.service, "plan", None)
         resource_limits = runtime_limits(plan)
