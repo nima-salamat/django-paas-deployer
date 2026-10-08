@@ -1035,12 +1035,20 @@ class SwarmRuntime:
             # terminal tasks down to DesiredState=running and then waited for the
             # full timeout when Swarm had no replacement task. That hid the real
             # failure and made WordPress/Apache shutdowns look like a hang.
+            restartable_backoff = (
+                str(latest.restart_condition or "").lower() in {"on-failure", "any"}
+                and any(
+                    task.state.lower() in {"failed", "rejected"}
+                    for task in terminal
+                )
+            )
             terminal_without_replacement = (
                 terminal
                 and not active
                 and not running
                 and desired > 0
                 and not update_in_progress
+                and not restartable_backoff
             )
             service_scaled_to_zero = (
                 desired <= 0
