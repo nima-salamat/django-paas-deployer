@@ -1192,6 +1192,37 @@ class SwarmRuntime:
         except Exception as exc:
             return f"<unable to collect Swarm service logs: {exc}>"
 
+    def _task_logs_for_failure(self, task: SwarmTaskState, *, tail: int = 200) -> str:
+        """Read logs from the exact failed task container, not other service generations."""
+        if not task.container_id:
+            return ""
+        try:
+            container = self.client.containers.get(task.container_id)
+            raw_logs = container.logs(
+                stdout=True,
+                stderr=True,
+                timestamps=True,
+                tail=tail,
+            )
+            if isinstance(raw_logs, bytes):
+                return raw_logs.decode("utf-8", errors="replace")
+            if not raw_logs:
+                return ""
+            return "".join(
+                chunk.decode("utf-8", errors="replace")
+                if isinstance(chunk, bytes)
+                else str(chunk)
+                for chunk in raw_logs
+            )
+        except Exception as exc:
+            logger.debug(
+                "Unable to collect task-specific logs for task=%s container=%s: %s",
+                task.task_id,
+                task.container_id,
+                exc,
+            )
+            return ""
+
     def _task_container_diagnostics(self, task: SwarmTaskState) -> dict[str, Any]:
         """Collect safe local container state for a Swarm readiness failure."""
         result: dict[str, Any] = {
@@ -1310,9 +1341,15 @@ class SwarmRuntime:
         expected_image: str | None,
         task_error: str = "",
         task_message: str = "",
+        task_logs: str = "",
         provenance: Mapping[str, Any] | None = None,
     ) -> DeploymentError | None:
-        """Classify deterministic process-level startup failures from observed evidence."""
+        """Classify deterministic process-level startup failures from observed evidence.
+
+        Service logs can include output from old/replaced Swarm tasks. Prefer logs
+        collected directly from this task's container whenever available.
+        """
+        evidence_logs = task_logs if str(task_logs or "").strip() else service_logs
         combined = " ".join(
             value for value in (
                 str(task_error or ""),
@@ -1320,7 +1357,7 @@ class SwarmRuntime:
                 str(task_diagnostics.get("error") or ""),
                 str(task_diagnostics.get("path") or ""),
                 str(task_diagnostics.get("args") or ""),
-                str(service_logs[-4000:] or ""),
+                str(evidence_logs[-4000:] or ""),
             )
             if value
         ).lower()
@@ -1337,7 +1374,7 @@ class SwarmRuntime:
 
         matching_log_lines = [
             _safe_diagnostic(line, limit=500)
-            for line in (service_logs or "").splitlines()
+            for line in (evidence_logs or "").splitlines()
             if re.search(
                 r"not found|no such file|exec:|error|fatal|permission denied|"
                 r"command not found|cannot execute|failed to start",
@@ -1355,7 +1392,9 @@ class SwarmRuntime:
             "task_error": _safe_diagnostic(task_error),
             "task_message": _safe_diagnostic(task_message),
             "task_diagnostics": task_diagnostics,
+            "task_logs": task_logs[-12000:],
             "service_logs": service_logs[-12000:],
+            "log_evidence_source": "task_container" if str(task_logs or "").strip() else "service_fallback",
             "matching_service_log_lines": matching_log_lines,
         }
         if "exec format error" in combined:
@@ -1682,12 +1721,14 @@ class SwarmRuntime:
                     raise contract_failure
 
                 task_diagnostics = self._task_container_diagnostics(task)
+                task_logs = self._task_logs_for_failure(task)
+                evidence_logs = task_logs if str(task_logs or "").strip() else service_logs
                 combined_error = " ".join(
                     value for value in (
                         str(task.error or ""),
                         str(task.message or ""),
                         str(task_diagnostics.get("error") or ""),
-                        str(service_logs[-4000:] or ""),
+                        str(evidence_logs[-4000:] or ""),
                     )
                     if value
                 ).lower()
@@ -1697,6 +1738,7 @@ class SwarmRuntime:
                     exit_code=exit_code,
                     task_diagnostics=task_diagnostics,
                     service_logs=service_logs,
+                    task_logs=task_logs,
                     expected_image=expected_image,
                     task_error=task.error,
                     task_message=task.message,
