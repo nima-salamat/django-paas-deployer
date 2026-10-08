@@ -104,7 +104,14 @@ def deploy(self, deploy_id) -> None:
                     "redirecting to run_db_deploy",
                     platform, deploy_id,
                 )
-                run_db_deploy.delay(str(deploy_id))
+                # Preserve the task owner. _lock_for_db_deploy fences
+                # duplicate deliveries against Deploy.execution_task_id and
+                # Service.task_id; .delay() would create a new task id and make
+                # this valid mis-routed DB deployment a no-op.
+                run_db_deploy.apply(
+                    args=[str(deploy_id)],
+                    task_id=str(self.request.id),
+                )
                 return
     except Exception:
         logger.exception(
