@@ -188,6 +188,43 @@ def test_swarm_process_graph_does_not_resurrect_catalog_entrypoint_override(monk
     assert captured["config"].start_command == "apache2-foreground"
 
 
+def test_legacy_catalog_revision_drops_stale_process_command_when_catalog_does_not_define_one():
+    from deployments.core.runtime_graph import ServiceRuntimeGraph
+
+    revision = SimpleNamespace(
+        pk="revision-wordpress-legacy",
+        config_snapshot={"source_kind": "catalog"},
+        build_snapshot={
+            "dockerfile": (
+                "FROM wordpress:7.1.2-php8.4-apache\n"
+                'ENTRYPOINT ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh"]\n'
+                'CMD ["apache2-foreground"]\n'
+            ),
+        },
+        runtime_snapshot={
+            "start_command": None,
+            "entry_point": None,
+        },
+        process_snapshot=[{
+            "name": "web",
+            "process_type": "application",
+            "command": "true",
+            "entrypoint": "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+            "replicas": 1,
+            "enabled": True,
+        }],
+        environment_snapshot={},
+        endpoint_snapshot=[],
+        volume_snapshot=[],
+        network_snapshot=[],
+        graph_snapshot={},
+    )
+
+    graph = ServiceRuntimeGraph.from_revision(revision)
+
+    assert graph.processes[0].command is None
+    assert graph.processes[0].entrypoint is None
+
 def test_legacy_catalog_revision_drops_dockerfile_owned_process_entrypoint():
     from deployments.core.runtime_graph import ServiceRuntimeGraph
 
