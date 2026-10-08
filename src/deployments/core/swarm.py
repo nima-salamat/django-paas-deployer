@@ -2167,13 +2167,16 @@ class SwarmRuntime:
                 or []
             )
             process_contract = raw.get("execution_contract")
-            if process_contract:
+            catalog_process = bool(process_runtime_options.get("catalog_managed"))
+            if process_contract and not catalog_process:
                 process_runtime_options["execution_contract"] = process_contract
                 process_runtime_options["execution_contracts"] = {
                     process_name: process_contract,
                 }
             else:
-                # Do not leak the primary web contract into another process.
+                # Catalog executable semantics are reconstructed from the current
+                # immutable Dockerfile/process graph. A legacy stored contract may
+                # describe an obsolete ENTRYPOINT/CMD and must not reach Docker.
                 process_runtime_options.pop("execution_contract", None)
                 process_runtime_options.pop("execution_contracts", None)
             process_runtime_options["process_name"] = process_name
