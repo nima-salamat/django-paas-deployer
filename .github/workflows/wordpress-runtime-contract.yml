@@ -37,6 +37,10 @@ jobs:
           dockerfile = data["services"]["wordpress"]["dockerfile"]
           dockerfile = dockerfile.replace("${config.software_version}", "7.1.2")
           dockerfile = dockerfile.replace("${config.php_version}", "8.4")
+          health = data["services"]["wordpress"]["healthcheck"]
+          test = health["test"]
+          command = " ".join(str(x) for x in test[1:]) if test[0] == "CMD-SHELL" else ""
+          dockerfile = dockerfile.rstrip() + "\nHEALTHCHECK --interval=5s --timeout=5s --start-period=15s --retries=24 CMD " + command + "\n"
           Path("/tmp/wordpress.Dockerfile").write_text(dockerfile)
           print(dockerfile)
           PY
