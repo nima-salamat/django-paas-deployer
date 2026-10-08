@@ -56,6 +56,29 @@ class RevisioningContractTests(SimpleTestCase):
 
         self.assertFalse(_catalog_revision_requires_refresh(service, revision))
 
+    def test_catalog_revision_refreshes_when_dockerfile_is_stale(self):
+        current = (
+            "FROM wordpress:7.1.2-php8.4-apache\\n"
+            'ENTRYPOINT ["/usr/local/bin/docker-ensure-installed.sh"]\\n'
+            'CMD ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "apache2-foreground"]\\n'
+        )
+        stale = (
+            "FROM wordpress:7.1.2-php8.4-apache\\n"
+            'ENTRYPOINT ["docker-entrypoint.sh"]\\n'
+            'CMD ["apache2-foreground"]\\n'
+        )
+        files = {"passdeployer-wordpress-entrypoint.sh": "#!/bin/sh\\nset -eu\\n"}
+        service = SimpleNamespace(
+            source_kind="catalog",
+            build_config={"dockerfile": current, "files": files},
+        )
+        revision = SimpleNamespace(
+            config_snapshot={"source_kind": "catalog"},
+            build_snapshot={"dockerfile": stale, "files": dict(files)},
+        )
+
+        self.assertTrue(_catalog_revision_requires_refresh(service, revision))
+
     @patch("services.revisioning.ServiceProcess.objects")
     def test_legacy_config_derives_web_and_celery_processes(self, objects):
         objects.filter.return_value.order_by.return_value = []
