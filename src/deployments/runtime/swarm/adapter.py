@@ -295,6 +295,11 @@ class SwarmRuntimeAdapter:
                 "operation.key": str(operation_key),
             },
         )
+        # Keep the state collection defined for both the production
+        # process-graph runtime and small/single-service runtime doubles.
+        # The fallback path used to leave `states` undefined, causing the
+        # adapter to crash while constructing the RuntimeHandle metadata.
+        states = {}
         try:
             apply_processes = getattr(self.runtime, "apply_processes", None)
             if callable(apply_processes):
