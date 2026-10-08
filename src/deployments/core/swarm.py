@@ -1217,6 +1217,89 @@ class SwarmRuntime:
             },
         )
 
+    def _startup_process_failure(
+        self,
+        *,
+        service_name: str,
+        task_id: str,
+        exit_code: int | None,
+        task_diagnostics: Mapping[str, Any],
+        service_logs: str,
+        expected_image: str | None,
+        provenance: Mapping[str, Any] | None = None,
+    ) -> DeploymentError | None:
+        """Classify deterministic process-level startup failures from observed evidence."""
+        combined = " ".join(
+            value for value in (
+                str(task_diagnostics.get("error") or ""),
+                str(task_diagnostics.get("path") or ""),
+                str(task_diagnostics.get("args") or ""),
+                str(service_logs[-4000:] or ""),
+            )
+            if value
+        ).lower()
+        details = {
+            **dict(provenance or {}),
+            "boundary": "swarm_task_container",
+            "service": service_name,
+            "task_id": task_id,
+            "exit_code": exit_code,
+            "expected_image": expected_image,
+            "task_diagnostics": task_diagnostics,
+            "service_logs": service_logs[-12000:],
+        }
+        if "exec format error" in combined:
+            technical = (
+                f"Swarm task {task_id!r} failed with an executable format error. "
+                f"The observed command could not be executed by the container runtime."
+            )
+            return DeploymentError(
+                technical,
+                stage="swarm_startup",
+                code="RUNTIME_ARTIFACT_INTERPRETER_INVALID",
+                user_message=(
+                    "The runtime executable is incompatible with the built application artifact."
+                ),
+                technical_message=technical,
+                certainty=FailureCertainty.OBSERVED,
+                details={**details, "failure_reason": "exec_format_error"},
+            )
+        if exit_code == 126 and "permission denied" in combined:
+            technical = (
+                f"Swarm task {task_id!r} failed with permission denied while starting "
+                f"the application executable."
+            )
+            return DeploymentError(
+                technical,
+                stage="swarm_startup",
+                code="RUNTIME_ARTIFACT_EXECUTION_PERMISSION_DENIED",
+                user_message=(
+                    "The runtime executable in the application artifact is not executable."
+                ),
+                technical_message=technical,
+                certainty=FailureCertainty.OBSERVED,
+                details={**details, "failure_reason": "permission_denied"},
+            )
+        if exit_code == 127 and "not found" in combined:
+            technical = (
+                f"Swarm task {task_id!r} exited with code 127 and reported 'not found'. "
+                f"The available evidence does not prove whether the artifact filesystem "
+                f"or executable interpreter is missing."
+            )
+            return DeploymentError(
+                technical,
+                stage="swarm_startup",
+                code="SWARM_APPLICATION_PROCESS_EXITED",
+                user_message=(
+                    "The application process exited during startup. "
+                    "Review deployment diagnostics for the exact executable error."
+                ),
+                technical_message=technical,
+                certainty=FailureCertainty.OBSERVED,
+                details={**details, "failure_reason": "exit_127_not_found"},
+            )
+        return None
+
     def wait_ready(
         self,
         name: str,
@@ -1477,40 +1560,17 @@ class SwarmRuntime:
                     )
                     if value
                 ).lower()
-                if exit_code == 127 and "not found" in combined_error:
-                    technical = (
-                        "Swarm application process exited with code 127 and reported "
-                        "'not found'. The observed ContainerSpec is contract-valid, "
-                        "so the available evidence does not prove whether the artifact "
-                        "filesystem or executable interpreter is the remaining cause. "
-                        f"service={name!r}; task_id={task.task_id}; "
-                        f"task_diagnostics={task_diagnostics!r}; "
-                        f"service_logs={service_logs[-12000:]}"
-                    )
-                    raise DeploymentError(
-                        technical,
-                        stage="swarm_startup",
-                        code="SWARM_APPLICATION_PROCESS_EXITED",
-                        user_message=(
-                            "The application process exited during startup. "
-                            "Review deployment diagnostics for the exact executable error."
-                        ),
-                        technical_message=technical,
-                        certainty="OBSERVED",
-                        details={
-                            **dict(provenance or {}),
-                            "failure_reason": "exit_127_not_found",
-                            "boundary": "swarm_task_container",
-                            "task_id": task.task_id,
-                            "state": task.state,
-                            "desired_state": task.desired_state,
-                            "exit_code": exit_code,
-                            "container_id": task.container_id,
-                            "task_diagnostics": task_diagnostics,
-                            "expected_image": expected_image,
-                            "service_logs": service_logs[-12000:],
-                        },
-                    )
+                startup_failure = self._startup_process_failure(
+                    service_name=name,
+                    task_id=task.task_id,
+                    exit_code=exit_code,
+                    task_diagnostics=task_diagnostics,
+                    service_logs=service_logs,
+                    expected_image=expected_image,
+                    provenance=provenance,
+                )
+                if startup_failure is not None:
+                    raise startup_failure
 
                 code = (
                     "SWARM_SERVICE_SCALED_TO_ZERO"
@@ -1590,35 +1650,17 @@ class SwarmRuntime:
                     )
                     if value
                 ).lower()
-                if exit_code == 127 and "not found" in combined_error:
-                    technical = (
-                        f"Swarm application process exited with code 127 and reported "
-                        f"'not found': task_id={task.task_id}; service={name!r}; "
-                        f"task_diagnostics={task_diagnostics!r}; "
-                        f"expected_image={expected_image!r}; "
-                        f"service_logs={service_logs[-12000:]}"
-                    )
-                    raise DeploymentError(
-                        technical,
-                        stage="swarm_startup",
-                        code="SWARM_APPLICATION_PROCESS_EXITED",
-                        user_message=(
-                            "The application process exited during startup. "
-                            "Review deployment diagnostics for the exact executable error."
-                        ),
-                        technical_message=technical,
-                        certainty="OBSERVED",
-                        details={
-                            **dict(provenance or {}),
-                            "failure_reason": "exit_127_not_found",
-                            "boundary": "swarm_task_container",
-                            "task_id": task.task_id,
-                            "exit_code": exit_code,
-                            "task_diagnostics": task_diagnostics,
-                            "expected_image": expected_image,
-                            "service_logs": service_logs[-12000:],
-                        },
-                    )
+                startup_failure = self._startup_process_failure(
+                    service_name=name,
+                    task_id=task.task_id,
+                    exit_code=exit_code,
+                    task_diagnostics=task_diagnostics,
+                    service_logs=service_logs,
+                    expected_image=expected_image,
+                    provenance=provenance,
+                )
+                if startup_failure is not None:
+                    raise startup_failure
                 technical = (
                     f"Swarm task failed: {task_detail}; "
                     f"task_id={task.task_id}; node={task.node_name or task.node_id or ''}; "
