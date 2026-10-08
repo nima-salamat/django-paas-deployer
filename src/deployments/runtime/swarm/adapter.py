@@ -442,6 +442,74 @@ class SwarmRuntimeAdapter:
             )
         return result
 
+    def recover_failed_apply(
+        self,
+        details: Mapping[str, Any],
+        *,
+        operation_key: str,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        """Recover runtime resources created/mutated by a failed apply attempt."""
+        self._ensure_available(self)
+        if cancel_check is not None and cancel_check():
+            cancel_check = None
+
+        recovery = dict(details.get("swarm_recovery") or {})
+        removed: list[str] = []
+        rolled_back: list[str] = []
+        failures: list[dict[str, str]] = []
+
+        # Newly-created services have no previous production state. They can
+        # only be removed after ownership/recovery metadata identifies them.
+        for name in recovery.get("remove_services") or ():
+            service_name = str(name or "").strip()
+            if not service_name:
+                continue
+            try:
+                self.runtime.remove(service_name)
+                removed.append(service_name)
+            except Exception as exc:
+                failures.append({
+                    "operation": "remove_failed_apply_service",
+                    "service": service_name,
+                    "error": str(exc),
+                })
+
+        # Existing services were updated in place. Swarm keeps their previous
+        # service spec, so a server-side rollback restores the last known-good
+        # runtime without inventing a new plan.
+        for name in recovery.get("rollback_services") or ():
+            service_name = str(name or "").strip()
+            if not service_name:
+                continue
+            try:
+                self.runtime.rollback_service(service_name)
+                rolled_back.append(service_name)
+            except Exception as exc:
+                failures.append({
+                    "operation": "rollback_failed_apply_service",
+                    "service": service_name,
+                    "error": str(exc),
+                })
+
+        result = {
+            "cleanup_attempted": bool(removed or rolled_back or recovery),
+            "cleanup_failed": bool(failures),
+            "removed_services": removed,
+            "rolled_back_services": rolled_back,
+            "cleanup_failures": failures,
+            "operation_key": operation_key,
+        }
+        if failures:
+            raise RuntimeOperationError(
+                "Partial runtime apply recovery failed.",
+                code="runtime_partial_apply_recovery_failed",
+                category="runtime_cleanup",
+                recoverable=True,
+                details=result,
+            )
+        return result
+
     def inspect(self, identity: RuntimeIdentity) -> RuntimeObservation:
         self._ensure_available(self)
         try:
