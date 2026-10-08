@@ -1,0 +1,137 @@
+from types import SimpleNamespace
+
+from deployments.core.platform_bridge import enrich_config_from_project
+from deployments.core.types import DeploymentConfig
+
+
+def _project_cfg(**overrides):
+    values = {
+        "platform": "docker",
+        "framework": "wordpress",
+        "start_command": "apache2-foreground",
+        "server_type": None,
+        "runtime_version": None,
+        "package_manager": None,
+        "working_directory": None,
+        "build_dir": None,
+        "output_dir": None,
+        "static_dir": None,
+        "build_command": None,
+        "install_command": None,
+        "extra": {},
+        "port": 80,
+        "environment": {},
+        "sources": {},
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _detection():
+    return SimpleNamespace(
+        platform="docker",
+        framework="wordpress",
+        confidence=1.0,
+        matched_files=["Dockerfile"],
+    )
+
+
+def test_catalog_managed_docker_does_not_promote_detected_default_command(monkeypatch):
+    from deployments.core.platforms.registry import PlatformRegistry
+    from deployments.core import project_model
+
+    monkeypatch.setattr(
+        PlatformRegistry,
+        "detect",
+        lambda *args, **kwargs: (
+            None,
+            _detection(),
+            _project_cfg(),
+        ),
+    )
+    monkeypatch.setattr(
+        "deployments.core.platform_bridge._ensure_plugins_loaded",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "deployments.core.platform_bridge._project_file_index",
+        lambda project_root: {},
+    )
+    monkeypatch.setattr(
+        project_model,
+        "build_project_model_from_tree",
+        lambda *args, **kwargs: SimpleNamespace(applications=(), frontends=()),
+    )
+
+    config = DeploymentConfig(
+        name="blog-wordpress-docker",
+        tag="1.00",
+        zip_path="/tmp/wordpress.zip",
+        dockerfile_template=(
+            "FROM wordpress:latest\\n"
+            'ENTRYPOINT ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh"]\\n'
+            'CMD ["apache2-foreground"]\\n'
+        ),
+        max_cpu=1.0,
+        max_ram=512,
+        networks=[],
+        volumes=[],
+        port=80,
+        read_only=False,
+        platform="docker",
+        platform_type="APP",
+        runtime_options={"catalog_managed": True, "processes": []},
+    )
+
+    enriched = enrich_config_from_project(config, "/tmp")
+
+    assert enriched.start_command == "apache2-foreground"
+    assert enriched.entry_point is None
+
+
+def test_non_catalog_docker_still_promotes_detected_default_command(monkeypatch):
+    from deployments.core.platforms.registry import PlatformRegistry
+    from deployments.core import project_model
+
+    monkeypatch.setattr(
+        PlatformRegistry,
+        "detect",
+        lambda *args, **kwargs: (
+            None,
+            _detection(),
+            _project_cfg(),
+        ),
+    )
+    monkeypatch.setattr(
+        "deployments.core.platform_bridge._ensure_plugins_loaded",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "deployments.core.platform_bridge._project_file_index",
+        lambda project_root: {},
+    )
+    monkeypatch.setattr(
+        project_model,
+        "build_project_model_from_tree",
+        lambda *args, **kwargs: SimpleNamespace(applications=(), frontends=()),
+    )
+
+    config = DeploymentConfig(
+        name="generic-docker",
+        tag="1.00",
+        zip_path="/tmp/app.zip",
+        dockerfile_template='FROM alpine:latest\\nCMD ["sleep", "infinity"]\\n',
+        max_cpu=1.0,
+        max_ram=512,
+        networks=[],
+        volumes=[],
+        port=80,
+        read_only=False,
+        platform="docker",
+        platform_type="APP",
+        runtime_options={},
+    )
+
+    enriched = enrich_config_from_project(config, "/tmp")
+
+    assert enriched.entry_point == "apache2-foreground"
