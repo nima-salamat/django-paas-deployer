@@ -1661,6 +1661,15 @@ class DeployService:
             )
 
             cache_sources = get_build_cache_sources(str(deploy_item.pk))
+            revision_build_files = dict(
+                build_options.get("revision_build_files") or {}
+            )
+            if str(cfg.get("source_kind") or "").strip().lower() == "catalog":
+                logger.info(
+                    "Catalog build context files: count=%d names=%s",
+                    len(revision_build_files),
+                    sorted(revision_build_files.keys()),
+                )
             image = Image(
                 container_name,
                 tag,
