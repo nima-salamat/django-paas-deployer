@@ -418,7 +418,7 @@ def test_artifact_preflight_rejects_missing_image_owned_executable():
             "Entrypoint": ["docker-ensure-installed.sh"],
             "Cmd": [
                 "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-                "apache2-foreground",
+                "/usr/local/bin/apache2-foreground",
             ],
         },
         "Os": "linux",
@@ -466,7 +466,7 @@ def test_artifact_preflight_rejects_missing_relative_image_entrypoint():
             "Entrypoint": ["docker-ensure-installed.sh"],
             "Cmd": [
                 "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-                "apache2-foreground",
+                "/usr/local/bin/apache2-foreground",
             ],
         },
         "Os": "linux",
@@ -510,7 +510,7 @@ def test_artifact_preflight_rejects_invalid_image_owned_interpreter():
             "Entrypoint": ["docker-ensure-installed.sh"],
             "Cmd": [
                 "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-                "apache2-foreground",
+                "/usr/local/bin/apache2-foreground",
             ],
         },
         "Os": "linux",
