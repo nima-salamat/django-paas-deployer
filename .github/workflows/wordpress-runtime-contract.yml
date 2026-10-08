@@ -150,3 +150,53 @@ jobs:
           test "$start_line" -lt "$apache_line"
           docker exec passdeployer-wp wp core is-installed --allow-root
           docker exec passdeployer-wp wp option get blogname --allow-root
+
+      - name: Run WordPress through single-node Swarm
+        run: |
+          set -euxo pipefail
+          docker swarm init --advertise-addr 127.0.0.1
+
+          docker network create --driver overlay --attachable passdeployer-wp-swarm
+          docker volume create passdeployer-wp-swarm-files
+          docker volume create passdeployer-wp-swarm-db
+
+          docker service create             --name passdeployer-wp-swarm-db             --network passdeployer-wp-swarm             --mount type=volume,source=passdeployer-wp-swarm-db,target=/var/lib/mysql             --env MARIADB_ROOT_PASSWORD=root-swarm-password             --env MARIADB_DATABASE=wordpress             --env MARIADB_USER=app             --env MARIADB_PASSWORD=app-swarm-password             mariadb:11.8.9
+
+          for i in $(seq 1 120); do
+            db_state="$(docker service ps --no-trunc --format '{{.CurrentState}}' passdeployer-wp-swarm-db | head -n1)"
+            echo "db_state=$db_state"
+            if echo "$db_state" | grep -q "Running"; then
+              break
+            fi
+            sleep 1
+          done
+
+          docker service create             --name passdeployer-wp-swarm             --network passdeployer-wp-swarm             --mount type=volume,source=passdeployer-wp-swarm-files,target=/var/www/html             --env WORDPRESS_DB_HOST=passdeployer-wp-swarm-db             --env WORDPRESS_DB_USER=app             --env WORDPRESS_DB_PASSWORD=app-swarm-password             --env WORDPRESS_DB_NAME=wordpress             --env WORDPRESS_TABLE_PREFIX=wp_             --env WORDPRESS_SITE_URL=http://127.0.0.1:18081             --env WORDPRESS_SITE_TITLE="Swarm Contract Site"             --env WORDPRESS_ADMIN_USER=swarm-admin             --env WORDPRESS_ADMIN_PASSWORD="swarm-admin-password-123"             --env WORDPRESS_ADMIN_EMAIL=swarm@example.invalid             --env WORDPRESS_LOCALE=en_US             --env WORDPRESS_TIMEZONE=UTC             --env WORDPRESS_PERMALINK_STRUCTURE="/%postname%/"             --env WORDPRESS_AUTO_INSTALL=1             --env WORDPRESS_MANAGED_CRON=0             --env WORDPRESS_CRON_INTERVAL=300             --env WORDPRESS_CONFIG_EXTRA="define( 'WP_HOME', 'http://127.0.0.1:18081' ); define( 'WP_SITEURL', 'http://127.0.0.1:18081' );"             --health-cmd='test -f /tmp/passdeployer-wordpress-ready && wp core is-installed --allow-root >/dev/null 2>&1'             --health-interval=5s             --health-timeout=10s             --health-start-period=60s             --health-retries=36             --entrypoint docker-ensure-installed.sh             passdeployer-wordpress-contract:test             /usr/local/bin/passdeployer-wordpress-entrypoint.sh apache2-foreground
+
+          for i in $(seq 1 240); do
+            state="$(docker service ps --no-trunc --format '{{.CurrentState}}' passdeployer-wp-swarm | head -n1)"
+            error="$(docker service ps --no-trunc --format '{{.Error}}' passdeployer-wp-swarm | head -n1 || true)"
+            echo "wp_state=$state error=$error"
+            if echo "$state" | grep -q "Running"; then
+              cid="$(docker ps -q --filter label=com.docker.swarm.service.name=passdeployer-wp-swarm | head -n1)"
+              if [ -n "$cid" ]; then
+                status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cid")"
+                echo "health=$status"
+                if [ "$status" = "healthy" ]; then
+                  docker exec "$cid" wp core is-installed --allow-root
+                  docker logs "$cid"
+                  exit 0
+                fi
+              fi
+            fi
+            sleep 1
+          done
+
+          docker service ps --no-trunc passdeployer-wp-swarm || true
+          docker service inspect passdeployer-wp-swarm || true
+          cid="$(docker ps -aq --filter label=com.docker.swarm.service.name=passdeployer-wp-swarm | head -n1 || true)"
+          if [ -n "$cid" ]; then
+            docker inspect "$cid" || true
+            docker logs "$cid" || true
+          fi
+          exit 1
