@@ -144,6 +144,8 @@ class DeploymentLogger:
             "revision_contract_hash",
             "plan_contract_hash",
             "compiled_swarm_contract_hash",
+            "expected_contract_hash",
+            "actual_contract_hash",
             "worker_code_revision",
             "worker_started_at",
             "worker_instance_id",
