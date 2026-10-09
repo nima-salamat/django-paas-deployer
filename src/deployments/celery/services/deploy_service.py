@@ -90,7 +90,7 @@ def _merge_revision_runtime_environment(
         scope = str(ref.get("scope") or "runtime").lower()
         if not path.startswith("env.") or scope not in {"runtime", "both"}:
             continue
-        key = path[len("env."): ]
+        key = path[4:]
         if key in materialized:
             merged[key] = materialized[key]
     return merged
