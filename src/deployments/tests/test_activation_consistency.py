@@ -72,6 +72,15 @@ class DeploymentActivationConsistencyContractTests(unittest.TestCase):
     def test_deploy_worker_does_not_overwrite_lifecycle_intent(self):
         self.assertNotIn("objects.filter(pk=deploy_item.service_id).update(desired_state=\"running\")", self.service)
 
+    def test_native_swarm_plan_preserves_service_read_only_policy(self):
+        native = self.service.split("def _compile_native_plan", 1)[1].split(
+            "# ------------------------------------------------------------------\n    # Volume resolution",
+            1,
+        )[0]
+        self.assertIn("runtime_options.setdefault(", native)
+        self.assertIn('"read_only"', native)
+        self.assertIn('bool(getattr(service, "read_only", True))', native)
+
     def test_native_activation_passes_lifecycle_and_previous_deploy_fences(self):
         state_manager = (ROOT / "deployments/core/state/manager.py").read_text()
         store = (ROOT / "deployments/infrastructure/django_lifecycle.py").read_text()
