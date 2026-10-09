@@ -131,7 +131,10 @@ class RuntimeExecutionContract:
         if image_entrypoint_owned:
             source = "IMAGE"
             command = None
-            args = _tokens(process_command) or image_cmd
+            # A catalog image's immutable Dockerfile CMD outranks stale
+            # process commands persisted by older revisions. The runtime graph
+            # normalizes current catalog intent before reaching this boundary.
+            args = image_cmd or _tokens(process_command)
         else:
             source = "USER" if process_entrypoint not in (None, "", []) else "PLATFORM"
             command = _command_tokens(process_entrypoint) or _command_tokens(process_command) or None
