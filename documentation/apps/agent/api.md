@@ -149,6 +149,16 @@ The runtime OpenAPI builder derives several request schemas from the existing Se
 | `ShellCommandRequest` | `command` | `confirm=false`, `dry_run=false`, `token` | Token is a write-only body fallback for `X-Shell-Token`. |
 | `ShellFileRequest` | `action`, `path` | `token`, `new_name`, `content`, upload fields | Rename/create-folder/upload have operation-specific requirements. |
 
+### Service and Volume creation order
+
+Tenant Volume creation is Service-scoped because storage is charged against the Service's Plan. A workflow that creates both resources must therefore:
+
+1. Create the Service (directly with `POST /agent/v1/services`, or through `POST /agent/v1/services/from-plan`).
+2. Use the returned Service UUID in each `POST /agent/v1/volumes` request as `service`.
+3. For a pre-existing unused Volume, attach it with `PATCH /agent/v1/volumes/{volume_id}` and the same `service` UUID.
+
+Do not create an ownerless tenant Volume and try to attach it later. The tenant API returns a validation error when the Service is missing/null; a client wizard may retain a volume draft locally, but must wait until Service creation returns an id before sending the Volume request. Plan storage calculations in the client are a preview only; backend quota checks are authoritative.
+
 ## High-risk endpoints
 
 **Database credentials:** `GET /agent/v1/services/{service_id}/database-credentials` requires `service_database_credentials.read` and existing service permission. `reveal=true` may return decrypted credentials, so the client must treat the response as secret material and avoid caching/logging it.
