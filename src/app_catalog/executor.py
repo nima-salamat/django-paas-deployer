@@ -111,11 +111,49 @@ class ApplicationStackExecutor:
             if service is None:
                 continue
 
-            endpoint_exists = service.endpoints.filter(
-                enabled=True,
-                exposure="public",
-            ).exists()
-            if endpoint_exists:
+            existing_public_endpoints = list(
+                service.endpoints.filter(
+                    enabled=True,
+                    exposure="public",
+                ).order_by("name")
+            )
+            if existing_public_endpoints:
+                # Older Ready App installations persisted a web port as
+                # protocol=tcp even though no host port was published. Such an
+                # endpoint cannot pass the HTTP-family route filter, so Traefik
+                # never received router labels. Normalize this impossible raw
+                # TCP shape and reconcile live Swarm labels/network membership.
+                normalized_legacy_web = False
+                for endpoint in existing_public_endpoints:
+                    if endpoint.protocol == "tcp" and endpoint.published_port is None:
+                        endpoint.protocol = "https" if endpoint.tls else "http"
+                        endpoint.save(update_fields=["protocol", "updated_at"])
+                        sync_endpoint_reservation(endpoint)
+                        normalized_legacy_web = True
+
+                if normalized_legacy_web:
+                    repaired += 1
+                    if swarm_enabled():
+                        try:
+                            from deployments.core.swarm import SwarmRuntime
+                            SwarmRuntime().reconcile_public_routing(
+                                service_name=service.get_docker_service_name(),
+                                endpoints=service.endpoints.filter(
+                                    enabled=True,
+                                    exposure="public",
+                                ).order_by("name"),
+                                networks=(
+                                    [service.network.get_docker_network_name()]
+                                    if getattr(service, "network", None) is not None
+                                    else []
+                                ),
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Ready App %s failed to repair legacy public routing for service %s.",
+                                self.instance_id,
+                                service.pk,
+                            )
                 continue
 
             public = False
@@ -184,7 +222,7 @@ class ApplicationStackExecutor:
                 defaults={
                     "target_port": target_port,
                     "published_port": None,
-                    "protocol": "tcp",
+                    "protocol": "https",
                     "exposure": "public",
                     "hostname": host,
                     "path": "",
