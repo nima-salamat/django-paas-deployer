@@ -65,6 +65,37 @@ from ..helpers import DeploymentHelper, MockOrchestratorResult
 logger = logging.getLogger(__name__)
 
 
+def _merge_revision_runtime_environment(
+    graph_environment: dict[str, str] | None,
+    materialized_environment: dict[str, str] | None,
+    secret_refs: list[dict] | None,
+) -> dict[str, str]:
+    """Restore versioned runtime secrets omitted by the non-secret graph snapshot.
+
+    ServiceRuntimeGraph intentionally contains only non-secret environment
+    values. The materialized revision config separately resolves the exact
+    secret versions selected by this immutable revision. Merge only runtime
+    secret references from that materialized config so no secret is required
+    in the graph snapshot and build-only secrets never enter the container.
+    """
+    merged = {str(key): str(value) for key, value in (graph_environment or {}).items()}
+    materialized = {
+        str(key): str(value)
+        for key, value in (materialized_environment or {}).items()
+    }
+    for ref in secret_refs or []:
+        if not isinstance(ref, dict):
+            continue
+        path = str(ref.get("path") or "")
+        scope = str(ref.get("scope") or "runtime").lower()
+        if not path.startswith("env.") or scope not in {"runtime", "both"}:
+            continue
+        key = path[len("env."): ]
+        if key in materialized:
+            merged[key] = materialized[key]
+    return merged
+
+
 def _docker_tag_from_deploy(version) -> str:
     """Resolve the canonical Docker image tag for a Deploy.version value."""
     return canonical_image_tag(version)
@@ -912,7 +943,15 @@ class DeployService:
             else None
         )
         if runtime_graph is not None:
-            environment = dict(runtime_graph.runtime_environment)
+            # Graph snapshots deliberately omit secret-backed environment rows;
+            # the materialized revision config above contains their exact
+            # versioned values. Replacing this environment outright silently
+            # drops credentials (for example WordPress DB/admin passwords).
+            environment = _merge_revision_runtime_environment(
+                runtime_graph.runtime_environment,
+                environment,
+                getattr(deploy_item.revision, "secret_refs", None),
+            )
             build_environment.update(runtime_graph.build_environment)
             cfg["processes"] = [
                 {
