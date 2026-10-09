@@ -1128,7 +1128,13 @@ class SwarmRuntime:
                 .lower()
                 or None
             )
-            if inspect_missing_health and not health_status and container_id:
+            if (
+                inspect_missing_health
+                and not health_status
+                and container_id
+                and str(status.get("State") or "").strip().lower() == "running"
+                and str(task.get("DesiredState") or "").strip().lower() == "running"
+            ):
                 health_status = self._container_health_status(container_id)
 
             task_spec = (task.get("Spec") or {}).get("ContainerSpec") or {}
@@ -1301,7 +1307,10 @@ class SwarmRuntime:
             result.update(
                 {
                     "container_status": str(attrs.get("State", {}).get("Status") or ""),
-                    "health_status": str(health.get("Status") or task.health_status or "").strip().lower() or None,
+                    "health_status": (
+                        str(health.get("Status") or task.health_status or "").strip().lower()
+                        or None
+                    ),
                     "health_failing_streak": health.get("FailingStreak"),
                     "running": state.get("Running"),
                     "restarting": state.get("Restarting"),
