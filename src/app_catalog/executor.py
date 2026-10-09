@@ -97,6 +97,8 @@ class ApplicationStackExecutor:
             if isinstance(raw, dict) and raw.get("key")
         }
 
+        from services.ports import sync_endpoint_reservation
+
         repaired = 0
         for spec in plan.services:
             service = (
@@ -211,7 +213,6 @@ class ApplicationStackExecutor:
                 continue
 
             from services.serializers import _service_host
-            from services.ports import sync_endpoint_reservation
             host = str(_service_host(service) or "").strip()
             if not host:
                 continue
