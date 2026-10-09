@@ -11,6 +11,7 @@ import yaml
 from deployments.core.swarm import compile_compose_service
 from deployments.core.types import DeploymentConfig
 from deployments.runtime.execution_contract import RuntimeExecutionContract
+from deployments.celery.services.deploy_service import _merge_revision_runtime_environment
 
 
 def test_wordpress_catalog_executable_paths_reach_swarm_unchanged():
@@ -90,3 +91,40 @@ def test_wordpress_catalog_executable_paths_reach_swarm_unchanged():
     assert service["environment"] == [
         "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     ]
+
+
+
+def test_materialized_runtime_secrets_survive_non_secret_runtime_graph():
+    graph_environment = {
+        "WORDPRESS_DB_HOST": "mariadb",
+        "WORDPRESS_DB_NAME": "wordpress",
+        "WORDPRESS_SITE_TITLE": "Example",
+    }
+    materialized_environment = {
+        **graph_environment,
+        "WORDPRESS_DB_PASSWORD": "db-secret-version-4",
+        "WORDPRESS_ADMIN_PASSWORD": "admin-secret-version-2",
+        "BUILD_ONLY_SECRET": "must-not-enter-runtime",
+        "UNREFERENCED_SECRET": "must-not-enter-runtime",
+    }
+    secret_refs = [
+        {"path": "env.WORDPRESS_DB_PASSWORD", "scope": "runtime", "key": "service_password_wordpress", "version": 4},
+        {"path": "env.WORDPRESS_ADMIN_PASSWORD", "scope": "both", "key": "wordpress_admin_password", "version": 2},
+        {"path": "env.BUILD_ONLY_SECRET", "scope": "build", "key": "build_only_secret", "version": 1},
+        {"path": "config.password", "scope": "runtime", "key": "password", "version": 1},
+    ]
+
+    result = _merge_revision_runtime_environment(
+        graph_environment,
+        materialized_environment,
+        secret_refs,
+    )
+
+    assert result["WORDPRESS_DB_PASSWORD"] == "db-secret-version-4"
+    assert result["WORDPRESS_ADMIN_PASSWORD"] == "admin-secret-version-2"
+    assert result["WORDPRESS_DB_HOST"] == "mariadb"
+    assert result["WORDPRESS_DB_NAME"] == "wordpress"
+    assert result["WORDPRESS_SITE_TITLE"] == "Example"
+    assert "BUILD_ONLY_SECRET" not in result
+    assert "UNREFERENCED_SECRET" not in result
+    assert "password" not in result
