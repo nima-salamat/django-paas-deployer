@@ -40,12 +40,57 @@ def test_catalog_image_cmd_replaces_stale_shell_wrapped_process_command():
             "catalog_managed": True,
             "start_command": stale_command,
             "entry_point": "/bin/sh -lc",
+            # Old runtime snapshots may carry a serialized contract that bypasses
+            # Dockerfile inspection and incorrectly treats the shell wrapper as
+            # the process executable.
+            "execution_contract": {
+                "entrypoint_source": "PLATFORM",
+                "image_entrypoint": [],
+                "image_cmd": [],
+                "command": ["/bin/sh", "-lc", stale_command],
+                "args": [],
+                "catalog_managed": False,
+                "image_entrypoint_owned": False,
+                "process_name": "web",
+                "contract_version": "1",
+                "required_executables": [],
+                "source_kind": "docker",
+            },
+            "execution_contracts": {
+                "web": {
+                    "entrypoint_source": "PLATFORM",
+                    "image_entrypoint": [],
+                    "image_cmd": [],
+                    "command": ["/bin/sh", "-lc", stale_command],
+                    "args": [],
+                    "catalog_managed": False,
+                    "image_entrypoint_owned": False,
+                    "process_name": "web",
+                    "contract_version": "1",
+                    "required_executables": [],
+                    "source_kind": "docker",
+                }
+            },
+            "execution_contract_hashes": {"revision_contract_hash": "old-contract"},
         },
         process_snapshot=[{
             "name": "web",
             "process_type": "web",
             "command": stale_command,
             "entrypoint": "/bin/sh -lc",
+            "execution_contract": {
+                "entrypoint_source": "PLATFORM",
+                "image_entrypoint": [],
+                "image_cmd": [],
+                "command": ["/bin/sh", "-lc", stale_command],
+                "args": [],
+                "catalog_managed": False,
+                "image_entrypoint_owned": False,
+                "process_name": "web",
+                "contract_version": "1",
+                "required_executables": [],
+                "source_kind": "docker",
+            },
             "replicas": 1,
             "enabled": True,
         }],
@@ -64,6 +109,13 @@ def test_catalog_image_cmd_replaces_stale_shell_wrapped_process_command():
     assert graph.processes[0].entrypoint is None
     assert graph.execution_contract is not None
     assert graph.execution_contract.entrypoint_source == "IMAGE"
+    assert graph.execution_contract.image_entrypoint == (
+        "/usr/local/bin/docker-ensure-installed.sh",
+    )
+    assert graph.execution_contract.image_cmd == (
+        "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+        "/usr/local/bin/apache2-foreground",
+    )
     assert graph.execution_contract.command is None
     assert graph.execution_contract.args == (
         "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
