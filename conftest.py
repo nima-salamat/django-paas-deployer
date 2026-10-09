@@ -26,9 +26,10 @@ for _path in (_SRC, _WORK):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-_FULL_DJANGO_TESTS = os.environ.get("DJANGO_FULL_TESTS", "").strip().lower() in {
-    "1", "true", "yes", "on",
-}
+_FULL_DJANGO_TESTS = (
+    os.environ.get("DJANGO_FULL_TESTS", "").strip().lower() in {"1", "true", "yes", "on"}
+    or os.environ.get("DJANGO_SETTINGS_MODULE", "").strip() == "config.settings"
+)
 
 # ---------------------------------------------------------------------------
 # Pre-install a minimal ``core.global_settings.config`` stub for the fast
@@ -130,10 +131,12 @@ if not _FULL_DJANGO_TESTS:
 
 
 # ---------------------------------------------------------------------------
-# Configure a minimal Django settings module on the fly. We do not want
-# to load the project's full ``config/settings.py`` because that pulls in
-# Wagtail, channels, postgres, etc. — none of which are installed in the
-# test environment.
+# Configure settings for the selected test profile. The normal pytest.ini
+# points at the real project settings so model-backed unit tests can register
+# every local app. Set DJANGO_FULL_TESTS=1 explicitly in scripts/CI that want
+# the full profile even when overriding the settings module. The lightweight
+# profile remains available when invoking this conftest without project
+# settings (for isolated source/contract test environments).
 # ---------------------------------------------------------------------------
 _MIN_SETTINGS = """
 SECRET_KEY = "test-secret-key-for-patch-tests-only"
