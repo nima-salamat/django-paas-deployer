@@ -216,6 +216,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --disable-pip-version-check -r requirements.txt
+          pytest -q src/app_catalog/tests/test_catalog_sources.py -k "wordpress_public_service_uses_ready_marker_healthcheck_and_https_config"
           pytest -q src/deployments/tests/test_execution_contract.py src/deployments/tests/test_swarm_runtime.py src/deployments/tests/test_wordpress_runtime_path_trace.py src/deployments/tests/test_catalog_runtime_authority_regressions.py src/deployments/tests/test_swarm_startup_diagnostics.py
 
       - name: Run Compose catalog resolution regressions
