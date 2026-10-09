@@ -178,12 +178,18 @@ services:
         export PATH
         
         APP_ROOT="${WORDPRESS_ROOT:-/var/www/html}"
-        READY_MARKER="/tmp/passdeployer-wordpress-ready"
+        READY_MARKER="/run/passdeployer-wordpress-ready"
         LOCK_DIR="${APP_ROOT}/.passdeployer-wp-install.lock"
         UPSTREAM_PID=""
         
         log() { echo "[passdeployer-wordpress] $*" >&2; }
         cleanup_lock() { rmdir "$LOCK_DIR" 2>/dev/null || true; }
+        mark_ready() {
+          if ! touch "$READY_MARKER"; then
+            log "ERROR: cannot create readiness marker at $READY_MARKER; ensure /run is writable."
+            return 1
+          fi
+        }
         
         wait_for_database() {
           attempts=0
@@ -213,7 +219,7 @@ services:
         
         install_wordpress() {
           if [ "${WORDPRESS_AUTO_INSTALL:-1}" != "1" ]; then
-            touch "$READY_MARKER"
+            mark_ready || return 1
             return 0
           fi
         
@@ -223,7 +229,7 @@ services:
           fi
         
           if wp core is-installed --allow-root >/dev/null 2>&1; then
-            touch "$READY_MARKER"
+            mark_ready || return 1
             log "Existing WordPress installation detected; preserving persistent site settings."
             return 0
           fi
@@ -246,7 +252,7 @@ services:
               fi
             fi
             configure_site
-            touch "$READY_MARKER"
+            mark_ready || return 1
             log "WordPress installation is ready."
             trap - EXIT INT TERM
             cleanup_lock
@@ -258,7 +264,7 @@ services:
           while [ "$attempts" -lt 180 ]; do
             if wp core is-installed --allow-root >/dev/null 2>&1; then
               configure_site
-              touch "$READY_MARKER"
+              mark_ready || return 1
               return 0
             fi
             attempts=$((attempts + 1))
@@ -333,7 +339,7 @@ services:
     depends_on:
       - mariadb
     healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/passdeployer-wordpress-ready && wp core is-installed --allow-root >/dev/null 2>&1"]
+      test: ["CMD-SHELL", "test -f /run/passdeployer-wordpress-ready && wp core is-installed --allow-root >/dev/null 2>&1"]
       interval: 5s
       timeout: 10s
       start_period: 60s
