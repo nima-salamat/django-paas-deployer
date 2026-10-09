@@ -10,7 +10,7 @@ Model: Service. ModelSerializer uses all model fields. service_name, service_hos
 Model: Service. Read projection using all model fields plus derived service_name, service_host, user_username, user_info and storage. It never grants object access; ViewSet/queryset resolution does.
 
 ## VolumeSerializer
-Model: Volume. ModelSerializer uses all model fields. Derived fields are service_name, service_status, is_unused, attached_services and attached_services_count. validate_size_mb enforces positive size; validate() enforces Service ownership/quota. create/update use Volume domain operations so service attachment/release cannot bypass lifecycle invariants.
+Model: Volume. ModelSerializer uses all model fields. Derived fields are service_name, service_status, is_unused, attached_services and attached_services_count. validate_size_mb enforces positive size; validate() enforces Service ownership/quota. create/update use Volume domain operations so service attachment/release cannot bypass lifecycle invariants. The shared serializer declares `service` as structurally optional/nullable, but tenant `VolumeViewSet.create` adds a stronger API rule and rejects missing/null service; the tenant API requires a pre-existing Service id to enforce plan quota.
 
 ## ServiceShareSerializer
 Read representation of ServiceShare. Fields: id, service_id, service_name, service_status, service_platform, service_plan_type, service, group_id, group_title, target_user_id, target_username, shared_by_id, shared_by_username, rules, is_active, note, expires_at, admin_only, preset, is_owner, my_permissions, created_at, updated_at. SerializerMethodField values are viewer-sensitive. my_permissions uses owner rules, group-member overrides or normalized share rules.
