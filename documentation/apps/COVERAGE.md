@@ -34,7 +34,7 @@ Every production source surface must be mapped to its owning canonical document 
 | `services` | 36 | [services](./services/README.md) |
 | `plans` | 13 | [plans](./plans/README.md) |
 | `deploy` | 24 | [deploy](./deploy/README.md) |
-| `deployments` | 117 | [deployments](./deployments/README.md) |
+| `deployments` | 118 | [deployments](./deployments/README.md) |
 | `logs` | 12 | [logs](./logs/README.md) |
 | `app_catalog` | 18 | [app_catalog](./app_catalog/README.md) |
 | `messenger` | 33 | [messenger](./messenger/README.md) |
@@ -43,7 +43,7 @@ Every production source surface must be mapped to its owning canonical document 
 | `docs` | 9 | [docs](./docs/README.md) |
 | `core` | 31 | [core](./core/README.md) |
 | `cms` | 9 | [cms](./cms/README.md) |
-| **Total** | **413** | **15 app boundaries** |
+| **Total** | **414** | **15 app boundaries** |
 
 ### Module-level inventory
 
@@ -292,6 +292,7 @@ Every production source surface must be mapped to its owning canonical document 
 - `src/deployments/runtime/capabilities.py` → [deployments](./deployments/README.md)
 - `src/deployments/runtime/contract.py` → [deployments](./deployments/README.md)
 - `src/deployments/runtime/errors.py` → [deployments](./deployments/README.md)
+- `src/deployments/runtime/execution_contract.py` → [deployments](./deployments/README.md)
 - `src/deployments/runtime/fake.py` → [deployments](./deployments/README.md)
 - `src/deployments/runtime/identity.py` → [deployments](./deployments/README.md)
 - `src/deployments/runtime/observations.py` → [deployments](./deployments/README.md)
