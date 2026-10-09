@@ -273,6 +273,34 @@ def test_stale_worker_cannot_cleanup_or_transition_new_owner_state():
     assert runtime.remove_count == 0
 
 
+def test_stale_duplicate_returns_committed_success_without_cleanup():
+    runtime = FakeRuntime()
+    identity = RuntimeIdentity(service_id="service-1", runtime_name="app-service-1")
+    owner = {"current": True}
+    store = InMemoryLifecycleStore()
+
+    def concurrent_completion():
+        # Simulate another delivery committing this same Deploy before this
+        # worker's final compare-and-set. The stale delivery must not convert
+        # an already successful deployment into a reported error.
+        store.status = sm.DEPLOY_SUCCEEDED
+        owner["current"] = False
+
+    runtime.finalize_success = lambda *args, **kwargs: pytest.fail(
+        "stale duplicate must not run post-success cleanup"
+    )
+    result = DeploymentLifecycleExecutor(store).execute(
+        _context(identity, owns=lambda: owner["current"]),
+        _Strategy(_plan(identity), activate=concurrent_completion),
+        runtime,
+    )
+
+    assert result.success is True
+    assert result.status == sm.DEPLOY_SUCCEEDED
+    assert result.details["completion_already_committed"] is True
+    assert runtime.remove_count == 0
+
+
 def test_cancellation_wins_completion_race_and_cleans_owned_runtime():
     runtime = FakeRuntime()
     identity = RuntimeIdentity(service_id="service-1", runtime_name="app-service-1")
