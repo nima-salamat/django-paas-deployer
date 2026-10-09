@@ -327,6 +327,23 @@ Use the volume API for resource creation and lifecycle changes. Respect plan,
 quota and server-owned volume constraints. Use the returned volume id and
 binding metadata when connecting storage to a service.
 
+A tenant Volume cannot be created without an existing Service. The create API
+rejects a missing/null `service` because quota is checked against that Service's
+plan. Never try to create an unused tenant volume first.
+
+For a new Service with storage:
+1. Create the Service through `POST {{base}}/services` or
+   `POST {{base}}/services/from-plan`.
+2. Read the returned Service `id`.
+3. Create each new Volume with `POST {{base}}/volumes` and
+   `service: <returned Service id>`.
+4. To reuse an existing unused Volume instead, attach it with
+   `PATCH {{base}}/volumes/{volume_id}` and `service: <returned Service id>`.
+
+A wizard may stage volume specifications locally before Service creation, but
+it must not POST those drafts until the Service id exists. Treat volume creation
+or attachment errors as an incomplete storage setup and report them explicitly.
+
 A runtime path being writable does not imply a volume exists, and a volume
 being attached does not imply every path under it is writable by the service
 process UID. Verify the actual resource and runtime state after important
