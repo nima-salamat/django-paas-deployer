@@ -198,7 +198,7 @@ networks:
             "define( 'FORCE_SSL_ADMIN', true );\n"
             "if ( getenv( 'WORDPRESS_MANAGED_CRON' ) === '1' ) { define( 'DISABLE_WP_CRON', true ); }"
         )
-        self.assertIn("FROM wordpress:7.1.2-php8.3-apache", wordpress["dockerfile"])
+        self.assertIn("FROM wordpress:7.1.2-php8.4-apache", wordpress["dockerfile"])
         self.assertIn("ARG WP_CLI_VERSION=2.12.0", wordpress["dockerfile"])
         self.assertIn("mariadb-client", wordpress["dockerfile"])
         self.assertIn("WP_CLI_ALLOW_ROOT=1", wordpress["dockerfile"])
