@@ -2151,6 +2151,15 @@ class DeployService:
                 for key in ("worker_code_revision", "worker_started_at", "worker_instance_id")
             },
         }
+        # The native Swarm adapter defaults to a read-only root filesystem if
+        # this option is omitted. Carry the Service policy across the native
+        # planning boundary explicitly; otherwise Ready Apps created with
+        # service.read_only=False unexpectedly run read-only and the official
+        # WordPress bootstrap cannot chown its initially empty document root.
+        runtime_options.setdefault(
+            "read_only",
+            bool(getattr(service, "read_only", True)),
+        )
         if primary_contract is not None:
             runtime_options["execution_contract"] = primary_contract.as_dict()
 
