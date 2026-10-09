@@ -5,7 +5,7 @@ import pytest
 
 from deployments.common.exceptions import DeploymentError
 from deployments.core.runtime_graph import ServiceRuntimeGraph
-from deployments.core.swarm import SwarmRuntime
+from deployments.core.swarm import SwarmRuntime, compile_compose_service
 from deployments.runtime.execution_contract import RuntimeExecutionContract
 from deployments.runtime.identity import RuntimeIdentity
 from deployments.runtime.swarm.adapter import SwarmRuntimeAdapter
@@ -271,3 +271,63 @@ def test_swarm_adapter_does_not_forward_stale_runtime_options_processes():
     )
     assert spec.runtime_options["processes"][0]["entrypoint"] is None
     assert spec.runtime_options["processes"][0]["execution_contract"]["entrypoint_source"] == "IMAGE"
+
+    # Trace the adapter output through the exact final Compose-shaped service
+    # spec used by Swarm; this is where Command=/bin/sh, Args=-lc previously
+    # escaped the higher-level graph assertions.
+    compiled = compile_compose_service(spec, image_ref=spec.image_ref)
+    service = compiled["services"][spec.name]
+    assert service["command"] is None
+    assert service["args"] == [
+        "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+        "/usr/local/bin/apache2-foreground",
+    ]
+    assert service["entrypoint"] is None
+
+
+
+def test_execution_contract_ignores_stored_shell_contract_when_catalog_dockerfile_owns_entrypoint():
+    stale_command = (
+        "/bin/sh -lc /usr/local/bin/passdeployer-wordpress-entrypoint.sh "
+        "apache2-foreground"
+    )
+    stored_contract = {
+        "entrypoint_source": "PLATFORM",
+        "image_entrypoint": [],
+        "image_cmd": [],
+        "command": ["/bin/sh", "-lc", stale_command],
+        "args": [],
+        "catalog_managed": False,
+        "image_entrypoint_owned": False,
+        "process_name": "web",
+        "contract_version": "1",
+        "required_executables": [],
+        "source_kind": "docker",
+    }
+
+    contract = RuntimeExecutionContract.from_runtime(
+        process_name="web",
+        process_command=stale_command,
+        process_entrypoint="/bin/sh -lc",
+        runtime_options={
+            "catalog_managed": True,
+            "image_entrypoint_owned": True,
+            "execution_contract": stored_contract,
+        },
+        source_kind="docker",
+        dockerfile=WORDPRESS_DOCKERFILE,
+    )
+
+    assert contract.entrypoint_source == "IMAGE"
+    assert contract.image_entrypoint == (
+        "/usr/local/bin/docker-ensure-installed.sh",
+    )
+    assert contract.image_cmd == (
+        "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+        "/usr/local/bin/apache2-foreground",
+    )
+    assert contract.command is None
+    assert contract.args == (
+        "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+        "/usr/local/bin/apache2-foreground",
+    )
