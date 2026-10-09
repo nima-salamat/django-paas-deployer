@@ -426,7 +426,17 @@ def compose_to_resolved(*, document: dict[str, Any], metadata: dict[str, Any], c
             m = re.search(r"https?://(?:127\.0\.0\.1|localhost):\d+([^\s\"']*)", text)
             if m:
                 readiness_path = m.group(1) or "/"
-        inline_dockerfile = (raw.get("x-passdeployer") or {}).get("dockerfile")
+        pd_service_meta = raw.get("x-passdeployer") or {}
+        # Catalog definitions may keep these platform extensions directly on
+        # the Compose service (the built-in Ready App format), or nest them
+        # under x-passdeployer for imported Compose definitions. Support both
+        # shapes so immutable build files survive definition -> resolved plan.
+        inline_dockerfile = pd_service_meta.get("dockerfile") or raw.get("dockerfile")
+        raw_files = pd_service_meta.get("files") or raw.get("files") or {}
+        if not isinstance(raw_files, dict):
+            raise ApplicationPlanError(
+                f"Compose service {key!r} files must be a mapping."
+            )
         if raw.get("build") and not inline_dockerfile:
             raise ApplicationPlanError(
                 f"Compose service {key!r} uses an external build context, which this catalog importer cannot safely materialize yet."
@@ -450,7 +460,16 @@ def compose_to_resolved(*, document: dict[str, Any], metadata: dict[str, Any], c
                 if inline_dockerfile
                 else None
             ),
-            "files": {},
+            "files": {
+                str(name): _transform(
+                    str(content),
+                    render_context,
+                    aliases,
+                    secrets,
+                    preserve_native_variables=True,
+                )
+                for name, content in raw_files.items()
+            },
             "environment": _transform(env, render_context, aliases, secrets),
             "ports": raw.get("ports") or raw.get("expose") or [],
             "port": port_target,
