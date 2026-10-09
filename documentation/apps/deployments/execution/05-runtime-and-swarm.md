@@ -100,6 +100,8 @@ Path: `runtime/execution_contract.py`
 The Runtime Execution Contract is the canonical executable semantics carried
 from the immutable revision graph into the concrete runtime adapter.
 
+Runtime environment values and secrets follow a related but separate rule. `ServiceRuntimeGraph.runtime_environment` is built from the redacted revision environment snapshot and must not contain secret plaintext. `materialize_revision_config(revision)` resolves the revision's exact versioned secret references at the deployment boundary. The native Swarm path merges back only `env.*` references whose scope is `runtime` or `both`; it must not replace those resolved values with the non-secret graph map, nor forward build-only or unreferenced secrets. This preserves revision-pinned credentials without storing them in the graph snapshot.
+
 It records only non-secret execution intent:
 
 - `entrypoint_source`: `IMAGE`, `PLATFORM` or `USER`;
