@@ -1085,10 +1085,52 @@ class SwarmRuntime:
             constraints.append(f"node.id == {node_id}")
         return constraints
 
-    def _task_states(self, service) -> tuple[SwarmTaskState, ...]:
+    def _container_health_status(self, container_id: str) -> str | None:
+        """Read health from the container when Swarm TaskStatus omits it.
+
+        Docker Engine versions/API responses do not consistently expose
+        ContainerStatus.Health on a Swarm task. The node-local container
+        inspection still exposes State.Health.Status when the task is on the
+        Engine this client is connected to.
+        """
+        try:
+            container = self.client.containers.get(container_id)
+            container.reload()
+            attrs = container.attrs or {}
+            state = attrs.get("State") or {}
+            health = state.get("Health") or {}
+            return str(health.get("Status") or "").strip().lower() or None
+        except Exception as exc:
+            # In a multi-node Swarm, the task can live on a worker that is not
+            # the node serving this Docker client. Keep health unknown in that
+            # case; do not treat a failed inspection as evidence of health.
+            logger.debug(
+                "Unable to read container health for Swarm task container=%s: %s",
+                container_id,
+                exc,
+            )
+            return None
+
+    def _task_states(
+        self,
+        service,
+        *,
+        inspect_missing_health: bool = False,
+    ) -> tuple[SwarmTaskState, ...]:
         rows = []
         for task in service.tasks() or ():
             status = task.get("Status") or {}
+            container_status = status.get("ContainerStatus") or {}
+            container_id = str(container_status.get("ContainerID") or "").strip() or None
+            health_status = (
+                str((container_status.get("Health") or {}).get("Status") or "")
+                .strip()
+                .lower()
+                or None
+            )
+            if inspect_missing_health and not health_status and container_id:
+                health_status = self._container_health_status(container_id)
+
             task_spec = (task.get("Spec") or {}).get("ContainerSpec") or {}
             task_image = str(task_spec.get("Image") or "").strip() or None
             node_name = None
@@ -1110,15 +1152,9 @@ class SwarmRuntime:
                     error=str(status.get("Err") or ""),
                     message=str(status.get("Message") or ""),
                     image=task_image,
-                    container_id=str((status.get("ContainerStatus") or {}).get("ContainerID") or "") or None,
+                    container_id=container_id,
                     status_timestamp=str(status.get("Timestamp") or "") or None,
-                    health_status=(
-                        str(
-                            ((status.get("ContainerStatus") or {}).get("Health") or {}).get("Status")
-                            or ""
-                        ).strip().lower()
-                        or None
-                    ),
+                    health_status=health_status,
                 )
             )
         return tuple(rows)
@@ -1157,7 +1193,7 @@ class SwarmRuntime:
             healthcheck_test
             and [str(item).strip().upper() for item in healthcheck_test] != ["NONE"]
         )
-        tasks = self._task_states(service)
+        tasks = self._task_states(service, inspect_missing_health=healthcheck_configured)
         running = sum(
             1 for task in tasks
             if task.state.lower() == "running"
@@ -1265,6 +1301,8 @@ class SwarmRuntime:
             result.update(
                 {
                     "container_status": str(attrs.get("State", {}).get("Status") or ""),
+                    "health_status": str(health.get("Status") or task.health_status or "").strip().lower() or None,
+                    "health_failing_streak": health.get("FailingStreak"),
                     "running": state.get("Running"),
                     "restarting": state.get("Restarting"),
                     "exit_code": state.get("ExitCode"),
