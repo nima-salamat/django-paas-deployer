@@ -886,6 +886,18 @@ class SwarmRuntime:
                         "observed_entrypoint": list(observed_entrypoint),
                     },
                 )
+            if contract.catalog_managed and contract.image_cmd and observed_cmd != contract.image_cmd:
+                raise DeploymentError(
+                    "The built catalog artifact does not preserve its Dockerfile CMD.",
+                    stage="image_validation",
+                    code="RUNTIME_ARTIFACT_CMD_MISMATCH",
+                    user_message="The application image does not contain the expected startup command and was stopped before Swarm startup.",
+                    certainty=FailureCertainty.OBSERVED,
+                    details=diagnostics | {
+                        "failure_reason": "image_cmd_mismatch",
+                        "observed_cmd": list(observed_cmd),
+                    },
+                )
 
         def _validate_runtime_executable(executable: str, *, role: str = "executable") -> None:
             container = None
