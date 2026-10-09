@@ -209,7 +209,21 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --disable-pip-version-check -r requirements.txt
-          pytest -q src/deployments/tests/test_execution_contract.py src/deployments/tests/test_swarm_runtime.py src/deployments/tests/test_wordpress_runtime_path_trace.py src/deployments/tests/test_catalog_runtime_authority_regressions.py src/deployments/tests/test_swarm_startup_diagnostics.py src/app_catalog/tests/test_catalog_sources.py
+          pytest -q src/deployments/tests/test_execution_contract.py src/deployments/tests/test_swarm_runtime.py src/deployments/tests/test_wordpress_runtime_path_trace.py src/deployments/tests/test_catalog_runtime_authority_regressions.py src/deployments/tests/test_swarm_startup_diagnostics.py
+
+      - name: Run Compose catalog resolution regressions
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings
+          SECRET_KEY: ci-only-secret
+          DOMAIN_NAME: localhost
+          API_DOMAIN_NAME: localhost
+          DB_NAME: paas_ci
+          DB_USER: paas_ci
+          DB_PASSWORD: paas_ci
+          DB_HOST: 127.0.0.1
+          DB_PORT: "5432"
+        run: |
+          pytest -q src/app_catalog/tests/test_catalog_sources.py -k "compose_catalog_keeps_service_level_dockerfile_and_generated_files or compose_service_files_must_be_a_mapping"
 
       - name: Assert WP-CLI installation completed
         run: |
