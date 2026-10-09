@@ -7,6 +7,8 @@ from deployments.common.exceptions import DeploymentError
 from deployments.core.runtime_graph import ServiceRuntimeGraph
 from deployments.core.swarm import SwarmRuntime
 from deployments.runtime.execution_contract import RuntimeExecutionContract
+from deployments.runtime.identity import RuntimeIdentity
+from deployments.runtime.swarm.adapter import SwarmRuntimeAdapter
 from services.revisioning import _catalog_revision_requires_refresh
 
 
@@ -139,3 +141,81 @@ def test_catalog_image_preflight_rejects_stale_image_cmd():
         "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
         "apache2-foreground",
     ]
+
+
+
+def test_swarm_adapter_does_not_forward_stale_runtime_options_processes():
+    stale_command = (
+        "/bin/sh -lc /usr/local/bin/passdeployer-wordpress-entrypoint.sh "
+        "apache2-foreground"
+    )
+    revision = SimpleNamespace(
+        pk="revision-wordpress-stale-options",
+        revision_number=13,
+        config_snapshot={"source_kind": "catalog", "catalog_managed": True},
+        source_snapshot={"catalog_id": "wordpress", "definition_version": "1.3"},
+        build_snapshot={
+            "dockerfile": WORDPRESS_DOCKERFILE,
+            "files": {
+                "passdeployer-wordpress-entrypoint.sh": "#!/bin/sh\\nset -eu\\n"
+            },
+        },
+        runtime_snapshot={
+            "catalog_managed": True,
+            "start_command": stale_command,
+        },
+        process_snapshot=[{
+            "name": "web",
+            "process_type": "web",
+            "command": stale_command,
+            "entrypoint": "/bin/sh -lc",
+            "replicas": 1,
+            "enabled": True,
+        }],
+        environment_snapshot={},
+        endpoint_snapshot=[],
+        volume_snapshot=[],
+        network_snapshot=[],
+    )
+    graph = ServiceRuntimeGraph.from_revision(revision)
+    plan = SimpleNamespace(
+        identity=RuntimeIdentity(
+            service_id="service-wordpress",
+            deployment_id="deploy-wordpress",
+            revision_id="revision-wordpress-stale-options",
+            runtime_name="app-wordpress",
+        ),
+        process_graph=graph,
+        execution_contracts=graph.execution_contracts,
+        image_ref="wordpress:test",
+        artifact_digest="",
+        release_id="release-wordpress",
+        environment={},
+        labels={},
+        runtime_options={
+            "catalog_managed": True,
+            "image_entrypoint_owned": True,
+            "processes": [{
+                "name": "web",
+                "process_type": "web",
+                "command": stale_command,
+                "entrypoint": "/bin/sh -lc",
+                "enabled": True,
+                "replicas": 1,
+            }],
+        },
+        networks=(),
+        volumes=(),
+        endpoints=(),
+        resources={},
+        health_policy={},
+    )
+
+    spec, _ = SwarmRuntimeAdapter._plan_config(plan)
+
+    assert spec.runtime_options["processes"][0]["command"] == (
+        "/usr/local/bin/passdeployer-wordpress-entrypoint.sh "
+        "/usr/local/bin/apache2-foreground"
+    )
+    assert spec.runtime_options["processes"][0]["entrypoint"] is None
+    assert spec.runtime_options["processes"][0]["execution_contract"]["entrypoint_source"] == "IMAGE"
