@@ -28,7 +28,13 @@ class AgentContractTests(TestCase):
         self.agent = Agent.objects.create(
             user=self.user,
             name="contract-agent",
-            scopes=["services.create", "services.read", "plans.apply", "shell.files.write"],
+            scopes=[
+                "services.create",
+                "services.read",
+                "plans.apply",
+                "service_volumes.write",
+                "shell.files.write",
+            ],
         )
         _, self.raw = issue_access_credential(self.agent)
         self.client = APIClient()
@@ -339,7 +345,7 @@ class AgentContractTests(TestCase):
         self.assertIn("existing Service id", schema.get("description", ""))
 
         operation = openapi["paths"]["/agent/v1/volumes"]["post"]
-        self.assertIn("create the Service first", operation.get("description", ""))
+        self.assertIn("Create the Service first", operation.get("description", ""))
 
         from agent.skills import skill_for_agent
         skill = skill_for_agent("volumes", self.agent)
