@@ -117,6 +117,7 @@ class ServiceRuntimeGraph:
             source_kind == "catalog"
             or bool(config_snapshot.get("catalog_managed"))
             or bool(source_snapshot.get("catalog_id"))
+            or bool(runtime_snapshot.get("catalog_managed"))
         )
         dockerfile = str(
             build_snapshot.get("dockerfile")
