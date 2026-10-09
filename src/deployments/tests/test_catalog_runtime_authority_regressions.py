@@ -24,8 +24,10 @@ def test_catalog_image_cmd_replaces_stale_shell_wrapped_process_command():
     revision = SimpleNamespace(
         pk="revision-wordpress-stale-command",
         revision_number=12,
-        config_snapshot={"source_kind": "catalog", "catalog_managed": True},
-        source_snapshot={"catalog_id": "wordpress", "definition_version": "1.3"},
+        # Legacy revisions can lose their catalog source marker while the
+        # immutable runtime snapshot still records that this is a managed app.
+        config_snapshot={"source_kind": "docker"},
+        source_snapshot={"definition_version": "1.3"},
         build_snapshot={
             "dockerfile": WORDPRESS_DOCKERFILE,
             "files": {
