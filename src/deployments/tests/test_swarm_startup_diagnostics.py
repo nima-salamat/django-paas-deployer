@@ -21,7 +21,11 @@ def test_exit_127_diagnostic_surfaces_missing_executable_and_redacts_secrets():
             ],
         },
         service_logs=(
-            "2026-10-09T02:49:18Z ERROR token=do-not-expose "
+            "2026-10-08T23:51:38Z ERROR stale-service-log "
+            "/usr/local/bin/passdeployer-wordpress-entrypoint.sh: not found"
+        ),
+        task_logs=(
+            "2026-10-08T23:20:38Z ERROR token=do-not-expose "
             "/usr/local/bin/apache2-foreground: not found"
         ),
         expected_image="app-wordpress:test",
@@ -34,4 +38,9 @@ def test_exit_127_diagnostic_surfaces_missing_executable_and_redacts_secrets():
     assert "/usr/local/bin/docker-ensure-installed.sh" in failure.technical_message
     assert "/usr/local/bin/apache2-foreground: not found" in failure.technical_message
     assert "do-not-expose" not in failure.technical_message
+    assert "stale-service-log" not in failure.technical_message
+    assert failure.details["log_evidence_source"] == "task_container"
     assert failure.details["matching_service_log_lines"]
+    assert failure.details["matching_service_log_lines"][0].endswith(
+        "/usr/local/bin/apache2-foreground: not found"
+    )
