@@ -263,29 +263,34 @@ class SwarmRuntimeAdapter:
         if graph_runtime.get("image_entrypoint_owned"):
             runtime_options["catalog_managed"] = True
             runtime_options["image_entrypoint_owned"] = True
-        runtime_options.setdefault(
-            "processes",
-            [
-                {
-                    "name": str(getattr(item, "name", "web") or "web"),
-                    "process_type": str(getattr(item, "process_type", "custom") or "custom"),
-                    "command": getattr(item, "command", None),
-                    "entrypoint": getattr(item, "entrypoint", None),
-                    "replicas": int(getattr(item, "replicas", 1) or 1),
-                    "enabled": bool(getattr(item, "enabled", True)),
-                    "environment": dict(getattr(item, "environment", {}) or {}),
-                    "healthcheck": dict(getattr(item, "healthcheck", {}) or {}),
-                    "resources": dict(getattr(item, "resources", {}) or {}),
-                    "metadata": dict(getattr(item, "metadata", {}) or {}),
-                    "execution_contract": (
-                        execution_contracts.get(str(getattr(item, "name", "web") or "web")).as_dict()
-                        if execution_contracts.get(str(getattr(item, "name", "web") or "web"))
-                        else None
-                    ),
-                }
-                for item in processes
-            ],
-        )
+        # The runtime graph is the canonical, revision-derived process model.
+        # Never retain runtime_options["processes"] from an older serialized
+        # config: it can carry a stale shell wrapper even when from_revision()
+        # has correctly normalized the catalog Dockerfile ENTRYPOINT/CMD.
+        graph_process_specs = [
+            {
+                "name": str(getattr(item, "name", "web") or "web"),
+                "process_type": str(getattr(item, "process_type", "custom") or "custom"),
+                "command": getattr(item, "command", None),
+                "entrypoint": getattr(item, "entrypoint", None),
+                "replicas": int(getattr(item, "replicas", 1) or 1),
+                "enabled": bool(getattr(item, "enabled", True)),
+                "environment": dict(getattr(item, "environment", {}) or {}),
+                "healthcheck": dict(getattr(item, "healthcheck", {}) or {}),
+                "resources": dict(getattr(item, "resources", {}) or {}),
+                "metadata": dict(getattr(item, "metadata", {}) or {}),
+                "execution_contract": (
+                    execution_contracts.get(str(getattr(item, "name", "web") or "web")).as_dict()
+                    if execution_contracts.get(str(getattr(item, "name", "web") or "web"))
+                    else None
+                ),
+            }
+            for item in processes
+        ]
+        if graph_process_specs:
+            runtime_options["processes"] = graph_process_specs
+        else:
+            runtime_options.setdefault("processes", [])
         labels = {str(k): str(v) for k, v in dict(getattr(plan, "labels", {}) or {}).items()}
         labels.update({
             "passdeployer.service": identity.service_id,
