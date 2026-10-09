@@ -419,10 +419,37 @@ class DeploymentLifecycleExecutor:
                 details=details,
             )
 
+        if observed_status == sm.DEPLOY_CANCELLED:
+            details["terminal_result_already_committed"] = True
+            cancelled_error = (
+                error
+                if isinstance(error, DeploymentCancelled)
+                else DeploymentCancelled(
+                    "Deployment cancellation was already committed by the lifecycle owner.",
+                    details=details,
+                )
+            )
+            return DeploymentLifecycleResult(
+                status=sm.DEPLOY_CANCELLED,
+                success=False,
+                runtime_result=runtime_result,
+                error=cancelled_error,
+                details={**details, **dict(cancelled_error.details or {})},
+            )
+
         stale_error = error or StaleDeploymentWorkerError(
             "Deployment execution ownership is no longer current.",
             details=details,
         )
+        if sm.is_deploy_terminal(observed_status):
+            details["terminal_result_already_committed"] = True
+            return DeploymentLifecycleResult(
+                status=observed_status,
+                success=False,
+                runtime_result=runtime_result,
+                error=stale_error,
+                details={**details, **dict(stale_error.details or {})},
+            )
         return DeploymentLifecycleResult(
             status="stale",
             success=False,
