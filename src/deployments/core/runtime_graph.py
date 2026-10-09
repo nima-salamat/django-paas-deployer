@@ -178,9 +178,22 @@ class ServiceRuntimeGraph:
             # execution_contract may come from a legacy revision generated before
             # the catalog runtime contract was corrected, so never let it override
             # the current Dockerfile ENTRYPOINT/CMD.
-            contract_options = runtime
-            if stored_contract and not (catalog_managed and dockerfile_owns_entrypoint):
-                contract_options = {**runtime, "execution_contract": stored_contract}
+            contract_options = dict(runtime)
+            if catalog_managed and dockerfile_owns_entrypoint:
+                # A pre-contract revision can contain an obsolete serialized
+                # runtime_snapshot["execution_contract"] as well as a stale
+                # process-level contract. RuntimeExecutionContract.from_runtime
+                # returns stored contracts before inspecting the Dockerfile, so
+                # leaving that nested value here can resurrect the old /bin/sh -lc
+                # command and erase the image CMD discovered above.
+                for stale_key in (
+                    "execution_contract",
+                    "execution_contracts",
+                    "execution_contract_hashes",
+                ):
+                    contract_options.pop(stale_key, None)
+            elif stored_contract:
+                contract_options["execution_contract"] = stored_contract
             execution_contracts[process.name] = RuntimeExecutionContract.from_runtime(
                 process_name=process.name,
                 process_command=process.command,
