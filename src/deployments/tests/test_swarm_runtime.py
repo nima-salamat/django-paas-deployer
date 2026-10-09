@@ -280,10 +280,22 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         runtime = SwarmRuntime.__new__(SwarmRuntime)
         with patch.object(runtime, "_apply_local_volume_pin", return_value=[]):
             kwargs = runtime._create_kwargs(config, image_ref="demo:r1", compose_spec=spec)
-        tmpfs_mounts = [mount for mount in kwargs["mounts"] if mount.get("Type") == "tmpfs"]
-        self.assertEqual(len(tmpfs_mounts), 1)
-        self.assertEqual(tmpfs_mounts[0]["Target"], "/run")
-        self.assertEqual(tmpfs_mounts[0]["TmpfsOptions"]["SizeBytes"], 16 * 1024 * 1024)
+        tmpfs_mounts = {
+            mount["Target"]: mount
+            for mount in kwargs["mounts"]
+            if mount.get("Type") == "tmpfs"
+        }
+        self.assertEqual(
+            {
+                target: mount["TmpfsOptions"]["SizeBytes"]
+                for target, mount in tmpfs_mounts.items()
+            },
+            {
+                "/tmp": 64 * 1024 * 1024,
+                "/var/tmp": 32 * 1024 * 1024,
+                "/run": 16 * 1024 * 1024,
+            },
+        )
 
     def test_create_kwargs_adds_ready_app_service_dns_alias(self):
         config = _config(
