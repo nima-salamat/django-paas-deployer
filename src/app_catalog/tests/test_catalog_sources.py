@@ -184,7 +184,8 @@ networks:
         self.assertTrue(wordpress["public"])
         healthcheck = wordpress["healthcheck"]
         self.assertEqual(healthcheck["test"][0], "CMD-SHELL")
-        self.assertIn("passdeployer-wordpress-ready", healthcheck["test"][1])
+        self.assertIn("/run/passdeployer-wordpress-ready", healthcheck["test"][1])
+        self.assertNotIn("/tmp/passdeployer-wordpress-ready", healthcheck["test"][1])
         self.assertIn("wp core is-installed", healthcheck["test"][1])
         self.assertEqual(healthcheck["interval"], "5s")
         self.assertEqual(healthcheck["timeout"], "5s")
@@ -206,6 +207,18 @@ networks:
         self.assertIn("COPY passdeployer-wordpress-entrypoint.sh /usr/local/bin/passdeployer-wordpress-entrypoint.sh", wordpress["dockerfile"])
         self.assertIn("passdeployer-wordpress-entrypoint.sh", wordpress.get("files") or {})
         self.assertIn("set -eu", wordpress["files"]["passdeployer-wordpress-entrypoint.sh"])
+        self.assertIn(
+            'READY_MARKER="/run/passdeployer-wordpress-ready"',
+            wordpress["files"]["passdeployer-wordpress-entrypoint.sh"],
+        )
+        self.assertIn(
+            'if ! touch "$READY_MARKER"; then',
+            wordpress["files"]["passdeployer-wordpress-entrypoint.sh"],
+        )
+        self.assertIn(
+            "cannot create readiness marker",
+            wordpress["files"]["passdeployer-wordpress-entrypoint.sh"],
+        )
         self.assertEqual(
             wordpress.get("command"),
             ["/usr/local/bin/passdeployer-wordpress-entrypoint.sh", "/usr/local/bin/apache2-foreground"],
