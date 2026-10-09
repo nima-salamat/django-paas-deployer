@@ -250,7 +250,7 @@ class DeploymentLifecycleExecutor:
                 },
             )
             if not transitioned:
-                return self._stale_result(context)
+                return self._stale_result(context, runtime_result=ready)
 
             # Cleanup is deliberately post-activation. A cleanup failure must
             # never turn an already-activated deployment into FAILED; instead
@@ -324,7 +324,7 @@ class DeploymentLifecycleExecutor:
         except StaleDeploymentWorkerError as exc:
             # A stale worker must not clean up or transition a resource that a
             # newer owner may already be using.
-            return self._stale_result(context, error=exc)
+            return self._stale_result(context, error=exc, runtime_result=applied)
         except Exception as exc:
             if isinstance(exc, RuntimeOperationError) and exc.code == "runtime_cancelled":
                 return self._finish_cancellation(
@@ -361,7 +361,7 @@ class DeploymentLifecycleExecutor:
                 },
             )
             if not transitioned:
-                return self._stale_result(context, error=error)
+                return self._stale_result(context, error=error, runtime_result=applied)
             context.emit(
                 "deployment_failed",
                 error.user_message,
@@ -384,6 +384,52 @@ class DeploymentLifecycleExecutor:
                     **cleanup_details,
                 },
             )
+
+    def _stale_result(
+        self,
+        context: DeploymentExecutionContext,
+        *,
+        error: DeploymentError | None = None,
+        runtime_result: RuntimeOperationResult | None = None,
+    ) -> DeploymentLifecycleResult:
+        """Return a safe result when this worker no longer owns the lifecycle.
+
+        A concurrent delivery can lose the final compare-and-set after another
+        worker has already committed this Deploy as succeeded. In that case,
+        the durable terminal row is authoritative: report the existing success
+        without running cleanup or writing state again. Otherwise, leave all
+        runtime/state mutation to the current owner.
+        """
+        observed_status = str(self.store.status or "")
+        details = {
+            "deployment_id": str(context.deployment_id),
+            "service_id": str(context.service_id),
+            "revision_id": str(context.revision_id or ""),
+            "worker_task_id": str(context.worker_task_id or ""),
+            "operation_key": str(context.operation_key),
+            "observed_status": observed_status,
+            "worker_ownership_lost": True,
+        }
+        if observed_status == sm.DEPLOY_SUCCEEDED:
+            details["completion_already_committed"] = True
+            return DeploymentLifecycleResult(
+                status=sm.DEPLOY_SUCCEEDED,
+                success=True,
+                runtime_result=runtime_result,
+                details=details,
+            )
+
+        stale_error = error or StaleDeploymentWorkerError(
+            "Deployment execution ownership is no longer current.",
+            details=details,
+        )
+        return DeploymentLifecycleResult(
+            status="stale",
+            success=False,
+            runtime_result=runtime_result,
+            error=stale_error,
+            details={**details, **dict(stale_error.details or {})},
+        )
 
     @staticmethod
     def _assert_runtime_selection(context: DeploymentExecutionContext) -> None:
