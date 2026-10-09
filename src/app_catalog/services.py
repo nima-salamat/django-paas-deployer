@@ -851,16 +851,31 @@ def _create_application_installation(
                 published = int(parts[-2]) if len(parts) >= 2 and parts[-2].isdigit() else None
                 protocol = proto.lower()
 
+            published_port = int(published) if published not in (None, "") else None
+            # Compose's port protocol describes transport (normally TCP), but
+            # ServiceEndpoint.protocol describes how the platform routes the
+            # endpoint. A public catalog web service without a published host
+            # port is served through Traefik, so persist an HTTP-family protocol
+            # instead of an unroutable public TCP endpoint.
+            endpoint_protocol = (
+                ("https" if bool(resolved_config.get("https")) else "http")
+                if public and published_port is None
+                else (protocol if protocol in {"tcp", "udp"} else "tcp")
+            )
+            endpoint_tls = endpoint_protocol == "https" or (
+                endpoint_protocol in {"http", "https", "ws"}
+                and bool(resolved_config.get("https"))
+            )
             endpoint_row, _ = ServiceEndpoint.objects.update_or_create(
                 service=service,
                 name=f"port-{target}-{protocol}",
                 defaults={
                     "target_port": target,
-                    "published_port": int(published) if published not in (None, "") else None,
-                    "protocol": protocol if protocol in {"tcp", "udp"} else "tcp",
+                    "published_port": published_port,
+                    "protocol": endpoint_protocol,
                     "exposure": "public" if public else "internal",
                     "hostname": service_public_host if public else "",
-                    "tls": bool(resolved_config.get("https") or False),
+                    "tls": endpoint_tls,
                     "enabled": True,
                     "metadata": {"catalog_service_key": key},
                 },
