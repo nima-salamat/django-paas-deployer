@@ -1347,7 +1347,10 @@ def build_openapi(agent, *, request=None):
         ("/agent/v1/volumes", "POST"): {
             "schema": "Volume", "status": 201, "tags": ["Volumes"],
             "body": _json_body({"$ref": "#/components/schemas/VolumeCreateRequest"}),
-            "description": "Create a Volume subject to Service mutability, attachment and storage-quota checks.",
+            "description": (
+                "Create a Volume for an existing Service. Create the Service first; "
+                "POST requires service=<service UUID> so plan quota and mutability can be checked."
+            ),
         },
         ("/agent/v1/volumes/{volume_id}", "GET"): {"schema": "Volume", "status": 200, "tags": ["Volumes"], "description": "Inspect a Volume."},
         ("/agent/v1/volumes/{volume_id}", "PATCH"): {
