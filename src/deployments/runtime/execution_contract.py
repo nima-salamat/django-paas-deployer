@@ -107,11 +107,6 @@ class RuntimeExecutionContract:
     ) -> "RuntimeExecutionContract":
         options = dict(runtime_options or {})
         stored = options.get("execution_contract")
-        if isinstance(stored, RuntimeExecutionContract):
-            return stored
-        if isinstance(stored, Mapping):
-            return cls.from_dict(stored)
-
         catalog_managed = bool(options.get("catalog_managed"))
         image_owned = bool(options.get("image_entrypoint_owned"))
         dockerfile_entrypoint = _dockerfile_instruction(dockerfile, "ENTRYPOINT")
@@ -119,6 +114,19 @@ class RuntimeExecutionContract:
             image_owned or (catalog_managed and dockerfile_entrypoint)
         )
         image_cmd = _dockerfile_instruction(dockerfile, "CMD")
+
+        # A catalog Dockerfile's ENTRYPOINT/CMD is authoritative over serialized
+        # contracts from older revisions. Do not early-return a stale contract
+        # (which may say PLATFORM and contain Command=/bin/sh, Args=-lc ...) when
+        # the current immutable Dockerfile clearly owns process startup.
+        dockerfile_contract_authoritative = bool(
+            image_entrypoint_owned and dockerfile_entrypoint
+        )
+        if stored and not dockerfile_contract_authoritative:
+            if isinstance(stored, RuntimeExecutionContract):
+                return stored
+            if isinstance(stored, Mapping):
+                return cls.from_dict(stored)
 
         if image_entrypoint_owned:
             source = "IMAGE"
