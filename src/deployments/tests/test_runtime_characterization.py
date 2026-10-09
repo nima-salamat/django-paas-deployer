@@ -106,6 +106,43 @@ def test_revision_graph_preserves_process_environment_and_runtime_resources():
     ]
 
 
+def test_legacy_public_tcp_endpoint_is_normalized_for_traefik():
+    graph = ServiceRuntimeGraph.from_revision(
+        _revision(
+            endpoint_snapshot=[
+                {
+                    "name": "port-80-tcp",
+                    "target_port": 80,
+                    "published_port": None,
+                    "protocol": "tcp",
+                    "exposure": "public",
+                    "hostname": "demo.example.test",
+                    "tls": True,
+                    "enabled": True,
+                }
+            ]
+        )
+    )
+
+    assert graph.endpoints[0].protocol == "https"
+    assert graph.primary_public_endpoint() is not None
+    endpoint = graph.public_endpoints()[0]
+    assert endpoint["protocol"] == "https"
+
+    config = _deployment_config(
+        port=80,
+        endpoints=[EndpointSpec(**endpoint, exposure="public")],
+    )
+    compiled = compile_compose_service(config, image_ref="wordpress:test")
+    service = compiled["services"]["demo"]
+    labels = service["deploy"]["labels"]
+
+    assert service["networks"] == ["demo-net", "proxy_net"]
+    assert labels["traefik.enable"] == "true"
+    assert labels["traefik.http.routers.demo-http.rule"] == "Host(`demo.example.test`)"
+    assert labels["traefik.http.services.demo-http.loadbalancer.server.port"] == "80"
+
+
 def test_revision_graph_preserves_supported_replica_shape():
     graph = ServiceRuntimeGraph.from_revision(
         _revision(
