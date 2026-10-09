@@ -131,6 +131,33 @@ class DeploymentPlanCompiler:
         elif graph_runtime.get("image_entrypoint_owned"):
             runtime_options["catalog_managed"] = True
             runtime_options["image_entrypoint_owned"] = True
+
+        # Keep the plan's compatibility runtime options aligned with the
+        # normalized immutable graph. Legacy revision snapshots may still carry
+        # runtime_options["processes"] with a stale shell wrapper; leaving that
+        # nested list untouched lets downstream adapters bypass the corrected
+        # RuntimeProcess objects above.
+        if graph.processes:
+            runtime_options["processes"] = [
+                {
+                    "name": str(process.name or "web"),
+                    "process_type": str(process.process_type or "custom"),
+                    "command": process.command,
+                    "entrypoint": process.entrypoint,
+                    "replicas": int(process.replicas or 1),
+                    "enabled": bool(process.enabled),
+                    "environment": dict(process.environment or {}),
+                    "healthcheck": dict(process.healthcheck or {}),
+                    "resources": dict(process.resources or {}),
+                    "metadata": dict(process.metadata or {}),
+                    "execution_contract": (
+                        execution_contracts[process.name].as_dict()
+                        if process.name in execution_contracts
+                        else None
+                    ),
+                }
+                for process in graph.processes
+            ]
         RolloutStrategy.from_mapping(rollout_policy_raw)
         HealthPolicy.from_mapping(
             dict(resolved.get("health_policy") or runtime_options.get("healthcheck") or {})
