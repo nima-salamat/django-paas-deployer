@@ -6,7 +6,7 @@ from app_catalog.executor import ApplicationStackExecutor
 from app_catalog.models import ApplicationInstance, ApplicationInstanceService, ApplicationStatus
 from deploy.models import Deploy, DeploymentStatusChoices
 from plans.models import Plan
-from services.models import PrivateNetwork, Service
+from services.models import PrivateNetwork, Service, ServiceEndpoint
 from users.models import User
 from core.global_settings.config import PlanTypeChoices, StorageTypeChoices
 
@@ -122,6 +122,40 @@ class ReadyAppRuntimeSupervisorTests(TestCase):
         endpoint = service.endpoints.get(exposure="public")
         self.assertEqual(endpoint.target_port, 8088)
         self.assertEqual(endpoint.hostname, "supervised-web.apps.example.test")
+
+    @override_settings(DEPLOYMENT_DOMAIN="apps.example.test", SWARM_ENABLED=True)
+    def test_supervisor_repairs_legacy_public_tcp_endpoint_and_live_traefik_route(self):
+        instance, service, _deploy, _network = self._application()
+        endpoint = ServiceEndpoint.objects.create(
+            service=service,
+            name="port-80-tcp",
+            target_port=80,
+            published_port=None,
+            protocol="tcp",
+            exposure="public",
+            hostname="supervised-web.apps.example.test",
+            tls=True,
+            enabled=True,
+        )
+        executor = ApplicationStackExecutor(str(instance.pk))
+        _loaded_instance, plan = executor._load()
+
+        with (
+            patch("app_catalog.executor.swarm_enabled", return_value=True),
+            patch("deployments.core.swarm.SwarmRuntime") as runtime_cls,
+        ):
+            repaired = executor._ensure_public_endpoints(instance, plan)
+
+        endpoint.refresh_from_db()
+        self.assertEqual(repaired, 1)
+        self.assertEqual(endpoint.protocol, "https")
+        self.assertTrue(endpoint.tls)
+        runtime_cls.return_value.reconcile_public_routing.assert_called_once()
+        call = runtime_cls.return_value.reconcile_public_routing.call_args
+        self.assertEqual(call.kwargs["service_name"], service.get_docker_service_name())
+        routed_endpoints = list(call.kwargs["endpoints"])
+        self.assertEqual(len(routed_endpoints), 1)
+        self.assertEqual(routed_endpoints[0].protocol, "https")
 
     def test_healthy_running_application_is_reconciled_as_ready(self):
         instance, _service, _deploy, _network = self._application()
