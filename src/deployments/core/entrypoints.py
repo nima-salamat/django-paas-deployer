@@ -392,28 +392,34 @@ def resolve_python_entrypoint(tar_stream, *, server_type: str | None = None) -> 
 
 
 def resolve_node_entrypoint(tar_stream) -> dict:
-    tar_stream.seek(0)
-    with tarfile.open(fileobj=tar_stream, mode="r:*") as tar:
-        for member in tar.getmembers():
-            if member.name.endswith("package.json") and member.name.count("/") <= 1:
-                file_obj = tar.extractfile(member)
-                if not file_obj:
-                    continue
-                try:
-                    pkg = json.loads(file_obj.read().decode("utf-8", errors="ignore"))
-                except Exception:
-                    continue
-                scripts = pkg.get("scripts") or {}
-                start = scripts.get("start") or scripts.get("serve") or scripts.get("dev")
-                main = pkg.get("main") or "index.js"
-                return {
-                    "start_script": start,
-                    "main": main,
-                    "has_build": "build" in scripts,
-                    "framework": _detect_node_framework(pkg),
-                }
-    tar_stream.seek(0)
-    return {"start_script": None, "main": "index.js", "has_build": False, "framework": "node"}
+    """Read the Node manifest and always rewind the archive for downstream users."""
+    try:
+        tar_stream.seek(0)
+        with tarfile.open(fileobj=tar_stream, mode="r:*") as tar:
+            for member in tar.getmembers():
+                if member.name.endswith("package.json") and member.name.count("/") <= 1:
+                    file_obj = tar.extractfile(member)
+                    if not file_obj:
+                        continue
+                    try:
+                        pkg = json.loads(file_obj.read().decode("utf-8", errors="ignore"))
+                    except Exception:
+                        continue
+                    scripts = pkg.get("scripts") or {}
+                    start = scripts.get("start") or scripts.get("serve") or scripts.get("dev")
+                    main = pkg.get("main") or "index.js"
+                    return {
+                        "start_script": start,
+                        "main": main,
+                        "has_build": "build" in scripts,
+                        "framework": _detect_node_framework(pkg),
+                    }
+        return {"start_script": None, "main": "index.js", "has_build": False, "framework": "node"}
+    finally:
+        try:
+            tar_stream.seek(0)
+        except Exception:
+            pass
 
 
 def _detect_node_framework(pkg: dict) -> str:

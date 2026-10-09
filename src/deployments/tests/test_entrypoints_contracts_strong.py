@@ -114,17 +114,17 @@ class EntrypointRuntimeContractTests(unittest.TestCase):
 
         cases = (
             (
-                {"app/__init__.py", "app/main.py"},
+                {"requirements.txt", "app/__init__.py", "app/main.py"},
                 "app.main",
                 {"module": "app.main", "source_root": "", "working_directory": "/app"},
             ),
             (
-                {"src/app/__init__.py", "src/app/main.py"},
+                {"requirements.txt", "src/app/__init__.py", "src/app/main.py"},
                 "src.app.main",
                 {"module": "app.main", "source_root": "src", "working_directory": "/app/src"},
             ),
             (
-                {"backend/src/app/__init__.py", "backend/src/app/main.py"},
+                {"requirements.txt", "backend/src/app/__init__.py", "backend/src/app/main.py"},
                 "app.main",
                 {"module": "app.main", "source_root": "backend/src", "working_directory": "/app/backend/src"},
             ),

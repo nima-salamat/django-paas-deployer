@@ -200,12 +200,11 @@ class DeploymentActivationConsistencyContractTests(unittest.TestCase):
         orchestrator = self.orchestrator.split("def _handle_failure", 1)[1].split(
             "def _deploy_process_containers", 1
         )[0]
+        # Swarm has its own mutation journal/rollback strategy. The local
+        # Docker snapshot branch remains valid for the non-Swarm backend.
+        self.assertIn('if self._runtime_backend == "swarm":', orchestrator)
         self.assertIn("self._recover_swarm_mutations(", orchestrator)
-        self.assertIn("self._recover_swarm_mutations(", orchestrator)
-        self.assertNotIn(
-            'if snapshot.image_ref:\n            try:\n                self.logger.warning("rollback", "Starting rollback.',
-            orchestrator,
-        )
+        self.assertIn("elif snapshot.image_ref:", orchestrator)
 
     def test_stale_recovery_requires_positive_resource_ownership(self):
         self.assertIn("owned_by_deploy", self.scheduler)

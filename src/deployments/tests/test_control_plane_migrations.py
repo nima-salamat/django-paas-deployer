@@ -22,13 +22,13 @@ def test_control_plane_migration_has_one_runtime_owner():
     assert "command:\n      - daphne" in web_block
 
 
-def test_dockerfile_uses_base_image_codename_and_normalizes_linux_mirror():
+def test_control_plane_dockerfile_declares_operator_mirror_defaults():
     dockerfile = (ROOT / "Dockerfile").read_text()
 
     assert "ARG CODENAME=" not in dockerfile
-    assert 'codename="$${VERSION_CODENAME}"' in dockerfile
-    assert 'case "$mirror" in' in dockerfile
-    assert '*) mirror="http://$mirror" ;;' in dockerfile
+    assert "ARG DOCKERFILE_DOCKER_MIRROR=docker.io" in dockerfile
+    assert "ARG DOCKERFILE_PYTHON_MIRROR=https://pypi.org/simple" in dockerfile
+    assert "EXPOSE 8000" in dockerfile
 
 
 

@@ -46,9 +46,8 @@ class VolumeMountManager:
         service_id is provided. This prevents Docker from creating persistent
         storage that is absent from Service quota accounting.
         """
-        binds: dict[str, dict[str, str]] = {}
+        # Preflight all mount targets before creating or inspecting Docker volumes.
         targets: set[str] = set()
-
         for volume in volumes:
             target = volume.target
             if not target:
@@ -57,6 +56,10 @@ class VolumeMountManager:
                 raise VolumeError(f"Duplicate volume target '{target}'.", details={"target": target})
             targets.add(target)
 
+        binds: dict[str, dict[str, str]] = {}
+
+        for volume in volumes:
+            target = volume.target
             mode = MODE_MAP.get((volume.mode or "rw").lower())
             if not mode:
                 raise VolumeError(f"Unsupported volume mode '{volume.mode}'.", details={"source": volume.source, "target": target})

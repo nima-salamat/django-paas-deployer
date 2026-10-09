@@ -388,7 +388,7 @@ def normalize_fastapi_config(value: Any, *, warnings: list[str] | None = None) -
         forwarded = str(forwarded).strip()
         if not forwarded:
             raise ValueError("fastapi.forwarded_allow_ips cannot be empty.")
-        if len(forwarded) > 512 or not re.fullmatch(r"[A-Za-z0-9:./,_\-\s]+", forwarded):
+        if len(forwarded) > 512 or not re.fullmatch(r"[A-Za-z0-9:*./,_\-\s]+", forwarded):
             raise ValueError("fastapi.forwarded_allow_ips contains invalid characters.")
         if "*" in forwarded:
             warnings.append("FastAPI forwarded_allow_ips='*' trusts forwarded headers from any source; use a restricted proxy IP/CIDR when possible.")

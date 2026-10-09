@@ -204,12 +204,12 @@ def test_docker_api_error_surfaces_daemon_explanation_as_user_message(monkeypatc
     class FakeApi:
         def build(self, **kwargs):
             def fail_before_stream():
+                response = type("Response", (), {"status_code": 400, "reason": "Bad Request", "url": "/build"})()
                 error = docker.errors.APIError(
                     "Bad Request",
-                    response=None,
+                    response=response,
                     explanation='dockerfile parse error on line 2: Unknown type "CMD-SHELL" in HEALTHCHECK (try CMD)',
                 )
-                error.status_code = 400
                 raise error
                 yield  # pragma: no cover
             return fail_before_stream()
@@ -240,8 +240,8 @@ def test_http_400_build_request_is_retried_with_minimal_profile(monkeypatch):
             self.calls.append(kwargs)
             if len(self.calls) == 1:
                 def fail_before_stream():
-                    error = docker.errors.APIError("Bad parameter", response=None)
-                    error.status_code = 400
+                    response = type("Response", (), {"status_code": 400, "reason": "Bad Request", "url": "/build"})()
+                    error = docker.errors.APIError("Bad parameter", response=response)
                     raise error
                     yield  # pragma: no cover
                 return fail_before_stream()

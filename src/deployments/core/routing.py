@@ -18,7 +18,7 @@ def deployment_domain() -> str:
     value = getattr(settings, "DEPLOYMENT_DOMAIN", None)
     if not value:
         value = os.environ.get("DEPLOYMENT_DOMAIN", "")
-    return str(value or "").strip().strip(".")
+    return str(value or "").strip().strip(".").lower()
 
 
 def resolve_public_host(config: Any, endpoint: Any) -> str:

@@ -817,7 +817,7 @@ def inspect_docker_source(project_root: str, *, environment: dict[str, str] | No
         if health:
             test = health.get("test") if isinstance(health, dict) else ""
             test_text = " ".join(str(x) for x in test) if isinstance(test, list) else str(test)
-            match = re.search(r"https?://(?:127\\.0\\.0\\.1|localhost)(?::\\d+)?([^\\s\"']*)", test_text)
+            match = re.search(r"https?://(?:127\.0\.0\.1|localhost)(?::\d+)?([^\s\"']*)", test_text)
             if match:
                 runtime["healthcheck_path"] = match.group(1) or "/"
             else:

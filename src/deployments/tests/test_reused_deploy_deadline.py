@@ -8,7 +8,7 @@ from deploy.models import Deploy, DeploymentStatusChoices
 from deployments.common.deadline import DeploymentDeadline
 from deployments.core.state.manager import StateManager
 from plans.models import Plan
-from services.models import Service
+from services.models import PrivateNetwork, Service
 from users.models import User
 
 
@@ -27,10 +27,15 @@ class ReusedDeploymentDeadlineTests(TestCase):
             max_storage=10,
             price_per_hour=0,
         )
+        self.network = PrivateNetwork.objects.create(
+            name="reused-deploy-deadline-network",
+            user=self.user,
+        )
         self.service = Service.objects.create(
             name="reused-deploy-deadline-service",
             user=self.user,
             plan=self.plan,
+            network=self.network,
         )
 
     def test_queueing_reused_deploy_clears_all_lifecycle_deadline_timestamps(self):

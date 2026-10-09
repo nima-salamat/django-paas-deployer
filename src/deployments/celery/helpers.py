@@ -1,6 +1,7 @@
 """deployments/celery/helpers.py — mirrors + versions from DB settings."""
 from dataclasses import dataclass
 import json
+import logging
 import os
 import re
 import zipfile
@@ -20,6 +21,9 @@ class MockOrchestratorResult:
     error: str = ""
     rollback_performed: bool = False
     status: str = ""
+
+
+logger = logging.getLogger(__name__)
 
 
 class DeploymentHelper:

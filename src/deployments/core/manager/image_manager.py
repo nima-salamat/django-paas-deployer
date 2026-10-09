@@ -284,19 +284,30 @@ def _materialize_build_files(build_root: str, files: dict[str, Any] | None) -> N
     if not files:
         return
 
-    base = os.path.abspath(build_root)
+    base = os.path.realpath(os.path.abspath(build_root))
     total_bytes = 0
     max_bytes = 16 * 1024 * 1024
 
     for raw_name, raw_content in files.items():
-        name = str(raw_name or "").replace("\\", "/").lstrip("./")
-        if not name or name == "Dockerfile" or name.startswith("/") or "/../" in f"/{name}/" or name == ".." or name.startswith("../"):
+        # Strip exact leading "./" segments only. lstrip("./") also eats
+        # leading dots and slashes, turning "../secret" into "secret".
+        name = str(raw_name or "").replace("\\", "/").strip()
+        while name.startswith("./"):
+            name = name[2:]
+        parts = name.split("/")
+        if (
+            not name
+            or name == "Dockerfile"
+            or name.startswith("/")
+            or re.match(r"^[A-Za-z]:/", name)
+            or any(part in {"", ".", ".."} for part in parts)
+        ):
             raise ImageBuildError(
                 "The immutable build artifact contains an unsafe auxiliary file path.",
                 details={"file": str(raw_name)},
             )
 
-        target = os.path.abspath(os.path.join(base, name))
+        target = os.path.realpath(os.path.join(base, name))
         try:
             if os.path.commonpath([base, target]) != base:
                 raise ValueError

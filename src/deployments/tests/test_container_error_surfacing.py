@@ -152,11 +152,7 @@ class ContainerCreateErrorSurfacingTests(unittest.TestCase):
         self.assertIn("container failed to start: invalid argument", msg)
         self.assertIn("Docker APIError", msg)
         self.assertIn("HTTP 400", msg)
-        # The last attempted fallback stage must be named.  The final
-        # stage in the fallback chain is "bare" — keeps only binds +
-        # ports + read_only so a deploy can never be blocked by a
-        # host_config rejection.
-        self.assertIn("bare", msg)
+        # The hardened create path uses the full runtime configuration.
         # The current hardened create path uses the full runtime config as the
         # final attempt and reports that explicitly.
         self.assertIn("full config", msg)

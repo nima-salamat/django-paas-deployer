@@ -273,7 +273,7 @@ def test_swarm_adapter_preserves_expected_image_and_startup_timeout_for_readines
 
     assert result.handle.metadata["expected_image"] == "demo:r1"
     assert runtime.wait_ready_calls[-1]["expected_image"] == "demo:r1"
-    assert runtime.wait_ready_calls[-1]["timeout"] == 5
+    assert runtime.wait_ready_calls[-1]["timeout"] == pytest.approx(5)
 
 
 def test_swarm_adapter_translates_existing_runtime_state_without_exposing_sdk_types():

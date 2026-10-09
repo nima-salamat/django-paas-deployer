@@ -189,11 +189,9 @@ class FastAPIPlatform(PythonPlatform):
             if "lifespan=" in lowered or "@asynccontextmanager" in lowered: profile["lifespan"] = True
             for route in ("/health", "/healthz", "/ready", "/readyz", "/live", "/liveness", "/readiness"):
                 route_re = re.compile(
-                    r"(?:(?:\.|^)(?:get|post|put|delete|api_route)\s*\(\s*['\"]"
+                    r"(?:\.(?:get|post|put|delete|api_route)|(?:^|\W)add_api_route)\s*\(\s*['\"]"
                     + re.escape(route)
-                    + r"['\"])|(?:add_api_route)\s*\(\s*['\"]"
-                    + re.escape(route)
-                    + r"['\"])",
+                    + r"['\"]",
                     re.IGNORECASE,
                 )
                 if route_re.search(text):

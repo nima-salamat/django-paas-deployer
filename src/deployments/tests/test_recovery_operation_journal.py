@@ -41,7 +41,8 @@ class TestRecoveryOperationJournal(unittest.TestCase):
         source = (ROOT / "deployments" / "celery" / "schedules.py").read_text()
         self.assertIn("owned_by_deploy", source)
         self.assertIn('str(labels.get("deployment.id") or "") == str(locked.pk)', source)
-        self.assertIn("recovery could not prove a safe completed state", source)
+        self.assertIn('if owned_by_deploy and stage == "activation" and runtime.get("running")', source)
+        self.assertIn("current_selected != expected_previous", source)
 
     def test_stale_terminal_result_is_ignored(self):
         source = (ROOT / "deploy" / "deployment_state.py").read_text()

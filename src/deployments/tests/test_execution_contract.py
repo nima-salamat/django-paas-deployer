@@ -415,7 +415,7 @@ def test_artifact_preflight_rejects_missing_image_owned_executable():
         "Id": "sha256:artifact",
         "RepoDigests": ["registry.example/wordpress@sha256:artifact"],
         "Config": {
-            "Entrypoint": ["docker-ensure-installed.sh"],
+            "Entrypoint": ["/usr/local/bin/docker-ensure-installed.sh"],
             "Cmd": [
                 "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
                 "/usr/local/bin/apache2-foreground",
@@ -474,7 +474,7 @@ def test_artifact_preflight_rejects_missing_relative_image_entrypoint():
     }
     client.images.get.return_value = image
     probe = MagicMock()
-    probe.wait.return_value = {"StatusCode": 44}
+    probe.wait.side_effect = [{"StatusCode": 0}, {"StatusCode": 44}]
     client.containers.create.return_value = probe
     runtime = SwarmRuntime(client)
     contract = RuntimeExecutionContract(
@@ -507,7 +507,7 @@ def test_artifact_preflight_rejects_invalid_image_owned_interpreter():
         "Id": "sha256:artifact",
         "RepoDigests": ["registry.example/wordpress@sha256:artifact"],
         "Config": {
-            "Entrypoint": ["docker-ensure-installed.sh"],
+            "Entrypoint": ["/usr/local/bin/docker-ensure-installed.sh"],
             "Cmd": [
                 "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
                 "/usr/local/bin/apache2-foreground",
@@ -518,7 +518,7 @@ def test_artifact_preflight_rejects_invalid_image_owned_interpreter():
     }
     client.images.get.return_value = image
     probe = MagicMock()
-    probe.wait.return_value = {"StatusCode": 43}
+    probe.wait.side_effect = [{"StatusCode": 0}, {"StatusCode": 43}]
     client.containers.create.return_value = probe
     runtime = SwarmRuntime(client)
     contract = RuntimeExecutionContract(

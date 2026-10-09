@@ -10,6 +10,7 @@ def test_force_cancel_cleanup_targets_deployment_image(monkeypatch):
     class Containers:
         def list(self, all=True): return []
     images=Images(); client=SimpleNamespace(images=images, containers=Containers())
+    monkeypatch.setattr(runtime, "swarm_enabled", lambda: False)
     monkeypatch.setattr(runtime, "Client", lambda: (lambda: client))
     monkeypatch.setattr(runtime, "DockerNotFound", type("DNF", (Exception,), {}))
     monkeypatch.setattr(

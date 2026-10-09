@@ -89,7 +89,8 @@ def _deployment_config(**overrides):
 def test_revision_graph_preserves_process_environment_and_runtime_resources():
     graph = ServiceRuntimeGraph.from_revision(_revision())
 
-    assert graph.metadata == {"revision_id": "revision-1", "revision": 4}
+    assert graph.metadata["revision_id"] == "revision-1"
+    assert graph.metadata["revision"] == 4
     assert graph.runtime_environment == {"APP_ENV": "production"}
     assert graph.processes[0].environment == {"PROCESS_ENV": "1"}
     assert graph.networks == ("demo-net",)

@@ -799,6 +799,7 @@ def test_cached_laravel_frontend_stage_sees_composer_vendor():
 
 
 def test_laravel_migration_failure_is_fatal_before_apache():
+    d = load_dockerfile_module()
     script = d._php_entrypoint_script(
         is_laravel=True,
         schema_files=[],

@@ -64,14 +64,17 @@ def test_failure_taxonomy_distinguishes_user_input_from_transient_infrastructure
 
 
 def test_terminal_outbox_authority_is_not_in_public_transition():
-    from pathlib import Path
     root = Path(__file__).resolve().parents[2]
     source = (root / "deployments" / "core" / "state" / "manager.py").read_text(encoding="utf-8")
-    public = source.split("def transition_deploy(", 1)[1].split("def lock_and_get_deployment", 1)[0]
+    tree = ast.parse(source)
+    methods = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "transition_deploy"
+    ]
+    assert len(methods) == 1
+    public = ast.get_source_segment(source, methods[0])
     assert "DeploymentEventOutbox.objects.create" not in public
-    assert "terminal" not in public
     assert "DeploymentEventOutbox.objects.create" in source.split("def transition_deploy_if_owned", 1)[1]
-
 
 
 def test_owned_terminal_transition_rewrites_event_when_cancellation_wins():

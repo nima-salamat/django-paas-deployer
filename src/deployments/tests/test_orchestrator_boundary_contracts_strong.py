@@ -62,7 +62,7 @@ class OrchestratorBoundaryContracts(unittest.TestCase):
         with self.assertRaises(DeploymentCancelled) as cancel_ctx:
             cancelled_orchestrator._check_cancelled()
         self.assertEqual(cancel_ctx.exception.stage, "cancelled")
-        self.assertIsNone(cancel_ctx.exception.code)
+        self.assertEqual(cancel_ctx.exception.code, "DEPLOYMENT_CANCELLED")
 
     def test_swarm_activation_happens_only_after_runtime_cleanup(self):
         events = []

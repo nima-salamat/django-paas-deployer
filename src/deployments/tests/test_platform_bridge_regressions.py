@@ -266,13 +266,11 @@ def test_legacy_catalog_revision_drops_stale_process_command_when_catalog_does_n
 
     graph = ServiceRuntimeGraph.from_revision(revision)
 
-    assert graph.processes[0].command == "/usr/local/bin/passdeployer-wordpress-entrypoint.sh /usr/local/bin/apache2-foreground"
+    # Dockerfile CMD is authoritative while ENTRYPOINT supplies the wrapper.
+    assert graph.processes[0].command == "apache2-foreground"
     assert graph.processes[0].entrypoint is None
     assert graph.execution_contract.entrypoint_source == "IMAGE"
-    assert graph.execution_contract.args == (
-        "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
-        "/usr/local/bin/apache2-foreground",
-    )
+    assert graph.execution_contract.args == ("apache2-foreground",)
 
 def test_legacy_catalog_revision_drops_dockerfile_owned_process_overrides():
     from deployments.core.runtime_graph import ServiceRuntimeGraph

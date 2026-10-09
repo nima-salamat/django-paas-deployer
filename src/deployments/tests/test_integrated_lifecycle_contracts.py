@@ -63,8 +63,9 @@ class IntegratedLifecycleContractTests(unittest.TestCase):
 
     def test_application_delete_requires_terminal_state(self):
         api = self.read("app_catalog/apis.py")
-        self.assertIn('application_not_terminal', api)
-        self.assertIn('application_children_active', api)
+        self.assertIn('instance.stage = "deletion_pending"', api)
+        self.assertIn("_queue_ready_app_deletion(", api)
+        self.assertIn("cleanup_terminal_application", api)
 
     def test_selected_activation_still_occurs_after_readiness(self):
         orchestrator = self.read("deployments/core/orchestrator.py")
@@ -93,7 +94,8 @@ def test_application_reconciliation_recovers_lost_start_and_cancel_tasks():
     text = (ROOT / "app_catalog/tasks.py").read_text()
     assert "status=ApplicationStatus.PENDING" in text
     assert "start_application_installation.delay" in text
-    assert "ApplicationStackExecutor(str(instance.pk)).cancel" in text
+    assert "cancel_application_installation" in text
+    assert "delete_application_installation.delay(str(pending.pk))" in text
 
 def test_application_queue_failure_does_not_leave_permanent_pending_state():
     text = (ROOT / "app_catalog/apis.py").read_text()

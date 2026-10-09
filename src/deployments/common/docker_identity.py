@@ -242,7 +242,7 @@ def canonical_process_name(
         "-",
         _text(deployment_id).lower(),
     ).strip("-")
-    deployment = deployment[-12:] or "current"
+    deployment = deployment[-10:] or "current"
     return validate_docker_component(
         f"{base}-{process}-{replica_value}-{deployment}",
         field="process_container_name",

@@ -149,6 +149,7 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
 
     def test_apply_forwards_requested_replica_count_to_compiler(self):
         client = MagicMock()
+        client.networks.get.return_value.attrs = {"Driver": "overlay"}
         client.services.get.side_effect = docker.errors.NotFound("missing")
         client.services.create.return_value = MagicMock()
         runtime = SwarmRuntime(client)
@@ -167,6 +168,7 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
 
     def test_existing_service_forces_new_task_generation_on_update(self):
         client = MagicMock()
+        client.networks.get.return_value.attrs = {"Driver": "overlay"}
         service = MagicMock()
         service.attrs = {
             "Spec": {
@@ -288,10 +290,12 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
                 compose_spec=spec,
             )
 
-        self.assertEqual(len(kwargs["networks"]), 1)
-        attachment = kwargs["networks"][0]
-        self.assertEqual(attachment["Target"], "net-demo")
-        self.assertEqual(attachment["Aliases"], ["mariadb"])
+        aliases_by_network = {
+            attachment["Target"]: attachment["Aliases"]
+            for attachment in kwargs["networks"]
+        }
+        self.assertEqual(aliases_by_network["net-demo"], ["mariadb"])
+        self.assertEqual(aliases_by_network.get("proxy_net", []), [])
 
     def test_create_kwargs_adds_ready_app_database_dns_alias(self):
         config = _config(
@@ -313,10 +317,12 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
                 compose_spec=spec,
             )
 
-        self.assertEqual(len(kwargs["networks"]), 1)
-        attachment = kwargs["networks"][0]
-        self.assertEqual(attachment["Target"], "net-demo")
-        self.assertEqual(attachment["Aliases"], ["mariadb"])
+        aliases_by_network = {
+            attachment["Target"]: attachment["Aliases"]
+            for attachment in kwargs["networks"]
+        }
+        self.assertEqual(aliases_by_network["net-demo"], ["mariadb"])
+        self.assertEqual(aliases_by_network.get("proxy_net", []), [])
 
     def test_create_kwargs_keeps_ready_app_alias_off_proxy_network(self):
         config = _config(

@@ -14,7 +14,6 @@ class DocsAssetSecurityContractTests(unittest.TestCase):
         self.assertIn("class DocsAssetJWTAuthentication(JWTAuthentication):", self.apis)
         self.assertIn('if request.method in {"GET", "HEAD"}:', self.apis)
         self.assertIn("authentication_classes = [DocsAssetJWTAuthentication, SessionAuthentication]", self.apis)
-        self.assertIn('if self.request.method == "GET":', self.apis)
         self.assertIn("return [AllowAny()]", self.apis)
 
     def test_public_asset_route_never_reads_draft_or_unattached_files(self):

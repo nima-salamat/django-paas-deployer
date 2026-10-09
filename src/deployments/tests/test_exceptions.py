@@ -121,7 +121,7 @@ class TestInternalPlatformErrors(unittest.TestCase):
         self.assertEqual(err.code, "INTERNAL_PLATFORM_ERROR")
         self.assertEqual(err.category, "internal_platform_error")
         self.assertNotEqual(err.user_message, err.technical_message)
-        self.assertIn("internal error", err.user_message.lower())
+        self.assertIn("internal platform error", err.user_message.lower())
         self.assertEqual(err.technical_message, "name '_paths_cfg' is not defined")
 
     def test_existing_deployment_error_keeps_classification(self):

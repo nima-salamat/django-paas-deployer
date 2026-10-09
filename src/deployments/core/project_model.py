@@ -511,9 +511,9 @@ def select_frontend(candidates: "list[dict]") -> "dict | None":
     usable = [c for c in candidates if c["kind"]]
     if not usable:
         return None
-    return max(
+    return min(
         usable,
-        key=lambda c: (c["score"], -c["root"].count("/"), c["path"]),
+        key=lambda c: (-c["score"], c["root"].count("/"), c["path"]),
     )
 
 

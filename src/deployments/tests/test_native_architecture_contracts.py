@@ -23,11 +23,12 @@ def test_swarm_adapter_has_native_plan_boundary_without_legacy_config():
 
 def test_native_deploy_service_uses_lifecycle_executor_for_swarm():
     source = _source("celery", "services", "deploy_service.py")
+    assert "def _execute_native_swarm_lifecycle(" in source
+    assert "return self._execute_native_swarm_lifecycle(" in source
     assert "DeploymentLifecycleExecutor(store).execute(" in source
     assert "CallbackDeploymentStrategy(build_plan=build_plan)" in source
-    assert "if swarm_enabled() and execution_plan is not None:" in source
-    # The old facade is retained only as a non-Swarm compatibility path.
-    branch = source.index("if swarm_enabled() and execution_plan is not None:")
+    # The native lifecycle dispatch precedes the legacy compatibility path.
+    branch = source.index("return self._execute_native_swarm_lifecycle(")
     legacy = source.index("deployer = DeployFacade(")
     assert branch < legacy
 
@@ -123,7 +124,8 @@ def test_release_fingerprint_is_content_deterministic():
 
 def test_new_migration_is_db_only_and_follows_current_deploy_head():
     migration = _source("..", "deploy", "migrations", "0032_release_and_build_artifact.py")
-    assert '("deploy", "0027_deploylog_event_id")' in migration
+    assert '("deploy", "0031_align_model_indexes_and_base_fields")' in migration
+    assert '("services", "0031_service_process_replicas")' in migration
     forbidden = ("Docker", "Celery", "Redis", "requests.", "urllib.")
     assert not any(token in migration for token in forbidden)
 

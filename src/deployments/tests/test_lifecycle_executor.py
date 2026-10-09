@@ -79,7 +79,7 @@ def test_lifecycle_executor_runs_pending_running_succeeded():
     ]
     assert strategy.activated == 1
     assert [event.stage for event in events] == [
-        "planning", "runtime_apply", "readiness", "deployment_completed"
+        "planning", "runtime_contract", "runtime_apply", "readiness", "deployment_completed"
     ]
 
 
@@ -132,7 +132,7 @@ def test_lifecycle_executor_requires_runtime_handle_before_readiness():
     runtime = FakeRuntime()
     identity = RuntimeIdentity(service_id="service-1", runtime_name="app-service-1")
 
-    def apply_without_handle(plan, *, operation_key):
+    def apply_without_handle(plan, *, operation_key, cancel_check=None):
         from deployments.runtime.contract import RuntimeOperationResult
         return RuntimeOperationResult(success=True, changed=True, handle=None)
 
@@ -391,6 +391,18 @@ def test_unsupported_runtime_capability_is_blocked_before_planning():
 def test_replacement_cancellation_rolls_back_instead_of_removing_runtime():
     runtime = FakeRuntime()
     identity = RuntimeIdentity(service_id="service-1", runtime_name="app-service-1")
+    previous_identity = RuntimeIdentity(
+        service_id="service-1",
+        deployment_id="previous-deploy",
+        revision_id="previous-revision",
+        runtime_name="app-service-1",
+    )
+    # A replacement must snapshot the previously active runtime before apply.
+    # The fake backend uses that snapshot to prove rollback does not remove it.
+    runtime._observations[identity.resource_name()] = SimpleNamespace(
+        identity=previous_identity,
+        runtime_id="previous-runtime",
+    )
     runtime.set_readiness_error(
         identity,
         RuntimeOperationError(
@@ -448,11 +460,19 @@ def test_cancellation_cleanup_failure_requires_reconciliation():
         )
 
     runtime.stop = fail_stop
+    runtime.set_readiness_error(
+        identity,
+        RuntimeOperationError(
+            "cancelled during readiness",
+            code="runtime_cancelled",
+            category="cancellation",
+        ),
+    )
     strategy = _Strategy(_plan(identity))
     store = InMemoryLifecycleStore()
 
     result = DeploymentLifecycleExecutor(store).execute(
-        _context(identity, cancelled=lambda: True),
+        _context(identity),
         strategy,
         runtime,
     )

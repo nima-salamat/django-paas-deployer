@@ -827,8 +827,8 @@ class PythonSrcLayoutImportPathTests(unittest.TestCase):
             make_tar({
                 "requirements.txt": "fastapi\nuvicorn\n",
                 "src/app/__init__.py": "",
-                "src/app/main.py": "from fastapi import FastAPI\\nfrom app.api import router\\napp = FastAPI()\\n",
-                "src/app/api.py": "router = object()\\n",
+                "src/app/main.py": "from fastapi import FastAPI\nfrom app.api import router\napp = FastAPI()\n",
+                "src/app/api.py": "router = object()\n",
             }),
             Config(),
             None,
@@ -934,7 +934,7 @@ class PythonBridgeRuntimeOwnershipTests(unittest.TestCase):
         from pathlib import Path
 
         source = Path(__file__).parents[2].joinpath(
-            "core", "platform_bridge.py"
+            "deployments", "core", "platform_bridge.py"
         ).read_text(encoding="utf-8")
 
         self.assertIn('"python", "django", "flask", "fastapi"', source)
@@ -952,9 +952,9 @@ class FastAPIProfileRegressionTests(unittest.TestCase):
         from deployments.core.entrypoints import resolve_fastapi_entrypoint
 
         result = resolve_fastapi_entrypoint(make_tar({
-            "pyproject.toml": "[tool.fastapi]\\nentrypoint = \\\"app.main:application\\\"\\n",
+            "pyproject.toml": "[tool.fastapi]\nentrypoint = \"app.main:application\"\n",
             "src/app/__init__.py": "",
-            "src/app/main.py": "from fastapi import FastAPI\\napplication = FastAPI()\\n",
+            "src/app/main.py": "from fastapi import FastAPI\napplication = FastAPI()\n",
         }))
         self.assertEqual(result["entrypoint"], "app.main:application")
         self.assertEqual(result["module"], "app.main")
@@ -967,8 +967,8 @@ class FastAPIProfileRegressionTests(unittest.TestCase):
 
         result = resolve_fastapi_entrypoint(make_tar({
             "src/app/__init__.py": "",
-            "src/app/main.py": "from fastapi import FastAPI\\napp = FastAPI()\\n",
-            "requirements.txt": "fastapi\\n",
+            "src/app/main.py": "from fastapi import FastAPI\napp = FastAPI()\n",
+            "requirements.txt": "fastapi\n",
         }))
         self.assertEqual(result["entrypoint"], "app.main:app")
         self.assertEqual(result["module"], "app.main")
@@ -995,6 +995,7 @@ class FastAPIProfileRegressionTests(unittest.TestCase):
 
         result = resolve_python_runtime_context(
             {
+                "requirements.txt",
                 "backend/src/app/__init__.py",
                 "backend/src/app/main.py",
             },

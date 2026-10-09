@@ -688,7 +688,7 @@ class DeploymentOrchestrator:
                 raise DeploymentCancelled(
                     "Deployment timed out while work was still running." if timeout else "Deployment cancelled by user request.",
                     stage="timeout" if timeout else "cancelled",
-                    code="DEPLOYMENT_TIMEOUT" if timeout else None,
+                    code="DEPLOYMENT_TIMEOUT" if timeout else "DEPLOYMENT_CANCELLED",
                     user_message=(
                         "The deployment exceeded its maximum allowed time and was stopped."
                         if timeout else "Deployment cancelled by user request."
