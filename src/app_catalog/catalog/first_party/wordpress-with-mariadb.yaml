@@ -187,11 +187,19 @@ services:
         
         wait_for_database() {
           attempts=0
+          log "Waiting for database readiness (host=${WORDPRESS_DB_HOST:-unset}, database=${WORDPRESS_DB_NAME:-unset})."
           while [ "$attempts" -lt 120 ]; do
-            if wp db check --allow-root >/dev/null 2>&1; then return 0; fi
+            if wp db check --allow-root >/dev/null 2>&1; then
+              log "Database connection is ready."
+              return 0
+            fi
             attempts=$((attempts + 1))
+            if [ "$((attempts % 15))" -eq 0 ]; then
+              log "Database check has not succeeded after ${attempts} seconds; continuing to wait."
+            fi
             sleep 1
           done
+          log "ERROR: Database did not become ready within 120 seconds (host=${WORDPRESS_DB_HOST:-unset}, database=${WORDPRESS_DB_NAME:-unset})."
           return 1
         }
         
