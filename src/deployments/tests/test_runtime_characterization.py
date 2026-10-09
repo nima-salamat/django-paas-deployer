@@ -139,8 +139,8 @@ def test_legacy_public_tcp_endpoint_is_normalized_for_traefik():
 
     assert service["networks"] == ["demo-net", "proxy_net"]
     assert labels["traefik.enable"] == "true"
-    assert labels["traefik.http.routers.demo-http.rule"] == "Host(`demo.example.test`)"
-    assert labels["traefik.http.services.demo-http.loadbalancer.server.port"] == "80"
+    assert labels["traefik.http.routers.demo-port-80-tcp.rule"] == "Host(`demo.example.test`)"
+    assert labels["traefik.http.services.demo-port-80-tcp.loadbalancer.server.port"] == "80"
 
 
 def test_revision_graph_preserves_supported_replica_shape():
