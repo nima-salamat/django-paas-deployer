@@ -219,6 +219,80 @@ networks:
         self.assertIn("WORDPRESS_ADMIN_EMAIL", wordpress["environment"])
         self.assertNotIn("wp_cli_version", {field["id"] for field in resolved["fields"]})
 
+    def test_compose_catalog_keeps_service_level_dockerfile_and_generated_files(self):
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "catalog"
+            / "first_party"
+            / "wordpress-with-mariadb.yaml"
+        )
+        definition = load_yaml_definition(source)
+        variant = definition.variants["default"]
+        resolved = compose_to_resolved(
+            document=variant["compose_document"],
+            metadata=variant["compose_metadata"],
+            config={
+                "software_version": "7.1.2",
+                "php_version": "8.4",
+                "domain": "app.example.invalid",
+            },
+            secrets={
+                "wordpress_admin_password": "test-admin-secret",
+                "service_password_wordpress": "test-db-secret",
+            },
+            catalog_id="wordpress",
+            version="7.1.2",
+            variant="default",
+        )
+
+        wordpress = next(
+            item for item in resolved["services"] if item["key"] == "wordpress"
+        )
+        self.assertIn(
+            "FROM wordpress:7.1.2-php8.4-apache",
+            wordpress["dockerfile"],
+        )
+        self.assertIn(
+            "COPY passdeployer-wordpress-entrypoint.sh "
+            "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+            wordpress["dockerfile"],
+        )
+        self.assertIn(
+            "passdeployer-wordpress-entrypoint.sh",
+            wordpress["files"],
+        )
+        script = wordpress["files"]["passdeployer-wordpress-entrypoint.sh"]
+        # Variables belong to the shell/container runtime, not catalog template
+        # interpolation, and must survive byte-for-byte through resolution.
+        self.assertIn("${WORDPRESS_ROOT:-/var/www/html}", script)
+        self.assertIn("${PATH:+$PATH}", script)
+        self.assertIn("${WORDPRESS_AUTO_INSTALL:-1}", script)
+        self.assertEqual(
+            wordpress["command"],
+            [
+                "/usr/local/bin/passdeployer-wordpress-entrypoint.sh",
+                "/usr/local/bin/apache2-foreground",
+            ],
+        )
+
+    def test_compose_service_files_must_be_a_mapping(self):
+        with self.assertRaises(ApplicationPlanError):
+            compose_to_resolved(
+                document={
+                    "services": {
+                        "web": {
+                            "image": "example/web:1",
+                            "files": ["not-a-mapping"],
+                        }
+                    }
+                },
+                metadata={},
+                config={},
+                secrets={},
+                catalog_id="invalid-files",
+                version="1",
+            )
+
     def test_inline_dockerfile_preserves_native_build_variables(self):
         resolved = compose_to_resolved(
             document={
