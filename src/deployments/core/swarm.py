@@ -352,11 +352,16 @@ def compile_compose_service(config, *, image_ref: str, replicas: int = 1) -> dic
         },
     }
 
-    # Apache/PHP needs ephemeral writable process state even when the root
-    # filesystem is read-only. The official PHP Apache entrypoint recreates
-    # missing runtime directories at startup, so /run is safe as tmpfs.
-    if bool(config.read_only):
-        service["tmpfs"] = [{"target": "/run", "size": 16 * 1024 * 1024, "mode": 0o1777}]
+    # Keep runtime scratch paths writable and outside the container layer.
+    # PHP uploads create a temporary file (normally under /tmp) before WordPress
+    # can move it into wp-content/uploads. The local Docker backend provisions
+    # these tmpfs mounts unconditionally; native Swarm must preserve the same
+    # contract for both writable and read-only root filesystems.
+    service["tmpfs"] = [
+        {"target": "/tmp", "size": 64 * 1024 * 1024, "mode": 0o1777},
+        {"target": "/var/tmp", "size": 32 * 1024 * 1024, "mode": 0o1777},
+        {"target": "/run", "size": 16 * 1024 * 1024, "mode": 0o1777},
+    ]
 
     ports = []
     for endpoint in config.endpoints or ():

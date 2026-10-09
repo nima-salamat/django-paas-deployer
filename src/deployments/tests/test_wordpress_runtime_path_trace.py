@@ -84,6 +84,14 @@ def test_wordpress_catalog_executable_paths_reach_swarm_unchanged():
     assert service["command"] is None
     assert service["args"] == command
     assert service["entrypoint"] is None
+    # PHP's upload_tmp_dir defaults to the system temporary path (/tmp).
+    # Ready Apps use a writable document-root volume, but temporary upload
+    # creation is a distinct runtime path and must not depend on that volume.
+    assert service["tmpfs"] == [
+        {"target": "/tmp", "size": 64 * 1024 * 1024, "mode": 0o1777},
+        {"target": "/var/tmp", "size": 32 * 1024 * 1024, "mode": 0o1777},
+        {"target": "/run", "size": 16 * 1024 * 1024, "mode": 0o1777},
+    ]
 
     # The downstream executable must be checked in the actual image at build
     # time, not merely accepted as a string in Swarm Args.

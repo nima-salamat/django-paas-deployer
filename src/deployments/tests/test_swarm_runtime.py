@@ -236,8 +236,23 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         )
         self.assertEqual(
             spec["services"]["demo"]["tmpfs"],
-            [{"target": "/run", "size": 16 * 1024 * 1024, "mode": 0o1777}],
+            [
+                {"target": "/tmp", "size": 64 * 1024 * 1024, "mode": 0o1777},
+                {"target": "/var/tmp", "size": 32 * 1024 * 1024, "mode": 0o1777},
+                {"target": "/run", "size": 16 * 1024 * 1024, "mode": 0o1777},
+            ],
         )
+
+    def test_writable_swarm_service_gets_php_upload_tmpfs(self):
+        spec = compile_compose_service(
+            _config(read_only=False), image_ref="demo:r1"
+        )
+        service = spec["services"]["demo"]
+        self.assertFalse(service["read_only"])
+        tmpfs_mounts = {mount["target"]: mount for mount in service["tmpfs"]}
+        self.assertIn("/tmp", tmpfs_mounts)
+        self.assertEqual(tmpfs_mounts["/tmp"]["size"], 64 * 1024 * 1024)
+        self.assertEqual(tmpfs_mounts["/tmp"]["mode"], 0o1777)
 
     def test_process_resources_cannot_exceed_plan_cpu_or_memory(self):
         with self.assertRaises(Exception):
