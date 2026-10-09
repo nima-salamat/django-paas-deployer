@@ -332,6 +332,21 @@ class AgentContractTests(TestCase):
         self.assertIn("/agent/v1/services/{service_id}/rebuild", openapi["paths"])
         self.assertIn("/agent/v1/services/{service_id}/database-credentials", openapi["paths"])
 
+    def test_volume_create_contract_requires_existing_service_first(self):
+        openapi = build_openapi(self.agent)
+        schema = openapi["components"]["schemas"]["VolumeCreateRequest"]
+        self.assertIn("service", schema.get("required", []))
+        self.assertIn("existing Service id", schema.get("description", ""))
+
+        operation = openapi["paths"]["/agent/v1/volumes"]["post"]
+        self.assertIn("create the Service first", operation.get("description", ""))
+
+        from agent.skills import skill_for_agent
+        skill = skill_for_agent("volumes", self.agent)
+        self.assertIsNotNone(skill)
+        self.assertIn("Create the Service first", skill.body)
+        self.assertIn("service: <returned Service id>", skill.body)
+
     def test_shell_protocol_distinguishes_compound_and_interactive_transports(self):
         protocol = shell_protocol_metadata("service-1")
         self.assertEqual(protocol["command_api"]["operators"], ["|", "&&", "||", ";"])
