@@ -5,6 +5,9 @@ on:
     branches: ["master"]
     paths:
       - "src/app_catalog/catalog/first_party/wordpress-with-mariadb.yaml"
+      - "src/app_catalog/compose_catalog.py"
+      - "src/app_catalog/source_loader.py"
+      - "src/app_catalog/tests/test_catalog_sources.py"
       - "src/app_catalog/services.py"
       - "src/deployments/common/deployment_profile.py"
       - "src/deployments/core/platform_bridge.py"
@@ -206,7 +209,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --disable-pip-version-check -r requirements.txt
-          pytest -q src/deployments/tests/test_execution_contract.py src/deployments/tests/test_swarm_runtime.py src/deployments/tests/test_wordpress_runtime_path_trace.py src/deployments/tests/test_catalog_runtime_authority_regressions.py src/deployments/tests/test_swarm_startup_diagnostics.py
+          pytest -q src/deployments/tests/test_execution_contract.py src/deployments/tests/test_swarm_runtime.py src/deployments/tests/test_wordpress_runtime_path_trace.py src/deployments/tests/test_catalog_runtime_authority_regressions.py src/deployments/tests/test_swarm_startup_diagnostics.py src/app_catalog/tests/test_catalog_sources.py
 
       - name: Assert WP-CLI installation completed
         run: |
