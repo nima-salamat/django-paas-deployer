@@ -205,16 +205,34 @@ class ServiceRuntimeGraph:
 
         endpoint_rows = []
         for raw in (getattr(revision, "endpoint_snapshot", None) or []):
+            published_port = (
+                int(raw["published_port"])
+                if raw.get("published_port") not in (None, "")
+                else None
+            )
+            protocol = str(raw.get("protocol") or "tcp").lower()
+            exposure = str(raw.get("exposure") or "internal").lower()
+            tls = bool(raw.get("tls", False))
+
+            # Compatibility repair for Ready App revisions created before
+            # public catalog ports were classified as HTTP-family endpoints.
+            # ServiceEndpoint.clean() requires public raw TCP/UDP to have a
+            # published host port, so a public TCP endpoint without one is the
+            # legacy representation of a domain-routed web service, not a raw
+            # TCP listener. Normalize it before readiness/routing decisions.
+            if exposure == "public" and protocol == "tcp" and published_port is None:
+                protocol = "https" if tls else "http"
+
             endpoint_rows.append(
                 RuntimeEndpoint(
                     name=str(raw.get("name") or "endpoint"),
                     target_port=int(raw["target_port"]),
-                    published_port=int(raw["published_port"]) if raw.get("published_port") not in (None, "") else None,
-                    protocol=str(raw.get("protocol") or "tcp").lower(),
-                    exposure=str(raw.get("exposure") or "internal").lower(),
+                    published_port=published_port,
+                    protocol=protocol,
+                    exposure=exposure,
                     hostname=str(raw.get("hostname") or ""),
                     path=str(raw.get("path") or ""),
-                    tls=bool(raw.get("tls", False)),
+                    tls=tls,
                     enabled=bool(raw.get("enabled", True)),
                     process=str(raw.get("process")) if raw.get("process") else None,
                     metadata=dict(raw.get("metadata") or {}),
