@@ -90,7 +90,23 @@ sequenceDiagram
 
 ## Volume semantics
 
-Volumes are exclusive to one Service. Tenant creation requires an attached Service so quota can be checked. Every volume still owned by a Service counts against logical plan storage, including soft-detached volumes. `release=true` on detach performs a hard release and frees logical ownership/quota; ordinary detach keeps ownership. Once the Docker volume exists, name/size/bind/mode metadata is locked.
+Volumes are exclusive to one Service. Tenant creation requires an existing, attached Service so quota can be checked against `Service.plan`. The shared `VolumeSerializer` permits a nullable service field for reuse across API contexts, but the tenant `VolumeViewSet.create` rejects a missing/null `service`; a tenant cannot create an ownerless volume and attach it later.
+
+The Plans service wizard must therefore stage new volume specifications locally until Service creation returns an id. It then creates each new volume with `POST /api/volumes/` and a `service` field containing that id. Example body:
+
+```json
+{
+  "name": "app-data",
+  "size_mb": 1024,
+  "default_bind": "/data",
+  "default_mode": "rw",
+  "service": "<existing-service-uuid>"
+}
+```
+
+To reuse a previously created unused volume, first create the Service, then attach that volume with `PATCH /api/volumes/{volume_id}/` and `{"service": "<existing-service-uuid>"}`. The backend checks ownership, lifecycle mutability and quota; the browser must not treat client-side quota calculations as authoritative. Service creation does not accept an ownerless or nested tenant volume payload.
+
+Every volume still owned by a Service counts against logical plan storage, including soft-detached volumes. `release=true` on detach performs a hard release and frees logical ownership/quota; ordinary detach keeps ownership. Once the Docker volume exists, name/size/bind/mode metadata is locked.
 
 ## Shell API parameters
 
