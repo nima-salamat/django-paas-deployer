@@ -657,7 +657,11 @@ def build_openapi(agent, *, request=None):
     volume_create = _serializer_schema(VolumeSerializer, exclude={"user"}, writable=True)
     volume_create.setdefault("required", [])
     volume_create["required"] = sorted(set(volume_create["required"]) | {"service"})
-    volume_create["description"] = "Volume fields accepted by the existing VolumeSerializer; the Agent facade requires a Service."
+    volume_create["description"] = (
+        "Creating a tenant Volume requires an existing Service id; create the "
+        "Service first, then POST a Volume with service=<service UUID> so plan "
+        "quota and mutability can be checked."
+    )
     volume_update = _serializer_schema(VolumeSerializer, instance=True, exclude={"user"}, writable=True)
     volume_update["required"] = []
 
