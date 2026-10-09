@@ -254,6 +254,61 @@ class SwarmFailureRecoveryTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "SWARM_UPDATE_ROLLED_BACK")
         self.assertEqual(ctx.exception.details["expected_image"], new_image)
 
+    def test_healthcheck_uses_container_inspect_when_swarm_task_omits_health(self):
+        image = "demo:r1@sha256:new"
+        service = FakeService(
+            image=image,
+            tasks=[
+                {
+                    "ID": "task-1",
+                    "DesiredState": "running",
+                    "Status": {
+                        "State": "running",
+                        "Message": "started",
+                        # Some Swarm TaskStatus responses omit ContainerStatus.Health.
+                        "ContainerStatus": {"ContainerID": "container-1"},
+                    },
+                    "Spec": {"ContainerSpec": {"Image": image}},
+                }
+            ],
+        )
+        service.attrs["Spec"]["TaskTemplate"]["ContainerSpec"]["Healthcheck"] = {
+            "Test": ["CMD-SHELL", "curl -fsS http://127.0.0.1/ || exit 1"],
+            "Interval": 5_000_000_000,
+            "Timeout": 10_000_000_000,
+            "Retries": 3,
+        }
+
+        client = FakeClient(service)
+        container = MagicMock()
+        container.attrs = {
+            "State": {
+                "Status": "running",
+                "Running": True,
+                "Health": {
+                    "Status": "healthy",
+                    "FailingStreak": 0,
+                    "Log": [
+                        {"ExitCode": 0, "Output": "", "Start": "start", "End": "end"}
+                    ],
+                },
+            }
+        }
+        client.containers = MagicMock()
+        client.containers.get.return_value = container
+
+        state = SwarmRuntime(client).wait_ready(
+            "demo",
+            timeout=1,
+            expected_image=image,
+        )
+
+        self.assertEqual(state.replicas_running, 1)
+        self.assertTrue(state.healthcheck_configured)
+        self.assertEqual(state.tasks[0].health_status, "healthy")
+        client.containers.get.assert_called_once_with("container-1")
+        container.reload.assert_called_once_with()
+
     def test_digest_qualified_task_image_is_accepted_when_service_spec_matches(self):
         service_image = "demo:r1"
         task_image = "demo:r1@sha256:new"
