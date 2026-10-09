@@ -123,8 +123,6 @@ class ServiceRuntimeGraph:
             or config_snapshot.get("dockerfile")
             or ""
         )
-        catalog_command = runtime_snapshot.get("start_command")
-        catalog_command_is_explicit = str(catalog_command or "").strip() != ""
         dockerfile_owns_entrypoint = bool(
             catalog_managed
             and re.search(
