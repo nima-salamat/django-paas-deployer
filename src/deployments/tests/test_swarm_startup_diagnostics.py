@@ -1,4 +1,27 @@
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 from deployments.core.swarm import SwarmRuntime
+
+
+def test_task_logs_are_collected_from_the_exact_failed_container():
+    runtime = object.__new__(SwarmRuntime)
+    runtime.client = MagicMock()
+    container = MagicMock()
+    container.logs.return_value = b"current task: /usr/local/bin/apache2-foreground: not found\\n"
+    runtime.client.containers.get.return_value = container
+    task = SimpleNamespace(task_id="task-123", container_id="container-123")
+
+    logs = runtime._task_logs_for_failure(task)
+
+    assert logs == "current task: /usr/local/bin/apache2-foreground: not found\\n"
+    runtime.client.containers.get.assert_called_once_with("container-123")
+    container.logs.assert_called_once_with(
+        stdout=True,
+        stderr=True,
+        timestamps=True,
+        tail=200,
+    )
 
 
 def test_exit_127_diagnostic_surfaces_missing_executable_and_redacts_secrets():
