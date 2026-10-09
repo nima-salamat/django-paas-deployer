@@ -164,6 +164,13 @@ class ReadyAppPublicApiTests(TestCase):
             f"{wordpress.get_docker_service_name()}.apps.example.test"
         )
         self.assertEqual(endpoint.hostname, expected)
+        self.assertEqual(
+            endpoint.protocol,
+            "https",
+            "A public Ready App web port must be an HTTP-family endpoint for Traefik routing.",
+        )
+        self.assertTrue(endpoint.tls)
+        self.assertIsNone(endpoint.published_port)
         self.assertNotEqual(endpoint.hostname, "friendly-wordpress-name.apps.example.test")
 
     @override_settings(DEPLOYMENT_DOMAIN="apps.example.test")
