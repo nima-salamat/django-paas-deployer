@@ -2,6 +2,8 @@
 
 Canonical mount: /api/messenger/. Routes and methods below are derived from src/messenger/urls.py and the registered APIView classes. Authentication is SessionJWTAuthentication + IsAuthenticated; authorization is participant/role/viewer scoped.
 
+Topic handlers live in `src/messenger/api/topics.py`. For standard groups, GET/POST operates on child topic conversations while preserving the existing root timeline as General. The endpoint rejects legacy topic operations for `matrix_e2ee` records until they are backed by actual Matrix rooms.
+
 ## Exact HTTP surface
 
 ### Users and profile
