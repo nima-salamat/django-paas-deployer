@@ -83,6 +83,32 @@ class MessengerTopicsAPITests(TestCase):
         self.conversation.refresh_from_db()
         self.assertFalse(self.conversation.is_forum)
 
+    def test_root_group_members_added_later_are_added_to_existing_topics(self):
+        response = self.client.post(
+            f"/api/messenger/conversations/{self.conversation.id}/topics/",
+            {"title": "Operations"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        topic_id = response.data["data"]["topic"]["id"]
+
+        late_member = User.objects.create_user(
+            username="topics-late-member",
+            email="topics-late@example.com",
+            password="password123",
+        )
+        ConversationParticipant.objects.create(
+            conversation=self.conversation,
+            user=late_member,
+            role=ConversationParticipant.Role.MEMBER,
+        )
+
+        self.assertTrue(ConversationParticipant.objects.filter(
+            conversation_id=topic_id,
+            user=late_member,
+            left_at__isnull=True,
+        ).exists())
+
     def test_topic_conversations_are_hidden_from_top_level_conversation_list(self):
         response = self.client.post(
             f"/api/messenger/conversations/{self.conversation.id}/topics/",
