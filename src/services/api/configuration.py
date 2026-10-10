@@ -743,6 +743,15 @@ class ServiceDatabaseBindingsAPIView(ServiceConfigBaseAPIView):
         if access_mode not in {"rw", "ro"}:
             return Response({"error": "access_mode must be 'rw' or 'ro'."}, status=400)
 
+        if ServiceDatabaseBinding.objects.filter(
+            service=service,
+            env_prefix=env_prefix,
+        ).exclude(alias=alias).exists():
+            return Response({
+                "error": "That environment prefix is already used by another database binding on this service.",
+                "code": "database_env_prefix_conflict",
+            }, status=409)
+
         provider = None
         database = None
         if database_ref.startswith("service:"):
@@ -807,16 +816,6 @@ class ServiceDatabaseBindingsAPIView(ServiceConfigBaseAPIView):
                 database.status = str(provider.status or database.status or "unknown")[:20]
                 database.save(update_fields=["engine", "host", "port", "database_name", "status", "updated_at"])
 
-            username = str(provider_config.get("username") or "")
-            password = str(provider_config.get("password") or "")
-            if username or password:
-                credential, created = DatabaseCredential.objects.get_or_create(database=database)
-                credential.username = username or credential.username
-                if password and (created or credential.get_password() != password):
-                    credential.set_password(password)
-                    if not created:
-                        credential.version += 1
-                credential.save(update_fields=["username", "password_ciphertext", "version", "updated_at"])
         else:
             database = get_object_or_404(
                 DatabaseResource.objects.select_related("provider_service"),
@@ -840,14 +839,30 @@ class ServiceDatabaseBindingsAPIView(ServiceConfigBaseAPIView):
         if bool(policy.get("read_only")) and access_mode == "rw":
             return Response({"error": "This database resource only permits read-only access."}, status=400)
 
-        if ServiceDatabaseBinding.objects.filter(
-            service=service,
-            env_prefix=env_prefix,
-        ).exclude(alias=alias).exists():
-            return Response({
-                "error": "That environment prefix is already used by another database binding on this service.",
-                "code": "database_env_prefix_conflict",
-            }, status=409)
+        # The active database deployment is the credential source of truth even
+        # when this provider already had a DatabaseResource row before binding.
+        if provider is not None:
+            provider_config = _database_service_configuration(provider)
+            engine = _database_engine_for_service(provider)
+            database.engine = engine
+            database.host = provider.get_docker_service_name()
+            database.port = _database_service_port(engine)
+            configured_name = str(provider_config.get("database") or "").strip()
+            if configured_name:
+                database.database_name = configured_name[:128]
+            database.status = str(provider.status or database.status or "unknown")[:20]
+            database.save(update_fields=["engine", "host", "port", "database_name", "status", "updated_at"])
+
+            username = str(provider_config.get("username") or "")
+            password = str(provider_config.get("password") or "")
+            if username or password:
+                credential, created = DatabaseCredential.objects.get_or_create(database=database)
+                credential.username = username or credential.username
+                if password and (created or credential.get_password() != password):
+                    credential.set_password(password)
+                    if not created:
+                        credential.version += 1
+                credential.save(update_fields=["username", "password_ciphertext", "version", "updated_at"])
 
         with transaction.atomic():
             Service.objects.select_for_update().get(pk=service.pk)
