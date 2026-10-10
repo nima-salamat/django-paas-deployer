@@ -41,8 +41,8 @@ sequenceDiagram
 | GET/POST/DELETE | `/service/{id}/secrets/` | `key`, `value`, optional `note` on create/update | key/value for writes | Secret CRUD; plaintext is not returned in read responses. |
 | GET/POST/DELETE | `/service/{id}/endpoints/` | endpoint fields such as `name`, `target_port`, `published_port`, `protocol`, `exposure`, `hostname`, `path`, `tls`, `enabled` | endpoint-specific | Declarative public/internal endpoint configuration. |
 | GET/POST/DELETE | `/service/{id}/networks/` | `network` required on attach | attach: network | Manages explicit Service network attachments. |
-| GET/POST/DELETE | `/service/{id}/databases/` | binding fields: `alias`, `env_prefix`, `access_mode`, database reference | binding-specific | Manages Service-to-managed-database bindings. |
-| GET/POST/DELETE | `/service/{id}/database-resources/` | database resource fields such as name/engine/host/port/database name/provider | create-specific | Manages database resources owned by the Service owner. |
+| GET/POST/DELETE | `/service/{id}/databases/` | `database` is a DatabaseResource UUID or `service:<database-service-uuid>`; optional `alias`, `env_prefix`, `access_mode` | POST requires a database reference | Explicitly binds a service to an owned managed resource or an existing same-owner DB service; service providers must share a private network; secrets are never returned; binding status is configured/unverified until a runtime connection check exists. |
+| GET/POST/DELETE | `/service/{id}/database-resources/` | database resource fields such as name/engine/host/port/database name/provider | create-specific | Lists owner-managed resources and selectable same-owner DB services with `connectable` network metadata; never exposes DB credentials. |
 | GET | `/service/{id}/revisions/` | `service_id` required | `service_id` | Lists immutable executable revisions. |
 | GET | `/service/{id}/revisions/{revision_id}/` | both UUIDs required | both | Retrieves one immutable revision snapshot. |
 | POST | `/service/{id}/revisions/{revision_id}/rollback/` | both UUIDs required | both | Queues rollback through `can_deploy_add`. |
