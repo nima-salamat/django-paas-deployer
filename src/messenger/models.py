@@ -125,6 +125,16 @@ class Conversation(models.Model):
     avatar = models.ImageField(upload_to="messenger/groups/", null=True, blank=True)
     is_public = models.BooleanField(default=False, db_index=True)  # appears in search
     is_closed = models.BooleanField(default=False)  # no new joins / messages
+    # A forum keeps its existing conversation as the General topic. Additional
+    # topics are standard group conversations linked to this root.
+    is_forum = models.BooleanField(default=False, db_index=True)
+    parent_conversation = models.ForeignKey(
+        "self",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="topic_conversations",
+    )
     # If True, users must send a join request that admins approve/reject
     # (Telegram-style "private public groups"). If False, anyone can join directly.
     requires_approval = models.BooleanField(default=False)
