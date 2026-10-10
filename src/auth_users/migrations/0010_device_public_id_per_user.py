@@ -5,7 +5,7 @@ import uuid
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("auth_users", "0009_usercontactchange_contact_change_purpose"),
+        ("auth_users", "0010_device_metadata"),
     ]
 
     operations = [
