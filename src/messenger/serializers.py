@@ -310,7 +310,8 @@ class ConversationListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Conversation
         fields = (
-            "id", "public_id", "type", "security_mode", "title", "description", "avatar", "avatar_url",
+            "id", "public_id", "type", "security_mode", "matrix_room_id", "matrix_space_id",
+            "title", "description", "avatar", "avatar_url",
             "is_public", "is_closed", "requires_approval", "members_can_add", "only_admins_send",
             "is_forum", "parent_conversation", "parent_conversation_title", "topics",
             "history_visibility", "created_by",
@@ -318,7 +319,7 @@ class ConversationListSerializer(serializers.ModelSerializer):
             "participants", "last_message", "unread_count", "peer", "is_pinned",
             "draft_text",
         )
-        read_only_fields = ("security_mode",)
+        read_only_fields = ("security_mode", "matrix_room_id", "matrix_space_id")
 
     def get_parent_conversation_title(self, obj):
         if not obj.parent_conversation_id:
@@ -357,6 +358,8 @@ class ConversationListSerializer(serializers.ModelSerializer):
                 "public_id": str(topic.public_id),
                 "type": topic.type,
                 "security_mode": topic.security_mode,
+                "matrix_room_id": topic.matrix_room_id,
+                "matrix_space_id": topic.matrix_space_id,
                 "title": topic.title,
                 "description": topic.description,
                 "is_forum": False,
