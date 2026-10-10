@@ -29,7 +29,7 @@ from ..serializers import (
     build_message_list_context, build_user_mini_context,
 )
 from ..utils import validate_messenger_file, detect_kind, users_blocked, can_see_profile_photo
-from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger
+from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger, reject_plaintext_transport
 
 User = get_user_model()
 class ConversationPinAPIView(APIView):
@@ -43,6 +43,9 @@ class ConversationPinAPIView(APIView):
         ).first()
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(part.conversation)
+        if transport_error:
+            return transport_error
         part.is_pinned = not part.is_pinned
         part.pinned_at = timezone.now() if part.is_pinned else None
         part.save(update_fields=["is_pinned", "pinned_at"])
@@ -86,6 +89,9 @@ class MessagePinAPIView(APIView):
         ).first()
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
         # Permission check: owner/admin always allowed.
         # In private (direct) chats, every participant can pin.
         # In group chats, non-owner/admin needs explicit can_pin_messages.
@@ -144,6 +150,9 @@ class ConversationPinnedMessagesAPIView(APIView):
             conversation=conv, user=request.user, left_at__isnull=True
         ).exists():
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
         pins = (
             PinnedMessage.objects.filter(conversation=conv, message__is_deleted=False)
             .select_related("message", "message__sender", "pinned_by")
@@ -175,6 +184,9 @@ class MessageReadersAPIView(APIView):
             conversation=msg.conversation, user=request.user, left_at__isnull=True
         ).exists():
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(msg.conversation)
+        if transport_error:
+            return transport_error
 
         participants = list(
             ConversationParticipant.objects.filter(
