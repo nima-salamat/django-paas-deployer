@@ -20,7 +20,7 @@ sequenceDiagram
 
 The REST API owns authentication, object-level conversation/member authorization and durable model mutation. Realtime delivery is a transport layer; it is not the durable source of truth.
 
-The topic route is implemented in `src/messenger/api/topics.py`. E2EE conversations intentionally do not use this Django endpoint; until Matrix room provisioning is integrated, the endpoint fails closed for records marked `matrix_e2ee`.
+The topic route is implemented in `src/messenger/api/topics.py`: standard groups create ordinary child conversations; an encrypted group creates a client-side Matrix encrypted room and registers it through the secure path. The Matrix endpoints are in `src/messenger/api/matrix.py`; they accept only authenticated contacts/authorized participants and do not return the Synapse admin token. Secure rooms use Matrix for encrypted text, while the current release explicitly disables legacy attachment, search, scheduled, forwarding, reaction, read-receipt and call features.
 
 ## Complete route matrix
 
@@ -34,6 +34,11 @@ The topic route is implemented in `src/messenger/api/topics.py`. E2EE conversati
 | `/api/messenger/conversations/` | `as_view` | `avatar`, `clear_avatar`, `description`, `history_visibility`, `is_closed`, `is_public`, `member_ids`, `members_can_add`, `only_admins_send`, `page`, `page_size`, `requires_approval`, `title`, `type`, `user_id` |
 | `/api/messenger/conversations/<int:pk>/` | `as_view` | `avatar`, `clear_avatar`, `description`, `history_visibility`, `is_closed`, `is_public`, `member_ids`, `members_can_add`, `only_admins_send`, `page`, `page_size`, `requires_approval`, `title`, `type`, `user_id` |
 | `/api/messenger/conversations/<int:pk>/topics/` | `ConversationTopicsAPIView` | GET: none; POST: `title`, optional `description` |
+| `/api/messenger/secure/device-session/` | `MatrixDeviceSessionAPIView` | POST: `device_id`, optional `display_name`; GET uses `X-Matrix-Access-Token` and `X-Matrix-Device-ID` headers |
+| `/api/messenger/secure/identities/` | `MatrixIdentityResolveAPIView` | POST: `user_ids` (active contacts/authorized participants only) |
+| `/api/messenger/secure/devices/` | `MatrixDeviceListAPIView` | GET: optional `X-Matrix-Device-ID` header |
+| `/api/messenger/secure/devices/<str:device_id>/revoke/` | `MatrixDeviceRevokeAPIView` | POST: no body required |
+| `/api/messenger/secure/conversations/` | `SecureConversationMapAPIView` | POST: `type`, `member_ids`, `room_id`, optional `space_id`, `title`, `description`; requires `X-Matrix-Access-Token` |
 | `/api/messenger/conversations/<int:pk>/messages/` | `as_view` | `body`, `client_message_id`, `conversation_id`, `emoji`, `force_all`, `limit`, `message_ids`, `q`, `reply_to`, `schedule_at`, `scheduled_for`, `up_to_message_id` |
 | `/api/messenger/conversations/<int:pk>/events/` | `as_view` | `avatar`, `clear_avatar`, `description`, `history_visibility`, `is_closed`, `is_public`, `member_ids`, `members_can_add`, `only_admins_send`, `page`, `page_size`, `requires_approval`, `title`, `type`, `user_id` |
 | `/api/messenger/conversations/<int:pk>/messages/search/` | `as_view` | `body`, `client_message_id`, `conversation_id`, `emoji`, `force_all`, `limit`, `message_ids`, `q`, `reply_to`, `schedule_at`, `scheduled_for`, `up_to_message_id` |
