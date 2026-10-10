@@ -16,7 +16,7 @@ ProfilePhotoPrivacy is one-to-one per user. scope is everyone, contacts, nobody 
 
 ## Conversation
 
-public_id is the stable external identifier. type is private/group. title/description/avatar/public/closed/approval/member/send/history flags define group behavior. created_by is historical creator context; active ownership comes from ConversationParticipant.role. last_message_at drives chat-list ordering and is updated by Message.save() for non-scheduled messages.
+public_id is the stable external identifier. type is private/group. title/description/avatar/public/closed/approval/member/send/history flags define group behavior. `is_forum` marks a root group whose sidebar can expand into topic conversations. `parent_conversation` links each topic conversation to its root and is null for ordinary conversations and forum roots. Existing history stays in the root conversation, which serves as General; each child topic has an independent message timeline and cache. created_by is historical creator context; active ownership comes from ConversationParticipant.role. last_message_at drives chat-list ordering and is updated by Message.save() for non-scheduled messages.
 
 ## ConversationParticipant
 
