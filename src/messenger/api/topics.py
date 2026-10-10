@@ -65,8 +65,12 @@ class ConversationTopicsAPIView(APIView):
                 {
                     "id": topic.id,
                     "public_id": str(topic.public_id),
+                    "type": topic.type,
                     "title": topic.title,
                     "description": topic.description,
+                    "is_forum": False,
+                    "parent_conversation": conversation.id,
+                    "parent_conversation_title": conversation.title,
                     "is_closed": topic.is_closed,
                     "last_message_at": topic.last_message_at.isoformat() if topic.last_message_at else None,
                     "created_at": topic.created_at.isoformat() if topic.created_at else None,
