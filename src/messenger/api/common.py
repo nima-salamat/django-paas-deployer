@@ -28,6 +28,20 @@ def err(message, http_status=status.HTTP_400_BAD_REQUEST, extra=None):
     return Response(body, status=http_status)
 
 
+def reject_plaintext_transport(conversation):
+    """Return a fail-closed response when an endpoint uses Django plaintext I/O.
+
+    E2EE rooms are owned by Matrix. Call this before any legacy read, write,
+    cache operation, notification, or side-effect for an authorized room.
+    """
+    if getattr(conversation, "security_mode", Conversation.SecurityMode.STANDARD) == Conversation.SecurityMode.MATRIX_E2EE:
+        return err(
+            "This conversation uses Matrix end-to-end encryption. The plaintext Messenger endpoint is disabled.",
+            status.HTTP_409_CONFLICT,
+        )
+    return None
+
+
 def _attach_list_side_data(conversations, user):
     """Attach last_message + unread_count on each Conversation in O(1) queries.
 
