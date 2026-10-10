@@ -723,7 +723,7 @@ class ServiceDatabaseBindingsAPIView(ServiceConfigBaseAPIView):
     @transaction.atomic
     def post(self, request, service_id):
         service = get_object_or_404(
-            Service.objects.select_for_update().select_related("plan", "network", "selected_deploy"),
+            Service.objects.select_for_update(),
             pk=service_id,
         )
         denied = self.assert_access(request, service, "can_change_config")
