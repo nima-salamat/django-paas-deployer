@@ -318,6 +318,7 @@ class ConversationListSerializer(serializers.ModelSerializer):
             "participants", "last_message", "unread_count", "peer", "is_pinned",
             "draft_text",
         )
+        read_only_fields = ("security_mode",)
 
     def get_parent_conversation_title(self, obj):
         if not obj.parent_conversation_id:
