@@ -233,6 +233,18 @@ class ConversationParticipant(models.Model):
             models.Index(fields=["user", "is_pinned"]),
         ]
 
+    def save(self, *args, **kwargs):
+        # Composer drafts are server-readable UI state, not E2EE room content.
+        if self.conversation_id and self.draft_text:
+            mode = Conversation.objects.filter(pk=self.conversation_id).values_list(
+                "security_mode", flat=True
+            ).first()
+            if mode == Conversation.SecurityMode.MATRIX_E2EE:
+                raise ValidationError(
+                    "Server-side composer drafts are disabled for encrypted conversations."
+                )
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.user_id} in {self.conversation_id} ({self.role})"
 
