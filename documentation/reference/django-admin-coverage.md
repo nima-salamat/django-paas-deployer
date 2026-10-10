@@ -18,6 +18,8 @@ The registration policy is not "everything is writable":
 
 The shared implementation lives in `src/core/django_admin.py`. The project-wide regression contract is `src/core/tests/test_django_admin_coverage.py`.
 
+The regression test discovers project-owned apps from installed app-config paths inside `src/`; it does not depend on a manually maintained allowlist. It checks both registration and deliberate admin configuration, and verifies that shared read-only policies remain non-mutating.
+
 ## Wagtail contract
 
 Wagtail is not required to expose every database model. It is the editorial/operator workspace for selected domain objects, site settings and operational inspection views. Its model registration is intentionally narrower and can be read-only for runtime state.
@@ -26,7 +28,7 @@ Therefore a model being absent from Wagtail is not evidence that it is missing f
 
 ## Current coverage
 
-The product-owned model apps included in the complete Django Admin coverage contract are:
+The current first-party model apps include:
 
 - agent
 - app_catalog
@@ -43,7 +45,7 @@ The product-owned model apps included in the complete Django Admin coverage cont
 - tickets
 - users
 
-Framework models outside these project app labels are not part of this coverage contract.
+The test's discovery is deliberately not limited to this inventory, so adding another first-party app will not silently remove it from the coverage contract. Framework models outside the repository source tree are not part of this contract.
 
 ## Sensitive data
 
