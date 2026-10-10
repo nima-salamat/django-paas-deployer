@@ -9,6 +9,10 @@ This directory is the canonical engineering documentation for the repository. Th
 - [Control plane](control-plane.md) — HTTP/Celery/runtime flow.
 - [Installation](installation.md), [Development](development.md), [Configuration](configuration.md).
 
+## Architecture proposals
+
+- [Git Hosting and PaaS source deployment feasibility](proposals/git-hosting-paas-feasibility.md) — source-backed feasibility, recommended Forgejo-backed architecture, proposed APIs/models/limits, security controls, delivery phases and open product questions. This is a proposal, not an implemented feature contract.
+
 ## Django applications
 
 Every first-party Django application has a canonical architectural entry point under [apps/](apps/):
