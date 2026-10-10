@@ -11,7 +11,7 @@ This directory is the canonical engineering documentation for the repository. Th
 
 ## Architecture proposals
 
-- [Git Hosting and PaaS source deployment feasibility](proposals/git-hosting-paas-feasibility.md) — source-backed feasibility, recommended Forgejo-backed architecture, proposed APIs/models/limits, security controls, delivery phases and open product questions. This is a proposal, not an implemented feature contract.
+- [Git Hosting and PaaS source deployment feasibility](proposals/git-hosting-paas-feasibility.md) — source-backed feasibility; relational model and immutable provenance design; Agent contract; isolated Celery worker, webhook recovery, quotas, security and staged rollout, delivery phases and open product questions. This is a proposal, not an implemented feature contract.
 
 ## Django applications
 
