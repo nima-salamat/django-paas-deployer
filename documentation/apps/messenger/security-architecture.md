@@ -23,7 +23,7 @@ Use the maintained Matrix client protocol and its established E2EE implementatio
 
 - `matrix-js-sdk` for client-server messaging, room membership, device management, encrypted event handling, and encrypted media.
 - `@matrix-org/matrix-sdk-crypto-wasm` for the Rust/WASM-backed Matrix crypto state machine.
-- A self-hosted Matrix homeserver (for example, Synapse) operated alongside the existing Django platform. This avoids depending on a public third-party homeserver for private room data.
+- A self-hosted Matrix homeserver (for example, Synapse) operated alongside the existing Django platform. This avoids depending on a public third-party homeserver for private room data. The backend repository already includes a Ready App definition named `matrix-synapse-with-postgresql`; that makes deployment available, but it does not by itself provision user identities or integrate Matrix encryption into Messenger.
 
 The WASM package implements a crypto state machine without doing network I/O itself; the Matrix client-server protocol still has to carry device keys, one-time keys, to-device messages, membership changes and encrypted room events. Therefore the package cannot simply be dropped into the current Django message endpoint and provide encryption automatically.
 
