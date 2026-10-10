@@ -173,6 +173,22 @@ class Conversation(models.Model):
             models.Index(fields=["type", "is_public"]),
             models.Index(fields=["last_message_at"]),
         ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        security_mode="standard",
+                        matrix_room_id__isnull=True,
+                        matrix_space_id__isnull=True,
+                    )
+                    | models.Q(
+                        security_mode="matrix_e2ee",
+                        matrix_room_id__isnull=False,
+                    )
+                ),
+                name="messenger_conv_security_room_consistent",
+            ),
+        ]
 
     @classmethod
     def from_db(cls, db, field_names, values):
