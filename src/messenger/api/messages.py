@@ -30,7 +30,7 @@ from ..serializers import (
     build_message_list_context, build_user_mini_context,
 )
 from ..utils import validate_messenger_file, detect_kind, users_blocked, can_see_profile_photo
-from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger
+from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger, reject_plaintext_transport
 
 User = get_user_model()
 class MessageListCreateAPIView(APIView):
@@ -46,6 +46,9 @@ class MessageListCreateAPIView(APIView):
         part = self.get_participant(conv, request.user)
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
 
         def _parse_id(name):
             raw = request.query_params.get(name)
@@ -256,6 +259,9 @@ class MessageListCreateAPIView(APIView):
         part = self.get_participant(conv, request.user)
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
         if conv.is_closed:
             return err("Conversation is closed")
         if not part.can_send_messages:
@@ -463,6 +469,9 @@ class MessageForwardAPIView(APIView):
             conversation=src.conversation, user=request.user, left_at__isnull=True
         ).exists():
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(src.conversation)
+        if transport_error:
+            return transport_error
         target_id = request.data.get("conversation_id")
         if not target_id:
             return err("conversation_id required")
@@ -472,6 +481,9 @@ class MessageForwardAPIView(APIView):
         ).first()
         if not part or not part.can_send_messages:
             return err("Cannot send to target", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(target)
+        if transport_error:
+            return transport_error
 
         if src.attachments.filter(is_view_once=True).exists():
             return err(
@@ -529,6 +541,9 @@ class MessageReactAPIView(APIView):
             conversation=msg.conversation, user=request.user, left_at__isnull=True
         ).exists():
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(msg.conversation)
+        if transport_error:
+            return transport_error
         emoji = (request.data.get("emoji") or "").strip()[:32]
         if not emoji:
             return err("emoji required")
@@ -563,6 +578,9 @@ class MessageEditAPIView(APIView):
         msg = get_object_or_404(Message, pk=pk, is_deleted=False)
         if msg.sender_id != request.user.id:
             return err("Only the sender can edit this message", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(msg.conversation)
+        if transport_error:
+            return transport_error
         raw = request.data.get("body")
         if not isinstance(raw, str):
             raw = "" if raw is None else str(raw)
@@ -610,6 +628,9 @@ class MessageDeleteAPIView(APIView):
             ).first()
             if not part or part.role not in ("owner", "admin"):
                 return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(msg.conversation)
+        if transport_error:
+            return transport_error
         msg.is_deleted = True
         msg.is_scheduled = False
         msg.body = ""
@@ -665,6 +686,9 @@ class MarkReadAPIView(APIView):
         ).first()
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(part.conversation)
+        if transport_error:
+            return transport_error
 
         raw_ids = request.data.get("message_ids")
         up_to = request.data.get("up_to_message_id")
@@ -773,6 +797,9 @@ class MessageSearchAPIView(APIView):
         part = conv.participants.filter(user=request.user, left_at__isnull=True).first()
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
         q = (request.query_params.get("q") or "").strip()
         if len(q) < 1:
             return ok(data={"results": [], "count": 0})
@@ -801,6 +828,9 @@ class ScheduledMessageCancelAPIView(APIView):
         msg = get_object_or_404(Message, pk=pk)
         if msg.sender_id != request.user.id:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(msg.conversation)
+        if transport_error:
+            return transport_error
         if not msg.is_scheduled:
             return err("Message is not scheduled")
         msg.is_deleted = True
@@ -825,6 +855,9 @@ class ScheduledMessageListAPIView(APIView):
         part = conv.participants.filter(user=request.user, left_at__isnull=True).first()
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
         qs = (
             Message.objects.filter(
                 conversation=conv, sender=request.user, is_scheduled=True, is_deleted=False
