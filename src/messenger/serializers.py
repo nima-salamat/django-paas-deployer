@@ -354,8 +354,12 @@ class ConversationListSerializer(serializers.ModelSerializer):
             result.append({
                 "id": topic.id,
                 "public_id": str(topic.public_id),
+                "type": topic.type,
                 "title": topic.title,
                 "description": topic.description,
+                "is_forum": False,
+                "parent_conversation": root.id,
+                "parent_conversation_title": root.title,
                 "avatar_url": avatar_url,
                 "is_closed": topic.is_closed,
                 "last_message_at": topic.last_message_at.isoformat() if topic.last_message_at else None,
