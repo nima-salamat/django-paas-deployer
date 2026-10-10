@@ -65,6 +65,7 @@ class ConversationListCreateAPIView(APIView):
 
         qs = (
             Conversation.objects.filter(
+                parent_conversation__isnull=True,
                 participants__user=request.user, participants__left_at__isnull=True
             )
             .distinct()
@@ -74,7 +75,15 @@ class ConversationListCreateAPIView(APIView):
                     "participants",
                     queryset=ConversationParticipant.objects.filter(left_at__isnull=True).select_related("user"),
                     to_attr="_prefetched_active_participants",
-                )
+                ),
+                Prefetch(
+                    "topic_conversations",
+                    queryset=Conversation.objects.filter(
+                        participants__user=request.user,
+                        participants__left_at__isnull=True,
+                    ).order_by("created_at"),
+                    to_attr="_visible_topic_conversations",
+                ),
             )
         )
         items = list(qs[:200])
@@ -187,12 +196,20 @@ class ConversationDetailAPIView(APIView):
 
     def get(self, request, pk):
         conv = get_object_or_404(
-            Conversation.objects.select_related("created_by").prefetch_related(
+            Conversation.objects.select_related("created_by", "parent_conversation").prefetch_related(
                 Prefetch(
                     "participants",
                     queryset=ConversationParticipant.objects.filter(left_at__isnull=True).select_related("user"),
                     to_attr="_prefetched_active_participants",
-                )
+                ),
+                Prefetch(
+                    "topic_conversations",
+                    queryset=Conversation.objects.filter(
+                        participants__user=request.user,
+                        participants__left_at__isnull=True,
+                    ).order_by("created_at"),
+                    to_attr="_visible_topic_conversations",
+                ),
             ),
             pk=pk,
         )
