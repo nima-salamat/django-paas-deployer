@@ -426,14 +426,23 @@ class MessengerConsumer(AsyncJsonWebsocketConsumer):
             return
 
     def _can_subscribe(self, conversation_id: int) -> bool:
-        from .models import ConversationParticipant
+        # The Django Messenger websocket broadcasts plaintext bodies and stores
+        # synced composer drafts. Matrix rooms must use Matrix sync instead.
+        from .models import Conversation, ConversationParticipant
         return ConversationParticipant.objects.filter(
-            conversation_id=conversation_id, user_id=self.user.id, left_at__isnull=True
+            conversation_id=conversation_id,
+            conversation__security_mode=Conversation.SecurityMode.STANDARD,
+            user_id=self.user.id,
+            left_at__isnull=True,
         ).exists()
 
     def _save_draft(self, conversation_id: int, text: str) -> None:
         from django.utils import timezone
-        from .models import ConversationParticipant
+        from .models import Conversation, ConversationParticipant
+        if Conversation.objects.filter(
+            pk=conversation_id, security_mode=Conversation.SecurityMode.MATRIX_E2EE
+        ).exists():
+            return
         ConversationParticipant.objects.filter(
             conversation_id=conversation_id, user_id=self.user.id, left_at__isnull=True
         ).update(draft_text=text, draft_updated_at=timezone.now())
@@ -470,6 +479,19 @@ def _send(group: str, data: dict):
 
 
 def broadcast_message(msg):
+    # Defensive last-mile guard: never fan out a body over Django Channels for a
+    # conversation reserved for Matrix E2EE, even if a caller bypassed API guards.
+    try:
+        if msg.conversation.security_mode == msg.conversation.SecurityMode.MATRIX_E2EE:
+            logger.error(
+                "Blocked plaintext WebSocket broadcast for encrypted conversation=%s message=%s",
+                msg.conversation_id,
+                msg.id,
+            )
+            return
+    except Exception:
+        logger.exception("Could not verify security mode before message broadcast; refusing fan-out")
+        return
     data = {
         "type": "message.new",
         "conversation_id": msg.conversation_id,
