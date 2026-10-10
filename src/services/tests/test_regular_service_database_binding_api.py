@@ -99,7 +99,7 @@ class RegularServiceDatabaseBindingApiTests(TestCase):
         response = DatabaseResourceAPIView.as_view()(request, service_id=workload.pk)
 
         self.assertEqual(response.status_code, 200)
-        results = response.data["results"]
+        results = response.data if isinstance(response.data, list) else response.data["results"]
         candidate = next(item for item in results if item["id"] == f"service:{provider.pk}")
         self.assertEqual(candidate["resource_type"], "database_service")
         self.assertEqual(candidate["engine"], "postgresql")
