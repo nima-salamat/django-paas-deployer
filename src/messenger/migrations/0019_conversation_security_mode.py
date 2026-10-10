@@ -34,6 +34,37 @@ def install_security_mode_triggers(apps, schema_editor):
         """)
 
         cursor.execute("""
+            CREATE OR REPLACE FUNCTION messenger_reject_plaintext_draft_for_e2ee_conversation()
+            RETURNS trigger AS $function$
+            DECLARE current_security_mode varchar(20);
+            BEGIN
+                IF COALESCE(NEW.draft_text, '') <> '' THEN
+                    SELECT security_mode
+                      INTO current_security_mode
+                      FROM messenger_conversation
+                     WHERE id = NEW.conversation_id;
+
+                    IF current_security_mode = 'matrix_e2ee' THEN
+                        RAISE EXCEPTION
+                            'Server-side composer drafts are disabled for Matrix E2EE conversations';
+                    END IF;
+                END IF;
+                RETURN NEW;
+            END;
+            $function$ LANGUAGE plpgsql;
+        """)
+        cursor.execute("""
+            DROP TRIGGER IF EXISTS messenger_participant_no_plaintext_draft_for_e2ee
+            ON messenger_conversationparticipant;
+        """)
+        cursor.execute("""
+            CREATE TRIGGER messenger_participant_no_plaintext_draft_for_e2ee
+            BEFORE INSERT OR UPDATE ON messenger_conversationparticipant
+            FOR EACH ROW
+            EXECUTE FUNCTION messenger_reject_plaintext_draft_for_e2ee_conversation();
+        """)
+
+        cursor.execute("""
             CREATE OR REPLACE FUNCTION messenger_reject_plaintext_for_e2ee_conversation()
             RETURNS trigger AS $function$
             DECLARE current_security_mode varchar(20);
@@ -107,6 +138,13 @@ def remove_security_mode_triggers(apps, schema_editor):
         """)
         cursor.execute("""
             DROP FUNCTION IF EXISTS messenger_reject_plaintext_for_e2ee_conversation();
+        """)
+        cursor.execute("""
+            DROP TRIGGER IF EXISTS messenger_participant_no_plaintext_draft_for_e2ee
+            ON messenger_conversationparticipant;
+        """)
+        cursor.execute("""
+            DROP FUNCTION IF EXISTS messenger_reject_plaintext_draft_for_e2ee_conversation();
         """)
 
 
