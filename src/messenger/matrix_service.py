@@ -354,8 +354,21 @@ def verify_encrypted_room_binding(user, access_token: str, room_id: str,
         space_memberships = room_memberships(access_token, space_id)
         if space_memberships.get(identity.matrix_user_id) != "join":
             raise MatrixServiceError("The current Matrix device is not a joined member of the requested space.", 403)
-        parent_content = parent
-        if not isinstance(parent_content.get("via"), list) or not parent_content["via"]:
+        space_create = matrix_request(
+            "GET",
+            f"/_matrix/client/v3/rooms/{quote(space_id, safe='')}/state/m.room.create/",
+            access_token=access_token,
+        )
+        if space_create.get("type") != "m.space":
+            raise MatrixServiceError("The parent room is not a Matrix Space.", 400)
+        child = matrix_request(
+            "GET",
+            f"/_matrix/client/v3/rooms/{quote(space_id, safe='')}/state/m.space.child/{quote(room_id, safe='')}",
+            access_token=access_token,
+        )
+        if not isinstance(child.get("via"), list) or not child["via"]:
+            raise MatrixServiceError("The Matrix Space does not declare this room as a child.", 400)
+        if not isinstance(parent.get("via"), list) or not parent["via"]:
             raise MatrixServiceError("The room is not properly linked to the requested Matrix space.", 400)
     return identity, device
 
