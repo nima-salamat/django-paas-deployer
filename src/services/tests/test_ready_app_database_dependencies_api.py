@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from rest_framework.test import APIRequestFactory, force_authenticate
 from django.test import TestCase
 
@@ -142,7 +144,7 @@ class ReadyAppDatabaseDependencyApiTests(TestCase):
         self.assertNotIn("password", dependency)
         self.assertNotIn("username", dependency)
 
-    def test_database_api_does_not_expose_catalog_siblings_to_shared_viewers(self):
+    def test_catalog_dependency_metadata_is_not_exposed_to_non_owners(self):
         instance = ApplicationInstance.objects.create(
             user=self.user,
             name="WordPress",
@@ -191,8 +193,7 @@ class ReadyAppDatabaseDependencyApiTests(TestCase):
             username="ready-app-db-reader",
             email="ready-app-db-reader@example.invalid",
         )
-        request = APIRequestFactory().get(f"/services/service/{app_service.pk}/databases/")
-        force_authenticate(request, user=other_user)
+        request = SimpleNamespace(user=other_user)
 
         # This method only returns catalog dependencies for the owner. Normal
         # service-view authorization remains the API's responsibility.
