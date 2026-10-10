@@ -151,3 +151,57 @@ class MessengerSecurityModeTests(TestCase):
         self.assertFalse(
             Conversation.objects.filter(parent_conversation=conversation).exists()
         )
+
+
+    def test_standard_conversation_api_exposes_standard_security_mode(self):
+        response = self.client.post(
+            "/api/messenger/conversations/",
+            {"type": "group", "title": "Normal by default"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(
+            response.data["data"]["security_mode"],
+            Conversation.SecurityMode.STANDARD,
+        )
+
+    def test_legacy_message_read_write_and_search_routes_reject_encrypted_rooms(self):
+        conversation = self.make_encrypted_group()
+
+        history = self.client.get(
+            f"/api/messenger/conversations/{conversation.id}/messages/"
+        )
+        self.assertEqual(history.status_code, 409, history.data)
+
+        send = self.client.post(
+            f"/api/messenger/conversations/{conversation.id}/messages/",
+            {"body": "must not fall back to plaintext"},
+            format="json",
+        )
+        self.assertEqual(send.status_code, 409, send.data)
+
+        search = self.client.get(
+            f"/api/messenger/conversations/{conversation.id}/messages/search/?q=old"
+        )
+        self.assertEqual(search.status_code, 409, search.data)
+        self.assertFalse(Message.objects.filter(conversation=conversation).exists())
+
+    def test_legacy_detail_event_and_call_routes_reject_encrypted_rooms(self):
+        conversation = self.make_encrypted_group()
+
+        detail = self.client.get(
+            f"/api/messenger/conversations/{conversation.id}/"
+        )
+        self.assertEqual(detail.status_code, 409, detail.data)
+
+        events = self.client.get(
+            f"/api/messenger/conversations/{conversation.id}/events/"
+        )
+        self.assertEqual(events.status_code, 409, events.data)
+
+        call = self.client.post(
+            f"/api/messenger/conversations/{conversation.id}/call/",
+            {"video": False, "audio": True},
+            format="json",
+        )
+        self.assertEqual(call.status_code, 409, call.data)
