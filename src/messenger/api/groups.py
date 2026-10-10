@@ -31,7 +31,7 @@ from ..serializers import (
     build_message_list_context, build_user_mini_context,
 )
 from ..utils import validate_messenger_file, detect_kind, users_blocked, can_see_profile_photo
-from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger
+from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger, reject_plaintext_transport
 
 
 def _schedule_member_cache(conv_id, extra_user_ids=None, system_msg=None):
@@ -65,7 +65,10 @@ class PublicGroupSearchAPIView(APIView):
             return ok(data=[])
         qs = (
             Conversation.objects.filter(
-                type=Conversation.Type.GROUP, is_public=True, is_closed=False,
+                type=Conversation.Type.GROUP,
+                security_mode=Conversation.SecurityMode.STANDARD,
+                is_public=True,
+                is_closed=False,
             )
             .filter(Q(title__icontains=q) | Q(description__icontains=q))
             .order_by("-last_message_at")[:50]
@@ -211,6 +214,9 @@ class PublicGroupJoinAPIView(APIView):
             Conversation, pk=pk,
             type=Conversation.Type.GROUP, is_public=True, is_closed=False,
         )
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
         # Already an active member?
         existing = ConversationParticipant.objects.filter(
             conversation=conv, user=request.user, left_at__isnull=True
@@ -314,6 +320,9 @@ class JoinRequestListAPIView(APIView):
         ).first()
         if not my_part or my_part.role not in ("owner", "admin"):
             return err("Only admins can view join requests", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
         qs = (
             conv.join_requests.filter(status=JoinRequest.Status.PENDING)
             .select_related("user", "decided_by")
@@ -343,6 +352,9 @@ class JoinRequestActionAPIView(APIView):
         ).first()
         if not my_part or my_part.role not in ("owner", "admin"):
             return err("Only admins can act on join requests", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
         try:
             req = conv.join_requests.get(pk=req_id)
         except JoinRequest.DoesNotExist:
@@ -435,7 +447,10 @@ class MyJoinRequestsAPIView(APIView):
 
     def get(self, request):
         qs = (
-            JoinRequest.objects.filter(user=request.user)
+            JoinRequest.objects.filter(
+                user=request.user,
+                conversation__security_mode=Conversation.SecurityMode.STANDARD,
+            )
             .select_related("conversation", "decided_by")
             .order_by("-created_at")
         )
@@ -460,6 +475,9 @@ class JoinRequestCancelAPIView(APIView):
             req = JoinRequest.objects.get(pk=req_id, user=request.user)
         except JoinRequest.DoesNotExist:
             return err("Join request not found", status.HTTP_404_NOT_FOUND)
+        transport_error = reject_plaintext_transport(req.conversation)
+        if transport_error:
+            return transport_error
         if req.status != JoinRequest.Status.PENDING:
             return err(f"Cannot cancel a {req.status} request")
         conv_id = req.conversation_id
