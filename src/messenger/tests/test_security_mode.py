@@ -32,6 +32,8 @@ class MessengerSecurityModeTests(TestCase):
             title="Encrypted group",
             created_by=self.owner,
             security_mode=Conversation.SecurityMode.MATRIX_E2EE,
+            matrix_room_id=f"!secure-group-{self.owner.pk}-{self.peer.pk}:matrix.example.test",
+            matrix_space_id=f"!secure-space-{self.owner.pk}-{self.peer.pk}:matrix.example.test",
         )
         ConversationParticipant.objects.create(
             conversation=conversation,
@@ -250,6 +252,7 @@ class MessengerSecurityModeTests(TestCase):
             type=Conversation.Type.PRIVATE,
             created_by=self.owner,
             security_mode=Conversation.SecurityMode.MATRIX_E2EE,
+            matrix_room_id=f"!secure-dm-{self.owner.pk}-{self.peer.pk}:matrix.example.test",
         )
         ConversationParticipant.objects.create(
             conversation=encrypted,
