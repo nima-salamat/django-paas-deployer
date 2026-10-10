@@ -1012,7 +1012,8 @@ class DatabaseResourceAPIView(ServiceConfigBaseAPIView):
                 ),
             })
         results.sort(key=lambda item: (str(item.get("name") or "").lower(), str(item.get("id") or "")))
-        return Response({"results": results})
+        # Preserve the historical array response shape used by existing clients.
+        return Response(results)
     def post(self, request, service_id):
         service = self.service(request, service_id)
         denied = self.assert_access(request, service, "can_change_config")
