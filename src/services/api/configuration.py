@@ -808,14 +808,6 @@ class ServiceDatabaseBindingsAPIView(ServiceConfigBaseAPIView):
                     status=str(provider.status or "unknown")[:20],
                     metadata={"source": "database_service_binding"},
                 )
-            else:
-                database.engine = engine
-                database.host = provider.get_docker_service_name()
-                database.port = _database_service_port(engine)
-                database.database_name = str(provider_config.get("database") or database.database_name or "")[:128]
-                database.status = str(provider.status or database.status or "unknown")[:20]
-                database.save(update_fields=["engine", "host", "port", "database_name", "status", "updated_at"])
-
         else:
             database = get_object_or_404(
                 DatabaseResource.objects.select_related("provider_service"),
@@ -823,6 +815,12 @@ class ServiceDatabaseBindingsAPIView(ServiceConfigBaseAPIView):
                 pk=database_ref,
             )
             provider = database.provider_service
+
+        if provider is not None and provider.source_kind == Service.SourceKind.CATALOG:
+            return Response({
+                "error": "This database is owned by a Ready App. Use the Ready App's declared dependency instead.",
+                "code": "ready_app_database_managed",
+            }, status=409)
 
         if not database.host and not provider:
             return Response({"error": "The selected database resource has no host configured."}, status=400)
