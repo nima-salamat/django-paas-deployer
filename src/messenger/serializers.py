@@ -304,17 +304,64 @@ class ConversationListSerializer(serializers.ModelSerializer):
     created_by = serializers.SerializerMethodField()
     avatar_url = serializers.SerializerMethodField()
     draft_text = serializers.SerializerMethodField()
+    parent_conversation_title = serializers.SerializerMethodField()
+    topics = serializers.SerializerMethodField()
 
     class Meta:
         model = Conversation
         fields = (
             "id", "public_id", "type", "title", "description", "avatar", "avatar_url",
             "is_public", "is_closed", "requires_approval", "members_can_add", "only_admins_send",
+            "is_forum", "parent_conversation", "parent_conversation_title", "topics",
             "history_visibility", "created_by",
             "created_at", "updated_at", "last_message_at",
             "participants", "last_message", "unread_count", "peer", "is_pinned",
             "draft_text",
         )
+
+    def get_parent_conversation_title(self, obj):
+        if not obj.parent_conversation_id:
+            return None
+        parent = getattr(obj, "parent_conversation", None)
+        return parent.title if parent else None
+
+    def get_topics(self, obj):
+        request = self.context.get("request")
+        viewer = getattr(request, "user", None) if request else None
+        if not viewer or not getattr(viewer, "is_authenticated", False):
+            return []
+
+        root = obj if obj.is_forum else getattr(obj, "parent_conversation", None)
+        if root is None or not root.is_forum:
+            return []
+
+        topics = getattr(root, "_visible_topic_conversations", None)
+        if topics is None:
+            topics = (
+                root.topic_conversations
+                .filter(participants__user=viewer, participants__left_at__isnull=True)
+                .order_by("created_at")
+            )
+
+        result = []
+        for topic in topics:
+            avatar_url = None
+            if topic.avatar:
+                try:
+                    avatar_url = topic.avatar.url
+                except Exception:
+                    avatar_url = None
+            result.append({
+                "id": topic.id,
+                "public_id": str(topic.public_id),
+                "title": topic.title,
+                "description": topic.description,
+                "avatar_url": avatar_url,
+                "is_closed": topic.is_closed,
+                "last_message_at": topic.last_message_at.isoformat() if topic.last_message_at else None,
+                "created_at": topic.created_at.isoformat() if topic.created_at else None,
+            })
+        return result
 
     def get_avatar_url(self, obj):
         if not obj.avatar:
