@@ -20,6 +20,8 @@ sequenceDiagram
 
 The REST API owns authentication, object-level conversation/member authorization and durable model mutation. Realtime delivery is a transport layer; it is not the durable source of truth.
 
+The topic route is implemented in `src/messenger/api/topics.py`. E2EE conversations intentionally do not use this Django endpoint; until Matrix room provisioning is integrated, the endpoint fails closed for records marked `matrix_e2ee`.
+
 ## Complete route matrix
 
 | Route | Handler | Request fields observed in implementation |
@@ -31,6 +33,7 @@ The REST API owns authentication, object-level conversation/member authorization
 | `/api/messenger/blocks/<int:user_id>/unblock/` | `as_view` | `nickname`, `page`, `page_size`, `q`, `user_id` |
 | `/api/messenger/conversations/` | `as_view` | `avatar`, `clear_avatar`, `description`, `history_visibility`, `is_closed`, `is_public`, `member_ids`, `members_can_add`, `only_admins_send`, `page`, `page_size`, `requires_approval`, `title`, `type`, `user_id` |
 | `/api/messenger/conversations/<int:pk>/` | `as_view` | `avatar`, `clear_avatar`, `description`, `history_visibility`, `is_closed`, `is_public`, `member_ids`, `members_can_add`, `only_admins_send`, `page`, `page_size`, `requires_approval`, `title`, `type`, `user_id` |
+| `/api/messenger/conversations/<int:pk>/topics/` | `ConversationTopicsAPIView` | GET: none; POST: `title`, optional `description` |
 | `/api/messenger/conversations/<int:pk>/messages/` | `as_view` | `body`, `client_message_id`, `conversation_id`, `emoji`, `force_all`, `limit`, `message_ids`, `q`, `reply_to`, `schedule_at`, `scheduled_for`, `up_to_message_id` |
 | `/api/messenger/conversations/<int:pk>/events/` | `as_view` | `avatar`, `clear_avatar`, `description`, `history_visibility`, `is_closed`, `is_public`, `member_ids`, `members_can_add`, `only_admins_send`, `page`, `page_size`, `requires_approval`, `title`, `type`, `user_id` |
 | `/api/messenger/conversations/<int:pk>/messages/search/` | `as_view` | `body`, `client_message_id`, `conversation_id`, `emoji`, `force_all`, `limit`, `message_ids`, `q`, `reply_to`, `schedule_at`, `scheduled_for`, `up_to_message_id` |
