@@ -117,7 +117,10 @@ def get_or_create_dm(user_a, user_b) -> Conversation:
     if user_a.id > user_b.id:
         user_a, user_b = user_b, user_a
     existing = (
-        Conversation.objects.filter(type=Conversation.Type.PRIVATE)
+        Conversation.objects.filter(
+            type=Conversation.Type.PRIVATE,
+            security_mode=Conversation.SecurityMode.STANDARD,
+        )
         .annotate(pc=Count("participants"))
         .filter(pc=2)
         .filter(participants__user=user_a)
