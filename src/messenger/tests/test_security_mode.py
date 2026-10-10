@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, override_settings
+from cryptography.fernet import Fernet
 from rest_framework.test import APIClient
 
 from django.contrib.auth import get_user_model
-from messenger.models import Conversation, ConversationParticipant, Message, MessageAttachment
+from messenger.models import Contact, Conversation, ConversationParticipant, MatrixDevice, Message, MessageAttachment
 
 User = get_user_model()
 
@@ -63,11 +64,13 @@ class MessengerSecurityModeTests(TestCase):
             created_by=self.owner,
         )
         conversation.security_mode = Conversation.SecurityMode.MATRIX_E2EE
-        with self.assertRaises(ValidationError):
+        conversation.matrix_room_id = f"!immutable-{self.owner.pk}:matrix.example.test"
+        with self.assertRaisesMessage(ValidationError, "security mode and Matrix room bindings are immutable"):
             conversation.save()
 
         conversation.refresh_from_db()
         self.assertEqual(conversation.security_mode, Conversation.SecurityMode.STANDARD)
+        self.assertIsNone(conversation.matrix_room_id)
 
     def test_plaintext_messages_are_rejected_for_encrypted_conversation(self):
         conversation = self.make_encrypted_group()
@@ -275,3 +278,85 @@ class MessengerSecurityModeTests(TestCase):
             Conversation.SecurityMode.STANDARD,
         )
         self.assertNotEqual(response.data["data"]["id"], encrypted.id)
+
+
+    @override_settings(
+        MATRIX_HOMESERVER_URL="",
+        MATRIX_HOMESERVER_DOMAIN="",
+        MATRIX_ADMIN_ACCESS_TOKEN="",
+        MATRIX_IDENTITY_ENCRYPTION_KEY="",
+    )
+    def test_secure_matrix_endpoints_fail_closed_when_not_configured(self):
+        device = self.client.post(
+            "/api/messenger/secure/device-session/",
+            {"device_id": "PD1234567890ABCD"},
+            format="json",
+        )
+        self.assertEqual(device.status_code, 503, device.data)
+
+        identities = self.client.post(
+            "/api/messenger/secure/identities/",
+            {"user_ids": [self.peer.id]},
+            format="json",
+        )
+        self.assertEqual(identities.status_code, 503, identities.data)
+
+        room = self.client.post(
+            "/api/messenger/secure/conversations/",
+            {
+                "type": "private",
+                "member_ids": [self.owner.id, self.peer.id],
+                "room_id": "!missing:matrix.example.test",
+            },
+            format="json",
+            HTTP_X_MATRIX_ACCESS_TOKEN="not-a-real-token",
+        )
+        self.assertEqual(room.status_code, 503, room.data)
+        self.assertFalse(Conversation.objects.filter(security_mode=Conversation.SecurityMode.MATRIX_E2EE).exists())
+
+    @override_settings(
+        MATRIX_HOMESERVER_URL="https://matrix.example.test",
+        MATRIX_HOMESERVER_DOMAIN="matrix.example.test",
+        MATRIX_ADMIN_ACCESS_TOKEN="test-admin-token",
+        MATRIX_IDENTITY_ENCRYPTION_KEY=Fernet.generate_key().decode("ascii"),
+    )
+    def test_identity_resolution_rejects_non_contact_stranger_before_provisioning(self):
+        response = self.client.post(
+            "/api/messenger/secure/identities/",
+            {"user_ids": [self.peer.id]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403, response.data)
+        self.assertIn("contacts or existing Messenger conversation participants", response.data["message"])
+        self.assertFalse(MatrixDevice.objects.filter(user=self.peer).exists())
+
+    @override_settings(
+        MATRIX_HOMESERVER_URL="https://matrix.example.test",
+        MATRIX_HOMESERVER_DOMAIN="matrix.example.test",
+        MATRIX_ADMIN_ACCESS_TOKEN="test-admin-token",
+        MATRIX_IDENTITY_ENCRYPTION_KEY=Fernet.generate_key().decode("ascii"),
+    )
+    def test_encrypted_room_mapping_rejects_missing_room_id_before_remote_calls(self):
+        Contact.objects.create(owner=self.owner, contact=self.peer)
+        response = self.client.post(
+            "/api/messenger/secure/conversations/",
+            {
+                "type": "private",
+                "member_ids": [self.owner.id, self.peer.id],
+                "room_id": None,
+            },
+            format="json",
+            HTTP_X_MATRIX_ACCESS_TOKEN="fake-token",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("valid Matrix room ID", response.data["message"])
+        self.assertFalse(Conversation.objects.filter(security_mode=Conversation.SecurityMode.MATRIX_E2EE).exists())
+
+    def test_matrix_room_binding_cannot_be_remapped_after_registration(self):
+        conversation = self.make_encrypted_group()
+        conversation.matrix_room_id = f"!replacement-{self.owner.pk}-{self.peer.pk}:matrix.example.test"
+        with self.assertRaisesMessage(ValidationError, "security mode and Matrix room bindings are immutable"):
+            conversation.save()
+        conversation.refresh_from_db()
+        self.assertIn("secure-group-", conversation.matrix_room_id)
+
