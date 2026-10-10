@@ -729,6 +729,11 @@ class ServiceDatabaseBindingsAPIView(ServiceConfigBaseAPIView):
         denied = self.assert_access(request, service, "can_change_config")
         if denied:
             return denied
+        if service.source_kind == Service.SourceKind.CATALOG:
+            return Response({
+                "error": "Database bindings for Ready App services are managed by the app dependency graph.",
+                "code": "ready_app_database_managed",
+            }, status=409)
         blocked = self.assert_mutable(service)
         if blocked:
             return blocked
