@@ -45,14 +45,14 @@ class ConversationParticipantInline(admin.TabularInline):
 @admin.register(Conversation)
 class ConversationAdmin(admin.ModelAdmin):
     list_display = (
-        "id", "type", "title", "is_forum", "parent_conversation", "is_public", "history_visibility",
+        "id", "type", "security_mode", "title", "is_forum", "parent_conversation", "is_public", "history_visibility",
         "last_message_at", "created_at", "cache_status",
     )
-    list_filter = ("type", "is_forum", "is_public", "history_visibility", "requires_approval", "only_admins_send")
+    list_filter = ("type", "security_mode", "is_forum", "is_public", "history_visibility", "requires_approval", "only_admins_send")
     search_fields = ("title", "public_id", "description")
     raw_id_fields = ("created_by",)
     inlines = [ConversationParticipantInline]
-    readonly_fields = ("public_id", "created_at", "updated_at")
+    readonly_fields = ("public_id", "security_mode", "created_at", "updated_at")
 
     @admin.display(description="Cache")
     def cache_status(self, obj):
