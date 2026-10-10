@@ -39,20 +39,27 @@ This is based on source inspection, not on an assumption that a model choice imp
 
 ### Backend: useful foundations already exist
 
-- `src/services/models.py` defines `Service.SourceKind.GIT = "git"`, together with `source_config`, `build_config` and `runtime_config`. This is a useful representation for future source intent, but the enum by itself is not proof of a working Git provider or clone/deploy path.
-- `ServiceRevision` already owns immutable executable snapshots, including `source_snapshot`, `build_snapshot` and `artifact_file`. Its save contract prevents changing executable snapshot data after creation. This is the right boundary for pinning a repository/ref/commit and the exact source archive used for a deployment.
-- `src/deploy/models.py` contains deployment provenance and artifact/release concepts, including `source_revision`, `BuildArtifact` and `Release`. These should be reused; Git should not introduce a parallel runtime/release engine.
-- `src/deploy/apis.py` exposes the existing Deploy create flow with JSON/multipart handling, deployment permission checks and a ZIP upload path.
-- `src/deploy/serializers.py` describes `zip_file` as an uploaded deployment ZIP.
-- `src/deployments/celery/services/deploy_service.py` extracts the uploaded archive to a temporary directory and runs Docker-source inspection/security validation before the ordinary build path continues.
-- `src/services/revisioning.py` materializes service intent into a frozen revision. New source integration should participate before or during this established snapshot boundary, rather than changing mutable Service data while a build is executing.
+- src/services/models.py already defines Service.source_kind, including the value git, plus source_config, build_config and runtime_config. The source kind is a discriminator, not evidence that source resolution, provider authorization or a Git deploy path exists.
+- ServiceRevision already freezes source_snapshot, build_snapshot, runtime_snapshot and the other executable layers. Its artifact_file owns a revision's deployable source archive. This remains the right execution boundary.
+- src/services/revisioning.py currently compiles Service.source_config/build_config/runtime_config, sets the revision source snapshot from the redacted Service.source_config, and copies Deploy.zip_file into ServiceRevision.artifact_file. It does not currently resolve a Git ref or inject a per-attempt resolved commit/archive digest into source_snapshot. Git integration therefore needs an explicit revisioning/provenance bridge; storing a SHA only in mutable Service configuration would be incorrect.
+- src/deploy/models.py already has Deploy.source_revision, BuildArtifact.source_digest/build_definition_digest/provenance, Release.provenance and an immutable ServiceRevision reference. Reuse these concepts. Do not invent a second runtime, image, release or deployment state machine.
+- src/deploy/apis.py validates Service ownership/share permission and daily deployment allowance when creating a Deploy. The normal execution task enters DeployService, calls ensure_revision_for_deploy, and runs the current lifecycle/health/activation path. A Git worker should hand a prepared archive and trusted source provenance to this normal path, not call Docker or Swarm itself.
+- src/deploy/serializers.py models the current uploaded source as a ZIP. The current deployment pipeline extracts ZIP source and invokes the Docker-source security inspection for the relevant Docker platform path. The integration must preserve this validation; fetching from Git must not be treated as trusted source.
+- src/deployments/celery/services/deploy_service.py materializes the immutable revision and then drives the normal plan/build/runtime pipeline. It should remain the only deployment execution path.
+- Current Celery routing is explicit: application deployment tasks use the deployments queue; stop and maintenance tasks use operations; the base-image worker has a separate base-images queue. In Compose, the generic Celery consumer and deployment worker have access to deployment queues, and the latter mounts the Docker socket. A source-fetch worker must be isolated rather than added to either of those queues.
+- The Agent API is not Git-enabled today. src/agent/application.py:create_deployment accepts archive/ZIP and database-native input and explicitly rejects Git and existing-image input. src/agent/apis/deployments.py:DeploymentHelpView and the Agent capabilities response advertise git=false. src/agent/contracts.py, src/agent/scopes.py, src/agent/urls.py and src/agent/skills.py are separate contract surfaces that must be updated together when Git operations are implemented.
+- The Agent configuration endpoint currently delegates to the general Service configuration API, whose schema includes source_kind/source_config. Git must not be enabled by merely PATCHing those generic fields: all browser and Agent write paths need to route through the same validated Git-source application service.
 
 ### Frontend: source deploy is currently ZIP-oriented
 
-- `src/components/service_detail/components/CreateDeployPanel.jsx` currently exposes a ZIP upload workflow, including an “Inspect & suggest config” flow.
-- The service detail page already has a Deploy workspace and talks to the Django API. This makes it the natural place for a future “Deploy from Git” source selector.
-- The React home-page data contains a Forgejo/Git-hosting entry. That presentation entry must not be taken as evidence that a repository-management API, user identity integration, or Git-to-Deploy pipeline is already implemented.
-- In the inspected end-to-end create-deploy path I found no complete, verified flow that authenticates to a Git provider, resolves a ref to a commit, fetches that commit and delivers an immutable source artifact to the normal PaaS deployment engine. Before implementation, run a focused repository-wide code search and trace the actual `SourceKind.GIT` writers/readers so any partial or legacy wiring is not duplicated.
+- src/components/service_detail/components/CreateDeployPanel.jsx currently exposes ZIP upload and inspection/config suggestion.
+- The Service detail page already has a Deploy workspace, so a Git source selector and source status can live alongside the current ZIP workflow.
+- A Forgejo entry in frontend presentation data is not evidence of repository management, authentication, webhook processing or Git deployment being implemented.
+- In the inspected create-deploy path, I found no complete provider-authentication → permitted-repository/ref resolution → pinned commit fetch → immutable artifact → normal Deploy flow. Before coding, run a repo-wide trace of every SourceKind.GIT reader/writer and verify the branch under implementation, because the enum and generic configuration fields are already present.
+
+### Feasibility conclusion from these facts
+
+The project has useful domain boundaries, but a few integration details in an initial high-level design were under-specified: the current revisioning method only snapshots Service.source_config; the Agent rejects Git explicitly; and the existing build workers have Docker privileges. The missing slice is not just a provider adapter and UI. It includes a durable source-preparation operation, a safe archive/provenance hand-off into revisioning, a dedicated queue/worker and reconciliation, and Agent contract integration. Those are described below as design requirements, not existing capabilities.
 
 ### Feasibility conclusion from these facts
 
@@ -183,94 +190,127 @@ Only revisit custom Git protocol serving if a future technical spike demonstrate
 
 ## 7. Proposed domain model and invariants
 
-The names below are proposals, not claims that these models already exist.
+The first draft listed a possible ServiceGitSource model without resolving how it would coexist with Service.source_kind and source_config. That would risk creating two editable sources of truth. The recommended MVP uses the existing Service source contract as the single desired-state record and adds only the relational/provider/operation records that the current schema does not provide.
 
-### `GitProvider` / `GitProviderInstallation`
+### Existing Service fields remain the desired source contract
 
-Represents a configured provider instance.
+For a Git-backed Service:
 
-Suggested fields:
-- `id`: UUID.
-- `provider_kind`: `forgejo` initially; extensible to `gitea`, `github`, `gitlab`.
-- `base_url`: HTTPS API/UI origin; no credentials embedded in the URL.
-- `status`: `pending | healthy | degraded | disabled`.
-- `capabilities`: server-derived feature flags, not client-controlled permissions.
-- `credential_ref`: reference to an encrypted system credential store.
-- `created_at`, `updated_at`, `last_health_check_at`.
+- Service.source_kind is git.
+- Service.source_config is the sole mutable desired-source configuration, written only through a dedicated Git-source application service that validates ownership and provider binding.
+- Service.build_config and Service.runtime_config keep their current meanings; Git selection must not smuggle runtime limits, arbitrary networks, privileged mode or other operator-owned settings into them.
+- The generic configuration PATCH endpoint must reject attempts to set source_kind=git or mutate Git-managed source_config directly. The same guard must apply to browser API and Agent API callers. The Git-source API performs an atomic normalized update after validating the referenced repository.
+- Do not store the resolved commit SHA by mutating Service.source_config at job time. Branch/ref selection is mutable desired state; the resolved SHA and source archive digest belong to that attempt's immutable ServiceRevision provenance.
 
-Do not expose the provider's administrative API token to the browser or keep it in an ordinary Service config/revision snapshot.
+Proposed version-1 source_config fields:
 
-### `GitRepositoryBinding`
+| Field | Meaning and validation |
+|---|---|
+| schema_version | Integer schema version, initially 1; unknown versions are rejected rather than guessed |
+| repository_binding_id | UUID of a GitRepositoryBinding visible and authorized to the Service owner |
+| ref_kind | branch, tag or commit; only the documented values are accepted |
+| ref_name | Ref name for branch/tag, or a full commit SHA for commit mode; resolved server-side |
+| context_path | Relative path inside the repository, default .; reject absolute paths, traversal and paths not present in the pinned tree |
+| dockerfile_path | Optional relative path under context_path, accepted only where the existing builder supports it |
+| auto_deploy | Desired automation policy, default disabled; only an exact branch and push event in MVP |
+| source_generation | Optional optimistic-concurrency token generated by the API; clients cannot choose it |
 
-Maps the repository provider ID to the PaaS owner and repository metadata.
+Provider IDs, clone URLs and credentials must not be trusted from this JSON. Resolve repository_binding_id through the database, then obtain clone/API URLs from the validated installation adapter. Keep build-specific options in Service.build_config when they are already supported by the current engine.
 
-Suggested fields:
-- `id`: UUID.
-- `owner_user_id`: PaaS owner; later this could become a workspace/team ID.
-- `provider_installation_id`: provider instance.
-- `provider_repository_id`: stable provider-generated ID (not only a mutable slug).
-- `namespace`, `slug`, `display_name`, `description`.
-- `visibility`: `private` initially; public only if policy permits.
-- `default_branch`, `clone_https_url`, `clone_ssh_url` (URLs must be validated provider output).
-- `quota_bytes`, `last_known_size_bytes`, `archived_at`.
-- `created_at`, `updated_at`.
+### GitProviderInstallation
 
-Invariant: a client cannot choose or overwrite a provider repository ID, owner ID or clone URL to impersonate another tenant's repository.
-
-### `ServiceGitSource`
-
-Links one PaaS Service to a source and deploy policy.
+One operator-managed provider installation record, not one arbitrary provider URL per user. The first release supports one Forgejo installation. Provider implementations/capabilities should live in a code-level adapter registry; do not add a database row for every adapter type.
 
 Suggested fields:
-- `id`: UUID.
-- `service_id`: FK to an existing Service, unique for the initial single-source-per-Service model.
-- `repository_binding_id`: FK to an owned/authorized repository.
-- `ref_kind`: `branch | tag | commit`.
-- `ref_name`: branch/tag name or requested full commit SHA; validated by provider.
-- `subdirectory`: relative build context such as `.` or `apps/api`; no absolute paths or traversal.
-- `build_mode`: initially `existing_docker_source_detection`; any later modes must map to currently supported builders.
-- `dockerfile_path`: optional relative path under allowed context, only if the selected build mode supports it.
-- `auto_deploy_enabled`: false by default.
-- `auto_deploy_events`: allowed event kinds, initially push only.
-- `auto_deploy_branch_pattern`: explicit branch filter; initially exact branch name.
-- `last_requested_commit_sha`, `last_deployed_commit_sha`, `last_event_at`.
-- `created_by`, `created_at`, `updated_at`.
 
-The source binding is mutable desired state. Its historical commit/artifact record belongs to an immutable ServiceRevision/deployment provenance snapshot, not to a mutable `last commit` field alone.
+- UUID primary key; provider_kind; API origin and UI origin.
+- Status: pending, healthy, degraded or disabled.
+- Encrypted system credential reference for provider administration; never the raw token.
+- Version/capability snapshot, last health-check time, created_at and updated_at.
+- A configuration version for credential rotation or provider migration.
 
-### `GitWebhookDelivery` (or equivalent durable inbox/outbox row)
+The record is operator-owned. Customers and Agents cannot edit its host, administrator credential, capability flags or webhook ingress URL. An API token that administers Forgejo belongs to the control-plane provider adapter only and must never be sent to the browser, Agent or deployment container.
+
+### GitRepositoryBinding
+
+A tenant-scoped mapping to a repository that already exists in the selected provider.
 
 Suggested fields:
-- `id`: UUID.
-- `provider_installation_id`, `delivery_id` (unique together).
-- `repository_provider_id`, `event_type`, `ref_name`, `before_sha`, `after_sha`.
-- `signature_verified`, `received_at`, `processed_at`.
-- `status`: `received | ignored | queued | processed | failed`.
-- `reason`: sanitized failure/ignore reason.
-- `deploy_id`: optional linked Deploy.
 
-Invariant: delivery ID idempotency prevents a retry from making duplicate deployments. The delivery is acknowledged only after it has been durably recorded or safely enqueued according to an outbox contract.
+- UUID primary key; owner_user FK; provider_installation FK.
+- provider_repository_id as a string, because provider IDs are provider-specific; provider_owner_id/namespace identity, namespace slug, repository slug, display name and description.
+- Visibility, provider-reported archived/deleted state, lifecycle state, provider size and last_synced_at.
+- Optional provider webhook ID, webhook secret reference, webhook rotation version and registration status. Keep only a reference to encrypted secret material, never the secret itself.
+- created_at, updated_at and deletion/tombstone timestamps.
 
-### Credential storage
+Constraints and behavior:
 
-Repository-provider API credentials and webhook secrets need encrypted-at-rest storage, rotation and redaction. Reuse the project's secret-storage approach only if it supports user/provider credentials with correct ownership and rotation semantics; the current Service-scoped secret records should not automatically become a universal credential vault. Git push credentials used by developers must be handled by Forgejo's supported identity/SSH/token system.
+- Unique provider installation + provider repository ID. Repository slug is mutable metadata, never the durable identity.
+- Enforce normalized namespace/slug uniqueness according to the selected provider's rules.
+- Create/read/rename/archive/delete must be tenant-scoped. A provider rename updates metadata on the same binding.
+- A provider deletion is a lifecycle transition/tombstone, not an implicit deletion of the Service or the last successful Release.
+- A repository can be linked to several Services in future; webhook delivery is deduplicated once and then evaluated against each authorized source policy.
+- Private repositories only in the MVP. Owner-to-provider namespace provisioning and login/SSH-key strategy are Phase 0 decisions, not implied by storing a PaaS owner FK.
 
-## 8. Git-to-deploy lifecycle
+### GitSourceOperation
 
-1. **Configure:** An owner selects a repository and the permitted branch/tag/commit, plus optional subdirectory/build mode.
-2. **Authorize:** Django checks Service ownership, repository ownership/provider membership, plan/policy quotas and that the source binding is permitted for this Service.
-3. **Resolve:** The provider/worker resolves the requested ref to an exact full commit SHA. A moving branch name is not a reproducible source identity.
-4. **Fetch:** A dedicated worker fetches that exact revision using a provider-scoped credential. Web/API processes do not execute arbitrary clone/build operations.
-5. **Validate:** Validate ref format, subdirectory, archive size, file count, paths, symlinks, submodule policy, LFS policy, timeout and disk budget. Never trust filenames or archive entries from a Git tree.
-6. **Freeze:** Create a source archive from the selected commit/context, compute SHA-256, and record non-secret provenance: provider/repository ID, ref, full commit SHA, context path, tree/archive digest and source event ID.
-7. **Create immutable revision:** Pass the archive and source/build configuration through existing revisioning. Do not mutate an already-created revision when the branch later moves.
-8. **Deploy:** Create/run a normal Deploy through the current execution pipeline. Preserve existing plan-based build/runtime limits, Docker-source validation, health checks, runtime ownership fencing, activation and rollback.
-9. **Report:** Expose source commit and deployment status in the Service UI and deployment logs. Show useful sanitized errors for missing refs, inaccessible repo, quota, policy rejection, build failure and health failure.
-10. **Clean up:** Delete temporary checkout/work directories on success, failure, cancellation and worker restart/recovery. Retain only artifacts according to the defined retention policy.
+A durable record for the source-preparation phase. It is not a second Deploy state machine: after it hands off to a normal Deploy, that Deploy remains authoritative for build, rollout, readiness, activation, cancellation and rollback.
 
-### Why a pinned commit matters
+Suggested fields:
 
-Suppose the `main` branch receives commit A, then commit B while a deployment is queued. The build must execute one resolved commit and use the exact source archive recorded for that revision. It must not checkout `main` again midway through build or runtime preparation. This is required for auditability, reproducibility and meaningful rollback.
+- UUID primary key; Service FK; repository-binding FK; requesting User nullable; trigger_kind (manual or webhook); optional webhook-delivery FK.
+- requested_ref_kind/name; immutable source_config hash or generation captured when the request is accepted; resolved_commit_sha; optional provider tree SHA.
+- status limited to source preparation/dispatch: queued, running, prepared, dispatched, failed, cancelled or ignored. Use explicit transitions and reject stale workers.
+- stage, attempt_count, worker task ID for correlation, lease/heartbeat timestamps, created/started/prepared/dispatched/finished timestamps.
+- staged_archive FileField or shared-storage key, archive_sha256, archive_bytes, file_count and context_path after successful preparation.
+- sanitized error_code/error_detail; request_fingerprint and idempotency key; optional one-to-one link to the resulting Deploy.
+
+Do not copy the full Git history into the build artifact. Keep a shallow/temporary checkout only long enough to resolve and archive the requested source. The staged archive is temporary recovery state; after the regular revision artifact is safely persisted and its digest verified, cleanup can reclaim the staged copy under the source-retention policy.
+
+Idempotency: one accepted manual request with the same Service + Agent/request idempotency identity must return the same operation, not create a second Deploy. A webhook delivery ID deduplicates webhook retries before an operation is created. An operation's Celery task ID is observability metadata, not proof of ownership; DB lease/status/version checks fence stale or duplicate task deliveries.
+
+### GitWebhookDelivery
+
+A durable inbound webhook inbox row, unique by provider installation + provider delivery ID.
+
+Suggested fields:
+
+- UUID primary key; installation FK; provider delivery ID; provider repository ID; event type; ref; before/after SHA; received timestamp and request-body digest.
+- signature_verified_at and webhook secret rotation/version identifier, without persisting the secret or raw Authorization/signature headers.
+- status: received, ignored, queued, processed or failed; sanitized outcome/reason; optional linked GitSourceOperation and processed_at.
+
+Persist this row before returning a successful HTTP acknowledgement. If publishing a Celery task fails after the DB transaction commits, a periodic dispatcher/reconciler must redispatch eligible received rows. Do not add a second generic outbox model only for this purpose: this inbox plus the recovery contract is enough for the MVP.
+
+### Revision and deployment provenance bridge — required schema/code change
+
+The current ServiceRevision artifact_file and source_snapshot are reusable, but the existing revisioning path does not yet record a Git attempt's pinned commit and archive hash. Add a provider-neutral optional source_provenance JSON field to Deploy (read-only in public serializers and populated only by trusted source/deployment application services), or an equivalent internal immutable hand-off contract with the same guarantees. Do not accept this field from tenant JSON.
+
+When ensure_revision_for_deploy creates the revision, it must merge sanitized per-attempt source provenance into the revision's source_snapshot without mutating Service.source_config. Record at least provider kind/installation ID, provider repository ID, requested ref, resolved full commit SHA, context path, archive SHA-256, archive byte count, source operation ID, trigger/delivery ID where applicable and provenance schema version. Set Deploy.source_revision to the full Git commit SHA only if its current semantic contract is confirmed compatible; never rely on that string as the only provenance record.
+
+Reuse ServiceRevision.artifact_file as the frozen source archive. Reuse BuildArtifact.source_digest/build_definition_digest/provenance and Release.provenance in the normal builder where their established contracts permit it. Make the source archive digest an input to revision/build identity; do not invent a parallel runtime or release table.
+
+## 8. Git-to-deploy lifecycle and the exact engine hand-off
+
+The safe flow has two different phases: source preparation and the existing deployment execution. They must not collapse into one long request, and only the deployment engine owns runtime state.
+
+1. **Configure desired source.** The Service owner selects a repository binding, branch/tag/full commit, context directory and any builder-supported options. The Git-source service validates the repository owner, Service owner, current plan/policy and relative paths, then atomically persists Service.source_kind/source_config. Repository binding and Service binding writes are owner-only in the MVP, even when a Service is shared for runtime work.
+2. **Authorize the deploy intent.** The UI or Agent requests a manual Git deploy. Check Git-specific capability/scope, existing Service can_deploy_add authorization, owner/share rules, plan/source policy, idempotency and source quotas. Do not let source fetch imply deploy permission.
+3. **Create durable preparation state.** In a short DB transaction create GitSourceOperation with the normalized desired-source fingerprint, request identity and requested ref. Commit first; enqueue through transaction.on_commit. A periodic recovery task must discover committed queued rows if the process dies between commit and broker publish.
+4. **Resolve and pin.** For a manual branch request, resolve the branch when the worker starts and persist the full commit SHA. For a webhook, validate after_sha against the expected repository/ref with the provider; do not use an unverified payload URL. Once a SHA has been persisted, later branch movement must not silently change the requested build.
+5. **Fetch in an isolated worker.** Fetch only from the configured provider and authorized binding using a read-only repository credential. Use the Git executable with argument arrays, disabled prompts and helpers, controlled Git configuration, bounded time/process/disk use, and no execution of repository scripts. Do not accept arbitrary remote URLs.
+6. **Verify the pinned object.** Fetch/check out the exact resolved SHA and verify it equals the recorded SHA. If a force-push or provider retention makes that object unavailable, fail with a specific source error or a deliberate re-resolve policy for a *new* operation. Never silently rebuild whatever the branch points to now.
+7. **Prepare context.** Validate context_path and any Dockerfile path against the pinned tree. Reject traversal, unsafe paths, unsupported symlinks, excessive file counts/expanded bytes, unsupported submodules and LFS. Create a bounded archive for the selected context; compute SHA-256 and size and save it to the shared artifact storage used by the deployment process. Do not include Git credentials, remote URLs with credentials, the .git directory or Git history.
+8. **Re-check current authority.** Before hand-off, re-read the Service, repository binding and desired-source fingerprint. If the binding was revoked, the Service was deleted, or its source configuration changed while fetch ran, mark the operation ignored/failed instead of dispatching stale code. Check cancellation and policy again.
+9. **Create a normal Deploy.** Through an internal domain/application service (not by fabricating an HTTP request to a ViewSet), create the ordinary Deploy with the prepared archive and server-owned source_provenance. Apply the existing deployment quota exactly once; do not count a webhook retry or the same idempotent operation as a second deployment. Use the project's established permission, immutable-revision and deployment admission behavior.
+10. **Freeze the source revision.** Extend ensure_revision_for_deploy (or the canonical revision creation boundary) to persist the source provenance and verified archive into ServiceRevision.source_snapshot/artifact_file. The frozen revision must be independently reproducible after branch movement, repository rename, deletion of the preparation record or deletion of the legacy Deploy ZIP.
+11. **Run only the existing execution path.** Queue deployments.celery.tasks.deploy for the new Deploy. It continues through DeployService, current source/Dockerfile inspection, DeploymentPlan, BuildArtifact/Release, runtime apply, readiness, ownership-fenced activation, cleanup and rollback. The Git worker itself never builds images, talks to Docker/Swarm or marks the Service running.
+12. **Report one coherent operation.** Mark the preparation operation dispatched and return its operation ID plus Deploy ID. After that, obtain build/deploy state from the normal Deploy and Service APIs/logs rather than mirroring its full state machine in GitSourceOperation.
+13. **Recover and clean up.** Always clean temporary checkout directories on success, failure, timeout, cancellation and process restart. Retain a staged archive only until its digest and revision-owned artifact are verified; safely reconcile orphaned stage files and stale operations. Preserve source artifacts still referenced by retained revisions/releases.
+14. **Preserve runtime independence.** Removing a Git binding/repository disables future source operations but does not stop or delete the last successful runtime/release. Deployed runtime lifecycle and source-provider lifecycle are separate.
+
+### Why a pinned commit and archive digest both matter
+
+A ref name identifies a moving pointer, whereas the full commit SHA identifies a Git object. The archive digest identifies the exact bytes handed to the builder. Store both: a commit SHA alone does not prove which context/subdirectory, archive transformation or prepared bytes were supplied to the builder. The archive digest should be verified again at the revision hand-off and included in source/build provenance.
 
 ## 9. Proposed PaaS API contract
 
@@ -302,6 +342,58 @@ Routes below are illustrative v1 contracts. They are not implemented endpoints. 
 - Set explicit request throttles, provider timeouts and pagination caps.
 - Do not return access tokens, deploy keys, webhook secrets or credential-bearing clone URLs in ordinary API responses.
 - Error responses should use stable machine-readable `code` values plus safe user-facing `detail` strings.
+
+
+### Agent contract and operating flow (not implemented yet)
+
+The current Agent contract must stay explicit: Git remains unsupported until all of the API, scope, capability, skill, worker and revisioning pieces below exist and pass end-to-end tests. Do not change the current git=false capability flag early just to advertise the design.
+
+Agent authentication is the existing separate Bearer credential. The Agent manifest, capabilities, OpenAPI and scope-filtered skills are generated from distinct but connected source files, so an endpoint added only to urls.py is incomplete. Implement the future API in a dedicated module such as src/agent/apis/git.py and its application/domain service, then register it in URLs and the centralized contract.
+
+Proposed scopes, default-deny:
+
+| Scope | Purpose | Notes |
+|---|---|---|
+| git.repositories.read | List/read only repositories belonging to the PaaS user | Must not disclose provider-wide repositories |
+| git.repositories.create | Create a private repository under the user's provisioned provider namespace | Never accept an owner/namespace override |
+| git.repositories.manage | Rename/archive/delete a repository owned by the user | High-risk; deletion is not runtime deletion |
+| git.sources.read | Read the Git binding for an authorized Service | Service and repository authorization are both checked |
+| git.sources.write | Bind/update/remove a Service's Git source | Service-owner only for MVP; sharing a Service does not grant Git repository administration |
+| git.sources.deploy | Queue a manual Git source operation | Also requires the existing Service can_deploy_add policy and deployment quota |
+| git.automation.manage | Enable/disable the owner's push-webhook auto-deploy policy | Optional later phase; default off, owner-only |
+
+No new Git scope is implicitly added to existing Agents. Update src/agent/scopes.py (valid scopes, categories, labels, high-risk list), the credential/scope-management UI, contracts, route handlers, capabilities and tests together.
+
+Proposed Agent routes follow the existing versioned facade and are not current routes:
+
+| Method | Route | Scope | Contract |
+|---|---|---|---|
+| GET | /agent/v1/git/repositories | git.repositories.read | Paginated owner-scoped repository list |
+| POST | /agent/v1/git/repositories | git.repositories.create | Creates private repo; idempotent |
+| GET | /agent/v1/git/repositories/{repository_id} | git.repositories.read | Stable binding ID, sanitized provider metadata |
+| PATCH | /agent/v1/git/repositories/{repository_id} | git.repositories.manage | Only explicitly supported metadata/rename |
+| DELETE | /agent/v1/git/repositories/{repository_id} | git.repositories.manage | Explicit delete policy; never deletes running Service/releases |
+| GET | /agent/v1/services/{service_id}/git-source | git.sources.read | Read normalized desired source and last operation/deployment provenance |
+| PUT | /agent/v1/services/{service_id}/git-source | git.sources.write | Validate repository/ref/context then atomically save Service source config |
+| DELETE | /agent/v1/services/{service_id}/git-source | git.sources.write | Disconnect source; keep past revisions/releases/runtime |
+| POST | /agent/v1/services/{service_id}/git-source/deploy | git.sources.deploy | Returns 202 with source operation ID; does not synchronously clone |
+| GET | /agent/v1/git/source-operations/{operation_id} | git.sources.read | Source-preparation result and linked normal Deploy status |
+
+Do not expose a Git provider administrator token, webhook secret, raw signature header or credential-bearing clone URL in Agent output. Webhook-secret rotation and automation configuration may remain dashboard-only in the first release.
+
+The existing Agent authorization model is an intersection: Agent scope AND the Agent owner's existing PassDeployer user permissions AND ServiceShare action permissions when relevant. Repository-management actions require repository ownership separately. In MVP, a shared-service collaborator can request a Git deploy only if the current Service policy explicitly permits that action and the Git-source binding is already configured; they cannot repoint the Service at their own/another repository. Source-binding writes are owner-only.
+
+### Example Agent usage sequence
+
+1. Call GET /agent/v1/capabilities and GET /agent/v1/openapi.json; confirm git capabilities/scopes exist for this particular Agent. Read GET /agent/v1/skills/git-source once the skill is registered.
+2. List or create a repository with /agent/v1/git/repositories. Treat repository IDs returned by the PaaS as opaque; do not call Forgejo's administrative API directly.
+3. Read /agent/v1/services/{service_id}/git-source, then PUT the validated binding with repository_id, ref_kind, ref_name and context_path. A generic Service configuration PATCH must not be used to bypass this validation.
+4. POST /agent/v1/services/{service_id}/git-source/deploy with an idempotency key. Expect 202 Accepted and an operation ID, not a claim of successful deployment.
+5. Poll /agent/v1/git/source-operations/{operation_id}. Once dispatched, inspect the linked normal Deploy using /agent/v1/deployments/{deployment_id} and /logs. Verify the terminal Deploy status, active revision and relevant logs before reporting success.
+
+The source skill should tell an Agent to pin/record the SHA, request confirmation before enabling production auto-deploy or deleting repositories, never use shell to clone onto the runtime container, never expose credentials, and never claim success from HTTP 202 alone.
+
+Implementation must also update src/agent/apis/deployments.py DeploymentHelpView and src/agent/apis/identity.py capabilities so git changes from false only after the supported route is live and the complete end-to-end path passes. src/agent/application.py:create_deployment must continue to reject direct source=git on the generic ZIP API; Git deployments must enter through the purpose-built source-operation endpoint so an unvalidated payload cannot bypass repository binding and provenance checks.
 
 ## 10. Webhooks and automatic deploy policy
 
@@ -361,7 +453,53 @@ Git hosting makes user-controlled repositories executable build inputs. Treat re
 - A push storm or worker crash leaves duplicate Deploys, a stale lock, or temporary source files.
 - Forgejo is restored from a backup that is newer/older than the PaaS's repository-binding rows.
 
-## 12. Quota and configuration parameters to decide
+## 12. Worker topology, Celery routing and crash recovery
+
+The phrase “dedicated source worker” is not enough for this codebase. Today deployment work is deliberately routed to deployments/operations queues; the deployment worker consumes deployments and operations and mounts /var/run/docker.sock. Git clone/fetch must not be sent to those queues or run in a worker with Docker-host privileges.
+
+### Recommended worker split
+
+| Component | Responsibility | Queue/process | Privilege boundary |
+|---|---|---|---|
+| Django Git API | User-facing repository/source CRUD, authorization, operation acceptance | HTTP request; no clone/build | No arbitrary process execution |
+| Webhook receiver | HTTPS, size limit, raw-body signature verification, durable inbox insert and quick acknowledgement | HTTP request only | No clone/build; no long-running work |
+| Git source worker | Resolve refs, fetch pinned objects, validate tree/context, create/archive source, update GitSourceOperation and prepare normal Deploy | New git-source queue; dedicated Compose service | No Docker socket, no host Docker-root mount, no runtime/container shell |
+| Existing deployment worker | Create immutable revision from prepared Deploy, build and execute current deployment lifecycle | deployments queue (existing) | Retains current deployment privileges and policy |
+| Recovery/cleanup task | Redispatch stale queued inbox/operations, expire leases, clean safe orphan scratch/staged artifacts | git-source queue; periodic Celery Beat task | Same restrictions as Git source worker |
+| Forgejo | Git SSH/HTTPS protocol, repository storage and provider-side web UI | Separate service/host | Never share its internal repository filesystem with Django or build workers |
+
+### Required code and deployment changes
+
+- Add explicit Celery routes for Git source tasks in src/config/settings.py, for example prepare/process tasks and a recovery task on queue git-source.
+- Add a separate git-source-worker Compose service that consumes only git-source, with its own bounded concurrency setting (start conservatively at 1 and tune from measurement), prefetch multiplier 1 and bounded task/time/resource limits.
+- Ensure neither generic Celery nor deployment-worker consumes git-source. Adding a route without a dedicated consumer causes backlog; adding the queue to the generic Docker-privileged consumer defeats isolation.
+- The worker needs database/Redis connectivity and access to the configured provider over HTTPS, plus the same durable artifact storage backend needed to hand a staged archive to DeployService. Do not assume that a local worker filesystem path is visible to web/deployment workers; test the actual MEDIA_ROOT/object-storage configuration.
+- Use a unique operation-scoped temporary directory and enforce wall-clock, checkout, expanded-size, file-count, process and disk quotas. Restrict outbound traffic to the configured provider and required infrastructure; deny arbitrary redirects/hosts and unapproved Git transports.
+- Run Git with an absolute executable path, argument-array invocation, noninteractive mode, controlled HOME and Git configuration, no inherited global/system credential helpers, no arbitrary URL rewrite, and no user-defined external filters/hooks. Never interpolate repo refs/paths into a shell command.
+- Use a read-only repository credential scoped as narrowly as the provider permits. Do not hand the Forgejo administrator API token to the worker if a repository-scoped credential/limited robot account can satisfy the design. If Forgejo cannot provide adequate least privilege, record this as a Phase 0 security blocker rather than quietly granting the worker broad cross-tenant read access.
+- Do not copy provider credentials into Deploy.config, Service source/build/runtime snapshots, source archives, environment variables for user containers, build arguments, normal logs or Agent responses. A secret broker or short-lived credential injection should expose them only to the source-fetch process and clear them after use.
+- Cancellation and worker shutdown must kill the Git process group and remove scratch data. A Celery task ID is not an execution fence: use a DB operation status/lease/attempt token and compare the captured source-config fingerprint before committing results.
+- Use bounded retries only for transient provider/network failures. Invalid signature, unsupported Git tree content, disallowed ref/context, quota excess and other deterministic policy failures are terminal. Every retry must reuse the same idempotent operation; after a pinned SHA is recorded, a retry may not silently select a different SHA.
+- The source worker writes only source-preparation state. It must not call DeployService, build images, modify Swarm, activate Service.active_revision or reproduce deployment rollback/cleanup code.
+
+### Crash windows and recovery contract
+
+| Crash window | Required recovery |
+|---|---|
+| Operation row commits but Celery publish fails | Beat/recovery scan discovers queued undispatched rows and republishes safely |
+| Worker dies during clone/fetch/archive | Lease expires; next attempt fences the stale worker and recreates a clean workspace |
+| Archive saved but operation status not committed | Reconcile by operation ID and digest; reuse only if storage object is complete and verified, otherwise delete and redo |
+| Deploy row is created but source operation not marked dispatched | Find the Deploy by the operation's idempotent link; repair the operation projection, never create another Deploy |
+| Deploy task starts but revision snapshot fails | Existing deployment failure/lifecycle path remains authoritative; source operation reports hand-off failure and retains enough provenance for diagnosis |
+| Revision artifact persisted but staging file remains | Cleanup only after artifact existence and SHA-256 verification; do not remove data needed by retry/rollback |
+| Service binding changes or repository is revoked during preparation | Final authority/fingerprint check rejects stale operation; no Deploy is dispatched |
+| Webhook row persisted but task publish fails | Reconciliation schedules it again; unique delivery ID prevents duplicate operations |
+| Worker returns after its lease/attempt was superseded | It cannot commit the archive, create a Deploy or overwrite operation status |
+
+A source operation has a small preparation state machine only. Once dispatched, the normal Deploy state machine and existing fencing/reconciliation own execution. Never add Git-specific runtime state, image lifecycle or a parallel release activation path.
+
+
+## 13. Quota and configuration parameters to decide
 
 These are **proposed knobs**, not existing platform settings or final commercial limits. Put them in a central settings/policy model and document which are plan-specific before implementation.
 
@@ -394,7 +532,7 @@ All numeric values need a small load/security spike and product/plan review. Do 
 
 The source archive must enter a builder already allowed by the Service plan and existing backend policy. MVP should not introduce a new language/framework entitlement or accept tenant-selected unlimited Docker resources. If the current Docker source detector needs a root-level Dockerfile or another required file layout, the worker must prepare the allowed context accordingly and run the existing validation unchanged.
 
-## 13. React dashboard proposal
+## 14. React dashboard proposal
 
 ### Repository workspace
 
@@ -420,7 +558,7 @@ In Service Detail, add a source selector or a dedicated Deploy Source section:
 
 On a Git deploy attempt, the UI should show a durable task/deploy ID and then navigate into the existing deployment progress/log experience rather than implementing a second progress UI or state model.
 
-## 14. Delivery plan and acceptance criteria
+## 15. Delivery plan and acceptance criteria
 
 ### Phase 0 — architecture spike (small, required before implementation)
 
@@ -467,7 +605,7 @@ Only after demand is demonstrated:
 
 Do not couple Phase 1 delivery to Phase 3 features.
 
-## 15. Test and operational checklist
+## 16. Test and operational checklist
 
 ### Provider adapter contract
 
@@ -499,6 +637,18 @@ Do not couple Phase 1 delivery to Phase 3 features.
 - Repository deletion/revocation while queued cannot make the worker bypass current binding policy.
 - A webhook-triggered deployment cannot create an endless push → build → push loop.
 
+
+### Agent and worker integration contracts
+
+- Agent credentials without Git scopes cannot call Git endpoints; existing Agents do not silently gain Git scopes; capabilities/OpenAPI/AGENT.md/skills agree on the enabled operations.
+- Generic Service configuration PATCH cannot forge source_kind=git or substitute repository_binding_id; the session API and Agent API use the same validation service.
+- Service binding changes and repository revocation while work is queued prevent the stale worker from dispatching code; a later branch movement does not alter the already pinned SHA.
+- Manual Agent request and webhook retry converge to one GitSourceOperation/Deploy under idempotency; daily deployment allowance is not double-counted.
+- Celery route tests prove Git preparation goes to git-source and that generic Celery/deployment-worker queues do not consume it. Compose/config tests prove the Git worker has no Docker socket/host Docker-root mount.
+- Test task timeout, killed Git process, worker restart, stale lease, lost broker publish, duplicate delivery, partial stage file, digest mismatch, cleanup failure and recovery with the operation/deployment lifecycle fences intact.
+- Existing ZIP deployments, Ready Apps, database-native deployment, build policy, Docker-source security inspection, rollout/readiness, activation, rollback and cleanup continue to pass their regression suite.
+- Agent operation polling distinguishes accepted/preparing/prepared/dispatched from a successful Deploy; terminal status is read from the real Deploy row.
+
 ### Operations
 
 - Forgejo is backed up with a tested restore; PostgreSQL/metadata backups and repository storage backups are coordinated.
@@ -507,7 +657,7 @@ Do not couple Phase 1 delivery to Phase 3 features.
 - Forgejo, Git worker and build runtime have separate network/credential permissions.
 - Disaster recovery can reconcile orphaned provider repositories and stale Django mappings.
 
-## 16. Questions that should be answered before coding
+## 17. Questions that should be answered before coding
 
 The following are open product/operations questions. The suggested choices are defaults for the architecture spike, not decisions silently forced on the product.
 
@@ -529,7 +679,7 @@ The following are open product/operations questions. The suggested choices are d
 | 14. Do we need per-user SSH keys, HTTPS tokens, deploy keys, or all three? | Verify provider support and choose the smallest supported set | Affects user experience and safe credential revocation |
 | 15. What recovery SLA/backups are required? | Write and test a basic backup/restore runbook before production | Git data is customer source code and is not recoverable from a Django DB dump alone |
 
-## 17. Go/no-go decision
+## 18. Go/no-go decision
 
 **Go for a Phase 0 spike, with Forgejo as the first candidate and the existing PaaS deployment engine retained.** The current model/revision architecture makes integration realistic, while the Git hosting server and source-fetch worker remain new operational/security surfaces.
 
