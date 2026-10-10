@@ -92,17 +92,20 @@ Source-derived from `src/messenger/models.py` on `master`. This supplements [mod
 ## Conversation
 
 **Bases:** `models.Model`  
-**Declared fields:** 15
+**Declared fields:** 18
 
 | Field | Type | DB NULL | Blank | Default | Constraints | Purpose / why it exists |
 |---|---|---:|---:|---|---|---|
 | `public_id` | `UUIDField` | no | no | `uuid.uuid4` | DB non-null, blank not allowed, unique, indexed | Stable public identifier for API/resource references. |
 | `type` | `CharField` | no | no | `Type.PRIVATE` | DB non-null, blank not allowed, indexed, choices; choices | Stores the type required by the Conversation contract. |
+| `security_mode` | `CharField` | no | no | `SecurityMode.STANDARD` (`standard`) | DB non-null, blank not allowed, indexed, choices | Immutable transport boundary. `matrix_e2ee` is guarded but unavailable until Matrix device and recovery integration is shipped. |
 | `title` | `CharField` | no | yes | `""` | DB non-null, blank allowed | Human-facing title. |
 | `description` | `TextField` | no | yes | `""` | DB non-null, blank allowed | Human-readable explanation or metadata. |
 | `avatar` | `ImageField` | yes | yes | `—` | DB nullable, blank allowed | Stores the avatar required by the Conversation contract. |
 | `is_public` | `BooleanField` | no | no | `False` | DB non-null, blank not allowed, indexed | Stores the is public required by the Conversation contract. |
 | `is_closed` | `BooleanField` | no | no | `False` | DB non-null, blank not allowed | Stores the is closed required by the Conversation contract. |
+| `is_forum` | `BooleanField` | no | no | `False` | DB non-null, blank not allowed, indexed | Marks a root group that exposes child topic conversations. |
+| `parent_conversation` | `ForeignKey` | yes | yes | `—` | DB nullable, blank allowed; self relation; CASCADE; related_name=topic_conversations | Links a topic to its root conversation. |
 | `requires_approval` | `BooleanField` | no | no | `False` | DB non-null, blank not allowed | Stores the requires approval required by the Conversation contract. |
 | `members_can_add` | `BooleanField` | no | no | `True` | DB non-null, blank not allowed | Stores the members can add required by the Conversation contract. |
 | `only_admins_send` | `BooleanField` | no | no | `False` | DB non-null, blank not allowed | Stores the only admins send required by the Conversation contract. |
@@ -116,11 +119,14 @@ Source-derived from `src/messenger/models.py` on `master`. This supplements [mod
 
 - `public_id`: `UUIDField` — declaration: `default=uuid.uuid4, unique=True, editable=False, db_index=True`
 - `type`: `CharField` — declaration: `max_length=10, choices=Type.choices, default=Type.PRIVATE, db_index=True`
+- `security_mode`: `CharField` — declaration: `max_length=20, choices=SecurityMode.choices, default=SecurityMode.STANDARD, db_index=True`
 - `title`: `CharField` — declaration: `max_length=255, blank=True, default=""`
 - `description`: `TextField` — declaration: `blank=True, default=""`
 - `avatar`: `ImageField` — declaration: `upload_to="messenger/groups/", null=True, blank=True`
 - `is_public`: `BooleanField` — declaration: `default=False, db_index=True`
 - `is_closed`: `BooleanField` — declaration: `default=False`
+- `is_forum`: `BooleanField` — declaration: `default=False, db_index=True`
+- `parent_conversation`: `ForeignKey` — declaration: `self, on_delete=models.CASCADE, null=True, blank=True, related_name="topic_conversations"`
 - `requires_approval`: `BooleanField` — declaration: `default=False`
 - `members_can_add`: `BooleanField` — declaration: `default=True`
 - `only_admins_send`: `BooleanField` — declaration: `default=False`
