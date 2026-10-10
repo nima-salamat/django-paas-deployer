@@ -671,6 +671,9 @@ class GroupParticipantsListAPIView(APIView):
         ).first()
         if not me:
             return err("Not a member", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
 
         page = max(1, int(request.query_params.get("page") or 1))
         page_size = min(50, max(1, int(request.query_params.get("page_size") or 20)))
