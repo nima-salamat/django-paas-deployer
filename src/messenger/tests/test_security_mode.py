@@ -225,3 +225,21 @@ class MessengerSecurityModeTests(TestCase):
             "Server-side composer drafts are disabled for encrypted conversations.",
         ):
             participant.save(update_fields=["draft_text"])
+
+
+    def test_legacy_public_join_and_join_request_routes_reject_encrypted_rooms(self):
+        conversation = self.make_encrypted_group()
+        conversation.is_public = True
+        conversation.save(update_fields=["is_public", "updated_at"])
+
+        join = self.client.post(
+            f"/api/messenger/groups/{conversation.id}/join/",
+            {},
+            format="json",
+        )
+        self.assertEqual(join.status_code, 409, join.data)
+
+        join_requests = self.client.get(
+            f"/api/messenger/conversations/{conversation.id}/join-requests/"
+        )
+        self.assertEqual(join_requests.status_code, 409, join_requests.data)
