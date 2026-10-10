@@ -29,7 +29,7 @@ from ..serializers import (
     build_message_list_context, build_user_mini_context,
 )
 from ..utils import validate_messenger_file, detect_kind, users_blocked, can_see_profile_photo
-from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger
+from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger, reject_plaintext_transport
 
 
 def _schedule_member_cache(conv_id, extra_user_ids=None, system_msg=None):
@@ -55,6 +55,9 @@ class InviteLinkCreateAPIView(APIView):
         ).first()
         if not part or part.role not in ("owner", "admin"):
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
         link = GroupInviteLink.objects.create(
             conversation=conv,
             created_by=request.user,
@@ -74,6 +77,9 @@ class InviteLinkRevokeAPIView(APIView):
         ).first()
         if not part or part.role not in ("owner", "admin"):
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(link.conversation)
+        if transport_error:
+            return transport_error
         link.is_active = False
         link.save(update_fields=["is_active"])
         return ok("Revoked")
@@ -99,6 +105,9 @@ class JoinByInviteAPIView(APIView):
         if not link.is_valid():
             return err("Invite link is invalid or expired")
         conv = link.conversation
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
         if conv.is_closed:
             return err("Group is closed")
         # If user is already an active member, just return the conversation
