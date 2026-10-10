@@ -337,12 +337,36 @@ def verify_encrypted_room_binding(user, access_token: str, room_id: str,
     memberships = room_memberships(access_token, room_id)
     if memberships.get(identity.matrix_user_id) != "join":
         raise MatrixServiceError("The current Matrix device is not a joined member of this room.", 403)
-    for expected_user_id in set(expected_matrix_user_ids):
+    expected_users = set(expected_matrix_user_ids)
+    for expected_user_id in expected_users:
         if memberships.get(expected_user_id) not in {"join", "invite"}:
             raise MatrixServiceError(
                 "The encrypted room does not contain every intended participant.",
                 400,
             )
+    unexpected_users = {
+        user_id for user_id, membership in memberships.items()
+        if membership in {"join", "invite"} and user_id not in expected_users
+    }
+    if unexpected_users:
+        raise MatrixServiceError(
+            "The encrypted room contains unapproved users outside the intended participant list.",
+            400,
+        )
+
+    # An E2EE marker does not itself prevent a public join rule. Require an
+    # invite-only room before mapping it into Messenger.
+    join_rules = matrix_request(
+        "GET",
+        f"/_matrix/client/v3/rooms/{quote(room_id, safe='')}/state/m.room.join_rules/",
+        access_token=access_token,
+    )
+    if join_rules.get("join_rule") != "invite":
+        raise MatrixServiceError(
+            "Secure Messenger rooms must use an invite-only Matrix join rule.",
+            400,
+        )
+
     if space_id:
         if not ROOM_ID_RE.fullmatch(space_id):
             raise MatrixServiceError("Matrix space ID is invalid.", 400)
@@ -354,6 +378,22 @@ def verify_encrypted_room_binding(user, access_token: str, room_id: str,
         space_memberships = room_memberships(access_token, space_id)
         if space_memberships.get(identity.matrix_user_id) != "join":
             raise MatrixServiceError("The current Matrix device is not a joined member of the requested space.", 403)
+        unexpected_space_users = {
+            user_id for user_id, membership in space_memberships.items()
+            if membership in {"join", "invite"} and user_id not in expected_users
+        }
+        if unexpected_space_users:
+            raise MatrixServiceError(
+                "The Matrix Space contains users outside the intended secure-group participant list.",
+                400,
+            )
+        space_join_rules = matrix_request(
+            "GET",
+            f"/_matrix/client/v3/rooms/{quote(space_id, safe='')}/state/m.room.join_rules/",
+            access_token=access_token,
+        )
+        if space_join_rules.get("join_rule") != "invite":
+            raise MatrixServiceError("Secure group Spaces must use an invite-only join rule.", 400)
         space_create = matrix_request(
             "GET",
             f"/_matrix/client/v3/rooms/{quote(space_id, safe='')}/state/m.room.create/",
