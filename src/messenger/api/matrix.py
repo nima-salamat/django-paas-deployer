@@ -12,6 +12,7 @@ from auth_users.authentication import SessionJWTAuthentication as JWTAuthenticat
 
 from ..matrix_service import (
     MatrixServiceError,
+    ROOM_ID_RE,
     create_device_session,
     ensure_matrix_identity,
     matrix_is_configured,
@@ -20,7 +21,7 @@ from ..matrix_service import (
     verify_device_session,
     verify_encrypted_room_binding,
 )
-from ..models import Conversation, ConversationParticipant, MatrixDevice, MatrixIdentity
+from ..models import Contact, Conversation, ConversationParticipant, MatrixDevice, MatrixIdentity
 from ..serializers import ConversationDetailSerializer, build_conversation_list_context
 from ..utils import users_blocked
 from .common import err, ok
@@ -37,6 +38,19 @@ def _matrix_token(request):
 
 def _service_error_response(exc: MatrixServiceError):
     return err(str(exc), exc.status_code)
+
+
+def _can_start_secure_chat_with(requester, target):
+    if target.pk == requester.pk:
+        return True
+    if Contact.objects.filter(owner=requester, contact=target).exists():
+        return True
+    return ConversationParticipant.objects.filter(
+        conversation__participants__user=target,
+        conversation__participants__left_at__isnull=True,
+        user=requester,
+        left_at__isnull=True,
+    ).exists()
 
 
 class MatrixDeviceSessionAPIView(APIView):
@@ -105,6 +119,11 @@ class MatrixIdentityResolveAPIView(APIView):
         if {user.pk for user in users} != set(normalized):
             return err("One or more requested users do not exist or are inactive.", status.HTTP_400_BAD_REQUEST)
         for target in users:
+            if not _can_start_secure_chat_with(request.user, target):
+                return err(
+                    "Secure chat can only be started with contacts or existing Messenger conversation participants.",
+                    status.HTTP_403_FORBIDDEN,
+                )
             if target.pk != request.user.pk and users_blocked(request.user, target):
                 return err("A secure room cannot be created with a blocked user.", status.HTTP_403_FORBIDDEN)
         output = []
@@ -210,7 +229,14 @@ class SecureConversationMapAPIView(APIView):
             return err("A secure group must be linked to a Matrix Space.", status.HTTP_400_BAD_REQUEST)
         if ctype == Conversation.Type.PRIVATE and space_id:
             return err("A secure private chat cannot be mapped to a group Space.", status.HTTP_400_BAD_REQUEST)
+        if not isinstance(room_id, str) or not ROOM_ID_RE.fullmatch(room_id):
+            return err("A valid Matrix room ID is required.", status.HTTP_400_BAD_REQUEST)
         for target in users:
+            if not _can_start_secure_chat_with(request.user, target):
+                return err(
+                    "Secure chat can only be created with contacts or existing Messenger conversation participants.",
+                    status.HTTP_403_FORBIDDEN,
+                )
             if target.pk != request.user.pk and users_blocked(request.user, target):
                 return err("A secure room cannot be created with a blocked user.", status.HTTP_403_FORBIDDEN)
         if Conversation.objects.filter(matrix_room_id=room_id).exists():
