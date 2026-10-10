@@ -92,12 +92,14 @@ Source-derived from `src/messenger/models.py` on `master`. This supplements [mod
 ## Conversation
 
 **Bases:** `models.Model`  
-**Declared fields:** 18
+**Declared fields:** 20
 
 | Field | Type | DB NULL | Blank | Default | Constraints | Purpose / why it exists |
 |---|---|---:|---:|---|---|---|
 | `public_id` | `UUIDField` | no | no | `uuid.uuid4` | DB non-null, blank not allowed, unique, indexed | Stable public identifier for API/resource references. |
 | `type` | `CharField` | no | no | `Type.PRIVATE` | DB non-null, blank not allowed, indexed, choices; choices | Stores the type required by the Conversation contract. |
+| `matrix_room_id` | `CharField` | yes | yes | `—` | nullable, unique, editable=False | Immutable reference to a verified encrypted Matrix room; required for `matrix_e2ee`. |
+| `matrix_space_id` | `CharField` | yes | yes | `—` | nullable, editable=False | Immutable Matrix Space ID for an encrypted forum/group; null for encrypted DMs and all standard conversations. |
 | `security_mode` | `CharField` | no | no | `SecurityMode.STANDARD` (`standard`) | DB non-null, blank not allowed, indexed, choices | Immutable transport boundary. `matrix_e2ee` is guarded but unavailable until Matrix device and recovery integration is shipped. |
 | `title` | `CharField` | no | yes | `""` | DB non-null, blank allowed | Human-facing title. |
 | `description` | `TextField` | no | yes | `""` | DB non-null, blank allowed | Human-readable explanation or metadata. |
@@ -119,6 +121,8 @@ Source-derived from `src/messenger/models.py` on `master`. This supplements [mod
 
 - `public_id`: `UUIDField` — declaration: `default=uuid.uuid4, unique=True, editable=False, db_index=True`
 - `type`: `CharField` — declaration: `max_length=10, choices=Type.choices, default=Type.PRIVATE, db_index=True`
+- `matrix_room_id`: `CharField` — declaration: `max_length=255, unique=True, null=True, blank=True, editable=False`
+- `matrix_space_id`: `CharField` — declaration: `max_length=255, null=True, blank=True, editable=False`
 - `security_mode`: `CharField` — declaration: `max_length=20, choices=SecurityMode.choices, default=SecurityMode.STANDARD, db_index=True`
 - `title`: `CharField` — declaration: `max_length=255, blank=True, default=""`
 - `description`: `TextField` — declaration: `blank=True, default=""`
@@ -135,6 +139,35 @@ Source-derived from `src/messenger/models.py` on `master`. This supplements [mod
 - `created_at`: `DateTimeField` — declaration: `auto_now_add=True, db_index=True`
 - `updated_at`: `DateTimeField` — declaration: `auto_now=True`
 - `last_message_at`: `DateTimeField` — declaration: `null=True, blank=True, db_index=True`
+
+
+
+## MatrixIdentity
+
+**Bases:** `models.Model`  
+**Declared fields:** 5
+
+| Field | Type | DB NULL | Blank | Default | Constraints | Purpose / why it exists |
+|---|---|---:|---:|---|---|---|
+| `user` | `OneToOneField` | no | no | — | unique relation; CASCADE; related_name=`messenger_matrix_identity` | Maps one Paas Deployer account to its server-managed Matrix identity. |
+| `matrix_user_id` | `CharField` | no | no | — | unique, indexed | Fully-qualified Matrix user ID. |
+| `encrypted_password` | `TextField` | no | no | — | encrypted with the server-only Fernet key | Credential used only by the backend to create a normal device-bound Matrix login; never returned to the browser. |
+| `created_at` | `DateTimeField` | no | no | — | auto_now_add | Identity creation timestamp. |
+| `updated_at` | `DateTimeField` | no | no | — | auto_now | Identity update timestamp. |
+
+## MatrixDevice
+
+**Bases:** `models.Model`  
+**Declared fields:** 6
+
+| Field | Type | DB NULL | Blank | Default | Constraints | Purpose / why it exists |
+|---|---|---:|---:|---|---|---|
+| `user` | `ForeignKey` | no | no | — | CASCADE; related_name=`messenger_matrix_devices` | Owning Paas Deployer account. |
+| `device_id` | `CharField` | no | no | — | unique per user | Device ID created by the Matrix login protocol. |
+| `display_name` | `CharField` | no | yes | `""` | blank allowed | Human-readable device label. |
+| `last_seen_at` | `DateTimeField` | no | no | — | auto_now | Last successful app login through this Matrix device. |
+| `created_at` | `DateTimeField` | no | no | — | auto_now_add | Device creation timestamp. |
+| `revoked_at` | `DateTimeField` | yes | yes | — | nullable, indexed | Local record of server-side Matrix device revocation. |
 
 ## ConversationParticipant
 
