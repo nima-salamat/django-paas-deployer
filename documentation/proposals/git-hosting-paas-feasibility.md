@@ -7,6 +7,10 @@
 
 This document intentionally separates a Git repository hosting product from the ability to deploy source from a Git repository. They are related capabilities, but one can be useful without implementing the other.
 
+**Companion review:** [Implementation Gap Analysis](git-hosting-implementation-gap-analysis.md) tracks confirmed source-code gaps, unresolved provider/operations questions, P0/P1 blockers, acceptance tests and the Phase 0 evidence checklist.
+
+**Important implementation caveat from the latest source review:** the current non-catalog Docker-source path still reads `Deploy.zip_file.path` for source inspection. Although revisioning copies the archive into `ServiceRevision.artifact_file`, the current execution path is not yet proven independent of the legacy Deploy ZIP. The design below states the target contract; it must not be treated as satisfied until GAP-01 is fixed and tested.
+
 ## 1. Executive recommendation
 
 **Feasible: yes. Build it as a provider-backed Git subsystem, not as a new Git implementation inside Django.**
@@ -404,7 +408,7 @@ The safe flow has two different phases: source preparation and the existing depl
 7. **Prepare context.** Validate context_path and any Dockerfile path against the pinned tree. Reject traversal, unsafe paths, unsupported symlinks, excessive file counts/expanded bytes, unsupported submodules and LFS. Create a bounded archive for the selected context; compute SHA-256 and size and save it to the shared artifact storage used by the deployment process. Do not include Git credentials, remote URLs with credentials, the .git directory or Git history.
 8. **Re-check current authority.** Before hand-off, re-read the Service, repository binding and desired-source fingerprint. If the binding was revoked, the Service was deleted, or its source configuration changed while fetch ran, mark the operation ignored/failed instead of dispatching stale code. Check cancellation and policy again.
 9. **Create a normal Deploy.** Through an internal domain/application service (not by fabricating an HTTP request to a ViewSet), create the ordinary Deploy with the prepared archive and server-owned source_provenance. Apply the existing deployment quota exactly once; do not count a webhook retry or the same idempotent operation as a second deployment. Use the project's established permission, immutable-revision and deployment admission behavior.
-10. **Freeze the source revision.** Extend ensure_revision_for_deploy (or the canonical revision creation boundary) to persist the source provenance and verified archive into ServiceRevision.source_snapshot/artifact_file. The frozen revision must be independently reproducible after branch movement, repository rename, deletion of the preparation record or deletion of the legacy Deploy ZIP.
+10. **Freeze the source revision.** Extend ensure_revision_for_deploy (or the canonical revision creation boundary) to persist the source provenance and verified archive into ServiceRevision.source_snapshot/artifact_file. Target guarantee, not current behavior: the frozen revision must remain source-reproducible after branch movement, repository rename or deletion of the preparation record. Independence from the legacy Deploy ZIP requires the GAP-01 source-artifact refactor: the current non-catalog Docker inspection path still reads Deploy.zip_file. Do not delete/expire the legacy ZIP until the execution pipeline consumes and verifies the revision-owned artifact, and add an end-to-end test that proves it.
 11. **Run only the existing execution path.** Queue deployments.celery.tasks.deploy for the new Deploy. It continues through DeployService, current source/Dockerfile inspection, DeploymentPlan, BuildArtifact/Release, runtime apply, readiness, ownership-fenced activation, cleanup and rollback. The Git worker itself never builds images, talks to Docker/Swarm or marks the Service running.
 12. **Report one coherent operation.** Mark the preparation operation dispatched and return its operation ID plus Deploy ID. After that, obtain build/deploy state from the normal Deploy and Service APIs/logs rather than mirroring its full state machine in GitSourceOperation.
 13. **Recover and clean up.** Always clean temporary checkout directories on success, failure, timeout, cancellation and process restart. Retain a staged archive only until its digest and revision-owned artifact are verified; safely reconcile orphaned stage files and stale operations. Preserve source artifacts still referenced by retained revisions/releases.
@@ -611,7 +615,7 @@ These are **proposed knobs**, not existing platform settings or final commercial
 | `git_hosting.provider_kind` | `forgejo` | Keep provider-specific behavior behind an adapter |
 | `git_hosting.private_by_default` | true | Avoid accidental code exposure |
 | `git_hosting.max_repositories_per_user` | 10 (provisional) | Bound initial storage/abuse |
-| `git_hosting.repository_soft_quota_mb` | 1024 per repo (provisional) | Initial tenant guardrail; measure actual Git pack/storage behavior |
+| `git_hosting.repository_soft_quota_mb` | Unset / not promised until enforceability is proven | Forgejo quota support is soft and in development; the exact per-repository enforcement contract needs a provider-level spike |
 | `git_hosting.user_storage_quota_mb` | 5120 per user (provisional) | User-level budget in addition to per-repo guard |
 | `git_source.max_checkout_bytes` | 512 MiB (provisional) | Limit untrusted working tree size; separate from Git's on-disk repo size |
 | `git_source.max_archive_bytes` | 256 MiB (provisional) | Keep build input bounded; adjust to observed apps |
@@ -628,7 +632,7 @@ These are **proposed knobs**, not existing platform settings or final commercial
 | `git_source.source_retention_days` | 30 days of unreferenced snapshots, subject to release/rollback retention | Prevent unbounded object/artifact storage |
 | `git_hosting.deleted_repo_retention_days` | 7-day soft-delete window (provisional) | Accidental deletion recovery |
 
-All numeric values need a small load/security spike and product/plan review. Do not treat the provisional numbers as approved billable promises. Enforce expanded checkout/archive size separately from compressed Git object storage; they are not the same metric.
+All numeric values need a small load/security spike and product/plan review. Do not treat provisional numbers as approved billable promises. In particular, the per-repository quota is deliberately unset until tested: Forgejo documents soft quotas as disabled by default, still in development and subject to in-flight operations completing above the limit; its documented `size:repos:all` subject is aggregate, not proof of hard per-repository enforcement. See [Forgejo soft quota and limitations](https://forgejo.org/docs/v17.0/admin/advanced/quota/). Enforce expanded checkout/archive size separately from compressed Git object storage; they are not the same metric.
 
 ### Build strategy choice
 
@@ -683,7 +687,7 @@ On a Git deploy attempt, the UI should show a durable task/deploy ID and then na
 - React repository picker and manual Deploy source UI.
 - Contract tests for ownership, credential redaction, SHA pinning, source cleanup and normal deployment outcomes.
 
-**Exit gate:** a deployment is reproducible from recorded provider repo ID + full commit SHA + source archive digest after the branch moves.
+**Exit gate:** source input is repeatable from the recorded provider repo ID + full commit SHA + source archive digest after the branch moves. This is not a claim of bit-for-bit deterministic image builds. The gate also requires GAP-01 to pass: the deployment path can consume the revision-owned artifact without requiring the legacy Deploy ZIP.
 
 ### Phase 2 — push webhook auto-deploy
 
@@ -797,6 +801,9 @@ The implementation should start only after the Phase 0 exit gate, authentication
 - [Current DeployService build path](../../src/deployments/celery/services/deploy_service.py)
 - [Current immutable revision model](../apps/services/models.md)
 - [Current deployment system model](../apps/deployments/execution/01-system-model.md)
+- [Implementation Gap Analysis — confirmed gaps, decisions and Phase 0 test gates](git-hosting-implementation-gap-analysis.md)
+- [Forgejo soft quota and limitations](https://forgejo.org/docs/v17.0/admin/advanced/quota/)
+- [Forgejo access-token scope and repository-restricted credentials](https://forgejo.org/docs/v17.0/user/authentication/token-scope/)
 - [Forgejo documentation](https://forgejo.org/docs/latest/)
 - [Forgejo admin guide](https://forgejo.org/docs/latest/admin/)
 - [Forgejo repository guide](https://forgejo.org/docs/latest/user/)
