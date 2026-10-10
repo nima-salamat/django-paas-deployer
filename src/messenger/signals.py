@@ -3,14 +3,70 @@ import os
 import shutil
 
 from django.conf import settings
-from django.db.models.signals import post_delete, pre_delete
+from django.db.models.signals import post_delete, post_save, pre_delete
 from django.dispatch import receiver
+from django.utils import timezone
 from django.contrib.auth import get_user_model
 
 from .models import Conversation, ConversationParticipant, MessageAttachment, Message, PinnedMessage
 
 logger = logging.getLogger("messenger.signals")
 User = get_user_model()
+
+
+@receiver(post_save, sender=ConversationParticipant)
+def sync_forum_topic_membership(sender, instance, **kwargs):
+    """
+    The root group's active membership and roles are the default authority for
+    its topics. Topic-level removals remain local until that user rejoins the
+    root group; child conversation saves never recurse here.
+    """
+    conversation = instance.conversation
+    if conversation.parent_conversation_id or not conversation.is_forum:
+        return
+
+    topic_ids = list(conversation.topic_conversations.values_list("id", flat=True))
+    if not topic_ids:
+        return
+
+    policy = {
+        "role": instance.role,
+        "can_send_messages": instance.can_send_messages,
+        "can_send_media": instance.can_send_media,
+        "can_add_members": instance.can_add_members,
+        "can_pin_messages": instance.can_pin_messages,
+        "can_change_info": instance.can_change_info,
+    }
+    now = timezone.now()
+    for topic_id in topic_ids:
+        topic_member = ConversationParticipant.objects.filter(
+            conversation_id=topic_id, user_id=instance.user_id
+        ).first()
+        if topic_member is None:
+            if instance.left_at is None:
+                ConversationParticipant.objects.create(
+                    conversation_id=topic_id,
+                    user_id=instance.user_id,
+                    **policy,
+                )
+            continue
+
+        changed_fields = []
+        if instance.left_at is None:
+            for field, value in policy.items():
+                if getattr(topic_member, field) != value:
+                    setattr(topic_member, field, value)
+                    changed_fields.append(field)
+            if topic_member.left_at is not None:
+                topic_member.left_at = None
+                topic_member.joined_at = now
+                changed_fields.extend(("left_at", "joined_at"))
+        elif topic_member.left_at is None:
+            topic_member.left_at = instance.left_at or now
+            changed_fields.append("left_at")
+
+        if changed_fields:
+            topic_member.save(update_fields=sorted(set(changed_fields)))
 
 
 def _delete_quietly(file_field):
