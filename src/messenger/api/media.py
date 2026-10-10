@@ -29,7 +29,7 @@ from ..serializers import (
     build_message_list_context, build_user_mini_context,
 )
 from ..utils import validate_messenger_file, detect_kind, users_blocked, can_see_profile_photo
-from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger
+from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger, reject_plaintext_transport
 
 User = get_user_model()
 class AttachmentDownloadAPIView(APIView):
@@ -78,6 +78,9 @@ class AttachmentDownloadAPIView(APIView):
             conversation=att.conversation, user=user, left_at__isnull=True
         ).exists():
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(att.conversation)
+        if transport_error:
+            return transport_error
 
         # Purged view-once: file gone
         if getattr(att, "is_purged", False) or not att.file:
@@ -171,6 +174,9 @@ class ConversationCleanupAPIView(APIView):
         ).first()
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
         # Collect all attachments for this conversation and delete their
         # underlying files from disk BEFORE deleting the message rows.
         # (Once the Message rows are gone, the ORM cascade will also delete
@@ -252,6 +258,9 @@ class ConversationMediaAPIView(APIView):
             conversation=conv, user=request.user, left_at__isnull=True
         ).exists():
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
         kinds_param = (request.query_params.get("kind") or "image").lower()
         kinds = [k.strip() for k in kinds_param.split(",") if k.strip()]
         if not kinds:
@@ -401,6 +410,9 @@ class ViewOnceOpenAPIView(APIView):
             conversation=att.conversation, user=request.user, left_at__isnull=True
         ).exists():
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(att.conversation)
+        if transport_error:
+            return transport_error
 
         if att.uploaded_by_id == request.user.id:
             return ok(data={
