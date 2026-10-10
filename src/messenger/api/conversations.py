@@ -30,7 +30,7 @@ from ..serializers import (
     build_conversation_list_context, prepare_conversation_detail,
 )
 from ..utils import validate_messenger_file, detect_kind, users_blocked, can_see_profile_photo
-from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger
+from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger, reject_plaintext_transport
 
 User = get_user_model()
 
@@ -227,6 +227,9 @@ class ConversationDetailAPIView(APIView):
         )
         if not self.get_participant(conv, request.user):
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
         _attach_list_side_data([conv], request.user)
         ctx = build_conversation_list_context(request, [conv])
         prepare_conversation_detail(conv, request.user)
@@ -237,6 +240,9 @@ class ConversationDetailAPIView(APIView):
         part = self.get_participant(conv, request.user)
         if not part or (part.role not in ("owner", "admin") and not part.can_change_info):
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
         if "title" in request.data and conv.type == Conversation.Type.GROUP:
             conv.title = str(request.data["title"])[:255]
         if "description" in request.data:
