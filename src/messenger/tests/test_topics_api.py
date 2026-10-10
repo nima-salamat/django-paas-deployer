@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from messenger.models import Conversation, ConversationParticipant, Message
@@ -124,3 +125,58 @@ class MessengerTopicsAPITests(TestCase):
         self.assertIn(self.conversation.id, ids)
         self.assertEqual(len(ids), len(rows))
         self.assertTrue(all(row.get("parent_conversation") is None for row in rows))
+
+
+    def test_root_role_edit_does_not_readd_topic_removed_member(self):
+        response = self.client.post(
+            f"/api/messenger/conversations/{self.conversation.id}/topics/",
+            {"title": "Restricted"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        topic_id = response.data["data"]["topic"]["id"]
+
+        topic_membership = ConversationParticipant.objects.get(
+            conversation_id=topic_id,
+            user=self.member,
+        )
+        topic_membership.left_at = timezone.now()
+        topic_membership.save(update_fields=["left_at"])
+
+        root_membership = ConversationParticipant.objects.get(
+            conversation=self.conversation,
+            user=self.member,
+        )
+        root_membership.role = ConversationParticipant.Role.ADMIN
+        root_membership.save(update_fields=["role"])
+
+        topic_membership.refresh_from_db()
+        self.assertIsNotNone(topic_membership.left_at)
+
+    def test_explicit_root_rejoin_restores_topic_membership(self):
+        response = self.client.post(
+            f"/api/messenger/conversations/{self.conversation.id}/topics/",
+            {"title": "Rejoin"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        topic_id = response.data["data"]["topic"]["id"]
+
+        root_membership = ConversationParticipant.objects.get(
+            conversation=self.conversation,
+            user=self.member,
+        )
+        root_membership.left_at = timezone.now()
+        root_membership.save(update_fields=["left_at"])
+
+        topic_membership = ConversationParticipant.objects.get(
+            conversation_id=topic_id,
+            user=self.member,
+        )
+        self.assertIsNotNone(topic_membership.left_at)
+
+        root_membership.left_at = None
+        root_membership.save(update_fields=["left_at"])
+
+        topic_membership.refresh_from_db()
+        self.assertIsNone(topic_membership.left_at)
