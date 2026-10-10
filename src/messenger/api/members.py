@@ -29,7 +29,7 @@ from ..serializers import (
     build_message_list_context, build_user_mini_context,
 )
 from ..utils import validate_messenger_file, detect_kind, users_blocked, can_see_profile_photo
-from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger
+from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger, reject_plaintext_transport
 
 
 def _schedule_member_cache(conv_id, extra_user_ids=None, system_msg=None):
@@ -149,6 +149,9 @@ class LeaveConversationAPIView(APIView):
         if not part:
             return err("Not a member", status.HTTP_404_NOT_FOUND)
         conv = part.conversation
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
         part.left_at = timezone.now()
         part.save(update_fields=["left_at"])
 
@@ -280,6 +283,9 @@ class RemoveMemberAPIView(APIView):
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
         if my_part.role not in ("owner", "admin"):
             return err("Only admins can remove members", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
         target = ConversationParticipant.objects.filter(
             conversation=conv, user_id=user_id, left_at__isnull=True
         ).first()
@@ -343,6 +349,9 @@ class MemberRoleAPIView(APIView):
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
         if my_part.role != "owner":
             return err("Only the group owner can change roles", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
         new_role = (request.data.get("role") or "").strip().lower()
         if new_role not in ("admin", "member"):
             return err("role must be 'admin' or 'member'")
@@ -409,6 +418,9 @@ class TransferOwnershipAPIView(APIView):
         ).first()
         if not my_part or my_part.role != "owner":
             return err("Only the owner can transfer ownership", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
         target_id = request.data.get("user_id")
         if not target_id:
             return err("user_id required")
@@ -474,6 +486,9 @@ class AddMembersAPIView(APIView):
         if part.role not in ("owner", "admin"):
             if not getattr(conv, "members_can_add", True) or not part.can_add_members:
                 return err("You cannot add members to this group", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
         ids = request.data.get("user_ids") or request.data.get("member_ids") or []
         if not isinstance(ids, list) or not ids:
             return err("user_ids required")
@@ -553,6 +568,9 @@ class DeleteConversationAPIView(APIView):
         ).first()
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
 
         # Snapshot participant user ids BEFORE any leave/delete so we can
         # invalidate their conversation-list caches after the row is gone.
