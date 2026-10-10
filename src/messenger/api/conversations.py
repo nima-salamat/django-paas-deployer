@@ -125,6 +125,18 @@ class ConversationListCreateAPIView(APIView):
         })
 
     def post(self, request):
+        # Never silently turn a request for an encrypted conversation into a
+        # normal plaintext chat. Matrix support remains disabled until the
+        # device-aware login/crypto/recovery flow is fully integrated.
+        requested_security_mode = str(request.data.get("security_mode") or "standard").strip().lower()
+        if requested_security_mode == Conversation.SecurityMode.MATRIX_E2EE:
+            return err(
+                "End-to-end encrypted chats are not configured yet. No conversation was created.",
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        if requested_security_mode != Conversation.SecurityMode.STANDARD:
+            return err("Unsupported conversation security_mode", status.HTTP_400_BAD_REQUEST)
+
         ctype = (request.data.get("type") or "private").lower()
         if ctype == "private":
             uid = request.data.get("user_id")
