@@ -462,7 +462,7 @@ class Message(models.Model):
         # Matrix encrypted events are transported by Matrix, never by this
         # server-readable Django model. Fail closed if any legacy code attempts
         # to create a plaintext Message in an encrypted conversation.
-        if self._state.adding and self.conversation_id:
+        if self.conversation_id:
             mode = Conversation.objects.filter(pk=self.conversation_id).values_list(
                 "security_mode", flat=True
             ).first()
@@ -567,7 +567,7 @@ class MessageAttachment(models.Model):
     def save(self, *args, **kwargs):
         # Encrypted media must be encrypted client-side and uploaded via the
         # Matrix encrypted-file protocol, not the legacy Django media store.
-        if self._state.adding and self.conversation_id:
+        if self.conversation_id:
             mode = Conversation.objects.filter(pk=self.conversation_id).values_list(
                 "security_mode", flat=True
             ).first()
