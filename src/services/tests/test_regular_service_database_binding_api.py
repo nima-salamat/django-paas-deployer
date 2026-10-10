@@ -212,3 +212,24 @@ class RegularServiceDatabaseBindingApiTests(TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.data["code"], "database_env_prefix_conflict")
         self.assertFalse(DatabaseResource.objects.filter(provider_service=second_provider).exists())
+    def test_ready_app_child_cannot_receive_manual_database_binding(self):
+        workload = Service.objects.create(
+            name="catalog-workload-binding",
+            user=self.user,
+            plan=self.workload_plan,
+            network=self.network,
+            source_kind=Service.SourceKind.CATALOG,
+            source_config={"application_instance": "catalog-managed"},
+        )
+        provider = self._provider_with_credentials("regular-postgres-for-catalog")
+        request = self._request(
+            "post",
+            f"/services/service/{workload.pk}/databases/",
+            data={"database": f"service:{provider.pk}", "env_prefix": "DB"},
+        )
+
+        response = ServiceDatabaseBindingsAPIView.as_view()(request, service_id=workload.pk)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "ready_app_database_managed")
+        self.assertFalse(ServiceDatabaseBinding.objects.filter(service=workload).exists())
