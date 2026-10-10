@@ -825,6 +825,12 @@ class ServiceDatabaseBindingsAPIView(ServiceConfigBaseAPIView):
                 "error": "This database is owned by a Ready App. Use the Ready App's declared dependency instead.",
                 "code": "ready_app_database_managed",
             }, status=409)
+        if provider is not None:
+            from deployments.core.db_deployer import DB_PLATFORMS
+            if provider.user_id != service.user_id:
+                return Response({"error": "The selected database provider is not owned by this service owner."}, status=404)
+            if provider.plan.plan_type != PlanTypeChoices.DB or _database_engine_for_service(provider) not in DB_PLATFORMS:
+                return Response({"error": "The selected resource provider is not a supported database service."}, status=400)
 
         if not database.host and not provider:
             return Response({"error": "The selected database resource has no host configured."}, status=400)
@@ -940,6 +946,13 @@ class DatabaseResourceAPIView(ServiceConfigBaseAPIView):
         existing_provider_ids = set()
         for row in rows:
             provider = row.provider_service
+            if provider is not None and (
+                provider.user_id != service.user_id
+                or provider.source_kind == Service.SourceKind.CATALOG
+                or provider.plan.plan_type != PlanTypeChoices.DB
+            ):
+                # Do not offer invalid or Ready-App-owned providers as manual resources.
+                continue
             if provider is not None:
                 existing_provider_ids.add(str(provider.pk))
             host = row.host or (provider.get_docker_service_name() if provider else "")
@@ -1011,12 +1024,26 @@ class DatabaseResourceAPIView(ServiceConfigBaseAPIView):
         provider_id = request.data.get("provider_service")
         provider = None
         if provider_id:
-            provider = get_object_or_404(Service, pk=provider_id, user=service.user)
+            provider = get_object_or_404(
+                Service.objects.select_related("plan"),
+                pk=provider_id,
+                user=service.user,
+            )
+            if provider.source_kind == Service.SourceKind.CATALOG:
+                return Response({
+                    "error": "Ready App database dependencies are managed by the app catalog.",
+                    "code": "ready_app_database_managed",
+                }, status=409)
+            from deployments.core.db_deployer import DB_PLATFORMS
+            if provider.plan.plan_type != PlanTypeChoices.DB or _database_engine_for_service(provider) not in DB_PLATFORMS:
+                return Response({"error": "provider_service must reference a supported database service."}, status=400)
         name = str(request.data.get("name") or "").strip()
         engine = str(request.data.get("engine") or "").strip().lower()
         allowed = {choice[0] for choice in DatabaseResource.Engine.choices}
         if not name or engine not in allowed:
             return Response({"error": "name and a valid engine are required.", "allowed_engines": sorted(allowed)}, status=400)
+        if provider is not None and engine != _database_engine_for_service(provider):
+            return Response({"error": "The resource engine must match the provider database service platform."}, status=400)
         resource, _ = DatabaseResource.objects.update_or_create(
             owner=service.user,
             name=name,
