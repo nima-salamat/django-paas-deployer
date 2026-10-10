@@ -243,3 +243,32 @@ class MessengerSecurityModeTests(TestCase):
             f"/api/messenger/conversations/{conversation.id}/join-requests/"
         )
         self.assertEqual(join_requests.status_code, 409, join_requests.data)
+
+
+    def test_standard_dm_creation_never_returns_an_encrypted_dm(self):
+        encrypted = Conversation.objects.create(
+            type=Conversation.Type.PRIVATE,
+            created_by=self.owner,
+            security_mode=Conversation.SecurityMode.MATRIX_E2EE,
+        )
+        ConversationParticipant.objects.create(
+            conversation=encrypted,
+            user=self.owner,
+            role=ConversationParticipant.Role.OWNER,
+        )
+        ConversationParticipant.objects.create(
+            conversation=encrypted,
+            user=self.peer,
+        )
+
+        response = self.client.post(
+            "/api/messenger/conversations/",
+            {"type": "private", "user_id": self.peer.id, "security_mode": "standard"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(
+            response.data["data"]["security_mode"],
+            Conversation.SecurityMode.STANDARD,
+        )
+        self.assertNotEqual(response.data["data"]["id"], encrypted.id)
