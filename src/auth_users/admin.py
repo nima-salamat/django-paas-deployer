@@ -17,8 +17,8 @@ class DeviceAdmin(admin.ModelAdmin):
     @admin.action(description="Revoke selected devices")
     def revoke_devices(self, request, queryset):
         updated = 0
-        for device_id in queryset.values_list("public_id", flat=True).iterator():
-            updated += invalidate_device(device_id)
+        for device_id, user_id in queryset.values_list("public_id", "user_id").iterator():
+            updated += invalidate_device(device_id, user_id=user_id)
         self.message_user(request, f"{updated} active session(s) revoked; selected devices were disabled.")
 
 

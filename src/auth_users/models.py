@@ -252,7 +252,7 @@ class LoginSettings(models.Model):
 class Device(models.Model):
     """A client installation identity; descriptive metadata is not authority."""
 
-    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
+    public_id = models.UUIDField(default=uuid.uuid4, editable=False, db_index=True)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="auth_devices")
     name = models.CharField(max_length=120, blank=True, default="")
     platform = models.CharField(max_length=64, blank=True, default="")
@@ -269,6 +269,12 @@ class Device(models.Model):
         indexes = [
             models.Index(fields=["user", "revoked_at"]),
             models.Index(fields=["user", "-last_seen_at"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "public_id"],
+                name="auth_device_user_public_id_uniq",
+            ),
         ]
 
     @property
