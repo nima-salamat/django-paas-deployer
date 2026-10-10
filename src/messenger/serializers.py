@@ -378,6 +378,10 @@ class ConversationListSerializer(serializers.ModelSerializer):
             return None
 
     def get_draft_text(self, obj):
+        # Composer drafts are plaintext server state and must never be serialized
+        # for a conversation reserved for the Matrix encrypted transport.
+        if obj.security_mode == Conversation.SecurityMode.MATRIX_E2EE:
+            return ""
         request = self.context.get("request")
         viewer_id = getattr(getattr(request, "user", None), "id", None) if request else None
         if viewer_id is None:
@@ -424,6 +428,11 @@ class ConversationListSerializer(serializers.ModelSerializer):
         return ParticipantSerializer(parts, many=True, context=self.context).data
 
     def get_last_message(self, obj):
+        # Never leak a server-side plaintext preview for an encrypted room.
+        # Once Matrix is integrated, previews/activity must come from Matrix
+        # metadata without exposing decrypted event bodies to Django.
+        if obj.security_mode == Conversation.SecurityMode.MATRIX_E2EE:
+            return None
         msg = getattr(obj, "_prefetched_last_message", None)
         if msg is not None and getattr(msg, "is_scheduled", False):
             msg = None
