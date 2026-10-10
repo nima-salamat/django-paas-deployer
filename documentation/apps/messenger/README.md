@@ -23,6 +23,7 @@ User identity is users. Service-share authorization is services. Deployment life
 - [serializers.md](serializers.md)
 - [background.md](background.md)
 - [tests.md](tests.md)
+- [security-architecture.md](security-architecture.md)
 
 ## Core state path
 
