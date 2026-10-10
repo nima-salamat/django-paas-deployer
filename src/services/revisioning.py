@@ -455,15 +455,29 @@ def _database_environment_snapshot(
     *,
     created_by=None,
 ) -> tuple[dict[str, str], list[dict[str, Any]]]:
-    """Resolve DB bindings into safe connection env plus versioned secrets."""
-    from services.models import DatabaseResource, ServiceDatabaseBinding
+    """Resolve explicitly selected DB bindings into runtime env without exposing secrets."""
+    from services.models import ServiceDatabaseBinding, ServiceNetworkAttachment
+
+    default_ports = {
+        "mysql": 3306, "mariadb": 3306, "postgres": 5432, "postgresql": 5432,
+        "mongodb": 27017, "mongo": 27017, "redis": 6379, "oracle": 1521,
+    }
+
+    def network_ids(candidate):
+        ids = {candidate.network_id} if candidate.network_id else set()
+        ids.update(
+            ServiceNetworkAttachment.objects.filter(service_id=candidate.pk)
+            .values_list("network_id", flat=True)
+        )
+        return ids
 
     values: dict[str, str] = {}
     refs: list[dict[str, Any]] = []
+    used_prefixes: set[str] = set()
     bindings = (
         ServiceDatabaseBinding.objects
         .filter(service=service)
-        .select_related("database")
+        .select_related("database", "database__provider_service", "database__provider_service__plan")
         .order_by("alias")
     )
     for binding in bindings:
@@ -481,41 +495,86 @@ def _database_environment_snapshot(
                 f"Database binding {binding.alias!r} requires read-only access."
             )
 
-        prefix = str(binding.env_prefix or "DB").strip().upper()
-        if not prefix:
-            prefix = "DB"
+        prefix = str(binding.env_prefix or "DB").strip().upper() or "DB"
+        if prefix in used_prefixes:
+            raise ValueError(
+                f"Database bindings use the same environment prefix {prefix!r}. Give each binding a unique prefix."
+            )
+        used_prefixes.add(prefix)
+
+        provider = database.provider_service
+        engine = str(database.engine or "").strip().lower()
+        host = str(database.host or "")
+        port = database.port
+        if provider is not None:
+            shared_networks = network_ids(service) & network_ids(provider)
+            if not shared_networks:
+                raise PermissionError(
+                    f"Service {service.pk} and database service {provider.pk} must share a private network."
+                )
+            provider_platform = str(getattr(getattr(provider, "plan", None), "platform", "") or "").strip().lower()
+            engine = {"postgres": "postgresql", "mongo": "mongodb"}.get(provider_platform, provider_platform) or engine
+            host = host or provider.get_docker_service_name()
+            port = port or default_ports.get(engine)
+
+        if not host:
+            raise ValueError(
+                f"Database binding {binding.alias!r} has no host configured."
+            )
 
         plain = {
-            f"{prefix}_HOST": str(database.host or ""),
-            f"{prefix}_PORT": str(database.port or ""),
+            f"{prefix}_HOST": host,
+            f"{prefix}_PORT": str(port or ""),
             f"{prefix}_NAME": str(database.database_name or ""),
             f"{prefix}_DATABASE": str(database.database_name or ""),
-            f"{prefix}_ENGINE": str(database.engine or ""),
+            f"{prefix}_ENGINE": engine,
         }
         for key, value in plain.items():
             if value:
+                if key in values and values[key] != value:
+                    raise ValueError(
+                        f"Database bindings conflict on environment variable {key!r}."
+                    )
                 values[key] = value
 
         credential = getattr(database, "credential", None)
-        if credential is not None:
-            if credential.username:
-                values[f"{prefix}_USER"] = str(credential.username)
-                values[f"{prefix}_USERNAME"] = str(credential.username)
-            if credential.password_ciphertext:
-                secret_key = f"{prefix}_PASSWORD"
-                secret, version = _get_or_create_secret(
-                    service,
-                    secret_key,
-                    credential.get_password(),
-                    created_by=created_by,
-                    note=f"Database binding {binding.alias} password",
-                )
-                refs.append({
-                    "path": f"env.{secret_key}",
-                    "key": secret.key,
-                    "version": version,
-                    "scope": ServiceEnvironmentVariable.Scope.RUNTIME,
-                })
+        username = str(getattr(credential, "username", "") or "") if credential is not None else ""
+        password = credential.get_password() if credential is not None else ""
+
+        # A database service's active deploy remains the source of truth for its
+        # application-user credentials. Refresh from it at compile time so a DB
+        # password rotation does not silently leave new app revisions with stale
+        # copied credentials. These values are never returned by this API.
+        if provider is not None:
+            from deployments.common.config import parse_config
+
+            provider_deploy = get_active_deploy(provider) or getattr(provider, "selected_deploy", None)
+            if provider_deploy is not None:
+                provider_config = parse_config(getattr(provider_deploy, "config", None))
+                if isinstance(provider_config, dict):
+                    if "username" in provider_config:
+                        username = str(provider_config.get("username") or "")
+                    if "password" in provider_config:
+                        password = str(provider_config.get("password") or "")
+
+        if username:
+            values[f"{prefix}_USER"] = username
+            values[f"{prefix}_USERNAME"] = username
+        if password:
+            secret_key = f"{prefix}_PASSWORD"
+            secret, version = _get_or_create_secret(
+                service,
+                secret_key,
+                password,
+                created_by=created_by,
+                note=f"Database binding {binding.alias} password",
+            )
+            refs.append({
+                "path": f"env.{secret_key}",
+                "key": secret.key,
+                "version": version,
+                "scope": ServiceEnvironmentVariable.Scope.RUNTIME,
+            })
     return values, refs
 
 
