@@ -17,6 +17,7 @@ from ..matrix_service import (
     matrix_is_configured,
     matrix_request,
     revoke_device,
+    verify_device_session,
     verify_encrypted_room_binding,
 )
 from ..models import Conversation, ConversationParticipant, MatrixDevice, MatrixIdentity
@@ -43,6 +44,21 @@ class MatrixDeviceSessionAPIView(APIView):
 
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not matrix_is_configured():
+            return err("Secure chat is not configured on this deployment.", status.HTTP_503_SERVICE_UNAVAILABLE)
+        access_token = _matrix_token(request)
+        device_id = (request.headers.get("X-Matrix-Device-ID") or "").strip()
+        if not access_token or not device_id:
+            return err("A Matrix device session is required.", status.HTTP_401_UNAUTHORIZED)
+        try:
+            _identity, device = verify_device_session(request.user, access_token)
+        except MatrixServiceError as exc:
+            return _service_error_response(exc)
+        if device.device_id != device_id:
+            return err("Matrix session belongs to a different device.", status.HTTP_403_FORBIDDEN)
+        return ok(data={"valid": True, "device_id": device.device_id})
 
     def post(self, request):
         if not matrix_is_configured():
