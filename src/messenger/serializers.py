@@ -310,7 +310,7 @@ class ConversationListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Conversation
         fields = (
-            "id", "public_id", "type", "title", "description", "avatar", "avatar_url",
+            "id", "public_id", "type", "security_mode", "title", "description", "avatar", "avatar_url",
             "is_public", "is_closed", "requires_approval", "members_can_add", "only_admins_send",
             "is_forum", "parent_conversation", "parent_conversation_title", "topics",
             "history_visibility", "created_by",
@@ -355,6 +355,7 @@ class ConversationListSerializer(serializers.ModelSerializer):
                 "id": topic.id,
                 "public_id": str(topic.public_id),
                 "type": topic.type,
+                "security_mode": topic.security_mode,
                 "title": topic.title,
                 "description": topic.description,
                 "is_forum": False,
