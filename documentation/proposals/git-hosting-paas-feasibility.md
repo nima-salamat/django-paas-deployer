@@ -280,7 +280,7 @@ Constraints and behavior:
 - Use explicit lifecycle states such as active, archived, deleting, deleted and unavailable; do not encode all of these as a nullable timestamp.
 - Create/read/rename/archive/delete must be tenant-scoped. A provider rename updates metadata on the same binding.
 - A provider deletion is a lifecycle transition/tombstone, not an implicit deletion of the Service or the last successful Release.
-- Physical deletion is permitted only after every GitServiceSource reference is disconnected/removed and the retention window is satisfied; the PROTECT relationship is a final safeguard.
+- Physical deletion is permitted only after every GitServiceSource row referencing the binding has been removed and the retention window is satisfied; a merely disconnected/invalid row still holds the PROTECT reference. Prefer a provider-repository tombstone over physical deletion.
 - A repository can be linked to several Services in future; webhook delivery is deduplicated once and then evaluated against each authorized source policy.
 - Private repositories only in the MVP. Owner-to-provider namespace provisioning and login/SSH-key strategy are Phase 0 decisions, not implied by storing a PaaS owner FK.
 
@@ -322,6 +322,18 @@ Suggested fields:
 Persist this row before returning a successful HTTP acknowledgement. In the same transaction, create any required dispatch/outbox intent, or make received rows an explicitly pollable durable inbox. If publishing a Celery task fails after the DB transaction commits, a periodic dispatcher/reconciler must redispatch eligible rows. Do not acknowledge success based only on an in-memory Celery send. Do not add a second generic outbox model only for this purpose: a durable inbox plus a tested recovery contract is enough for the MVP.
 
 
+
+### Credential storage and trust levels
+
+Do not treat all Git credentials as one token. Keep three separate lifecycles:
+
+- **Provider administration:** operator-only token used by the PaaS adapter for repository provisioning and metadata/webhook configuration. Store encrypted via an operator-managed credential reference; never give this token to source workers, Agents or user code.
+- **Developer push/pull:** credentials or SSH keys used by the person pushing code. Prefer Forgejo's own supported user identity/key mechanisms. The PaaS should not receive or persist developer passwords. If SSO is chosen, prove it covers Git-over-HTTPS/SSH and API operations rather than assuming browser SSO transfers automatically.
+- **Deployment fetch:** read-only credential capable of fetching only the intended private repository or a narrowly scoped bot account. Resolve the least-privilege mechanism experimentally in Phase 0; do not default to a provider administrator token. Credentials should be injected only into the isolated fetch process and excluded from the remote URL written to logs, Git config that survives the process, environment snapshots and archive.
+
+Webhook secrets are separate random high-entropy values, stored encrypted, versioned and rotated. Persist only a secret reference/version and signature-verification metadata on delivery rows. On rotation, accept the old key only for an explicit short overlap window if provider retry behavior requires it; never keep accepting old signatures indefinitely. Credential values are write-once/rotate-only at APIs and are never returned from list/detail endpoints.
+
+
 ### Proposed Django app boundary and model ownership
 
 Use a dedicated first-party Django app, provisionally named src/git_hosting/; confirm by repository-wide tree/search that no partial Git subsystem already exists before creating it. Do not place Git-provider lifecycle code in deployments, and do not grow src/agent into a second Git domain application.
@@ -356,7 +368,7 @@ erDiagram
 
 Recommended deletion/history semantics:
 - GitServiceSource.repository_binding uses PROTECT. Disconnect or tombstone references first; do not cascade-delete source intent silently.
-- GitServiceSource.service can cascade with Service deletion only after the delete/lifecycle hook has cancelled or invalidated queued operations. GitSourceOperation should retain immutable service/repository ID snapshots and survive through its retention window; use nullable SET_NULL relations or equivalent deliberate history preservation instead of an accidental cascade.
+- GitServiceSource.service can cascade with Service deletion only after the delete/lifecycle hook has cancelled or invalidated queued operations. GitSourceOperation's references to the live source/Service should be nullable SET_NULL (or an equivalent deliberate history-preserving relationship), alongside immutable service/repository ID snapshots; this lets operation audit survive without allowing a worker to continue against deleted authority.
 - GitWebhookDelivery keeps provider installation/repository IDs and delivery ID as snapshots so audit survives repository deletion. Any live FK to a binding can be nullable SET_NULL after the tombstone process.
 - The operation-to-Deploy hand-off must have a uniqueness guarantee. Prefer a nullable OneToOne relation or a unique deploy-side source_operation_id so retry/recovery cannot create multiple Deploy rows.
 - Store only encrypted credential references plus metadata/version IDs in model rows. Separate provider administrative credentials, developer push credentials and fetch-only credentials; they are different trust levels. Never reuse ServiceSecret blindly as a global credential vault without validating ownership, rotation and access semantics.
