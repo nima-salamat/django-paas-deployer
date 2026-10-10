@@ -186,6 +186,7 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `messenger` | `src/messenger/urls.py` | explicit | `conversations/<int:pk>/read/` | [app API docs](../apps/messenger/api-reference.md) |
 | `messenger` | `src/messenger/urls.py` | explicit | `conversations/<int:pk>/scheduled/` | [app API docs](../apps/messenger/api-reference.md) |
 | `messenger` | `src/messenger/urls.py` | explicit | `conversations/<int:pk>/transfer-ownership/` | [app API docs](../apps/messenger/api-reference.md) |
+| `messenger` | `src/messenger/urls.py` | explicit | `conversations/<int:pk>/topics/` | [app API docs](../apps/messenger/api-reference.md) |
 | `messenger` | `src/messenger/urls.py` | explicit | `conversations/` | [app API docs](../apps/messenger/api-reference.md) |
 | `messenger` | `src/messenger/urls.py` | explicit | `groups/<int:pk>/join/` | [app API docs](../apps/messenger/api-reference.md) |
 | `messenger` | `src/messenger/urls.py` | explicit | `groups/search/` | [app API docs](../apps/messenger/api-reference.md) |
@@ -1028,6 +1029,9 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `messenger` | `src/messenger/models.py` | `Conversation` | `requires_approval` | `BooleanField` | [field reference](../apps/messenger/field-reference.md#conversation) |
 | `messenger` | `src/messenger/models.py` | `Conversation` | `title` | `CharField` | [field reference](../apps/messenger/field-reference.md#conversation) |
 | `messenger` | `src/messenger/models.py` | `Conversation` | `type` | `CharField` | [field reference](../apps/messenger/field-reference.md#conversation) |
+| `messenger` | `src/messenger/models.py` | `Conversation` | `security_mode` | `CharField` | [field reference](../apps/messenger/field-reference.md#conversation) |
+| `messenger` | `src/messenger/models.py` | `Conversation` | `is_forum` | `BooleanField` | [field reference](../apps/messenger/field-reference.md#conversation) |
+| `messenger` | `src/messenger/models.py` | `Conversation` | `parent_conversation` | `ForeignKey` | [field reference](../apps/messenger/field-reference.md#conversation) |
 | `messenger` | `src/messenger/models.py` | `Conversation` | `updated_at` | `DateTimeField` | [field reference](../apps/messenger/field-reference.md#conversation) |
 | `messenger` | `src/messenger/models.py` | `GroupInviteLink` | `code` | `CharField` | [field reference](../apps/messenger/field-reference.md#groupinvitelink) |
 | `messenger` | `src/messenger/models.py` | `GroupInviteLink` | `conversation` | `ForeignKey` | [field reference](../apps/messenger/field-reference.md#groupinvitelink) |
