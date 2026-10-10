@@ -32,7 +32,7 @@ from ..serializers import (
 )
 from ..call_state import transition_call
 from ..utils import validate_messenger_file, detect_kind, users_blocked, can_see_profile_photo
-from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger
+from .common import ok, err, _attach_list_side_data, get_or_create_dm, logger, reject_plaintext_transport
 
 User = get_user_model()
 
@@ -209,6 +209,9 @@ class ConversationCallStartAPIView(APIView):
         ).first()
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
 
         video = _as_bool(request.data.get("video"), True)
         audio = _as_bool(request.data.get("audio"), True)
@@ -333,6 +336,9 @@ class ConversationCallJoinAPIView(APIView):
         ).first()
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
 
         call_id = request.query_params.get("call_id") or request.query_params.get("call")
         with transaction.atomic():
@@ -398,6 +404,9 @@ class ConversationCallEndAPIView(APIView):
         ).first()
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
 
         call_id = request.data.get("call_id")
         reason = (request.data.get("reason") or "ended").strip().lower()
@@ -552,6 +561,9 @@ class ConversationCallActiveAPIView(APIView):
         ).first()
         if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
 
         cutoff = _tz.now() - timedelta(seconds=30)
         # Self-heal abandoned ringing sessions when Celery/websocket delivery
