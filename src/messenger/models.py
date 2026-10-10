@@ -132,6 +132,10 @@ class Conversation(models.Model):
         default=SecurityMode.STANDARD,
         db_index=True,
     )
+    # Matrix IDs are immutable protocol bindings, not message content. Secure
+    # conversations must always point at an already-created encrypted room.
+    matrix_room_id = models.CharField(max_length=255, unique=True, null=True, blank=True, editable=False)
+    matrix_space_id = models.CharField(max_length=255, null=True, blank=True, editable=False)
     title = models.CharField(max_length=255, blank=True, default="")  # groups only
     description = models.TextField(blank=True, default="")
     avatar = models.ImageField(upload_to="messenger/groups/", null=True, blank=True)
@@ -175,27 +179,90 @@ class Conversation(models.Model):
         instance = super().from_db(db, field_names, values)
         if "security_mode" in field_names:
             instance._security_mode_snapshot = instance.security_mode
+        if "matrix_room_id" in field_names:
+            instance._matrix_room_id_snapshot = instance.matrix_room_id
+        if "matrix_space_id" in field_names:
+            instance._matrix_space_id_snapshot = instance.matrix_space_id
         return instance
 
     def save(self, *args, **kwargs):
+        if self.security_mode == self.SecurityMode.MATRIX_E2EE and not self.matrix_room_id:
+            raise ValidationError("Encrypted conversations must be bound to a Matrix room.")
+        if self.security_mode == self.SecurityMode.STANDARD and (
+            self.matrix_room_id or self.matrix_space_id
+        ):
+            raise ValidationError("Standard conversations cannot be bound to Matrix rooms.")
         if not self._state.adding:
-            original_mode = getattr(self, "_security_mode_snapshot", None)
-            if original_mode is None:
-                original_mode = type(self).objects.filter(pk=self.pk).values_list(
-                    "security_mode", flat=True
-                ).first()
-            if original_mode is not None and original_mode != self.security_mode:
+            snapshot = {}
+            for field_name, snapshot_name in (
+                ("security_mode", "_security_mode_snapshot"),
+                ("matrix_room_id", "_matrix_room_id_snapshot"),
+                ("matrix_space_id", "_matrix_space_id_snapshot"),
+            ):
+                original = getattr(self, snapshot_name, None)
+                if original is None:
+                    original = type(self).objects.filter(pk=self.pk).values_list(
+                        field_name, flat=True
+                    ).first()
+                snapshot[field_name] = original
+            if (
+                snapshot["security_mode"] != self.security_mode
+                or snapshot["matrix_room_id"] != self.matrix_room_id
+                or snapshot["matrix_space_id"] != self.matrix_space_id
+            ):
                 raise ValidationError(
-                    "Conversation security mode is immutable; create a separate conversation "
-                    "to change the security boundary."
+                    "Conversation security mode and Matrix room bindings are immutable; "
+                    "create a separate conversation to change the security boundary."
                 )
         super().save(*args, **kwargs)
         self._security_mode_snapshot = self.security_mode
+        self._matrix_room_id_snapshot = self.matrix_room_id
+        self._matrix_space_id_snapshot = self.matrix_space_id
 
     def __str__(self):
         if self.type == self.Type.PRIVATE:
             return f"DM {self.public_id}"
         return self.title or f"Group {self.public_id}"
+
+
+class MatrixIdentity(models.Model):
+    """Server-managed Matrix identity; its password is encrypted at rest."""
+
+    user = models.OneToOneField(
+        User, on_delete=models.CASCADE, related_name="messenger_matrix_identity"
+    )
+    matrix_user_id = models.CharField(max_length=255, unique=True, db_index=True)
+    encrypted_password = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"MatrixIdentity(user={self.user_id})"
+
+
+class MatrixDevice(models.Model):
+    """A Matrix crypto device associated with one Paas Deployer account."""
+
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="messenger_matrix_devices"
+    )
+    device_id = models.CharField(max_length=255)
+    display_name = models.CharField(max_length=100, blank=True, default="")
+    last_seen_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    revoked_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("user", "device_id"),
+                name="messenger_matrix_device_user_unique",
+            ),
+        ]
+        ordering = ("-last_seen_at",)
+
+    def __str__(self):
+        return f"MatrixDevice(user={self.user_id}, device={self.device_id})"
 
 
 class ConversationParticipant(models.Model):
