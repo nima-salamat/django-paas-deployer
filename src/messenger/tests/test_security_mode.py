@@ -189,10 +189,16 @@ class MessengerSecurityModeTests(TestCase):
     def test_legacy_detail_event_and_call_routes_reject_encrypted_rooms(self):
         conversation = self.make_encrypted_group()
 
+        # Metadata remains readable so the UI can explain that Matrix is not
+        # configured, but server-side message previews/drafts stay hidden.
         detail = self.client.get(
             f"/api/messenger/conversations/{conversation.id}/"
         )
-        self.assertEqual(detail.status_code, 409, detail.data)
+        self.assertEqual(detail.status_code, 200, detail.data)
+        detail_data = detail.data["data"]
+        self.assertEqual(detail_data["security_mode"], Conversation.SecurityMode.MATRIX_E2EE)
+        self.assertIsNone(detail_data["last_message"])
+        self.assertEqual(detail_data["draft_text"], "")
 
         events = self.client.get(
             f"/api/messenger/conversations/{conversation.id}/events/"
@@ -205,3 +211,17 @@ class MessengerSecurityModeTests(TestCase):
             format="json",
         )
         self.assertEqual(call.status_code, 409, call.data)
+
+
+    def test_server_side_composer_drafts_are_rejected_for_encrypted_rooms(self):
+        conversation = self.make_encrypted_group()
+        participant = ConversationParticipant.objects.get(
+            conversation=conversation,
+            user=self.owner,
+        )
+        participant.draft_text = "do not store this as plaintext"
+        with self.assertRaisesMessage(
+            ValidationError,
+            "Server-side composer drafts are disabled for encrypted conversations.",
+        ):
+            participant.save(update_fields=["draft_text"])
