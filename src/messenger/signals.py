@@ -49,7 +49,13 @@ def sync_forum_topic_membership(sender, instance, created=False, **kwargs):
     their root membership is newly created or explicitly transitions from
     left to active. Child conversation saves never recurse here.
     """
-    conversation = instance.conversation
+    # Do not trust a relation object cached on a caller-owned instance:
+    # topic creation may have promoted the root to is_forum=True after that
+    # Python object was loaded, and later member-add flows can reuse the stale
+    # object. Read the current root state from the database.
+    conversation = Conversation.objects.only(
+        "id", "parent_conversation_id", "is_forum"
+    ).get(pk=instance.conversation_id)
     if conversation.parent_conversation_id or not conversation.is_forum:
         return
 
