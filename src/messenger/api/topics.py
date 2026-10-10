@@ -57,6 +57,11 @@ class ConversationTopicsAPIView(APIView):
         conversation, participant = self._conversation_and_participant(request, pk)
         if participant is None:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        if conversation.security_mode == Conversation.SecurityMode.MATRIX_E2EE:
+            return err(
+                "Encrypted-room topics must be read from Matrix; plaintext Messenger topics are disabled.",
+                status.HTTP_409_CONFLICT,
+            )
         topics = _visible_topics(conversation, request.user) if conversation.is_forum else []
         return ok(data={
             "conversation_id": conversation.id,
@@ -90,6 +95,11 @@ class ConversationTopicsAPIView(APIView):
             conversation, participant = self._conversation_and_participant(request, pk)
             if participant is None:
                 return err("Forbidden", status.HTTP_403_FORBIDDEN)
+            if conversation.security_mode == Conversation.SecurityMode.MATRIX_E2EE:
+                return err(
+                    "Encrypted-room topics must be created through Matrix; plaintext topic creation is disabled.",
+                    status.HTTP_409_CONFLICT,
+                )
             if participant.role not in (ConversationParticipant.Role.OWNER, ConversationParticipant.Role.ADMIN) and not participant.can_change_info:
                 return err("Only group admins can create topics", status.HTTP_403_FORBIDDEN)
             if conversation.is_closed:
