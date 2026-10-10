@@ -96,7 +96,7 @@ These observations do not replace the required exhaustive search of all Git sour
 **Acceptance criteria:**
 - The Git worker never constructs a DRF request or calls a ViewSet method.
 - Existing ZIP/API/Agent creation behavior remains equivalent under regression tests.
-- Authorization and the daily deployment allowance are enforced exactly once per accepted Deploy.
+- All existing admission checks are applied consistently at the shared boundary, and the daily deployment allowance is charged exactly once per accepted Deploy.
 - A repeated manual request or duplicate worker delivery finds the existing GitSourceOperation/Deploy and cannot create another attempt.
 - Provider/source fetch failure before Deploy hand-off does not consume a Deploy slot; quota semantics for a successful hand-off are explicit.
 
@@ -504,6 +504,7 @@ Must additionally have:
 - [Forgejo soft quota and its limitations](https://forgejo.org/docs/v17.0/admin/advanced/quota/)
 - [Forgejo configuration reference, including webhook allowlists and quota subjects](https://forgejo.org/docs/latest/admin/config-cheat-sheet/)
 - [Forgejo reverse-proxy and same-origin subpath risks](https://forgejo.org/docs/v17.0/admin/setup/reverse-proxy/)
-- [Forgejo webhook user guide](https://forgejo.org/docs/latest/user/repository/webhooks/)
+- [Forgejo v17 webhook headers and signature example](https://forgejo.org/docs/v17.0/user/repository/webhooks/)
+- [Forgejo latest webhook user guide](https://forgejo.org/docs/latest/user/repository/webhooks/)
 - [Celery task acknowledgement, retry and worker-loss behavior](https://docs.celeryq.dev/en/latest/userguide/tasks.html)
 - [Django Storage API](https://docs.djangoproject.com/en/5.2/ref/files/storage/)
