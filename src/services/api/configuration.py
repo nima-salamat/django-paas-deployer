@@ -13,7 +13,7 @@ from auth_users.authentication import SessionJWTAuthentication as JWTAuthenticat
 from deploy.models import Deploy
 from deployments.celery.tasks import deploy as deploy_task
 from deployments.core.state.manager import StateManager
-from core.global_settings.config import SERVICE_STATUS_CHOICES
+from core.global_settings.config import SERVICE_STATUS_CHOICES, PlanTypeChoices
 from services.models import (
     Service,
     ServiceEnvironmentVariable,
@@ -524,7 +524,120 @@ class ServiceNetworksAPIView(ServiceConfigBaseAPIView):
 
 
 class ServiceDatabaseBindingsAPIView(ServiceConfigBaseAPIView):
-    """Expose managed DB resources and Service-to-DB bindings."""
+    """Expose managed DB bindings and Ready App database dependencies."""
+
+    @staticmethod
+    def _catalog_database_dependencies(request, service):
+        """Describe DB child services that the installed Ready App already wires.
+
+        Catalog applications intentionally use their declared service graph and
+        runtime environment for in-app database connections. Those relationships
+        are not ServiceDatabaseBinding rows, so expose safe metadata separately
+        instead of incorrectly telling users that the app has no database.
+        """
+        if service.source_kind != Service.SourceKind.CATALOG:
+            return []
+        if str(service.user_id) != str(request.user.id):
+            # Do not reveal sibling service topology to shared-service viewers.
+            return []
+
+        try:
+            from app_catalog.models import ApplicationInstanceService
+        except ImportError:
+            return []
+
+        app_service = (
+            ApplicationInstanceService.objects
+            .filter(service=service)
+            .select_related("instance")
+            .first()
+        )
+        if app_service is None:
+            return []
+
+        snapshot = app_service.instance.definition_snapshot or {}
+        orchestration = snapshot.get("_application_orchestration") or {}
+        specs = orchestration.get("services") or []
+        current_spec = next(
+            (
+                item for item in specs
+                if isinstance(item, dict)
+                and str(item.get("key") or "") == str(app_service.service_key)
+            ),
+            None,
+        )
+        if not current_spec:
+            return []
+
+        dependency_keys = {
+            str(key)
+            for key in (current_spec.get("depends_on") or [])
+            if str(key)
+        }
+        if not dependency_keys:
+            return []
+
+        engine_ports = {
+            "mysql": 3306,
+            "mariadb": 3306,
+            "postgres": 5432,
+            "postgresql": 5432,
+            "mongodb": 27017,
+            "redis": 6379,
+            "oracle": 1521,
+        }
+        dependencies = (
+            ApplicationInstanceService.objects
+            .filter(
+                instance=app_service.instance,
+                service_key__in=dependency_keys,
+                service__plan__plan_type=PlanTypeChoices.DB,
+            )
+            .select_related("service", "service__plan")
+            .order_by("sequence", "service_key")
+        )
+        result = []
+        for dependency in dependencies:
+            database_service = dependency.service
+            engine = str(database_service.plan.platform or "").strip().lower()
+            env = {
+                row.key.upper(): row
+                for row in ServiceEnvironmentVariable.objects.filter(
+                    service=database_service,
+                    enabled=True,
+                )
+            }
+            database_name = ""
+            database_name_keys = {
+                "mysql": ("MYSQL_DATABASE", "MARIADB_DATABASE"),
+                "mariadb": ("MYSQL_DATABASE", "MARIADB_DATABASE"),
+                "postgres": ("POSTGRES_DB",),
+                "postgresql": ("POSTGRES_DB",),
+                "mongodb": ("MONGO_INITDB_DATABASE",),
+            }.get(engine, ())
+            for key in database_name_keys:
+                row = env.get(key)
+                # Database names are metadata, not credentials. Never resolve a
+                # secret-backed variable merely to display this information.
+                if row is not None and not row.secret_id and str(row.value or "").strip():
+                    database_name = str(row.value).strip()
+                    break
+
+            result.append({
+                "service_id": str(database_service.pk),
+                "service_key": dependency.service_key,
+                "name": dependency.service_key,
+                "engine": engine,
+                # Ready App definitions use the service key as the internal DNS
+                # alias (e.g. "mariadb" for WordPress's WORDPRESS_DB_HOST).
+                "host": dependency.service_key,
+                "port": engine_ports.get(engine),
+                "database_name": database_name,
+                "status": str(database_service.status or "unknown"),
+                "connection_type": "ready_app_dependency",
+                "managed_by": "ready_app",
+            })
+        return result
 
     def get(self, request, service_id):
         service = self.service(request, service_id)
@@ -548,7 +661,8 @@ class ServiceDatabaseBindingsAPIView(ServiceConfigBaseAPIView):
                     "provider_service": str(row.database.provider_service_id) if row.database.provider_service_id else None,
                 }
                 for row in rows
-            ]
+            ],
+            "catalog_dependencies": self._catalog_database_dependencies(request, service),
         })
 
     def post(self, request, service_id):
