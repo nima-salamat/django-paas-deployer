@@ -2,7 +2,9 @@
 
 ## Decision status
 
-**Architecture selected; end-to-end encryption is not implemented yet.** Existing Messenger conversations continue to use the current server-readable message path. They must not be labelled or presented as end-to-end encrypted.
+**End-to-end encryption is not implemented yet.** Existing Messenger conversations continue to use the current server-readable message path. They must not be labelled or presented as end-to-end encrypted.
+
+A preparation layer is now committed: each conversation has an immutable `security_mode`; normal conversations default to `standard`; requests for `matrix_e2ee` fail with HTTP 503 rather than silently creating a plaintext chat; Django message/media creation is blocked for conversations marked encrypted; and the React Messenger hides its ordinary timeline, composer, upload, search and call controls for such records. This is a fail-closed boundary, not yet an active Matrix implementation. The device login, verification, key-share, backup/recovery and encrypted event transport remain unimplemented.
 
 The security feature is feasible, but it must be implemented as a protocol integration—not as a home-grown encryption wrapper around `Message.body`.
 
@@ -79,8 +81,8 @@ The following are concrete integration risks found by reviewing the current Mess
 ### Data-model and routing blockers
 
 1. `get_or_create_dm(user_a, user_b)` currently returns an existing private conversation for a user pair without any encryption-mode discriminator. A secure DM cannot safely be added by calling this helper unchanged: it could open a pre-existing plaintext DM instead of creating or selecting the secure one. The conversation identity/query must include immutable security mode.
-2. `Conversation` does not currently carry a security mode or Matrix room binding. No existing endpoint can guarantee that a room is secure.
-3. Existing message handlers assume the conversation has Django `Message` rows. The message-create/read, edit, delete, search, forwarding, reaction, schedule, attachment, and current WebSocket/event paths must never accept or emit plaintext for an E2EE conversation. Each handler needs a central security-mode guard, with separate protocol-backed routes where supported.
+2. `Conversation.security_mode` now distinguishes `standard` from `matrix_e2ee`, and is immutable through the model save path and a PostgreSQL trigger. There is still no Matrix room binding or working secure-chat creation endpoint, so no existing endpoint can provision a usable E2EE room.
+3. Existing message handlers assume the conversation has Django `Message` rows. Model-level guards now reject new plaintext `Message` and legacy Django `MessageAttachment` rows for `matrix_e2ee` conversations, and the ordinary React UI does not render its message timeline or composer for that mode. Endpoint-by-endpoint guards are still required for read/search, forwarding, edit/delete, reactions, scheduling, event sync, downloads, membership, pins and calls before an E2EE room can be provisioned.
 4. Conversation list data is built using the latest Django message body as a preview and database-backed unread counts. E2EE entries must not leak body text through previews, search, Redis cache inspection, error reporting, telemetry, notifications, logs or exports. Secure-room unread/activity state must be derived from Matrix event metadata or client sync without introducing plaintext message rows.
 5. Existing attachment endpoints serve Django-managed files. They are not encrypted-media endpoints. Secure media must be encrypted client-side and sent as Matrix encrypted file content; the old download/view-once flow must reject E2EE records unless a compatible secure implementation exists.
 6. Current call flows use the Messenger/Jitsi integration. Encrypted messages do not make a Jitsi call end-to-end encrypted. Secure chats must either use a separately verified secure-call design or explicitly show that calls are not covered by the message encryption guarantee.
@@ -94,6 +96,19 @@ The following are concrete integration risks found by reviewing the current Mess
 - Topic membership currently inherits root-group membership/permissions by application logic, with local topic removal behavior. Secure room membership synchronization must be durable and idempotent; a best-effort Django signal is not sufficient. Reconcile the Matrix room's actual membership against a persisted desired state and block sensitive operations while required membership changes are pending or failed.
 - Secure/public discovery, invite links, cross-server federation and room aliases need explicit policy. Do not make E2EE rooms searchable as public groups by default or allow arbitrary federation without a clear threat model.
 
+### Element-like first-login and history-recovery state machine
+
+A successful Django account login is not proof that a Matrix cryptographic device is trusted and does not itself give the new browser the keys to decrypt old messages. Match Element's explicit trust/recovery flow:
+
+1. **Existing device already trusted:** create independent keys for the new browser and show an interactive verification request (for example, cross-signing / QR or emoji verification supported by the selected SDK). After the user verifies it, allow key requests to be handled by the trusted existing device. Do not copy private device keys from the previous browser.
+2. **No old device available, recovery already set up:** ask the user for the recovery key/passphrase, validate it using Matrix Secret Storage, then restore the server-side encrypted key backup. A successful account password login alone must not unlock it.
+3. **First secure-device setup:** initialize Rust crypto once for the browser profile; set up Secret Storage and cross-signing, establish key backup if absent, show the recovery key only to the user, and require an explicit saved-it confirmation before treating recovery as ready. Never reset an existing backup merely because local IndexedDB is empty.
+4. **History status:** distinguish `device unverified`, `waiting for verification`, `recovery required`, `restoring`, `partially restored`, and `ready`. For an unavailable message key, show a per-message undecryptable state with actions to verify another device or restore backup. Never display an empty timeline as if the history has been successfully restored.
+5. **No usable device or recovery secret:** preserve the account and future use where supported, but make unavailable old history explicit. Do not weaken trust or fallback to the normal Django transport.
+6. **Device revocation:** revoke the Matrix device/session so it stops receiving future events/keys. Clearly explain that revocation cannot erase messages or keys already copied from that device.
+
+Recovery keys are not the Django password. The recovery key and encrypted backup must not be logged, sent to analytics, placed in URLs, stored in Django/Redis, or included in plaintext error telemetry. The UI must distinguish a valid backup restore from partial history recovery. These states are requirements for the future SDK integration; they are not claimed as shipped behavior.
+
 ### Matrix identity and device safety
 
 - Never send a Synapse admin token or application-service token to the browser. An application-service token can act as users in its configured namespace; it is not a per-user client credential.
@@ -105,6 +120,16 @@ The following are concrete integration risks found by reviewing the current Mess
 ### Required integration gate
 
 Before exposing a "Start encrypted chat" action, implement and test all of the following together: immutable mode and secure-room mapping; device-bound Matrix authentication without browser access to server-admin credentials; encrypted text/reply/media transport; membership reconciliation; secure list previews and unread state; explicit handling of unsupported features (search, forwarding, scheduled messages, view-once, calls); device verification; recovery; revocation; and multi-tab/browser-storage-loss tests. If any required secure path is unavailable, fail closed for that conversation rather than falling back to Django plaintext.
+
+## Current implementation boundary
+
+- Migration `0019_conversation_security_mode` adds the `security_mode` field, defaulting every existing conversation to `standard`.
+- ORM saves reject changes to a conversation's security mode; PostgreSQL also gets a trigger to reject direct `UPDATE security_mode` attempts. SQLite-based tests use the model-level check.
+- `Message.save()` and `MessageAttachment.save()` reject newly-created plaintext Django records for a conversation explicitly marked `matrix_e2ee`.
+- `POST /api/messenger/conversations/` returns HTTP 503 when `security_mode=matrix_e2ee` is requested before Matrix is ready. It does not return an existing normal DM as a substitute.
+- The topics endpoint rejects access/creation for encrypted records until backed by Matrix rooms. The React chat pane renders an unavailable state instead of the plaintext timeline, composer, uploads, search and ordinary calls.
+
+These are safe boundaries and regression tests—not the final Element-like experience. They deliberately leave secure chat unavailable instead of simulating verification or key recovery. Do not create `matrix_e2ee` conversations in production by hand: no Matrix room provisioning/session endpoint currently exists.
 
 ## Rollout and acceptance gates
 
