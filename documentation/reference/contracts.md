@@ -188,6 +188,11 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `messenger` | `src/messenger/urls.py` | explicit | `conversations/<int:pk>/transfer-ownership/` | [app API docs](../apps/messenger/api-reference.md) |
 | `messenger` | `src/messenger/urls.py` | explicit | `conversations/<int:pk>/topics/` | [app API docs](../apps/messenger/api-reference.md) |
 | `messenger` | `src/messenger/urls.py` | explicit | `conversations/` | [app API docs](../apps/messenger/api-reference.md) |
+| `messenger` | `src/messenger/urls.py` | explicit | `secure/device-session/` | [app API docs](../apps/messenger/api-reference.md) |
+| `messenger` | `src/messenger/urls.py` | explicit | `secure/identities/` | [app API docs](../apps/messenger/api-reference.md) |
+| `messenger` | `src/messenger/urls.py` | explicit | `secure/devices/` | [app API docs](../apps/messenger/api-reference.md) |
+| `messenger` | `src/messenger/urls.py` | explicit | `secure/devices/<str:device_id>/revoke/` | [app API docs](../apps/messenger/api-reference.md) |
+| `messenger` | `src/messenger/urls.py` | explicit | `secure/conversations/` | [app API docs](../apps/messenger/api-reference.md) |
 | `messenger` | `src/messenger/urls.py` | explicit | `groups/<int:pk>/join/` | [app API docs](../apps/messenger/api-reference.md) |
 | `messenger` | `src/messenger/urls.py` | explicit | `groups/search/` | [app API docs](../apps/messenger/api-reference.md) |
 | `messenger` | `src/messenger/urls.py` | explicit | `join-requests/<int:req_id>/` | [app API docs](../apps/messenger/api-reference.md) |
@@ -409,6 +414,8 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `messenger` | `src/messenger/models.py` | `Contact` | project model class | [field reference](../apps/messenger/field-reference.md#contact) |
 | `messenger` | `src/messenger/models.py` | `ConversationParticipant` | project model class | [field reference](../apps/messenger/field-reference.md#conversationparticipant) |
 | `messenger` | `src/messenger/models.py` | `Conversation` | project model class | [field reference](../apps/messenger/field-reference.md#conversation) |
+| `messenger` | `src/messenger/models.py` | `MatrixIdentity` | project model class | [field reference](../apps/messenger/field-reference.md#matrixidentity) |
+| `messenger` | `src/messenger/models.py` | `MatrixDevice` | project model class | [field reference](../apps/messenger/field-reference.md#matrixdevice) |
 | `messenger` | `src/messenger/models.py` | `GroupInviteLink` | project model class | [field reference](../apps/messenger/field-reference.md#groupinvitelink) |
 | `messenger` | `src/messenger/models.py` | `JoinRequest` | project model class | [field reference](../apps/messenger/field-reference.md#joinrequest) |
 | `messenger` | `src/messenger/models.py` | `MessageAttachment` | project model class | [field reference](../apps/messenger/field-reference.md#messageattachment) |
@@ -1029,6 +1036,19 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `messenger` | `src/messenger/models.py` | `Conversation` | `requires_approval` | `BooleanField` | [field reference](../apps/messenger/field-reference.md#conversation) |
 | `messenger` | `src/messenger/models.py` | `Conversation` | `title` | `CharField` | [field reference](../apps/messenger/field-reference.md#conversation) |
 | `messenger` | `src/messenger/models.py` | `Conversation` | `type` | `CharField` | [field reference](../apps/messenger/field-reference.md#conversation) |
+| `messenger` | `src/messenger/models.py` | `Conversation` | `matrix_room_id` | `CharField` | [field reference](../apps/messenger/field-reference.md#conversation) |
+| `messenger` | `src/messenger/models.py` | `Conversation` | `matrix_space_id` | `CharField` | [field reference](../apps/messenger/field-reference.md#conversation) |
+| `messenger` | `src/messenger/models.py` | `MatrixIdentity` | `user` | `OneToOneField` | [field reference](../apps/messenger/field-reference.md#matrixidentity) |
+| `messenger` | `src/messenger/models.py` | `MatrixIdentity` | `matrix_user_id` | `CharField` | [field reference](../apps/messenger/field-reference.md#matrixidentity) |
+| `messenger` | `src/messenger/models.py` | `MatrixIdentity` | `encrypted_password` | `TextField` | [field reference](../apps/messenger/field-reference.md#matrixidentity) |
+| `messenger` | `src/messenger/models.py` | `MatrixIdentity` | `created_at` | `DateTimeField` | [field reference](../apps/messenger/field-reference.md#matrixidentity) |
+| `messenger` | `src/messenger/models.py` | `MatrixIdentity` | `updated_at` | `DateTimeField` | [field reference](../apps/messenger/field-reference.md#matrixidentity) |
+| `messenger` | `src/messenger/models.py` | `MatrixDevice` | `user` | `ForeignKey` | [field reference](../apps/messenger/field-reference.md#matrixdevice) |
+| `messenger` | `src/messenger/models.py` | `MatrixDevice` | `device_id` | `CharField` | [field reference](../apps/messenger/field-reference.md#matrixdevice) |
+| `messenger` | `src/messenger/models.py` | `MatrixDevice` | `display_name` | `CharField` | [field reference](../apps/messenger/field-reference.md#matrixdevice) |
+| `messenger` | `src/messenger/models.py` | `MatrixDevice` | `last_seen_at` | `DateTimeField` | [field reference](../apps/messenger/field-reference.md#matrixdevice) |
+| `messenger` | `src/messenger/models.py` | `MatrixDevice` | `created_at` | `DateTimeField` | [field reference](../apps/messenger/field-reference.md#matrixdevice) |
+| `messenger` | `src/messenger/models.py` | `MatrixDevice` | `revoked_at` | `DateTimeField` | [field reference](../apps/messenger/field-reference.md#matrixdevice) |
 | `messenger` | `src/messenger/models.py` | `Conversation` | `security_mode` | `CharField` | [field reference](../apps/messenger/field-reference.md#conversation) |
 | `messenger` | `src/messenger/models.py` | `Conversation` | `is_forum` | `BooleanField` | [field reference](../apps/messenger/field-reference.md#conversation) |
 | `messenger` | `src/messenger/models.py` | `Conversation` | `parent_conversation` | `ForeignKey` | [field reference](../apps/messenger/field-reference.md#conversation) |
