@@ -1,6 +1,7 @@
 from django.urls import path
 from . import api as apis  # feature-split package (apis.py is a compat shim)
 from .api.events import ConversationEventSyncAPIView
+from .api.topics import ConversationTopicsAPIView
 
 urlpatterns = [
     path("users/search/", apis.UserSearchAPIView.as_view()),
@@ -10,6 +11,7 @@ urlpatterns = [
     path("blocks/<int:user_id>/unblock/", apis.UnblockAPIView.as_view()),
     path("conversations/", apis.ConversationListCreateAPIView.as_view()),
     path("conversations/<int:pk>/", apis.ConversationDetailAPIView.as_view()),
+    path("conversations/<int:pk>/topics/", ConversationTopicsAPIView.as_view()),
     path("conversations/<int:pk>/messages/", apis.MessageListCreateAPIView.as_view()),
     path("conversations/<int:pk>/events/", ConversationEventSyncAPIView.as_view()),
     path("conversations/<int:pk>/messages/search/", apis.MessageSearchAPIView.as_view()),
