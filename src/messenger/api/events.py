@@ -3,6 +3,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from auth_users.authentication import SessionJWTAuthentication
+from .common import reject_plaintext_transport
 
 from ..models import Conversation, ConversationParticipant, MessengerEvent
 
@@ -18,6 +19,9 @@ class ConversationEventSyncAPIView(APIView):
             conversation_id=pk, user=request.user, left_at__isnull=True
         ).exists():
             return Response({"detail": "Forbidden"}, status=403)
+        transport_error = reject_plaintext_transport(Conversation.objects.get(pk=pk))
+        if transport_error:
+            return transport_error
 
         try:
             after_id = max(0, int(request.query_params.get("after_id") or 0))
