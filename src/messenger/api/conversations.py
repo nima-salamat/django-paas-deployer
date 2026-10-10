@@ -227,9 +227,8 @@ class ConversationDetailAPIView(APIView):
         )
         if not self.get_participant(conv, request.user):
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
-        transport_error = reject_plaintext_transport(conv)
-        if transport_error:
-            return transport_error
+        # Metadata may be loaded to show a safe "secure chat unavailable" state.
+        # Serializer suppresses plaintext previews/drafts; messages remain owned by Matrix.
         _attach_list_side_data([conv], request.user)
         ctx = build_conversation_list_context(request, [conv])
         prepare_conversation_detail(conv, request.user)
