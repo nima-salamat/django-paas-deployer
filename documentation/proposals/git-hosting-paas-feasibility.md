@@ -164,6 +164,31 @@ Using the Git executable for controlled clone/fetch/archive operations is approp
 
 Only revisit custom Git protocol serving if a future technical spike demonstrates that a provider cannot meet a concrete requirement.
 
+
+### Forgejo deployment and provider-adapter contract
+
+Run Forgejo as a separately operated product, preferably on a dedicated hostname such as git.<your-domain>, rather than mounting it below the same PaaS browser origin under a path. Forgejo's reverse-proxy guide documents security concerns for hosting it under a subpath on an origin that also serves unrelated user-controlled content. Configure HTTPS, an explicit canonical ROOT_URL, reverse-proxy trust boundaries and a firewall that does not expose its private application/API port directly.
+
+The initial deployment must be deliberately closed:
+- Disable public self-registration unless there is an approved abuse-control policy; PaaS users should be provisioned through the chosen identity model.
+- Keep custom Git hooks disabled. Repository content is untrusted and custom server-side hooks could execute code on the Forgejo host.
+- Restrict Forgejo webhook egress using its webhook allowed-host setting to the exact PaaS webhook ingress host where possible; avoid broad private-network egress allowances.
+- Keep provider admin API credentials in the PaaS control-plane secret facility. Do not place the credential in Compose source, public settings, repository metadata or browser storage.
+- Use the provider's supported API for repository metadata/management and normal HTTPS/SSH Git protocol for fetch/push. Never manipulate Forgejo's internal repository directories from Django or a worker.
+- Back up Forgejo's configured data/repository storage, database and required secret/configuration state together; prove restore and reconcile provider repo IDs against GitRepositoryBinding records before production.
+
+Confirm the precise configuration keys and behavior against the selected Forgejo release during the spike: [Forgejo reverse-proxy guidance](https://forgejo.org/docs/v17.0/admin/setup/reverse-proxy/), [configuration cheat sheet](https://forgejo.org/docs/latest/admin/config-cheat-sheet/) and [recommended settings](https://forgejo.org/docs/latest/admin/setup/recommendations/). Do not copy a configuration recipe across versions without reviewing defaults.
+
+Define a narrow provider adapter before endpoint implementation. Its interface should expose only the operations the PaaS actually needs:
+- health/version/capability check;
+- create/get/list/rename/archive/delete a repository using stable provider IDs;
+- list branches/tags and resolve a ref to a full commit SHA;
+- register, rotate, inspect and remove a repository webhook;
+- obtain or configure the narrowly scoped credential mechanism used for a source fetch.
+
+The provider adapter must accept a validated installation plus provider object ID, not an arbitrary base URL/clone URL supplied by a tenant. Translate provider errors into stable, sanitized domain errors (not raw API responses or credential-bearing URLs). It must not fetch/build source; actual Git object transfer belongs to the isolated source worker. The Phase 0 spike must prove how a repository owner can push normally while the deploy worker can fetch read-only without possessing the Forgejo administrator token. If the selected Forgejo authentication model cannot meet that trust boundary, stop and revisit the identity/credential design before implementation.
+
+
 ## 6. Recommended MVP boundary
 
 ### Include
@@ -295,6 +320,56 @@ Suggested fields:
 - status: received, ignored, queued, processed or failed; sanitized outcome/reason; optional linked GitSourceOperation and processed_at.
 
 Persist this row before returning a successful HTTP acknowledgement. In the same transaction, create any required dispatch/outbox intent, or make received rows an explicitly pollable durable inbox. If publishing a Celery task fails after the DB transaction commits, a periodic dispatcher/reconciler must redispatch eligible rows. Do not acknowledge success based only on an in-memory Celery send. Do not add a second generic outbox model only for this purpose: a durable inbox plus a tested recovery contract is enough for the MVP.
+
+
+### Proposed Django app boundary and model ownership
+
+Use a dedicated first-party Django app, provisionally named src/git_hosting/; confirm by repository-wide tree/search that no partial Git subsystem already exists before creating it. Do not place Git-provider lifecycle code in deployments, and do not grow src/agent into a second Git domain application.
+
+| Module | Ownership |
+|---|---|
+| git_hosting/models.py | GitProviderInstallation, GitRepositoryBinding, GitServiceSource, GitSourceOperation and GitWebhookDelivery |
+| git_hosting/providers/base.py | Provider adapter protocol and normalized result/error types |
+| git_hosting/providers/forgejo.py | Version-tested Forgejo API implementation |
+| git_hosting/application/repositories.py | Tenant-fenced repository provisioning, metadata sync, quota and delete lifecycle |
+| git_hosting/application/sources.py | GitServiceSource validation, guarded Service projection and owner/share authorization |
+| git_hosting/application/operations.py | Idempotent source operation acceptance, state transitions, hand-off and recovery |
+| git_hosting/apis/ | Browser/session API views and webhook receiver; route registration belongs to this app |
+| git_hosting/tasks.py | Only source-fetch/archive/recovery tasks, routed to git-source |
+| git_hosting/tests/ | Provider contracts, tenancy, task routing, revision hand-off, webhook and recovery tests |
+| agent/apis/git.py + existing Agent contracts | Thin Agent-facing adapter that calls the same application services; no duplicate repository/deploy logic |
+| deploy/models.py + services/revisioning.py | Provider-neutral Deploy source_provenance hand-off and immutable revision snapshot integration |
+
+Model relationship sketch (proposed, not current schema):
+
+```mermaid
+erDiagram
+    USER ||--o{ GIT_REPOSITORY_BINDING : owns
+    GIT_PROVIDER_INSTALLATION ||--o{ GIT_REPOSITORY_BINDING : hosts
+    SERVICE ||--o| GIT_SERVICE_SOURCE : configures
+    GIT_REPOSITORY_BINDING ||--o{ GIT_SERVICE_SOURCE : source_for
+    GIT_SERVICE_SOURCE ||--o{ GIT_SOURCE_OPERATION : requested_by
+    GIT_REPOSITORY_BINDING ||--o{ GIT_WEBHOOK_DELIVERY : receives
+    GIT_WEBHOOK_DELIVERY ||--o{ GIT_SOURCE_OPERATION : triggers
+    DEPLOY o|--o| GIT_SOURCE_OPERATION : handoff
+```
+
+Recommended deletion/history semantics:
+- GitServiceSource.repository_binding uses PROTECT. Disconnect or tombstone references first; do not cascade-delete source intent silently.
+- GitServiceSource.service can cascade with Service deletion only after the delete/lifecycle hook has cancelled or invalidated queued operations. GitSourceOperation should retain immutable service/repository ID snapshots and survive through its retention window; use nullable SET_NULL relations or equivalent deliberate history preservation instead of an accidental cascade.
+- GitWebhookDelivery keeps provider installation/repository IDs and delivery ID as snapshots so audit survives repository deletion. Any live FK to a binding can be nullable SET_NULL after the tombstone process.
+- The operation-to-Deploy hand-off must have a uniqueness guarantee. Prefer a nullable OneToOne relation or a unique deploy-side source_operation_id so retry/recovery cannot create multiple Deploy rows.
+- Store only encrypted credential references plus metadata/version IDs in model rows. Separate provider administrative credentials, developer push credentials and fetch-only credentials; they are different trust levels. Never reuse ServiceSecret blindly as a global credential vault without validating ownership, rotation and access semantics.
+
+### Migration and release ordering
+
+1. Audit all existing Service rows with source_kind=git and inspect their source_config shape before a schema change. Do not silently treat existing values as valid GitServiceSource rows or overwrite them. Keep a report/management command and decide whether each record is migrated, quarantined or left untouched.
+2. Add the new app/models and provider adapter behind a disabled feature flag; create migrations and admin read-only diagnostics.
+3. Implement the guarded source application service first; then reject direct generic/API/Agent writes to Git-managed source_config and source_kind paths. Add regression tests for all configuration write routes.
+4. Add the source operation, isolated worker and artifact hand-off; verify the SHA+archive digest in a revision before enabling any user-facing feature.
+5. Add Agent contracts and React surfaces only after the same application service works for browser and Agent callers. The Agent route is not a second implementation.
+6. Turn on manual deploy for internal/test users after all gates pass; only later enable the webhook receiver and owner opt-in auto-deploy.
+
 
 ### Revision and deployment provenance bridge — required schema/code change
 
@@ -580,7 +655,7 @@ On a Git deploy attempt, the UI should show a durable task/deploy ID and then na
 - Deploy a disposable Forgejo instance in a non-production environment.
 - Verify provider account/provisioning strategy, API authentication, repo create/delete, normal Git push/clone, webhooks/signatures, backup/restore and repository quota observability.
 - Create a temporary repository with a small supported Docker source and run the current PaaS pipeline on a frozen source archive.
-- Trace all existing `SourceKind.GIT` call sites and confirm source-binding ownership semantics.
+- Trace all existing SourceKind.GIT readers/writers and inspect persisted Service rows with source_kind=git; decide explicitly how any legacy JSON configuration is handled before migration. Confirm source-binding ownership semantics.
 - Decide how PaaS users authenticate to the Git UI and Git over SSH/HTTPS.
 - Produce measured resource/security results and refine the proposed defaults.
 
@@ -590,7 +665,7 @@ On a Git deploy attempt, the UI should show a durable task/deploy ID and then na
 
 - Provider adapter and health checks.
 - Repository metadata/bindings and owner-scoped API.
-- ServiceGitSource API.
+- GitServiceSource API.
 - Restricted fetch/archive worker.
 - Immutable source provenance connected to ServiceRevision/Deploy.
 - React repository picker and manual Deploy source UI.
@@ -714,6 +789,8 @@ The implementation should start only after the Phase 0 exit gate, authentication
 - [Forgejo admin guide](https://forgejo.org/docs/latest/admin/)
 - [Forgejo repository guide](https://forgejo.org/docs/latest/user/)
 - [Forgejo webhook/config security settings](https://forgejo.org/docs/latest/admin/config-cheat-sheet/)
+- [Forgejo reverse-proxy guidance and same-origin/subpath risks](https://forgejo.org/docs/v17.0/admin/setup/reverse-proxy/)
+- [Forgejo recommended settings and SSH/Git hosting operations](https://forgejo.org/docs/latest/admin/setup/recommendations/)
 - [Gitea webhook delivery/signature reference](https://docs.gitea.com/usage/repository/webhooks/)
 - [Git Smart HTTP protocol](https://git-scm.com/docs/http-protocol)
 - [GitLab Gitaly architecture and storage caveats](https://docs.gitlab.com/administration/gitaly/)
