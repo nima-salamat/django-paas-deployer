@@ -23,11 +23,54 @@ from services.models import (
     PrivateNetwork,
     ServiceNetworkAttachment,
     DatabaseResource,
+    DatabaseCredential,
     ServiceDatabaseBinding,
 )
 from services.revisioning import materialize_revision_config, _get_or_create_secret, redact_config, get_active_deploy
 from services.share_permissions import assert_share_action, SharePermissionError
 from services.ports import sync_endpoint_reservation, release_endpoint_port
+
+
+_DATABASE_SERVICE_PORTS = {
+    "mysql": 3306, "mariadb": 3306, "postgres": 5432, "postgresql": 5432,
+    "mongodb": 27017, "mongo": 27017, "redis": 6379, "oracle": 1521,
+}
+
+
+def _database_engine_for_service(service: Service) -> str:
+    engine = str(getattr(getattr(service, "plan", None), "platform", "") or "").strip().lower()
+    return {"postgres": "postgresql", "mongo": "mongodb"}.get(engine, engine)
+
+
+def _database_service_port(engine: str):
+    return _DATABASE_SERVICE_PORTS.get(str(engine or "").strip().lower())
+
+
+def _service_network_ids(service: Service) -> set:
+    network_ids = set()
+    if getattr(service, "network_id", None):
+        network_ids.add(service.network_id)
+    if getattr(service, "pk", None):
+        network_ids.update(
+            ServiceNetworkAttachment.objects.filter(service_id=service.pk)
+            .values_list("network_id", flat=True)
+        )
+    return network_ids
+
+
+def _services_share_private_network(service: Service, provider: Service) -> bool:
+    return bool(_service_network_ids(service) & _service_network_ids(provider))
+
+
+def _database_service_configuration(service: Service) -> dict:
+    """Read the active DB deploy's config server-side; callers must redact credentials."""
+    from deployments.common.config import parse_config
+
+    deployment = get_active_deploy(service) or getattr(service, "selected_deploy", None)
+    if deployment is None:
+        return {}
+    parsed = parse_config(getattr(deployment, "config", None))
+    return parsed if isinstance(parsed, dict) else {}
 
 
 class ServiceConfigBaseAPIView(APIView):
@@ -644,7 +687,11 @@ class ServiceDatabaseBindingsAPIView(ServiceConfigBaseAPIView):
         denied = self.assert_access(request, service, "can_view")
         if denied:
             return denied
-        rows = ServiceDatabaseBinding.objects.filter(service=service).select_related("database", "database__provider_service")
+        rows = (
+            ServiceDatabaseBinding.objects.filter(service=service)
+            .select_related("database", "database__provider_service")
+            .order_by("alias")
+        )
         return Response({
             "results": [
                 {
@@ -652,19 +699,27 @@ class ServiceDatabaseBindingsAPIView(ServiceConfigBaseAPIView):
                     "database": str(row.database_id),
                     "database_name": row.database.name,
                     "engine": row.database.engine,
-                    "host": row.database.host,
-                    "port": row.database.port,
+                    "host": row.database.host or (
+                        row.database.provider_service.get_docker_service_name()
+                        if row.database.provider_service_id else ""
+                    ),
+                    "port": row.database.port or (
+                        _database_service_port(_database_engine_for_service(row.database.provider_service))
+                        if row.database.provider_service_id else None
+                    ),
                     "database_name_runtime": row.database.database_name,
                     "alias": row.alias,
                     "env_prefix": row.env_prefix,
                     "access_mode": row.access_mode,
+                    "status": row.database.status,
+                    "connection_type": "managed_binding",
+                    "binding_status": "configured_unverified",
                     "provider_service": str(row.database.provider_service_id) if row.database.provider_service_id else None,
                 }
                 for row in rows
             ],
             "catalog_dependencies": self._catalog_database_dependencies(request, service),
         })
-
     def post(self, request, service_id):
         service = self.service(request, service_id)
         denied = self.assert_access(request, service, "can_change_config")
@@ -673,31 +728,166 @@ class ServiceDatabaseBindingsAPIView(ServiceConfigBaseAPIView):
         blocked = self.assert_mutable(service)
         if blocked:
             return blocked
-        database_id = request.data.get("database")
-        database = get_object_or_404(
-            DatabaseResource.objects.filter(owner=service.user),
-            pk=database_id,
-        )
-        row, _ = ServiceDatabaseBinding.objects.update_or_create(
+
+        database_ref = str(request.data.get("database") or "").strip()
+        if not database_ref:
+            return Response({"error": "database is required."}, status=400)
+
+        alias = str(request.data.get("alias") or "default").strip()
+        env_prefix = str(request.data.get("env_prefix") or "DB").strip().upper()
+        access_mode = str(request.data.get("access_mode") or "rw").strip().lower()
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", alias):
+            return Response({"error": "Alias must start with a letter and contain only letters, digits, '_' or '-'."}, status=400)
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,31}", env_prefix):
+            return Response({"error": "Environment prefix must start with a letter and contain only A-Z, digits or '_'."}, status=400)
+        if access_mode not in {"rw", "ro"}:
+            return Response({"error": "access_mode must be 'rw' or 'ro'."}, status=400)
+
+        provider = None
+        database = None
+        if database_ref.startswith("service:"):
+            from uuid import UUID
+            from deployments.core.db_deployer import DB_PLATFORMS
+
+            try:
+                provider_id = UUID(database_ref.partition(":")[2])
+            except (ValueError, TypeError, AttributeError):
+                return Response({"error": "Invalid database service reference."}, status=400)
+
+            provider = get_object_or_404(
+                Service.objects.select_related("plan", "selected_deploy").filter(
+                    user=service.user,
+                    plan__plan_type=PlanTypeChoices.DB,
+                ),
+                pk=provider_id,
+            )
+            engine = _database_engine_for_service(provider)
+            if provider.pk == service.pk:
+                return Response({"error": "A service cannot use itself as its database."}, status=400)
+            if provider.source_kind == Service.SourceKind.CATALOG:
+                return Response({
+                    "error": "This database is owned by a Ready App. Use the Ready App's declared dependency instead.",
+                    "code": "ready_app_database_managed",
+                }, status=409)
+            if engine not in DB_PLATFORMS:
+                return Response({"error": "The selected service does not use a supported database platform."}, status=400)
+            if not _services_share_private_network(service, provider):
+                return Response({
+                    "error": "The application and database service must share a private network before they can be connected.",
+                    "code": "database_network_mismatch",
+                }, status=409)
+
+            provider_config = _database_service_configuration(provider)
+            database = DatabaseResource.objects.filter(provider_service=provider).first()
+            if database is not None and database.owner_id != service.user_id:
+                return Response({"error": "The selected database resource is not available to this service."}, status=404)
+
+            if database is None:
+                base_name = str(provider.name or "database").strip()[:64] or "database"
+                resource_name = base_name
+                if DatabaseResource.objects.filter(owner=service.user, name=resource_name).exists():
+                    suffix = str(provider.pk).replace("-", "")[:8]
+                    resource_name = f"{base_name[:64 - len(suffix) - 1]}-{suffix}"
+                database = DatabaseResource.objects.create(
+                    owner=service.user,
+                    provider_service=provider,
+                    name=resource_name,
+                    engine=engine,
+                    host=provider.get_docker_service_name(),
+                    port=_database_service_port(engine),
+                    database_name=str(provider_config.get("database") or "")[:128],
+                    status=str(provider.status or "unknown")[:20],
+                    metadata={"source": "database_service_binding"},
+                )
+            else:
+                database.engine = engine
+                database.host = provider.get_docker_service_name()
+                database.port = _database_service_port(engine)
+                database.database_name = str(provider_config.get("database") or database.database_name or "")[:128]
+                database.status = str(provider.status or database.status or "unknown")[:20]
+                database.save(update_fields=["engine", "host", "port", "database_name", "status", "updated_at"])
+
+            username = str(provider_config.get("username") or "")
+            password = str(provider_config.get("password") or "")
+            if username or password:
+                credential, created = DatabaseCredential.objects.get_or_create(database=database)
+                credential.username = username or credential.username
+                if password and (created or credential.get_password() != password):
+                    credential.set_password(password)
+                    if not created:
+                        credential.version += 1
+                credential.save(update_fields=["username", "password_ciphertext", "version", "updated_at"])
+        else:
+            database = get_object_or_404(
+                DatabaseResource.objects.select_related("provider_service"),
+                owner=service.user,
+                pk=database_ref,
+            )
+            provider = database.provider_service
+
+        if not database.host and not provider:
+            return Response({"error": "The selected database resource has no host configured."}, status=400)
+        if provider and not _services_share_private_network(service, provider):
+            return Response({
+                "error": "The application and database service must share a private network before they can be connected.",
+                "code": "database_network_mismatch",
+            }, status=409)
+
+        policy = dict(database.access_policy or {})
+        allowed = policy.get("allowed_service_ids") or policy.get("allowed_services")
+        if allowed and str(service.pk) not in {str(item) for item in allowed}:
+            return Response({"error": "This database resource does not allow this service."}, status=403)
+        if bool(policy.get("read_only")) and access_mode == "rw":
+            return Response({"error": "This database resource only permits read-only access."}, status=400)
+
+        if ServiceDatabaseBinding.objects.filter(
             service=service,
-            database=database,
-            alias=str(request.data.get("alias") or "default")[:64],
-            defaults={
-                "env_prefix": str(request.data.get("env_prefix") or "DB")[:32],
-                "access_mode": str(request.data.get("access_mode") or "rw")[:16],
-                "metadata": dict(request.data.get("metadata") or {}),
-            },
-        )
+            env_prefix=env_prefix,
+        ).exclude(alias=alias).exists():
+            return Response({
+                "error": "That environment prefix is already used by another database binding on this service.",
+                "code": "database_env_prefix_conflict",
+            }, status=409)
+
+        with transaction.atomic():
+            Service.objects.select_for_update().get(pk=service.pk)
+            existing = (
+                ServiceDatabaseBinding.objects.select_for_update()
+                .filter(service=service, alias=alias)
+                .first()
+            )
+            if existing:
+                ServiceDatabaseBinding.objects.filter(
+                    service=service, alias=alias,
+                ).exclude(pk=existing.pk).delete()
+                existing.database = database
+                existing.env_prefix = env_prefix
+                existing.access_mode = access_mode
+                existing.save(update_fields=["database", "env_prefix", "access_mode", "updated_at"])
+                row = existing
+            else:
+                row = ServiceDatabaseBinding.objects.create(
+                    service=service,
+                    database=database,
+                    alias=alias,
+                    env_prefix=env_prefix,
+                    access_mode=access_mode,
+                )
+
         return Response({
             "id": str(row.pk),
             "database": str(database.pk),
             "database_name": database.name,
             "engine": database.engine,
+            "host": database.host or (provider.get_docker_service_name() if provider else ""),
+            "port": database.port or (_database_service_port(_database_engine_for_service(provider)) if provider else None),
             "alias": row.alias,
             "env_prefix": row.env_prefix,
             "access_mode": row.access_mode,
-        }, status=200)
-
+            "provider_service": str(provider.pk) if provider else None,
+            "status": database.status,
+            "binding_status": "configured_unverified",
+        })
     def delete(self, request, service_id):
         service = self.service(request, service_id)
         denied = self.assert_access(request, service, "can_change_config")
@@ -721,24 +911,78 @@ class DatabaseResourceAPIView(ServiceConfigBaseAPIView):
         denied = self.assert_access(request, service, "can_view")
         if denied:
             return denied
-        rows = DatabaseResource.objects.filter(owner=service.user).select_related("provider_service").order_by("name")
-        return Response({
-            "results": [
-                {
-                    "id": str(row.pk),
-                    "name": row.name,
-                    "engine": row.engine,
-                    "host": row.host,
-                    "port": row.port,
-                    "database_name": row.database_name,
-                    "provider_service": str(row.provider_service_id) if row.provider_service_id else None,
-                    "status": row.status,
-                    "access_policy": row.access_policy or {},
-                }
-                for row in rows
-            ]
-        })
 
+        from deployments.core.db_deployer import DB_PLATFORMS
+
+        rows = (
+            DatabaseResource.objects.filter(owner=service.user)
+            .select_related("provider_service", "provider_service__plan")
+            .order_by("name")
+        )
+        results = []
+        existing_provider_ids = set()
+        for row in rows:
+            provider = row.provider_service
+            if provider is not None:
+                existing_provider_ids.add(str(provider.pk))
+            host = row.host or (provider.get_docker_service_name() if provider else "")
+            port = row.port or (_database_service_port(_database_engine_for_service(provider)) if provider else None)
+            connectable = bool(host) and (
+                provider is None or _services_share_private_network(service, provider)
+            )
+            results.append({
+                "id": str(row.pk),
+                "name": row.name,
+                "engine": row.engine,
+                "host": host,
+                "port": port,
+                "database_name": row.database_name,
+                "provider_service": str(row.provider_service_id) if row.provider_service_id else None,
+                "status": str(provider.status if provider else row.status or "unknown"),
+                "access_policy": row.access_policy or {},
+                "resource_type": "managed_resource",
+                "connectable": connectable,
+                "connection_issue": (
+                    "Attach this service and the database service to the same private network before connecting."
+                    if provider is not None and not connectable
+                    else "The database resource has no host configured."
+                    if not host else ""
+                ),
+            })
+
+        db_services = (
+            Service.objects.filter(user=service.user, plan__plan_type=PlanTypeChoices.DB)
+            .exclude(pk=service.pk)
+            .exclude(source_kind=Service.SourceKind.CATALOG)
+            .select_related("plan", "selected_deploy")
+            .order_by("name")
+        )
+        for provider in db_services:
+            engine = _database_engine_for_service(provider)
+            if engine not in DB_PLATFORMS or str(provider.pk) in existing_provider_ids:
+                continue
+            config = _database_service_configuration(provider)
+            host = provider.get_docker_service_name()
+            connectable = _services_share_private_network(service, provider)
+            results.append({
+                "id": f"service:{provider.pk}",
+                "name": provider.name,
+                "engine": engine,
+                "host": host,
+                "port": _database_service_port(engine),
+                "database_name": str(config.get("database") or ""),
+                "provider_service": str(provider.pk),
+                "status": str(provider.status or "unknown"),
+                "resource_type": "database_service",
+                "connectable": connectable,
+                "connection_issue": (
+                    ""
+                    if connectable
+                    else "Attach this service and the database service to the same private network before connecting."
+                ),
+            })
+        results.sort(key=lambda item: (str(item.get("name") or "").lower(), str(item.get("id") or "")))
+        return Response({"results": results})
     def post(self, request, service_id):
         service = self.service(request, service_id)
         denied = self.assert_access(request, service, "can_change_config")
