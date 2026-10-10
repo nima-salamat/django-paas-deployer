@@ -720,8 +720,12 @@ class ServiceDatabaseBindingsAPIView(ServiceConfigBaseAPIView):
             ],
             "catalog_dependencies": self._catalog_database_dependencies(request, service),
         })
+    @transaction.atomic
     def post(self, request, service_id):
-        service = self.service(request, service_id)
+        service = get_object_or_404(
+            Service.objects.select_for_update().select_related("plan", "network", "selected_deploy"),
+            pk=service_id,
+        )
         denied = self.assert_access(request, service, "can_change_config")
         if denied:
             return denied
