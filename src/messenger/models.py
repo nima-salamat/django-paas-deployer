@@ -112,6 +112,10 @@ class Conversation(models.Model):
         PRIVATE = "private", _("Private")
         GROUP = "group", _("Group")
 
+    class SecurityMode(models.TextChoices):
+        STANDARD = "standard", _("Standard chat")
+        MATRIX_E2EE = "matrix_e2ee", _("End-to-end encrypted (Matrix)")
+
     class HistoryVisibility(models.TextChoices):
         """Who can see messages sent BEFORE they joined the group."""
         ALL = "all", _("All new members see history")
@@ -120,6 +124,14 @@ class Conversation(models.Model):
 
     public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
     type = models.CharField(max_length=10, choices=Type.choices, default=Type.PRIVATE, db_index=True)
+    # Immutable transport/security boundary. E2EE rooms must use Matrix and must
+    # never fall back to Django's plaintext Message/MessageAttachment pipeline.
+    security_mode = models.CharField(
+        max_length=20,
+        choices=SecurityMode.choices,
+        default=SecurityMode.STANDARD,
+        db_index=True,
+    )
     title = models.CharField(max_length=255, blank=True, default="")  # groups only
     description = models.TextField(blank=True, default="")
     avatar = models.ImageField(upload_to="messenger/groups/", null=True, blank=True)
@@ -157,6 +169,28 @@ class Conversation(models.Model):
             models.Index(fields=["type", "is_public"]),
             models.Index(fields=["last_message_at"]),
         ]
+
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        instance = super().from_db(db, field_names, values)
+        if "security_mode" in field_names:
+            instance._security_mode_snapshot = instance.security_mode
+        return instance
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            original_mode = getattr(self, "_security_mode_snapshot", None)
+            if original_mode is None:
+                original_mode = type(self).objects.filter(pk=self.pk).values_list(
+                    "security_mode", flat=True
+                ).first()
+            if original_mode is not None and original_mode != self.security_mode:
+                raise ValidationError(
+                    "Conversation security mode is immutable; create a separate conversation "
+                    "to change the security boundary."
+                )
+        super().save(*args, **kwargs)
+        self._security_mode_snapshot = self.security_mode
 
     def __str__(self):
         if self.type == self.Type.PRIVATE:
@@ -330,6 +364,17 @@ class Message(models.Model):
         ]
 
     def save(self, *args, **kwargs):
+        # Matrix encrypted events are transported by Matrix, never by this
+        # server-readable Django model. Fail closed if any legacy code attempts
+        # to create a plaintext Message in an encrypted conversation.
+        if self._state.adding and self.conversation_id:
+            mode = Conversation.objects.filter(pk=self.conversation_id).values_list(
+                "security_mode", flat=True
+            ).first()
+            if mode == Conversation.SecurityMode.MATRIX_E2EE:
+                raise ValidationError(
+                    "Plaintext Messenger messages are disabled for encrypted conversations."
+                )
         super().save(*args, **kwargs)
         # Do not bump conversation activity for still-pending scheduled messages
         if self.is_scheduled and self.scheduled_for:
@@ -423,6 +468,19 @@ class MessageAttachment(models.Model):
 
     class Meta:
         ordering = ["created_at"]
+
+    def save(self, *args, **kwargs):
+        # Encrypted media must be encrypted client-side and uploaded via the
+        # Matrix encrypted-file protocol, not the legacy Django media store.
+        if self._state.adding and self.conversation_id:
+            mode = Conversation.objects.filter(pk=self.conversation_id).values_list(
+                "security_mode", flat=True
+            ).first()
+            if mode == Conversation.SecurityMode.MATRIX_E2EE:
+                raise ValidationError(
+                    "Django attachments are disabled for encrypted conversations."
+                )
+        super().save(*args, **kwargs)
 
 
 class AttachmentViewOnceOpen(models.Model):
