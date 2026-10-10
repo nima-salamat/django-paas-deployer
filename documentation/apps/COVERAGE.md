@@ -37,13 +37,13 @@ Every production source surface must be mapped to its owning canonical document 
 | `deployments` | 118 | [deployments](./deployments/README.md) |
 | `logs` | 12 | [logs](./logs/README.md) |
 | `app_catalog` | 18 | [app_catalog](./app_catalog/README.md) |
-| `messenger` | 34 | [messenger](./messenger/README.md) |
+| `messenger` | 35 | [messenger](./messenger/README.md) |
 | `tickets` | 21 | [tickets](./tickets/README.md) |
 | `custom_emails` | 12 | [custom_emails](./custom_emails/README.md) |
 | `docs` | 9 | [docs](./docs/README.md) |
 | `core` | 31 | [core](./core/README.md) |
 | `cms` | 9 | [cms](./cms/README.md) |
-| **Total** | **415** | **15 app boundaries** |
+| **Total** | **416** | **15 app boundaries** |
 
 ### Module-level inventory
 
@@ -394,6 +394,7 @@ Every production source surface must be mapped to its owning canonical document 
 - `src/messenger/api/media.py` → [messenger](./messenger/README.md)
 - `src/messenger/api/members.py` → [messenger](./messenger/README.md)
 - `src/messenger/api/messages.py` → [messenger](./messenger/README.md)
+- `src/messenger/api/matrix.py` → [messenger](./messenger/README.md)
 - `src/messenger/api/pins.py` → [messenger](./messenger/README.md)
 - `src/messenger/api/topics.py` → [messenger](./messenger/README.md)
 - `src/messenger/api/profile.py` → [messenger](./messenger/README.md)
