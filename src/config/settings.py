@@ -37,6 +37,13 @@ DOMAIN_NAME = os.environ.get("DOMAIN_NAME", "")
 DEPLOYMENT_DOMAIN = os.environ.get("DEPLOYMENT_DOMAIN", "local")
 API_DOMAIN_NAME = os.environ.get("API_DOMAIN_NAME", "")
 
+# Optional self-hosted Matrix/Synapse integration for opt-in E2EE Messenger rooms.
+# Secure chat stays unavailable unless every required value is configured.
+MATRIX_HOMESERVER_URL = os.environ.get("MATRIX_HOMESERVER_URL", "").strip().rstrip("/")
+MATRIX_HOMESERVER_DOMAIN = os.environ.get("MATRIX_HOMESERVER_DOMAIN", "").strip().lower()
+MATRIX_ADMIN_ACCESS_TOKEN = os.environ.get("MATRIX_ADMIN_ACCESS_TOKEN", "").strip()
+MATRIX_IDENTITY_ENCRYPTION_KEY = os.environ.get("MATRIX_IDENTITY_ENCRYPTION_KEY", "").strip()
+
 
 # Docker Swarm runtime. Application workloads are deployed as Swarm services.
 SWARM_ENABLED = env_bool("SWARM_ENABLED", True)
