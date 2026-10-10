@@ -51,8 +51,8 @@ The same PrivateNetworkViewSet and VolumeViewSet are mounted under /api/networks
 | GET, POST, DELETE | /services/service/<uuid:service_id>/secrets/ | Secret identities/versions; plaintext is not ordinary read output. |
 | GET, POST, DELETE | /services/service/<uuid:service_id>/endpoints/ | Desired exposure; model validation enforces protocol/port/path rules. |
 | GET, POST, DELETE | /services/service/<uuid:service_id>/networks/ | ServiceNetworkAttachment rows. |
-| GET, POST, DELETE | /services/service/<uuid:service_id>/databases/ | ServiceDatabaseBinding rows. |
-| GET, POST | /services/service/<uuid:service_id>/database-resources/ | Visible database resources. |
+| GET, POST, DELETE | /services/service/<uuid:service_id>/databases/ | Explicit DB binding; POST accepts an owned DatabaseResource UUID or `service:<database-service-uuid>`. DB services must share a private network with the workload. Binding is recorded as configured/unverified, not a live connection test. |
+| GET, POST | /services/service/<uuid:service_id>/database-resources/ | Lists owned database resources and selectable regular DB services; credentials are not returned. |
 | GET | /services/service/<uuid:service_id>/revisions/ | List immutable revisions. |
 | GET | /services/service/<uuid:service_id>/revisions/<uuid:revision_id>/ | Read one owned revision. |
 | POST | /services/service/<uuid:service_id>/revisions/<uuid:revision_id>/rollback/ | Deploy an existing revision without editing it. |
