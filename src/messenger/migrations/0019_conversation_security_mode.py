@@ -1,14 +1,18 @@
 from django.db import migrations, models
 
 
-def install_security_mode_immutability_trigger(apps, schema_editor):
-    """Enforce the immutable security boundary in PostgreSQL as well as ORM saves."""
+def install_security_mode_triggers(apps, schema_editor):
+    """
+    Enforce immutable security mode and block plaintext rows at the database
+    boundary. This protects bulk_create and other ORM paths that bypass save().
+    """
     if schema_editor.connection.vendor != "postgresql":
         return
+
     with schema_editor.connection.cursor() as cursor:
         cursor.execute("""
             CREATE OR REPLACE FUNCTION messenger_reject_security_mode_change()
-            RETURNS trigger AS $
+            RETURNS trigger AS $function$
             BEGIN
                 IF NEW.security_mode IS DISTINCT FROM OLD.security_mode THEN
                     RAISE EXCEPTION
@@ -16,7 +20,7 @@ def install_security_mode_immutability_trigger(apps, schema_editor):
                 END IF;
                 RETURN NEW;
             END;
-            $ LANGUAGE plpgsql;
+            $function$ LANGUAGE plpgsql;
         """)
         cursor.execute("""
             DROP TRIGGER IF EXISTS messenger_conversation_security_mode_immutable
@@ -29,16 +33,69 @@ def install_security_mode_immutability_trigger(apps, schema_editor):
             EXECUTE FUNCTION messenger_reject_security_mode_change();
         """)
 
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION messenger_reject_plaintext_for_e2ee_conversation()
+            RETURNS trigger AS $function$
+            DECLARE current_security_mode varchar(20);
+            BEGIN
+                SELECT security_mode
+                  INTO current_security_mode
+                  FROM messenger_conversation
+                 WHERE id = NEW.conversation_id;
 
-def remove_security_mode_immutability_trigger(apps, schema_editor):
+                IF current_security_mode = 'matrix_e2ee' THEN
+                    RAISE EXCEPTION
+                        'Plaintext Messenger records are disabled for Matrix E2EE conversations';
+                END IF;
+                RETURN NEW;
+            END;
+            $function$ LANGUAGE plpgsql;
+        """)
+        cursor.execute("""
+            DROP TRIGGER IF EXISTS messenger_message_no_plaintext_for_e2ee
+            ON messenger_message;
+        """)
+        cursor.execute("""
+            CREATE TRIGGER messenger_message_no_plaintext_for_e2ee
+            BEFORE INSERT OR UPDATE ON messenger_message
+            FOR EACH ROW
+            EXECUTE FUNCTION messenger_reject_plaintext_for_e2ee_conversation();
+        """)
+        cursor.execute("""
+            DROP TRIGGER IF EXISTS messenger_attachment_no_plaintext_for_e2ee
+            ON messenger_messageattachment;
+        """)
+        cursor.execute("""
+            CREATE TRIGGER messenger_attachment_no_plaintext_for_e2ee
+            BEFORE INSERT OR UPDATE ON messenger_messageattachment
+            FOR EACH ROW
+            EXECUTE FUNCTION messenger_reject_plaintext_for_e2ee_conversation();
+        """)
+
+
+def remove_security_mode_triggers(apps, schema_editor):
     if schema_editor.connection.vendor != "postgresql":
         return
+
     with schema_editor.connection.cursor() as cursor:
         cursor.execute("""
             DROP TRIGGER IF EXISTS messenger_conversation_security_mode_immutable
             ON messenger_conversation;
         """)
-        cursor.execute("DROP FUNCTION IF EXISTS messenger_reject_security_mode_change();")
+        cursor.execute("""
+            DROP TRIGGER IF EXISTS messenger_message_no_plaintext_for_e2ee
+            ON messenger_message;
+        """)
+        cursor.execute("""
+            DROP TRIGGER IF EXISTS messenger_attachment_no_plaintext_for_e2ee
+            ON messenger_messageattachment;
+        """)
+        cursor.execute("""
+            DROP FUNCTION IF EXISTS messenger_reject_security_mode_change();
+        """)
+        cursor.execute("""
+            DROP FUNCTION IF EXISTS messenger_reject_plaintext_for_e2ee_conversation();
+        """)
 
 
 class Migration(migrations.Migration):
@@ -61,7 +118,7 @@ class Migration(migrations.Migration):
             ),
         ),
         migrations.RunPython(
-            install_security_mode_immutability_trigger,
-            remove_security_mode_immutability_trigger,
+            install_security_mode_triggers,
+            remove_security_mode_triggers,
         ),
     ]
