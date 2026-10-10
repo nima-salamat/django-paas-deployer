@@ -26,6 +26,7 @@ Canonical mount: /api/messenger/. Routes and methods below are derived from src/
 |---|---|---|
 | GET, POST | /api/messenger/conversations/ | List accessible conversations or create private/group conversation. |
 | GET, PATCH | /api/messenger/conversations/<int:pk>/ | Conversation detail/settings; no DELETE handler is registered. |
+| GET, POST | /api/messenger/conversations/<int:pk>/topics/ | List the caller's visible topics or create a topic (owner/admin or member with info-management permission); creation preserves the root's existing history as General. |
 | GET, POST | /api/messenger/conversations/<int:pk>/messages/ | History/create; create validates membership, capability, attachments and client_message_id idempotency. |
 | GET | /api/messenger/conversations/<int:pk>/events/ | Durable reconnect cursor; after_id and bounded limit are query inputs. |
 | GET | /api/messenger/conversations/<int:pk>/messages/search/ | Participant-scoped message search. |
