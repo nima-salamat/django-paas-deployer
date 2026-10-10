@@ -65,6 +65,21 @@ Topic handlers live in `src/messenger/api/topics.py`. For standard groups, GET/P
 | DELETE | /api/messenger/conversations/<int:pk>/delete/ | Delete conversation. |
 | POST, DELETE | /api/messenger/conversations/<int:pk>/avatar/ | Set/clear group avatar. |
 
+### Optional Matrix secure chat
+
+These endpoints are reserved for the opt-in E2EE path; they do not change standard conversations.
+
+| Method | Route | Important contract |
+|---|---|---|
+| POST | /api/messenger/secure/device-session/ | Create a normal Matrix login for a newly generated device ID; the Synapse admin credential stays on the backend. |
+| GET | /api/messenger/secure/device-session/ | Validate that the supplied Matrix access token and device belong to the currently authenticated Django account. |
+| POST | /api/messenger/secure/identities/ | Resolve active Messenger contacts/authorized conversation participants to server-managed Matrix user IDs. |
+| GET | /api/messenger/secure/devices/ | List Matrix device records associated with the current Django user. |
+| POST | /api/messenger/secure/devices/<str:device_id>/revoke/ | Revoke a device/session through Synapse and mark the local device record revoked. |
+| POST | /api/messenger/secure/conversations/ | Register an existing Matrix room only after verifying the E2EE algorithm, requesting device, intended participants and (for a group) the reciprocal Matrix Space relationship. Does not create a plaintext fallback. |
+
+The ordinary `POST /conversations/` endpoint still returns `503` when a caller requests `security_mode=matrix_e2ee`. The secure client creates the Matrix room and then calls the secure mapping endpoint. Secure chat is unavailable unless `MATRIX_HOMESERVER_URL`, `MATRIX_HOMESERVER_DOMAIN`, `MATRIX_ADMIN_ACCESS_TOKEN` and `MATRIX_IDENTITY_ENCRYPTION_KEY` are configured. The first release supports encrypted text only; Matrix media encryption and secure equivalents for legacy features are not yet implemented.
+
 ### Media and calls
 
 | Method | Route |
