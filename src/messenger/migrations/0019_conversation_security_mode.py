@@ -38,6 +38,18 @@ def install_security_mode_triggers(apps, schema_editor):
             RETURNS trigger AS $function$
             DECLARE current_security_mode varchar(20);
             BEGIN
+                IF TG_OP = 'UPDATE' THEN
+                    SELECT security_mode
+                      INTO current_security_mode
+                      FROM messenger_conversation
+                     WHERE id = OLD.conversation_id;
+
+                    IF current_security_mode = 'matrix_e2ee' THEN
+                        RAISE EXCEPTION
+                            'Plaintext Messenger records are disabled for Matrix E2EE conversations';
+                    END IF;
+                END IF;
+
                 SELECT security_mode
                   INTO current_security_mode
                   FROM messenger_conversation
