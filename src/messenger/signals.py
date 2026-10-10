@@ -14,12 +14,40 @@ logger = logging.getLogger("messenger.signals")
 User = get_user_model()
 
 
+@receiver(pre_save, sender=ConversationParticipant)
+def remember_previous_forum_membership_state(sender, instance, **kwargs):
+    """Record only the root-forum membership transition needed by topic sync."""
+    instance._messenger_previous_root_left_at = None
+    if not instance.pk:
+        return
+
+    previous = (
+        ConversationParticipant.objects
+        .filter(pk=instance.pk)
+        .values(
+            "left_at",
+            "conversation__parent_conversation_id",
+            "conversation__is_forum",
+        )
+        .first()
+    )
+    if (
+        previous
+        and previous["conversation__parent_conversation_id"] is None
+        and previous["conversation__is_forum"]
+    ):
+        instance._messenger_previous_root_left_at = previous["left_at"]
+
+
 @receiver(post_save, sender=ConversationParticipant)
-def sync_forum_topic_membership(sender, instance, **kwargs):
+def sync_forum_topic_membership(sender, instance, created=False, **kwargs):
     """
-    The root group's active membership and roles are the default authority for
-    its topics. Topic-level removals remain local until that user rejoins the
-    root group; child conversation saves never recurse here.
+    Synchronize active root membership and permissions into forum topics.
+
+    A topic-local removal must not be undone by an unrelated role/permission
+    edit on the root group. A removed topic member is reactivated only when
+    their root membership is newly created or explicitly transitions from
+    left to active. Child conversation saves never recurse here.
     """
     conversation = instance.conversation
     if conversation.parent_conversation_id or not conversation.is_forum:
@@ -38,6 +66,9 @@ def sync_forum_topic_membership(sender, instance, **kwargs):
         "can_change_info": instance.can_change_info,
     }
     now = timezone.now()
+    rejoined_root = instance.left_at is None and (
+        created or getattr(instance, "_messenger_previous_root_left_at", None) is not None
+    )
     for topic_id in topic_ids:
         topic_member = ConversationParticipant.objects.filter(
             conversation_id=topic_id, user_id=instance.user_id
@@ -53,14 +84,19 @@ def sync_forum_topic_membership(sender, instance, **kwargs):
 
         changed_fields = []
         if instance.left_at is None:
+            if topic_member.left_at is not None:
+                if not rejoined_root:
+                    # Preserve a deliberate topic-level removal during ordinary
+                    # root group role/permission changes.
+                    continue
+                topic_member.left_at = None
+                topic_member.joined_at = now
+                changed_fields.extend(("left_at", "joined_at"))
+
             for field, value in policy.items():
                 if getattr(topic_member, field) != value:
                     setattr(topic_member, field, value)
                     changed_fields.append(field)
-            if topic_member.left_at is not None:
-                topic_member.left_at = None
-                topic_member.joined_at = now
-                changed_fields.extend(("left_at", "joined_at"))
         elif topic_member.left_at is None:
             topic_member.left_at = instance.left_at or now
             changed_fields.append("left_at")
