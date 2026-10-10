@@ -196,7 +196,7 @@ The previous design listed a `repository_soft_quota_mb` per repository. Do not p
 
 **Severity:** P1 for manual-deploy MVP; P0 before auto-deploy; **Status:** Unverified
 
-The proposal correctly calls for signature verification and deduplication, but the exact Forgejo version's header names, signature format, delivery identifier and retry behavior must be confirmed. A generic Gitea webhook reference is not proof of identical behavior in every Forgejo release.
+The Forgejo v17 documentation shows `X-Forgejo-Delivery`, `X-Forgejo-Event` and `X-Forgejo-Signature`; its example computes an HMAC-SHA256 hex digest over the raw request body. The installed Forgejo version is not selected yet, so pin that version and test its actual headers, signature comparison, delivery identifier and retry behavior before implementing the receiver. A generic Gitea webhook reference is not proof of identical behavior in every Forgejo release.
 
 **Required resolution:**
 - Pin the Forgejo version in the spike and record real example requests for push, branch deletion and force-push.
