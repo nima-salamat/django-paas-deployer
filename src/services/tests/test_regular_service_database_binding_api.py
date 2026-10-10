@@ -3,6 +3,7 @@ from django.test import TestCase
 
 from core.global_settings.config import NameChoices, PlanTypeChoices, StorageTypeChoices
 from deploy.models import Deploy
+from plans.models import Plan
 from services.api.configuration import (
     DatabaseResourceAPIView,
     ServiceDatabaseBindingsAPIView,
@@ -33,9 +34,6 @@ class RegularServiceDatabaseBindingApiTests(TestCase):
             "price_per_hour": 0,
             "storage_type": StorageTypeChoices.SSD,
         }
-        cls.app_plan = PlanTypeChoices.APP
-        from plans.models import Plan
-
         cls.workload_plan = Plan.objects.create(
             name=NameChoices.BRONZE,
             platform="docker",
