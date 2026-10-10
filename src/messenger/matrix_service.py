@@ -72,14 +72,15 @@ def _url(path: str) -> str:
 
 
 def matrix_request(method: str, path: str, *, access_token: str | None = None,
-                   admin: bool = False, json_body=None, timeout: float = 8.0):
+                   admin: bool = False, unauthenticated: bool = False,
+                   json_body=None, timeout: float = 8.0):
     base_url, _, admin_token, _ = _config()
     headers = {"Accept": "application/json"}
     if access_token:
         headers["Authorization"] = f"Bearer {access_token}"
     elif admin:
         headers["Authorization"] = f"Bearer {admin_token}"
-    else:
+    elif not unauthenticated:
         raise MatrixServiceError("A Matrix user session is required.")
     try:
         response = requests.request(
@@ -221,6 +222,7 @@ def create_device_session(user, device_id: str, display_name: str = "") -> dict:
         "POST",
         "/_matrix/client/v3/login",
         access_token=None,
+        unauthenticated=True,
         json_body={
             "type": "m.login.password",
             "identifier": {"type": "m.id.user", "user": identity.matrix_user_id},
@@ -349,8 +351,9 @@ def verify_encrypted_room_binding(user, access_token: str, room_id: str,
             f"/_matrix/client/v3/rooms/{quote(room_id, safe='')}/state/m.space.parent/{quote(space_id, safe='')}",
             access_token=access_token,
         )
-        if space_id not in room_memberships(access_token, space_id):
-            raise MatrixServiceError("The Matrix space is not visible to the current device.", 403)
+        space_memberships = room_memberships(access_token, space_id)
+        if space_memberships.get(identity.matrix_user_id) != "join":
+            raise MatrixServiceError("The current Matrix device is not a joined member of the requested space.", 403)
         parent_content = parent
         if not isinstance(parent_content.get("via"), list) or not parent_content["via"]:
             raise MatrixServiceError("The room is not properly linked to the requested Matrix space.", 400)
