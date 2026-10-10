@@ -51,12 +51,18 @@ def _attach_list_side_data(conversations, user):
     if not conversations:
         return
     conv_ids = [c.id for c in conversations]
+    # Secure conversations are Matrix-owned: never even query Django message
+    # bodies or unread rows for them while building a mixed chat-list response.
+    standard_conv_ids = [
+        c.id for c in conversations
+        if c.security_mode == Conversation.SecurityMode.STANDARD
+    ]
 
-    # --- last non-deleted, non-scheduled message per conversation (1 query) ---
+    # --- last non-deleted, non-scheduled message per standard conversation (1 query) ---
     # DISTINCT ON is Postgres-specific; project already uses postgres.
     last_rows = (
         Message.objects.filter(
-            conversation_id__in=conv_ids,
+            conversation_id__in=standard_conv_ids,
             is_deleted=False,
             is_scheduled=False,
         )
@@ -82,7 +88,7 @@ def _attach_list_side_data(conversations, user):
     # --- unread counts: one grouped SQL join (not N COUNT queries) ---
     from django.db import connection
     unread_map = {cid: 0 for cid in conv_ids}
-    if conv_ids:
+    if standard_conv_ids:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -99,7 +105,7 @@ def _attach_list_side_data(conversations, user):
                   AND (p.last_read_at IS NULL OR m.created_at > p.last_read_at)
                 GROUP BY m.conversation_id
                 """,
-                [user.id, conv_ids, user.id],
+                [user.id, standard_conv_ids, user.id],
             )
             for cid, cnt in cursor.fetchall():
                 unread_map[int(cid)] = int(cnt)
