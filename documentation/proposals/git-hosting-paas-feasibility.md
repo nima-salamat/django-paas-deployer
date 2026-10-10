@@ -503,7 +503,7 @@ Implementation must also update src/agent/apis/deployments.py DeploymentHelpView
 
 ## 10. Webhooks and automatic deploy policy
 
-Forgejo/Gitea-style repository webhooks can deliver push events and support shared-secret signatures. The receiver should verify the raw-body signature before parsing or trusting payload fields. See [Gitea's webhook contract](https://docs.gitea.com/usage/repository/webhooks/) for delivery IDs, event headers, signatures and ref information; confirm the exact header/payload names for the selected Forgejo release during the spike.
+Forgejo repository webhooks support shared-secret signatures and push events. The Forgejo v17 documentation shows `X-Forgejo-Delivery`, `X-Forgejo-Event` and `X-Forgejo-Signature`, with an HMAC-SHA256 hex digest over the raw request body. The receiver must verify that signature before parsing or trusting payload fields. The exact installed Forgejo version is not selected yet, so pin it and test the actual header aliases, signature format and retry behavior during the spike; see [Forgejo v17 webhook contract](https://forgejo.org/docs/v17.0/user/repository/webhooks/) and [Gitea webhook reference](https://docs.gitea.com/usage/repository/webhooks/).
 
 ### Verification and processing order
 
@@ -616,7 +616,7 @@ These are **proposed knobs**, not existing platform settings or final commercial
 | `git_hosting.private_by_default` | true | Avoid accidental code exposure |
 | `git_hosting.max_repositories_per_user` | 10 (provisional) | Bound initial storage/abuse |
 | `git_hosting.repository_soft_quota_mb` | Unset / not promised until enforceability is proven | Forgejo quota support is soft and in development; the exact per-repository enforcement contract needs a provider-level spike |
-| `git_hosting.user_storage_quota_mb` | 5120 per user (provisional) | User-level budget in addition to per-repo guard |
+| `git_hosting.user_storage_quota_mb` | 5120 per user (provisional; verify provider enforcement/overshoot) | Use only if provider quota behavior is acceptable; otherwise expose as measured usage/warning rather than a hard cap |
 | `git_source.max_checkout_bytes` | 512 MiB (provisional) | Limit untrusted working tree size; separate from Git's on-disk repo size |
 | `git_source.max_archive_bytes` | 256 MiB (provisional) | Keep build input bounded; adjust to observed apps |
 | `git_source.fetch_timeout_seconds` | 120 | Bound stuck/slow Git network operations |
