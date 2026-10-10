@@ -2,8 +2,20 @@ from django.urls import path
 from . import api as apis  # feature-split package (apis.py is a compat shim)
 from .api.events import ConversationEventSyncAPIView
 from .api.topics import ConversationTopicsAPIView
+from .api.matrix import (
+    MatrixDeviceSessionAPIView,
+    MatrixIdentityResolveAPIView,
+    MatrixDeviceListAPIView,
+    MatrixDeviceRevokeAPIView,
+    SecureConversationMapAPIView,
+)
 
 urlpatterns = [
+    path("secure/device-session/", MatrixDeviceSessionAPIView.as_view()),
+    path("secure/identities/", MatrixIdentityResolveAPIView.as_view()),
+    path("secure/devices/", MatrixDeviceListAPIView.as_view()),
+    path("secure/devices/<str:device_id>/revoke/", MatrixDeviceRevokeAPIView.as_view()),
+    path("secure/conversations/", SecureConversationMapAPIView.as_view()),
     path("users/search/", apis.UserSearchAPIView.as_view()),
     path("contacts/", apis.ContactListCreateAPIView.as_view()),
     path("contacts/<int:user_id>/", apis.ContactDeleteAPIView.as_view()),
