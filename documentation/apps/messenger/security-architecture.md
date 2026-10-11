@@ -47,6 +47,18 @@ References:
 5. A secure-room membership change must update the encrypted room's membership and key state. Former members must not receive keys for subsequent messages.
 6. The current Django model can retain display metadata and access mapping, but secure message payloads must go through the Matrix encrypted-room flow.
 
+## First-time secure chats and offline invitees
+
+Starting a secure chat creates a *new* Matrix room and a new Messenger conversation row with `security_mode=matrix_e2ee`. It never changes the security mode of a standard conversation, copies the old plaintext timeline, or deletes the old messages. Both conversations remain visible and distinct.
+
+A recipient does not need to have opened secure chat before. The backend provisions their Matrix identity, while their actual browser device and local Rust/WASM crypto store are created only when they open Messenger on that device. The initiating client invites the recipient's Matrix identity even if they are offline. The secure conversation metadata is persisted for both users; a metadata-only `conversation.created` event refreshes the chat list for online participants, and an offline participant sees the row on their next load. The legacy Messenger WebSocket must never carry encrypted message content or keys.
+
+Opening an invited encrypted room must not silently accept the invitation. The recipient sees an explicit **Accept secure invitation** action. While any intended participant is still invited, the sender sees **Waiting for secure-room participants** and sending is paused. This avoids creating a Megolm session that is available only to the sender's device when the recipient has not initialized a Matrix device. Once the recipient joins, the sender may send; the recipient does not need to create a separate secure chat or be online at the moment the room was created.
+
+Secure rooms set `m.room.history_visibility` to `invited`, matching private-room semantics used by Element: a participant can access messages sent after they were invited once they join, without making earlier history visible to a future invitee. The backend verifies this policy and the invite-only join rule before mapping the room. Do not weaken either validation just to support a client that creates less restrictive rooms.
+
+**Recovery state is separate from device-crypto readiness.** Once Rust/WASM crypto is initialized and the current user has joined the encrypted room, missing or unverified key backup is a warning and recovery action—not a generic crypto-initialization failure and not a prerequisite for sending future messages. Recovery is still needed to restore older messages whose keys this device does not have. Errors during `initRustCrypto()` must preserve the real failing stage and expose a sanitized diagnostic; they must not be misreported as a peer being offline or not accepting an invitation.
+
 ## Recovery and lost-device behavior
 
 The UI must distinguish three operations:
@@ -127,7 +139,10 @@ Before treating the currently implemented "Start encrypted chat" path as product
 
 - Migration `0019_conversation_security_mode` adds immutable `security_mode` state (existing conversations remain `standard`); migration `0020_matrix_identity_and_room_binding` adds Matrix identity/device tracking and room-binding protections.
 - `src/messenger/matrix_service.py` provisions a Paas Deployer-specific Matrix identity per Django user through the Synapse Admin API, encrypts the generated account password with the Fernet key, logs in a real device ID, validates device ownership, verifies encrypted room bindings, and revokes devices. The Synapse administrator access token never leaves Django.
-- The API exposes device-session, identity-resolution, device-list/revocation and secure-room-registration routes. The React app uses `matrix-js-sdk` with Rust/WASM crypto, separate browser-device state, SAS verification and recovery UI.
+- The API exposes device-session, identity-resolution, device-list/revocation and secure-room-registration routes. The React app uses `matrix-js-sdk` with Rust/WASM crypto, separate browser-device state, SAS verification and recovery UI. First-time participants receive an explicit Matrix invitation state; offline recipients can accept it when they return, and a pending invite pauses sending rather than surfacing a misleading crypto-init error.
+- Encrypted room creation uses `m.room.history_visibility=invited`; backend room registration checks both the encryption algorithm and this history restriction.
+- Room registration sends a metadata-only `conversation.created` event after the transaction commits so online participants refresh their chat lists. This event must never include encrypted payloads, access tokens or key material.
+- Key backup/recovery is recommended but does not gate future message sending once the device crypto engine and room membership are ready. Older history still requires its corresponding Matrix keys.
 - A secure room is created by the Matrix client; Django validates its algorithm, device, participant list and (for a group) Space relationship before storing metadata. Standard conversations are not automatically migrated, and the ordinary conversation-create route refuses an E2EE request rather than silently making a plaintext conversation.
 - ORM/PostgreSQL protections reject plaintext `Message`, `MessageAttachment` and server-side drafts for E2EE conversations. Legacy message/search/event/media/member/invite/pin/call routes and the standard Channels path fail closed for encrypted rooms; chat previews avoid plaintext leakage.
 - The secure UI is intentionally text-only. Encrypted media and secure equivalents for search, forwarding, reactions, scheduled messages, read receipts and calls are not shipped. Durable reconciliation for later group membership/role changes is also incomplete; do not treat secure-group administration as production-ready.
