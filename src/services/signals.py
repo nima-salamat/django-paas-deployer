@@ -373,7 +373,7 @@ def _cleanup_service_cache_images(service: Service) -> None:
     other_swarm_service_ids = set()
     services_collection = getattr(client, "services", None)
     list_services = getattr(services_collection, "list", None)
-    if callable(list_services):
+    if callable(list_services) and swarm_enabled():
         try:
             runtime_services = list_services()
         except Exception as exc:

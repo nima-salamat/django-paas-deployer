@@ -10,6 +10,7 @@ from deploy.build_cache import (
 )
 from deploy.models import BaseRuntimeImage, BuildCacheArtifact, Deploy
 from deployments.core.manager.client_manager import get_docker_client
+from deployments.core.swarm import swarm_enabled
 from services.models import Service
 
 
@@ -63,10 +64,11 @@ class Command(BaseCommand):
         client = get_docker_client()
 
         # Fail closed: no destructive cleanup if Docker runtime inventory is unavailable.
+        runtime_swarm_enabled = swarm_enabled()
         try:
             images = list(client.images.list(all=True))
             containers = list(client.containers.list(all=True))
-            swarm_services = list(client.services.list())
+            swarm_services = list(client.services.list()) if runtime_swarm_enabled else []
         except Exception as exc:
             raise CommandError(
                 "Could not inspect Docker images, containers, and Swarm services; "

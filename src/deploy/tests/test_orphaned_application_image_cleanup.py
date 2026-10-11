@@ -22,6 +22,7 @@ def test_orphan_image_cleanup_is_dry_run_by_default_and_requires_proven_ownershi
     assert "BaseRuntimeImage.objects" in source
     assert "client.containers.list(all=True)" in source
     assert "client.services.list()" in source
+    assert "if runtime_swarm_enabled else []" in source
     assert "release_application_image_references(" in source
     assert "Unlabelled historical images are left for manual review." in source
 
