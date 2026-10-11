@@ -136,23 +136,25 @@ class MessengerSecurityModeTests(TestCase):
         self.assertFalse(MatrixDevice.objects.filter(user=self.peer, revoked_at__isnull=True).exists())
 
         room_id = f"!parallel-secure-{self.owner.pk}-{self.peer.pk}:matrix.example.test"
-        with (
-            patch("messenger.api.matrix.matrix_is_configured", return_value=True),
-            patch(
-                "messenger.api.matrix.verify_encrypted_room_binding",
-                return_value=(owner_identity, None),
-            ) as verify_binding,
-        ):
-            response = self.client.post(
-                "/api/messenger/secure/conversations/",
-                {
-                    "type": "private",
-                    "member_ids": [self.peer.pk],
-                    "room_id": room_id,
-                },
-                format="json",
-                HTTP_X_MATRIX_ACCESS_TOKEN="test-matrix-device-token",
-            )
+        with self.captureOnCommitCallbacks(execute=True):
+            with (
+                patch("messenger.api.matrix.matrix_is_configured", return_value=True),
+                patch(
+                    "messenger.api.matrix.verify_encrypted_room_binding",
+                    return_value=(owner_identity, None),
+                ) as verify_binding,
+                patch("messenger.api.matrix._notify_secure_conversation_created") as notify_created,
+            ):
+                response = self.client.post(
+                    "/api/messenger/secure/conversations/",
+                    {
+                        "type": "private",
+                        "member_ids": [self.peer.pk],
+                        "room_id": room_id,
+                    },
+                    format="json",
+                    HTTP_X_MATRIX_ACCESS_TOKEN="test-matrix-device-token",
+                )
 
         self.assertEqual(response.status_code, 201, response.data)
         verify_binding.assert_called_once()
@@ -160,11 +162,15 @@ class MessengerSecurityModeTests(TestCase):
             set(verify_binding.call_args.args[3]),
             {owner_identity.matrix_user_id, peer_identity.matrix_user_id},
         )
+        secure = Conversation.objects.get(matrix_room_id=room_id)
+        notify_created.assert_called_once()
+        self.assertEqual(notify_created.call_args.args[0], secure.pk)
+        self.assertEqual(set(notify_created.call_args.args[1]), {self.owner.pk, self.peer.pk})
+
         standard.refresh_from_db()
         self.assertEqual(standard.security_mode, Conversation.SecurityMode.STANDARD)
         self.assertIsNone(standard.matrix_room_id)
         self.assertTrue(Message.objects.filter(pk=old_message.pk, conversation=standard).exists())
-        secure = Conversation.objects.get(matrix_room_id=room_id)
         self.assertEqual(secure.security_mode, Conversation.SecurityMode.MATRIX_E2EE)
         self.assertFalse(secure.is_public)
         self.assertTrue(
