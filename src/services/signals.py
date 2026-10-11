@@ -263,7 +263,7 @@ def _cleanup_service_cache_images(service: Service) -> None:
         is_platform_application_image_ref,
         release_application_image_references,
     )
-    from deploy.models import BaseRuntimeImage
+    from deploy.models import BaseRuntimeImage, Deploy
     from deployments.core.manager.client_manager import get_docker_client
 
     # Do not filter reclaimed_at: recover old rows whose metadata says
@@ -344,6 +344,80 @@ def _cleanup_service_cache_images(service: Service) -> None:
         if value
     )
 
+    # Cache metadata is not the only reference source. A different Service may
+    # still point at the same image through a Deploy row, or an existing Swarm
+    # service may be using a canonical tag. Protect those identities too.
+    other_deployment_ids = set()
+    other_deploy_refs = (
+        Deploy.objects.exclude(service_id=service.pk)
+        .exclude(image_ref="")
+        .values_list("image_ref", flat=True)
+    )
+    for image_ref in other_deploy_refs:
+        try:
+            referenced = client.images.get(str(image_ref))
+        except docker.errors.ImageNotFound:
+            continue
+        except Exception as exc:
+            logger.exception(
+                "Unable to verify another deployment image reference '%s' during cleanup.",
+                image_ref,
+            )
+            raise RuntimeError(
+                f"Unable to verify other deployment image references for service '{service.name}'."
+            ) from exc
+        referenced_id = str(getattr(referenced, "id", "") or "")
+        if referenced_id in image_ids:
+            other_deployment_ids.add(referenced_id)
+
+    other_swarm_service_ids = set()
+    services_collection = getattr(client, "services", None)
+    list_services = getattr(services_collection, "list", None)
+    if callable(list_services):
+        try:
+            runtime_services = list_services()
+        except Exception as exc:
+            logger.exception(
+                "Unable to enumerate Swarm service images while cleaning service '%s'.",
+                service.pk,
+            )
+            raise RuntimeError(
+                f"Unable to verify live Swarm image references for service '{service.name}'."
+            ) from exc
+        for runtime_service in runtime_services or ():
+            attrs = getattr(runtime_service, "attrs", {}) or {}
+            spec = attrs.get("Spec") or {}
+            container_spec = (spec.get("TaskTemplate") or {}).get("ContainerSpec") or {}
+            image_ref = str(container_spec.get("Image") or "").strip()
+            if not image_ref:
+                continue
+            try:
+                referenced = client.images.get(image_ref)
+            except docker.errors.ImageNotFound:
+                # The service may pin a digest that is not available locally.
+                # Compare the exact tag text against candidate refs below too.
+                image_ref_without_digest = image_ref.split("@", 1)[0]
+                if not any(
+                    image_ref == ref or image_ref_without_digest == ref
+                    for refs in refs_by_image.values()
+                    for ref in refs
+                ):
+                    continue
+                raise RuntimeError(
+                    f"Unable to verify live Swarm image reference '{image_ref}' during cleanup."
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Unable to inspect live Swarm image reference '%s' during cleanup.",
+                    image_ref,
+                )
+                raise RuntimeError(
+                    f"Unable to verify live Swarm image references for service '{service.name}'."
+                ) from exc
+            referenced_id = str(getattr(referenced, "id", "") or "")
+            if referenced_id in image_ids:
+                other_swarm_service_ids.add(referenced_id)
+
     running_ids = set()
     for container in client.containers.list():
         # Prefer the image ID returned in Container.attrs; container.image
@@ -352,7 +426,14 @@ def _cleanup_service_cache_images(service: Service) -> None:
         if image_id:
             running_ids.add(image_id)
 
-    for image_id in sorted(image_ids - other_refs - protected_base_ids - running_ids):
+    protected_ids = (
+        other_refs
+        | protected_base_ids
+        | other_deployment_ids
+        | other_swarm_service_ids
+        | running_ids
+    )
+    for image_id in sorted(image_ids - protected_ids):
         ok, detail = release_application_image_references(
             image_id,
             refs_by_image.get(image_id, ()),

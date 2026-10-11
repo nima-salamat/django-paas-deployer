@@ -31,6 +31,8 @@ def test_service_runtime_cleanup_fails_closed_for_owned_resources():
     assert "Failed to remove application image(s)" in source
     assert "list_images(all=True)" in source
     assert "label_owner != owner_id" in source
+    assert "other_deployment_ids" in source
+    assert "other_swarm_service_ids" in source
     assert "raise" in source.split("def delete_deploy_before_delete_service", 1)[1].split(
         "def _cleanup_service_volumes", 1
     )[0]
