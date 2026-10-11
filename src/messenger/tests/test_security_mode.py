@@ -216,20 +216,27 @@ class MessengerSecurityModeTests(TestCase):
             Conversation.objects.filter(title="Must not downgrade").exists()
         )
 
-    def test_encrypted_group_topics_cannot_fall_back_to_plaintext_conversations(self):
+    def test_encrypted_group_topics_expose_metadata_but_never_create_plaintext_children(self):
         conversation = self.make_encrypted_group()
 
+        # Listing encrypted topic metadata is safe and needed by the Matrix UI;
+        # this endpoint must not return plaintext message history.
         get_response = self.client.get(
             f"/api/messenger/conversations/{conversation.id}/topics/"
         )
-        self.assertEqual(get_response.status_code, 409, get_response.data)
+        self.assertEqual(get_response.status_code, 200, get_response.data)
+        self.assertEqual(get_response.data["data"]["security_mode"], Conversation.SecurityMode.MATRIX_E2EE)
+        self.assertEqual(get_response.data["data"]["matrix_space_id"], conversation.matrix_space_id)
+        self.assertEqual(get_response.data["data"]["topics"], [])
 
+        # Creating a topic through Django without the authenticated Matrix
+        # device is refused rather than silently downgraded.
         post_response = self.client.post(
             f"/api/messenger/conversations/{conversation.id}/topics/",
             {"title": "Plaintext child"},
             format="json",
         )
-        self.assertEqual(post_response.status_code, 409, post_response.data)
+        self.assertEqual(post_response.status_code, 401, post_response.data)
         self.assertFalse(
             Conversation.objects.filter(parent_conversation=conversation).exists()
         )
