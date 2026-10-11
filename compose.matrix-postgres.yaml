@@ -1,6 +1,6 @@
 # Opt-in Compose overlay selected by scripts/compose.sh when USE_MATRIX_POSTGRES=1.
-# It disables only the two local Deployer PostgreSQL services; it does not alter
-# the existing Matrix Compose project, its database, or any volumes.
+# It disables only the two local Deployer PostgreSQL services. Synapse and all data volumes
+# stay owned by the separate Matrix Compose project and are never changed by this overlay.
 services:
   db:
     profiles:
@@ -9,3 +9,65 @@ services:
   deployment-log-db:
     profiles:
       - matrix-postgres-disabled-in-shared-mode
+
+  web:
+    depends_on:
+      db:
+        required: false
+      deployment-log-db:
+        required: false
+
+  celery:
+    depends_on:
+      db:
+        required: false
+      deployment-log-db:
+        required: false
+    networks:
+      - matrix-network
+
+  deployment-worker:
+    depends_on:
+      db:
+        required: false
+      deployment-log-db:
+        required: false
+    networks:
+      - matrix-network
+
+  base-image-worker:
+    depends_on:
+      db:
+        required: false
+      deployment-log-db:
+        required: false
+    networks:
+      - matrix-network
+
+  celery-beat:
+    depends_on:
+      db:
+        required: false
+      deployment-log-db:
+        required: false
+    networks:
+      - matrix-network
+
+  log-collector:
+    depends_on:
+      db:
+        required: false
+      deployment-log-db:
+        required: false
+    networks:
+      - matrix-network
+
+  integration-test:
+    depends_on:
+      db:
+        required: false
+      deployment-log-db:
+        required: false
+    networks:
+      - matrix-network
+

@@ -15,7 +15,7 @@ SWARM_ENABLED=0 remains an explicit compatibility mode. The normal architecture 
 
 ## Optional: use the existing Matrix PostgreSQL server
 
-This mode runs one PostgreSQL **server/container** for Matrix and the Deployer control plane. It does **not** merge their data into one database: Synapse keeps its existing `synapse` database, while Deployer uses two separate databases (`paas_deployer` and `paas_deployer_logs`) and a separate `paas_deployer` login. The local Deployer PostgreSQL services are disabled only when `USE_MATRIX_POSTGRES=1` is used with `./scripts/compose.sh`.
+This mode runs one PostgreSQL **server/container** for Matrix and the Deployer control plane. Shared mode requires Docker Compose v2.20.0 or newer because it uses optional `depends_on` dependencies. It does **not** merge their data into one database: Synapse keeps its existing `synapse` database, while Deployer uses two separate databases (`paas_deployer` and `paas_deployer_logs`) and a separate `paas_deployer` login. The local Deployer PostgreSQL services are disabled only when `USE_MATRIX_POSTGRES=1` is used with `./scripts/compose.sh`.
 
 ### Safety first — back up Matrix before changing anything
 

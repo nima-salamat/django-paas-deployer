@@ -157,11 +157,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
-        required: false
 
       deployment-log-db:
         condition: service_healthy
-        required: false
 
       redis:
         condition: service_healthy
@@ -276,11 +274,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
-        required: false
 
       deployment-log-db:
         condition: service_healthy
-        required: false
 
       redis:
         condition: service_healthy
@@ -325,7 +321,6 @@ services:
     networks:
       - app-network
       - proxy_net
-      - matrix-network
   
 
   # ============================================================
@@ -361,10 +356,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
-        required: false
       deployment-log-db:
         condition: service_healthy
-        required: false
       redis:
         condition: service_healthy
 
@@ -393,7 +386,6 @@ services:
     networks:
       - app-network
       - proxy_net
-      - matrix-network
 
 
   # ============================================================
@@ -420,10 +412,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
-        required: false
       deployment-log-db:
         condition: service_healthy
-        required: false
       redis:
         condition: service_healthy
     env_file:
@@ -448,7 +438,6 @@ services:
     networks:
       - app-network
       - proxy_net
-      - matrix-network
 
 
   # ============================================================
@@ -475,11 +464,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
-        required: false
 
       deployment-log-db:
         condition: service_healthy
-        required: false
 
       redis:
         condition: service_healthy
@@ -526,7 +513,6 @@ services:
     networks:
       - app-network
       - proxy_net
-      - matrix-network
 
   xray:
     image: ${DOCKER_MIRROR:-docker.io}/teddysun/xray:latest
@@ -572,10 +558,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
-        required: false
       deployment-log-db:
         condition: service_healthy
-        required: false
       redis:
         condition: service_healthy
 
@@ -603,7 +587,6 @@ services:
 
     networks:
       - app-network
-      - matrix-network
 
 
 # ==============================================================
@@ -647,10 +630,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
-        required: false
       deployment-log-db:
         condition: service_healthy
-        required: false
       redis:
         condition: service_healthy
       deployment-worker:
@@ -660,7 +641,6 @@ services:
     networks:
       - app-network
       - proxy_net
-      - matrix-network
 
 volumes:
   postgres_data:
