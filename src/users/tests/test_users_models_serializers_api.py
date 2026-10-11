@@ -163,9 +163,11 @@ class UserAPIPermissionAndCacheTests(TestCase):
         Rule.objects.create(user=self.staff, rules=["users.create"])
         self.client.force_authenticate(user=self.staff)
 
-        # The React form loads the user list before it can submit a new account.
+        # Creation must not implicitly grant permission to enumerate existing accounts.
         listed = self.client.get("/api/users/admin/users/")
-        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.status_code, 403)
+        detail = self.client.get(f"/api/users/admin/users/{self.other.pk}/")
+        self.assertEqual(detail.status_code, 403)
 
         response = self.client.post(
             "/api/users/admin/users/",
