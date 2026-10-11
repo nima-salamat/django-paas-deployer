@@ -224,7 +224,7 @@ class AdminUserListAPIView(APIView):
     # operators must be able to use the create form without being given the
     # broader users.view permission. The handler retains its explicit checks.
     required_rule_by_method = {
-        "GET": ("users.view", "users.manage", "users.create", "users.manage_rules"),
+        "GET": ("users.view", "users.manage", "users.manage_rules"),
         "POST": ("users.create", "users.manage"),
     }
 
@@ -237,7 +237,6 @@ class AdminUserListAPIView(APIView):
             u.is_superuser
             or user_has_rule(u, "users.view")
             or user_has_rule(u, "users.manage")
-            or user_has_rule(u, "users.create")
             or user_has_rule(u, "users.manage_rules")
         )
         if not allowed:
@@ -348,7 +347,7 @@ class AdminUserDetailAPIView(APIView):
     permission_classes = [IsAuthenticated, HasAdminRule]
     required_rule = "users.view"
     required_rule_by_method = {
-        "GET": ("users.view", "users.manage", "users.create", "users.manage_rules"),
+        "GET": ("users.view", "users.manage", "users.manage_rules"),
         "PATCH": ("users.create", "users.manage", "users.manage_rules"),
         "DELETE": ("users.manage",),
     }
@@ -361,7 +360,6 @@ class AdminUserDetailAPIView(APIView):
             request.user.is_superuser
             or user_has_rule(request.user, "users.view")
             or user_has_rule(request.user, "users.manage")
-            or user_has_rule(request.user, "users.create")
             or user_has_rule(request.user, "users.manage_rules")
         ):
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
