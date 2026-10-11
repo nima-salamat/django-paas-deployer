@@ -398,6 +398,21 @@ def verify_encrypted_room_binding(user, access_token: str, room_id: str,
             400,
         )
 
+    # Match Element's private-room defaults. "shared" history could reveal
+    # messages sent before a future participant's invitation. "invited" lets an
+    # offline invitee read the conversation after accepting without exposing
+    # history from before they were invited.
+    history_visibility = matrix_request(
+        "GET",
+        f"/_matrix/client/v3/rooms/{quote(room_id, safe='')}/state/m.room.history_visibility/",
+        access_token=access_token,
+    )
+    if history_visibility.get("history_visibility") != "invited":
+        raise MatrixServiceError(
+            "Secure Messenger rooms must restrict history visibility to invited participants.",
+            400,
+        )
+
     if space_id:
         if not ROOM_ID_RE.fullmatch(space_id):
             raise MatrixServiceError("Matrix space ID is invalid.", 400)
