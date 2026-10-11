@@ -38,12 +38,27 @@ def err(message, http_status=status.HTTP_400_BAD_REQUEST, extra=None):
 
 from .common import ok, err, TicketPagination
 
+
+def _can_manage_departments(user):
+    """Department metadata is delegated by departments.manage; membership administration is not."""
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    if getattr(user, "is_superuser", False):
+        return True
+    if not getattr(user, "is_staff", False):
+        return False
+    try:
+        return "departments.manage" in (user.rule.rules or [])
+    except Exception:
+        return False
+
+
 class AdminDepartmentListCreateAPIView(APIView):
     permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
 
     def get(self, request):
-        # Superuser: all; staff: only their departments with stats
-        if request.user.is_superuser:
+        # Department managers: all; other staff: only their assigned departments.
+        if _can_manage_departments(request.user):
             qs = Department.objects.all().order_by("order", "name")
         else:
             ids = DepartmentMembership.objects.filter(user=request.user).values_list("department_id", flat=True)
@@ -75,8 +90,8 @@ class AdminDepartmentListCreateAPIView(APIView):
         return ok(data=data)
 
     def post(self, request):
-        if not request.user.is_superuser:
-            return err("Only admin can create departments.", status.HTTP_403_FORBIDDEN)
+        if not _can_manage_departments(request.user):
+            return err("Missing permission departments.manage", status.HTTP_403_FORBIDDEN)
         ser = DepartmentSerializer(data=request.data)
         if not ser.is_valid():
             return err("Validation failed", extra={"errors": ser.errors})
@@ -97,7 +112,7 @@ class AdminDepartmentDetailAPIView(APIView):
         obj = self.get_object(pk)
         if not obj:
             return err("Not found", status.HTTP_404_NOT_FOUND)
-        if not request.user.is_superuser:
+        if not _can_manage_departments(request.user):
             if not DepartmentMembership.objects.filter(user=request.user, department=obj).exists():
                 return err("Forbidden", status.HTTP_403_FORBIDDEN)
         members = list(
@@ -120,8 +135,8 @@ class AdminDepartmentDetailAPIView(APIView):
         return ok(data=data)
 
     def put(self, request, pk):
-        if not request.user.is_superuser:
-            return err("Only admin can edit departments.", status.HTTP_403_FORBIDDEN)
+        if not _can_manage_departments(request.user):
+            return err("Missing permission departments.manage", status.HTTP_403_FORBIDDEN)
         obj = self.get_object(pk)
         if not obj:
             return err("Not found", status.HTTP_404_NOT_FOUND)
@@ -132,8 +147,8 @@ class AdminDepartmentDetailAPIView(APIView):
         return ok("Updated", data=ser.data)
 
     def delete(self, request, pk):
-        if not request.user.is_superuser:
-            return err("Only admin can deactivate departments.", status.HTTP_403_FORBIDDEN)
+        if not _can_manage_departments(request.user):
+            return err("Missing permission departments.manage", status.HTTP_403_FORBIDDEN)
         obj = self.get_object(pk)
         if not obj:
             return err("Not found", status.HTTP_404_NOT_FOUND)
