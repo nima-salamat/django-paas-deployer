@@ -118,7 +118,13 @@ class IsSuperuser(BasePermission):
 
 
 class HasAdminRule(BasePermission):
-    """Require superuser OR is_staff with a specific rule code (view.required_rule)."""
+    """Require a staff account and the rule(s) configured for this HTTP method.
+
+    Most views use a single required_rule. Views whose methods intentionally have
+    different capabilities may declare required_rule_by_method, with either one
+    rule code or a tuple/list of alternatives for each method. Method handlers
+    still enforce their own field-level permissions.
+    """
 
     def has_permission(self, request, view):
         u = request.user
@@ -128,10 +134,14 @@ class HasAdminRule(BasePermission):
             return True
         if not u.is_staff:
             return False
-        required = getattr(view, "required_rule", None)
+
+        method_rules = getattr(view, "required_rule_by_method", {})
+        required = method_rules.get(request.method, getattr(view, "required_rule", None))
         if not required:
             return True
-        return user_has_rule(u, required)
+        if isinstance(required, str):
+            return user_has_rule(u, required)
+        return any(user_has_rule(u, code) for code in required)
 
 
 class AdminPagination(PageNumberPagination):
@@ -182,6 +192,7 @@ class AdminPermissionCatalogAPIView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, HasAdminRule]
     required_rule = "users.view"
+    required_rule_by_method = {"GET": ("users.view", "users.manage")}
 
     def get(self, request):
         if not (
@@ -208,6 +219,13 @@ class AdminUserListAPIView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, HasAdminRule]
     required_rule = "users.view"
+    # Listing and creating users have different capabilities: users.create-only
+    # operators must be able to use the create form without being given the
+    # broader users.view permission. The handler retains its explicit checks.
+    required_rule_by_method = {
+        "GET": None,  # The GET handler limits this to staff and checks its policy.
+        "POST": ("users.create", "users.manage"),
+    }
 
     def get(self, request):
         from core.app_cache import (
@@ -219,7 +237,8 @@ class AdminUserListAPIView(APIView):
             or user_has_rule(u, "users.view")
             or user_has_rule(u, "users.manage")
             or user_has_rule(u, "users.create")
-            or u.is_staff  # staff can list; edit still gated
+            or user_has_rule(u, "users.manage_rules")
+            or u.is_staff  # staff can list; write actions are gated separately
         )
         if not allowed:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
@@ -328,6 +347,11 @@ class AdminUserDetailAPIView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, HasAdminRule]
     required_rule = "users.view"
+    required_rule_by_method = {
+        "GET": ("users.view", "users.manage", "users.create", "users.manage_rules"),
+        "PATCH": ("users.create", "users.manage", "users.manage_rules"),
+        "DELETE": ("users.manage",),
+    }
 
     def _get(self, pk):
         return User.objects.get(pk=pk)
@@ -338,6 +362,7 @@ class AdminUserDetailAPIView(APIView):
             or user_has_rule(request.user, "users.view")
             or user_has_rule(request.user, "users.manage")
             or user_has_rule(request.user, "users.create")
+            or user_has_rule(request.user, "users.manage_rules")
         ):
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
         try:
