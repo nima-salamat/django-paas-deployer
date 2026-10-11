@@ -77,7 +77,7 @@ def test_service_delete_reclaims_only_unshared_application_cache_images():
     assert "BuildCacheArtifact.objects.filter(" in source
     assert "BaseRuntimeImage.objects.filter(" in source
     assert "client.containers.list()" in source
-    assert "image_ids - other_refs - protected_base_ids - running_ids" in source
+    assert "image_ids - protected_ids" in source
     assert "force=False" in source
     assert "release_application_image_references" in source
 
@@ -106,6 +106,8 @@ def test_cache_cleanup_reads_container_image_id_without_inspecting_image():
     artifact_manager.filter.side_effect = [first_qs, second_qs]
     base_manager = MagicMock()
     base_manager.filter.return_value = base_qs
+    deploy_manager = MagicMock()
+    deploy_manager.exclude.return_value.exclude.return_value.values_list.return_value = []
 
     client = SimpleNamespace(
         containers=SimpleNamespace(list=MagicMock(return_value=[ContainerWithMissingImage()])),
@@ -116,6 +118,7 @@ def test_cache_cleanup_reads_container_image_id_without_inspecting_image():
     with (
         patch("deploy.build_cache.BuildCacheArtifact.objects", artifact_manager),
         patch("deploy.models.BaseRuntimeImage.objects", base_manager),
+        patch("deploy.models.Deploy.objects", deploy_manager),
         patch("deployments.core.manager.client_manager.get_docker_client", return_value=client),
     ):
         signals._cleanup_service_cache_images(service)
@@ -394,6 +397,8 @@ def test_cache_cleanup_releases_owned_tag_without_force_deleting_shared_image():
     artifact_manager.filter.side_effect = [first_qs, second_qs]
     base_manager = MagicMock()
     base_manager.filter.return_value = base_qs
+    deploy_manager = MagicMock()
+    deploy_manager.exclude.return_value.exclude.return_value.values_list.return_value = []
     client = SimpleNamespace(
         containers=SimpleNamespace(list=MagicMock(return_value=[])),
         images=Images(),
@@ -403,6 +408,7 @@ def test_cache_cleanup_releases_owned_tag_without_force_deleting_shared_image():
     with (
         patch("deploy.build_cache.BuildCacheArtifact.objects", artifact_manager),
         patch("deploy.models.BaseRuntimeImage.objects", base_manager),
+        patch("deploy.models.Deploy.objects", deploy_manager),
         patch("deployments.core.manager.client_manager.get_docker_client", return_value=client),
     ):
         signals._cleanup_service_cache_images(service)
@@ -473,6 +479,8 @@ def test_service_cleanup_discovers_native_swarm_images_without_cache_rows():
     artifacts.filter.side_effect = [empty_rows, no_other_refs]
     base_images = MagicMock()
     base_images.filter.return_value = no_base_images
+    deploy_manager = MagicMock()
+    deploy_manager.exclude.return_value.exclude.return_value.values_list.return_value = []
     client = SimpleNamespace(
         images=Images(),
         containers=SimpleNamespace(list=MagicMock(return_value=[])),
@@ -482,6 +490,7 @@ def test_service_cleanup_discovers_native_swarm_images_without_cache_rows():
     with (
         patch("deploy.build_cache.BuildCacheArtifact.objects", artifacts),
         patch("deploy.models.BaseRuntimeImage.objects", base_images),
+        patch("deploy.models.Deploy.objects", deploy_manager),
         patch("deployments.core.manager.client_manager.get_docker_client", return_value=client),
     ):
         signals._cleanup_service_cache_images(service)
