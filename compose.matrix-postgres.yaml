@@ -49,6 +49,9 @@ services:
       db:
         required: false
       deployment-log-db:
+        # The base compose file no longer needs the log DB just to run Beat,
+        # but keep a valid optional dependency when this overlay is merged.
+        condition: service_healthy
         required: false
     networks:
       - matrix-network

@@ -27,6 +27,10 @@ def test_shared_matrix_postgres_mode_is_opt_in_and_keeps_databases_separate():
     assert 'exec docker compose -f compose.yaml "$@"' in helper
     assert "required: false" not in compose
     assert overlay.count("required: false") == 14
+    beat_override = _service_block(overlay, "celery-beat")
+    assert "deployment-log-db:" in beat_override
+    assert "condition: service_healthy" in beat_override
+    assert "required: false" in beat_override
     assert "DB_HOST: ${DB_HOST:-db}" in compose
     assert "DEPLOYMENT_LOG_DB_HOST: ${DEPLOYMENT_LOG_DB_HOST:-deployment-log-db}" in compose
     assert "DEPLOYMENT_LOG_DB_PORT: ${DEPLOYMENT_LOG_DB_PORT:-5432}" in compose
