@@ -30,6 +30,23 @@ logger = logging.getLogger("messenger.matrix.api")
 User = get_user_model()
 
 
+def _notify_secure_conversation_created(conversation_id: int, member_ids: list[int]) -> None:
+    """Refresh participants' lists after the secure room has been committed.
+
+    Only conversation metadata is sent through the legacy Messenger socket.
+    Room contents, Matrix credentials and encryption keys never use this path.
+    """
+    from ..consumers import _send
+
+    data = {
+        "type": "conversation.created",
+        "conversation_id": int(conversation_id),
+        "security_mode": Conversation.SecurityMode.MATRIX_E2EE,
+    }
+    for user_id in set(member_ids):
+        _send(f"messenger_user_{int(user_id)}", data)
+
+
 def _matrix_token(request):
     # Deliberately use a separate header so the Django JWT authenticator never
     # interprets a Matrix access token as a Paas Deployer session.
@@ -298,6 +315,15 @@ class SecureConversationMapAPIView(APIView):
         except Exception:
             logger.exception("Failed to persist Matrix room mapping for requester=%s", request.user.pk)
             return err("Could not save the secure conversation metadata.", status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # The room mapping and participant rows are durable before listeners
+        # are notified. Offline recipients discover the chat on next load;
+        # online recipients refresh immediately. This event contains no secrets.
+        committed_member_ids = [int(target.pk) for target in users]
+        transaction.on_commit(
+            lambda conversation_id=conversation.pk, member_ids=committed_member_ids:
+                _notify_secure_conversation_created(conversation_id, member_ids)
+        )
 
         try:
             from ..message_cache import ConversationCacheService
