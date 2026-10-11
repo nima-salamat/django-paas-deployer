@@ -79,6 +79,10 @@ jobs:
         run: |
           python scripts/validate_documentation_contracts.py
 
+      - name: Matrix secure-chat regression tests
+        run: |
+          pytest -q src/messenger/tests/test_matrix_service_config.py src/messenger/tests/test_security_mode.py -k "encrypted_room or secure_dm_is_parallel or encrypted_group_topics_expose_metadata"
+
       - name: Run unit and regression tests
         run: |
           # Unit/regression suite only. Real Docker/Swarm tests are marked
