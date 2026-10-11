@@ -27,6 +27,7 @@ def test_shared_matrix_postgres_mode_is_opt_in_and_keeps_databases_separate():
     assert "required: false" in compose
     assert "DB_HOST: ${DB_HOST:-db}" in compose
     assert "DEPLOYMENT_LOG_DB_HOST: ${DEPLOYMENT_LOG_DB_HOST:-deployment-log-db}" in compose
+    assert "DEPLOYMENT_LOG_DB_PORT: ${DEPLOYMENT_LOG_DB_PORT:-5432}" in compose
 
 
 def test_all_django_control_plane_containers_join_the_matrix_network():

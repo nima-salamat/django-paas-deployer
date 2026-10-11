@@ -55,15 +55,15 @@ Copy it somewhere secure temporarily, then open a psql session to the **existing
 docker exec -it synapse-postgres psql -U synapse -d postgres
 ```
 
-At the psql prompt, run these one at a time. The `\\password` command prompts for the new password without embedding it in SQL history; enter the generated password twice.
+At the psql prompt, run these one at a time. The `\password` command prompts for the new password without embedding it in SQL history; enter the generated password twice.
 
 ```sql
 CREATE ROLE paas_deployer LOGIN;
-\\password paas_deployer
+\password paas_deployer
 CREATE DATABASE paas_deployer OWNER paas_deployer;
 CREATE DATABASE paas_deployer_logs OWNER paas_deployer;
-\\l
-\\du paas_deployer
+\l
+\du paas_deployer
 ```
 
 If role/database creation fails or the `synapse` role lacks permission, stop and share only the error text—not any password or token. Do not modify the existing `synapse` database or change the Synapse role to make this work.

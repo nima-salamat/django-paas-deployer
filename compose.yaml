@@ -186,7 +186,7 @@ services:
       # Deployment Logs PostgreSQL
       # ----------------------------------------------------------
       DEPLOYMENT_LOG_DB_HOST: ${DEPLOYMENT_LOG_DB_HOST:-deployment-log-db}
-      DEPLOYMENT_LOG_DB_PORT: ${DB_PORT:-5432}
+      DEPLOYMENT_LOG_DB_PORT: ${DEPLOYMENT_LOG_DB_PORT:-5432}
 
       # ----------------------------------------------------------
       # Redis
@@ -306,7 +306,7 @@ services:
       # Deployment Logs PostgreSQL
       # ----------------------------------------------------------
       DEPLOYMENT_LOG_DB_HOST: ${DEPLOYMENT_LOG_DB_HOST:-deployment-log-db}
-      DEPLOYMENT_LOG_DB_PORT: ${DB_PORT:-5432}
+      DEPLOYMENT_LOG_DB_PORT: ${DEPLOYMENT_LOG_DB_PORT:-5432}
 
       # ----------------------------------------------------------
       # Redis
@@ -382,7 +382,7 @@ services:
       DOCKER_HOST_STORAGE_PATH: /host-docker-root
       DB_PORT: ${DB_PORT:-5432}
       DEPLOYMENT_LOG_DB_HOST: ${DEPLOYMENT_LOG_DB_HOST:-deployment-log-db}
-      DEPLOYMENT_LOG_DB_PORT: ${DB_PORT:-5432}
+      DEPLOYMENT_LOG_DB_PORT: ${DEPLOYMENT_LOG_DB_PORT:-5432}
       REDIS_URL: redis://redis:6379
       CELERY_BROKER_URL: redis://redis:6379
       CELERY_RESULT_BACKEND: redis://redis:6379
@@ -438,7 +438,7 @@ services:
       DB_HOST: ${DB_HOST:-db}
       DB_PORT: ${DB_PORT:-5432}
       DEPLOYMENT_LOG_DB_HOST: ${DEPLOYMENT_LOG_DB_HOST:-deployment-log-db}
-      DEPLOYMENT_LOG_DB_PORT: ${DB_PORT:-5432}
+      DEPLOYMENT_LOG_DB_PORT: ${DEPLOYMENT_LOG_DB_PORT:-5432}
       REDIS_URL: redis://redis:6379
       CELERY_BROKER_URL: redis://redis:6379
       CELERY_RESULT_BACKEND: redis://redis:6379
@@ -507,7 +507,7 @@ services:
       # Deployment Logs PostgreSQL
       # ----------------------------------------------------------
       DEPLOYMENT_LOG_DB_HOST: ${DEPLOYMENT_LOG_DB_HOST:-deployment-log-db}
-      DEPLOYMENT_LOG_DB_PORT: ${DB_PORT:-5432}
+      DEPLOYMENT_LOG_DB_PORT: ${DEPLOYMENT_LOG_DB_PORT:-5432}
 
       # ----------------------------------------------------------
       # Redis
@@ -592,7 +592,7 @@ services:
       DB_HOST: ${DB_HOST:-db}
       DB_PORT: ${DB_PORT:-5432}
       DEPLOYMENT_LOG_DB_HOST: ${DEPLOYMENT_LOG_DB_HOST:-deployment-log-db}
-      DEPLOYMENT_LOG_DB_PORT: ${DB_PORT:-5432}
+      DEPLOYMENT_LOG_DB_PORT: ${DEPLOYMENT_LOG_DB_PORT:-5432}
       REDIS_URL: redis://redis:6379
       CHANNEL_REDIS_URL: redis://redis:6379
       # Optional tuning (defaults in command)
@@ -632,7 +632,7 @@ services:
       DB_HOST: ${DB_HOST:-db}
       DB_PORT: ${DB_PORT:-5432}
       DEPLOYMENT_LOG_DB_HOST: ${DEPLOYMENT_LOG_DB_HOST:-deployment-log-db}
-      DEPLOYMENT_LOG_DB_PORT: ${DB_PORT:-5432}
+      DEPLOYMENT_LOG_DB_PORT: ${DEPLOYMENT_LOG_DB_PORT:-5432}
       REDIS_URL: redis://redis:6379
       CELERY_BROKER_URL: redis://redis:6379
       CELERY_RESULT_BACKEND: redis://redis:6379
