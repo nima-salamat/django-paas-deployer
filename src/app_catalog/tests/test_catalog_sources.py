@@ -192,9 +192,9 @@ networks:
         self.assertNotIn("/tmp/passdeployer-wordpress-ready", healthcheck["test"][1])
         self.assertIn("wp core is-installed", healthcheck["test"][1])
         self.assertEqual(healthcheck["interval"], "5s")
-        self.assertEqual(healthcheck["timeout"], "5s")
-        self.assertEqual(healthcheck["start_period"], "15s")
-        self.assertEqual(healthcheck["retries"], 24)
+        self.assertEqual(healthcheck["timeout"], "10s")
+        self.assertEqual(healthcheck["start_period"], "60s")
+        self.assertEqual(healthcheck["retries"], 36)
         self.assertEqual(
             wordpress["environment"]["WORDPRESS_CONFIG_EXTRA"],
             "define( 'WP_HOME', 'https://app.example.com' );\n"
