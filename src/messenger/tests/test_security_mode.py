@@ -3,11 +3,12 @@ from __future__ import annotations
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
+from unittest.mock import patch
 from cryptography.fernet import Fernet
 from rest_framework.test import APIClient
 
 from django.contrib.auth import get_user_model
-from messenger.models import Contact, Conversation, ConversationParticipant, MatrixDevice, Message, MessageAttachment
+from messenger.models import Contact, Conversation, ConversationParticipant, MatrixDevice, MatrixIdentity, Message, MessageAttachment
 
 User = get_user_model()
 
@@ -101,6 +102,76 @@ class MessengerSecurityModeTests(TestCase):
                 kind=MessageAttachment.Kind.FILE,
             )
         self.assertFalse(MessageAttachment.objects.filter(conversation=conversation).exists())
+
+    def test_secure_dm_is_parallel_to_standard_dm_and_keeps_old_plaintext_history(self):
+        # The recipient has an ordinary DM with the sender but no Matrix device
+        # yet (they may be offline). Secure-room registration must create a
+        # separate transport-bound conversation, not mutate or empty the old one.
+        standard = Conversation.objects.create(
+            type=Conversation.Type.PRIVATE,
+            created_by=self.owner,
+            security_mode=Conversation.SecurityMode.STANDARD,
+        )
+        ConversationParticipant.objects.create(
+            conversation=standard, user=self.owner, role=ConversationParticipant.Role.OWNER
+        )
+        ConversationParticipant.objects.create(
+            conversation=standard, user=self.peer
+        )
+        old_message = Message.objects.create(
+            conversation=standard,
+            sender=self.owner,
+            body="This is the existing non-encrypted history.",
+        )
+        owner_identity = MatrixIdentity.objects.create(
+            user=self.owner,
+            matrix_user_id=f"@pd_owner_{self.owner.pk}:matrix.example.test",
+            encrypted_password="encrypted-test-value",
+        )
+        peer_identity = MatrixIdentity.objects.create(
+            user=self.peer,
+            matrix_user_id=f"@pd_peer_{self.peer.pk}:matrix.example.test",
+            encrypted_password="encrypted-test-value",
+        )
+        self.assertFalse(MatrixDevice.objects.filter(user=self.peer, revoked_at__isnull=True).exists())
+
+        room_id = f"!parallel-secure-{self.owner.pk}-{self.peer.pk}:matrix.example.test"
+        with (
+            patch("messenger.api.matrix.matrix_is_configured", return_value=True),
+            patch(
+                "messenger.api.matrix.verify_encrypted_room_binding",
+                return_value=(owner_identity, None),
+            ) as verify_binding,
+        ):
+            response = self.client.post(
+                "/api/messenger/secure/conversations/",
+                {
+                    "type": "private",
+                    "member_ids": [self.peer.pk],
+                    "room_id": room_id,
+                },
+                format="json",
+                HTTP_X_MATRIX_ACCESS_TOKEN="test-matrix-device-token",
+            )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        verify_binding.assert_called_once()
+        self.assertEqual(
+            set(verify_binding.call_args.args[3]),
+            {owner_identity.matrix_user_id, peer_identity.matrix_user_id},
+        )
+        standard.refresh_from_db()
+        self.assertEqual(standard.security_mode, Conversation.SecurityMode.STANDARD)
+        self.assertIsNone(standard.matrix_room_id)
+        self.assertTrue(Message.objects.filter(pk=old_message.pk, conversation=standard).exists())
+        secure = Conversation.objects.get(matrix_room_id=room_id)
+        self.assertEqual(secure.security_mode, Conversation.SecurityMode.MATRIX_E2EE)
+        self.assertFalse(secure.is_public)
+        self.assertTrue(
+            ConversationParticipant.objects.filter(conversation=secure, user=self.peer).exists()
+        )
+        # Inviting a user does not require them to have initialized a device first.
+        self.assertFalse(MatrixDevice.objects.filter(user=self.peer, revoked_at__isnull=True).exists())
 
     def test_request_for_secure_dm_fails_closed_without_creating_normal_dm(self):
         before = Conversation.objects.filter(
