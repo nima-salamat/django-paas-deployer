@@ -5,7 +5,13 @@ from unittest.mock import Mock, patch
 from cryptography.fernet import Fernet
 from django.test import SimpleTestCase, override_settings
 
-from messenger.matrix_service import MatrixServiceError, _config, matrix_request
+from messenger.matrix_service import (
+    ALGORITHM,
+    MatrixServiceError,
+    _config,
+    matrix_request,
+    verify_encrypted_room_binding,
+)
 
 
 class MatrixServiceConfigTests(SimpleTestCase):
@@ -60,6 +66,67 @@ class MatrixServiceConfigTests(SimpleTestCase):
                 "The backend Matrix URL must use HTTPS or an explicitly configured private Docker service URL.",
             ):
                 _config()
+
+    def test_encrypted_room_accepts_offline_invitee_with_invited_history(self):
+        identity = Mock(matrix_user_id="@sender:example.test")
+        device = Mock()
+        memberships = {
+            identity.matrix_user_id: "join",
+            "@peer:example.test": "invite",
+        }
+        with (
+            patch("messenger.matrix_service.verify_device_session", return_value=(identity, device)),
+            patch("messenger.matrix_service.encrypted_room_state", return_value={"algorithm": ALGORITHM}),
+            patch("messenger.matrix_service.room_memberships", return_value=memberships),
+            patch(
+                "messenger.matrix_service.matrix_request",
+                side_effect=[
+                    {"join_rule": "invite"},
+                    {"history_visibility": "invited"},
+                ],
+            ) as request,
+        ):
+            result = verify_encrypted_room_binding(
+                Mock(pk=1),
+                "device-token",
+                "!secure:example.test",
+                [identity.matrix_user_id, "@peer:example.test"],
+            )
+
+        self.assertEqual(result, (identity, device))
+        self.assertEqual(request.call_count, 2)
+
+    def test_encrypted_room_rejects_shared_history_visibility(self):
+        identity = Mock(matrix_user_id="@sender:example.test")
+        device = Mock()
+        with (
+            patch("messenger.matrix_service.verify_device_session", return_value=(identity, device)),
+            patch("messenger.matrix_service.encrypted_room_state", return_value={"algorithm": ALGORITHM}),
+            patch(
+                "messenger.matrix_service.room_memberships",
+                return_value={
+                    identity.matrix_user_id: "join",
+                    "@peer:example.test": "invite",
+                },
+            ),
+            patch(
+                "messenger.matrix_service.matrix_request",
+                side_effect=[
+                    {"join_rule": "invite"},
+                    {"history_visibility": "shared"},
+                ],
+            ),
+        ):
+            with self.assertRaisesMessage(
+                MatrixServiceError,
+                "Secure Messenger rooms must restrict history visibility to invited participants.",
+            ):
+                verify_encrypted_room_binding(
+                    Mock(pk=1),
+                    "device-token",
+                    "!secure:example.test",
+                    [identity.matrix_user_id, "@peer:example.test"],
+                )
 
     def test_public_client_url_must_remain_https_in_production(self):
         with self.settings_for(
