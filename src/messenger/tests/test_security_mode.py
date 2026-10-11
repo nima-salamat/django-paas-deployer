@@ -136,15 +136,15 @@ class MessengerSecurityModeTests(TestCase):
         self.assertFalse(MatrixDevice.objects.filter(user=self.peer, revoked_at__isnull=True).exists())
 
         room_id = f"!parallel-secure-{self.owner.pk}-{self.peer.pk}:matrix.example.test"
-        with self.captureOnCommitCallbacks(execute=True):
-            with (
-                patch("messenger.api.matrix.matrix_is_configured", return_value=True),
-                patch(
-                    "messenger.api.matrix.verify_encrypted_room_binding",
-                    return_value=(owner_identity, None),
-                ) as verify_binding,
-                patch("messenger.api.matrix._notify_secure_conversation_created") as notify_created,
-            ):
+        with (
+            patch("messenger.api.matrix.matrix_is_configured", return_value=True),
+            patch(
+                "messenger.api.matrix.verify_encrypted_room_binding",
+                return_value=(owner_identity, None),
+            ) as verify_binding,
+            patch("messenger.api.matrix._notify_secure_conversation_created") as notify_created,
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
                 response = self.client.post(
                     "/api/messenger/secure/conversations/",
                     {
