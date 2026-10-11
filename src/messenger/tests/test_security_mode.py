@@ -51,6 +51,29 @@ class MessengerSecurityModeTests(TestCase):
         )
         return conversation
 
+    def test_secure_conversation_created_event_contains_metadata_only(self):
+        from messenger.api.matrix import _notify_secure_conversation_created
+
+        with patch("messenger.consumers._send") as send:
+            _notify_secure_conversation_created(314, [self.owner.pk, self.peer.pk, self.owner.pk])
+
+        self.assertEqual(send.call_count, 2)
+        expected = {
+            "type": "conversation.created",
+            "conversation_id": 314,
+            "security_mode": Conversation.SecurityMode.MATRIX_E2EE,
+        }
+        self.assertEqual(send.call_args_list[0].args[1], expected)
+        self.assertEqual(send.call_args_list[1].args[1], expected)
+        groups = {call.args[0] for call in send.call_args_list}
+        self.assertEqual(groups, {
+            f"messenger_user_{self.owner.pk}",
+            f"messenger_user_{self.peer.pk}",
+        })
+        # The payload deliberately has no room ID, message body, Matrix token,
+        # device key, or crypto payload; E2EE room contents stay on Matrix.
+        self.assertEqual(set(expected), {"type", "conversation_id", "security_mode"})
+
     def test_new_conversations_default_to_standard_mode(self):
         conversation = Conversation.objects.create(
             type=Conversation.Type.GROUP,
