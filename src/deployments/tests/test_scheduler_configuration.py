@@ -305,3 +305,64 @@ def test_dependency_cancelled_deployments_are_not_labeled_as_user_cancelled_erro
     assert "Deployment cancelled by the user." in state
     assert 'current.get("status_message")' in state
     assert 'not isinstance(exception, DeploymentCancelled)' in state
+
+
+def test_beat_uses_a_lightweight_producer_app_and_keeps_database_scheduler():
+    compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+    beat = (ROOT / "src" / "config" / "beat.py").read_text(encoding="utf-8")
+    assert "config.beat:app" in compose
+    assert "django_celery_beat.schedulers:DatabaseScheduler" in compose
+    assert '--max-interval' in compose
+    assert "fixups=[]" in beat
+    assert "app.conf.imports = ()" in beat
+    assert "app.conf.include = ()" in beat
+
+
+def test_idle_periodic_pulses_are_bounded_and_event_outbox_has_a_hook_fallback():
+    settings = (ROOT / "src" / "config" / "settings.py").read_text(encoding="utf-8")
+    assert '"dispatch_deployment_event_outbox": {\n        "task": "deployments.celery.tasks.dispatch_deployment_event_outbox",\n        "schedule": 15.0,' in settings
+    assert '"monitor_services_reconciliation": {\n        "task": "deployments.celery.schedules.monitor_services",' in settings
+    assert '"schedule": 15.0,' in settings
+    event_pipeline = (ROOT / "src" / "deploy" / "event_pipeline.py").read_text(encoding="utf-8")
+    assert "transaction.on_commit(schedule_outbox_dispatch)" in event_pipeline
+    assert "cache.add(" in event_pipeline
+    assert "periodic recovery will retry" in event_pipeline
+
+
+def test_generic_worker_has_bounded_default_concurrency():
+    compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+    worker = compose.split("  celery:\n", 1)[1].split("  deployment-worker:\n", 1)[0]
+    assert "--pool=prefork" in worker
+    assert "--concurrency=${CELERY_WORKER_CONCURRENCY:-1}" in worker
+
+def test_deployment_event_outbox_dispatch_is_scheduled_only_after_durable_insert():
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from deploy.event_pipeline import DeploymentEventPipeline
+    from deployments.core.types import DeploymentEvent
+
+    deployment = SimpleNamespace(
+        pk="deployment-id",
+        service_id="service-id",
+        execution_task_id="",
+    )
+    with (
+        patch("deploy.event_pipeline.DeploymentEventOutbox.objects.create") as create,
+        patch("deploy.event_pipeline.transaction.on_commit") as on_commit,
+        patch("deploy.event_pipeline.get_channel_layer", return_value=None),
+    ):
+        pipeline = DeploymentEventPipeline(deployment)
+        pipeline.record(
+            DeploymentEvent(
+                stage="validation",
+                message="Queued deployment event",
+                level="info",
+                progress=1,
+                details={},
+            )
+        )
+
+    create.assert_called_once()
+    on_commit.assert_called_once()
+    assert on_commit.call_args.args[0].__name__ == "schedule_outbox_dispatch"

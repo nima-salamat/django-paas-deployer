@@ -364,8 +364,13 @@ def build_base_runtime_image(self, base_image_id, force_rebuild=False, build_pol
 @shared_task(bind=True, max_retries=0, name="deployments.celery.tasks.dispatch_deployment_event_outbox")
 def dispatch_deployment_event_outbox(self, batch_size=100) -> dict[str, int]:
     """Project durable deployment events without making projection authoritative."""
+    from deploy.event_pipeline import finish_outbox_dispatch
     from deployments.common.event_outbox import dispatch_pending
-    return dispatch_pending(batch_size=batch_size)
+
+    try:
+        return dispatch_pending(batch_size=batch_size)
+    finally:
+        finish_outbox_dispatch()
 
 @shared_task(bind=True, max_retries=0, name="deployments.celery.tasks.prune_deployment_event_outbox")
 def prune_deployment_event_outbox(self, retention_days=None, batch_size=1000):

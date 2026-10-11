@@ -9,11 +9,68 @@ from typing import Any
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
+from django.core.cache import cache
+from django.db import transaction
+from django.db.models import Q
 
 from .models import DeploymentEventOutbox
 
 
 logger = logging.getLogger(__name__)
+
+_OUTBOX_DISPATCH_CACHE_KEY = "deployer:deployment-event-outbox:dispatch"
+_OUTBOX_DISPATCH_COALESCE_SECONDS = 30
+
+
+def schedule_outbox_dispatch() -> None:
+    """Wake the asynchronous outbox projector once per short event burst.
+
+    The periodic Beat entry remains the recovery path if Redis or task publish
+    is unavailable. This is a best-effort hook, never part of deployment
+    correctness or the durable event write itself.
+    """
+    try:
+        if not cache.add(
+            _OUTBOX_DISPATCH_CACHE_KEY,
+            "queued",
+            timeout=_OUTBOX_DISPATCH_COALESCE_SECONDS,
+        ):
+            return
+        from deployments.celery.tasks import dispatch_deployment_event_outbox
+
+        dispatch_deployment_event_outbox.apply_async(kwargs={"batch_size": 100})
+    except Exception:
+        try:
+            cache.delete(_OUTBOX_DISPATCH_CACHE_KEY)
+        except Exception:
+            pass
+        logger.warning(
+            "Unable to enqueue deployment outbox dispatch; periodic recovery will retry.",
+            exc_info=True,
+        )
+
+
+def finish_outbox_dispatch() -> None:
+    """Release the coalescing marker and queue a follow-up if backlog remains."""
+    try:
+        cache.delete(_OUTBOX_DISPATCH_CACHE_KEY)
+    except Exception:
+        logger.debug("Unable to clear deployment outbox coalescing marker.", exc_info=True)
+
+    try:
+        pending = DeploymentEventOutbox.objects.filter(
+            dispatched_at__isnull=True,
+        ).filter(
+            Q(next_attempt_at__isnull=True)
+            | Q(next_attempt_at__lte=__import__("django.utils.timezone", fromlist=["now"]).now())
+        ).exists()
+    except Exception:
+        # A failed check is not a reason to alter the durable outbox. Beat's
+        # periodic fallback will retry when the database is reachable.
+        logger.debug("Unable to inspect remaining deployment outbox events.", exc_info=True)
+        return
+    if pending:
+        schedule_outbox_dispatch()
 SENSITIVE_KEY_RE = re.compile(r"(password|secret|token|api[_-]?key|private[_-]?key|authorization)", re.I)
 SENSITIVE_VALUE_RE = re.compile(
     r"(?i)(password|secret|token|api[_-]?key|authorization)\s*([:=])\s*([^\s,;]+)"
@@ -98,6 +155,9 @@ class DeploymentEventPipeline:
                 occurred_at=datetime.fromisoformat(timestamp),
                 payload=payload,
             )
+            # Do not dispatch before the durable outbox row commits. Burst
+            # coalescing prevents one Celery message per build/log event.
+            transaction.on_commit(schedule_outbox_dispatch)
         except Exception:
             logger.exception("Unable to persist deployment event for %s.", self.deploy.pk)
 

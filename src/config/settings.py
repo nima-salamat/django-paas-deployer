@@ -439,6 +439,7 @@ CELERY_TASK_ROUTES = {
     "deployments.celery.tasks.build_base_runtime_image": {"queue": "base-images"},
     "deployments.celery.tasks.reclaim_released_volumes": {"queue": "operations"},
     "deployments.celery.tasks.maintain_build_cache": {"queue": "operations"},
+    "deployments.celery.tasks.dispatch_deployment_event_outbox": {"queue": "operations"},
     "auth_users.tasks.cleanup_expired_jwt_blacklist": {"queue": "operations"},
     "app_catalog.start_application_installation": {"queue": "deployments"},
     "app_catalog.gate_application_service": {"queue": "deployments"},
@@ -466,11 +467,12 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers.DatabaseScheduler'
 CELERY_BEAT_SCHEDULE = {
-    # Lightweight pulse; the task reads the operator-configured interval from
-    # Wagtail CoreSettings and throttles itself with a distributed lock.
+    # Event creation normally wakes the durable outbox dispatcher through
+    # transaction.on_commit. Keep this periodic tick as a broker/cache outage
+    # fallback rather than polling PostgreSQL every two seconds.
     "dispatch_deployment_event_outbox": {
         "task": "deployments.celery.tasks.dispatch_deployment_event_outbox",
-        "schedule": 2.0,
+        "schedule": 15.0,
     },
     "prune_deployment_event_outbox": {
         "task": "deployments.celery.tasks.prune_deployment_event_outbox",
@@ -478,19 +480,21 @@ CELERY_BEAT_SCHEDULE = {
     },
     "monitor_services_reconciliation": {
         "task": "deployments.celery.schedules.monitor_services",
-        "schedule": 5.0,
+        # The task itself enforces the operator-configured interval in Redis.
+        # Avoid queuing no-op/throttled pulses every five seconds.
+        "schedule": 15.0,
     },
     "sync_swarm_infrastructure": {
         "task": "deployments.celery.schedules.sync_swarm_infrastructure",
-        "schedule": 15.0,
+        "schedule": 30.0,
     },
     "application_catalog_reconciliation": {
         "task": "app_catalog.reconcile_application_installations",
-        "schedule": 10.0,
+        "schedule": 30.0,
     },
     "ready_app_runtime_supervisor": {
         "task": "app_catalog.supervise_ready_applications",
-        "schedule": 10.0,
+        "schedule": 15.0,
     },
     "expire_idle_shell_sessions": {
         "task": "deployments.celery.tasks.expire_idle_shell_sessions",

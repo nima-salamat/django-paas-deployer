@@ -360,3 +360,12 @@ Do not:
 - `src/deployments/common/retry.py`
 - `src/deployments/application/cancellation.py`
 - `src/deployments/application/context.py`
+
+
+## Low-footprint Beat and event-driven event delivery
+
+The main Beat process is a producer, not a worker: it now uses `config.beat:app`, which initializes Django for `django-celery-beat` but deliberately does not auto-import application task modules or enable Celery task instrumentation. The database scheduler is retained so operator-managed `PeriodicTask` rows still work; its maximum wait is configurable with `CELERY_BEAT_MAX_INTERVAL` (default 30 seconds). The shortest built-in fallback schedule is 15 seconds, so normal schedule checks still happen as entries become due.
+
+Deployment event outbox writes schedule an asynchronous dispatcher from `transaction.on_commit`. A Redis-backed Django-cache marker coalesces bursts instead of sending a Celery message for every build event. Each completed batch clears the marker and queues a follow-up if due rows remain. The 15-second Beat entry is deliberately retained as the fallback for broker/cache interruptions; the outbox row remains durable and authoritative.
+
+The generic `celery` worker defaults to one prefork child (`CELERY_WORKER_CONCURRENCY=1`) to avoid multiplying the Django process footprint on small hosts. The dedicated deployment worker and base-image worker retain their separate concurrency controls and queue responsibilities. These defaults reduce idle worker/Beat overhead without moving Docker work into Beat or weakening periodic reconciliation.
