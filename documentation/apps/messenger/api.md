@@ -78,7 +78,21 @@ These endpoints are reserved for the opt-in E2EE path; they do not change standa
 | POST | /api/messenger/secure/devices/<str:device_id>/revoke/ | Revoke a device/session through Synapse and mark the local device record revoked. |
 | POST | /api/messenger/secure/conversations/ | Register an existing Matrix room only after verifying the E2EE algorithm, requesting device, intended participants and (for a group) the reciprocal Matrix Space relationship. Does not create a plaintext fallback. |
 
-The ordinary `POST /conversations/` endpoint still returns `503` when a caller requests `security_mode=matrix_e2ee`. The secure client creates the Matrix room and then calls the secure mapping endpoint. Secure chat is unavailable unless `MATRIX_HOMESERVER_URL`, `MATRIX_HOMESERVER_DOMAIN`, `MATRIX_ADMIN_ACCESS_TOKEN` and `MATRIX_IDENTITY_ENCRYPTION_KEY` are configured. The first release supports encrypted text only; Matrix media encryption and secure equivalents for legacy features are not yet implemented.
+The ordinary `POST /conversations/` endpoint still returns `503` when a caller requests `security_mode=matrix_e2ee`; it never downgrades the request to a normal conversation. The React secure client creates the encrypted Matrix room and then calls the secure mapping endpoint. The first release supports encrypted text only. Matrix media encryption and secure equivalents for legacy search, forwarding, reactions, scheduled messages, read receipts and calls are not implemented; the corresponding legacy Django paths must stay blocked for E2EE rooms.
+
+#### Connecting an existing Synapse homeserver
+
+No Synapse service is required in this repository's `compose.yaml`. Keep your existing Synapse deployment separate; do not deploy the Ready App template unless you intentionally want a second, independent homeserver.
+
+Configure these values in the backend `.env` (the Django service already loads it with `env_file`):
+
+- `MATRIX_HOMESERVER_URL`: the public HTTPS Matrix Client-Server API base URL. The React browser uses this URL directly, and Django uses it unless an internal URL is configured. It must be reachable from user browsers and provide the CORS responses required by the Matrix Client-Server API through your reverse proxy.
+- `MATRIX_HOMESERVER_DOMAIN`: the exact Synapse `server_name` (the domain part of Matrix user IDs), not necessarily the hostname in the public URL.
+- `MATRIX_HOMESERVER_INTERNAL_URL` (optional): a private backend-only URL such as `http://synapse:8008`. Set it only after attaching the Django service to the same private Docker network as the existing Synapse container and using its network DNS alias. The browser never receives this internal URL. A plain-HTTP value is accepted only for a single-label Docker service hostname; do not route it over a public network.
+- `MATRIX_ADMIN_ACCESS_TOKEN`: an administrator access token used only by Django for Synapse Admin API operations.
+- `MATRIX_IDENTITY_ENCRYPTION_KEY`: a dedicated Fernet key for encrypting the generated Matrix account passwords stored in Django. Keep a secure backup; rotating it without re-encrypting stored credentials disables future provisioning/login.
+
+The integration creates Paas Deployer-specific Matrix accounts (localparts derived from Django UUIDs) on the configured homeserver. It does not automatically link or take over existing Synapse usernames/passwords; existing Matrix accounts remain untouched. To authenticate the same Matrix users already present on Synapse, a separate explicit account-mapping/SSO design would be needed.
 
 ### Media and calls
 

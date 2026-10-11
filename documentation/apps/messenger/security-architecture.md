@@ -27,7 +27,7 @@ Use the maintained Matrix client protocol and its established E2EE implementatio
 
 - `matrix-js-sdk` for client-server messaging, room membership, device management, encrypted event handling, and encrypted media.
 - `@matrix-org/matrix-sdk-crypto-wasm` for the Rust/WASM-backed Matrix crypto state machine.
-- A self-hosted Matrix homeserver (for example, Synapse) operated alongside the existing Django platform. This avoids depending on a public third-party homeserver for private room data. The backend repository already includes a Ready App definition named `matrix-synapse-with-postgresql`; that makes deployment available, but it does not by itself provision user identities or integrate Matrix encryption into Messenger.
+- An existing self-hosted Matrix homeserver (for example, Synapse). It may run in a separate Compose project; the Paas Deploy(er) Compose stack does not need to start another Synapse service. The `matrix-synapse-with-postgresql` Ready App is optional for operators who intentionally want to deploy a new homeserver, not a prerequisite for Messenger integration.
 
 The WASM package implements a crypto state machine without doing network I/O itself; the Matrix client-server protocol still has to carry device keys, one-time keys, to-device messages, membership changes and encrypted room events. Therefore the package cannot simply be dropped into the current Django message endpoint and provide encryption automatically.
 
@@ -77,12 +77,12 @@ The following are concrete integration risks found by reviewing the current Mess
 
 - Normal direct/group messaging, message search, forwarding, reactions, read state, file uploads/downloads, scheduled messages, WebSocket delivery and Jitsi calls already have Django-owned implementations.
 - Group topics already exist as child `Conversation` records; the existing conversation remains General. The frontend already has topic navigation and a create-topic flow.
-- A Matrix Synapse Ready App template already exists in the app catalog. It deploys a homeserver and PostgreSQL, but it does not integrate that homeserver with Messenger identities, devices, rooms, or encryption.
+- A Matrix Synapse Ready App template exists for optional independent deployment. Messenger can instead use the operator's already-running Synapse; the app template is not automatically launched or required by the backend Compose stack.
 - The product already has a Django device/session management UI. Matrix cryptographic devices are distinct from Django browser sessions, so the UI needs a linked view rather than pretending they are the same object.
 
 ### Data-model and routing blockers
 
-1. `get_or_create_dm(user_a, user_b)` now explicitly filters to `security_mode=standard`, preventing the ordinary DM path from selecting a Matrix conversation. The future Matrix DM provisioner must be separate and bind an immutable security mode to the actual Matrix room ID; no such provisioner is shipped yet.
+1. `get_or_create_dm(user_a, user_b)` explicitly filters to `security_mode=standard`. Secure DM/group creation is a separate React Matrix-SDK flow followed by `POST /api/messenger/secure/conversations/`, which verifies the live encrypted room before storing an immutable room binding. It never converts an existing normal conversation.
 2. `Conversation.security_mode` distinguishes `standard` from `matrix_e2ee`; the mode and `matrix_room_id`/`matrix_space_id` mapping are immutable in model saves and guarded by PostgreSQL constraints/triggers. `POST /secure/conversations/` registers only a client-created room whose algorithm, signed-in device, member list and Space relationship were verified against the live homeserver. The normal conversation-create API cannot create or downgrade an E2EE room.
 3. Existing message handlers are prevented from handling E2EE messages: ORM/PostgreSQL guards reject plaintext `Message`, `MessageAttachment` and server-side drafts; legacy message/search/event/media/member/invite/pin/call endpoints fail closed; the Matrix WebSocket subscription and message broadcast path excludes encrypted conversations; chat-list preview/unread queries skip E2EE conversations; and the React UI uses the Matrix client rather than Django history. These controls are required so an implementation bug cannot silently downgrade an E2EE room.
 4. Conversation list data is built using the latest Django message body as a preview and database-backed unread counts. E2EE entries must not leak body text through previews, search, Redis cache inspection, error reporting, telemetry, notifications, logs or exports. Secure-room unread/activity state must be derived from Matrix event metadata or client sync without introducing plaintext message rows.
@@ -109,7 +109,7 @@ A successful Django account login is not proof that a Matrix cryptographic devic
 5. **No usable device or recovery secret:** preserve the account and future use where supported, but make unavailable old history explicit. Do not weaken trust or fallback to the normal Django transport.
 6. **Device revocation:** revoke the Matrix device/session so it stops receiving future events/keys. Clearly explain that revocation cannot erase messages or keys already copied from that device.
 
-Recovery keys are not the Django password. The recovery key and encrypted backup must not be logged, sent to analytics, placed in URLs, stored in Django/Redis, or included in plaintext error telemetry. The UI must distinguish a valid backup restore from partial history recovery. These states are requirements for the future SDK integration; they are not claimed as shipped behavior.
+Recovery keys are not the Django password. The frontend includes recovery-key setup/restore and existing-device SAS verification flows, but these flows still require end-to-end acceptance against the actual configured homeserver. Recovery keys must not be logged, sent to analytics, placed in URLs, stored in Django/Redis, or included in error telemetry. The UI must distinguish a valid backup restore from partial history recovery.
 
 ### Matrix identity and device safety
 
@@ -117,33 +117,38 @@ Recovery keys are not the Django password. The recovery key and encrypted backup
 - Do not use Synapse's admin "login as user" endpoint as the normal browser-login mechanism: official Synapse documentation states that this endpoint does not create a device entry. Device-aware authentication, token expiry/revocation and a one-device-per-browser crypto store are required.
 - Use one Matrix client/crypto-store owner per browser profile and coordinate multiple tabs. The Matrix JS SDK warns that multiple clients sharing the same IndexedDB crypto store can corrupt state and cause decryption failures.
 - Device verification, changed/unverified-device warnings, revoke behavior, recovery-key setup/export/import, and encrypted key backup are part of the feature—not later add-ons. Do not silently trust new devices or imply that account-password reset recovers E2EE history.
-- The app-catalog template currently uses a mutable `matrixdotorg/synapse:latest` image and exposes both client and federation resources. Before production use, pin and qualify a supported image version, harden configuration/secrets and backups, decide whether federation is permitted, and test the actual reverse-proxy/public URL setup.
+- Before production use of any Synapse deployment, qualify and pin its image version, harden configuration/secrets and backups, decide whether federation is permitted, and test the actual reverse-proxy/public URL and CORS behavior. These deployment choices apply to the existing homeserver too.
 
 ### Required integration gate
 
-Before exposing a "Start encrypted chat" action, implement and test all of the following together: immutable mode and secure-room mapping; device-bound Matrix authentication without browser access to server-admin credentials; encrypted text/reply/media transport; membership reconciliation; secure list previews and unread state; explicit handling of unsupported features (search, forwarding, scheduled messages, view-once, calls); device verification; recovery; revocation; and multi-tab/browser-storage-loss tests. If any required secure path is unavailable, fail closed for that conversation rather than falling back to Django plaintext.
+Before treating the currently implemented "Start encrypted chat" path as production-ready, run acceptance tests for the configured homeserver, device-bound sessions, encrypted text, room/Space membership validation, recovery, verification, revocation, browser-storage loss, CORS, backups and two independent users/devices. Durable post-creation membership/role reconciliation and encrypted media remain limitations. Keep unsupported features unavailable, and preserve fail-closed behavior: never fall back to Django plaintext.
 
 ## Current implementation boundary
 
-- Migration `0019_conversation_security_mode` adds the `security_mode` field, defaulting every existing conversation to `standard`.
-- ORM saves reject changes to a conversation's security mode; PostgreSQL also gets a trigger to reject direct `UPDATE security_mode` attempts. SQLite-based tests use the model-level check.
-- `Message.save()` and `MessageAttachment.save()` reject newly-created plaintext Django records for a conversation explicitly marked `matrix_e2ee`.
-- `POST /api/messenger/conversations/` returns HTTP 503 when `security_mode=matrix_e2ee` is requested before Matrix is ready. It does not return an existing normal DM as a substitute.
-- The topics endpoint rejects access/creation for encrypted records until backed by Matrix rooms; public discovery and legacy join/request/invite paths exclude or reject encrypted rooms. The ordinary Django Channels subscription does not admit encrypted rooms, server-side drafts are rejected/hidden, and message fan-out refuses to broadcast a body for those rooms. The React chat pane renders an unavailable state instead of the plaintext timeline, composer, uploads, search and ordinary calls.
-- PostgreSQL triggers additionally block attempts to use `bulk_create` or direct row updates to insert/update plaintext messages, attachments, or non-empty composer drafts in encrypted conversations, and stop plaintext rows being moved out of an encrypted room. These database guards are installed only on PostgreSQL; model/API guards remain the cross-database layer.
+- Migration `0019_conversation_security_mode` adds immutable `security_mode` state (existing conversations remain `standard`); migration `0020_matrix_identity_and_room_binding` adds Matrix identity/device tracking and room-binding protections.
+- `src/messenger/matrix_service.py` provisions a Paas Deployer-specific Matrix identity per Django user through the Synapse Admin API, encrypts the generated account password with the Fernet key, logs in a real device ID, validates device ownership, verifies encrypted room bindings, and revokes devices. The Synapse administrator access token never leaves Django.
+- The API exposes device-session, identity-resolution, device-list/revocation and secure-room-registration routes. The React app uses `matrix-js-sdk` with Rust/WASM crypto, separate browser-device state, SAS verification and recovery UI.
+- A secure room is created by the Matrix client; Django validates its algorithm, device, participant list and (for a group) Space relationship before storing metadata. Standard conversations are not automatically migrated, and the ordinary conversation-create route refuses an E2EE request rather than silently making a plaintext conversation.
+- ORM/PostgreSQL protections reject plaintext `Message`, `MessageAttachment` and server-side drafts for E2EE conversations. Legacy message/search/event/media/member/invite/pin/call routes and the standard Channels path fail closed for encrypted rooms; chat previews avoid plaintext leakage.
+- The secure UI is intentionally text-only. Encrypted media and secure equivalents for search, forwarding, reactions, scheduled messages, read receipts and calls are not shipped. Durable reconciliation for later group membership/role changes is also incomplete; do not treat secure-group administration as production-ready.
+- These repository checks protect boundaries but do not replace integration tests against the operator's actual Synapse. The feature remains opt-in and must not be described as production-certified until the acceptance gates below pass.
 
-These are safe boundaries and regression tests—not the final Element-like experience. They deliberately leave secure chat unavailable instead of simulating verification or key recovery. Do not create `matrix_e2ee` conversations in production by hand: no Matrix room provisioning/session endpoint currently exists.
+## Existing Synapse deployment and environment
+
+- The default `compose.yaml` does not contain a Synapse service. Use the already-running Synapse by setting `MATRIX_HOMESERVER_URL`, `MATRIX_HOMESERVER_DOMAIN`, `MATRIX_ADMIN_ACCESS_TOKEN` and `MATRIX_IDENTITY_ENCRYPTION_KEY` in the backend `.env`.
+- `MATRIX_HOMESERVER_URL` is the public HTTPS Matrix Client-Server API base URL. React connects to it directly, so a Docker-only hostname must never be used for this value. Verify that the reverse proxy passes the Matrix CORS pre-flight and response headers required by browser clients.
+- `MATRIX_HOMESERVER_DOMAIN` must equal Synapse's configured `server_name`; it can differ from the public API hostname (for example, URL `https://matrix.example.com` with server name `example.com`).
+- `MATRIX_HOMESERVER_INTERNAL_URL` is optional. It lets Django call Synapse over a private Docker network while the browser continues using the public URL. Only set it after the Django service is attached to the same private network and the configured service alias resolves there. An HTTP URL is accepted only for a single-label service hostname; it must stay on a private host-local Docker network.
+- `MATRIX_ADMIN_ACCESS_TOKEN` and `MATRIX_IDENTITY_ENCRYPTION_KEY` are backend secrets; do not add them to the React environment or expose them in API responses. The integration provisions new Paas Deployer-specific Matrix users; it does not automatically reuse or modify the homeserver's existing user accounts.
 
 ## Rollout and acceptance gates
 
-1. Deploy and configure the homeserver, its database, TLS, backups, registration policy and server-side secrets.
-2. Implement Django-to-Matrix identity provisioning and a scoped session endpoint. Never send an administrator token to the browser.
-3. Add explicit secure-conversation creation and room/Space mapping. Leave existing conversations unchanged.
-4. Integrate Matrix SDK crypto and the crypto WASM package in the frontend; persist the crypto store safely in IndexedDB.
-5. Implement device list, verification, unexpected-key-change warnings, recovery setup, recovery export/import, and device revocation.
-6. Handle text, reply/quote metadata, attachments, voice/video files, reactions, search, previews, event sync, membership changes, and new-device key sharing without exposing plaintext to Django/Redis.
-7. Test two users on independent devices, offline delivery, malicious/unknown device changes, device removal, lost local storage, valid/invalid recovery material, secure media download and room membership changes.
-8. Only call the feature end-to-end encrypted after protocol integration and all critical tests pass. Until then the UI must say that secure chat is unavailable or not yet configured.
+1. Configure the existing homeserver's public HTTPS endpoint, reverse proxy/CORS, admin access, TLS, account/device policy and backups. A second Synapse instance is not required.
+2. If using a private URL, attach the Django container to the existing Synapse Docker network without adding a Synapse service to this Compose project, then set `MATRIX_HOMESERVER_INTERNAL_URL` to the existing service's internal URL.
+3. With two independent Django users and two browser devices, verify account provisioning, encrypted DM/group creation, delivery, SAS verification, first-device recovery setup, recovery on another device, invalid recovery material and device revocation.
+4. Verify that a new device cannot read prior history without verification or a valid recovery backup, that server-side logs/cache/API responses never contain plaintext secure messages or recovery secrets, and that losing IndexedDB fails closed rather than reusing the old device ID.
+5. Confirm unsupported features remain blocked in secure rooms and exercise user removal/role-change behavior. Until durable Matrix membership reconciliation is implemented and tested, do not enable unrestricted membership mutations for encrypted groups.
+6. Run the backend Django test suite and frontend build/secure-mode tests against the candidate commit, then run live acceptance tests against the real Synapse. Only after all critical checks pass should the feature be considered production-ready.
 
 ## Explicit non-goals
 

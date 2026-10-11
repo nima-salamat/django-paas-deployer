@@ -38,25 +38,56 @@ class MatrixServiceError(Exception):
 
 
 def _config():
-    base_url = (getattr(settings, "MATRIX_HOMESERVER_URL", "") or "").strip().rstrip("/")
+    client_base_url = (getattr(settings, "MATRIX_HOMESERVER_URL", "") or "").strip().rstrip("/")
+    configured_internal_url = (
+        getattr(settings, "MATRIX_HOMESERVER_INTERNAL_URL", "") or ""
+    ).strip().rstrip("/")
+    server_base_url = configured_internal_url or client_base_url
     domain = (getattr(settings, "MATRIX_HOMESERVER_DOMAIN", "") or "").strip().lower()
     admin_token = (getattr(settings, "MATRIX_ADMIN_ACCESS_TOKEN", "") or "").strip()
     encryption_key = (getattr(settings, "MATRIX_IDENTITY_ENCRYPTION_KEY", "") or "").strip()
-    parsed = urlparse(base_url)
-    if not base_url or not domain or not admin_token or not encryption_key:
+    parsed_client = urlparse(client_base_url)
+    parsed_server = urlparse(server_base_url)
+    if not client_base_url or not domain or not admin_token or not encryption_key:
         raise MatrixServiceError("Secure chat is not configured on this deployment.")
-    if parsed.scheme != "https" and not (
-        settings.DEBUG and parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1"}
-    ):
-        raise MatrixServiceError("Secure chat requires a trusted HTTPS Matrix homeserver.")
-    if not parsed.hostname or parsed.username or parsed.password:
+
+    client_is_debug_local_http = (
+        settings.DEBUG
+        and parsed_client.scheme == "http"
+        and parsed_client.hostname in {"localhost", "127.0.0.1"}
+    )
+    if parsed_client.scheme != "https" and not client_is_debug_local_http:
+        raise MatrixServiceError("Secure chat requires a trusted HTTPS Matrix homeserver URL for browser clients.")
+    if not parsed_client.hostname or parsed_client.username or parsed_client.password:
         raise MatrixServiceError("Matrix homeserver configuration is invalid.")
+
+    # In production, HTTP is accepted only for an explicitly configured,
+    # single-label Docker service DNS name (for example, http://synapse:8008).
+    # That URL must exist only on a private Docker network; the browser never
+    # receives it. Public/client traffic still uses the HTTPS URL above.
+    private_docker_http = (
+        bool(configured_internal_url)
+        and parsed_server.scheme == "http"
+        and bool(parsed_server.hostname)
+        and re.fullmatch(r"[A-Za-z0-9_-]+", parsed_server.hostname) is not None
+        and parsed_server.hostname.lower() != "localhost"
+    )
+    server_is_debug_local_http = (
+        settings.DEBUG
+        and parsed_server.scheme == "http"
+        and parsed_server.hostname in {"localhost", "127.0.0.1"}
+    )
+    if parsed_server.scheme != "https" and not private_docker_http and not server_is_debug_local_http:
+        raise MatrixServiceError(
+            "The backend Matrix URL must use HTTPS or an explicitly configured private Docker service URL."
+        )
+    if not parsed_server.hostname or parsed_server.username or parsed_server.password:
+        raise MatrixServiceError("Matrix backend URL configuration is invalid.")
     try:
         fernet = Fernet(encryption_key.encode("ascii"))
     except (ValueError, UnicodeEncodeError):
         raise MatrixServiceError("Matrix identity encryption key is invalid or missing.")
-    return base_url, domain, admin_token, fernet
-
+    return server_base_url, client_base_url, domain, admin_token, fernet
 
 def matrix_is_configured() -> bool:
     try:
@@ -67,14 +98,14 @@ def matrix_is_configured() -> bool:
 
 
 def _url(path: str) -> str:
-    base_url, _, _, _ = _config()
-    return f"{base_url}/{path.lstrip('/')}"
+    server_base_url, _, _, _, _ = _config()
+    return f"{server_base_url}/{path.lstrip('/')}"
 
 
 def matrix_request(method: str, path: str, *, access_token: str | None = None,
                    admin: bool = False, unauthenticated: bool = False,
                    json_body=None, timeout: float = 8.0):
-    base_url, _, admin_token, _ = _config()
+    server_base_url, _, _, admin_token, _ = _config()
     headers = {"Accept": "application/json"}
     if access_token:
         headers["Authorization"] = f"Bearer {access_token}"
@@ -85,7 +116,7 @@ def matrix_request(method: str, path: str, *, access_token: str | None = None,
     try:
         response = requests.request(
             method=method.upper(),
-            url=f"{base_url}/{path.lstrip('/')}",
+            url=f"{server_base_url}/{path.lstrip('/')}",
             headers=headers,
             json=json_body,
             timeout=timeout,
@@ -120,7 +151,7 @@ def matrix_request(method: str, path: str, *, access_token: str | None = None,
 
 
 def _decrypt_identity_password(identity: MatrixIdentity) -> str:
-    _, _, _, fernet = _config()
+    _, _, _, _, fernet = _config()
     try:
         return fernet.decrypt(identity.encrypted_password.encode("ascii")).decode("utf-8")
     except (InvalidToken, UnicodeEncodeError, ValueError):
@@ -137,7 +168,7 @@ def ensure_matrix_identity(user) -> tuple[MatrixIdentity, str]:
     The Django user row serializes concurrent first-time provisioning requests.
     Remote credentials are never logged or returned to callers of this helper.
     """
-    base_url, domain, admin_token, fernet = _config()
+    server_base_url, _, domain, admin_token, fernet = _config()
     with transaction.atomic():
         locked_user = User.objects.select_for_update().get(pk=user.pk)
         identity = MatrixIdentity.objects.filter(user=locked_user).first()
@@ -152,7 +183,7 @@ def ensure_matrix_identity(user) -> tuple[MatrixIdentity, str]:
         headers = {"Authorization": f"Bearer {admin_token}", "Accept": "application/json"}
         try:
             response = requests.put(
-                f"{base_url}{path}",
+                f"{server_base_url}{path}",
                 headers=headers,
                 json={
                     "password": password,
@@ -244,9 +275,9 @@ def create_device_session(user, device_id: str, display_name: str = "") -> dict:
         raise MatrixServiceError("Matrix did not create the expected device session.")
     device.last_seen_at = timezone.now()
     device.save(update_fields=("last_seen_at",))
-    base_url, _, _, _ = _config()
+    _, client_base_url, _, _, _ = _config()
     return {
-        "homeserver_url": base_url,
+        "homeserver_url": client_base_url,
         "user_id": identity.matrix_user_id,
         "device_id": device_id,
         "access_token": access_token,
