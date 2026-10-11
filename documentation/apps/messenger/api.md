@@ -82,13 +82,16 @@ The ordinary `POST /conversations/` endpoint still returns `503` when a caller r
 
 #### Connecting an existing Synapse homeserver
 
-No Synapse service is required in this repository's `compose.yaml`. Keep your existing Synapse deployment separate; do not deploy the Ready App template unless you intentionally want a second, independent homeserver.
+No Synapse service is required in this repository's `compose.yaml`. The `web` service attaches to an existing external Docker network named by `MATRIX_DOCKER_NETWORK` (default `matrix_matrix`, the usual Compose-generated name when the Synapse project directory is `/opt/matrix`). The network is declared external, so Compose fails rather than creating a substitute network if that name is wrong. Keep your existing Synapse deployment separate; do not deploy the Ready App template unless you intentionally want a second, independent homeserver.
+
+Confirm the real network name on the host with `docker network ls --filter name=matrix --format '{{.Name}}'`. Set `MATRIX_DOCKER_NETWORK` in the Paas Deploy(er) root `.env` to the exact result if it is not `matrix_matrix`. Only the Django `web` service needs this network for the current synchronous Matrix API integration; no new Synapse or PostgreSQL service is added here. The existing `synapse` container name is used as the backend DNS alias on that network.
 
 Configure these values in the backend `.env` (the Django service already loads it with `env_file`):
 
 - `MATRIX_HOMESERVER_URL`: the public HTTPS Matrix Client-Server API base URL. The React browser uses this URL directly, and Django uses it unless an internal URL is configured. It must be reachable from user browsers and provide the CORS responses required by the Matrix Client-Server API through your reverse proxy.
 - `MATRIX_HOMESERVER_DOMAIN`: the exact Synapse `server_name` (the domain part of Matrix user IDs), not necessarily the hostname in the public URL.
-- `MATRIX_HOMESERVER_INTERNAL_URL` (optional): a private backend-only URL such as `http://synapse:8008`. Set it only after attaching the Django service to the same private Docker network as the existing Synapse container and using its network DNS alias. The browser never receives this internal URL. A plain-HTTP value is accepted only for a single-label Docker service hostname; do not route it over a public network.
+- `MATRIX_HOMESERVER_INTERNAL_URL`: for this deployment, `http://synapse:8008` uses the existing container alias on the shared private network. The browser never receives this internal URL. A plain-HTTP value is accepted only for a single-label Docker service hostname; do not route it over a public network.
+- `MATRIX_DOCKER_NETWORK`: the exact existing Docker network name from the Synapse Compose project. It is external and will not be created by Paas Deploy(er).
 - `MATRIX_ADMIN_ACCESS_TOKEN`: an administrator access token used only by Django for Synapse Admin API operations.
 - `MATRIX_IDENTITY_ENCRYPTION_KEY`: a dedicated Fernet key for encrypting the generated Matrix account passwords stored in Django. Keep a secure backup; rotating it without re-encrypting stored credentials disables future provisioning/login.
 

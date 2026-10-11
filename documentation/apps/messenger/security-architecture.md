@@ -135,7 +135,7 @@ Before treating the currently implemented "Start encrypted chat" path as product
 
 ## Existing Synapse deployment and environment
 
-- The default `compose.yaml` does not contain a Synapse service. Use the already-running Synapse by setting `MATRIX_HOMESERVER_URL`, `MATRIX_HOMESERVER_DOMAIN`, `MATRIX_ADMIN_ACCESS_TOKEN` and `MATRIX_IDENTITY_ENCRYPTION_KEY` in the backend `.env`.
+- The default `compose.yaml` does not contain a Synapse service. The Django `web` service joins the existing external Synapse network through `MATRIX_DOCKER_NETWORK` (default `matrix_matrix`, if the Synapse Compose project directory is `/opt/matrix`). Confirm the actual name with `docker network ls --filter name=matrix --format '{{.Name}}'`; set the exact result in Paas Deploy(er)'s root `.env`. The network is external: if it does not exist, Compose fails rather than starting a new Synapse or creating an unrelated network.
 - `MATRIX_HOMESERVER_URL` is the public HTTPS Matrix Client-Server API base URL. React connects to it directly, so a Docker-only hostname must never be used for this value. Verify that the reverse proxy passes the Matrix CORS pre-flight and response headers required by browser clients.
 - `MATRIX_HOMESERVER_DOMAIN` must equal Synapse's configured `server_name`; it can differ from the public API hostname (for example, URL `https://matrix.example.com` with server name `example.com`).
 - `MATRIX_HOMESERVER_INTERNAL_URL` is optional. It lets Django call Synapse over a private Docker network while the browser continues using the public URL. Only set it after the Django service is attached to the same private network and the configured service alias resolves there. An HTTP URL is accepted only for a single-label service hostname; it must stay on a private host-local Docker network.
@@ -144,7 +144,7 @@ Before treating the currently implemented "Start encrypted chat" path as product
 ## Rollout and acceptance gates
 
 1. Configure the existing homeserver's public HTTPS endpoint, reverse proxy/CORS, admin access, TLS, account/device policy and backups. A second Synapse instance is not required.
-2. If using a private URL, attach the Django container to the existing Synapse Docker network without adding a Synapse service to this Compose project, then set `MATRIX_HOMESERVER_INTERNAL_URL` to the existing service's internal URL.
+2. Set `MATRIX_DOCKER_NETWORK` to the exact existing Synapse network name and `MATRIX_HOMESERVER_INTERNAL_URL=http://synapse:8008`. Recreate the Django `web` service so it joins that network. No Synapse service is added to this Compose project.
 3. With two independent Django users and two browser devices, verify account provisioning, encrypted DM/group creation, delivery, SAS verification, first-device recovery setup, recovery on another device, invalid recovery material and device revocation.
 4. Verify that a new device cannot read prior history without verification or a valid recovery backup, that server-side logs/cache/API responses never contain plaintext secure messages or recovery secrets, and that losing IndexedDB fails closed rather than reusing the old device ID.
 5. Confirm unsupported features remain blocked in secure rooms and exercise user removal/role-change behavior. Until durable Matrix membership reconciliation is implemented and tested, do not enable unrestricted membership mutations for encrypted groups.

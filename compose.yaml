@@ -197,6 +197,9 @@ services:
     networks:
       - app-network
       - proxy_net
+      # Connect Django to the already-running Synapse network. No Synapse
+      # service is defined in this Compose project.
+      - matrix-network
 
 
   # ============================================================
@@ -622,3 +625,9 @@ networks:
     name: proxy_net
     driver: overlay
     attachable: true
+
+  # Existing Synapse network, created by the separate Compose project in /opt/matrix.
+  # MATRIX_DOCKER_NETWORK can override the usual "matrix_matrix" project-network name.
+  matrix-network:
+    external: true
+    name: ${MATRIX_DOCKER_NETWORK:-matrix_matrix}
