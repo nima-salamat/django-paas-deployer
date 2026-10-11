@@ -159,6 +159,53 @@ class UserAPIPermissionAndCacheTests(TestCase):
         self.assertFalse(created.is_superuser)
         self.assertEqual(created.rule.rules, [])
 
+    def test_users_create_permission_works_without_users_view(self):
+        Rule.objects.create(user=self.staff, rules=["users.create"])
+        self.client.force_authenticate(user=self.staff)
+
+        # The React form loads the user list before it can submit a new account.
+        listed = self.client.get("/api/users/admin/users/")
+        self.assertEqual(listed.status_code, 200)
+
+        response = self.client.post(
+            "/api/users/admin/users/",
+            {
+                "username": "create-only-operator-user",
+                "email": "create-only@example.com",
+                "password": "password123",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+
+        created = User.objects.get(username="create-only-operator-user")
+        self.assertTrue(created.is_active)
+        self.assertFalse(created.is_staff)
+        self.assertFalse(created.is_superuser)
+
+    def test_users_manage_rules_only_can_open_panel_and_only_change_rules(self):
+        Rule.objects.create(user=self.staff, rules=["users.manage_rules"])
+        self.client.force_authenticate(user=self.staff)
+
+        listed = self.client.get("/api/users/admin/users/")
+        self.assertEqual(listed.status_code, 200)
+        catalog = self.client.get("/api/users/admin/permissions/")
+        self.assertEqual(catalog.status_code, 200)
+
+        allowed = self.client.patch(
+            f"/api/users/admin/users/{self.other.pk}/",
+            {"rules": ["users.manage_rules"]},
+            format="json",
+        )
+        self.assertEqual(allowed.status_code, 200, allowed.content)
+
+        rejected = self.client.patch(
+            f"/api/users/admin/users/{self.other.pk}/",
+            {"rules": [], "email": "changed@example.com"},
+            format="json",
+        )
+        self.assertEqual(rejected.status_code, 403)
+
     def test_user_admin_cache_signal_is_triggered_for_rule_changes(self):
         Rule.objects.create(user=self.staff, rules=["users.view"])
         with patch("core.app_cache.invalidate_all_users_admin") as invalidate:
