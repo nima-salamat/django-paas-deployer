@@ -192,13 +192,14 @@ class AdminPermissionCatalogAPIView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, HasAdminRule]
     required_rule = "users.view"
-    required_rule_by_method = {"GET": ("users.view", "users.manage")}
+    required_rule_by_method = {"GET": ("users.view", "users.manage", "users.manage_rules")}
 
     def get(self, request):
         if not (
             request.user.is_superuser
             or user_has_rule(request.user, "users.view")
             or user_has_rule(request.user, "users.manage")
+            or user_has_rule(request.user, "users.manage_rules")
         ):
             if not request.user.is_superuser:
                 return err("Forbidden", status.HTTP_403_FORBIDDEN)
@@ -223,7 +224,7 @@ class AdminUserListAPIView(APIView):
     # operators must be able to use the create form without being given the
     # broader users.view permission. The handler retains its explicit checks.
     required_rule_by_method = {
-        "GET": None,  # The GET handler limits this to staff and checks its policy.
+        "GET": ("users.view", "users.manage", "users.create", "users.manage_rules"),
         "POST": ("users.create", "users.manage"),
     }
 
@@ -238,7 +239,6 @@ class AdminUserListAPIView(APIView):
             or user_has_rule(u, "users.manage")
             or user_has_rule(u, "users.create")
             or user_has_rule(u, "users.manage_rules")
-            or u.is_staff  # staff can list; write actions are gated separately
         )
         if not allowed:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
