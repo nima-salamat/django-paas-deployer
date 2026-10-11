@@ -1,0 +1,11 @@
+# Opt-in Compose overlay selected by scripts/compose.sh when USE_MATRIX_POSTGRES=1.
+# It disables only the two local Deployer PostgreSQL services; it does not alter
+# the existing Matrix Compose project, its database, or any volumes.
+services:
+  db:
+    profiles:
+      - matrix-postgres-disabled-in-shared-mode
+
+  deployment-log-db:
+    profiles:
+      - matrix-postgres-disabled-in-shared-mode

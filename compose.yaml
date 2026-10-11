@@ -157,9 +157,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+        required: false
 
       deployment-log-db:
         condition: service_healthy
+        required: false
 
       redis:
         condition: service_healthy
@@ -171,14 +173,20 @@ services:
       # ----------------------------------------------------------
       # Main PostgreSQL
       # ----------------------------------------------------------
-      DB_HOST: db
-      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-passdb}
+      DB_USER: ${DB_USER:-psguser}
+      DB_PASSWORD: ${DB_PASSWORD:-}
+      DEPLOYMENT_LOG_DB_NAME: ${DEPLOYMENT_LOG_DB_NAME:-deployment_logs}
+      DEPLOYMENT_LOG_DB_USER: ${DEPLOYMENT_LOG_DB_USER:-deployment_logs_user}
+      DEPLOYMENT_LOG_DB_PASSWORD: ${DEPLOYMENT_LOG_DB_PASSWORD:-}
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-5432}
 
       # ----------------------------------------------------------
       # Deployment Logs PostgreSQL
       # ----------------------------------------------------------
-      DEPLOYMENT_LOG_DB_HOST: deployment-log-db
-      DEPLOYMENT_LOG_DB_PORT: 5432
+      DEPLOYMENT_LOG_DB_HOST: ${DEPLOYMENT_LOG_DB_HOST:-deployment-log-db}
+      DEPLOYMENT_LOG_DB_PORT: ${DB_PORT:-5432}
 
       # ----------------------------------------------------------
       # Redis
@@ -268,9 +276,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+        required: false
 
       deployment-log-db:
         condition: service_healthy
+        required: false
 
       redis:
         condition: service_healthy
@@ -282,15 +292,21 @@ services:
       # ----------------------------------------------------------
       # Main PostgreSQL
       # ----------------------------------------------------------
-      DB_HOST: db
+      DB_NAME: ${DB_NAME:-passdb}
+      DB_USER: ${DB_USER:-psguser}
+      DB_PASSWORD: ${DB_PASSWORD:-}
+      DEPLOYMENT_LOG_DB_NAME: ${DEPLOYMENT_LOG_DB_NAME:-deployment_logs}
+      DEPLOYMENT_LOG_DB_USER: ${DEPLOYMENT_LOG_DB_USER:-deployment_logs_user}
+      DEPLOYMENT_LOG_DB_PASSWORD: ${DEPLOYMENT_LOG_DB_PASSWORD:-}
+      DB_HOST: ${DB_HOST:-db}
       DOCKER_HOST_STORAGE_PATH: /host-docker-root
-      DB_PORT: 5432
+      DB_PORT: ${DB_PORT:-5432}
 
       # ----------------------------------------------------------
       # Deployment Logs PostgreSQL
       # ----------------------------------------------------------
-      DEPLOYMENT_LOG_DB_HOST: deployment-log-db
-      DEPLOYMENT_LOG_DB_PORT: 5432
+      DEPLOYMENT_LOG_DB_HOST: ${DEPLOYMENT_LOG_DB_HOST:-deployment-log-db}
+      DEPLOYMENT_LOG_DB_PORT: ${DB_PORT:-5432}
 
       # ----------------------------------------------------------
       # Redis
@@ -309,6 +325,7 @@ services:
     networks:
       - app-network
       - proxy_net
+      - matrix-network
   
 
   # ============================================================
@@ -344,8 +361,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
+        required: false
       deployment-log-db:
         condition: service_healthy
+        required: false
       redis:
         condition: service_healthy
 
@@ -353,11 +372,17 @@ services:
       - .env
 
     environment:
-      DB_HOST: db
+      DB_NAME: ${DB_NAME:-passdb}
+      DB_USER: ${DB_USER:-psguser}
+      DB_PASSWORD: ${DB_PASSWORD:-}
+      DEPLOYMENT_LOG_DB_NAME: ${DEPLOYMENT_LOG_DB_NAME:-deployment_logs}
+      DEPLOYMENT_LOG_DB_USER: ${DEPLOYMENT_LOG_DB_USER:-deployment_logs_user}
+      DEPLOYMENT_LOG_DB_PASSWORD: ${DEPLOYMENT_LOG_DB_PASSWORD:-}
+      DB_HOST: ${DB_HOST:-db}
       DOCKER_HOST_STORAGE_PATH: /host-docker-root
-      DB_PORT: 5432
-      DEPLOYMENT_LOG_DB_HOST: deployment-log-db
-      DEPLOYMENT_LOG_DB_PORT: 5432
+      DB_PORT: ${DB_PORT:-5432}
+      DEPLOYMENT_LOG_DB_HOST: ${DEPLOYMENT_LOG_DB_HOST:-deployment-log-db}
+      DEPLOYMENT_LOG_DB_PORT: ${DB_PORT:-5432}
       REDIS_URL: redis://redis:6379
       CELERY_BROKER_URL: redis://redis:6379
       CELERY_RESULT_BACKEND: redis://redis:6379
@@ -368,6 +393,7 @@ services:
     networks:
       - app-network
       - proxy_net
+      - matrix-network
 
 
   # ============================================================
@@ -394,17 +420,25 @@ services:
     depends_on:
       db:
         condition: service_healthy
+        required: false
       deployment-log-db:
         condition: service_healthy
+        required: false
       redis:
         condition: service_healthy
     env_file:
       - .env
     environment:
-      DB_HOST: db
-      DB_PORT: 5432
-      DEPLOYMENT_LOG_DB_HOST: deployment-log-db
-      DEPLOYMENT_LOG_DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-passdb}
+      DB_USER: ${DB_USER:-psguser}
+      DB_PASSWORD: ${DB_PASSWORD:-}
+      DEPLOYMENT_LOG_DB_NAME: ${DEPLOYMENT_LOG_DB_NAME:-deployment_logs}
+      DEPLOYMENT_LOG_DB_USER: ${DEPLOYMENT_LOG_DB_USER:-deployment_logs_user}
+      DEPLOYMENT_LOG_DB_PASSWORD: ${DEPLOYMENT_LOG_DB_PASSWORD:-}
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-5432}
+      DEPLOYMENT_LOG_DB_HOST: ${DEPLOYMENT_LOG_DB_HOST:-deployment-log-db}
+      DEPLOYMENT_LOG_DB_PORT: ${DB_PORT:-5432}
       REDIS_URL: redis://redis:6379
       CELERY_BROKER_URL: redis://redis:6379
       CELERY_RESULT_BACKEND: redis://redis:6379
@@ -414,6 +448,7 @@ services:
     networks:
       - app-network
       - proxy_net
+      - matrix-network
 
 
   # ============================================================
@@ -440,9 +475,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+        required: false
 
       deployment-log-db:
         condition: service_healthy
+        required: false
 
       redis:
         condition: service_healthy
@@ -457,14 +494,20 @@ services:
       # ----------------------------------------------------------
       # Main PostgreSQL
       # ----------------------------------------------------------
-      DB_HOST: db
-      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-passdb}
+      DB_USER: ${DB_USER:-psguser}
+      DB_PASSWORD: ${DB_PASSWORD:-}
+      DEPLOYMENT_LOG_DB_NAME: ${DEPLOYMENT_LOG_DB_NAME:-deployment_logs}
+      DEPLOYMENT_LOG_DB_USER: ${DEPLOYMENT_LOG_DB_USER:-deployment_logs_user}
+      DEPLOYMENT_LOG_DB_PASSWORD: ${DEPLOYMENT_LOG_DB_PASSWORD:-}
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-5432}
 
       # ----------------------------------------------------------
       # Deployment Logs PostgreSQL
       # ----------------------------------------------------------
-      DEPLOYMENT_LOG_DB_HOST: deployment-log-db
-      DEPLOYMENT_LOG_DB_PORT: 5432
+      DEPLOYMENT_LOG_DB_HOST: ${DEPLOYMENT_LOG_DB_HOST:-deployment-log-db}
+      DEPLOYMENT_LOG_DB_PORT: ${DB_PORT:-5432}
 
       # ----------------------------------------------------------
       # Redis
@@ -483,6 +526,7 @@ services:
     networks:
       - app-network
       - proxy_net
+      - matrix-network
 
   xray:
     image: ${DOCKER_MIRROR:-docker.io}/teddysun/xray:latest
@@ -528,8 +572,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
+        required: false
       deployment-log-db:
         condition: service_healthy
+        required: false
       redis:
         condition: service_healthy
 
@@ -537,10 +583,16 @@ services:
       - .env
 
     environment:
-      DB_HOST: db
-      DB_PORT: 5432
-      DEPLOYMENT_LOG_DB_HOST: deployment-log-db
-      DEPLOYMENT_LOG_DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-passdb}
+      DB_USER: ${DB_USER:-psguser}
+      DB_PASSWORD: ${DB_PASSWORD:-}
+      DEPLOYMENT_LOG_DB_NAME: ${DEPLOYMENT_LOG_DB_NAME:-deployment_logs}
+      DEPLOYMENT_LOG_DB_USER: ${DEPLOYMENT_LOG_DB_USER:-deployment_logs_user}
+      DEPLOYMENT_LOG_DB_PASSWORD: ${DEPLOYMENT_LOG_DB_PASSWORD:-}
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-5432}
+      DEPLOYMENT_LOG_DB_HOST: ${DEPLOYMENT_LOG_DB_HOST:-deployment-log-db}
+      DEPLOYMENT_LOG_DB_PORT: ${DB_PORT:-5432}
       REDIS_URL: redis://redis:6379
       CHANNEL_REDIS_URL: redis://redis:6379
       # Optional tuning (defaults in command)
@@ -551,6 +603,7 @@ services:
 
     networks:
       - app-network
+      - matrix-network
 
 
 # ==============================================================
@@ -570,10 +623,16 @@ services:
     command: ["pytest", "-m", "deployment_integration", "-q", "app_catalog/tests/integration"]
     environment:
       RUN_DEPLOYMENT_INTEGRATION: "1"
-      DB_HOST: db
-      DB_PORT: 5432
-      DEPLOYMENT_LOG_DB_HOST: deployment-log-db
-      DEPLOYMENT_LOG_DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-passdb}
+      DB_USER: ${DB_USER:-psguser}
+      DB_PASSWORD: ${DB_PASSWORD:-}
+      DEPLOYMENT_LOG_DB_NAME: ${DEPLOYMENT_LOG_DB_NAME:-deployment_logs}
+      DEPLOYMENT_LOG_DB_USER: ${DEPLOYMENT_LOG_DB_USER:-deployment_logs_user}
+      DEPLOYMENT_LOG_DB_PASSWORD: ${DEPLOYMENT_LOG_DB_PASSWORD:-}
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-5432}
+      DEPLOYMENT_LOG_DB_HOST: ${DEPLOYMENT_LOG_DB_HOST:-deployment-log-db}
+      DEPLOYMENT_LOG_DB_PORT: ${DB_PORT:-5432}
       REDIS_URL: redis://redis:6379
       CELERY_BROKER_URL: redis://redis:6379
       CELERY_RESULT_BACKEND: redis://redis:6379
@@ -588,8 +647,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
+        required: false
       deployment-log-db:
         condition: service_healthy
+        required: false
       redis:
         condition: service_healthy
       deployment-worker:
@@ -599,6 +660,7 @@ services:
     networks:
       - app-network
       - proxy_net
+      - matrix-network
 
 volumes:
   postgres_data:

@@ -72,12 +72,11 @@ Tenant input does not control Docker host privileges, arbitrary host mounts, Doc
 
 ```bash
 cp .env.example .env
-docker compose up -d --build
-docker compose exec web python manage.py migrate
-docker compose exec web python manage.py createsuperuser
+./scripts/compose.sh up -d --build
+./scripts/compose.sh exec web python manage.py createsuperuser
 ```
 
-For Swarm setup, registry, networking and production topology, read [documentation/installation.md](documentation/installation.md).
+For the optional shared Matrix PostgreSQL mode, Swarm setup, registry, networking and production topology, read [documentation/installation.md](documentation/installation.md).
 
 ## Related project
 
