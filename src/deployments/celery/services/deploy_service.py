@@ -1794,6 +1794,28 @@ class DeployService:
                 cancel_check=current_context.cancellation_requested,
                 timeout_seconds=deployment_deadline.bound(3600.0) or 0.0,
             )
+            # Native Swarm builds use immutable release tags, but historically
+            # bypassed BuildCacheArtifact registration (which the legacy
+            # orchestrator performs). This left app-* release tags invisible
+            # to retention and Service-delete cleanup.
+            try:
+                from deploy.build_cache import (
+                    record_application_image,
+                    enforce_service_cache_quota,
+                    enforce_user_cache_quota,
+                )
+                cache_artifact = record_application_image(str(deploy_item.pk), built_image)
+                enforce_service_cache_quota(str(cache_artifact.service_id))
+                enforce_user_cache_quota(str(cache_artifact.user_id))
+            except Exception:
+                # Cache accounting is retention metadata. Its failure must not
+                # turn a valid image build into a failed deployment; image labels
+                # remain as the cleanup/reconciliation fallback.
+                logger.warning(
+                    "Native application image-cache accounting failed for deployment %s.",
+                    deploy_item.pk,
+                    exc_info=True,
+                )
             current_context.assert_can_continue()
 
             attrs = getattr(built_image, "attrs", {}) or {}

@@ -280,6 +280,22 @@ def _base_image_ids() -> set[str]:
     }
 
 
+def is_platform_application_image_ref(image_ref: str) -> bool:
+    """Return whether a tagged reference belongs to a PassDeployer app repository.
+
+    Ready Apps use canonical repositories whose final path component starts
+    with app-. An ownership label belongs to the immutable image identity, but
+    a separate shared/cache tag may be used by another workload.
+    """
+    value = str(image_ref or "").strip().split("@", 1)[0]
+    if not value:
+        return False
+    slash = value.rfind("/")
+    colon = value.rfind(":")
+    repository = value[:colon] if colon > slash else value
+    return repository.rsplit("/", 1)[-1].startswith("app-")
+
+
 def release_application_image_references(
     image_id: str,
     image_refs: Iterable[str] | str = (),
@@ -341,12 +357,15 @@ def release_application_image_references(
         if str(getattr(tagged, "id", "") or "").strip() == target_id:
             owned_refs.add(ref)
 
-    # A matching PassDeployer ownership label allows release of all current
-    # repository tags because the immutable image identity is owned by this
-    # service. Without that proof, stay limited to explicit artifact refs.
+    # A matching ownership label allows discovery of canonical PassDeployer
+    # application tags only. Do not remove aliases in arbitrary repositories:
+    # a shared/cache reference can be intentionally used by another workload.
+    # Explicit persisted refs above are still checked against this exact image ID.
     owner_confirmed = bool(label_owner and label_owner in owner_ids)
     if owner_confirmed:
-        owned_refs.update(image_tags)
+        owned_refs.update(
+            ref for ref in image_tags if is_platform_application_image_ref(ref)
+        )
 
     removed_refs: list[str] = []
     for ref in sorted(owned_refs):

@@ -439,3 +439,26 @@ When changing Ready Apps, verify both the catalog compiler side and the coordina
 - [app_catalog serializers](serializers.md)
 - [app_catalog tests](tests.md)
 - [project architecture](../../architecture.md)
+
+
+## Application image tags and cleanup
+
+Ready App image repository names are derived from each child Service's stable UUID and name, so separate WordPress installations intentionally have different app-* repositories. Native Swarm rollouts use immutable tags such as 1.00-r<release-id>; the -r suffix identifies a deployment/release and is not by itself evidence of a leak.
+
+Native Swarm builds must be registered as BuildCacheArtifact records just like legacy builds. Service cleanup also discovers locally tagged images using the PassDeployer service-ownership label, because old installations may predate cache registration or have records marked reclaimed while tags remain.
+
+To audit existing orphaned images without changing Docker state, run:
+
+```bash
+./scripts/compose.sh exec web python manage.py cleanup_orphaned_application_images
+```
+
+The command is dry-run by default. It only proposes images with a recorded PassDeployer service/deployment identity whose owning Service row no longer exists, and skips known base images, active artifacts, containers, Swarm services, and persisted deployments. Unlabelled historical images are left for manual review.
+
+After inspecting the candidate output, apply only the verified orphan cleanup:
+
+```bash
+./scripts/compose.sh exec web python manage.py cleanup_orphaned_application_images --apply
+```
+
+The cleanup removes only canonical app-* repository references using non-force removal. It does not run host-wide image pruning and does not remove WordPress/MariaDB data volumes.

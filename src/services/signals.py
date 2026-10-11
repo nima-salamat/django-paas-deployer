@@ -250,32 +250,87 @@ def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
     cleanup_service_resources(instance)
 
 def _cleanup_service_cache_images(service: Service) -> None:
-    """Release cache-image references owned by a deleting Service safely."""
+    """Release all local images owned by a deleting Service, including native Swarm tags.
+
+    Native Swarm builds historically bypassed BuildCacheArtifact registration;
+    prior cleanup runs could therefore leave release-tagged app images behind.
+    Image ownership labels provide a recovery path, but candidates are still
+    checked against other service artifacts, base images and runtime containers.
+    """
     from collections import defaultdict
-    from deploy.build_cache import BuildCacheArtifact, release_application_image_references
+    from deploy.build_cache import (
+        BuildCacheArtifact,
+        is_platform_application_image_ref,
+        release_application_image_references,
+    )
     from deploy.models import BaseRuntimeImage
     from deployments.core.manager.client_manager import get_docker_client
 
+    # Do not filter reclaimed_at: recover old rows whose metadata says
+    # reclaimed even if Docker still has the image or its application tags.
     rows = list(
         BuildCacheArtifact.objects.filter(
             service_id=service.pk,
-            reclaimed_at__isnull=True,
         ).values_list("image_id", "image_ref")
     )
     image_ids = {str(image_id) for image_id, _ref in rows if image_id}
-    if not image_ids:
-        return
-
     refs_by_image = defaultdict(set)
     for image_id, image_ref in rows:
         if image_id and image_ref:
             refs_by_image[str(image_id)].add(str(image_ref).strip())
 
+    client = get_docker_client()
+    list_images = getattr(client.images, "list", None)
+    if callable(list_images):
+        try:
+            local_images = list_images(all=True)
+        except TypeError:
+            local_images = list_images()
+        except Exception as exc:
+            logger.exception(
+                "Unable to enumerate Docker images while cleaning service '%s'.",
+                service.pk,
+            )
+            raise RuntimeError(
+                f"Unable to verify application images for service '{service.name}'."
+            ) from exc
+
+        owner_id = str(service.pk)
+        for image in local_images or ():
+            attrs = getattr(image, "attrs", {}) or {}
+            config = attrs.get("Config") or {}
+            labels = dict(config.get("Labels") or attrs.get("Labels") or {})
+            label_owner = str(
+                labels.get("io.passdeployer.service")
+                or labels.get("passdeployer.service")
+                or labels.get("service.id")
+                or ""
+            ).strip()
+            if label_owner != owner_id:
+                continue
+
+            image_id = str(getattr(image, "id", "") or "").strip()
+            if not image_id:
+                continue
+            image_ids.add(image_id)
+
+            # Never auto-discover foreign-repository aliases, even if they
+            # share the immutable image ID; only app-* refs prove app ownership.
+            for image_ref in (
+                getattr(image, "tags", None) or attrs.get("RepoTags") or []
+            ):
+                if is_platform_application_image_ref(str(image_ref)):
+                    refs_by_image[image_id].add(str(image_ref).strip())
+
+    if not image_ids:
+        return
+
+    # A recorded reference belonging to any other Service protects the image
+    # regardless of the other row's reclaimed marker.
     other_refs = set(
         str(value)
         for value in BuildCacheArtifact.objects.filter(
             image_id__in=image_ids,
-            reclaimed_at__isnull=True,
         )
         .exclude(service_id=service.pk)
         .values_list("image_id", flat=True)
@@ -289,13 +344,10 @@ def _cleanup_service_cache_images(service: Service) -> None:
         if value
     )
 
-    client = get_docker_client()
     running_ids = set()
     for container in client.containers.list():
-        # Prefer the image identifier already returned by Container.attrs.
-        # Accessing container.image performs a separate inspect_image call and
-        # can raise ImageNotFound when a stale container references an image
-        # that has already been pruned from this Docker daemon.
+        # Prefer the image ID returned in Container.attrs; container.image
+        # performs another inspect and can fail on a stale missing image.
         image_id = str((getattr(container, "attrs", {}) or {}).get("Image") or "")
         if image_id:
             running_ids.add(image_id)
@@ -309,7 +361,7 @@ def _cleanup_service_cache_images(service: Service) -> None:
         )
         if ok:
             logger.info(
-                "Released application cache image '%s' for deleted service '%s': %s",
+                "Released application image '%s' for deleted service '%s': %s",
                 image_id,
                 service.name,
                 detail,
@@ -317,7 +369,7 @@ def _cleanup_service_cache_images(service: Service) -> None:
             continue
 
         logger.error(
-            "Failed to release application cache image '%s' for deleted service '%s': %s",
+            "Failed to release application image '%s' for deleted service '%s': %s",
             image_id,
             service.name,
             detail,

@@ -29,6 +29,8 @@ def test_service_runtime_cleanup_fails_closed_for_owned_resources():
     assert "Failed to remove Swarm runtime for service" in source
     assert "Refusing to delete service" in source
     assert "Failed to remove application image(s)" in source
+    assert "list_images(all=True)" in source
+    assert "label_owner != owner_id" in source
     assert "raise" in source.split("def delete_deploy_before_delete_service", 1)[1].split(
         "def _cleanup_service_volumes", 1
     )[0]
@@ -360,6 +362,9 @@ def test_cache_cleanup_releases_owned_tag_without_force_deleting_shared_image():
     removed = []
 
     class Images:
+        def list(self, all=True):
+            return [image]
+
         def get(self, ref):
             if ref == image.id or ref in image.tags:
                 return image
@@ -402,6 +407,89 @@ def test_cache_cleanup_releases_owned_tag_without_force_deleting_shared_image():
 
     assert removed == ["app-svc-1:1"]
     assert image.tags == ["shared/image:1"]
+
+
+def test_service_cleanup_discovers_native_swarm_images_without_cache_rows():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock, patch
+
+    from services import signals
+
+    class FakeImage:
+        id = "sha256:" + "c" * 64
+
+        def __init__(self):
+            self.tags = [
+                "app-svc-2-wordpress:1.00",
+                "app-svc-2-wordpress:1.00-r123456789abc",
+            ]
+            self.attrs = {
+                "RepoTags": list(self.tags),
+                "Size": 1024,
+                "Config": {
+                    "Labels": {
+                        "io.passdeployer.service": "svc-2",
+                        "io.passdeployer.deployment": "deploy-2",
+                        "io.passdeployer.cache.role": "application",
+                    }
+                },
+            }
+            self.removed = False
+
+    image = FakeImage()
+    removed = []
+
+    class Images:
+        def list(self, all=True):
+            return [image] if not image.removed else []
+
+        def get(self, ref):
+            if image.removed:
+                from docker.errors import ImageNotFound
+                raise ImageNotFound(ref)
+            if ref == image.id or ref in image.tags:
+                return image
+            from docker.errors import ImageNotFound
+            raise ImageNotFound(ref)
+
+        def remove(self, ref, force=False):
+            assert force is False
+            removed.append(ref)
+            if ref in image.tags:
+                image.tags.remove(ref)
+                image.attrs["RepoTags"] = list(image.tags)
+            elif ref == image.id:
+                image.removed = True
+
+    empty_rows = MagicMock()
+    empty_rows.values_list.return_value = []
+    no_other_refs = MagicMock()
+    no_other_refs.exclude.return_value.values_list.return_value = []
+    no_base_images = MagicMock()
+    no_base_images.values_list.return_value = []
+    artifacts = MagicMock()
+    artifacts.filter.side_effect = [empty_rows, no_other_refs]
+    base_images = MagicMock()
+    base_images.filter.return_value = no_base_images
+    client = SimpleNamespace(
+        images=Images(),
+        containers=SimpleNamespace(list=MagicMock(return_value=[])),
+    )
+    service = SimpleNamespace(pk="svc-2", name="wordpress")
+
+    with (
+        patch("deploy.build_cache.BuildCacheArtifact.objects", artifacts),
+        patch("deploy.models.BaseRuntimeImage.objects", base_images),
+        patch("deployments.core.manager.client_manager.get_docker_client", return_value=client),
+    ):
+        signals._cleanup_service_cache_images(service)
+
+    assert removed == [
+        "app-svc-2-wordpress:1.00",
+        "app-svc-2-wordpress:1.00-r123456789abc",
+        image.id,
+    ]
+    assert image.removed is True
 
 
 def test_release_application_image_rejects_unknown_shared_reference_ownership():
