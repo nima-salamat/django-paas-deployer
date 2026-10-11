@@ -494,7 +494,7 @@ CELERY_BEAT_SCHEDULE = {
     },
     "ready_app_runtime_supervisor": {
         "task": "app_catalog.supervise_ready_applications",
-        "schedule": 15.0,
+        "schedule": 30.0,
     },
     "expire_idle_shell_sessions": {
         "task": "deployments.celery.tasks.expire_idle_shell_sessions",

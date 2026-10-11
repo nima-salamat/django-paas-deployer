@@ -307,6 +307,16 @@ def test_dependency_cancelled_deployments_are_not_labeled_as_user_cancelled_erro
     assert 'not isinstance(exception, DeploymentCancelled)' in state
 
 
+def test_lightweight_beat_app_initializes_without_importing_worker_modules():
+    from config import beat
+
+    assert beat.app.conf.imports == ()
+    assert beat.app.conf.include == ()
+    assert "deployments.celery.tasks.dispatch_deployment_event_outbox" in beat.app.conf.beat_schedule[
+        "dispatch_deployment_event_outbox"
+    ]["task"]
+
+
 def test_beat_uses_a_lightweight_producer_app_and_keeps_database_scheduler():
     compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
     beat = (ROOT / "src" / "config" / "beat.py").read_text(encoding="utf-8")
@@ -321,6 +331,7 @@ def test_beat_uses_a_lightweight_producer_app_and_keeps_database_scheduler():
 def test_idle_periodic_pulses_are_bounded_and_event_outbox_has_a_hook_fallback():
     settings = (ROOT / "src" / "config" / "settings.py").read_text(encoding="utf-8")
     assert '"dispatch_deployment_event_outbox": {\n        "task": "deployments.celery.tasks.dispatch_deployment_event_outbox",\n        "schedule": 15.0,' in settings
+    assert '"ready_app_runtime_supervisor": {\n        "task": "app_catalog.supervise_ready_applications",\n        "schedule": 30.0,' in settings
     assert '"monitor_services_reconciliation": {\n        "task": "deployments.celery.schedules.monitor_services",' in settings
     assert '"schedule": 15.0,' in settings
     event_pipeline = (ROOT / "src" / "deploy" / "event_pipeline.py").read_text(encoding="utf-8")

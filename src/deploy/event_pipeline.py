@@ -12,6 +12,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 
 from .models import DeploymentEventOutbox
 
@@ -62,7 +63,7 @@ def finish_outbox_dispatch() -> None:
             dispatched_at__isnull=True,
         ).filter(
             Q(next_attempt_at__isnull=True)
-            | Q(next_attempt_at__lte=__import__("django.utils.timezone", fromlist=["now"]).now())
+            | Q(next_attempt_at__lte=timezone.now())
         ).exists()
     except Exception:
         # A failed check is not a reason to alter the durable outbox. Beat's
