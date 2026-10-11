@@ -168,6 +168,7 @@ Every production source surface must be mapped to its owning canonical document 
 - `src/deploy/management/commands/__init__.py` → [deploy](./deploy/README.md)
 - `src/deploy/management/commands/migrate_deployment_logs.py` → [deploy](./deploy/README.md)
 - `src/deploy/management/commands/setup_deployment_log_db.py` → [deploy](./deploy/README.md)
+- `src/deploy/management/commands/cleanup_orphaned_application_images.py` → [deploy](./deploy/README.md)
 - `src/deploy/models.py` → [deploy](./deploy/README.md)
 - `src/deploy/naming.py` → [deploy](./deploy/README.md)
 - `src/deploy/serializers.py` → [deploy](./deploy/README.md)

@@ -54,3 +54,10 @@ For lifecycle/runtime execution, read [../deployments/README.md](../deployments/
 ## Detailed contracts
 
 - [Detailed API reference](api-reference.md)
+
+
+## Orphaned application image cleanup
+
+Native Swarm application builds are recorded in the build cache so retention policy can age out old images. Historical Ready App builds may predate that registration, so the safe recovery command is maintained at `src/deploy/management/commands/cleanup_orphaned_application_images.py`.
+
+Run `python manage.py cleanup_orphaned_application_images` (or `./scripts/compose.sh exec web python manage.py cleanup_orphaned_application_images`) to report orphan candidates without changing Docker state. The default is a dry run. Review the owner, deployment ID, image ID and exact `app-*` tags before using `--apply`; the command preserves images referenced by existing Services, Deploy records, base-image registry entries, containers and Swarm services. Unlabelled legacy images are intentionally not deleted automatically. The command does not prune base images, database images or persistent data volumes.

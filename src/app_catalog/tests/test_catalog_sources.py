@@ -178,7 +178,11 @@ networks:
 
     def test_wordpress_public_service_uses_ready_marker_healthcheck_and_https_config(self):
         definition = ApplicationCatalog.get("wordpress")
-        resolved = resolve_variant(definition, "default", {"domain": "app.example.com"})
+        resolved = resolve_variant(
+            definition,
+            "default",
+            {"domain": "app.example.com", "wordpress_admin_email": "admin@app.example.com"},
+        )
         wordpress = next(item for item in resolved["services"] if item["key"] == "wordpress")
         self.assertEqual(wordpress["port"], 80)
         self.assertTrue(wordpress["public"])
