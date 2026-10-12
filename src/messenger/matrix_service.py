@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 import secrets
+from datetime import datetime, timezone as datetime_timezone
 from urllib.parse import quote, urlparse
 
 import requests
@@ -311,6 +312,56 @@ def verify_device_session(user, access_token: str) -> tuple[MatrixIdentity, Matr
     except MatrixDevice.DoesNotExist:
         raise MatrixServiceError("This Matrix device is not registered or has been revoked.", 403)
     return identity, device
+
+
+def list_matrix_devices(user) -> list[MatrixDevice]:
+    """Reconcile app-registered devices with Synapse before showing device counts.
+
+    Database rows alone can become stale if a device was removed directly from
+    Synapse or if a previous device session was lost by the browser. Such rows
+    remain visible as revoked history, but must not inflate the active-device
+    count. Only device IDs registered through this Messenger account are
+    surfaced to the client.
+    """
+    identity = MatrixIdentity.objects.filter(user=user).first()
+    devices = list(MatrixDevice.objects.filter(user=user).order_by("-last_seen_at"))
+    if identity is None:
+        return devices
+
+    payload = matrix_request(
+        "GET",
+        f"/_synapse/admin/v2/users/{quote(identity.matrix_user_id, safe='')}/devices",
+        admin=True,
+    )
+    remote_rows = payload.get("devices") if isinstance(payload, dict) else None
+    if not isinstance(remote_rows, list):
+        raise MatrixServiceError("Matrix returned an invalid device inventory.")
+
+    remote_by_id = {
+        row.get("device_id"): row
+        for row in remote_rows
+        if isinstance(row, dict) and isinstance(row.get("device_id"), str)
+    }
+    now = timezone.now()
+    for device in devices:
+        remote = remote_by_id.get(device.device_id)
+        if device.revoked_at is None and remote is None:
+            device.revoked_at = now
+            device.save(update_fields=("revoked_at", "last_seen_at"))
+        if remote is not None:
+            last_seen_ts = remote.get("last_seen_ts")
+            if isinstance(last_seen_ts, (int, float)) and last_seen_ts >= 0:
+                try:
+                    device.matrix_last_seen_at = datetime.fromtimestamp(
+                        last_seen_ts / 1000, tz=datetime_timezone.utc
+                    )
+                except (OverflowError, OSError, ValueError):
+                    device.matrix_last_seen_at = None
+            else:
+                device.matrix_last_seen_at = None
+        else:
+            device.matrix_last_seen_at = None
+    return devices
 
 
 def revoke_device(user, device_id: str) -> None:

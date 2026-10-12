@@ -19,6 +19,7 @@ from ..matrix_service import (
     matrix_request,
     revoke_device,
     verify_device_session,
+    list_matrix_devices,
     verify_encrypted_room_binding,
 )
 from ..models import Contact, Conversation, ConversationParticipant, MatrixDevice, MatrixIdentity
@@ -161,17 +162,26 @@ class MatrixDeviceListAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        devices = MatrixDevice.objects.filter(user=request.user).order_by("-last_seen_at")
+        try:
+            devices = list_matrix_devices(request.user)
+        except MatrixServiceError as exc:
+            return _service_error_response(exc)
+        except Exception:
+            logger.exception("Unexpected Matrix device inventory error for user_id=%s", request.user.pk)
+            return err("Could not verify the Matrix device inventory.", status.HTTP_503_SERVICE_UNAVAILABLE)
+        current_device_id = (request.headers.get("X-Matrix-Device-ID") or "").strip()
         return ok(data={"results": [
             {
                 "device_id": device.device_id,
                 "display_name": device.display_name,
                 "created_at": device.created_at.isoformat(),
-                "last_seen_at": device.last_seen_at.isoformat(),
-                "revoked_at": device.revoked_at.isoformat() if device.revoked_at else None,
-                "is_current": device.device_id == (
-                    (request.headers.get("X-Matrix-Device-ID") or "").strip()
+                "last_seen_at": (
+                    device.matrix_last_seen_at.isoformat()
+                    if getattr(device, "matrix_last_seen_at", None) else None
                 ),
+                "last_seen_known": bool(getattr(device, "matrix_last_seen_at", None)),
+                "revoked_at": device.revoked_at.isoformat() if device.revoked_at else None,
+                "is_current": device.device_id == current_device_id,
             }
             for device in devices
         ]})

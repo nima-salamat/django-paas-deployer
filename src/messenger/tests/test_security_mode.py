@@ -3,6 +3,7 @@ from __future__ import annotations
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from unittest.mock import patch
 from cryptography.fernet import Fernet
 from rest_framework.test import APIClient
@@ -95,6 +96,56 @@ class MessengerSecurityModeTests(TestCase):
         # The payload deliberately has no room ID, message body, Matrix token,
         # device key, or crypto payload; E2EE room contents stay on Matrix.
         self.assertEqual(set(expected), {"type", "conversation_id", "security_mode"})
+
+    def test_device_inventory_marks_missing_synapse_devices_as_revoked(self):
+        from messenger.matrix_service import list_matrix_devices
+
+        identity = MatrixIdentity.objects.create(
+            user=self.owner,
+            matrix_user_id=f"@pd_{self.owner.pk}:matrix.example.test",
+            encrypted_password=Fernet.generate_key().decode("ascii"),
+        )
+        active = MatrixDevice.objects.create(
+            user=self.owner,
+            device_id="PDLIVE1234",
+            display_name="Current browser",
+        )
+        stale = MatrixDevice.objects.create(
+            user=self.owner,
+            device_id="PDSTALE1234",
+            display_name="Old browser",
+        )
+        already_revoked = MatrixDevice.objects.create(
+            user=self.owner,
+            device_id="PDREVOKED1234",
+            display_name="Revoked browser",
+            revoked_at=timezone.now(),
+        )
+
+        with patch(
+            "messenger.matrix_service.matrix_request",
+            return_value={
+                "devices": [
+                    {
+                        "device_id": active.device_id,
+                        "display_name": active.display_name,
+                        "last_seen_ts": 1791760000000,
+                    }
+                ]
+            },
+        ) as matrix_request_mock:
+            devices = list_matrix_devices(self.owner)
+
+        by_id = {device.device_id: device for device in devices}
+        self.assertIsNone(by_id[active.device_id].revoked_at)
+        self.assertIsNotNone(by_id[active.device_id].matrix_last_seen_at)
+        self.assertIsNotNone(by_id[stale.device_id].revoked_at)
+        self.assertIsNotNone(by_id[already_revoked.device_id].revoked_at)
+        matrix_request_mock.assert_called_once_with(
+            "GET",
+            f"/_synapse/admin/v2/users/{identity.matrix_user_id}/devices",
+            admin=True,
+        )
 
     def test_new_conversations_default_to_standard_mode(self):
         conversation = Conversation.objects.create(
