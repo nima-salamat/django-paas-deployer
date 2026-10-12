@@ -69,3 +69,13 @@ def test_shared_postgres_helper_never_removes_volumes_or_changes_synapse_databas
     assert "paas_deployer_logs" in docs
     assert "Do not" in docs and "synapse" in docs
     assert "docker stop deploy-db deploy-log-db" in docs
+
+def test_shared_postgres_start_preflights_and_repairs_stale_matrix_network():
+    helper = (ROOT / "scripts" / "compose.sh").read_text(encoding="utf-8")
+
+    assert "preflight_matrix_postgres_network \"$@\" || exit $?" in helper
+    assert 'container_networks "$MATRIX_POSTGRES_HOST"' in helper
+    assert 'docker network inspect "$MATRIX_DOCKER_NETWORK"' in helper
+    assert "using detected network" in helper
+    assert "correct shared network is not unambiguous" in helper
+    assert "export MATRIX_DOCKER_NETWORK" in helper

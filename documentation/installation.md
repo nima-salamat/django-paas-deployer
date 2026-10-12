@@ -32,7 +32,7 @@ chmod 600 "$backup"
 printf 'Backup written: %s\n' "$backup"
 ```
 
-Check that the existing Synapse network name is exactly the value used by `MATRIX_DOCKER_NETWORK` in `.env` (often `matrix_matrix` when the Matrix Compose project lives in `/opt/matrix`):
+The wrapper checks that the configured network contains the existing PostgreSQL container before starting shared mode. If the configured name is stale but exactly one suitable network can be identified (preferring a network shared with the `synapse` container), it selects that network for this Compose invocation. If there are multiple possible networks, it stops and prints the actual network membership instead of letting Django enter a migration/restart loop. You can still set `MATRIX_DOCKER_NETWORK` explicitly in `.env` when detection is ambiguous. To inspect the current setup manually, run the commands below:
 
 ```bash
 docker network ls --filter name=matrix --format '{{.Name}}'
