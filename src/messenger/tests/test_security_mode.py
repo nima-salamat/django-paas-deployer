@@ -28,6 +28,28 @@ class MessengerSecurityModeTests(TestCase):
         self.client = APIClient()
         self.client.force_authenticate(user=self.owner)
 
+    def test_matrix_secure_headers_are_allowed_by_cors_preflight(self):
+        response = self.client.options(
+            "/api/messenger/secure/device-session/",
+            HTTP_ORIGIN="https://echonode.website",
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD="GET",
+            HTTP_ACCESS_CONTROL_REQUEST_HEADERS=(
+                "x-matrix-access-token,x-matrix-device-id"
+            ),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.get("Access-Control-Allow-Origin"),
+            "https://echonode.website",
+        )
+        allowed_headers = {
+            value.strip().lower()
+            for value in response.get("Access-Control-Allow-Headers", "").split(",")
+        }
+        self.assertIn("x-matrix-access-token", allowed_headers)
+        self.assertIn("x-matrix-device-id", allowed_headers)
+
     def make_encrypted_group(self):
         conversation = Conversation.objects.create(
             type=Conversation.Type.GROUP,

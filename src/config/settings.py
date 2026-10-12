@@ -577,6 +577,9 @@ CORS_ALLOW_HEADERS = list(getattr(__import__("corsheaders.defaults", fromlist=["
     "range",
     "authorization",
     "content-type",
+    # Matrix device binding uses these custom browser-to-Django API headers.
+    "x-matrix-access-token",
+    "x-matrix-device-id",
 ]
 
 # Browser frontend origins that may call the API. Keep this explicit so a
