@@ -79,3 +79,14 @@ def test_shared_postgres_start_preflights_and_repairs_stale_matrix_network():
     assert "using detected network" in helper
     assert "correct shared network is not unambiguous" in helper
     assert "export MATRIX_DOCKER_NETWORK" in helper
+
+def test_shared_postgres_resolves_host_alias_separately_from_container_name():
+    helper = (ROOT / "scripts" / "compose.sh").read_text(encoding="utf-8")
+    env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+
+    assert "MATRIX_POSTGRES_CONTAINER=$(setting MATRIX_POSTGRES_CONTAINER)" in helper
+    assert "resolve_postgres_container()" in helper
+    assert "docker ps -q" in helper
+    assert ".NetworkSettings.Networks" in helper
+    assert "MATRIX_POSTGRES_CONTAINER=" in env_example
+    assert "MATRIX_POSTGRES_HOST is a DNS name" in helper

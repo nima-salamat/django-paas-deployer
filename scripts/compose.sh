@@ -45,6 +45,38 @@ has_network() {
     printf '%s\n' "$2" | grep -F -x -q -- "$1"
 }
 
+# MATRIX_POSTGRES_HOST is a DNS name used by Django; it is not necessarily the
+# Docker container name. Prefer an explicit container setting, then a direct
+# name match, then discover a running container that advertises the host as a
+# hostname/network alias.
+resolve_postgres_container() {
+    if [ -n "$MATRIX_POSTGRES_CONTAINER" ]; then
+        docker inspect "$MATRIX_POSTGRES_CONTAINER" >/dev/null 2>&1 || return 1
+        printf '%s' "$MATRIX_POSTGRES_CONTAINER"
+        return 0
+    fi
+
+    if docker inspect "$MATRIX_POSTGRES_HOST" >/dev/null 2>&1; then
+        container_running=$(docker inspect --format '{{.State.Running}}' "$MATRIX_POSTGRES_HOST" 2>/dev/null || true)
+        if [ "$container_running" = "true" ]; then
+            printf '%s' "$MATRIX_POSTGRES_HOST"
+            return 0
+        fi
+    fi
+
+    for container_id in $(docker ps -q); do
+        container_aliases=$(docker inspect --format '{{.Name}} {{.Config.Hostname}}{{range .NetworkSettings.Networks}}{{range .Aliases}} {{.}}{{end}}{{end}}' "$container_id" 2>/dev/null || true)
+        case " $container_aliases " in
+            *" $MATRIX_POSTGRES_HOST "*)
+                printf '%s' "$container_id"
+                return 0
+                ;;
+        esac
+    done
+
+    return 1
+}
+
 # During shared-Postgres starts, make sure Compose connects to the network that
 # actually contains the existing PostgreSQL container. This avoids a Django
 # restart loop when MATRIX_DOCKER_NETWORK was copied from a different install.
@@ -57,11 +89,26 @@ preflight_matrix_postgres_network() {
     done
     [ -n "$compose_command" ] || return 0
 
-    postgres_networks=$(container_networks "$MATRIX_POSTGRES_HOST") || {
-        echo "ERROR: Cannot inspect Docker container '$MATRIX_POSTGRES_HOST'. Shared PostgreSQL mode expects the existing Matrix PostgreSQL container to be present." >&2
-        echo "Check MATRIX_POSTGRES_HOST and run: docker ps --format '{{.Names}}'" >&2
+    postgres_container=$(resolve_postgres_container) || {
+        if [ -n "$MATRIX_POSTGRES_CONTAINER" ]; then
+            echo "ERROR: Cannot inspect MATRIX_POSTGRES_CONTAINER='$MATRIX_POSTGRES_CONTAINER'." >&2
+            echo "Check the exact container name with: docker ps --format '{{.Names}}'" >&2
+        else
+            echo "ERROR: No running Docker container named '$MATRIX_POSTGRES_HOST' or advertising it as a network alias was found." >&2
+            echo "Run: docker ps --format 'table {{.Names}} {{.Status}} {{.Image}}'" >&2
+            echo "If the database container has a different name and no '$MATRIX_POSTGRES_HOST' alias, set MATRIX_POSTGRES_CONTAINER in .env to its actual name." >&2
+        fi
         return 2
     }
+
+    postgres_networks=$(container_networks "$postgres_container") || {
+        echo "ERROR: Cannot read Docker network membership for '$postgres_container'." >&2
+        return 2
+    }
+    if [ -z "$(printf '%s' "$postgres_networks" | tr -d '[:space:]')" ]; then
+        echo "ERROR: Docker container '$postgres_container' has no attached network. Make sure the Matrix PostgreSQL container is running." >&2
+        return 2
+    fi
 
     case "$MATRIX_DOCKER_NETWORK" in
         bridge|host|none)
@@ -124,6 +171,7 @@ case "$(printf '%s' "$USE_MATRIX_POSTGRES" | tr '[:upper:]' '[:lower:]')" in
         : "${MATRIX_POSTGRES_LOG_DB:=paas_deployer_logs}"
 
         MATRIX_DOCKER_NETWORK=$(setting MATRIX_DOCKER_NETWORK)
+        MATRIX_POSTGRES_CONTAINER=$(setting MATRIX_POSTGRES_CONTAINER)
         : "${MATRIX_DOCKER_NETWORK:=matrix_matrix}"
         preflight_matrix_postgres_network "$@" || exit $?
 

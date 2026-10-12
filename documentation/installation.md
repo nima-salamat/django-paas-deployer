@@ -32,7 +32,7 @@ chmod 600 "$backup"
 printf 'Backup written: %s\n' "$backup"
 ```
 
-The wrapper checks that the configured network contains the existing PostgreSQL container before starting shared mode. If the configured name is stale but exactly one suitable network can be identified (preferring a network shared with the `synapse` container), it selects that network for this Compose invocation. If there are multiple possible networks, it stops and prints the actual network membership instead of letting Django enter a migration/restart loop. You can still set `MATRIX_DOCKER_NETWORK` explicitly in `.env` when detection is ambiguous. To inspect the current setup manually, run the commands below:
+`MATRIX_POSTGRES_HOST` is the DNS name used by Django, while `MATRIX_POSTGRES_CONTAINER` (optional) is the exact Docker container name used only for network inspection. The wrapper first tries to discover a running container by the configured hostname/network alias; set `MATRIX_POSTGRES_CONTAINER` only if discovery is ambiguous or the hostname is not advertised as a Docker alias. It then checks that the configured network contains the resolved container before starting shared mode. If the configured name is stale but exactly one suitable network can be identified (preferring a network shared with the `synapse` container), it selects that network for this Compose invocation. If there are multiple possible networks, it stops and prints the actual network membership instead of letting Django enter a migration/restart loop. You can still set `MATRIX_DOCKER_NETWORK` explicitly in `.env` when detection is ambiguous. To inspect the current setup manually, run the commands below:
 
 ```bash
 docker network ls --filter name=matrix --format '{{.Name}}'
@@ -75,6 +75,8 @@ Add/update only these lines in the current Deployer `.env`; do not replace your 
 ```dotenv
 USE_MATRIX_POSTGRES=1
 MATRIX_POSTGRES_HOST=synapse-postgres
+# Optional: exact Docker container name if it differs from the host alias
+MATRIX_POSTGRES_CONTAINER=
 MATRIX_POSTGRES_PORT=5432
 MATRIX_POSTGRES_USER=paas_deployer
 MATRIX_POSTGRES_PASSWORD=PASTE_THE_GENERATED_HEX_PASSWORD_HERE
