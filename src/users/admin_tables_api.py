@@ -257,11 +257,14 @@ def _field_schema(field) -> dict:
     ftype = type(field).__name__
     info = {
         "name": field.name,
+        "label": _(str(field.verbose_name)),
         "type": ftype,
         "nullable": getattr(field, "null", False) or getattr(field, "blank", False),
         "editable": getattr(field, "editable", True),
         "is_relation": field.is_relation,
     }
+    if getattr(field, "help_text", None):
+        info["help_text"] = _(str(field.help_text))
     if field.is_relation:
         info["related"] = (
             f"{field.related_model._meta.app_label}."
@@ -274,7 +277,7 @@ def _field_schema(field) -> dict:
             else "many-to-one"
         )
     if field.choices:
-        info["choices"] = [{"value": v, "label": str(l)} for v, l in field.choices]
+        info["choices"] = [{"value": v, "label": _(str(l))} for v, l in field.choices]
     return info
 
 
@@ -319,6 +322,7 @@ def _serialize_value(value):
 def _serialize_row(instance, cfg) -> dict:
     """Serialize a model instance to a JSON-safe dict. Masks sensitive fields."""
     data = {}
+    display_values = {}
     for field in instance._meta.get_fields():
         if field.name in (cfg.get("exclude_fields") or set()):
             continue
@@ -330,12 +334,21 @@ def _serialize_row(instance, cfg) -> dict:
                 ]
                 continue
             value = getattr(instance, field.name, None)
+            if field.choices and not _is_sensitive(field, cfg):
+                display_method = getattr(instance, f"get_{field.name}_display", None)
+                if callable(display_method):
+                    display_value = display_method()
+                    display_values[field.name] = _(str(display_value)) if display_value is not None else None
             if _is_sensitive(field, cfg):
                 data[field.name] = "***REDACTED***" if value not in (None, "") else value
             else:
                 data[field.name] = _serialize_value(value)
         except Exception as exc:
             data[field.name] = f"<error: {exc}>"
+    # Preserve raw values for API clients and expose translated labels only
+    # in a separate presentation map used by human-readable admin tables.
+    if display_values:
+        data["_display"] = display_values
     return data
 
 
@@ -354,10 +367,10 @@ def _get_table_config(model_key: str) -> Tuple[object, dict, str]:
     """Resolve (Model, config, error)."""
     cfg = TABLE_REGISTRY.get(model_key)
     if not cfg:
-        return None, None, "Table not registered"
+        return None, None, _("Table not registered")
     Model = _resolve_model(model_key)
     if Model is None:
-        return None, None, "Model not found"
+        return None, None, _("Model not found")
     return Model, cfg, None
 
 
@@ -365,14 +378,14 @@ def _get_table_config(model_key: str) -> Tuple[object, dict, str]:
 # Response helpers
 # ---------------------------------------------------------------------------
 def ok(msg="ok", data=None, http_status=status.HTTP_200_OK):
-    body = {"success": True, "message": msg}
+    body = {"success": True, "message": _(str(msg)) if isinstance(msg, str) else msg}
     if data is not None:
         body["data"] = data
     return Response(body, status=http_status)
 
 
 def err(msg, http_status=status.HTTP_400_BAD_REQUEST, extra=None):
-    body = {"success": False, "message": msg}
+    body = {"success": False, "message": _(str(msg)) if isinstance(msg, str) else msg}
     if extra:
         body.update(extra)
     return Response(body, status=http_status)
@@ -414,7 +427,7 @@ class AdminTableListView(APIView):
                 count = None
             out.append({
                 "key": key,
-                "label": cfg.get("label") or Model._meta.verbose_name.title(),
+                "label": _(str(cfg.get("label") or Model._meta.verbose_name)),
                 "app": Model._meta.app_label,
                 "model": Model._meta.object_name,
                 "count": count,
@@ -422,7 +435,7 @@ class AdminTableListView(APIView):
                 "searchable": bool(cfg.get("search_fields")),
                 "per_page": int(cfg.get("per_page", 25)),
             })
-        out.sort(key=lambda r: r["label"])
+        out.sort(key=lambda r: str(r["label"]))
         return ok(data={"tables": out})
 
 
@@ -478,7 +491,7 @@ class AdminTableRowsView(APIView):
 
         return ok(data={
             "model_key": model_key,
-            "label": cfg.get("label") or Model._meta.verbose_name.title(),
+            "label": _(str(cfg.get("label") or Model._meta.verbose_name)),
             "count": paginator.count,
             "page": page.number,
             "num_pages": paginator.num_pages,
@@ -517,7 +530,7 @@ class AdminTableRowView(APIView):
             return err(error, status.HTTP_404_NOT_FOUND)
         obj = self._get_object(Model, pk)
         if obj is None:
-            return err("Row not found", status.HTTP_404_NOT_FOUND)
+            return err(_("Row not found"), status.HTTP_404_NOT_FOUND)
         return ok(data=_serialize_row(obj, cfg))
 
     def delete(self, request, model_key, pk):
@@ -526,13 +539,13 @@ class AdminTableRowView(APIView):
             return err(error, status.HTTP_404_NOT_FOUND)
         if not cfg.get("deletable"):
             return err(
-                "This table is not deletable from the admin UI. Use the dedicated admin API instead.",
+                _("This table is not deletable from the admin UI. Use the dedicated admin API instead."),
                 status.HTTP_403_FORBIDDEN,
             )
 
         obj = self._get_object(Model, pk)
         if obj is None:
-            return err("Row not found", status.HTTP_404_NOT_FOUND)
+            return err(_("Row not found"), status.HTTP_404_NOT_FOUND)
 
         # Safety: refuse to delete the last superuser
         if Model.__name__ == "User" and obj.is_superuser:
@@ -540,7 +553,7 @@ class AdminTableRowView(APIView):
             supers = User.objects.filter(is_superuser=True, is_active=True).count()
             if supers <= 1:
                 return err(
-                    "Refusing to delete the last active superuser.",
+                    _("Refusing to delete the last active superuser."),
                     status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -550,13 +563,17 @@ class AdminTableRowView(APIView):
                 obj.delete()
         except models.ProtectedError as pe:
             return err(
-                "Cannot delete: row is referenced by other rows.",
+                _("Cannot delete: row is referenced by other rows."),
                 status.HTTP_409_CONFLICT,
                 extra={"protected": [str(o) for o in pe.protected_objects[:50]]},
             )
-        except Exception as exc:
-            return err(f"Delete failed: {exc}", status.HTTP_400_BAD_REQUEST)
-        return ok(f"Deleted: {label}")
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "Admin table deletion failed for model=%s pk=%s", model_key, pk
+            )
+            return err(_("Delete failed. Inspect server logs for details."), status.HTTP_400_BAD_REQUEST)
+        return ok(_("Deleted: %(label)s") % {"label": label})
 
 
 class AdminTableFKSearchAPIView(APIView):

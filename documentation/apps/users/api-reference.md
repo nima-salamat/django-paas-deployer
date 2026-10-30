@@ -25,7 +25,8 @@ flowchart LR
 | `admin/users/<int:pk>/sessions/` | `AdminUserSessionListAPIView` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | path `pk` required ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
 | `admin/users/<int:pk>/sessions/logout-all/` | `AdminUserSessionLogoutAllAPIView` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | path `pk` required ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
 | `admin/users/<int:pk>/sessions/<str:session_id>/` | `AdminUserSessionRevokeAPIView` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | path `pk` required, path `session_id` required ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
-| `user/` | `UserAPIView` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | no path parameter ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
+| `user/` | `UserAPIView` |
+| `user/language/` | `LanguagePreferenceAPIView` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | no path parameter ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
 | `profile/list/` | `ProfileViewSet` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | no path parameter ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
 | `profile/order/` | `ProfileViewSet` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | no path parameter ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
 | `profile/delete/` | `ProfileViewSet` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | no path parameter ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
@@ -70,6 +71,17 @@ The URL declaration, handler implementation and serializer validation are author
 ### GET `/user/`
 
 No body. Returns the authenticated User representation.
+
+### GET/PATCH `/user/language/`
+
+This authenticated endpoint reads and persists the preferred interface language for the current user.
+
+| Method | Request field | Required | Contract |
+|---|---|---:|---|
+| GET | — | — | Returns the saved `language` and the supported options (`en-us`, `fa`). |
+| PATCH | `language` | Yes | Accepts only `en-us` or `fa`; unsupported values return HTTP 400 with code `unsupported_language`. |
+
+The preference is stored on the User row and is used as the fallback language for authenticated requests that do not send an explicit `Accept-Language` header.
 
 ### PUT `/user/`
 
@@ -156,6 +168,7 @@ These are additional HTTP mounts that must not be confused with the shorter rout
 
 | Method | Route |
 |---|---|
+| GET/PATCH | `/api/users/user/language/` |
 | POST | `/api/users/user/contact-change/` |
 | POST | `/api/users/user/contact-change/{change_id}/confirm/` |
 | GET | `/api/users/password-status/` |

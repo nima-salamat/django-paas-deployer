@@ -136,3 +136,1231 @@ msgstr "منبع درخواستی پیدا نشد."
 
 msgid "The service could not complete the request."
 msgstr "سرویس نتوانست درخواست را تکمیل کند."
+
+msgid "Users"
+msgstr "کاربران"
+
+msgid "Permission rules"
+msgstr "قوانین دسترسی"
+
+msgid "Profile images"
+msgstr "تصاویر پروفایل"
+
+msgid "Receipts / payments"
+msgstr "رسیدها و پرداخت‌ها"
+
+msgid "Login settings (singleton)"
+msgstr "تنظیمات ورود"
+
+msgid "Auth codes (OTP)"
+msgstr "کدهای احراز هویت"
+
+msgid "Invites"
+msgstr "دعوت‌نامه‌ها"
+
+msgid "Tickets"
+msgstr "تیکت‌ها"
+
+msgid "Ticket messages"
+msgstr "پیام‌های تیکت"
+
+msgid "Ticket attachments"
+msgstr "پیوست‌های تیکت"
+
+msgid "Departments"
+msgstr "دپارتمان‌ها"
+
+msgid "Department memberships"
+msgstr "عضویت‌های دپارتمان"
+
+msgid "Plans"
+msgstr "طرح‌ها"
+
+msgid "Services"
+msgstr "سرویس‌ها"
+
+msgid "Volumes"
+msgstr "فضاهای ذخیره‌سازی"
+
+msgid "Private networks"
+msgstr "شبکه‌های خصوصی"
+
+msgid "Deploys"
+msgstr "استقرارها"
+
+msgid "Deploy logs"
+msgstr "گزارش‌های استقرار"
+
+msgid "Deployment states"
+msgstr "وضعیت‌های استقرار"
+
+msgid "Email templates"
+msgstr "قالب‌های ایمیل"
+
+msgid "Email logs"
+msgstr "گزارش‌های ایمیل"
+
+msgid "Site settings (singleton)"
+msgstr "تنظیمات سایت"
+
+msgid "Table not registered"
+msgstr "این جدول در فهرست مجاز ثبت نشده است."
+
+msgid "Model not found"
+msgstr "مدل موردنظر پیدا نشد."
+
+msgid "Row not found"
+msgstr "رکورد موردنظر پیدا نشد."
+
+msgid "This table is not deletable from the admin UI. Use the dedicated admin API instead."
+msgstr "حذف این جدول از پنل مدیریت مجاز نیست. از API اختصاصی مدیریت استفاده کنید."
+
+msgid "Refusing to delete the last active superuser."
+msgstr "حذف آخرین مدیر ارشد فعال مجاز نیست."
+
+msgid "Cannot delete: row is referenced by other rows."
+msgstr "امکان حذف وجود ندارد؛ رکوردهای دیگری به این مورد ارجاع داده‌اند."
+
+msgid "Delete failed. Inspect server logs for details."
+msgstr "حذف انجام نشد. برای جزئیات بیشتر گزارش‌های سرور را بررسی کنید."
+
+msgid "Deleted: %(label)s"
+msgstr "حذف شد: %(label)s"
+
+msgid "username"
+msgstr "نام کاربری"
+
+msgid "email address"
+msgstr "نشانی ایمیل"
+
+msgid "phone number"
+msgstr "شماره تلفن"
+
+msgid "first name"
+msgstr "نام"
+
+msgid "last name"
+msgstr "نام خانوادگی"
+
+msgid "password"
+msgstr "گذرواژه"
+
+msgid "theme"
+msgstr "پوسته"
+
+msgid "active"
+msgstr "فعال"
+
+msgid "inactive"
+msgstr "غیرفعال"
+
+msgid "status"
+msgstr "وضعیت"
+
+msgid "name"
+msgstr "نام"
+
+msgid "description"
+msgstr "توضیحات"
+
+msgid "title"
+msgstr "عنوان"
+
+msgid "created at"
+msgstr "تاریخ ایجاد"
+
+msgid "updated at"
+msgstr "تاریخ به‌روزرسانی"
+
+msgid "date joined"
+msgstr "تاریخ عضویت"
+
+msgid "birth date"
+msgstr "تاریخ تولد"
+
+msgid "email verified"
+msgstr "تأیید ایمیل"
+
+msgid "phone number verified"
+msgstr "تأیید شماره تلفن"
+
+msgid "superuser status"
+msgstr "وضعیت مدیر ارشد"
+
+msgid "staff status"
+msgstr "وضعیت کارمند"
+
+msgid "Dark"
+msgstr "تیره"
+
+msgid "Light"
+msgstr "روشن"
+
+msgid "Pending"
+msgstr "در انتظار"
+
+msgid "Failed"
+msgstr "ناموفق"
+
+msgid "Success"
+msgstr "موفق"
+
+msgid "Active"
+msgstr "فعال"
+
+msgid "Inactive"
+msgstr "غیرفعال"
+
+msgid "Ready"
+msgstr "آماده"
+
+msgid "Running"
+msgstr "در حال اجرا"
+
+msgid "Stopped"
+msgstr "متوقف"
+
+msgid "Cancelled"
+msgstr "لغوشده"
+
+msgid "Owner"
+msgstr "مالک"
+
+msgid "Admin"
+msgstr "مدیر"
+
+msgid "Member"
+msgstr "عضو"
+
+msgid "Private"
+msgstr "خصوصی"
+
+msgid "Group"
+msgstr "گروه"
+
+msgid "error::user not created"
+msgstr "error::ساخت حساب کاربری انجام نشد."
+
+msgid "error::email or phone required to send code"
+msgstr "error::برای ارسال کد، ایمیل یا شماره تلفن لازم است."
+
+msgid "error::account is inactive. contact admin"
+msgstr "error::حساب کاربری غیرفعال است. با مدیر تماس بگیرید."
+
+msgid "success::logged in"
+msgstr "success::ورود با موفقیت انجام شد."
+
+msgid "success::code sent"
+msgstr "success::کد ارسال شد."
+
+msgid "error::otp is not required by current settings"
+msgstr "error::طبق تنظیمات فعلی، کد یک‌بارمصرف الزامی نیست."
+
+msgid "error::code is incorrect or expired"
+msgstr "error::کد نادرست است یا اعتبار آن پایان یافته است."
+
+msgid "success::code valid"
+msgstr "success::کد معتبر است."
+
+msgid "success::user is valid"
+msgstr "success::کاربر معتبر است."
+
+msgid "error::code is required"
+msgstr "error::وارد کردن کد الزامی است."
+
+msgid "error::password is required"
+msgstr "error::وارد کردن گذرواژه الزامی است."
+
+msgid "error::password is incorrect"
+msgstr "error::گذرواژه نادرست است."
+
+msgid "success::user logged in"
+msgstr "success::ورود کاربر با موفقیت انجام شد."
+
+msgid "error::password must be at least %(n)s characters"
+msgstr "error::گذرواژه باید دست‌کم %(n)s نویسه داشته باشد."
+
+msgid "error::password confirmation is required"
+msgstr "error::تأیید گذرواژه الزامی است."
+
+msgid "error::passwords do not match"
+msgstr "error::گذرواژه‌ها مطابقت ندارند."
+
+msgid "success::password set and logged in"
+msgstr "success::گذرواژه تنظیم شد و ورود انجام گرفت."
+
+msgid "success::invite is valid"
+msgstr "success::دعوت‌نامه معتبر است."
+
+msgid "error::max_uses must be >= 1 or null"
+msgstr "error::max_uses باید حداقل ۱ یا null باشد."
+
+msgid "error::max_uses must be an integer or null"
+msgstr "error::max_uses باید عدد صحیح یا null باشد."
+
+msgid "error::invalid expires_at format (use ISO 8601)"
+msgstr "error::قالب expires_at نامعتبر است؛ از ISO 8601 استفاده کنید."
+
+msgid "success::invite created"
+msgstr "success::دعوت‌نامه ایجاد شد."
+
+msgid "success::invite list"
+msgstr "success::فهرست دعوت‌نامه‌ها دریافت شد."
+
+msgid "error::token is required"
+msgstr "error::توکن الزامی است."
+
+msgid "error::invite not found"
+msgstr "error::دعوت‌نامه پیدا نشد."
+
+msgid "success::invite deactivated"
+msgstr "success::دعوت‌نامه غیرفعال شد."
+
+msgid "error::username recovery is disabled"
+msgstr "error::بازیابی نام کاربری غیرفعال است."
+
+msgid "error::email or phone is required"
+msgstr "error::ایمیل یا شماره تلفن الزامی است."
+
+msgid "error::email recovery is disabled"
+msgstr "error::بازیابی از طریق ایمیل غیرفعال است."
+
+msgid "error::phone recovery is disabled"
+msgstr "error::بازیابی از طریق تلفن غیرفعال است."
+
+msgid "success::if the account exists a code was sent"
+msgstr "success::در صورت وجود حساب، کد ارسال شده است."
+
+msgid "error::invalid code or contact"
+msgstr "error::کد یا اطلاعات تماس نامعتبر است."
+
+msgid "success::username recovered"
+msgstr "success::نام کاربری بازیابی شد."
+
+msgid "error::password recovery is disabled"
+msgstr "error::بازیابی گذرواژه غیرفعال است."
+
+msgid "error::email password recovery is disabled"
+msgstr "error::بازیابی گذرواژه از طریق ایمیل غیرفعال است."
+
+msgid "error::phone password recovery is disabled"
+msgstr "error::بازیابی گذرواژه از طریق تلفن غیرفعال است."
+
+msgid "success::password reset and logged in"
+msgstr "success::گذرواژه بازنشانی شد و ورود انجام گرفت."
+
+msgid "success::settings"
+msgstr "success::تنظیمات دریافت شد."
+
+msgid "This conversation uses Matrix end-to-end encryption. The plaintext Messenger endpoint is disabled."
+msgstr "این گفتگو از رمزگذاری سرتاسری Matrix استفاده می‌کند. مسیر پیام‌رسانی متنیِ عادی برای آن غیرفعال است."
+
+msgid "End-to-end encrypted chats are not configured yet. No conversation was created."
+msgstr "گفتگوهای رمزگذاری‌شدهٔ سرتاسری هنوز پیکربندی نشده‌اند. هیچ گفتگویی ایجاد نشد."
+
+msgid "Unsupported conversation security_mode"
+msgstr "حالت امنیتی گفتگو پشتیبانی نمی‌شود."
+
+msgid "user_id required for private chat"
+msgstr "برای گفتگوی خصوصی، user_id الزامی است."
+
+msgid "User not found"
+msgstr "کاربر پیدا نشد."
+
+msgid "Cannot message blocked user"
+msgstr "ارسال پیام به کاربر مسدودشده امکان‌پذیر نیست."
+
+msgid "Conversation ready"
+msgstr "گفتگو آماده است."
+
+msgid "Group title required"
+msgstr "عنوان گروه الزامی است."
+
+msgid "Group created"
+msgstr "گروه ایجاد شد."
+
+msgid "Forbidden"
+msgstr "دسترسی مجاز نیست."
+
+msgid "Secure chat is not configured on this deployment."
+msgstr "گفتگوی امن در این استقرار پیکربندی نشده است."
+
+msgid "A Matrix device session is required."
+msgstr "نشست دستگاه Matrix الزامی است."
+
+msgid "Matrix session belongs to a different device."
+msgstr "نشست Matrix متعلق به دستگاه دیگری است."
+
+msgid "Could not start a secure-chat device session."
+msgstr "امکان آغاز نشست دستگاه برای گفتگوی امن وجود نداشت."
+
+msgid "Matrix device session ready"
+msgstr "نشست دستگاه Matrix آماده است."
+
+msgid "user_ids must be a list containing at most 100 users."
+msgstr "user_ids باید فهرستی با حداکثر ۱۰۰ کاربر باشد."
+
+msgid "Every user_id must be an integer."
+msgstr "هر user_id باید عدد صحیح باشد."
+
+msgid "Every user_id must be a positive integer."
+msgstr "هر user_id باید عدد صحیح مثبت باشد."
+
+msgid "One or more requested users do not exist or are inactive."
+msgstr "یک یا چند کاربر درخواستی وجود ندارند یا غیرفعال هستند."
+
+msgid "Secure chat can only be started with contacts or existing Messenger conversation participants."
+msgstr "گفتگوی امن فقط با مخاطبان یا شرکت‌کنندگان گفتگوهای موجود پیام‌رسان قابل آغاز است."
+
+msgid "A secure room cannot be created with a blocked user."
+msgstr "ایجاد اتاق امن با کاربر مسدودشده امکان‌پذیر نیست."
+
+msgid "Matrix identities could not be prepared."
+msgstr "آماده‌سازی شناسه‌های Matrix انجام نشد."
+
+msgid "Could not verify the Matrix device inventory."
+msgstr "امکان بررسی فهرست دستگاه‌های Matrix وجود نداشت."
+
+msgid "Could not revoke the Matrix device."
+msgstr "امکان لغو دسترسی دستگاه Matrix وجود نداشت."
+
+msgid "Matrix device revoked"
+msgstr "دسترسی دستگاه Matrix لغو شد."
+
+msgid "Unsupported conversation type."
+msgstr "نوع گفتگو پشتیبانی نمی‌شود."
+
+msgid "member_ids must be a list containing at most 100 users."
+msgstr "member_ids باید فهرستی با حداکثر ۱۰۰ کاربر باشد."
+
+msgid "Every member_id must be an integer."
+msgstr "هر member_id باید عدد صحیح باشد."
+
+msgid "Every member_id must be positive."
+msgstr "هر member_id باید مثبت باشد."
+
+msgid "One or more conversation members do not exist or are inactive."
+msgstr "یک یا چند عضو گفتگو وجود ندارند یا غیرفعال هستند."
+
+msgid "A secure private conversation must contain exactly two users."
+msgstr "گفتگوی خصوصی امن باید دقیقاً دو کاربر داشته باشد."
+
+msgid "A secure group title is required."
+msgstr "عنوان گروه امن الزامی است."
+
+msgid "A secure group must be linked to a Matrix Space."
+msgstr "گروه امن باید به یک Matrix Space متصل باشد."
+
+msgid "A secure private chat cannot be mapped to a group Space."
+msgstr "گفتگوی خصوصی امن را نمی‌توان به یک فضای گروهی متصل کرد."
+
+msgid "A valid Matrix room ID is required."
+msgstr "شناسهٔ معتبر اتاق Matrix الزامی است."
+
+msgid "Secure chat can only be created with contacts or existing Messenger conversation participants."
+msgstr "گفتگوی امن فقط با مخاطبان یا شرکت‌کنندگان گفتگوهای موجود پیام‌رسان قابل ایجاد است."
+
+msgid "This Matrix room is already mapped to a Messenger conversation."
+msgstr "این اتاق Matrix قبلاً به یک گفتگوی پیام‌رسان متصل شده است."
+
+msgid "Matrix identities for every intended participant must be provisioned first."
+msgstr "ابتدا باید شناسهٔ Matrix تمام شرکت‌کنندگان موردنظر ایجاد شود."
+
+msgid "This Matrix room is already mapped or the secure-room metadata is invalid."
+msgstr "این اتاق Matrix قبلاً متصل شده است یا فرادادهٔ اتاق امن نامعتبر است."
+
+msgid "Could not save the secure conversation metadata."
+msgstr "ذخیرهٔ فرادادهٔ گفتگوی امن انجام نشد."
+
+msgid "Encrypted conversation registered"
+msgstr "گفتگوی رمزگذاری‌شده ثبت شد."
+
+msgid "Conversation is closed"
+msgstr "گفتگو بسته شده است."
+
+msgid "You cannot send messages in this chat"
+msgstr "شما اجازهٔ ارسال پیام در این گفتگو را ندارید."
+
+msgid "Only admins can send messages in this group"
+msgstr "فقط مدیران گروه می‌توانند در این گروه پیام بفرستند."
+
+msgid "Already sent"
+msgstr "قبلاً ارسال شده است."
+
+msgid "Invalid scheduled_for datetime"
+msgstr "تاریخ و زمان scheduled_for نامعتبر است."
+
+msgid "scheduled_for must be in the future"
+msgstr "scheduled_for باید در آینده باشد."
+
+msgid "Message body or attachment required"
+msgstr "متن پیام یا پیوست الزامی است."
+
+msgid "You cannot send media"
+msgstr "شما اجازهٔ ارسال رسانه را ندارید."
+
+msgid "You can attach up to 10 files per message"
+msgstr "برای هر پیام حداکثر می‌توانید ۱۰ فایل پیوست کنید."
+
+msgid "No valid attachments were uploaded"
+msgstr "هیچ پیوست معتبری بارگذاری نشد."
+
+msgid "Scheduled"
+msgstr "زمان‌بندی شد."
+
+msgid "conversation_id required"
+msgstr "conversation_id الزامی است."
+
+msgid "Cannot send to target"
+msgstr "ارسال پیام به مقصد امکان‌پذیر نیست."
+
+msgid "View-once media cannot be forwarded"
+msgstr "رسانه‌های یک‌بارمشاهده قابل ارسال مجدد نیستند."
+
+msgid "Forwarded"
+msgstr "ارسال مجدد شد."
+
+msgid "emoji required"
+msgstr "ایموجی الزامی است."
+
+msgid "Only the sender can edit this message"
+msgstr "فقط فرستنده می‌تواند این پیام را ویرایش کند."
+
+msgid "Body cannot be empty"
+msgstr "متن پیام نمی‌تواند خالی باشد."
+
+msgid "Edited"
+msgstr "ویرایش شد."
+
+msgid "Deleted"
+msgstr "حذف شد."
+
+msgid "Invalid up_to_message_id"
+msgstr "up_to_message_id نامعتبر است."
+
+msgid "Read"
+msgstr "خوانده شد."
+
+msgid "Message is not scheduled"
+msgstr "این پیام زمان‌بندی نشده است."
+
+msgid "Scheduled message cancelled"
+msgstr "پیام زمان‌بندی‌شده لغو شد."
+
+msgid "Rate limit exceeded."
+msgstr "تعداد درخواست‌ها از حد مجاز فراتر رفته است."
+
+msgid "Validation failed"
+msgstr "اعتبارسنجی ناموفق بود."
+
+msgid "Ticket created"
+msgstr "تیکت ایجاد شد."
+
+msgid "Already closed."
+msgstr "قبلاً بسته شده است."
+
+msgid "Ticket closed"
+msgstr "تیکت بسته شد."
+
+msgid "Cannot reply to closed ticket."
+msgstr "امکان پاسخ به تیکت بسته‌شده وجود ندارد."
+
+msgid "Message rate limit exceeded."
+msgstr "تعداد پیام‌ها از حد مجاز فراتر رفته است."
+
+msgid "Body or attachments required."
+msgstr "متن پیام یا پیوست الزامی است."
+
+msgid "Message sent"
+msgstr "پیام ارسال شد."
+
+msgid "Missing permission departments.manage"
+msgstr "مجوز departments.manage وجود ندارد."
+
+msgid "Created"
+msgstr "ایجاد شد."
+
+msgid "Not found"
+msgstr "پیدا نشد."
+
+msgid "Updated"
+msgstr "به‌روزرسانی شد."
+
+msgid "Deactivated"
+msgstr "غیرفعال شد."
+
+msgid "Department not found"
+msgstr "دپارتمان پیدا نشد."
+
+msgid "Staff user not found."
+msgstr "کاربر کارمند پیدا نشد."
+
+msgid "Membership saved"
+msgstr "عضویت ذخیره شد."
+
+msgid "Membership not found"
+msgstr "عضویت پیدا نشد."
+
+msgid "Removed"
+msgstr "حذف شد."
+
+msgid "Ticket deleted"
+msgstr "تیکت حذف شد."
+
+msgid "Marked as read"
+msgstr "به‌عنوان خوانده‌شده علامت‌گذاری شد."
+
+msgid "memberships list required"
+msgstr "فهرست memberships الزامی است."
+
+msgid "memberships must be a list"
+msgstr "memberships باید یک فهرست باشد."
+
+msgid "Memberships updated"
+msgstr "عضویت‌ها به‌روزرسانی شدند."
+
+msgid "Missing permission users.create or users.manage"
+msgstr "مجوز users.create یا users.manage وجود ندارد."
+
+msgid "username is required"
+msgstr "نام کاربری الزامی است."
+
+msgid "username already exists"
+msgstr "این نام کاربری قبلاً ثبت شده است."
+
+msgid "email already exists"
+msgstr "این ایمیل قبلاً ثبت شده است."
+
+msgid "User created"
+msgstr "کاربر ایجاد شد."
+
+msgid "Missing permission users.create, users.manage, or users.manage_rules"
+msgstr "مجوز users.create، users.manage یا users.manage_rules وجود ندارد."
+
+msgid "Only superuser can edit another superuser"
+msgstr "فقط مدیر ارشد می‌تواند حساب مدیر ارشد دیگری را ویرایش کند."
+
+msgid "With users.manage_rules only you may only edit the rules array."
+msgstr "با مجوز users.manage_rules فقط می‌توانید آرایهٔ قوانین را ویرایش کنید."
+
+msgid "You cannot grant permissions you do not own."
+msgstr "نمی‌توانید مجوزهایی را که خودتان ندارید به دیگران بدهید."
+
+msgid "Rules updated"
+msgstr "قوانین به‌روزرسانی شدند."
+
+msgid "Missing permission users.manage to change staff flag"
+msgstr "برای تغییر وضعیت کارمند به مجوز users.manage نیاز دارید."
+
+msgid "Cannot remove your own staff flag"
+msgstr "نمی‌توانید وضعیت کارمند را از حساب خودتان بردارید."
+
+msgid "Cannot deactivate yourself"
+msgstr "نمی‌توانید حساب خودتان را غیرفعال کنید."
+
+msgid "Cannot remove your own superuser flag"
+msgstr "نمی‌توانید دسترسی مدیر ارشد خودتان را حذف کنید."
+
+msgid "Only superuser can change superuser flag"
+msgstr "فقط مدیر ارشد می‌تواند وضعیت مدیر ارشد را تغییر دهد."
+
+msgid "Missing permission users.manage or users.manage_rules to update rules"
+msgstr "برای به‌روزرسانی قوانین به مجوز users.manage یا users.manage_rules نیاز دارید."
+
+msgid "Missing permission users.manage to delete a user"
+msgstr "برای حذف کاربر به مجوز users.manage نیاز دارید."
+
+msgid "Cannot delete yourself"
+msgstr "نمی‌توانید حساب خودتان را حذف کنید."
+
+msgid "User deletion is already in progress; active deployments are being converged."
+msgstr "حذف این کاربر در حال انجام است؛ استقرارهای فعال در حال جمع‌بندی هستند."
+
+msgid "User deletion requested; active deployments are being cancelled before final cleanup."
+msgstr "درخواست حذف کاربر ثبت شد؛ استقرارهای فعال پیش از پاک‌سازی نهایی لغو می‌شوند."
+
+msgid "User deactivated"
+msgstr "کاربر غیرفعال شد."
+
+msgid "Missing permission users.manage"
+msgstr "مجوز users.manage وجود ندارد."
+
+msgid "rules must be a list"
+msgstr "rules باید یک فهرست باشد."
+
+msgid "Only superuser can manage another superuser"
+msgstr "فقط مدیر ارشد می‌تواند حساب مدیر ارشد دیگری را مدیریت کند."
+
+msgid "Session not found"
+msgstr "نشست پیدا نشد."
+
+msgid "Session revoked"
+msgstr "نشست لغو شد."
+
+msgid "Sessions revoked"
+msgstr "نشست‌ها لغو شدند."
+
+msgid "Staff only"
+msgstr "فقط کارکنان مجاز هستند."
+
+msgid "image file is required"
+msgstr "فایل تصویر الزامی است."
+
+msgid "Profile image uploaded"
+msgstr "تصویر پروفایل بارگذاری شد."
+
+msgid "Profile image not found"
+msgstr "تصویر پروفایل پیدا نشد."
+
+msgid "order is required"
+msgstr "وارد کردن ترتیب الزامی است."
+
+msgid "order must be an integer"
+msgstr "ترتیب باید عدد صحیح باشد."
+
+msgid "Order updated"
+msgstr "ترتیب به‌روزرسانی شد."
+
+msgid "Profile image deleted"
+msgstr "تصویر پروفایل حذف شد."
+
+msgid "orders must be a list of {id, order}"
+msgstr "orders باید فهرستی از مقادیر {id, order} باشد."
+
+msgid "Reordered"
+msgstr "ترتیب تغییر کرد."
+
+msgid "Service not found."
+msgstr "سرویس پیدا نشد."
+
+msgid "deploy_id or service_id is required."
+msgstr "وارد کردن deploy_id یا service_id الزامی است."
+
+msgid "This service has no selected deployment to cancel."
+msgstr "برای این سرویس استقراری جهت لغو انتخاب نشده است."
+
+msgid "Deployment or service not found."
+msgstr "استقرار یا سرویس پیدا نشد."
+
+msgid "Service is running."
+msgstr "سرویس در حال اجرا است."
+
+msgid "Service is not running."
+msgstr "سرویس در حال اجرا نیست."
+
+msgid "Failed to get service stats."
+msgstr "دریافت آمار سرویس ناموفق بود."
+
+msgid "Rebuild queued."
+msgstr "درخواست بازسازی در صف قرار گرفت."
+
+msgid "Deploy deleted."
+msgstr "استقرار حذف شد."
+
+msgid "Invalid request."
+msgstr "درخواست نامعتبر است."
+
+msgid "Authentication failed."
+msgstr "احراز هویت ناموفق بود."
+
+msgid "Request was throttled."
+msgstr "تعداد درخواست‌ها بیش از حد مجاز است."
+
+msgid "Invalid token."
+msgstr "توکن نامعتبر است."
+
+msgid "Token is invalid or expired"
+msgstr "توکن نامعتبر است یا اعتبار آن پایان یافته است."
+
+msgid "No active account found with the given credentials"
+msgstr "حساب فعالی با این اطلاعات ورود پیدا نشد."
+
+msgid "Enter a valid email address."
+msgstr "یک نشانی ایمیل معتبر وارد کنید."
+
+msgid "Enter a valid URL."
+msgstr "یک نشانی اینترنتی معتبر وارد کنید."
+
+msgid "Ensure this field has no more than {max_length} characters."
+msgstr "این فیلد نباید بیش از {max_length} نویسه داشته باشد."
+
+msgid "Ensure this field has at least {min_length} characters."
+msgstr "این فیلد باید دست‌کم {min_length} نویسه داشته باشد."
+
+msgid "This field is required."
+msgstr "تکمیل این فیلد الزامی است."
+
+msgid "Not a valid string."
+msgstr "رشتهٔ متنی معتبر نیست."
+
+msgid "Enter a number."
+msgstr "یک عدد وارد کنید."
+
+msgid "A valid integer is required."
+msgstr "یک عدد صحیح معتبر وارد کنید."
+
+msgid "A valid choice is required."
+msgstr "انتخاب یک گزینهٔ معتبر الزامی است."
+
+msgid "Invalid data. Expected a dictionary, but got {datatype}."
+msgstr "داده نامعتبر است. یک شیء از نوع {datatype} انتظار می‌رفت."
+
+msgid "Expected a list of items but got type {input_type}."
+msgstr "فهرستی از موارد انتظار می‌رفت، اما نوع {input_type} دریافت شد."
+
+msgid "The submitted data was not a file. Check the encoding type on the form."
+msgstr "دادهٔ ارسالی فایل نیست. نوع کدگذاری فرم را بررسی کنید."
+
+msgid "A server error occurred."
+msgstr "خطایی در سرور رخ داد."
+
+msgid "error::login is temporarily closed"
+msgstr "error::ورود در حال حاضر موقتاً بسته است."
+
+msgid "error::signup is closed"
+msgstr "error::ثبت‌نام بسته است."
+
+msgid "success::continue"
+msgstr "success::ادامه دهید."
+
+msgid "error::user not found"
+msgstr "error::کاربر پیدا نشد."
+
+msgid "Service is required."
+msgstr "انتخاب سرویس الزامی است."
+
+msgid "You do not have permission to add deploys on this shared service."
+msgstr "شما مجوز افزودن استقرار به این سرویس اشتراکی را ندارید."
+
+msgid "DB config validation failed."
+msgstr "اعتبارسنجی تنظیمات پایگاه داده ناموفق بود."
+
+msgid "Deploy created."
+msgstr "استقرار ایجاد شد."
+
+msgid "Can not deploy."
+msgstr "امکان استقرار وجود ندارد."
+
+msgid "DB config validation failed: "
+msgstr "اعتبارسنجی تنظیمات پایگاه داده ناموفق بود: "
+
+msgid "This service already has an active operation."
+msgstr "این سرویس در حال حاضر عملیات فعالی دارد."
+
+msgid "Service already has an active operation."
+msgstr "این سرویس در حال حاضر عملیات فعالی دارد."
+
+msgid "You do not have permission to update DB config."
+msgstr "شما مجوز به‌روزرسانی تنظیمات پایگاه داده را ندارید."
+
+msgid "This deploy is not a DB platform."
+msgstr "این استقرار از نوع پلتفرم پایگاه داده نیست."
+
+msgid "DB config updated. Call /rebuild/ to apply the new credentials."
+msgstr "تنظیمات پایگاه داده به‌روزرسانی شد. برای اعمال اطلاعات ورود جدید، مسیر /rebuild/ را فراخوانی کنید."
+
+msgid "You do not have permission to edit this deploy."
+msgstr "شما مجوز ویرایش این استقرار را ندارید."
+
+msgid "Deploy updated."
+msgstr "استقرار به‌روزرسانی شد."
+
+msgid "Can not update deploy."
+msgstr "به‌روزرسانی استقرار ناموفق بود."
+
+msgid "You do not have permission to delete this deploy."
+msgstr "شما مجوز حذف این استقرار را ندارید."
+
+msgid "Active deployments must be cancelled and converged before deletion."
+msgstr "پیش از حذف، باید استقرارهای فعال لغو و پاک‌سازی آن‌ها تکمیل شوند."
+
+msgid "You do not have permission to download this deploy."
+msgstr "شما مجوز دریافت فایل این استقرار را ندارید."
+
+msgid "No zip file on this deploy."
+msgstr "برای این استقرار فایل ZIP وجود ندارد."
+
+msgid "Could not open zip file."
+msgstr "باز کردن فایل ZIP ممکن نشد."
+
+msgid "The length should be at least 4."
+msgstr "طول مقدار باید دست‌کم ۴ نویسه باشد."
+
+msgid "The name has been taken for this service."
+msgstr "این نام قبلاً برای این سرویس استفاده شده است."
+
+msgid "The name is free."
+msgstr "این نام آزاد است."
+
+msgid "Deployment logs are temporarily unavailable."
+msgstr "گزارش‌های استقرار موقتاً در دسترس نیستند."
+
+msgid "Invalid after timestamp."
+msgstr "زمان after نامعتبر است."
+
+msgid "Invalid before timestamp."
+msgstr "زمان before نامعتبر است."
+
+msgid "deploy_id and service_id are required."
+msgstr "وارد کردن deploy_id و service_id الزامی است."
+
+msgid "Deploy does not belong to this service."
+msgstr "این استقرار متعلق به این سرویس نیست."
+
+msgid "You do not have permission to select this deploy."
+msgstr "شما مجوز انتخاب این استقرار را ندارید."
+
+msgid "Deploy not found."
+msgstr "استقرار پیدا نشد."
+
+msgid "Invalid deploy_id or service_id."
+msgstr "deploy_id یا service_id نامعتبر است."
+
+msgid "Could not select deploy."
+msgstr "انتخاب استقرار ممکن نشد."
+
+msgid "You do not have permission to unselect this deploy."
+msgstr "شما مجوز لغو انتخاب این استقرار را ندارید."
+
+msgid "This deploy is not selected for the service."
+msgstr "این استقرار برای سرویس انتخاب نشده است."
+
+msgid "Could not unselect deploy."
+msgstr "لغو انتخاب استقرار ممکن نشد."
+
+msgid "File must be a .zip archive."
+msgstr "فایل باید یک آرشیو با پسوند .zip باشد."
+
+msgid "ZIP file exceeds the deployment upload limit."
+msgstr "حجم فایل ZIP از محدودیت بارگذاری استقرار بیشتر است."
+
+msgid "Not found."
+msgstr "موردی پیدا نشد."
+
+msgid "Plan created."
+msgstr "طرح ایجاد شد."
+
+msgid "Plan updated."
+msgstr "طرح به‌روزرسانی شد."
+
+msgid "Cannot delete: plan is still assigned to one or more services."
+msgstr "حذف ممکن نیست؛ این طرح هنوز به یک یا چند سرویس اختصاص دارد."
+
+msgid "Plan deleted."
+msgstr "طرح حذف شد."
+
+msgid "Incorrect platform."
+msgstr "پلتفرم نادرست است."
+
+msgid "There is not such plans."
+msgstr "چنین طرحی وجود ندارد."
+
+msgid "Plan not found."
+msgstr "طرح پیدا نشد."
+
+msgid "Invalid UUID format."
+msgstr "قالب UUID نامعتبر است."
+
+msgid "Please provide a valid UUID v4 format."
+msgstr "یک UUID نسخهٔ ۴ معتبر وارد کنید."
+
+msgid "Invalid target_type or missing target_id."
+msgstr "target_type نامعتبر است یا target_id ارسال نشده است."
+
+msgid "Service has no active revision to apply."
+msgstr "این سرویس نسخهٔ فعالی برای اعمال ندارد."
+
+msgid "Service cannot be redeployed in its current status."
+msgstr "با وضعیت فعلی سرویس، استقرار مجدد امکان‌پذیر نیست."
+
+msgid "Service not found or not owned by user."
+msgstr "سرویس پیدا نشد یا متعلق به این کاربر نیست."
+
+msgid "Plan applied to target."
+msgstr "طرح روی مقصد اعمال شد."
+
+msgid "user_id is required."
+msgstr "وارد کردن user_id الزامی است."
+
+msgid "Target user not found."
+msgstr "کاربر مقصد پیدا نشد."
+
+msgid "plan is required."
+msgstr "انتخاب طرح الزامی است."
+
+msgid "Network not found or does not belong to the target user."
+msgstr "شبکه پیدا نشد یا متعلق به کاربر مقصد نیست."
+
+msgid "name is required and must be ≤ 30 characters."
+msgstr "نام الزامی است و نباید بیش از ۳۰ نویسه باشد."
+
+msgid "Service created."
+msgstr "سرویس ایجاد شد."
+
+msgid "Validation failed."
+msgstr "اعتبارسنجی ناموفق بود."
+
+msgid "Missing permission services.delete."
+msgstr "مجوز services.delete وجود ندارد."
+
+msgid "Catalog-managed services must be deleted through their ApplicationInstance."
+msgstr "سرویس‌های مدیریت‌شده از طریق کاتالوگ باید با ApplicationInstance مربوطه حذف شوند."
+
+msgid "Service deleted."
+msgstr "سرویس حذف شد."
+
+msgid "Private Network created."
+msgstr "شبکهٔ خصوصی ایجاد شد."
+
+msgid "Can not create network."
+msgstr "ایجاد شبکه ممکن نشد."
+
+msgid "user_id or service is required."
+msgstr "وارد کردن user_id یا سرویس الزامی است."
+
+msgid "Can not create Volume."
+msgstr "ایجاد فضای ذخیره‌سازی ممکن نشد."
+
+msgid "Volume created."
+msgstr "فضای ذخیره‌سازی ایجاد شد."
+
+msgid "Missing permission services.manage."
+msgstr "مجوز services.manage وجود ندارد."
+
+msgid "This service has no active revision/deployment."
+msgstr "این سرویس نسخه یا استقرار فعالی ندارد."
+
+msgid "Service stopped."
+msgstr "سرویس متوقف شد."
+
+msgid "service_id is required."
+msgstr "وارد کردن service_id الزامی است."
+
+msgid "Service is busy (%(s)s). Wait until it is stopped."
+msgstr "سرویس مشغول است (%(s)s). تا توقف آن صبر کنید."
+
+msgid "Service runtime and image cleanup finished."
+msgstr "پاک‌سازی محیط اجرا و تصویر سرویس تکمیل شد."
+
+msgid "You must create a Private Network first."
+msgstr "ابتدا باید یک شبکهٔ خصوصی ایجاد کنید."
+
+msgid "Service updated."
+msgstr "سرویس به‌روزرسانی شد."
+
+msgid "Can not update service."
+msgstr "به‌روزرسانی سرویس ممکن نشد."
+
+msgid "Only the service owner can delete it."
+msgstr "فقط مالک سرویس می‌تواند آن را حذف کند."
+
+msgid "Private Network updated."
+msgstr "شبکهٔ خصوصی به‌روزرسانی شد."
+
+msgid "Can not update network"
+msgstr "به‌روزرسانی شبکه ممکن نشد."
+
+msgid "Cannot delete network with active services."
+msgstr "حذف شبکه‌ای که سرویس فعال دارد امکان‌پذیر نیست."
+
+msgid "Private Network deleted."
+msgstr "شبکهٔ خصوصی حذف شد."
+
+msgid "Selected service does not belong to the authenticated user."
+msgstr "سرویس انتخاب‌شده متعلق به کاربر احراز هویت‌شده نیست."
+
+msgid "size_mb must be a positive integer."
+msgstr "size_mb باید یک عدد صحیح مثبت باشد."
+
+msgid "size_mb must be greater than zero."
+msgstr "size_mb باید بزرگ‌تر از صفر باشد."
+
+msgid "Can not update Volume"
+msgstr "به‌روزرسانی فضای ذخیره‌سازی ممکن نشد."
+
+msgid "Volume updated."
+msgstr "فضای ذخیره‌سازی به‌روزرسانی شد."
+
+msgid "Volume is already detached."
+msgstr "فضای ذخیره‌سازی از قبل جدا شده است."
+
+msgid "service is required."
+msgstr "انتخاب سرویس الزامی است."
+
+msgid "Volume is owned by another service."
+msgstr "این فضای ذخیره‌سازی متعلق به سرویس دیگری است."
+
+msgid "Can not attach Volume"
+msgstr "اتصال فضای ذخیره‌سازی ممکن نشد."
+
+msgid "Volume attached."
+msgstr "فضای ذخیره‌سازی متصل شد."
+
+msgid "Volume could not be removed safely."
+msgstr "حذف ایمن فضای ذخیره‌سازی ممکن نشد."
+
+msgid "Volume deleted."
+msgstr "فضای ذخیره‌سازی حذف شد."
+
+msgid "Could not queue the service operation."
+msgstr "ثبت عملیات سرویس در صف ممکن نشد."
+
+msgid "Deployment is already cancelled."
+msgstr "این استقرار قبلاً لغو شده است."
+
+msgid "Only an active deployment can be force-cancelled."
+msgstr "فقط استقرار فعال را می‌توان به‌اجبار لغو کرد."
+
+msgid "Deployment force-cancelled and its deployment-scoped runtime artifacts were cleaned up."
+msgstr "استقرار به‌اجبار لغو شد و آثار محیط اجرایی مختص آن پاک‌سازی شدند."
+
+msgid "Service with the ID not found."
+msgstr "سرویسی با این شناسه پیدا نشد."
+
+msgid "Service is running, but resource metrics are temporarily unavailable."
+msgstr "سرویس در حال اجرا است، اما معیارهای منابع موقتاً در دسترس نیستند."
+
+msgid "Service is not running; resource metrics are unavailable."
+msgstr "سرویس در حال اجرا نیست؛ معیارهای منابع در دسترس نیستند."
+
+msgid "Service is busy; try again later."
+msgstr "سرویس مشغول است؛ بعداً دوباره تلاش کنید."
+
+msgid "Could not queue restart."
+msgstr "ثبت راه‌اندازی مجدد در صف ممکن نشد."
+
+msgid "Restart queued."
+msgstr "درخواست راه‌اندازی مجدد در صف قرار گرفت."
+
+msgid "Deployment force-cancelled by user."
+msgstr "استقرار به درخواست کاربر به‌اجبار لغو شد."
+
+msgid "Unable to list volume files: %(err)s"
+msgstr "فهرست کردن فایل‌های فضای ذخیره‌سازی ممکن نشد: %(err)s"
+
+msgid "Docker volume not found. Start/rebuild the service to provision it."
+msgstr "فضای ذخیره‌سازی Docker پیدا نشد. برای ایجاد آن، سرویس را اجرا یا بازسازی کنید."
+
+msgid "Unable to create volume archive: %(err)s"
+msgstr "ساخت آرشیو از فضای ذخیره‌سازی ممکن نشد: %(err)s"
+
+msgid "Container and image cleanup finished."
+msgstr "پاک‌سازی کانتینر و تصویر تکمیل شد."
+
+msgid "Secure chat requires a trusted HTTPS Matrix homeserver URL for browser clients."
+msgstr "برای گفتگوی امن، آدرس سرور Matrix در مرورگر باید از HTTPS معتبر استفاده کند."
+
+msgid "Matrix homeserver configuration is invalid."
+msgstr "تنظیمات سرور Matrix نامعتبر است."
+
+msgid "The backend Matrix URL must use HTTPS or an explicitly configured private Docker service URL."
+msgstr "نشانی Matrix در بک‌اند باید HTTPS باشد یا به‌صراحت به‌عنوان نشانی سرویس خصوصی Docker تنظیم شده باشد."
+
+msgid "Matrix backend URL configuration is invalid."
+msgstr "پیکربندی نشانی Matrix در بک‌اند نامعتبر است."
+
+msgid "Matrix identity encryption key is invalid or missing."
+msgstr "کلید رمزگذاری هویت Matrix نامعتبر است یا تنظیم نشده است."
+
+msgid "A Matrix user session is required."
+msgstr "نشست کاربری Matrix الزامی است."
+
+msgid "The Matrix homeserver is unavailable."
+msgstr "سرور Matrix در دسترس نیست."
+
+msgid "Matrix authorization failed; secure chat is unavailable."
+msgstr "احراز هویت Matrix ناموفق بود؛ گفتگوی امن در دسترس نیست."
+
+msgid "Matrix is temporarily rate limiting requests."
+msgstr "سرور Matrix موقتاً تعداد درخواست‌ها را محدود کرده است."
+
+msgid "The requested Matrix resource does not exist."
+msgstr "منبع درخواستی Matrix وجود ندارد."
+
+msgid "The Matrix homeserver rejected the secure-chat operation."
+msgstr "سرور Matrix عملیات گفتگوی امن را نپذیرفت."
+
+msgid "The Matrix homeserver returned an invalid response."
+msgstr "سرور Matrix پاسخ نامعتبری برگرداند."
+
+msgid "The Matrix identity key has changed or the stored credential is invalid. "
+msgstr "کلید هویت Matrix تغییر کرده است یا اطلاعات ورود ذخیره‌شده نامعتبر است. "
+
+msgid "A Matrix identity already exists without a local mapping; administrator reconciliation is required."
+msgstr "هویت Matrix از قبل وجود دارد اما نگاشت محلی آن ثبت نشده است؛ مدیر سیستم باید آن را تطبیق دهد."
+
+msgid "The Matrix identity could not be provisioned."
+msgstr "ایجاد هویت Matrix ممکن نشد."
+
+msgid "Device ID is invalid."
+msgstr "شناسه دستگاه نامعتبر است."
+
+msgid "This Matrix device was revoked. Create a new device to continue."
+msgstr "دسترسی این دستگاه Matrix لغو شده است. برای ادامه دستگاه جدیدی بسازید."
+
+msgid "Matrix did not create the expected device session."
+msgstr "Matrix نشست دستگاه مورد انتظار را ایجاد نکرد."
+
+msgid "A valid Matrix device session is required."
+msgstr "یک نشست معتبر دستگاه Matrix الزامی است."
+
+msgid "Matrix session is not bound to a device."
+msgstr "نشست Matrix به دستگاه مشخصی متصل نیست."
+
+msgid "This account has no provisioned Matrix identity."
+msgstr "برای این حساب هنوز هویت Matrix ایجاد نشده است."
+
+msgid "Matrix session belongs to a different account."
+msgstr "نشست Matrix متعلق به حساب دیگری است."
+
+msgid "This Matrix device is not registered or has been revoked."
+msgstr "این دستگاه Matrix ثبت نشده است یا دسترسی آن لغو شده است."
+
+msgid "Matrix returned an invalid device inventory."
+msgstr "Matrix فهرست دستگاه‌های نامعتبری برگرداند."
+
+msgid "Matrix device not found."
+msgstr "دستگاه Matrix پیدا نشد."
+
+msgid "Matrix room ID is invalid."
+msgstr "شناسه اتاق Matrix نامعتبر است."
+
+msgid "The Matrix room is not using the required end-to-end encryption algorithm."
+msgstr "اتاق Matrix از الگوریتم رمزگذاری سرتاسری موردنیاز استفاده نمی‌کند."
+
+msgid "The current Matrix device is not a joined member of this room."
+msgstr "دستگاه فعلی Matrix عضو پیوستهٔ این اتاق نیست."
+
+msgid "The encrypted room does not contain every intended participant."
+msgstr "اتاق رمزگذاری‌شده شامل تمام شرکت‌کنندگان موردنظر نیست."
+
+msgid "The encrypted room contains unapproved users outside the intended participant list."
+msgstr "اتاق رمزگذاری‌شده شامل کاربران تأییدنشده‌ای خارج از فهرست شرکت‌کنندگان موردنظر است."
+
+msgid "Secure Messenger rooms must use an invite-only Matrix join rule."
+msgstr "اتاق‌های امن پیام‌رسان باید فقط با دعوت قابل ورود باشند."
+
+msgid "Secure Messenger rooms must restrict history visibility to invited participants."
+msgstr "نمایش تاریخچهٔ اتاق‌های امن پیام‌رسان باید به شرکت‌کنندگان دعوت‌شده محدود باشد."
+
+msgid "Matrix space ID is invalid."
+msgstr "شناسه فضای Matrix نامعتبر است."
+
+msgid "The current Matrix device is not a joined member of the requested space."
+msgstr "دستگاه فعلی Matrix عضو پیوستهٔ فضای درخواستی نیست."
+
+msgid "The Matrix Space contains users outside the intended secure-group participant list."
+msgstr "فضای Matrix شامل کاربرانی خارج از فهرست شرکت‌کنندگان گروه امن موردنظر است."
+
+msgid "Secure group Spaces must use an invite-only join rule."
+msgstr "فضاهای گروه امن باید فقط با دعوت قابل ورود باشند."
+
+msgid "The parent room is not a Matrix Space."
+msgstr "اتاق والد یک Matrix Space نیست."
+
+msgid "The Matrix Space does not declare this room as a child."
+msgstr "فضای Matrix این اتاق را به‌عنوان اتاق فرزند ثبت نکرده است."
+
+msgid "The room is not properly linked to the requested Matrix space."
+msgstr "این اتاق به‌درستی به فضای Matrix درخواستی متصل نشده است."
+

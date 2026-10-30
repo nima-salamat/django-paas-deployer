@@ -20,7 +20,7 @@ Source of truth: `src/users/models.py`. Django/Django-contrib inherited fields a
 ## User
 
 **Bases:** `AbstractBaseUser, PermissionsMixin`  
-**Declared fields:** 17
+**Declared fields:** 19
 
 | Field | Django type | DB nullable | Blank | Default | Constraints / relation | Purpose / contract |
 |---|---|---:|---:|---|---|---|
@@ -31,8 +31,10 @@ Source of truth: `src/users/models.py`. Django/Django-contrib inherited fields a
 | `password` | `CharField` | yes | yes | `—` | DB nullable, blank allowed | Credential hash or stored password representation; never treat it as plaintext configuration. |
 | `email` | `EmailField` | yes | yes | `—` | DB nullable, blank allowed, unique | Stores the email value required by User for its EmailField contract. |
 | `email_verified` | `BooleanField` | no | no | `False` | DB non-null, blank not allowed | Stores the email verified value required by User for its BooleanField contract. |
+| `phone_number` | `PhoneNumberField` | yes | yes | `—` | DB nullable, blank allowed, unique | Stores the verified contact destination for phone-based sign-in and contact workflows. |
 | `phone_number_verified` | `BooleanField` | no | no | `False` | DB non-null, blank not allowed | Stores the phone number verified value required by User for its BooleanField contract. |
 | `theme` | `CharField` | no | no | `ThemeChoices.LIGHT` | DB non-null, blank not allowed, choices | Stores the theme value required by User for its CharField contract. |
+| `language` | `CharField` | no | no | `LanguageChoices.ENGLISH` | DB non-null, blank not allowed, choices | Stores the preferred interface language (`en-us` or `fa`). |
 | `color` | `PositiveSmallIntegerField` | no | no | `get_color` | DB non-null, blank not allowed, choices | Stores the color value required by User for its PositiveSmallIntegerField contract. |
 | `birthdate` | `DateField` | yes | yes | `—` | DB nullable, blank allowed | Stores the birthdate value required by User for its DateField contract. |
 | `balance` | `DecimalField` | no | no | `0` | DB non-null, blank not allowed | Stores the balance value required by User for its DecimalField contract. |
@@ -51,8 +53,10 @@ Source of truth: `src/users/models.py`. Django/Django-contrib inherited fields a
 - `password`: `CharField` with DB nullable, blank allowed. The model declaration is authoritative for validation and persistence behavior.
 - `email`: `EmailField` with DB nullable, blank allowed, unique. The model declaration is authoritative for validation and persistence behavior.
 - `email_verified`: `BooleanField` with DB non-null, blank not allowed. The model declaration is authoritative for validation and persistence behavior.
+- `phone_number`: `PhoneNumberField` with DB nullable, blank allowed, unique. The model declaration is authoritative for validation and persistence behavior.
 - `phone_number_verified`: `BooleanField` with DB non-null, blank not allowed. The model declaration is authoritative for validation and persistence behavior.
 - `theme`: `CharField` with DB non-null, blank not allowed, choices. The model declaration is authoritative for validation and persistence behavior.
+- `language`: `CharField` with DB non-null, blank not allowed, choices. The preference is stored per user and defaults to `en-us`.
 - `color`: `PositiveSmallIntegerField` with DB non-null, blank not allowed, choices. The model declaration is authoritative for validation and persistence behavior.
 - `birthdate`: `DateField` with DB nullable, blank allowed. The model declaration is authoritative for validation and persistence behavior.
 - `balance`: `DecimalField` with DB non-null, blank not allowed. The model declaration is authoritative for validation and persistence behavior.

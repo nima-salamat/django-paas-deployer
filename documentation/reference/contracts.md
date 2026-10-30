@@ -312,6 +312,7 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `users` | `src/users/api_urls.py` | explicit | `remove-password/` | [app API docs](../apps/users/api-reference.md) |
 | `users` | `src/users/api_urls.py` | explicit | `set-password/` | [app API docs](../apps/users/api-reference.md) |
 | `users` | `src/users/api_urls.py` | explicit | `user/` | [app API docs](../apps/users/api-reference.md) |
+| `users` | `src/users/api_urls.py` | explicit | `user/language/` | [app API docs](../apps/users/api-reference.md) |
 | `users` | `src/users/api_urls.py` | explicit | `user/contact-change/<uuid:change_id>/confirm/` | [app API docs](../apps/users/api-reference.md) |
 | `users` | `src/users/api_urls.py` | explicit | `user/contact-change/` | [app API docs](../apps/users/api-reference.md) |
 | `users` | `src/users/urls.py` | explicit | `admin/me/permissions/` | [app API docs](../apps/users/api-reference.md) |
@@ -1369,6 +1370,7 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `users` | `src/users/models.py` | `User` | `first_name` | `CharField` | [field reference](../apps/users/field-reference.md#user) |
 | `users` | `src/users/models.py` | `User` | `is_active` | `BooleanField` | [field reference](../apps/users/field-reference.md#user) |
 | `users` | `src/users/models.py` | `User` | `is_staff` | `BooleanField` | [field reference](../apps/users/field-reference.md#user) |
+| `users` | `src/users/models.py` | `User` | `language` | `CharField` | [field reference](../apps/users/field-reference.md#user) |
 | `users` | `src/users/models.py` | `User` | `last_name` | `CharField` | [field reference](../apps/users/field-reference.md#user) |
 | `users` | `src/users/models.py` | `User` | `national_id` | `CharField` | [field reference](../apps/users/field-reference.md#user) |
 | `users` | `src/users/models.py` | `User` | `password` | `CharField` | [field reference](../apps/users/field-reference.md#user) |
