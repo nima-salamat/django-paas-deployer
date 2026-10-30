@@ -30,7 +30,7 @@ RUN set -eux; \
     security_mirror="${mirror%/debian}/debian-security"; \
     rm -f /etc/apt/sources.list.d/*.sources; \
     rm -f /etc/apt/sources.list.d/*.list; \
-    printf '%s\n' \
+    printf '%s\\n' \
         "deb $mirror $codename main" \
         "deb $mirror $codename-updates main" \
         "deb $security_mirror $codename-security main" \
@@ -59,9 +59,14 @@ RUN pip install \
 
 COPY . .
 
-# Compile the checked-in gettext catalogs into runtime .mo files.
-RUN python manage.py compilemessages -l fa
+# compilemessages initializes Django (and SimpleJWT reads SECRET_KEY), even
+# though compilation itself does not need production credentials. Give this
+# one build step a throwaway key; it is process-scoped and is never persisted
+# into the image as an ENV value or reused by the running application.
+RUN set -eu; \
+    build_secret="$(python -c 'import secrets; print(secrets.token_urlsafe(64))')"; \
+    SECRET_KEY="$build_secret" python manage.py compilemessages -l fa
 
 EXPOSE 8000
 
-CMD ["uvicorn", "config.asgi:application", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+CMD ["uvicorn", "config.asgi:application", "--host", "0.0.0.0", "--port", "8000"]
