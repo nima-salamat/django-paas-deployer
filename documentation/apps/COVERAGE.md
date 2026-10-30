@@ -41,9 +41,9 @@ Every production source surface must be mapped to its owning canonical document 
 | `tickets` | 21 | [tickets](./tickets/README.md) |
 | `custom_emails` | 12 | [custom_emails](./custom_emails/README.md) |
 | `docs` | 9 | [docs](./docs/README.md) |
-| `core` | 31 | [core](./core/README.md) |
+| `core` | 32 | [core](./core/README.md) |
 | `cms` | 9 | [cms](./cms/README.md) |
-| **Total** | **417** | **15 app boundaries** |
+| **Total** | **418** | **15 app boundaries** |
 
 ### Module-level inventory
 
@@ -496,6 +496,7 @@ Every production source surface must be mapped to its owning canonical document 
 - `src/core/tasks/email.py` → [core](./core/README.md)
 - `src/core/tasks/zip_utils.py` → [core](./core/README.md)
 - `src/core/throttling.py` → [core](./core/README.md)
+- `src/core/middleware.py` → [core](./core/README.md)
 - `src/core/urls.py` → [core](./core/README.md)
 - `src/core/utils.py` → [core](./core/README.md)
 - `src/core/wagtail_admin/__init__.py` → [core](./core/README.md)
