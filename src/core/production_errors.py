@@ -3,15 +3,16 @@ from __future__ import annotations
 
 from django.http import JsonResponse
 from django.shortcuts import render
+from django.utils.translation import gettext as _
 
 
 def _error_context(code: int):
-    titles = {400: "Bad request", 403: "Access denied", 404: "Page not found", 500: "Something went wrong"}
+    titles = {400: _("Bad request"), 403: _("Access denied"), 404: _("Page not found"), 500: _("Something went wrong")}
     messages = {
-        400: "The request could not be processed.",
-        403: "You do not have permission to access this resource.",
-        404: "The requested resource could not be found.",
-        500: "The service could not complete the request.",
+        400: _("The request could not be processed."),
+        403: _("You do not have permission to access this resource."),
+        404: _("The requested resource could not be found."),
+        500: _("The service could not complete the request."),
     }
     return {"status_code": code, "title": titles[code], "message": messages[code]}
 

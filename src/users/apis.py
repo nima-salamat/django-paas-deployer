@@ -156,3 +156,36 @@ class RemovePasswordAPIView(APIView):
             serializer.save()
             return Response({"message": _("success::password removed.")}, status=status.HTTP_200_OK)
         return Response({"message": _("error::cannot remove password."), "errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class LanguagePreferenceAPIView(APIView):
+    """Read and update the authenticated user's interface language."""
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response({
+            "language": request.user.language,
+            "languages": [
+                {"code": "en-us", "label": "English"},
+                {"code": "fa", "label": "فارسی"},
+            ],
+        }, status=status.HTTP_200_OK)
+
+    def patch(self, request):
+        language = str(request.data.get("language", "")).strip().lower()
+        supported = {value for value, _label in User.LanguageChoices.choices}
+        if language not in supported:
+            return Response({
+                "detail": _("Unsupported language."),
+                "code": "unsupported_language",
+                "supported_languages": sorted(supported),
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        request.user.language = language
+        request.user.save(update_fields=["language"])
+        return Response({
+            "language": request.user.language,
+            "message": _("Language preference updated."),
+        }, status=status.HTTP_200_OK)

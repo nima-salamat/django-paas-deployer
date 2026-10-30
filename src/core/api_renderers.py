@@ -6,6 +6,7 @@ import logging
 
 from rest_framework.renderers import JSONRenderer
 from rest_framework.views import exception_handler as drf_exception_handler
+from django.utils.translation import gettext as _
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ def production_exception_handler(exc, context):
         )
         from rest_framework.response import Response
         return Response(
-            {"detail": "An internal server error occurred."},
+            {"detail": _("An internal server error occurred.")},
             status=500,
             content_type="application/json",
         )
@@ -57,11 +58,11 @@ def production_exception_handler(exc, context):
             if key not in {"exception", "traceback", "debug", "__debug__"}
         }
         if not data:
-            data = {"detail": "Request could not be completed."}
+            data = {"detail": _("Request could not be completed.")}
     elif isinstance(data, list):
         data = {"detail": data}
     else:
-        data = {"detail": str(data) if response.status_code < 500 else "Request failed."}
+        data = {"detail": str(data) if response.status_code < 500 else _("Request failed.")}
 
     response.data = data
     return response

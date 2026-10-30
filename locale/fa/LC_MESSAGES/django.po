@@ -1,0 +1,138 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Django PaaS Deployer\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-10-30 00:00+0000\n"
+"PO-Revision-Date: 2026-10-30 00:00+0000\n"
+"Language: fa\n"
+"Language-Team: Persian\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "English"
+msgstr "انگلیسی"
+
+msgid "Persian"
+msgstr "فارسی"
+
+msgid "preferred language"
+msgstr "زبان ترجیحی"
+
+msgid "Unsupported language."
+msgstr "زبان انتخاب‌شده پشتیبانی نمی‌شود."
+
+msgid "Language preference updated."
+msgstr "زبان ترجیحی با موفقیت به‌روزرسانی شد."
+
+msgid "Passwords do not match."
+msgstr "رمزهای عبور مطابقت ندارند."
+
+msgid "Password already set. Use change password instead."
+msgstr "برای این حساب رمز عبور ثبت شده است. برای تغییر آن از گزینهٔ تغییر رمز عبور استفاده کنید."
+
+msgid "Current password is incorrect."
+msgstr "رمز عبور فعلی نادرست است."
+
+msgid "No password is configured for this account."
+msgstr "برای این حساب رمزی تنظیم نشده است."
+
+msgid "Email and phone changes require OTP verification through the contact-change API."
+msgstr "تغییر ایمیل و شماره تلفن باید از طریق کد یک‌بارمصرف و API تغییر اطلاعات تماس تأیید شود."
+
+msgid "Either email or phone number must be set."
+msgstr "حداقل باید ایمیل یا شمارهٔ تلفن وارد شود."
+
+msgid "Order keys must contain only digits."
+msgstr "کلیدهای ترتیب باید فقط شامل رقم باشند."
+
+msgid "Order values must be integers."
+msgstr "مقادیر ترتیب باید عدد صحیح باشند."
+
+msgid "Order must be a non-empty object mapping profile IDs to positions."
+msgstr "ترتیب باید یک شیء غیرخالی باشد که شناسهٔ پروفایل‌ها را به موقعیت آن‌ها نگاشت می‌کند."
+
+msgid "Password is incorrect."
+msgstr "رمز عبور نادرست است."
+
+msgid "success::user found."
+msgstr "success::اطلاعات کاربر دریافت شد."
+
+msgid "success::user updated."
+msgstr "success::اطلاعات کاربر به‌روزرسانی شد."
+
+msgid "error::user not updated!"
+msgstr "error::اطلاعات کاربر به‌روزرسانی نشد."
+
+msgid "success::order change."
+msgstr "success::ترتیب تصاویر تغییر کرد."
+
+msgid "error::cant change order."
+msgstr "error::تغییر ترتیب انجام نشد."
+
+msgid "error::profile not found!"
+msgstr "error::پروفایل پیدا نشد."
+
+msgid "success::profile deleted."
+msgstr "success::پروفایل حذف شد."
+
+msgid "success::profile added."
+msgstr "success::پروفایل اضافه شد."
+
+msgid "error::cant add profile."
+msgstr "error::افزودن پروفایل انجام نشد."
+
+msgid "success::password status retrieved."
+msgstr "success::وضعیت رمز عبور دریافت شد."
+
+msgid "success::password set."
+msgstr "success::رمز عبور تنظیم شد."
+
+msgid "error::cannot set password."
+msgstr "error::تنظیم رمز عبور انجام نشد."
+
+msgid "success::password changed."
+msgstr "success::رمز عبور تغییر کرد."
+
+msgid "error::cannot change password."
+msgstr "error::تغییر رمز عبور انجام نشد."
+
+msgid "success::password removed."
+msgstr "success::رمز عبور حذف شد."
+
+msgid "error::cannot remove password."
+msgstr "error::حذف رمز عبور انجام نشد."
+
+msgid "An internal server error occurred."
+msgstr "خطای داخلی سرور رخ داد."
+
+msgid "Request could not be completed."
+msgstr "امکان تکمیل درخواست وجود نداشت."
+
+msgid "Request failed."
+msgstr "درخواست ناموفق بود."
+
+msgid "Bad request"
+msgstr "درخواست نامعتبر"
+
+msgid "Access denied"
+msgstr "دسترسی رد شد"
+
+msgid "Page not found"
+msgstr "صفحه پیدا نشد"
+
+msgid "Something went wrong"
+msgstr "مشکلی پیش آمد"
+
+msgid "The request could not be processed."
+msgstr "امکان پردازش درخواست وجود نداشت."
+
+msgid "You do not have permission to access this resource."
+msgstr "شما مجوز دسترسی به این منبع را ندارید."
+
+msgid "The requested resource could not be found."
+msgstr "منبع درخواستی پیدا نشد."
+
+msgid "The service could not complete the request."
+msgstr "سرویس نتوانست درخواست را تکمیل کند."

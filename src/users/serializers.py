@@ -4,6 +4,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 import json
 import string
+from django.utils.translation import gettext_lazy as _
 
 class CreateUserSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(required=False, allow_blank=True)
@@ -25,7 +26,7 @@ class CreateUserSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         if not data.get("email") and not data.get("phone_number"):
-            raise serializers.ValidationError("Either email or phone number must be set.")
+            raise serializers.ValidationError(_("Either email or phone number must be set."))
 
         # email = data.get("email")
         # phone_number = data.get("phone_number")
@@ -79,13 +80,14 @@ class GetUserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["id", "username", "email", "phone_number", "theme", "email_verified", "phone_number_verified", "color", "birthdate", "has_password", "is_staff", "is_superuser"]
+        fields = ["id", "username", "email", "phone_number", "theme", "language", "email_verified", "phone_number_verified", "color", "birthdate", "has_password", "is_staff", "is_superuser"]
         extra_kwargs = {
             "id" : {"read_only": True},
             "username": {"read_only": True},
             "email" : {"read_only": True},
             "phone_number" : {"read_only": True},
             "theme": {"read_only": True},
+            "language": {"read_only": True},
             "color": {"read_only": True},
             "email_verified": {"read_only": True},
             "email_verified": {"read_only": True},
@@ -101,13 +103,13 @@ class SetPasswordSerializer(serializers.Serializer):
 
     def validate(self, data):
         if data["new_password"] != data["new_confirm_password"]:
-            raise serializers.ValidationError("Passwords do not match.")
+            raise serializers.ValidationError(_("Passwords do not match."))
         validate_password(data["new_password"])
         return data
 
     def save(self, user):
         if user.has_usable_password():
-            raise serializers.ValidationError("Password already set. Use change password instead.")
+            raise serializers.ValidationError(_("Password already set. Use change password instead."))
         user.set_password(self.validated_data["new_password"])
         user.save()
         return user
@@ -123,9 +125,9 @@ class ChangePasswordSerializer(serializers.Serializer):
 
     def validate(self, data):
         if data["new_password"] != data["new_confirm_password"]:
-            raise serializers.ValidationError("Passwords do not match.")
+            raise serializers.ValidationError(_("Passwords do not match."))
         if not self.user or not self.user.check_password(data["current_password"]):
-            raise serializers.ValidationError("Current password is incorrect.")
+            raise serializers.ValidationError(_("Current password is incorrect."))
         validate_password(data["new_password"], user=self.user)
         return data
 
@@ -143,9 +145,9 @@ class RemovePasswordSerializer(serializers.Serializer):
 
     def validate(self, data):
         if not self.user or not self.user.check_password(data["current_password"]):
-            raise serializers.ValidationError("Current password is incorrect.")
+            raise serializers.ValidationError(_("Current password is incorrect."))
         if not self.user.has_usable_password():
-            raise serializers.ValidationError("No password is configured for this account.")
+            raise serializers.ValidationError(_("No password is configured for this account."))
         return data
 
     def save(self):
@@ -169,7 +171,7 @@ class UpdateUserSerializer(serializers.Serializer):
     def validate(self, data):
         if "email" in data or "phone_number" in data:
             raise serializers.ValidationError(
-                "Email and phone changes require OTP verification through the contact-change API."
+                _("Email and phone changes require OTP verification through the contact-change API.")
             )
         return data
     def update(self, user, data):
@@ -222,11 +224,11 @@ class OrderImageProfileSerializer(serializers.Serializer):
         order = data.get("order", None)
         if order and isinstance(order, dict):
             if not all([i.isdigit() for i in order.keys()]):
-                raise exceptions.ValidationError("order keys should be inlcude digits")
+                raise exceptions.ValidationError(_("Order keys must contain only digits."))
             if not all([isinstance(i, int) for i in order.values()]):
-                raise exceptions.ValidationError("order values should be a integer")
+                raise exceptions.ValidationError(_("Order values must be integers."))
         else:
-            raise exceptions.ValidationError("order should be a dict(json=>{key:value}) that is not empty")
+            raise exceptions.ValidationError(_("Order must be a non-empty object mapping profile IDs to positions."))
         return data 
     def save(self, user):
         profile_images =  Profile.objects.filter(user=user)
@@ -273,10 +275,10 @@ class DeletePasswordSerializer(serializers.Serializer):
     def validate(self, data):
         
         if data["password"] != data["confirm_password"]:
-            raise serializers.ValidationError("Password do not match")
+            raise serializers.ValidationError(_("Passwords do not match."))
         
         if not self.user.check_password(data["password"]):
-            raise serializers.ValidationError("Password is not correct")
+            raise serializers.ValidationError(_("Password is incorrect."))
 
         return data
 

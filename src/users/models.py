@@ -43,6 +43,10 @@ def get_color():
     
 
 class User(AbstractBaseUser, PermissionsMixin):
+    class LanguageChoices(models.TextChoices):
+        ENGLISH = "en-us", _("English")
+        PERSIAN = "fa", _("Persian")
+
     class ThemeChoices(models.TextChoices):
         DARK  = "dark",  _("Dark")
         LIGHT = "light", _("Light")
@@ -60,6 +64,10 @@ class User(AbstractBaseUser, PermissionsMixin):
     phone_number = PhoneNumberField(_("phone number"), null=True, blank=True, unique=True)
     phone_number_verified = models.BooleanField(_("phone number verified"), default=False)
     theme = models.CharField(_("theme"), choices=ThemeChoices.choices, default=ThemeChoices.LIGHT, max_length=7)
+    language = models.CharField(
+        _("preferred language"), max_length=5,
+        choices=LanguageChoices.choices, default=LanguageChoices.ENGLISH,
+    )
     color = models.PositiveSmallIntegerField(_("color"), choices=COLOR_CHOICES, default=get_color)    
     birthdate = models.DateField(_("birth date"),null=True, blank=True)
     balance = models.DecimalField(max_digits=11, decimal_places=3, default=0)

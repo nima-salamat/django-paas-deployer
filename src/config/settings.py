@@ -174,9 +174,11 @@ MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.middleware.locale.LocaleMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'core.middleware.UserLanguageMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     # Wagtail
@@ -347,6 +349,8 @@ SIMPLE_JWT = {
 
 # Internationalization
 LANGUAGE_CODE = 'en-us'
+LANGUAGES = (("en-us", "English"), ("fa", "فارسی"))
+LOCALE_PATHS = (BASE_DIR / "locale",)
 
 TIME_ZONE = 'Asia/Tehran'
 

@@ -41,7 +41,8 @@ RUN set -eux; \
         libpq-dev \
         python3-dev \
         libjpeg-dev \
-        zlib1g-dev; \
+        zlib1g-dev \
+        gettext; \
     rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -57,6 +58,9 @@ RUN pip install \
         -r requirements.txt
 
 COPY . .
+
+# Compile the checked-in gettext catalogs into runtime .mo files.
+RUN python manage.py compilemessages -l fa
 
 EXPOSE 8000
 
