@@ -1,10 +1,14 @@
-"""Per-user locale fallback for clients that do not send Accept-Language."""
-
-from django.utils import translation
+"""Select a persisted account locale before Django's LocaleMiddleware runs."""
 
 
 class UserLanguageMiddleware:
-    """Use a signed-in user's saved language when the request has no preference."""
+    """Use an authenticated user's saved language when no header was sent.
+
+    This middleware must run after AuthenticationMiddleware and before
+    LocaleMiddleware. It supplies the missing Accept-Language header instead
+    of activating a translation itself, so LocaleMiddleware also sets the
+    correct response Content-Language and applies normal cleanup semantics.
+    """
 
     def __init__(self, get_response):
         self.get_response = get_response
@@ -16,7 +20,7 @@ class UserLanguageMiddleware:
             and getattr(user, "is_authenticated", False)
             and not request.headers.get("Accept-Language")
         ):
-            language = getattr(user, "language", "en-us") or "en-us"
-            translation.activate(language)
-            request.LANGUAGE_CODE = language
+            language = getattr(user, "language", None)
+            if language:
+                request.META["HTTP_ACCEPT_LANGUAGE"] = language
         return self.get_response(request)

@@ -1,5 +1,8 @@
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
+from django.http import HttpResponse
+from django.test import RequestFactory
+from types import SimpleNamespace
 from rest_framework.test import APIClient
 
 
@@ -39,3 +42,35 @@ class LanguagePreferenceAPITests(TestCase):
         self.assertEqual(response.data["code"], "unsupported_language")
         self.user.refresh_from_db()
         self.assertEqual(self.user.language, "en-us")
+
+
+class UserLanguageMiddlewareTests(SimpleTestCase):
+    def setUp(self):
+        self.factory = RequestFactory()
+
+    def test_saved_user_language_becomes_accept_language_fallback(self):
+        from core.middleware import UserLanguageMiddleware
+
+        request = self.factory.get("/api/users/user/")
+        request.user = SimpleNamespace(is_authenticated=True, language="fa")
+        response = UserLanguageMiddleware(
+            lambda current: HttpResponse(current.headers.get("Accept-Language", ""))
+        )(request)
+        self.assertEqual(request.headers.get("Accept-Language"), "fa")
+        self.assertEqual(response.content, b"fa")
+
+    def test_explicit_accept_language_header_takes_precedence(self):
+        from core.middleware import UserLanguageMiddleware
+
+        request = self.factory.get("/api/users/user/", HTTP_ACCEPT_LANGUAGE="en-US")
+        request.user = SimpleNamespace(is_authenticated=True, language="fa")
+        UserLanguageMiddleware(lambda current: HttpResponse("ok"))(request)
+        self.assertEqual(request.headers.get("Accept-Language"), "en-US")
+
+    def test_anonymous_request_does_not_receive_user_language(self):
+        from core.middleware import UserLanguageMiddleware
+
+        request = self.factory.get("/api/users/user/")
+        request.user = SimpleNamespace(is_authenticated=False, language="fa")
+        UserLanguageMiddleware(lambda current: HttpResponse("ok"))(request)
+        self.assertIsNone(request.headers.get("Accept-Language"))
