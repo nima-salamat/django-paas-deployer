@@ -3537,7 +3537,10 @@ class SwarmRuntime:
                 limit = max(1, min(int(tail), 1000))
             except (TypeError, ValueError):
                 limit = 200
-            attrs = service.attrs or {}
+            # Docker SDK service objects normally expose attrs, but keep
+            # the log API usable with lightweight adapters and partially
+            # materialized service objects that only implement logs().
+            attrs = getattr(service, "attrs", None) or {}
             task_template = attrs.get("Spec", {}).get("TaskTemplate") or {}
             driver = (task_template.get("LogDriver") or {}).get("Name") or ""
             if str(driver).lower() == "fluentd":
