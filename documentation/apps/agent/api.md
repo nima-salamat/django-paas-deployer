@@ -339,9 +339,9 @@ membership, block, posting, validation, cache and event rules.
 
 Conversation/message history endpoints return only conversations whose
 security mode is \`standard\`. Matrix E2EE is not exposed through this Agent
-facade and is not downgraded to plaintext. The standard chat body is UTF-8
-text with Unicode emoji and line breaks; the Agent skill describes the
-plain-text/Markdown-ish format. Message creation supports the existing
+facade and is not downgraded to plaintext. The standard chat body is plain UTF-8 text with Unicode emoji and line
+breaks. The API does not promise rich-text or Markdown rendering; send plain
+text rather than HTML tags or assumed Markdown styling. Message creation supports the existing
 \`scheduled_for\` ISO-8601 field and \`client_message_id\` retry key. Scheduled
 sends require both \`messenger.messages.send\` and
 \`messenger.messages.schedule\`; ordinary sends need only the send scope.
