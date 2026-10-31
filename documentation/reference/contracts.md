@@ -222,6 +222,7 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `services` | `src/services/urls.py` | explicit | `admin/start_service/` | [app API docs](../apps/services/api-reference.md) |
 | `services` | `src/services/urls.py` | explicit | `admin/stop_service/` | [app API docs](../apps/services/api-reference.md) |
 | `services` | `src/services/urls.py` | explicit | `force_cancel_deploy/` | [app API docs](../apps/services/api-reference.md) |
+| `services` | `src/services/urls.py` | explicit | `internal/logs/ingest/` | [app API docs](../apps/services/api-reference.md) |
 | `services` | `src/services/urls.py` | explicit | `purge_service_runtime/` | [app API docs](../apps/services/api-reference.md) |
 | `services` | `src/services/urls.py` | explicit | `restart_service/` | [app API docs](../apps/services/api-reference.md) |
 | `services` | `src/services/urls.py` | explicit | `service/<uuid:pk>/logs/` | [app API docs](../apps/services/api-reference.md) |
