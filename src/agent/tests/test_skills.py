@@ -31,6 +31,24 @@ class AgentSkillTests(TestCase):
         skills = all_skills()
         self.assertGreaterEqual(len(skills), 1)
         self.assertTrue(all(skill.body.strip() for skill in skills))
+    def test_messenger_skill_documents_safe_message_and_reaction_contract(self):
+        from agent.skills import all_skills
+
+        skill = next(item for item in all_skills() if item.name == "messenger")
+        for required in (
+            '"body":',
+            '"client_message_id":',
+            "4,000 characters",
+            "plain UTF-8",
+            "POST is a TOGGLE",
+            '"emoji": "👍"',
+            "32 characters",
+            "messenger.messages.reactions.remove",
+            "can_pin_messages=true",
+            "pinned-messages",
+        ):
+            self.assertIn(required, skill.body)
+
     def test_skill_index_is_scope_filtered(self):
         response = self.client.get("/agent/v1/skills", **self._auth())
         self.assertEqual(response.status_code, 200)
