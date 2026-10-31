@@ -92,11 +92,15 @@ DJANGO_ADMIN_PATH = _admin_path(os.environ.get("DJANGO_ADMIN_PATH"), "django-4p8
 
 
 # Never use a wildcard host allow-list in production. Keep only explicitly
-# configured public domains plus local development hosts.
+# configured public domains, the private Compose DNS name used by Fluent Bit,
+# and local development hosts. LOG_INGEST_HOST is the Host header sent by the
+# internal collector when it posts to Django (normally "deploy-web").
+LOG_INGEST_HOST = os.environ.get("LOG_INGEST_HOST", "deploy-web").strip()
 ALLOWED_HOSTS = [
     host for host in {
         API_DOMAIN_NAME,
         DOMAIN_NAME,
+        LOG_INGEST_HOST,
         "localhost",
         "127.0.0.1",
     } if host
