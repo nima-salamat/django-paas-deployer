@@ -8,8 +8,8 @@ case "$SOCKET_DIR" in
     /run/*) ;;
     *) echo "The log socket directory must be under /run." >&2; exit 2 ;;
 esac
-case "$SOCKET_DIR" in
-    *..*|*\n*) echo "Invalid log socket directory." >&2; exit 2 ;;
+case "/$SOCKET_DIR/" in
+    */../*) echo "Invalid log socket directory." >&2; exit 2 ;;
 esac
 RULE=/etc/tmpfiles.d/passdeployer-logs.conf
 
