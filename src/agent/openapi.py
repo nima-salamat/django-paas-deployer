@@ -174,12 +174,21 @@ def _operation_id(path, method):
 def _path_parameters(path):
     import re
     params = []
+    integer_identifiers = {
+        "user_id", "conversation_id", "message_id", "request_id", "ticket_id",
+        "department_id",
+    }
     for name in re.findall(r"\{([^}]+)\}", path):
+        schema = (
+            {"type": "integer", "format": "int64", "minimum": 1}
+            if name in integer_identifiers
+            else {"type": "string", "format": "uuid"}
+        )
         params.append(
             _parameter(
                 name,
                 "path",
-                {"type": "string", "format": "uuid"},
+                schema,
                 required=True,
                 description=f"PassDeployer {name.replace('_', ' ')}.",
             )
