@@ -2045,6 +2045,7 @@ class SwarmRuntime:
         )
 
     def _create_kwargs(self, config, *, image_ref: str, compose_spec: dict[str, Any]):
+        from deployments.common.runtime_logging import fluentd_log_driver_options
         from docker.types import (
             EndpointSpec,
             Healthcheck,
@@ -2261,10 +2262,7 @@ class SwarmRuntime:
             # Docker's async + bounded non-blocking logger keeps application
             # stdout/stderr independent from the HTTP/PostgreSQL ingestion path.
             "log_driver": "fluentd",
-            "log_driver_options": __import__(
-                "deployments.common.runtime_logging",
-                fromlist=["fluentd_log_driver_options"],
-            ).fluentd_log_driver_options(),
+            "log_driver_options": fluentd_log_driver_options(),
         }
 
     def apply_processes(self, config, *, image_ref: str, operation_key: str | None = None, cancel_check: Callable[[], bool] | None = None, prepared_image_ref: str | None = None) -> dict[str, SwarmServiceState]:
