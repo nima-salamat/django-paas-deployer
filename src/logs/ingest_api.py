@@ -13,7 +13,8 @@ import logging
 import secrets
 import threading
 import time
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
+import re
 from datetime import datetime
 from uuid import UUID
 
@@ -46,7 +47,7 @@ class _PerServiceRateLimiter:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._windows: dict[str, _RateWindow] = {}
+        self._windows: OrderedDict[str, _RateWindow] = OrderedDict()
 
     def filter(self, service_id: str, lines: list[dict], limit: int):
         accepted: list[dict] = []
@@ -60,6 +61,7 @@ class _PerServiceRateLimiter:
             if window is None or now - window.started >= 1.0:
                 window = _RateWindow()
                 self._windows[service_id] = window
+            self._windows.move_to_end(service_id)
 
             for line in lines:
                 size = len(str(line.get("message") or "").encode("utf-8", "replace"))
@@ -70,16 +72,25 @@ class _PerServiceRateLimiter:
                 window.used += size
                 accepted.append(line)
 
-            if len(self._windows) > MAX_RATE_WINDOWS:
-                cutoff = now - 120.0
-                stale = [
-                    key for key, value in self._windows.items()
-                    if value.started < cutoff
-                ]
-                for key in stale[: len(self._windows) - MAX_RATE_WINDOWS]:
-                    self._windows.pop(key, None)
+            # Hard bound memory under churn from short-lived services.
+            while len(self._windows) > MAX_RATE_WINDOWS:
+                self._windows.popitem(last=False)
 
         return accepted, dropped_entries, dropped_bytes
+
+    def refund(self, service_id: str, lines: list[dict]) -> None:
+        """Refund a reservation when the database rejects a batch for retry."""
+        byte_count = sum(
+            len(str(line.get("message") or "").encode("utf-8", "replace"))
+            for line in lines
+        )
+        if byte_count <= 0:
+            return
+        with self._lock:
+            window = self._windows.get(service_id)
+            if window is not None and time.monotonic() - window.started < 1.0:
+                window.used = max(0, window.used - byte_count)
+                self._windows.move_to_end(service_id)
 
 
 _rate_limiter = _PerServiceRateLimiter()
@@ -188,7 +199,19 @@ def _parse_record(record: dict):
     if isinstance(raw_ts, datetime):
         ts = raw_ts
     elif raw_ts:
-        ts = parse_datetime(str(raw_ts))
+        timestamp_text = str(raw_ts).strip()
+        # Fluent Bit may preserve nanosecond Docker timestamps. Django/Python
+        # datetime only stores microseconds, so trim excess fractional digits
+        # instead of silently replacing a valid event time with ingestion time.
+        if timestamp_text.endswith("Z"):
+            timestamp_text = timestamp_text[:-1] + "+00:00"
+        match = re.match(
+            r"^(.*?\\.\\d{6})\\d+([+-]\\d{2}:?\\d{2})$",
+            timestamp_text,
+        )
+        if match:
+            timestamp_text = match.group(1) + match.group(2)
+        ts = parse_datetime(timestamp_text)
     if ts is None:
         ts = timezone.now()
     elif timezone.is_naive(ts):
@@ -395,6 +418,10 @@ def runtime_logs_ingest_apiview(request):
                 realtime=bool(policy.realtime_enabled),
             )
         except Exception:
+            # The reservation is not a committed ingestion. Refund it before
+            # returning 503 so Fluent Bit's retry is not rejected by our own
+            # in-memory rate limiter.
+            _rate_limiter.refund(service_id, accepted_lines)
             # A 5xx tells Fluent Bit to retry the chunk; PostgreSQL uniqueness
             # makes a retry idempotent after successful/partial persistence.
             logger.exception(
