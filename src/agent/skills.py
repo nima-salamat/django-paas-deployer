@@ -980,10 +980,11 @@ and do not send an object, array or nested JSON string as body.
 ### Exact text-send request
 
 Send one message as JSON (not form data) with the body field:
+Set `Content-Type: application/json; charset=utf-8`. Do not send Persian text as ASCII, Latin-1 or a form-encoded string.
 
 ~~~http
 POST {{base}}/messenger/conversations/{conversation_id}/messages
-Content-Type: application/json
+Content-Type: application/json; charset=utf-8
 ~~~
 
 ~~~json
@@ -994,7 +995,8 @@ Content-Type: application/json
 ~~~
 
 Rules for sending:
-- body must be one string. Use the field name body, not text, message or content.
+- body must be one string.
+- Use a UTF-8 JSON encoder. In Python, use `requests.post(url, json=payload, headers={"Content-Type": "application/json; charset=utf-8"})`; in JavaScript, use `fetch` with `JSON.stringify(payload)` and the same Content-Type. Read the HTTP response with the JSON decoder (`response.json()` / `response.json()`), or decode raw bytes as UTF-8. Never use ASCII/Latin-1 replacement such as `.encode("ascii", errors="replace")` or `.decode(errors="replace")`. Use the field name body, not text, message or content.
 - Keep each message at or below 4,000 characters. The current API splits longer text-only bodies into multiple separate messages; do not let one intended message turn into several messages accidentally.
 - The API trims whitespace at the beginning and end of the body. Keep meaningful line breaks inside the text.
 - client_message_id is optional but recommended: generate a unique value (UUID is suitable) for each logical send. When retrying the same request after a timeout, reuse the exact same id. Never reuse it for a different message. The API uses it to avoid duplicate sends.
@@ -1008,14 +1010,14 @@ A reaction request uses a single emoji string in JSON:
 
 ~~~http
 POST {{base}}/messenger/messages/{message_id}/react
-Content-Type: application/json
+Content-Type: application/json; charset=utf-8
 ~~~
 
 ~~~json
 { "emoji": "👍" }
 ~~~
 
-There is no server-side emoji allow-list: the backend stores a non-empty string up to 32 characters and does not prove that the value is a displayable emoji. For predictable UI rendering, send exactly ONE standard Unicode emoji per reaction, not a word, shortcode or sentence. Common choices include:
+The Agent reaction endpoint accepts JSON only and requires UTF-8. There is no server-side emoji allow-list: the backend stores a non-empty string up to 32 characters and does not prove that the value is a displayable emoji. For predictable UI rendering, send exactly ONE standard Unicode emoji per reaction, not a word, shortcode or sentence. Common choices include:
 👍, ❤️, 😂, 😮, 😢, 🙏, 🎉, 🔥, ✅, 👀.
 This is a practical suggested set, not an enforced or exhaustive server list. When removing a reaction, copy the exact same emoji string (including variation selectors) that was originally used.
 
@@ -1025,7 +1027,7 @@ To remove the Agent user's own reaction explicitly and safely:
 
 ~~~http
 DELETE {{base}}/messenger/messages/{message_id}/react
-Content-Type: application/json
+Content-Type: application/json; charset=utf-8
 ~~~
 
 ~~~json
