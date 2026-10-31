@@ -178,6 +178,11 @@ class AgentContractTests(TestCase):
             "{network_id}": "00000000-0000-0000-0000-000000000005",
             "{volume_id}": "00000000-0000-0000-0000-000000000006",
             "{session_id}": "00000000-0000-0000-0000-000000000007",
+            "{conversation_id}": "101",
+            "{user_id}": "102",
+            "{message_id}": "103",
+            "{request_id}": "104",
+            "{ticket_id}": "105",
         }
         for contract in CONTRACTS:
             path = contract.path
@@ -199,6 +204,11 @@ class AgentContractTests(TestCase):
             "<uuid:session_id>": "{session_id}",
             "<uuid:credential_id>": "{credential_id}",
             "<uuid:agent_id>": "{agent_id}",
+            "<int:conversation_id>": "{conversation_id}",
+            "<int:user_id>": "{user_id}",
+            "<int:message_id>": "{message_id}",
+            "<int:request_id>": "{request_id}",
+            "<int:ticket_id>": "{ticket_id}",
         }
         for pattern in agent_urls.urlpatterns:
             route = "/agent/" + str(pattern.pattern._route)
