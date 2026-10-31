@@ -15,7 +15,7 @@ from django.utils.dateparse import parse_datetime
 
 from .models import LogUsageDaily, ServiceLogEntry, ServiceLogStream, ServiceLogUsage
 from .policy import EffectiveLoggingPolicy, resolve_for_service_id
-from .usage import bump_delete, bump_drop, get_usage
+from .usage import get_usage
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +45,13 @@ def infer_level(message: str) -> str:
 
 
 def _redact(text: str) -> str:
-    try:
-        from deployments.common.security import redact_secrets
+    """Redact before persistence; never fall back to storing raw input."""
+    from deployments.common.security import redact_secrets
 
-        return redact_secrets(text or "")
-    except Exception:
-        return text or ""
+    redacted = redact_secrets(text or "")
+    if not isinstance(redacted, str):
+        raise RuntimeError("Log redaction returned a non-text value")
+    return redacted
 
 
 def lease_is_current(stream: ServiceLogStream, owner_id: str, *, now=None) -> bool:
@@ -192,35 +193,80 @@ def close_stream(
     )
 
 
-def _trim_fifo(service_id: str, need_bytes: int, policy: EffectiveLoggingPolicy) -> int:
-    """Delete oldest entries until under quota - need_bytes. Returns bytes freed."""
+def _record_drop_locked(
+    service_id: str,
+    *,
+    entries: int,
+    bytes_dropped: int,
+) -> None:
+    """Update drop accounting inside the caller's ServiceLogUsage lock."""
+    if entries <= 0 and bytes_dropped <= 0:
+        return
     alias = _alias()
-    usage = get_usage(service_id)
-    target = max(0, policy.storage_quota_bytes - need_bytes)
-    if usage["current_storage_bytes"] <= target:
-        return 0
+    now = timezone.now()
+    ServiceLogUsage.objects.using(alias).filter(pk=service_id).update(
+        entries_dropped=F("entries_dropped") + max(0, entries),
+        bytes_dropped=F("bytes_dropped") + max(0, bytes_dropped),
+        updated_at=now,
+    )
+    day, _ = LogUsageDaily.objects.using(alias).get_or_create(
+        service_id=service_id, date=timezone.localdate(), defaults={},
+    )
+    LogUsageDaily.objects.using(alias).filter(pk=day.pk).update(
+        entries_dropped=F("entries_dropped") + max(0, entries),
+        bytes_dropped=F("bytes_dropped") + max(0, bytes_dropped),
+    )
+
+
+def _trim_fifo_locked(
+    service_id: str,
+    usage: ServiceLogUsage,
+    need_bytes: int,
+    policy: EffectiveLoggingPolicy,
+) -> int:
+    """Delete oldest rows while the caller holds the service usage row lock."""
+    alias = _alias()
     freed = 0
-    deleted = 0
-    while usage["current_storage_bytes"] - freed > target:
-        batch = list(
+    while int(usage.current_storage_bytes or 0) + need_bytes > policy.storage_quota_bytes:
+        rows = list(
             ServiceLogEntry.objects.using(alias)
             .filter(service_id=service_id)
-            .order_by("ts", "seq")[:500]
+            .order_by("ts", "id")
+            .values("id", "byte_size")[:500]
         )
-        if not batch:
+        if not rows:
             break
-        ids = [e.id for e in batch]
-        batch_bytes = sum(int(e.byte_size or 0) for e in batch)
-        ServiceLogEntry.objects.using(alias).filter(id__in=ids).delete()
-        freed += batch_bytes
-        deleted += len(ids)
-        if len(batch) < 500:
+        ids = [row["id"] for row in rows]
+        deleted_count, _ = (
+            ServiceLogEntry.objects.using(alias)
+            .filter(service_id=service_id, id__in=ids)
+            .delete()
+        )
+        deleted_entries = min(len(rows), int(deleted_count or 0))
+        if deleted_entries <= 0:
             break
-    if deleted:
-        bump_delete(service_id, bytes_removed=freed, entries=deleted)
+        removed_bytes = sum(
+            int(row.get("byte_size") or 0) for row in rows[:deleted_entries]
+        )
+        freed += removed_bytes
+        usage.current_storage_bytes = max(
+            0, int(usage.current_storage_bytes or 0) - removed_bytes
+        )
+        usage.entry_count = max(0, int(usage.entry_count or 0) - deleted_entries)
+        now = timezone.now()
+        ServiceLogUsage.objects.using(alias).filter(pk=service_id).update(
+            current_storage_bytes=usage.current_storage_bytes,
+            entry_count=usage.entry_count,
+            updated_at=now,
+        )
+        day, _ = LogUsageDaily.objects.using(alias).get_or_create(
+            service_id=service_id, date=timezone.localdate(), defaults={},
+        )
+        LogUsageDaily.objects.using(alias).filter(pk=day.pk).update(
+            bytes_deleted=F("bytes_deleted") + removed_bytes,
+            entries_deleted=F("entries_deleted") + deleted_entries,
+        )
     return freed
-
-
 def _prepare_lines(lines: Iterable[dict], policy: EffectiveLoggingPolicy) -> list[dict]:
     """Normalize, redact, truncate and classify lines before any delivery path."""
     prepared: list[dict] = []
@@ -263,77 +309,44 @@ def ingest_lines(
     policy: EffectiveLoggingPolicy | None = None,
     owner_id: str | None = None,
 ) -> dict:
-    """
-    Prepare and persist one log batch.
-
-    The hot path uses a single bulk INSERT with ON CONFLICT DO NOTHING via
-    Django's bulk_create(ignore_conflicts=True). A duplicate fingerprint no
-    longer poisons the surrounding PostgreSQL transaction or rolls back the
-    unrelated entries in the same batch.
-    """
+    """Persist a batch with service-wide atomic quota enforcement."""
     alias = _alias()
     policy = policy or resolve_for_service_id(stream.service_id)
     prepared = _prepare_lines(lines, policy)
 
     if not policy.persistent_enabled or policy.quota_behavior == "realtime_only":
         return {
-            "inserted": 0,
-            "duplicates": 0,
-            "dropped": 0,
-            "bytes": 0,
-            "realtime_only": True,
-            "persisted": False,
-            "inserted_entries": [],
-            "realtime_lines": prepared,
+            "inserted": 0, "duplicates": 0, "dropped": 0, "bytes": 0,
+            "realtime_only": True, "persisted": False,
+            "inserted_entries": [], "realtime_lines": prepared,
         }
-
-    if owner_id and stream.owner_id and stream.owner_id != owner_id:
-        if stream.lease_until and stream.lease_until > timezone.now():
-            return {
-                "inserted": 0,
-                "duplicates": 0,
-                "dropped": 0,
-                "bytes": 0,
-                "lease_denied": True,
-            }
-
     if not prepared:
         return {
-            "inserted": 0,
-            "duplicates": 0,
-            "dropped": 0,
-            "bytes": 0,
-            "persisted": True,
-            "inserted_entries": [],
+            "inserted": 0, "duplicates": 0, "dropped": 0, "bytes": 0,
+            "persisted": True, "inserted_entries": [],
         }
 
-    need_bytes = sum(item["byte_size"] for item in prepared)
-    usage = get_usage(stream.service_id)
-    if usage["current_storage_bytes"] + need_bytes > policy.storage_quota_bytes:
-        if policy.quota_behavior == "drop_new":
-            bump_drop(
-                stream.service_id,
-                entries=len(prepared),
-                bytes_dropped=need_bytes,
-            )
-            return {
-                "inserted": 0,
-                "duplicates": 0,
-                "dropped": len(prepared),
-                "dropped_bytes": need_bytes,
-                "bytes": 0,
-                "persisted": False,
-                "inserted_entries": [],
-                "realtime_lines": prepared,
-            }
-        _trim_fifo(str(stream.service_id), need_bytes, policy)
-
+    service_key = str(stream.service_id)
     inserted_entries: list[dict] = []
     inserted = 0
-    duplicates = 0
     total_bytes = 0
+    duplicates = 0
 
     with transaction.atomic(using=alias):
+        # One lock shared by all container streams of this service prevents
+        # simultaneous batches from making independent quota decisions.
+        ServiceLogUsage.objects.using(alias).get_or_create(
+            service_id=service_key,
+            defaults={
+                "current_storage_bytes": 0, "entry_count": 0,
+                "entries_dropped": 0, "bytes_dropped": 0,
+            },
+        )
+        usage = (
+            ServiceLogUsage.objects.using(alias)
+            .select_for_update()
+            .get(pk=service_key)
+        )
         locked = (
             ServiceLogStream.objects.using(alias)
             .select_for_update()
@@ -342,22 +355,70 @@ def ingest_lines(
         )
         if locked is None:
             return {
-                "inserted": 0,
-                "duplicates": 0,
-                "dropped": 0,
-                "bytes": 0,
-                "persisted": False,
-                "inserted_entries": [],
+                "inserted": 0, "duplicates": 0, "dropped": 0,
+                "bytes": 0, "persisted": False, "inserted_entries": [],
             }
-
         if owner_id and not lease_is_current(locked, owner_id):
             return {
-                "inserted": 0,
-                "duplicates": 0,
-                "dropped": 0,
-                "bytes": 0,
-                "lease_denied": True,
+                "inserted": 0, "duplicates": 0, "dropped": 0,
+                "bytes": 0, "lease_denied": True,
             }
+
+        # Only new fingerprints reserve storage. Keep all original lines for
+        # monotonic sequence allocation and conflict-safe retry semantics.
+        unique_by_fingerprint = {}
+        for item in prepared:
+            unique_by_fingerprint.setdefault(item["fingerprint"], item)
+        unique_items = list(unique_by_fingerprint.values())
+        existing_fingerprints = set(
+            ServiceLogEntry.objects.using(alias)
+            .filter(
+                stream_id=locked.pk,
+                fingerprint__in=[item["fingerprint"] for item in unique_items],
+            )
+            .values_list("fingerprint", flat=True)
+        )
+        new_items = [
+            item for item in unique_items
+            if item["fingerprint"] not in existing_fingerprints
+        ]
+        need_bytes = sum(int(item["byte_size"] or 0) for item in new_items)
+
+        if (
+            need_bytes > 0
+            and int(usage.current_storage_bytes or 0) + need_bytes
+            > policy.storage_quota_bytes
+        ):
+            if policy.quota_behavior == "drop_new":
+                _record_drop_locked(
+                    service_key, entries=len(new_items), bytes_dropped=need_bytes,
+                )
+                return {
+                    "inserted": 0,
+                    "duplicates": len(prepared) - len(new_items),
+                    "dropped": len(new_items),
+                    "dropped_bytes": need_bytes,
+                    "bytes": 0,
+                    "persisted": False,
+                    "inserted_entries": [],
+                    "realtime_lines": prepared,
+                }
+
+            _trim_fifo_locked(service_key, usage, need_bytes, policy)
+            if int(usage.current_storage_bytes or 0) + need_bytes > policy.storage_quota_bytes:
+                _record_drop_locked(
+                    service_key, entries=len(new_items), bytes_dropped=need_bytes,
+                )
+                return {
+                    "inserted": 0,
+                    "duplicates": len(prepared) - len(new_items),
+                    "dropped": len(new_items),
+                    "dropped_bytes": need_bytes,
+                    "bytes": 0,
+                    "persisted": False,
+                    "inserted_entries": [],
+                    "realtime_lines": prepared,
+                }
 
         previous_seq = int(locked.last_seq or 0)
         next_seq = previous_seq
@@ -380,69 +441,35 @@ def ingest_lines(
                 )
             )
 
-        # PostgreSQL emits INSERT .. ON CONFLICT DO NOTHING. We intentionally
-        # keep this inside the stream-row lock: sequence allocation and the
-        # checkpoint update remain serialized for all writers of this stream.
         ServiceLogEntry.objects.using(alias).bulk_create(
-            objects,
-            batch_size=500,
-            ignore_conflicts=True,
+            objects, batch_size=500, ignore_conflicts=True,
         )
-
-        # bulk_create(ignore_conflicts=True) does not populate primary keys.
-        # Query only the sequence interval allocated by this batch; rows with a
-        # pre-existing fingerprint have an older sequence and are excluded.
         inserted_entries = list(
             ServiceLogEntry.objects.using(alias)
-            .filter(
-                stream_id=locked.pk,
-                seq__gt=previous_seq,
-                seq__lte=next_seq,
-            )
+            .filter(stream_id=locked.pk, seq__gt=previous_seq, seq__lte=next_seq)
             .order_by("seq")
             .values(
-                "id",
-                "stream_id",
-                "ts",
-                "seq",
-                "stream",
-                "level",
-                "message",
-                "byte_size",
-                "truncated",
+                "id", "stream_id", "ts", "seq", "stream", "level",
+                "message", "byte_size", "truncated",
             )
         )
         inserted = len(inserted_entries)
         duplicates = max(0, len(prepared) - inserted)
         total_bytes = sum(int(item["byte_size"] or 0) for item in inserted_entries)
 
-        # A sequence may contain gaps where a fingerprint already existed.
-        # Gaps are intentional; last_seq must never move backwards.
         latest = max(prepared, key=lambda item: item["ts"])
+        now = timezone.now()
         ServiceLogStream.objects.using(alias).filter(pk=locked.pk).update(
             last_seq=next_seq,
             last_persisted_ts=latest["ts"],
             last_persisted_fingerprint=latest["fingerprint"],
-            updated_at=timezone.now(),
+            updated_at=now,
         )
         stream.last_seq = next_seq
         stream.last_persisted_ts = latest["ts"]
         stream.last_persisted_fingerprint = latest["fingerprint"]
 
-        # Update both usage aggregates once per batch, in the same transaction
-        # as the log rows. No per-entry UPDATE or nested transaction is needed.
         if inserted:
-            service_key = str(locked.service_id)
-            now = timezone.now()
-            ServiceLogUsage.objects.using(alias).get_or_create(
-                service_id=service_key,
-                defaults={
-                    "current_storage_bytes": 0,
-                    "entry_count": 0,
-                    "entries_dropped": 0,
-                    "bytes_dropped": 0,
-                },
-            )
             ServiceLogUsage.objects.using(alias).filter(pk=service_key).update(
                 current_storage_bytes=F("current_storage_bytes") + total_bytes,
                 entry_count=F("entry_count") + inserted,
@@ -450,9 +477,7 @@ def ingest_lines(
                 updated_at=now,
             )
             day, _ = LogUsageDaily.objects.using(alias).get_or_create(
-                service_id=service_key,
-                date=timezone.localdate(),
-                defaults={},
+                service_id=service_key, date=timezone.localdate(), defaults={},
             )
             LogUsageDaily.objects.using(alias).filter(pk=day.pk).update(
                 bytes_ingested=F("bytes_ingested") + total_bytes,
@@ -460,10 +485,7 @@ def ingest_lines(
             )
 
     return {
-        "inserted": inserted,
-        "duplicates": duplicates,
-        "dropped": 0,
-        "bytes": total_bytes,
-        "persisted": True,
+        "inserted": inserted, "duplicates": duplicates, "dropped": 0,
+        "bytes": total_bytes, "persisted": True,
         "inserted_entries": inserted_entries,
     }

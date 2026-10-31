@@ -1,7 +1,6 @@
 """Incremental usage accounting on the log database."""
 from __future__ import annotations
 
-from datetime import date
 from uuid import UUID
 
 from django.conf import settings
@@ -39,7 +38,7 @@ def bump_ingest(service_id: UUID | str, *, bytes_added: int, entries: int = 1) -
             updated_at=now,
         )
         day, _ = LogUsageDaily.objects.using(alias).get_or_create(
-            service_id=sid, date=date.today(), defaults={}
+            service_id=sid, date=timezone.localdate(), defaults={}
         )
         LogUsageDaily.objects.using(alias).filter(pk=day.pk).update(
             bytes_ingested=F("bytes_ingested") + max(0, bytes_added),
@@ -60,7 +59,7 @@ def bump_drop(service_id: UUID | str, *, entries: int, bytes_dropped: int = 0) -
             updated_at=timezone.now(),
         )
         day, _ = LogUsageDaily.objects.using(alias).get_or_create(
-            service_id=sid, date=date.today(), defaults={}
+            service_id=sid, date=timezone.localdate(), defaults={}
         )
         LogUsageDaily.objects.using(alias).filter(pk=day.pk).update(
             entries_dropped=F("entries_dropped") + max(0, entries),
@@ -85,7 +84,7 @@ def bump_delete(service_id: UUID | str, *, bytes_removed: int, entries: int) -> 
                 entry_count=max(0, int(u.entry_count or 0)),
             )
         day, _ = LogUsageDaily.objects.using(alias).get_or_create(
-            service_id=sid, date=date.today(), defaults={}
+            service_id=sid, date=timezone.localdate(), defaults={}
         )
         LogUsageDaily.objects.using(alias).filter(pk=day.pk).update(
             bytes_deleted=F("bytes_deleted") + max(0, bytes_removed),

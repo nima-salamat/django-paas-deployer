@@ -43,26 +43,71 @@ class _RateWindow:
 
 
 class _PerServiceRateLimiter:
-    """Process-local, per-service 1-second byte window with bounded state."""
+    """Cluster-wide byte token bucket, with a bounded local fallback."""
+
+    _FILTER_SCRIPT = """
+    local rate = math.max(1024, tonumber(ARGV[1]))
+    local count = tonumber(ARGV[2])
+    local now_parts = redis.call('TIME')
+    local now = tonumber(now_parts[1]) + tonumber(now_parts[2]) / 1000000
+    local values = redis.call('HMGET', KEYS[1], 'tokens', 'updated')
+    local tokens = tonumber(values[1]) or rate
+    local updated = tonumber(values[2]) or now
+    tokens = math.min(rate, tokens + math.max(0, now - updated) * rate)
+    local accepted = {}
+    for i = 1, count do
+        local size = math.max(0, tonumber(ARGV[i + 2]) or 0)
+        if size <= tokens then
+            tokens = tokens - size
+            accepted[i] = 1
+        else
+            accepted[i] = 0
+        end
+    end
+    redis.call('HSET', KEYS[1], 'tokens', tokens, 'updated', now)
+    redis.call('PEXPIRE', KEYS[1], 10000)
+    return accepted
+    """
+
+    _REFUND_SCRIPT = """
+    local rate = math.max(1024, tonumber(ARGV[1]))
+    local amount = math.max(0, tonumber(ARGV[2]))
+    local now_parts = redis.call('TIME')
+    local now = tonumber(now_parts[1]) + tonumber(now_parts[2]) / 1000000
+    local values = redis.call('HMGET', KEYS[1], 'tokens', 'updated')
+    local tokens = tonumber(values[1]) or rate
+    local updated = tonumber(values[2]) or now
+    tokens = math.min(rate, tokens + math.max(0, now - updated) * rate + amount)
+    redis.call('HSET', KEYS[1], 'tokens', tokens, 'updated', now)
+    redis.call('PEXPIRE', KEYS[1], 10000)
+    return 1
+    """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._windows: OrderedDict[str, _RateWindow] = OrderedDict()
 
-    def filter(self, service_id: str, lines: list[dict], limit: int):
+    @staticmethod
+    def _redis():
+        from django_redis import get_redis_connection
+        return get_redis_connection("default")
+
+    @staticmethod
+    def _key(service_id: str) -> str:
+        return f"passdeployer:logs:rate:{service_id}"
+
+    def _filter_local(self, service_id: str, lines: list[dict], limit: int):
         accepted: list[dict] = []
         dropped_entries = 0
         dropped_bytes = 0
         now = time.monotonic()
         maximum = max(1024, int(limit))
-
         with self._lock:
             window = self._windows.get(service_id)
             if window is None or now - window.started >= 1.0:
                 window = _RateWindow()
                 self._windows[service_id] = window
             self._windows.move_to_end(service_id)
-
             for line in lines:
                 size = len(str(line.get("message") or "").encode("utf-8", "replace"))
                 if window.used + size > maximum:
@@ -71,27 +116,56 @@ class _PerServiceRateLimiter:
                     continue
                 window.used += size
                 accepted.append(line)
-
-            # Hard bound memory under churn from short-lived services.
             while len(self._windows) > MAX_RATE_WINDOWS:
                 self._windows.popitem(last=False)
-
         return accepted, dropped_entries, dropped_bytes
 
-    def refund(self, service_id: str, lines: list[dict]) -> None:
-        """Refund a reservation when the database rejects a batch for retry."""
+    def filter(self, service_id: str, lines: list[dict], limit: int):
+        if not lines:
+            return [], 0, 0
+        maximum = max(1024, int(limit))
+        sizes = [
+            len(str(line.get("message") or "").encode("utf-8", "replace"))
+            for line in lines
+        ]
+        try:
+            flags = self._redis().eval(
+                self._FILTER_SCRIPT, 1, self._key(service_id),
+                maximum, len(sizes), *sizes,
+            )
+            accepted = [line for line, flag in zip(lines, flags) if int(flag)]
+            dropped = len(lines) - len(accepted)
+            dropped_bytes = sum(size for size, flag in zip(sizes, flags) if not int(flag))
+            return accepted, dropped, dropped_bytes
+        except Exception:
+            logger.debug(
+                "Redis log rate limiter unavailable; using process-local fallback service=%s",
+                service_id, exc_info=True,
+            )
+            return self._filter_local(service_id, lines, maximum)
+
+    def refund(self, service_id: str, lines: list[dict], limit: int | None = None) -> None:
         byte_count = sum(
             len(str(line.get("message") or "").encode("utf-8", "replace"))
             for line in lines
         )
         if byte_count <= 0:
             return
+        maximum = max(1024, int(limit or 1024))
+        try:
+            self._redis().eval(
+                self._REFUND_SCRIPT, 1, self._key(service_id),
+                maximum, byte_count,
+            )
+            return
+        except Exception:
+            logger.debug("Unable to refund Redis log rate reservation service=%s",
+                         service_id, exc_info=True)
         with self._lock:
             window = self._windows.get(service_id)
             if window is not None and time.monotonic() - window.started < 1.0:
                 window.used = max(0, window.used - byte_count)
                 self._windows.move_to_end(service_id)
-
 
 _rate_limiter = _PerServiceRateLimiter()
 
@@ -423,7 +497,7 @@ def runtime_logs_ingest_apiview(request):
             # The reservation is not a committed ingestion. Refund it before
             # returning 503 so Fluent Bit's retry is not rejected by our own
             # in-memory rate limiter.
-            _rate_limiter.refund(service_id, accepted_lines)
+            _rate_limiter.refund(service_id, accepted_lines, policy.max_bytes_per_second)
             # A 5xx tells Fluent Bit to retry the chunk; PostgreSQL uniqueness
             # makes a retry idempotent after successful/partial persistence.
             logger.exception(

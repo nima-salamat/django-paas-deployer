@@ -72,6 +72,30 @@ class BulkRuntimeLogIngestionTests(TestCase):
         self.assertEqual(daily.entries_ingested, 2)
         self.assertEqual(daily.bytes_ingested, expected_bytes)
 
+    def test_replayed_batch_does_not_consume_quota_twice(self):
+        policy = EffectiveLoggingPolicy(
+            retention_days=7,
+            storage_quota_bytes=5,
+            max_bytes_per_second=1024,
+            max_entry_size=4096,
+            persistent_enabled=True,
+            realtime_enabled=True,
+            quota_behavior="drop_new",
+        )
+        line = {"ts": timezone.now(), "stream": "stdout", "message": "hello"}
+        first = ingest_lines(self.stream, [line], policy=policy)
+        replay = ingest_lines(self.stream, [line], policy=policy)
+
+        self.assertEqual(first["inserted"], 1)
+        self.assertEqual(replay["inserted"], 0)
+        self.assertEqual(replay["duplicates"], 1)
+        self.assertEqual(replay["dropped"], 0)
+        usage = ServiceLogUsage.objects.using("deployment_logs").get(
+            service_id=self.service_id
+        )
+        self.assertEqual(usage.entry_count, 1)
+        self.assertEqual(usage.current_storage_bytes, 5)
+
     def test_duplicate_inside_one_batch_leaves_monotonic_sequence_with_gap(self):
         ts = timezone.now()
         line = {"ts": ts, "stream": "stdout", "message": "same"}

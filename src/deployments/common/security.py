@@ -282,9 +282,19 @@ def validate_final_app_layout(project_root: str) -> None:
     assert_tree_under(project_root)
 
 
+_AUTH_HEADER = re.compile(
+    r"(?i)(authorization\s*[:=]\s*)(?:(?:bearer|basic)\s+)?[^\s,;]+"
+)
+_BEARER_TOKEN = re.compile(
+    r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/-]+=*"
+)
+_URL_CREDENTIALS = re.compile(
+    r"(?i)\b([a-z][a-z0-9+.-]*://)[^/@\s:]+:[^/@\s]+@"
+)
 _SECRET_LINE = re.compile(
-    r"(?i)(password|passwd|secret|token|api[_-]?key|authorization|mysql_pwd|"
-    r"postgres_password|redis_password|oracle_pwd)\s*[=:]\s*\S+"
+    r"(?i)(password|passwd|secret|token|api[_-]?key|mysql_pwd|"
+    r"postgres_password|redis_password|oracle_pwd)\s*[=:]\s*"
+    r'("[^"]*"|\'[^\']*\'|[^\s,;]+)'
 )
 
 
@@ -292,7 +302,24 @@ def redact_secrets(text: str, *, max_len: int = 120_000) -> str:
     """Best-effort redact of common secret patterns before persisting logs."""
     if not text:
         return ""
-    out = _SECRET_LINE.sub(r"\1=***REDACTED***", text)
+    # Handle Authorization before generic assignments: otherwise "Bearer abc"
+    # could be split and leave the credential suffix exposed.
+    out = _AUTH_HEADER.sub(
+        lambda match: match.group(1) + "***REDACTED***",
+        text,
+    )
+    out = _BEARER_TOKEN.sub(
+        lambda match: match.group(1) + " ***REDACTED***",
+        out,
+    )
+    out = _URL_CREDENTIALS.sub(
+        lambda match: match.group(1) + "***:***@",
+        out,
+    )
+    out = _SECRET_LINE.sub(
+        lambda match: match.group(1) + "=***REDACTED***",
+        out,
+    )
     if len(out) > max_len:
         out = "[truncated]\n" + out[-max_len:]
     return out
