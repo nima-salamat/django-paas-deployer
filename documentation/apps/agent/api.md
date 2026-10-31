@@ -354,9 +354,11 @@ sends require both messenger.messages.send and
 messenger.messages.schedule; ordinary sends need only the send scope.
 
 Invite codes are accepted in the JSON body, never in the URL. Forwarding
-requires all three listed scopes and the existing Messenger API still checks
-source membership, target membership and target send permission. Deleting a
-conversation is irreversible: deleting a private chat hides it for both
+requires all three listed scopes. The Agent also enforces the source
+conversation's history visibility, scheduled-message sender restriction, and
+the target conversation's active membership, open state, can-send permission,
+admin-only posting mode and media permission for attachments. The existing
+Messenger API additionally rejects view-once media. Deleting a conversation is irreversible: deleting a private chat hides it for both
 participants, while deleting a group hard-deletes its messages and media and
 is limited by the Messenger domain API to group owners/admins. Clearing history
 also permanently deletes messages and media for every participant; through
