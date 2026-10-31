@@ -381,7 +381,7 @@ granted by default.
 Send a text message as JSON to
 /agent/v1/messenger/conversations/{conversation_id}/messages:
 
-Use `Content-Type: application/json; charset=utf-8; charset=utf-8`. The Agent Messenger send and reaction endpoints reject JSON requests that declare a non-UTF-8 charset rather than silently decoding Persian text incorrectly.
+Use `Content-Type: application/json; charset=utf-8`. The Agent Messenger send and reaction endpoints reject JSON requests that declare a non-UTF-8 charset rather than silently decoding Persian text incorrectly.
 
 ~~~json
 {
@@ -411,7 +411,7 @@ For client code, use a real UTF-8 JSON encoder instead of constructing JSON byte
 
 ~~~python
 payload = {
-    "body": "سلام دنیا 👋\\nپیام دوم",
+    "body": "سلام دنیا 👋\nپیام دوم",
     "client_message_id": "agent-unique-id",
 }
 response = requests.post(
