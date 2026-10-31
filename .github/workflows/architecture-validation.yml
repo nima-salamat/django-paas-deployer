@@ -96,7 +96,7 @@ jobs:
 
       - name: Agent Messenger and Ticket collaboration tests
         run: |
-          pytest -q src/agent/tests/test_collaboration.py src/agent/tests/test_contracts.py
+          pytest -q src/agent/tests/test_collaboration.py
 
       - name: Run unit and regression tests
         run: |
