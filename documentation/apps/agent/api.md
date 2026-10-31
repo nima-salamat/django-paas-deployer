@@ -423,7 +423,7 @@ response = requests.post(
 data = response.json()
 ~~~
 
-JavaScript clients should use `JSON.stringify(payload)` with the same Content-Type. Do not encode Persian text as ASCII/Latin-1 or use replacement decoding. Read responses using the JSON decoder or decode response bytes as UTF-8. If a response already contains literal question marks, the original characters were lost before or during request encoding; the API cannot reconstruct them, so correct the sender and resend the original text.
+JavaScript clients should use `JSON.stringify(payload)` with the same Content-Type. Do not manually convert raw Persian text to ASCII/Latin-1 or use replacement decoding; standard JSON Unicode escapes such as \\u0633 are valid UTF-8 JSON and decode back to Persian. Read responses using the JSON decoder or decode response bytes as UTF-8. If a response already contains literal question marks, the original characters were lost before or during request encoding; the API cannot reconstruct them, so correct the sender and resend the original text.
 
 #### Reaction payload contract
 
