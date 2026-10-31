@@ -35,7 +35,7 @@ pipeline:
       header:
         - Content-Type application/x-ndjson
         - X-PassDeployer-Token ${LOG_INGEST_SHARED_TOKEN}
-        - X-PassDeployer-Collector ${LOG_COLLECTOR_ID}
+        - X-PassDeployer-Collector ${HOSTNAME}
       compress: gzip
       workers: 1
       retry_limit: false
