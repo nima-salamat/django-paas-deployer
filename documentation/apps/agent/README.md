@@ -89,8 +89,9 @@ cache invalidation and durable event recording remain centralized.
 Messenger E2EE/Matrix rooms are intentionally unsupported. Ticket staff/admin
 operations and tickets owned by other users are also excluded. The Agent API
 also exposes invite-code joins, caller-owned join-request listing/cancellation,
-invite-link creation/revocation, message forwarding, conversation deletion
-and permanent history cleanup. Each operation has a dedicated scope (message
+invite-link creation/revocation, message forwarding, reaction removal,
+message pin/unpin, pinned-message listing, conversation deletion and permanent
+history cleanup. Each operation has a dedicated scope (message
 forwarding also requires read and send scopes); history cleanup in groups is
 restricted to group owners/admins. Grant the new messenger.* and tickets.*
 scopes explicitly; neither is included in the default Agent permission set.
