@@ -56,6 +56,14 @@ Only verified inputs are advertised: ZIP/archive application deployments and dat
 
 Important mutating operations support durable `Idempotency-Key` semantics. Agent-specific throttles are stricter for deployment, upload and shell actions. Audit records are sanitized and do not contain bearer/enrollment/shell credentials or plaintext service secrets.
 
+## Implementation map
+
+The Agent efficiency adapter in `src/agent/apis/efficiency.py` provides the
+combined Context endpoint, workspace batch operations, validated command batch
+execution, and the service-scoped MCP Streamable HTTP interface. These views
+reuse the existing Agent authentication, scope contracts, managed file API,
+restricted shell, runtime tools, audit and idempotency boundaries.
+
 ## Contract references
 
 - [API reference](api.md)

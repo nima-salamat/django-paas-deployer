@@ -552,6 +552,12 @@ def _invoke_agent_view(view_class, method, request, *args):
 
 def _mcp_call_tool(request, service_id, name, arguments):
     req = RequestProxy(request, data=arguments)
+    # Distinguish idempotency fingerprints for different tools invoked through
+    # the same service-scoped MCP URL.
+    req.META = {
+        **request.META,
+        "QUERY_STRING": (str(request.META.get("QUERY_STRING") or "") + "&mcp_tool=" + str(name)),
+    }
     if name == "service.inspect":
         _require_scope(request.agent, "services.read")
         return service_payload(get_service(service_id, request.user, action="can_view"))
@@ -648,6 +654,21 @@ class AgentMCPView(AgentSecuredAPIView):
             return Response(_rpc_error(None, -32600, "Invalid JSON-RPC request."), status=400)
         method, params = message["method"], message.get("params") or {}
         request_id = message.get("id")
+        mcp_tool_name = str(params.get("name") or "") if isinstance(params, dict) else ""
+        self.audit_metadata = {"mcp_method": method, "mcp_tool": mcp_tool_name,
+                               "mcp_protocol": protocol}
+        if method == "tools/call":
+            self.audit_action = f"agent.mcp.tool.{mcp_tool_name[:80] or 'unknown'}"
+            self.audit_resource_type = "service"
+            read_only_tools = {
+                "service.inspect", "workspace.tree", "workspace.read_many",
+                "workspace.search", "workspace.inspect", "runtime.detect",
+                "php.lint", "database.health", "wordpress.status", "wordpress.inspect",
+            }
+            self.audit_mutating = mcp_tool_name not in read_only_tools
+            if mcp_tool_name == "workspace.patch":
+                args = params.get("arguments") or {}
+                self.audit_mutating = args.get("dry_run", True) is False and args.get("apply") is True
         if method.startswith("notifications/") and "id" not in message:
             return Response(status=202)
         if protocol not in MCP_SUPPORTED_VERSIONS:
@@ -708,6 +729,7 @@ class AgentMCPView(AgentSecuredAPIView):
                     "structuredContent": result, "isError": False})
                 return Response({"jsonrpc": "2.0", "id": request_id, "result": body})
             except AgentError as exc:
+                self.audit_mutating = False
                 detail = {"code": exc.code, "detail": exc.detail,
                           "failure_domain": exc.failure_domain, **(exc.extra or {})}
                 body = self._success_result(protocol, {
@@ -715,6 +737,7 @@ class AgentMCPView(AgentSecuredAPIView):
                     "structuredContent": detail, "isError": True})
                 return Response({"jsonrpc": "2.0", "id": request_id, "result": body})
             except Exception:
+                self.audit_mutating = False
                 detail = {"code": "TOOL_EXECUTION_FAILED",
                           "detail": "Tool execution failed; inspect the request ID and service audit event."}
                 body = self._success_result(protocol, {
