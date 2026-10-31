@@ -562,7 +562,7 @@ services:
     command:
       - /fluent-bit/bin/fluent-bit
       - -c
-      - /fluent-bit/etc/fluent-bit.conf
+      - /fluent-bit/etc/fluent-bit.yaml
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -571,7 +571,7 @@ services:
     mem_limit: ${LOG_COLLECTOR_MEMORY_LIMIT:-128m}
     cpus: ${LOG_COLLECTOR_CPU_LIMIT:-0.50}
     volumes:
-      - ./deploy/fluent-bit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+      - ./deploy/fluent-bit/fluent-bit.yaml:/fluent-bit/etc/fluent-bit.yaml:ro
       - ${LOG_FORWARD_SOCKET_DIR:-/run/passdeployer-logs}:/run/passdeployer-logs
       - fluentbit_state:/var/fluent-bit/state
     env_file:
