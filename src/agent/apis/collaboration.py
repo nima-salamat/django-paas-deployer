@@ -811,9 +811,39 @@ class AgentMessengerMessageForwardView(AgentMessengerView):
         )
         if message is None:
             return _agent_error("RESOURCE_NOT_FOUND", "Message not found.", 404)
-        _, _, error = _standard_conversation(request, message.conversation_id)
+        from messenger.models import Conversation, ConversationParticipant
+
+        source, source_participant, error = _standard_conversation(
+            request, message.conversation_id
+        )
         if error:
             return error
+        # Match the visibility rules used by message history. A caller must not
+        # forward messages from before joining a restricted group.
+        if (
+            source.type == Conversation.Type.GROUP
+            and source_participant.role not in (
+                ConversationParticipant.Role.OWNER,
+                ConversationParticipant.Role.ADMIN,
+            )
+        ):
+            visibility = getattr(source, "history_visibility", "all") or "all"
+            if (
+                visibility in ("none", "from_join")
+                and source_participant.joined_at
+                and message.created_at < source_participant.joined_at
+            ):
+                return _agent_error(
+                    "PERMISSION_DENIED",
+                    "This message is outside the caller's visible group history.",
+                    403,
+                )
+        if message.is_scheduled and message.sender_id != request.user.id:
+            return _agent_error(
+                "PERMISSION_DENIED",
+                "Only the sender may access a scheduled message before delivery.",
+                403,
+            )
         raw_target_id = request.data.get("conversation_id")
         try:
             target_id = int(raw_target_id)
@@ -825,9 +855,39 @@ class AgentMessengerMessageForwardView(AgentMessengerView):
             return _agent_error(
                 "INVALID_REQUEST", "conversation_id must be a positive integer.", 400
             )
-        _, _, error = _standard_conversation(request, target_id)
+        target, target_participant, error = _standard_conversation(
+            request, target_id
+        )
         if error:
             return error
+        if target.is_closed:
+            return _agent_error(
+                "CONVERSATION_CLOSED", "The target conversation is closed.", 409
+            )
+        if not target_participant.can_send_messages:
+            return _agent_error(
+                "PERMISSION_DENIED",
+                "The caller cannot send messages in the target conversation.",
+                403,
+            )
+        if (
+            target.only_admins_send
+            and target_participant.role not in (
+                ConversationParticipant.Role.OWNER,
+                ConversationParticipant.Role.ADMIN,
+            )
+        ):
+            return _agent_error(
+                "PERMISSION_DENIED",
+                "Only group owners/admins can send to this target group.",
+                403,
+            )
+        if message.attachments.exists() and not target_participant.can_send_media:
+            return _agent_error(
+                "PERMISSION_DENIED",
+                "The caller cannot send media in the target conversation.",
+                403,
+            )
         return _call_messenger(
             "MessageForwardAPIView", "post", request, message_id
         )
