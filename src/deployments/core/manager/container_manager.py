@@ -181,8 +181,10 @@ class Container(Client):
             "port_bindings": self.port_bindings or None,
             "read_only": self.read_only,
             "restart_policy": self.restart_policy,
-            "log_config": docker_log_config(),
         }
+        log_config = docker_log_config()
+        if log_config is not None:
+            kwargs["log_config"] = log_config
 
         # CPU limit.  Docker accepts EITHER ``cpu_period`` + ``cpu_quota``
         # (cgroup v1 style) OR ``nano_cpus`` (cgroup v2 style) — setting
