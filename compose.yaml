@@ -546,12 +546,12 @@ services:
 
 
   # ============================================================
-  # ============================================================
   # RUNTIME LOG AGENT (Fluent Bit)
   # Docker's fluentd driver forwards each managed container's stdout/stderr
   # to this local Unix socket. No Docker socket or Python polling is needed.
   # ============================================================
   log-collector:
+    profiles: ["runtime-logs"]
     image: ${FLUENT_BIT_IMAGE:-fluent/fluent-bit:5.1.5-2}
     container_name: deploy-log-collector
     restart: unless-stopped
