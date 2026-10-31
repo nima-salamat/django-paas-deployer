@@ -335,7 +335,14 @@ membership, block, posting, validation, cache and event rules.
 | Schedule cancellation | \`POST /agent/v1/messenger/messages/{message_id}/cancel-schedule\` | \`messenger.messages.schedule\` |
 | Search/join public groups | \`GET /agent/v1/messenger/groups/search\`, \`POST .../groups/{conversation_id}/join\` | \`messenger.groups.search/join\` |
 | Members and permissions | \`GET .../participants\`, \`POST .../members\`, \`DELETE .../members/{user_id}\`, \`POST .../role\`, \`PATCH .../permissions\` | \`messenger.members.read/manage\`, \`messenger.permissions.manage\` |
-| Join request management | \`GET .../join-requests\`, \`POST .../join-requests/{request_id}/action\` | \`messenger.join_requests.read/manage\` |
+| Join request management | GET .../join-requests, POST .../join-requests/{request_id}/action | messenger.join_requests.read/manage |
+| My join requests | GET /agent/v1/messenger/me/join-requests | messenger.join_requests.own.read |
+| Cancel my pending request | DELETE /agent/v1/messenger/join-requests/{request_id} | messenger.join_requests.own.cancel |
+| Join by invite code | POST /agent/v1/messenger/join with JSON body { code: "..." } | messenger.invites.join |
+| Create/revoke group invite links | POST .../invite-links, DELETE .../invite-links/{link_id} | messenger.invites.create/revoke |
+| Forward message | POST /agent/v1/messenger/messages/{message_id}/forward | messenger.messages.read, messenger.messages.send, messenger.messages.forward |
+| Delete chat/group | DELETE /agent/v1/messenger/conversations/{conversation_id} | messenger.conversations.delete |
+| Clear conversation history | POST /agent/v1/messenger/conversations/{conversation_id}/clear-history | messenger.conversations.history.clear |
 
 Conversation/message history endpoints return only conversations whose
 security mode is \`standard\`. Matrix E2EE is not exposed through this Agent
@@ -343,8 +350,19 @@ facade and is not downgraded to plaintext. The standard chat body is plain UTF-8
 breaks. The API does not promise rich-text or Markdown rendering; send plain
 text rather than HTML tags or assumed Markdown styling. Message creation supports the existing
 \`scheduled_for\` ISO-8601 field and \`client_message_id\` retry key. Scheduled
-sends require both \`messenger.messages.send\` and
-\`messenger.messages.schedule\`; ordinary sends need only the send scope.
+sends require both messenger.messages.send and
+messenger.messages.schedule; ordinary sends need only the send scope.
+
+Invite codes are accepted in the JSON body, never in the URL. Forwarding
+requires all three listed scopes and the existing Messenger API still checks
+source membership, target membership and target send permission. Deleting a
+conversation is irreversible: deleting a private chat hides it for both
+participants, while deleting a group hard-deletes its messages and media and
+is limited by the Messenger domain API to group owners/admins. Clearing history
+also permanently deletes messages and media for every participant; through
+the Agent facade, group history clearing is additionally restricted to owners
+and admins. These operations have independent high-risk scopes and are not
+granted by default.
 
 ## Ticket Agent API
 
