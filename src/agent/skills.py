@@ -961,7 +961,11 @@ user's visibility. A successful DM response includes the conversation id.
 - GET {{base}}/messenger/conversations/{conversation_id}/messages/search?q=...
 - GET {{base}}/messenger/conversations/{conversation_id}/scheduled
 - POST {{base}}/messenger/conversations/{conversation_id}/read
-- POST {{base}}/messenger/messages/{message_id}/react
+- POST {{base}}/messenger/messages/{message_id}/react to toggle the caller's emoji reaction
+- DELETE {{base}}/messenger/messages/{message_id}/react with emoji in the JSON body to remove only the caller's matching reaction
+- PUT {{base}}/messenger/messages/{message_id}/pin to pin a message (requires messenger.messages.pin)
+- DELETE {{base}}/messenger/messages/{message_id}/pin to unpin it (requires messenger.messages.unpin)
+- GET {{base}}/messenger/conversations/{conversation_id}/pinned-messages to list visible pinned messages
 - PATCH {{base}}/messenger/messages/{message_id}/edit
 - DELETE {{base}}/messenger/messages/{message_id}
 - POST {{base}}/messenger/messages/{message_id}/forward with conversation_id
@@ -1030,12 +1034,18 @@ Never infer consent to send a message from a successful user search.
    conversion or plaintext fallback.
 5. Treat invite codes as secrets: submit them in the JSON body, never as URL
    path or query parameters.
-6. Forward only when explicitly requested; the operation requires separate
+6. Remove only the Agent's own reaction and specify the emoji in the DELETE
+   body; never remove another participant's reaction.
+7. Pin and unpin are separate idempotent operations. Pinning in groups follows
+   the member's can_pin_messages permission or owner/admin role.
+8. Read pinned messages only from active standard-chat participation; pinned
+   message visibility follows group history visibility.
+9. Forward only when explicitly requested; the operation requires separate
    forward, read and send scopes.
-7. Deleting a conversation or clearing its history is irreversible. Clearing
-   history affects every participant; group history clearing is restricted to
-   owners/admins.
-8. Keep sends idempotent with client_message_id and verify the returned
+10. Deleting a conversation or clearing its history is irreversible. Clearing
+    history affects every participant; group history clearing is restricted to
+    owners/admins.
+11. Keep sends idempotent with client_message_id and verify the returned
    message id; don't resend blindly after a timeout.
         """,
         any_scopes=(
@@ -1044,6 +1054,8 @@ Never infer consent to send a message from a successful user search.
             "messenger.blocks.read","messenger.blocks.write",
             "messenger.conversations.read","messenger.conversations.create",
             "messenger.messages.read","messenger.messages.send",
+            "messenger.messages.reactions.remove","messenger.messages.pin",
+            "messenger.messages.unpin","messenger.messages.pinned.read",
             "messenger.groups.search","messenger.groups.join",
             "messenger.members.read","messenger.members.manage",
             "messenger.permissions.manage","messenger.join_requests.read",
