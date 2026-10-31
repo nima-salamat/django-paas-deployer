@@ -155,6 +155,66 @@ class AgentCollaborationContractTests(TestCase):
             response.data["missing_scopes"],
         )
 
+    def test_forward_respects_target_group_admin_only_posting_policy(self):
+        from messenger.models import Message
+
+        self.agent.scopes = [
+            "messenger.messages.read",
+            "messenger.messages.send",
+            "messenger.messages.forward",
+        ]
+        self.agent.save(update_fields=["scopes", "updated_at"])
+
+        source = Conversation.objects.create(
+            type=Conversation.Type.PRIVATE,
+            created_by=self.user,
+        )
+        ConversationParticipant.objects.create(
+            conversation=source,
+            user=self.user,
+            role=ConversationParticipant.Role.OWNER,
+        )
+        other_owner = get_user_model().objects.create_user(
+            username="forward-target-owner",
+            email="forward-target-owner@example.com",
+            password="test-password",
+        )
+        target = Conversation.objects.create(
+            type=Conversation.Type.GROUP,
+            created_by=other_owner,
+            only_admins_send=True,
+        )
+        ConversationParticipant.objects.create(
+            conversation=target,
+            user=other_owner,
+            role=ConversationParticipant.Role.OWNER,
+        )
+        ConversationParticipant.objects.create(
+            conversation=target,
+            user=self.user,
+            role=ConversationParticipant.Role.MEMBER,
+        )
+        message = Message.objects.create(
+            conversation=source,
+            sender=self.user,
+            body="Please forward this message",
+        )
+
+        response = self.client.post(
+            f"/agent/v1/messenger/messages/{message.pk}/forward",
+            {"conversation_id": target.pk},
+            format="json",
+            **self.auth(),
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "PERMISSION_DENIED")
+        self.assertFalse(
+            Message.objects.filter(
+                conversation=target,
+                forwarded_from_message=message,
+            ).exists()
+        )
+
     def test_encrypted_conversations_are_excluded_from_agent_chat_list(self):
         normal = Conversation.objects.create(
             type=Conversation.Type.PRIVATE,
