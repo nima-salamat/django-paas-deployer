@@ -930,8 +930,174 @@ when a dedicated configuration endpoint exists.
         """,
         any_scopes=("shell.files.read", "shell.files.write"),
     ),
-)
+    _skill(
+        "messenger",
+        "Messenger",
+        "Search users and groups, manage standard chats, read and send messages, schedule delivery, and manage group membership.",
+        """
+# Messenger — standard chats only
 
+Use the Agent Messenger API for conversations belonging to the account linked
+to this Agent. The Agent can read and write ordinary server-side Messenger
+chats. Matrix end-to-end encrypted conversations are intentionally excluded:
+never try to read their Django message records, downgrade their security mode,
+or create a plaintext fallback.
+
+## Discovery and direct chats
+
+- GET {{base}}/messenger/users/search?q={username}
+- GET/POST {{base}}/messenger/contacts
+- DELETE {{base}}/messenger/contacts/{user_id}
+- GET {{base}}/messenger/conversations
+- POST {{base}}/messenger/conversations with type=private and user_id to
+  open or create a direct conversation
+
+Search a username before creating a DM. Respect block status and the target
+user's visibility. A successful DM response includes the conversation id.
+
+## Messages and formatting
+
+- GET/POST {{base}}/messenger/conversations/{conversation_id}/messages
+- GET {{base}}/messenger/conversations/{conversation_id}/messages/search?q=...
+- GET {{base}}/messenger/conversations/{conversation_id}/scheduled
+- POST {{base}}/messenger/conversations/{conversation_id}/read
+- POST {{base}}/messenger/messages/{message_id}/react
+- PATCH {{base}}/messenger/messages/{message_id}/edit
+- DELETE {{base}}/messenger/messages/{message_id}
+- POST {{base}}/messenger/messages/{message_id}/cancel-schedule
+
+Message body is UTF-8 text (the application describes it as plain text /
+Markdown-ish). Preserve Unicode and emoji exactly; line breaks are meaningful.
+Do not send HTML markup as a message body. Use reply_to for a reply, emoji for
+reactions, and scheduled_for as an ISO-8601 datetime with timezone when sending
+a future message. A scheduled message is private to its sender until delivery.
+Use client_message_id to safely retry a message-send request.
+
+A message may include reply metadata, reactions and attachment metadata in its
+serialized representation. The message endpoint applies the existing
+participant, send-permission, group posting mode, rate, event, and cache rules.
+
+## Groups
+
+- GET {{base}}/messenger/groups/search?q=...
+- POST {{base}}/messenger/groups/{conversation_id}/join
+- POST {{base}}/messenger/conversations to create a group (type=group, title,
+  optional description, is_public and member_ids)
+- PATCH {{base}}/messenger/conversations/{conversation_id} to update settings
+- GET {{base}}/messenger/conversations/{conversation_id}/participants
+- POST {{base}}/messenger/conversations/{conversation_id}/members
+- DELETE {{base}}/messenger/conversations/{conversation_id}/members/{user_id}
+- POST {{base}}/messenger/conversations/{conversation_id}/members/{user_id}/role
+- PATCH {{base}}/messenger/conversations/{conversation_id}/members/{user_id}/permissions
+- GET {{base}}/messenger/conversations/{conversation_id}/join-requests
+- POST {{base}}/messenger/conversations/{conversation_id}/join-requests/{request_id}/action
+
+Public group search requires a non-empty query. Joining may add the account
+immediately or create a pending join request depending on group settings.
+Only group owners/admins can manage join requests; only owners can promote or
+demote members. The permissions endpoint accepts JSON booleans for
+can_send_messages, can_send_media, can_add_members, can_pin_messages,
+can_change_info and is_muted. Owners retain control over elevated member
+management permissions.
+
+## Blocking and safety
+
+- GET/POST {{base}}/messenger/blocks
+- DELETE {{base}}/messenger/blocks/{user_id} to unblock
+
+Block or unblock only when explicitly requested. Blocking removes the
+corresponding contact relationship according to application behavior.
+Never infer consent to send a message from a successful user search.
+
+## Rules
+
+1. Confirm the corresponding Agent scope in /capabilities before each action.
+2. Read conversation metadata and confirm standard security mode before
+   accessing message history.
+3. Use pagination and request only the message window needed for the task.
+4. Do not read or send Matrix/E2EE messages, and do not attempt security-mode
+   conversion or plaintext fallback.
+5. Keep sends idempotent with client_message_id and verify the returned
+   message id; don't resend blindly after a timeout.
+        """,
+        any_scopes=(
+            "messenger.users.search",
+            "messenger.contacts.read","messenger.contacts.write",
+            "messenger.blocks.read","messenger.blocks.write",
+            "messenger.conversations.read","messenger.conversations.create",
+            "messenger.messages.read","messenger.messages.send",
+            "messenger.groups.search","messenger.groups.join",
+            "messenger.members.read","messenger.members.manage",
+            "messenger.permissions.manage","messenger.join_requests.read",
+            "messenger.join_requests.manage",
+        ),
+    ),
+    _skill(
+        "tickets",
+        "Tickets",
+        "Create and track support tickets, read replies, respond with safe rich-text formatting, and manage ticket read state.",
+        """
+# Tickets
+
+Agent ticket access is limited to tickets owned by the account linked to the
+Agent. Staff ticket administration and other users' tickets are not exposed.
+
+## Endpoints
+
+- GET {{base}}/tickets/departments
+- GET {{base}}/tickets/context for the account's own services and deployments
+- GET/POST {{base}}/tickets
+- GET {{base}}/tickets/{ticket_id}
+- POST {{base}}/tickets/{ticket_id}/messages
+- POST {{base}}/tickets/{ticket_id}/read
+- POST {{base}}/tickets/{ticket_id}/close
+
+Create a ticket with department_id, subject, body, optional priority,
+service_id and deploy_id. The related service and deployment must belong to
+the linked user. Use the context endpoint to discover valid IDs.
+
+## Ticket formatting
+
+Ticket message bodies are sanitized HTML, unlike Messenger message bodies.
+Supported tags include p, br, strong/b, em/i, u, s, h1-h4, ul, ol, li,
+a, blockquote, code, pre and span. Links are restricted to http, https and
+mailto protocols. Script tags, event-handler attributes and unsafe protocols
+are removed. Direction and alignment metadata are normalized.
+
+Use semantic markup such as <p>, <strong>, <em>, <ul>, <ol>, <li>,
+<blockquote>, <pre><code> and safe <a href="https://..."> links.
+Unicode emoji are supported. Do not rely on arbitrary CSS, scripts or
+unsupported HTML attributes surviving sanitization.
+
+## Lifecycle
+
+Ticket status values are open, in_progress, waiting_user, resolved and closed.
+Priority values are low, normal, high and urgent. The Agent can create, read,
+reply, mark messages as read, and close its own ticket. Staff assignment,
+department administration, staff-only status/priority changes and deletion
+remain outside this Agent API.
+
+List and detail responses include ticket identifiers, current status,
+priority, department, service/deployment context and ordered messages.
+A message includes author, sanitized body, staff-reply flag, seen metadata,
+timestamps and attachment metadata. Use the public_id for user-facing
+references and the numeric id for API routes.
+
+## Rules
+
+1. Discover active departments and owned service/deploy IDs before creating.
+2. Read the ticket before replying; never reply to a closed ticket.
+3. Include enough context in the first message to avoid unnecessary follow-up.
+4. Prefer one well-structured HTML body instead of many short replies.
+5. Use pagination and request only the ticket/message data needed.
+6. Never use staff endpoints or access tickets not owned by the linked account.
+        """,
+        any_scopes=(
+            "tickets.departments.read","tickets.context.read","tickets.read",
+            "tickets.create","tickets.reply","tickets.close","tickets.read_state.write",
+        ),
+    ),
+)
 
 def all_skills() -> tuple[Skill, ...]:
     return SKILLS
