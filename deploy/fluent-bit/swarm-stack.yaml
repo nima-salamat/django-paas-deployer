@@ -30,6 +30,7 @@ services:
     environment:
       LOG_INGEST_SHARED_TOKEN: ${LOG_INGEST_SHARED_TOKEN}
       LOG_FORWARD_SOCKET_PATH: ${LOG_FORWARD_SOCKET_PATH}
+      LOG_FORWARD_SOCKET_CONTAINER_PATH: /run/passdeployer-logs/forward.sock
       LOG_INGEST_HOST: deploy-web
       LOG_INGEST_PORT: "8000"
       LOG_INGEST_TLS: "off"
