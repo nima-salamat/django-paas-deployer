@@ -28,7 +28,7 @@ Every production source surface must be mapped to its owning canonical document 
 
 | Application | Production Python modules | Canonical documentation |
 |---|---:|---|
-| `agent` | 36 | [agent](./agent/README.md) |
+| `agent` | 37 | [agent](./agent/README.md) |
 | `users` | 19 | [users](./users/README.md) |
 | `auth_users` | 23 | [auth_users](./auth_users/README.md) |
 | `services` | 36 | [services](./services/README.md) |
@@ -334,6 +334,7 @@ Every production source surface must be mapped to its owning canonical document 
 - `src/agent/apis/identity.py` → [agent](./agent/README.md)
 - `src/agent/apis/networks.py` → [agent](./agent/README.md)
 - `src/agent/apis/plans.py` → [agent](./agent/README.md)
+- `src/agent/parsers.py` → [agent](./agent/README.md)
 - `src/agent/apis/runtime_tools.py` → [agent](./agent/README.md)
 - `src/agent/apis/services.py` → [agent](./agent/README.md)
 - `src/agent/apis/shell.py` → [agent](./agent/README.md)
