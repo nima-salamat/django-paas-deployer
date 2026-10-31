@@ -1,4 +1,4 @@
-""""Shared, operator-controlled Docker runtime log transport configuration.
+"""Shared, operator-controlled Docker runtime log transport configuration.
 
 Application containers never connect to the Django database or Redis directly.
 Docker forwards their stdout/stderr to the local Fluent Bit Unix socket; Fluent
