@@ -120,7 +120,7 @@ For Swarm services, keep Fluent Bit running while changing the Docker logging dr
 
 5. When runtime logs are still required after rollback, start the compatible collector explicitly:
 
-   ```docker
+   ```bash
    docker compose --profile docker-logs -f compose.yaml up -d legacy-log-collector
    ```
 
