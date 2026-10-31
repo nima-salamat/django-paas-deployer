@@ -9,12 +9,13 @@ from uuid import UUID
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
+from django.db.models import F
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from .models import ServiceLogEntry, ServiceLogStream
+from .models import LogUsageDaily, ServiceLogEntry, ServiceLogStream, ServiceLogUsage
 from .policy import EffectiveLoggingPolicy, resolve_for_service_id
-from .usage import bump_delete, bump_drop, bump_ingest, get_usage
+from .usage import bump_delete, bump_drop, get_usage
 
 logger = logging.getLogger(__name__)
 
@@ -263,8 +264,12 @@ def ingest_lines(
     owner_id: str | None = None,
 ) -> dict:
     """
-    Ingest normalized lines: {ts, stream, message}.
-    Returns counts: inserted, duplicates, dropped, bytes.
+    Prepare and persist one log batch.
+
+    The hot path uses a single bulk INSERT with ON CONFLICT DO NOTHING via
+    Django's bulk_create(ignore_conflicts=True). A duplicate fingerprint no
+    longer poisons the surrounding PostgreSQL transaction or rolls back the
+    unrelated entries in the same batch.
     """
     alias = _alias()
     policy = policy or resolve_for_service_id(stream.service_id)
@@ -284,16 +289,13 @@ def ingest_lines(
 
     if owner_id and stream.owner_id and stream.owner_id != owner_id:
         if stream.lease_until and stream.lease_until > timezone.now():
-            return {"inserted": 0, "duplicates": 0, "dropped": 0, "bytes": 0, "lease_denied": True}
-
-    inserted = 0
-    duplicates = 0
-    dropped = 0
-    total_bytes = 0
-    inserted_entries = []
-    last_ts = stream.last_persisted_ts
-    last_fp = stream.last_persisted_fingerprint or ""
-    next_seq = int(stream.last_seq or 0)
+            return {
+                "inserted": 0,
+                "duplicates": 0,
+                "dropped": 0,
+                "bytes": 0,
+                "lease_denied": True,
+            }
 
     if not prepared:
         return {
@@ -305,11 +307,15 @@ def ingest_lines(
             "inserted_entries": [],
         }
 
-    need = sum(p["byte_size"] for p in prepared)
+    need_bytes = sum(item["byte_size"] for item in prepared)
     usage = get_usage(stream.service_id)
-    if usage["current_storage_bytes"] + need > policy.storage_quota_bytes:
+    if usage["current_storage_bytes"] + need_bytes > policy.storage_quota_bytes:
         if policy.quota_behavior == "drop_new":
-            bump_drop(stream.service_id, entries=len(prepared), bytes_dropped=need)
+            bump_drop(
+                stream.service_id,
+                entries=len(prepared),
+                bytes_dropped=need_bytes,
+            )
             return {
                 "inserted": 0,
                 "duplicates": 0,
@@ -319,7 +325,12 @@ def ingest_lines(
                 "inserted_entries": [],
                 "realtime_lines": prepared,
             }
-        _trim_fifo(str(stream.service_id), need, policy)
+        _trim_fifo(str(stream.service_id), need_bytes, policy)
+
+    inserted_entries: list[dict] = []
+    inserted = 0
+    duplicates = 0
+    total_bytes = 0
 
     with transaction.atomic(using=alias):
         locked = (
@@ -337,9 +348,7 @@ def ingest_lines(
                 "persisted": False,
                 "inserted_entries": [],
             }
-        # The pre-check above is only an optimization. The locked row is the
-        # authority because another collector can acquire the lease between
-        # the pre-check and this transaction.
+
         if owner_id and not lease_is_current(locked, owner_id):
             return {
                 "inserted": 0,
@@ -348,65 +357,111 @@ def ingest_lines(
                 "bytes": 0,
                 "lease_denied": True,
             }
-        next_seq = int(locked.last_seq or 0)
-        for p in prepared:
+
+        previous_seq = int(locked.last_seq or 0)
+        next_seq = previous_seq
+        objects = []
+        for item in prepared:
             next_seq += 1
-            try:
-                entry = ServiceLogEntry.objects.using(alias).create(
-                    service_id=str(stream.service_id),
-                    stream_id=stream.pk,
-                    deploy_id=str(stream.deploy_id) if stream.deploy_id else None,
-                    ts=p["ts"],
+            objects.append(
+                ServiceLogEntry(
+                    service_id=str(locked.service_id),
+                    stream_id=locked.pk,
+                    deploy_id=str(locked.deploy_id) if locked.deploy_id else None,
+                    ts=item["ts"],
                     seq=next_seq,
-                    stream=p["stream"],
-                    level=p["level"],
-                    message=p["message"],
-                    byte_size=p["byte_size"],
-                    truncated=p["truncated"],
-                    fingerprint=p["fingerprint"],
+                    stream=item["stream"],
+                    level=item["level"],
+                    message=item["message"],
+                    byte_size=item["byte_size"],
+                    truncated=item["truncated"],
+                    fingerprint=item["fingerprint"],
                 )
-                inserted += 1
-                total_bytes += p["byte_size"]
-                inserted_entries.append(
-                    {
-                        "id": entry.id,
-                        "stream_id": entry.stream_id,
-                        "ts": entry.ts,
-                        "seq": entry.seq,
-                        "stream": entry.stream,
-                        "level": entry.level or "",
-                        "message": entry.message,
-                        "byte_size": entry.byte_size,
-                        "truncated": entry.truncated,
-                    }
-                )
-                last_ts = p["ts"]
-                last_fp = p["fingerprint"]
-            except IntegrityError:
-                next_seq -= 1  # roll back seq for dup fingerprint
-                duplicates += 1
-                continue
-        ServiceLogStream.objects.using(alias).filter(pk=stream.pk).update(
+            )
+
+        # PostgreSQL emits INSERT .. ON CONFLICT DO NOTHING. We intentionally
+        # keep this inside the stream-row lock: sequence allocation and the
+        # checkpoint update remain serialized for all writers of this stream.
+        ServiceLogEntry.objects.using(alias).bulk_create(
+            objects,
+            batch_size=500,
+            ignore_conflicts=True,
+        )
+
+        # bulk_create(ignore_conflicts=True) does not populate primary keys.
+        # Query only the sequence interval allocated by this batch; rows with a
+        # pre-existing fingerprint have an older sequence and are excluded.
+        inserted_entries = list(
+            ServiceLogEntry.objects.using(alias)
+            .filter(
+                stream_id=locked.pk,
+                seq__gt=previous_seq,
+                seq__lte=next_seq,
+            )
+            .order_by("seq")
+            .values(
+                "id",
+                "stream_id",
+                "ts",
+                "seq",
+                "stream",
+                "level",
+                "message",
+                "byte_size",
+                "truncated",
+            )
+        )
+        inserted = len(inserted_entries)
+        duplicates = max(0, len(prepared) - inserted)
+        total_bytes = sum(int(item["byte_size"] or 0) for item in inserted_entries)
+
+        # A sequence may contain gaps where a fingerprint already existed.
+        # Gaps are intentional; last_seq must never move backwards.
+        latest = max(prepared, key=lambda item: item["ts"])
+        ServiceLogStream.objects.using(alias).filter(pk=locked.pk).update(
             last_seq=next_seq,
-            last_persisted_ts=last_ts,
-            last_persisted_fingerprint=last_fp,
+            last_persisted_ts=latest["ts"],
+            last_persisted_fingerprint=latest["fingerprint"],
             updated_at=timezone.now(),
         )
         stream.last_seq = next_seq
-        stream.last_persisted_ts = last_ts
-        stream.last_persisted_fingerprint = last_fp
+        stream.last_persisted_ts = latest["ts"]
+        stream.last_persisted_fingerprint = latest["fingerprint"]
 
-    if inserted:
-        try:
-            bump_ingest(stream.service_id, bytes_added=total_bytes, entries=inserted)
-        except Exception:
-            # The rows are already durable; reconciliation can repair counters.
-            logger.exception("usage accounting failed service=%s", stream.service_id)
+        # Update both usage aggregates once per batch, in the same transaction
+        # as the log rows. No per-entry UPDATE or nested transaction is needed.
+        if inserted:
+            service_key = str(locked.service_id)
+            now = timezone.now()
+            ServiceLogUsage.objects.using(alias).get_or_create(
+                service_id=service_key,
+                defaults={
+                    "current_storage_bytes": 0,
+                    "entry_count": 0,
+                    "entries_dropped": 0,
+                    "bytes_dropped": 0,
+                },
+            )
+            ServiceLogUsage.objects.using(alias).filter(pk=service_key).update(
+                current_storage_bytes=F("current_storage_bytes") + total_bytes,
+                entry_count=F("entry_count") + inserted,
+                last_ingestion_at=now,
+                updated_at=now,
+            )
+            day, _ = LogUsageDaily.objects.using(alias).get_or_create(
+                service_id=service_key,
+                date=timezone.localdate(),
+                defaults={},
+            )
+            LogUsageDaily.objects.using(alias).filter(pk=day.pk).update(
+                bytes_ingested=F("bytes_ingested") + total_bytes,
+                entries_ingested=F("entries_ingested") + inserted,
+            )
 
     return {
         "inserted": inserted,
         "duplicates": duplicates,
-        "dropped": dropped,
+        "dropped": 0,
         "bytes": total_bytes,
         "persisted": True,
         "inserted_entries": inserted_entries,
