@@ -215,53 +215,7 @@ prepare_runtime_log_ingestion() {
 
     LOG_INGEST_NETWORK=$(setting LOG_INGEST_NETWORK)
     : "${LOG_INGEST_NETWORK:=deploy_log_ingest}"
-    printf '%s' "$LOG_INGEST_NETWORK" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}
-    1|true|yes|on)
-        MATRIX_POSTGRES_HOST=$(setting MATRIX_POSTGRES_HOST)
-        MATRIX_POSTGRES_PORT=$(setting MATRIX_POSTGRES_PORT)
-        MATRIX_POSTGRES_USER=$(setting MATRIX_POSTGRES_USER)
-        MATRIX_POSTGRES_PASSWORD=$(setting MATRIX_POSTGRES_PASSWORD)
-        MATRIX_POSTGRES_MAIN_DB=$(setting MATRIX_POSTGRES_MAIN_DB)
-        MATRIX_POSTGRES_LOG_DB=$(setting MATRIX_POSTGRES_LOG_DB)
-
-        : "${MATRIX_POSTGRES_HOST:=synapse-postgres}"
-        : "${MATRIX_POSTGRES_PORT:=5432}"
-        : "${MATRIX_POSTGRES_USER:=paas_deployer}"
-        : "${MATRIX_POSTGRES_MAIN_DB:=paas_deployer}"
-        : "${MATRIX_POSTGRES_LOG_DB:=paas_deployer_logs}"
-
-        MATRIX_DOCKER_NETWORK=$(setting MATRIX_DOCKER_NETWORK)
-        MATRIX_POSTGRES_CONTAINER=$(setting MATRIX_POSTGRES_CONTAINER)
-        : "${MATRIX_DOCKER_NETWORK:=matrix_matrix}"
-        preflight_matrix_postgres_network "$@" || exit $?
-
-        if [ -z "$MATRIX_POSTGRES_PASSWORD" ] || [ "$MATRIX_POSTGRES_PASSWORD" = "replace-with-a-new-random-password" ]; then
-            echo "ERROR: Set MATRIX_POSTGRES_PASSWORD in .env before enabling shared PostgreSQL." >&2
-            exit 2
-        fi
-
-        # Compose environment overrides .env and each service's env_file. Use
-        # separate logical databases and a dedicated non-Synapse role.
-        export DB_HOST="$MATRIX_POSTGRES_HOST"
-        export DB_PORT="$MATRIX_POSTGRES_PORT"
-        export DB_NAME="$MATRIX_POSTGRES_MAIN_DB"
-        export DB_USER="$MATRIX_POSTGRES_USER"
-        export DB_PASSWORD="$MATRIX_POSTGRES_PASSWORD"
-
-        export DEPLOYMENT_LOG_DB_HOST="$MATRIX_POSTGRES_HOST"
-        export DEPLOYMENT_LOG_DB_PORT="$MATRIX_POSTGRES_PORT"
-        export DEPLOYMENT_LOG_DB_NAME="$MATRIX_POSTGRES_LOG_DB"
-        export DEPLOYMENT_LOG_DB_USER="$MATRIX_POSTGRES_USER"
-        export DEPLOYMENT_LOG_DB_PASSWORD="$MATRIX_POSTGRES_PASSWORD"
-
-        exec docker compose -f compose.yaml -f compose.matrix-postgres.yaml "$@"
-        ;;
-    *)
-        # Keep the existing local-PostgreSQL deployment as the default.
-        exec docker compose -f compose.yaml "$@"
-        ;;
-esac
- || {
+    printf '%s' "$LOG_INGEST_NETWORK" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$' || {
         echo "ERROR: Invalid LOG_INGEST_NETWORK name." >&2
         return 2
     }
