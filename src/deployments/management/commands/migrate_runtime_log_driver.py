@@ -9,7 +9,12 @@ from deployments.core.swarm import SwarmRuntime
 from deployments.common.runtime_logging import fluentd_log_driver_options
 
 
-def updated_service_spec(spec: dict, options: dict[str, str]) -> dict:
+def updated_service_spec(
+    spec: dict,
+    options: dict[str, str],
+    *,
+    driver: str = "fluentd",
+) -> dict:
     """Return a copy of a Swarm ServiceSpec with a new log driver and task generation."""
     result = deepcopy(spec or {})
     task_template = dict(result.get("TaskTemplate") or {})
@@ -19,7 +24,7 @@ def updated_service_spec(spec: dict, options: dict[str, str]) -> dict:
     except (TypeError, ValueError):
         current_force_update = 0
     task_template["LogDriver"] = {
-        "Name": "fluentd",
+        "Name": str(driver),
         "Options": dict(options),
     }
     task_template["ForceUpdate"] = current_force_update + 1
@@ -40,6 +45,12 @@ class Command(BaseCommand):
             help="Apply the logging-driver change and replace running tasks.",
         )
         parser.add_argument(
+            "--driver",
+            choices=("fluentd", "json-file"),
+            default="fluentd",
+            help="Target Docker log driver. Use json-file to roll back.",
+        )
+        parser.add_argument(
             "--service-id",
             default="",
             help="Only migrate services owned by this PassDeployer Service UUID.",
@@ -55,7 +66,8 @@ class Command(BaseCommand):
         except Exception as exc:
             raise CommandError(f"Unable to inspect Docker Swarm services: {exc}") from exc
 
-        driver_options = fluentd_log_driver_options()
+        target_driver = str(options.get("driver") or "fluentd")
+        driver_options = fluentd_log_driver_options() if target_driver == "fluentd" else {}
         service_filter = str(options.get("service_id") or "").strip()
         apply_changes = bool(options.get("apply"))
         scanned = changed = skipped = failed = 0
@@ -76,8 +88,9 @@ class Command(BaseCommand):
                 log_driver = dict(task_template.get("LogDriver") or {})
                 current_options = dict(log_driver.get("Options") or {})
                 already_configured = (
-                    str(log_driver.get("Name") or "").lower() == "fluentd"
+                    str(log_driver.get("Name") or "").lower() == target_driver
                     and all(current_options.get(k) == v for k, v in driver_options.items())
+                    and (target_driver != "json-file" or not current_options)
                 )
                 if already_configured:
                     skipped += 1
@@ -86,7 +99,7 @@ class Command(BaseCommand):
                 name = str(service.name or service.id)
                 if not apply_changes:
                     self.stdout.write(
-                        f"Would migrate {name} (service={owner}) to fluentd."
+                        f"Would migrate {name} (service={owner}) to {target_driver}."
                     )
                     continue
 
@@ -94,7 +107,11 @@ class Command(BaseCommand):
                 if version <= 0:
                     raise RuntimeError("Docker service version is missing")
 
-                new_spec = updated_service_spec(spec, driver_options)
+                new_spec = updated_service_spec(
+                    spec,
+                    driver_options,
+                    driver=target_driver,
+                )
                 api = runtime.client.api
                 url = api._url("/services/{0}/update", service.id)
                 response = api._post_json(
@@ -106,7 +123,7 @@ class Command(BaseCommand):
                 changed += 1
                 self.stdout.write(
                     self.style.SUCCESS(
-                        f"Migrated {name} (service={owner}); Swarm will replace its tasks."
+                        f"Migrated {name} (service={owner}) to {target_driver}; Swarm will replace its tasks."
                     )
                 )
             except Exception as exc:
