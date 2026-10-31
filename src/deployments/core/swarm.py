@@ -3525,14 +3525,14 @@ class SwarmRuntime:
         except docker.errors.NotFound:
             return b""
         try:
+            try:
+                limit = max(1, min(int(tail), 1000))
+            except (TypeError, ValueError):
+                limit = 200
             attrs = service.attrs or {}
             task_template = attrs.get("Spec", {}).get("TaskTemplate") or {}
             driver = (task_template.get("LogDriver") or {}).get("Name") or ""
             if str(driver).lower() == "fluentd":
-                try:
-                    limit = max(1, min(int(tail), 1000))
-                except (TypeError, ValueError):
-                    limit = 200
                 return self._service_logs_for_failure(name, tail=limit).encode(
                     "utf-8", "replace"
                 )
@@ -3548,7 +3548,7 @@ class SwarmRuntime:
             try:
                 return self._service_logs_for_failure(
                     name,
-                    tail=max(1, min(int(tail), 1000)),
+                    tail=limit,
                 ).encode("utf-8", "replace")
             except Exception:
                 return b""
