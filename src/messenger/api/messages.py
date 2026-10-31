@@ -570,6 +570,52 @@ class MessageReactAPIView(APIView):
 
 
 
+class MessageReactionDeleteAPIView(APIView):
+    """Remove one emoji reaction belonging to the authenticated participant.
+
+    DELETE /messages/<pk>/react/ with {"emoji": "..."}.
+    Repeating the request is safe and never creates a reaction.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, pk):
+        msg = get_object_or_404(Message, pk=pk, is_deleted=False)
+        if not ConversationParticipant.objects.filter(
+            conversation=msg.conversation, user=request.user, left_at__isnull=True
+        ).exists():
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(msg.conversation)
+        if transport_error:
+            return transport_error
+        emoji = (request.data.get("emoji") or "").strip()[:32]
+        if not emoji:
+            return err("emoji required")
+
+        reaction = MessageReaction.objects.filter(
+            message=msg, user=request.user, emoji=emoji
+        ).first()
+        removed = reaction is not None
+        if reaction is not None:
+            reaction.delete()
+            try:
+                from ..message_cache import schedule_update_message
+                schedule_update_message(msg)
+            except Exception:
+                logger.exception("message cache schedule update (reaction delete) failed")
+            try:
+                from ..consumers import broadcast_reaction
+                broadcast_reaction(msg, request.user, emoji, "removed")
+            except Exception:
+                pass
+
+        return ok(
+            "Reaction removed" if removed else "Reaction was already absent",
+            data={"emoji": emoji, "action": "removed" if removed else "unchanged"},
+        )
+
+
+
 class MessageEditAPIView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
