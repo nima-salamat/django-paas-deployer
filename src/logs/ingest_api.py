@@ -408,6 +408,8 @@ def runtime_logs_ingest_apiview(request):
 
         try:
             result = ingest_lines(stream, accepted_lines, policy=policy)
+            dropped_total += int(result.get("dropped") or 0)
+            dropped_bytes_total += int(result.get("dropped_bytes") or 0)
             # Count accepted input records, including realtime-only/drop-new
             # modes where nothing is written to PostgreSQL by policy.
             accepted_total += len(accepted_lines)
