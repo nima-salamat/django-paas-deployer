@@ -59,7 +59,7 @@ class AgentCollaborationContractTests(TestCase):
             ("POST", "/agent/v1/messenger/conversations"),
             ("GET", "/agent/v1/messenger/conversations/{conversation_id}/messages"),
             ("POST", "/agent/v1/messenger/conversations/{conversation_id}/messages"),
-            ("POST", "/agent/v1/messenger/conversations/{conversation_id}/members/{user_id}/permissions"),
+            ("PATCH", "/agent/v1/messenger/conversations/{conversation_id}/members/{user_id}/permissions"),
             ("POST", "/agent/v1/messenger/conversations/{conversation_id}/join-requests/{request_id}/action"),
             ("GET", "/agent/v1/tickets"),
             ("POST", "/agent/v1/tickets"),
