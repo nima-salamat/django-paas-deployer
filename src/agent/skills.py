@@ -961,7 +961,7 @@ user's visibility. A successful DM response includes the conversation id.
 - GET {{base}}/messenger/conversations/{conversation_id}/messages/search?q=...
 - GET {{base}}/messenger/conversations/{conversation_id}/scheduled
 - POST {{base}}/messenger/conversations/{conversation_id}/read
-- POST {{base}}/messenger/messages/{message_id}/react to toggle the caller's emoji reaction
+- POST {{base}}/messenger/messages/{message_id}/react with emoji to add/toggle the caller's reaction (requires messenger.messages.react)
 - DELETE {{base}}/messenger/messages/{message_id}/react with emoji in the JSON body to remove only the caller's matching reaction
 - PUT {{base}}/messenger/messages/{message_id}/pin to pin a message (requires messenger.messages.pin)
 - DELETE {{base}}/messenger/messages/{message_id}/pin to unpin it (requires messenger.messages.unpin)
@@ -1053,7 +1053,7 @@ Never infer consent to send a message from a successful user search.
             "messenger.contacts.read","messenger.contacts.write",
             "messenger.blocks.read","messenger.blocks.write",
             "messenger.conversations.read","messenger.conversations.create",
-            "messenger.messages.read","messenger.messages.send",
+            "messenger.messages.read","messenger.messages.send","messenger.messages.react",
             "messenger.messages.reactions.remove","messenger.messages.pin",
             "messenger.messages.unpin","messenger.messages.pinned.read",
             "messenger.groups.search","messenger.groups.join",
