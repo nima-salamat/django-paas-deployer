@@ -57,7 +57,7 @@ path("v1/messenger/messages/<int:message_id>",AgentMessengerMessageDeleteView.as
 path("v1/messenger/messages/<int:message_id>/cancel-schedule",AgentMessengerScheduledMessageCancelView.as_view()),
 path("v1/messenger/groups/search",AgentMessengerGroupSearchView.as_view()),
 path("v1/messenger/groups/<int:conversation_id>/join",AgentMessengerGroupJoinView.as_view()),
-path("v1/messenger/join/<str:code>",AgentMessengerJoinByInviteView.as_view()),
+path("v1/messenger/join",AgentMessengerJoinByInviteView.as_view()),
 path("v1/messenger/me/join-requests",AgentMessengerMyJoinRequestsView.as_view()),
 path("v1/messenger/join-requests/<int:request_id>",AgentMessengerJoinRequestCancelView.as_view()),
 path("v1/messenger/conversations/<int:conversation_id>/participants",AgentMessengerParticipantsView.as_view()),
