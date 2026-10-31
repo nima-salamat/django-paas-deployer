@@ -43,6 +43,9 @@ class AgentEfficiencyContractTests(TestCase):
         self.assertEqual(first.data["agent"]["id"], str(self.agent.pk))
         self.assertIn("capabilities", first.data)
         self.assertIn("skills", first.data)
+        self.assertNotIn("operations", first.data["capabilities"])
+        self.assertGreater(first.data["discovery"]["available_operations"], 0)
+        self.assertFalse(first.data["discovery"]["operations_included"])
         self.assertTrue(first["ETag"])
         self.assertIn("private", first["Cache-Control"])
 
@@ -79,6 +82,19 @@ class AgentEfficiencyContractTests(TestCase):
         )
         self.assertTrue(
             contract_for("/agent/v1/services/{service_id}/workspace/patch", "POST").idempotent
+        )
+
+    def test_context_can_include_operations_only_when_requested(self):
+        response = self.client.get(
+            "/agent/v1/context?include=operations",
+            **self._auth(),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["discovery"]["operations_included"])
+        self.assertTrue(response.data["capabilities"]["operations"])
+        self.assertEqual(
+            len(response.data["capabilities"]["operations"]),
+            response.data["discovery"]["available_operations"],
         )
 
     def test_context_can_bundle_first_service_page(self):
