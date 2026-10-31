@@ -408,6 +408,83 @@ class AgentCollaborationContractTests(TestCase):
             response.data["missing_scopes"],
         )
 
+        response = self.client.put(
+            "/agent/v1/messenger/messages/999/pin",
+            {},
+            format="json",
+            **self.auth(),
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("messenger.messages.pin", response.data["missing_scopes"])
+
+        response = self.client.get(
+            "/agent/v1/messenger/conversations/999/pinned-messages",
+            **self.auth(),
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn(
+            "messenger.messages.pinned.read",
+            response.data["missing_scopes"],
+        )
+
+    def test_pinned_messages_respect_group_history_visibility(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from messenger.models import Message, PinnedMessage
+
+        self.agent.scopes = ["messenger.messages.pinned.read"]
+        self.agent.save(update_fields=["scopes", "updated_at"])
+        owner = get_user_model().objects.create_user(
+            username="history-pin-owner",
+            email="history-pin-owner@example.com",
+            password="test-password",
+        )
+        conv = Conversation.objects.create(
+            type=Conversation.Type.GROUP,
+            title="History visibility pins",
+            created_by=owner,
+            history_visibility=Conversation.HistoryVisibility.FROM_JOIN,
+        )
+        ConversationParticipant.objects.create(
+            conversation=conv,
+            user=owner,
+            role=ConversationParticipant.Role.OWNER,
+        )
+        old_message = Message.objects.create(
+            conversation=conv,
+            sender=owner,
+            body="This predates the member joining",
+        )
+        member = ConversationParticipant.objects.create(
+            conversation=conv,
+            user=self.user,
+            role=ConversationParticipant.Role.MEMBER,
+        )
+        Message.objects.filter(pk=old_message.pk).update(
+            created_at=member.joined_at - timedelta(days=1)
+        )
+        visible_message = Message.objects.create(
+            conversation=conv,
+            sender=owner,
+            body="This is visible after joining",
+        )
+        PinnedMessage.objects.create(
+            conversation=conv, message=old_message, pinned_by=owner
+        )
+        PinnedMessage.objects.create(
+            conversation=conv, message=visible_message, pinned_by=owner
+        )
+
+        response = self.client.get(
+            f"/agent/v1/messenger/conversations/{conv.pk}/pinned-messages",
+            **self.auth(),
+        )
+        self.assertEqual(response.status_code, 200)
+        visible_ids = {
+            item["message"]["id"] for item in response.data["data"]
+        }
+        self.assertEqual(visible_ids, {visible_message.pk})
+
     def test_encrypted_conversations_are_excluded_from_agent_chat_list(self):
         normal = Conversation.objects.create(
             type=Conversation.Type.PRIVATE,
