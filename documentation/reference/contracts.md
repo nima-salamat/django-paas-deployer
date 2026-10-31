@@ -34,6 +34,8 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `agent` | `src/agent/urls.py` | explicit | `v1/messenger/conversations` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/messenger/conversations/<int:conversation_id>` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/messenger/conversations/<int:conversation_id>/clear-history` | [app API docs](../apps/agent/api.md) |
+| `agent` | `src/agent/urls.py` | explicit | `v1/messenger/conversations/<int:conversation_id>/pinned-messages` | [app API docs](../apps/agent/api.md) |
+| `agent` | `src/agent/urls.py` | explicit | `v1/messenger/messages/<int:message_id>/pin` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/messenger/conversations/<int:conversation_id>/invite-links` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/messenger/conversations/<int:conversation_id>/invite-links/<int:link_id>` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/messenger/join` | [app API docs](../apps/agent/api.md) |
