@@ -1346,27 +1346,35 @@ class SwarmRuntime:
             # have exited and the Docker SDK may no longer expose its config.
 
         service_id = str(
-            labels.get("passdeployer.service") or labels.get("service.id") or ""
+            labels.get("passdeployer.service")
+            or labels.get("service.id")
+            or labels.get("io.passdeployer.service")
+            or ""
         ).strip()
-        if not service_id:
-            return ""
+        deployment_id = str(
+            labels.get("passdeployer.deployment")
+            or labels.get("deployment.id")
+            or labels.get("io.passdeployer.deployment")
+            or ""
+        ).strip()
         try:
             from django.conf import settings
             from logs.models import ServiceLogEntry, ServiceLogStream
 
             alias = getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", None) or "default"
-            stream_ids = (
-                ServiceLogStream.objects.using(alias)
-                .filter(service_id=service_id, container_id=task.container_id)
-                .values_list("id", flat=True)
+            stream_query = ServiceLogStream.objects.using(alias).filter(
+                container_id=task.container_id
             )
+            if service_id:
+                stream_query = stream_query.filter(service_id=service_id)
+            if deployment_id:
+                stream_query = stream_query.filter(deploy_id=deployment_id)
+            stream_ids = stream_query.values_list("id", flat=True)
             query = ServiceLogEntry.objects.using(alias).filter(
-                service_id=service_id,
                 stream_id__in=stream_ids,
             )
-            deployment_id = str(
-                labels.get("passdeployer.deployment") or ""
-            ).strip()
+            if service_id:
+                query = query.filter(service_id=service_id)
             if deployment_id:
                 query = query.filter(deploy_id=deployment_id)
             rows = list(
