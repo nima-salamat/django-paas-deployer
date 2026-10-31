@@ -195,8 +195,9 @@ networks:
         self.assertEqual(healthcheck["timeout"], "10s")
         self.assertEqual(healthcheck["start_period"], "60s")
         self.assertEqual(healthcheck["retries"], 36)
+        # YAML literal block scalars preserve one trailing newline.
         self.assertEqual(
-            wordpress["environment"]["WORDPRESS_CONFIG_EXTRA"],
+            wordpress["environment"]["WORDPRESS_CONFIG_EXTRA"].rstrip("\n"),
             "define( 'WP_HOME', 'https://app.example.com' );\n"
             "define( 'WP_SITEURL', 'https://app.example.com' );\n"
             "define( 'FORCE_SSL_ADMIN', true );\n"
