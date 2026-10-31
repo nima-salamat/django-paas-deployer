@@ -154,14 +154,17 @@ preflight_matrix_postgres_network() {
     export MATRIX_DOCKER_NETWORK
 }
 
-# Prepare the host Unix socket and shared ingestion secret only for
-# commands that can start or recreate services. The token is persisted in
-# .env, generated locally, and never printed to the terminal.
+# Prepare the external runtime-log network for Compose. Swarm uses an
+# attachable overlay; standalone Docker uses an internal bridge. The web
+# service always references this external network, even when collection is off.
 prepare_runtime_log_ingestion() {
     compose_command=
     for arg in "$@"; do
         case "$arg" in
-            up|start|restart|create|run|logs|ps|stop|down) compose_command=$arg; break ;;
+            up|start|restart|create|run|logs|ps|stop|down)
+                compose_command=$arg
+                break
+                ;;
         esac
     done
     [ -n "$compose_command" ] || return 0
@@ -176,16 +179,20 @@ prepare_runtime_log_ingestion() {
     SWARM_ENABLED=$(setting SWARM_ENABLED)
     : "${SWARM_ENABLED:=1}"
     swarm_state=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)
+
+    case "$swarm_state" in
+        active) expected_driver=overlay ;;
+        *) expected_driver=bridge ;;
+    esac
+
     case "$(printf '%s' "$SWARM_ENABLED" | tr '[:upper:]' '[:lower:]'):$swarm_state" in
         1:active|true:active|yes:active|on:active)
             runtime_mode=swarm
             profile=runtime-logs
-            expected_driver=overlay
             ;;
         *)
             runtime_mode=docker
             profile=docker-logs
-            if [ "$swarm_state" = "active" ]; then expected_driver=overlay; else expected_driver=bridge; fi
             ;;
     esac
 
@@ -200,173 +207,15 @@ prepare_runtime_log_ingestion() {
             ;;
     esac
 
-    # The web service always declares this external network, even when log
-    # transport is disabled. Create it independently of the collector profile
-    # so a fresh installation with LOG_INGEST_ENABLED=0 still starts cleanly.
-    LOG_INGEST_NETWORK=$(setting LOG_INGEST_NETWORK)
-    : "${LOG_INGEST_NETWORK:=deploy_log_ingest}"
-    printf '%s' "$LOG_INGEST_NETWORK" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}    # but must not create networks, credentials, or host socket directories.
+    # Read-only/lifecycle commands must not create networks, credentials, or
+    # host socket directories as a side effect.
     case "$compose_command" in
         logs|ps|stop|down) return 0 ;;
     esac
 
-    # The compatibility collector for standalone Docker uses the Engine API;
-    # only Swarm tasks need a Fluent Bit socket and shared ingestion token.
-    [ "$runtime_mode" = "swarm" ] || return 0
-    case "$(printf '%s' "$LOG_INGEST_ENABLED" | tr '[:upper:]' '[:lower:]')" in
-        1|true|yes|on) ;;
-        *) return 0 ;;
-    esac
-
-    LOG_FORWARD_SOCKET_PATH=$(setting LOG_FORWARD_SOCKET_PATH)
-    : "${LOG_FORWARD_SOCKET_PATH:=/run/passdeployer-logs/forward.sock}"
-    case "$LOG_FORWARD_SOCKET_PATH" in
-        /run/*/*.sock) ;;
-        *) echo "ERROR: LOG_FORWARD_SOCKET_PATH must be a .sock path under /run." >&2; return 2 ;;
-    esac
-    LOG_FORWARD_SOCKET_DIR=$(dirname "$LOG_FORWARD_SOCKET_PATH")
-
-    LOG_FORWARD_SOCKET_PATH=$(setting LOG_FORWARD_SOCKET_PATH)
-    : "${LOG_FORWARD_SOCKET_PATH:=/run/passdeployer-logs/forward.sock}"
-    case "$LOG_FORWARD_SOCKET_PATH" in
-        /run/*/*.sock) ;;
-        *) echo "ERROR: LOG_FORWARD_SOCKET_PATH must be a .sock path under /run." >&2; return 2 ;;
-    esac
-    LOG_FORWARD_SOCKET_DIR=$(dirname "$LOG_FORWARD_SOCKET_PATH")
-    export LOG_FORWARD_SOCKET_PATH LOG_FORWARD_SOCKET_DIR LOG_INGEST_NETWORK
-
-    LOG_INGEST_SHARED_TOKEN=$(setting LOG_INGEST_SHARED_TOKEN)
-    if [ -z "$LOG_INGEST_SHARED_TOKEN" ]; then
-        command -v openssl >/dev/null 2>&1 || {
-            echo "ERROR: openssl is required to generate LOG_INGEST_SHARED_TOKEN." >&2
-            return 2
-        }
-        LOG_INGEST_SHARED_TOKEN=$(openssl rand -hex 32)
-        [ -n "$LOG_INGEST_SHARED_TOKEN" ] || {
-            echo "ERROR: Could not generate LOG_INGEST_SHARED_TOKEN." >&2
-            return 2
-        }
-        token_file=$(mktemp)
-        awk -v token="$LOG_INGEST_SHARED_TOKEN" '
-            /^LOG_INGEST_SHARED_TOKEN=/ {
-                if (!replaced) print "LOG_INGEST_SHARED_TOKEN=" token
-                replaced = 1
-                next
-            }
-            { print }
-            END { if (!replaced) print "LOG_INGEST_SHARED_TOKEN=" token }
-        ' .env > "$token_file"
-        mv "$token_file" .env
-        chmod 600 .env
-        echo "Generated LOG_INGEST_SHARED_TOKEN in .env."
-    fi
-    export LOG_INGEST_SHARED_TOKEN
-
-    if [ "$(id -u)" -eq 0 ]; then
-        sh "$SCRIPT_DIR/prepare-log-node.sh" "$LOG_FORWARD_SOCKET_DIR"
-    elif command -v sudo >/dev/null 2>&1; then
-        sudo sh "$SCRIPT_DIR/prepare-log-node.sh" "$LOG_FORWARD_SOCKET_DIR"
-    else
-        echo "ERROR: root or sudo is required to prepare the Docker log socket directory." >&2
-        return 2
-    fi
-}
-
-USE_MATRIX_POSTGRES=$(setting USE_MATRIX_POSTGRES)
-prepare_runtime_log_ingestion "$@" || exit $?
-
-case "$(printf '%s' "$USE_MATRIX_POSTGRES" | tr '[:upper:]' '[:lower:]')" in
-    1|true|yes|on)
-        MATRIX_POSTGRES_HOST=$(setting MATRIX_POSTGRES_HOST)
-        MATRIX_POSTGRES_PORT=$(setting MATRIX_POSTGRES_PORT)
-        MATRIX_POSTGRES_USER=$(setting MATRIX_POSTGRES_USER)
-        MATRIX_POSTGRES_PASSWORD=$(setting MATRIX_POSTGRES_PASSWORD)
-        MATRIX_POSTGRES_MAIN_DB=$(setting MATRIX_POSTGRES_MAIN_DB)
-        MATRIX_POSTGRES_LOG_DB=$(setting MATRIX_POSTGRES_LOG_DB)
-
-        : "${MATRIX_POSTGRES_HOST:=synapse-postgres}"
-        : "${MATRIX_POSTGRES_PORT:=5432}"
-        : "${MATRIX_POSTGRES_USER:=paas_deployer}"
-        : "${MATRIX_POSTGRES_MAIN_DB:=paas_deployer}"
-        : "${MATRIX_POSTGRES_LOG_DB:=paas_deployer_logs}"
-
-        MATRIX_DOCKER_NETWORK=$(setting MATRIX_DOCKER_NETWORK)
-        MATRIX_POSTGRES_CONTAINER=$(setting MATRIX_POSTGRES_CONTAINER)
-        : "${MATRIX_DOCKER_NETWORK:=matrix_matrix}"
-        preflight_matrix_postgres_network "$@" || exit $?
-
-        if [ -z "$MATRIX_POSTGRES_PASSWORD" ] || [ "$MATRIX_POSTGRES_PASSWORD" = "replace-with-a-new-random-password" ]; then
-            echo "ERROR: Set MATRIX_POSTGRES_PASSWORD in .env before enabling shared PostgreSQL." >&2
-            exit 2
-        fi
-
-        # Compose environment overrides .env and each service's env_file. Use
-        # separate logical databases and a dedicated non-Synapse role.
-        export DB_HOST="$MATRIX_POSTGRES_HOST"
-        export DB_PORT="$MATRIX_POSTGRES_PORT"
-        export DB_NAME="$MATRIX_POSTGRES_MAIN_DB"
-        export DB_USER="$MATRIX_POSTGRES_USER"
-        export DB_PASSWORD="$MATRIX_POSTGRES_PASSWORD"
-
-        export DEPLOYMENT_LOG_DB_HOST="$MATRIX_POSTGRES_HOST"
-        export DEPLOYMENT_LOG_DB_PORT="$MATRIX_POSTGRES_PORT"
-        export DEPLOYMENT_LOG_DB_NAME="$MATRIX_POSTGRES_LOG_DB"
-        export DEPLOYMENT_LOG_DB_USER="$MATRIX_POSTGRES_USER"
-        export DEPLOYMENT_LOG_DB_PASSWORD="$MATRIX_POSTGRES_PASSWORD"
-
-        exec docker compose -f compose.yaml -f compose.matrix-postgres.yaml "$@"
-        ;;
-    *)
-        # Keep the existing local-PostgreSQL deployment as the default.
-        exec docker compose -f compose.yaml "$@"
-        ;;
-esac
- || {
-        echo "ERROR: Invalid LOG_INGEST_NETWORK name." >&2
-        return 2
-    }
-    export LOG_FORWARD_SOCKET_PATH LOG_FORWARD_SOCKET_DIR LOG_INGEST_NETWORK
-
-    swarm_state=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)
-    if [ "$swarm_state" = "active" ]; then
-        expected_driver=overlay
-        if ! docker network inspect "$LOG_INGEST_NETWORK" >/dev/null 2>&1; then
-            docker network create --driver overlay --attachable --internal "$LOG_INGEST_NETWORK" >/dev/null
-        fi
-    else
-        expected_driver=bridge
-        if ! docker network inspect "$LOG_INGEST_NETWORK" >/dev/null 2>&1; then
-            docker network create --driver bridge --internal "$LOG_INGEST_NETWORK" >/dev/null
-        fi
-    fi
-    actual_driver=$(docker network inspect --format '{{.Driver}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
-    is_internal=$(docker network inspect --format '{{.Internal}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
-    if [ "$actual_driver" != "$expected_driver" ] || [ "$is_internal" != "true" ]; then
-        echo "ERROR: $LOG_INGEST_NETWORK must be an internal $expected_driver network (found driver=$actual_driver internal=$is_internal)." >&2
-        return 2
-    fi
-    if [ "$expected_driver" = "overlay" ]; then
-        attachable=$(docker network inspect --format '{{.Attachable}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
-        [ "$attachable" = "true" ] || {
-            echo "ERROR: $LOG_INGEST_NETWORK must be attachable." >&2
-            return 2
-        }
-    fi
-
-    if [ "$(id -u)" -eq 0 ]; then
-        sh "$SCRIPT_DIR/prepare-log-node.sh" "$LOG_FORWARD_SOCKET_DIR"
-    elif command -v sudo >/dev/null 2>&1; then
-        sudo sh "$SCRIPT_DIR/prepare-log-node.sh" "$LOG_FORWARD_SOCKET_DIR"
-    else
-        echo "ERROR: root or sudo is required to prepare the Docker log socket directory." >&2
-        return 2
-    fi
-}
-
-USE_MATRIX_POSTGRES=$(setting USE_MATRIX_POSTGRES)
-prepare_runtime_log_ingestion "$@" || exit $?
-
-case "$(printf '%s' "$USE_MATRIX_POSTGRES" | tr '[:upper:]' '[:lower:]')" in
+    LOG_INGEST_NETWORK=$(setting LOG_INGEST_NETWORK)
+    : "${LOG_INGEST_NETWORK:=deploy_log_ingest}"
+    printf '%s' "$LOG_INGEST_NETWORK" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}
     1|true|yes|on)
         MATRIX_POSTGRES_HOST=$(setting MATRIX_POSTGRES_HOST)
         MATRIX_POSTGRES_PORT=$(setting MATRIX_POSTGRES_PORT)
@@ -417,6 +266,9 @@ esac
         return 2
     }
     export LOG_INGEST_NETWORK
+
+    # The network is required by the web service even when log collection is
+    # disabled, so it is intentionally prepared before checking the feature flag.
     if ! docker network inspect "$LOG_INGEST_NETWORK" >/dev/null 2>&1; then
         if [ "$expected_driver" = "overlay" ]; then
             docker network create --driver overlay --attachable --internal "$LOG_INGEST_NETWORK" >/dev/null
@@ -424,6 +276,7 @@ esac
             docker network create --driver bridge --internal "$LOG_INGEST_NETWORK" >/dev/null
         fi
     fi
+
     actual_driver=$(docker network inspect --format '{{.Driver}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
     is_internal=$(docker network inspect --format '{{.Internal}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
     if [ "$actual_driver" != "$expected_driver" ] || [ "$is_internal" != "true" ]; then
@@ -438,14 +291,8 @@ esac
         }
     fi
 
-    # Read-only Compose commands need the matching profile to see the agent,
-    # but must not create networks, credentials, or host socket directories.
-    case "$compose_command" in
-        logs|ps|stop|down) return 0 ;;
-    esac
-
-    # The compatibility collector for standalone Docker uses the Engine API;
-    # only Swarm tasks need a Fluent Bit socket and shared ingestion token.
+    # Standalone Docker keeps the legacy Engine API collector and does not
+    # need the Fluentd Unix socket or an ingestion credential.
     [ "$runtime_mode" = "swarm" ] || return 0
     case "$(printf '%s' "$LOG_INGEST_ENABLED" | tr '[:upper:]' '[:lower:]')" in
         1|true|yes|on) ;;
@@ -456,28 +303,13 @@ esac
     : "${LOG_FORWARD_SOCKET_PATH:=/run/passdeployer-logs/forward.sock}"
     case "$LOG_FORWARD_SOCKET_PATH" in
         /run/*/*.sock) ;;
-        *) echo "ERROR: LOG_FORWARD_SOCKET_PATH must be a .sock path under /run." >&2; return 2 ;;
+        *)
+            echo "ERROR: LOG_FORWARD_SOCKET_PATH must be a .sock path under /run." >&2
+            return 2
+            ;;
     esac
     LOG_FORWARD_SOCKET_DIR=$(dirname "$LOG_FORWARD_SOCKET_PATH")
-
-    LOG_INGEST_NETWORK=$(setting LOG_INGEST_NETWORK)
-    : "${LOG_INGEST_NETWORK:=deploy_log_ingest}"
-    printf '%s' "$LOG_INGEST_NETWORK" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$' || {
-        echo "ERROR: Invalid LOG_INGEST_NETWORK name." >&2
-        return 2
-    }
-    export LOG_FORWARD_SOCKET_PATH LOG_FORWARD_SOCKET_DIR LOG_INGEST_NETWORK
-
-    if ! docker network inspect "$LOG_INGEST_NETWORK" >/dev/null 2>&1; then
-        docker network create --driver overlay --attachable --internal "$LOG_INGEST_NETWORK" >/dev/null
-    fi
-    actual_driver=$(docker network inspect --format '{{.Driver}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
-    is_internal=$(docker network inspect --format '{{.Internal}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
-    attachable=$(docker network inspect --format '{{.Attachable}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
-    if [ "$actual_driver" != "overlay" ] || [ "$is_internal" != "true" ] || [ "$attachable" != "true" ]; then
-        echo "ERROR: $LOG_INGEST_NETWORK must be an attachable internal Swarm overlay (driver=$actual_driver internal=$is_internal attachable=$attachable)." >&2
-        return 2
-    fi
+    export LOG_FORWARD_SOCKET_PATH LOG_FORWARD_SOCKET_DIR
 
     LOG_INGEST_SHARED_TOKEN=$(setting LOG_INGEST_SHARED_TOKEN)
     if [ -z "$LOG_INGEST_SHARED_TOKEN" ]; then
@@ -490,8 +322,10 @@ esac
             echo "ERROR: Could not generate LOG_INGEST_SHARED_TOKEN." >&2
             return 2
         }
-        token_file=$(mktemp)
-        awk -v token="$LOG_INGEST_SHARED_TOKEN" '
+
+        # Use a temporary file beside .env so replacement remains atomic.
+        token_file=$(mktemp .env.XXXXXX)
+        if ! awk -v token="$LOG_INGEST_SHARED_TOKEN" '
             /^LOG_INGEST_SHARED_TOKEN=/ {
                 if (!replaced) print "LOG_INGEST_SHARED_TOKEN=" token
                 replaced = 1
@@ -499,117 +333,24 @@ esac
             }
             { print }
             END { if (!replaced) print "LOG_INGEST_SHARED_TOKEN=" token }
-        ' .env > "$token_file"
+        ' .env > "$token_file"; then
+            rm -f "$token_file"
+            echo "ERROR: Could not update LOG_INGEST_SHARED_TOKEN in .env." >&2
+            return 2
+        fi
+        chmod 600 "$token_file"
         mv "$token_file" .env
         chmod 600 .env
         echo "Generated LOG_INGEST_SHARED_TOKEN in .env."
     fi
     export LOG_INGEST_SHARED_TOKEN
 
-    if [ "$(id -u)" -eq 0 ]; then
-        sh "$SCRIPT_DIR/prepare-log-node.sh" "$LOG_FORWARD_SOCKET_DIR"
-    elif command -v sudo >/dev/null 2>&1; then
-        sudo sh "$SCRIPT_DIR/prepare-log-node.sh" "$LOG_FORWARD_SOCKET_DIR"
-    else
-        echo "ERROR: root or sudo is required to prepare the Docker log socket directory." >&2
-        return 2
-    fi
+    # This helper handles privilege elevation itself when invoked by a
+    # non-root operator.
+    sh "$SCRIPT_DIR/prepare-log-node.sh" "$LOG_FORWARD_SOCKET_DIR"
 }
 
 USE_MATRIX_POSTGRES=$(setting USE_MATRIX_POSTGRES)
-prepare_runtime_log_ingestion "$@" || exit $?
-
-case "$(printf '%s' "$USE_MATRIX_POSTGRES" | tr '[:upper:]' '[:lower:]')" in
-    1|true|yes|on)
-        MATRIX_POSTGRES_HOST=$(setting MATRIX_POSTGRES_HOST)
-        MATRIX_POSTGRES_PORT=$(setting MATRIX_POSTGRES_PORT)
-        MATRIX_POSTGRES_USER=$(setting MATRIX_POSTGRES_USER)
-        MATRIX_POSTGRES_PASSWORD=$(setting MATRIX_POSTGRES_PASSWORD)
-        MATRIX_POSTGRES_MAIN_DB=$(setting MATRIX_POSTGRES_MAIN_DB)
-        MATRIX_POSTGRES_LOG_DB=$(setting MATRIX_POSTGRES_LOG_DB)
-
-        : "${MATRIX_POSTGRES_HOST:=synapse-postgres}"
-        : "${MATRIX_POSTGRES_PORT:=5432}"
-        : "${MATRIX_POSTGRES_USER:=paas_deployer}"
-        : "${MATRIX_POSTGRES_MAIN_DB:=paas_deployer}"
-        : "${MATRIX_POSTGRES_LOG_DB:=paas_deployer_logs}"
-
-        MATRIX_DOCKER_NETWORK=$(setting MATRIX_DOCKER_NETWORK)
-        MATRIX_POSTGRES_CONTAINER=$(setting MATRIX_POSTGRES_CONTAINER)
-        : "${MATRIX_DOCKER_NETWORK:=matrix_matrix}"
-        preflight_matrix_postgres_network "$@" || exit $?
-
-        if [ -z "$MATRIX_POSTGRES_PASSWORD" ] || [ "$MATRIX_POSTGRES_PASSWORD" = "replace-with-a-new-random-password" ]; then
-            echo "ERROR: Set MATRIX_POSTGRES_PASSWORD in .env before enabling shared PostgreSQL." >&2
-            exit 2
-        fi
-
-        # Compose environment overrides .env and each service's env_file. Use
-        # separate logical databases and a dedicated non-Synapse role.
-        export DB_HOST="$MATRIX_POSTGRES_HOST"
-        export DB_PORT="$MATRIX_POSTGRES_PORT"
-        export DB_NAME="$MATRIX_POSTGRES_MAIN_DB"
-        export DB_USER="$MATRIX_POSTGRES_USER"
-        export DB_PASSWORD="$MATRIX_POSTGRES_PASSWORD"
-
-        export DEPLOYMENT_LOG_DB_HOST="$MATRIX_POSTGRES_HOST"
-        export DEPLOYMENT_LOG_DB_PORT="$MATRIX_POSTGRES_PORT"
-        export DEPLOYMENT_LOG_DB_NAME="$MATRIX_POSTGRES_LOG_DB"
-        export DEPLOYMENT_LOG_DB_USER="$MATRIX_POSTGRES_USER"
-        export DEPLOYMENT_LOG_DB_PASSWORD="$MATRIX_POSTGRES_PASSWORD"
-
-        exec docker compose -f compose.yaml -f compose.matrix-postgres.yaml "$@"
-        ;;
-    *)
-        # Keep the existing local-PostgreSQL deployment as the default.
-        exec docker compose -f compose.yaml "$@"
-        ;;
-esac
- || {
-        echo "ERROR: Invalid LOG_INGEST_NETWORK name." >&2
-        return 2
-    }
-    export LOG_FORWARD_SOCKET_PATH LOG_FORWARD_SOCKET_DIR LOG_INGEST_NETWORK
-
-    swarm_state=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)
-    if [ "$swarm_state" = "active" ]; then
-        expected_driver=overlay
-        if ! docker network inspect "$LOG_INGEST_NETWORK" >/dev/null 2>&1; then
-            docker network create --driver overlay --attachable --internal "$LOG_INGEST_NETWORK" >/dev/null
-        fi
-    else
-        expected_driver=bridge
-        if ! docker network inspect "$LOG_INGEST_NETWORK" >/dev/null 2>&1; then
-            docker network create --driver bridge --internal "$LOG_INGEST_NETWORK" >/dev/null
-        fi
-    fi
-    actual_driver=$(docker network inspect --format '{{.Driver}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
-    is_internal=$(docker network inspect --format '{{.Internal}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
-    if [ "$actual_driver" != "$expected_driver" ] || [ "$is_internal" != "true" ]; then
-        echo "ERROR: $LOG_INGEST_NETWORK must be an internal $expected_driver network (found driver=$actual_driver internal=$is_internal)." >&2
-        return 2
-    fi
-    if [ "$expected_driver" = "overlay" ]; then
-        attachable=$(docker network inspect --format '{{.Attachable}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
-        [ "$attachable" = "true" ] || {
-            echo "ERROR: $LOG_INGEST_NETWORK must be attachable." >&2
-            return 2
-        }
-    fi
-
-    if [ "$(id -u)" -eq 0 ]; then
-        sh "$SCRIPT_DIR/prepare-log-node.sh" "$LOG_FORWARD_SOCKET_DIR"
-    elif command -v sudo >/dev/null 2>&1; then
-        sudo sh "$SCRIPT_DIR/prepare-log-node.sh" "$LOG_FORWARD_SOCKET_DIR"
-    else
-        echo "ERROR: root or sudo is required to prepare the Docker log socket directory." >&2
-        return 2
-    fi
-}
-
-USE_MATRIX_POSTGRES=$(setting USE_MATRIX_POSTGRES)
-prepare_runtime_log_ingestion "$@" || exit $?
-
 case "$(printf '%s' "$USE_MATRIX_POSTGRES" | tr '[:upper:]' '[:lower:]')" in
     1|true|yes|on)
         MATRIX_POSTGRES_HOST=$(setting MATRIX_POSTGRES_HOST)
