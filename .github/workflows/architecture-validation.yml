@@ -17,6 +17,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Validate POSIX shell scripts
+        run: |
+          sh -n scripts/compose.sh
+          sh -n scripts/prepare-log-node.sh
+          sh -n scripts/deploy-log-agents.sh
+          sh -n scripts/migrate-runtime-log-driver.sh
       - name: Compile Python sources
         run: |
           python -m compileall -q src
