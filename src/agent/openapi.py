@@ -176,7 +176,7 @@ def _path_parameters(path):
     params = []
     integer_identifiers = {
         "user_id", "conversation_id", "message_id", "request_id", "ticket_id",
-        "department_id",
+        "department_id", "link_id",
     }
     for name in re.findall(r"\{([^}]+)\}", path):
         schema = (
