@@ -11,7 +11,7 @@ from django.db.models import Count, OuterRef, Prefetch, Q, Subquery
 from rest_framework import status
 from rest_framework.response import Response
 
-from .base import AgentSecuredAPIView
+from .base import AgentSecuredAPIView, idempotent
 
 
 def _call_messenger(view_name: str, method: str, request, *args):
@@ -103,6 +103,7 @@ class AgentMessengerContactsView(AgentSecuredAPIView):
         self.audit_mutating = False
         return _call_messenger("ContactListCreateAPIView", "get", request)
 
+    @idempotent
     def post(self, request):
         self.audit_mutating = True
         return _call_messenger("ContactListCreateAPIView", "post", request)
@@ -113,6 +114,7 @@ class AgentMessengerContactDetailView(AgentSecuredAPIView):
     audit_action = "agent.messenger.contacts.delete"
     audit_mutating = True
 
+    @idempotent
     def delete(self, request, user_id):
         return _call_messenger("ContactDeleteAPIView", "delete", request, user_id)
 
@@ -126,6 +128,7 @@ class AgentMessengerBlocksView(AgentSecuredAPIView):
         self.audit_mutating = False
         return _call_messenger("BlockListCreateAPIView", "get", request)
 
+    @idempotent
     def post(self, request):
         self.audit_mutating = True
         return _call_messenger("BlockListCreateAPIView", "post", request)
@@ -136,6 +139,7 @@ class AgentMessengerBlockDetailView(AgentSecuredAPIView):
     audit_action = "agent.messenger.blocks.unblock"
     audit_mutating = True
 
+    @idempotent
     def delete(self, request, user_id):
         # The application endpoint uses POST for unblock; the Agent surface
         # uses DELETE to express the resource operation.
@@ -255,6 +259,7 @@ class AgentMessengerConversationsView(AgentSecuredAPIView):
             }
         )
 
+    @idempotent
     def post(self, request):
         self.audit_mutating = True
         from messenger.models import Conversation
@@ -265,6 +270,13 @@ class AgentMessengerConversationsView(AgentSecuredAPIView):
                 "UNSUPPORTED_SECURITY_MODE",
                 "Agent can create standard chats only; encrypted chat creation is not supported.",
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+        member_ids = request.data.get("member_ids") or []
+        if member_ids and "messenger.members.manage" not in set(request.agent.scopes or []):
+            return _agent_error(
+                "INSUFFICIENT_SCOPE",
+                "Adding members while creating a group requires the messenger.members.manage scope.",
+                status.HTTP_403_FORBIDDEN,
             )
         return _call_messenger("ConversationListCreateAPIView", "post", request)
 
@@ -283,6 +295,7 @@ class AgentMessengerConversationDetailView(AgentSecuredAPIView):
             "ConversationDetailAPIView", "get", request, conversation_id
         )
 
+    @idempotent
     def patch(self, request, conversation_id):
         self.audit_mutating = True
         _, _, error = _standard_conversation(request, conversation_id)
@@ -307,6 +320,7 @@ class AgentMessengerMessagesView(AgentSecuredAPIView):
             "MessageListCreateAPIView", "get", request, conversation_id
         )
 
+    @idempotent
     def post(self, request, conversation_id):
         self.audit_mutating = True
         _, _, error = _standard_conversation(request, conversation_id)
@@ -354,6 +368,7 @@ class AgentMessengerMarkReadView(AgentSecuredAPIView):
     audit_action = "agent.messenger.messages.read_state"
     audit_mutating = True
 
+    @idempotent
     def post(self, request, conversation_id):
         _, _, error = _standard_conversation(request, conversation_id)
         if error:
@@ -366,6 +381,7 @@ class AgentMessengerMessageReactView(AgentSecuredAPIView):
     audit_action = "agent.messenger.messages.react"
     audit_mutating = True
 
+    @idempotent
     def post(self, request, message_id):
         from messenger.models import Message
 
@@ -389,6 +405,7 @@ class AgentMessengerMessageEditView(AgentSecuredAPIView):
     audit_action = "agent.messenger.messages.edit"
     audit_mutating = True
 
+    @idempotent
     def patch(self, request, message_id):
         from messenger.models import Message
 
@@ -406,6 +423,7 @@ class AgentMessengerMessageDeleteView(AgentSecuredAPIView):
     audit_action = "agent.messenger.messages.delete"
     audit_mutating = True
 
+    @idempotent
     def delete(self, request, message_id):
         from messenger.models import Message
 
@@ -423,6 +441,7 @@ class AgentMessengerScheduledMessageCancelView(AgentSecuredAPIView):
     audit_action = "agent.messenger.messages.schedule.cancel"
     audit_mutating = True
 
+    @idempotent
     def post(self, request, message_id):
         from messenger.models import Message
 
@@ -460,6 +479,7 @@ class AgentMessengerGroupJoinView(AgentSecuredAPIView):
     audit_action = "agent.messenger.groups.join"
     audit_mutating = True
 
+    @idempotent
     def post(self, request, conversation_id):
         _, _, error = _standard_conversation(
             request, conversation_id, require_member=False
@@ -499,6 +519,7 @@ class AgentMessengerMembersView(AgentSecuredAPIView):
     audit_action = "agent.messenger.groups.members"
     audit_mutating = True
 
+    @idempotent
     def post(self, request, conversation_id):
         _, _, error = _standard_conversation(request, conversation_id)
         if error:
@@ -511,6 +532,7 @@ class AgentMessengerMemberDetailView(AgentSecuredAPIView):
     audit_action = "agent.messenger.groups.members.remove"
     audit_mutating = True
 
+    @idempotent
     def delete(self, request, conversation_id, user_id):
         _, _, error = _standard_conversation(request, conversation_id)
         if error:
@@ -525,6 +547,7 @@ class AgentMessengerMemberRoleView(AgentSecuredAPIView):
     audit_action = "agent.messenger.groups.members.role"
     audit_mutating = True
 
+    @idempotent
     def post(self, request, conversation_id, user_id):
         _, _, error = _standard_conversation(request, conversation_id)
         if error:
@@ -539,6 +562,7 @@ class AgentMessengerMemberPermissionsView(AgentSecuredAPIView):
     audit_action = "agent.messenger.groups.members.permissions"
     audit_mutating = True
 
+    @idempotent
     def patch(self, request, conversation_id, user_id):
         from messenger.models import Conversation, ConversationParticipant
 
@@ -635,6 +659,7 @@ class AgentMessengerJoinRequestActionView(AgentSecuredAPIView):
     audit_action = "agent.messenger.groups.join_requests.action"
     audit_mutating = True
 
+    @idempotent
     def post(self, request, conversation_id, request_id):
         _, _, error = _standard_conversation(request, conversation_id)
         if error:
@@ -680,6 +705,7 @@ class AgentTicketsView(AgentSecuredAPIView):
             "tickets.api.user_tickets", "MyTicketListCreateAPIView", "get", request
         )
 
+    @idempotent
     def post(self, request):
         self.audit_mutating = True
         return _call_ticket(
@@ -705,6 +731,7 @@ class AgentTicketMessagesView(AgentSecuredAPIView):
     audit_action = "agent.tickets.messages"
     audit_mutating = True
 
+    @idempotent
     def post(self, request, ticket_id):
         _, error = _owned_ticket(request, ticket_id)
         if error:
@@ -723,6 +750,7 @@ class AgentTicketReadView(AgentSecuredAPIView):
     audit_action = "agent.tickets.read_state"
     audit_mutating = True
 
+    @idempotent
     def post(self, request, ticket_id):
         _, error = _owned_ticket(request, ticket_id)
         if error:
@@ -737,6 +765,7 @@ class AgentTicketCloseView(AgentSecuredAPIView):
     audit_action = "agent.tickets.close"
     audit_mutating = True
 
+    @idempotent
     def post(self, request, ticket_id):
         _, error = _owned_ticket(request, ticket_id)
         if error:
