@@ -302,6 +302,22 @@ class AgentContractTests(TestCase):
             "#/components/schemas/EnvironmentMutationRequest",
         )
 
+        messenger_messages = paths[
+            "/agent/v1/messenger/conversations/{conversation_id}/messages"
+        ]["get"]
+        conversation_id_parameter = next(
+            p for p in messenger_messages["parameters"]
+            if isinstance(p, dict) and p.get("name") == "conversation_id"
+        )
+        self.assertEqual(conversation_id_parameter["schema"]["type"], "integer")
+
+        ticket_detail = paths["/agent/v1/tickets/{ticket_id}"]["get"]
+        ticket_id_parameter = next(
+            p for p in ticket_detail["parameters"]
+            if isinstance(p, dict) and p.get("name") == "ticket_id"
+        )
+        self.assertEqual(ticket_id_parameter["schema"]["type"], "integer")
+
         upload = paths["/agent/v1/deployments/{deployment_id}/upload"]["post"]
         self.assertIn("multipart/form-data", upload["requestBody"]["content"])
         self.assertEqual(
