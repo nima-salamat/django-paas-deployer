@@ -4,6 +4,18 @@ from .apis.efficiency import (AgentContextView, WorkspaceTreeView, WorkspaceRead
                               WorkspaceWriteManyView, WorkspacePatchView, WorkspaceSearchView,
                               AgentCommandBatchView, AgentMCPView)
 from .apis import DatabaseBindingsView, AgentCapabilitiesView,AgentExchangeView,AgentManifestView,AgentMeView,AgentOpenAPIView,AgentRootView,ConfigurationView,DatabaseCredentialsView,DeploymentActionView,DeploymentDetailView,DeploymentHelpView,DeploymentInspectView,DeploymentListCreateView,DeploymentLogsExportView,DeploymentLogsView,DeploymentRollbackView,DeploymentUploadView,EndpointConfigView,EnvironmentView,NetworkAttachmentsView,NetworkDetailView,NetworkListCreateView,PlanApplyView,PlanDetailView,PlanListView,PlanManagementView,RevisionDetailView,RevisionListView,RevisionRollbackView,SecretsView,ServiceActionView,ServiceDetailView,ServiceFromPlanView,ServiceListCreateView,ServiceLogsExportView,ServiceLogsView,ServiceMetricsView,ServiceStatusView,ShellCloseView,ShellCommandView,ShellFileView,ShellInfoView,ShellReplaceView,ShellSessionView,SkillDetailView,SkillIndexView,VolumeDetailView,VolumeListCreateView
+from .apis.collaboration import (
+    AgentMessengerUserSearchView,AgentMessengerContactsView,AgentMessengerContactDetailView,
+    AgentMessengerBlocksView,AgentMessengerBlockDetailView,AgentMessengerConversationsView,
+    AgentMessengerConversationDetailView,AgentMessengerMessagesView,AgentMessengerMessageSearchView,
+    AgentMessengerScheduledMessagesView,AgentMessengerMarkReadView,AgentMessengerMessageReactView,
+    AgentMessengerMessageEditView,AgentMessengerMessageDeleteView,AgentMessengerScheduledMessageCancelView,
+    AgentMessengerGroupSearchView,AgentMessengerGroupJoinView,AgentMessengerParticipantsView,
+    AgentMessengerMembersView,AgentMessengerMemberDetailView,AgentMessengerMemberRoleView,
+    AgentMessengerMemberPermissionsView,AgentMessengerJoinRequestsView,AgentMessengerJoinRequestActionView,
+    AgentTicketDepartmentsView,AgentTicketContextView,AgentTicketsView,AgentTicketDetailView,
+    AgentTicketMessagesView,AgentTicketReadView,AgentTicketCloseView,
+)
 app_name="agent"
 urlpatterns=[
 path("v1/",AgentRootView.as_view()),path("v1/skills",SkillIndexView.as_view()),path("v1/skills/<slug:skill_name>",SkillDetailView.as_view()),path("v1/auth/exchange",AgentExchangeView.as_view()),path("v1/auth/me",AgentMeView.as_view()),path("v1/capabilities",AgentCapabilitiesView.as_view()),path("v1/agent.md",AgentManifestView.as_view()),path("v1/openapi.json",AgentOpenAPIView.as_view()),path("v1/context",AgentContextView.as_view()),
@@ -19,4 +31,38 @@ path("v1/services/<uuid:service_id>/mcp",AgentMCPView.as_view()),
 path("v1/services/<uuid:service_id>/tools",RuntimeToolIndexView.as_view()),path("v1/services/<uuid:service_id>/tools/<str:tool_name>",RuntimeToolExecuteView.as_view()),
 path("v1/plans",PlanListView.as_view()),path("v1/plans/<uuid:plan_id>",PlanDetailView.as_view()),path("v1/plans/<uuid:plan_id>/apply",PlanApplyView.as_view()),path("v1/plans/manage",PlanManagementView.as_view()),path("v1/plans/manage/<uuid:plan_id>",PlanManagementView.as_view()),
 path("v1/networks",NetworkListCreateView.as_view()),path("v1/networks/<uuid:network_id>",NetworkDetailView.as_view()),path("v1/volumes",VolumeListCreateView.as_view()),path("v1/volumes/<uuid:volume_id>",VolumeDetailView.as_view()),
-path("v1/deployments/help",DeploymentHelpView.as_view()),path("v1/deployments/inspect",DeploymentInspectView.as_view()),path("v1/deployments",DeploymentListCreateView.as_view()),path("v1/deployments/<uuid:deployment_id>",DeploymentDetailView.as_view()),path("v1/deployments/<uuid:deployment_id>/upload",DeploymentUploadView.as_view()),path("v1/deployments/<uuid:deployment_id>/start",DeploymentActionView.as_view(),{"action":"start"}),path("v1/deployments/<uuid:deployment_id>/cancel",DeploymentActionView.as_view(),{"action":"cancel"}),path("v1/deployments/<uuid:deployment_id>/redeploy",DeploymentActionView.as_view(),{"action":"redeploy"}),path("v1/deployments/<uuid:deployment_id>/rebuild",DeploymentActionView.as_view(),{"action":"rebuild"}),path("v1/deployments/<uuid:deployment_id>/rollback",DeploymentRollbackView.as_view()),path("v1/deployments/<uuid:deployment_id>/logs",DeploymentLogsView.as_view()),path("v1/deployments/<uuid:deployment_id>/logs/export",DeploymentLogsExportView.as_view())]
+path("v1/deployments/help",DeploymentHelpView.as_view()),path("v1/deployments/inspect",DeploymentInspectView.as_view()),path("v1/deployments",DeploymentListCreateView.as_view()),path("v1/deployments/<uuid:deployment_id>",DeploymentDetailView.as_view()),path("v1/deployments/<uuid:deployment_id>/upload",DeploymentUploadView.as_view()),path("v1/deployments/<uuid:deployment_id>/start",DeploymentActionView.as_view(),{"action":"start"}),path("v1/deployments/<uuid:deployment_id>/cancel",DeploymentActionView.as_view(),{"action":"cancel"}),path("v1/deployments/<uuid:deployment_id>/redeploy",DeploymentActionView.as_view(),{"action":"redeploy"}),path("v1/deployments/<uuid:deployment_id>/rebuild",DeploymentActionView.as_view(),{"action":"rebuild"}),path("v1/deployments/<uuid:deployment_id>/rollback",DeploymentRollbackView.as_view()),path("v1/deployments/<uuid:deployment_id>/logs",DeploymentLogsView.as_view()),path("v1/deployments/<uuid:deployment_id>/logs/export",DeploymentLogsExportView.as_view())
+# Messenger — standard chats, never Matrix/E2EE plaintext.
+path("v1/messenger/users/search",AgentMessengerUserSearchView.as_view()),
+path("v1/messenger/contacts",AgentMessengerContactsView.as_view()),
+path("v1/messenger/contacts/<int:user_id>",AgentMessengerContactDetailView.as_view()),
+path("v1/messenger/blocks",AgentMessengerBlocksView.as_view()),
+path("v1/messenger/blocks/<int:user_id>",AgentMessengerBlockDetailView.as_view()),
+path("v1/messenger/conversations",AgentMessengerConversationsView.as_view()),
+path("v1/messenger/conversations/<int:conversation_id>",AgentMessengerConversationDetailView.as_view()),
+path("v1/messenger/conversations/<int:conversation_id>/messages",AgentMessengerMessagesView.as_view()),
+path("v1/messenger/conversations/<int:conversation_id>/messages/search",AgentMessengerMessageSearchView.as_view()),
+path("v1/messenger/conversations/<int:conversation_id>/scheduled",AgentMessengerScheduledMessagesView.as_view()),
+path("v1/messenger/conversations/<int:conversation_id>/read",AgentMessengerMarkReadView.as_view()),
+path("v1/messenger/messages/<int:message_id>/react",AgentMessengerMessageReactView.as_view()),
+path("v1/messenger/messages/<int:message_id>/edit",AgentMessengerMessageEditView.as_view()),
+path("v1/messenger/messages/<int:message_id>",AgentMessengerMessageDeleteView.as_view()),
+path("v1/messenger/messages/<int:message_id>/cancel-schedule",AgentMessengerScheduledMessageCancelView.as_view()),
+path("v1/messenger/groups/search",AgentMessengerGroupSearchView.as_view()),
+path("v1/messenger/groups/<int:conversation_id>/join",AgentMessengerGroupJoinView.as_view()),
+path("v1/messenger/conversations/<int:conversation_id>/participants",AgentMessengerParticipantsView.as_view()),
+path("v1/messenger/conversations/<int:conversation_id>/members",AgentMessengerMembersView.as_view()),
+path("v1/messenger/conversations/<int:conversation_id>/members/<int:user_id>",AgentMessengerMemberDetailView.as_view()),
+path("v1/messenger/conversations/<int:conversation_id>/members/<int:user_id>/role",AgentMessengerMemberRoleView.as_view()),
+path("v1/messenger/conversations/<int:conversation_id>/members/<int:user_id>/permissions",AgentMessengerMemberPermissionsView.as_view()),
+path("v1/messenger/conversations/<int:conversation_id>/join-requests",AgentMessengerJoinRequestsView.as_view()),
+path("v1/messenger/conversations/<int:conversation_id>/join-requests/<int:request_id>/action",AgentMessengerJoinRequestActionView.as_view()),
+# Tickets — linked user's own tickets only.
+path("v1/tickets/departments",AgentTicketDepartmentsView.as_view()),
+path("v1/tickets/context",AgentTicketContextView.as_view()),
+path("v1/tickets",AgentTicketsView.as_view()),
+path("v1/tickets/<int:ticket_id>",AgentTicketDetailView.as_view()),
+path("v1/tickets/<int:ticket_id>/messages",AgentTicketMessagesView.as_view()),
+path("v1/tickets/<int:ticket_id>/read",AgentTicketReadView.as_view()),
+path("v1/tickets/<int:ticket_id>/close",AgentTicketCloseView.as_view()),
+]
