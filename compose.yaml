@@ -642,6 +642,7 @@ volumes:
   postgres_data:
   deployment_log_data:
   redis_data:
+  fluentbit_state:
 
 
 # ==============================================================
