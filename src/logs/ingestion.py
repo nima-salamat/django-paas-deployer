@@ -320,6 +320,7 @@ def ingest_lines(
                 "inserted": 0,
                 "duplicates": 0,
                 "dropped": len(prepared),
+                "dropped_bytes": need_bytes,
                 "bytes": 0,
                 "persisted": False,
                 "inserted_entries": [],
