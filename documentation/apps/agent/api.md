@@ -376,6 +376,57 @@ the Agent facade, group history clearing is additionally restricted to owners
 and admins. These operations have independent high-risk scopes and are not
 granted by default.
 
+### Messenger message payload and formatting contract
+
+Send a text message as JSON to
+/agent/v1/messenger/conversations/{conversation_id}/messages:
+
+~~~json
+{
+  "body": "سلام، پیام اول.\\nاین خط دوم همان پیام است.",
+  "client_message_id": "agent-550e8400-e29b-41d4-a716-446655440000"
+}
+~~~
+
+body must be one plain UTF-8 string. Use JSON escaping such as \\n for
+line breaks. Markdown/HTML rendering is not guaranteed; do not use HTML tags or
+Markdown syntax as formatting instructions. Keep text-only messages at or
+below 4,000 characters because longer bodies are split into multiple messages
+by the current Messenger endpoint. The API trims leading and trailing
+whitespace.
+
+Use a unique client_message_id per logical send and reuse that exact id only
+when retrying the same send after a timeout. For replies, add reply_to with an
+integer message id from the same conversation. For scheduled sends, add
+scheduled_for as a future ISO-8601 datetime with an explicit timezone;
+scheduling requires both messenger.messages.send and
+messenger.messages.schedule. Attachments require multipart/form-data,
+the participant's media permission and no more than 10 files.
+
+#### Reaction payload contract
+
+Send one emoji in JSON, for example { "emoji": "👍" }, to
+/agent/v1/messenger/messages/{message_id}/react. The server has no emoji
+allow-list; it stores a non-empty string up to 32 characters. For reliable
+display, use one standard Unicode emoji such as 👍, ❤️, 😂, 😮, 😢, 🙏, 🎉,
+🔥, ✅ or 👀 rather than words, shortcodes or multi-emoji strings. These are
+recommendations, not a server-enforced allow-list.
+
+POST is a toggle: sending the same reaction again removes the caller's
+existing reaction. Inspect the message's reactions and mine flag before
+adding, and never blindly retry POST after a timeout. DELETE with the same
+emoji in its JSON body removes only the caller's reaction and is idempotent.
+Preserve the exact emoji sequence when removing it.
+
+#### Pin payload contract
+
+Use PUT /agent/v1/messenger/messages/{message_id}/pin to pin and
+DELETE /agent/v1/messenger/messages/{message_id}/pin to unpin; neither
+requires a body. Do not use toggle semantics. In groups, pinning requires
+owner/admin role or can_pin_messages=true. Retrieve the list from
+GET /agent/v1/messenger/conversations/{conversation_id}/pinned-messages.
+PUT and DELETE are idempotent.
+
 ## Ticket Agent API
 
 Ticket access is deliberately limited to records owned by the user attached
