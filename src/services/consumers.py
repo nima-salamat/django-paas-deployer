@@ -219,6 +219,7 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
         self.batch_continue_on_error = True
         self.current_batch_command = None
         self.batch_immediate_exit_code = None
+        self.batch_confirmation_required = False
         await self.accept()
         await self.send_json({"type": "ready", "cwd": self.session.workdir, "platform": self.session.platform, "auth": "agent" if self.agent is not None else "user"})
 
@@ -341,6 +342,7 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
         self.batch_index = 0
         self.batch_failures = 0
         self.batch_continue_on_error = content.get("continue_on_error", True) is not False
+        self.batch_confirmation_required = False
         await self.send_json({"type": "batch.started", "batch_id": self.batch_id,
                               "total": self.batch_total, "continue_on_error": self.batch_continue_on_error})
         await self._run_next_batch_command()
@@ -367,13 +369,16 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
         await self._start_command(item["command"], item["confirm"])
         if self.exec_task is None and self.exec_socket is None:
             exit_code = self.batch_immediate_exit_code
+            confirmation_required = bool(self.batch_confirmation_required)
             if exit_code != 0:
                 self.batch_failures += 1
             await self.send_json({"type": "batch.command.completed", "batch_id": self.batch_id,
-                                  "index": index, "exit_code": exit_code, "streamed": False})
+                                  "index": index, "exit_code": exit_code, "streamed": False,
+                                  "confirmation_required": confirmation_required})
             self.current_batch_command = None
-            if exit_code != 0 and not self.batch_continue_on_error:
+            if confirmation_required or (exit_code != 0 and not self.batch_continue_on_error):
                 self.batch_queue = []
+            self.batch_confirmation_required = False
             await self._run_next_batch_command()
 
     async def _start_command(self, command, confirm):
@@ -499,6 +504,8 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                 allow_advanced=can_use_advanced_shell(self.service, self.user),
             )
             if _is_destructive_command(argv) and not confirm:
+                if self.batch_id is not None:
+                    self.batch_confirmation_required = True
                 await self.send_json({
                     "type": "confirm_required",
                     "code": "CONFIRMATION_REQUIRED",
