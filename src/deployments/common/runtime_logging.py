@@ -12,6 +12,11 @@ import os
 DEFAULT_FORWARD_SOCKET = "/run/passdeployer-logs/forward.sock"
 
 
+def runtime_log_ingestion_enabled() -> bool:
+    value = str(os.environ.get("LOG_INGEST_ENABLED", "1")).strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
 def forward_socket_path() -> str:
     """Return the host-mounted Unix socket path used by Docker's Fluentd driver."""
     value = str(
@@ -56,8 +61,10 @@ def fluentd_log_driver_options() -> dict[str, str]:
     }
 
 
-def docker_log_config() -> dict:
-    """Docker host-config shape for non-Swarm containers."""
+def docker_log_config():
+    """Docker host-config shape for non-Swarm containers, or None when disabled."""
+    if not runtime_log_ingestion_enabled():
+        return None
     from docker.types import LogConfig
 
     return LogConfig(type="fluentd", config=fluentd_log_driver_options())
@@ -66,6 +73,7 @@ def docker_log_config() -> dict:
 __all__ = [
     "DEFAULT_FORWARD_SOCKET",
     "forward_socket_path",
+    "runtime_log_ingestion_enabled",
     "fluentd_log_driver_options",
     "docker_log_config",
 ]
