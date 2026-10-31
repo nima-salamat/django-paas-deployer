@@ -15,6 +15,8 @@ MESSENGER_SCOPES=(
     "messenger.conversations.read","messenger.conversations.create","messenger.conversations.update",
     "messenger.messages.read","messenger.messages.send","messenger.messages.search",
     "messenger.messages.edit","messenger.messages.delete","messenger.messages.react",
+    "messenger.messages.reactions.remove","messenger.messages.pin",
+    "messenger.messages.unpin","messenger.messages.pinned.read",
     "messenger.messages.schedule","messenger.messages.read_state.write",
     "messenger.groups.search","messenger.groups.join",
     "messenger.members.read","messenger.members.manage","messenger.permissions.manage",
