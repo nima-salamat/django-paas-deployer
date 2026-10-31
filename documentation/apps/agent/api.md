@@ -383,12 +383,12 @@ Send a text message as JSON to
 
 ~~~json
 {
-  "body": "سلام، پیام اول.\\nاین خط دوم همان پیام است.",
+  "body": "سلام، پیام اول.\nاین خط دوم همان پیام است.",
   "client_message_id": "agent-550e8400-e29b-41d4-a716-446655440000"
 }
 ~~~
 
-body must be one plain UTF-8 string. Use JSON escaping such as \\n for
+body must be one plain UTF-8 string. Use JSON escaping such as \n for
 line breaks. Markdown/HTML rendering is not guaranteed; do not use HTML tags or
 Markdown syntax as formatting instructions. Keep text-only messages at or
 below 4,000 characters because longer bodies are split into multiple messages
