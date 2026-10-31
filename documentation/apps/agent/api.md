@@ -339,7 +339,9 @@ security mode is \`standard\`. Matrix E2EE is not exposed through this Agent
 facade and is not downgraded to plaintext. The standard chat body is UTF-8
 text with Unicode emoji and line breaks; the Agent skill describes the
 plain-text/Markdown-ish format. Message creation supports the existing
-\`scheduled_for\` ISO-8601 field and \`client_message_id\` retry key.
+\`scheduled_for\` ISO-8601 field and \`client_message_id\` retry key. Scheduled
+sends require both \`messenger.messages.send\` and
+\`messenger.messages.schedule\`; ordinary sends need only the send scope.
 
 ## Ticket Agent API
 
