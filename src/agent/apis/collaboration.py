@@ -82,11 +82,19 @@ def _owned_ticket(request, ticket_id):
     return ticket, None
 
 
+class AgentMessengerView(AgentMessengerView):
+    audit_resource_type = "messenger"
+
+
+class AgentTicketView(AgentMessengerView):
+    audit_resource_type = "ticket"
+
+
 # ---------------------------------------------------------------------------
 # Messenger discovery and account-level operations
 # ---------------------------------------------------------------------------
 
-class AgentMessengerUserSearchView(AgentSecuredAPIView):
+class AgentMessengerUserSearchView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/users/search"
     audit_action = "agent.messenger.users.search"
 
@@ -94,7 +102,7 @@ class AgentMessengerUserSearchView(AgentSecuredAPIView):
         return _call_messenger("UserSearchAPIView", "get", request)
 
 
-class AgentMessengerContactsView(AgentSecuredAPIView):
+class AgentMessengerContactsView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/contacts"
     audit_action = "agent.messenger.contacts"
     audit_mutating = True
@@ -109,7 +117,7 @@ class AgentMessengerContactsView(AgentSecuredAPIView):
         return _call_messenger("ContactListCreateAPIView", "post", request)
 
 
-class AgentMessengerContactDetailView(AgentSecuredAPIView):
+class AgentMessengerContactDetailView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/contacts/{user_id}"
     audit_action = "agent.messenger.contacts.delete"
     audit_mutating = True
@@ -119,7 +127,7 @@ class AgentMessengerContactDetailView(AgentSecuredAPIView):
         return _call_messenger("ContactDeleteAPIView", "delete", request, user_id)
 
 
-class AgentMessengerBlocksView(AgentSecuredAPIView):
+class AgentMessengerBlocksView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/blocks"
     audit_action = "agent.messenger.blocks"
     audit_mutating = True
@@ -134,7 +142,7 @@ class AgentMessengerBlocksView(AgentSecuredAPIView):
         return _call_messenger("BlockListCreateAPIView", "post", request)
 
 
-class AgentMessengerBlockDetailView(AgentSecuredAPIView):
+class AgentMessengerBlockDetailView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/blocks/{user_id}"
     audit_action = "agent.messenger.blocks.unblock"
     audit_mutating = True
@@ -150,7 +158,7 @@ class AgentMessengerBlockDetailView(AgentSecuredAPIView):
 # Conversations, messages, formatting, reactions and scheduled delivery
 # ---------------------------------------------------------------------------
 
-class AgentMessengerConversationsView(AgentSecuredAPIView):
+class AgentMessengerConversationsView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/conversations"
     audit_action = "agent.messenger.conversations"
     audit_mutating = True
@@ -281,7 +289,7 @@ class AgentMessengerConversationsView(AgentSecuredAPIView):
         return _call_messenger("ConversationListCreateAPIView", "post", request)
 
 
-class AgentMessengerConversationDetailView(AgentSecuredAPIView):
+class AgentMessengerConversationDetailView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/conversations/{conversation_id}"
     audit_action = "agent.messenger.conversation"
     audit_mutating = True
@@ -306,7 +314,7 @@ class AgentMessengerConversationDetailView(AgentSecuredAPIView):
         )
 
 
-class AgentMessengerMessagesView(AgentSecuredAPIView):
+class AgentMessengerMessagesView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/conversations/{conversation_id}/messages"
     audit_action = "agent.messenger.messages"
     audit_mutating = True
@@ -337,7 +345,7 @@ class AgentMessengerMessagesView(AgentSecuredAPIView):
         )
 
 
-class AgentMessengerMessageSearchView(AgentSecuredAPIView):
+class AgentMessengerMessageSearchView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/conversations/{conversation_id}/messages/search"
     audit_action = "agent.messenger.messages.search"
 
@@ -350,7 +358,7 @@ class AgentMessengerMessageSearchView(AgentSecuredAPIView):
         )
 
 
-class AgentMessengerScheduledMessagesView(AgentSecuredAPIView):
+class AgentMessengerScheduledMessagesView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/conversations/{conversation_id}/scheduled"
     audit_action = "agent.messenger.messages.scheduled"
 
@@ -363,7 +371,7 @@ class AgentMessengerScheduledMessagesView(AgentSecuredAPIView):
         )
 
 
-class AgentMessengerMarkReadView(AgentSecuredAPIView):
+class AgentMessengerMarkReadView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/conversations/{conversation_id}/read"
     audit_action = "agent.messenger.messages.read_state"
     audit_mutating = True
@@ -376,7 +384,7 @@ class AgentMessengerMarkReadView(AgentSecuredAPIView):
         return _call_messenger("MarkReadAPIView", "post", request, conversation_id)
 
 
-class AgentMessengerMessageReactView(AgentSecuredAPIView):
+class AgentMessengerMessageReactView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/messages/{message_id}/react"
     audit_action = "agent.messenger.messages.react"
     audit_mutating = True
@@ -400,7 +408,7 @@ class AgentMessengerMessageReactView(AgentSecuredAPIView):
         return _call_messenger("MessageReactAPIView", "post", request, message_id)
 
 
-class AgentMessengerMessageEditView(AgentSecuredAPIView):
+class AgentMessengerMessageEditView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/messages/{message_id}/edit"
     audit_action = "agent.messenger.messages.edit"
     audit_mutating = True
@@ -418,7 +426,7 @@ class AgentMessengerMessageEditView(AgentSecuredAPIView):
         return _call_messenger("MessageEditAPIView", "patch", request, message_id)
 
 
-class AgentMessengerMessageDeleteView(AgentSecuredAPIView):
+class AgentMessengerMessageDeleteView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/messages/{message_id}"
     audit_action = "agent.messenger.messages.delete"
     audit_mutating = True
@@ -436,7 +444,7 @@ class AgentMessengerMessageDeleteView(AgentSecuredAPIView):
         return _call_messenger("MessageDeleteAPIView", "delete", request, message_id)
 
 
-class AgentMessengerScheduledMessageCancelView(AgentSecuredAPIView):
+class AgentMessengerScheduledMessageCancelView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/messages/{message_id}/cancel-schedule"
     audit_action = "agent.messenger.messages.schedule.cancel"
     audit_mutating = True
@@ -466,7 +474,7 @@ class AgentMessengerScheduledMessageCancelView(AgentSecuredAPIView):
 # Public groups, join requests, membership and per-member permissions
 # ---------------------------------------------------------------------------
 
-class AgentMessengerGroupSearchView(AgentSecuredAPIView):
+class AgentMessengerGroupSearchView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/groups/search"
     audit_action = "agent.messenger.groups.search"
 
@@ -474,7 +482,7 @@ class AgentMessengerGroupSearchView(AgentSecuredAPIView):
         return _call_messenger("PublicGroupSearchAPIView", "get", request)
 
 
-class AgentMessengerGroupJoinView(AgentSecuredAPIView):
+class AgentMessengerGroupJoinView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/groups/{conversation_id}/join"
     audit_action = "agent.messenger.groups.join"
     audit_mutating = True
@@ -501,7 +509,7 @@ class AgentMessengerGroupJoinView(AgentSecuredAPIView):
         return _call_messenger("PublicGroupJoinAPIView", "post", request, conversation_id)
 
 
-class AgentMessengerParticipantsView(AgentSecuredAPIView):
+class AgentMessengerParticipantsView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/conversations/{conversation_id}/participants"
     audit_action = "agent.messenger.groups.participants.read"
 
@@ -514,7 +522,7 @@ class AgentMessengerParticipantsView(AgentSecuredAPIView):
         )
 
 
-class AgentMessengerMembersView(AgentSecuredAPIView):
+class AgentMessengerMembersView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/conversations/{conversation_id}/members"
     audit_action = "agent.messenger.groups.members"
     audit_mutating = True
@@ -527,7 +535,7 @@ class AgentMessengerMembersView(AgentSecuredAPIView):
         return _call_messenger("AddMembersAPIView", "post", request, conversation_id)
 
 
-class AgentMessengerMemberDetailView(AgentSecuredAPIView):
+class AgentMessengerMemberDetailView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/conversations/{conversation_id}/members/{user_id}"
     audit_action = "agent.messenger.groups.members.remove"
     audit_mutating = True
@@ -542,7 +550,7 @@ class AgentMessengerMemberDetailView(AgentSecuredAPIView):
         )
 
 
-class AgentMessengerMemberRoleView(AgentSecuredAPIView):
+class AgentMessengerMemberRoleView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/conversations/{conversation_id}/members/{user_id}/role"
     audit_action = "agent.messenger.groups.members.role"
     audit_mutating = True
@@ -557,7 +565,7 @@ class AgentMessengerMemberRoleView(AgentSecuredAPIView):
         )
 
 
-class AgentMessengerMemberPermissionsView(AgentSecuredAPIView):
+class AgentMessengerMemberPermissionsView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/conversations/{conversation_id}/members/{user_id}/permissions"
     audit_action = "agent.messenger.groups.members.permissions"
     audit_mutating = True
@@ -641,7 +649,7 @@ class AgentMessengerMemberPermissionsView(AgentSecuredAPIView):
         )
 
 
-class AgentMessengerJoinRequestsView(AgentSecuredAPIView):
+class AgentMessengerJoinRequestsView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/conversations/{conversation_id}/join-requests"
     audit_action = "agent.messenger.groups.join_requests.read"
 
@@ -654,7 +662,7 @@ class AgentMessengerJoinRequestsView(AgentSecuredAPIView):
         )
 
 
-class AgentMessengerJoinRequestActionView(AgentSecuredAPIView):
+class AgentMessengerJoinRequestActionView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/conversations/{conversation_id}/join-requests/{request_id}/action"
     audit_action = "agent.messenger.groups.join_requests.action"
     audit_mutating = True
@@ -674,7 +682,7 @@ class AgentMessengerJoinRequestActionView(AgentSecuredAPIView):
 # Staff-facing ticket administration is not granted through Agent scopes.
 # ---------------------------------------------------------------------------
 
-class AgentTicketDepartmentsView(AgentSecuredAPIView):
+class AgentTicketDepartmentsView(AgentTicketView):
     agent_contract_path = "/agent/v1/tickets/departments"
     audit_action = "agent.tickets.departments.read"
 
@@ -684,7 +692,7 @@ class AgentTicketDepartmentsView(AgentSecuredAPIView):
         )
 
 
-class AgentTicketContextView(AgentSecuredAPIView):
+class AgentTicketContextView(AgentTicketView):
     agent_contract_path = "/agent/v1/tickets/context"
     audit_action = "agent.tickets.context.read"
 
@@ -694,7 +702,7 @@ class AgentTicketContextView(AgentSecuredAPIView):
         )
 
 
-class AgentTicketsView(AgentSecuredAPIView):
+class AgentTicketsView(AgentTicketView):
     agent_contract_path = "/agent/v1/tickets"
     audit_action = "agent.tickets"
     audit_mutating = True
@@ -713,7 +721,7 @@ class AgentTicketsView(AgentSecuredAPIView):
         )
 
 
-class AgentTicketDetailView(AgentSecuredAPIView):
+class AgentTicketDetailView(AgentTicketView):
     agent_contract_path = "/agent/v1/tickets/{ticket_id}"
     audit_action = "agent.tickets.detail"
 
@@ -726,7 +734,7 @@ class AgentTicketDetailView(AgentSecuredAPIView):
         )
 
 
-class AgentTicketMessagesView(AgentSecuredAPIView):
+class AgentTicketMessagesView(AgentTicketView):
     agent_contract_path = "/agent/v1/tickets/{ticket_id}/messages"
     audit_action = "agent.tickets.messages"
     audit_mutating = True
@@ -745,7 +753,7 @@ class AgentTicketMessagesView(AgentSecuredAPIView):
         )
 
 
-class AgentTicketReadView(AgentSecuredAPIView):
+class AgentTicketReadView(AgentTicketView):
     agent_contract_path = "/agent/v1/tickets/{ticket_id}/read"
     audit_action = "agent.tickets.read_state"
     audit_mutating = True
@@ -760,7 +768,7 @@ class AgentTicketReadView(AgentSecuredAPIView):
         )
 
 
-class AgentTicketCloseView(AgentSecuredAPIView):
+class AgentTicketCloseView(AgentTicketView):
     agent_contract_path = "/agent/v1/tickets/{ticket_id}/close"
     audit_action = "agent.tickets.close"
     audit_mutating = True
