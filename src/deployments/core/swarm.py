@@ -2256,6 +2256,15 @@ class SwarmRuntime:
             "rollback_config": rollback_config,
             "endpoint_spec": endpoint_spec,
             "constraints": constraints,
+            # Apply the host's Fluent Bit transport to every Swarm task,
+            # including Ready App children and managed database services.
+            # Docker's async + bounded non-blocking logger keeps application
+            # stdout/stderr independent from the HTTP/PostgreSQL ingestion path.
+            "log_driver": "fluentd",
+            "log_driver_options": __import__(
+                "deployments.common.runtime_logging",
+                fromlist=["fluentd_log_driver_options"],
+            ).fluentd_log_driver_options(),
         }
 
     def apply_processes(self, config, *, image_ref: str, operation_key: str | None = None, cancel_check: Callable[[], bool] | None = None, prepared_image_ref: str | None = None) -> dict[str, SwarmServiceState]:
