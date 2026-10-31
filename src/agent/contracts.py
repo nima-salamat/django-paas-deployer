@@ -142,8 +142,9 @@ CONTRACTS: tuple[EndpointContract, ...] = (
     _contract("/agent/v1/deployments/{deployment_id}/rebuild", "POST", scopes=("deployments.rebuild",), mutating=True, idempotent=True, throttle_scope="deployment"),
     _contract("/agent/v1/deployments/{deployment_id}/rollback", "POST", scopes=("deployments.rollback",), mutating=True, idempotent=True, throttle_scope="deployment"),
     _contract("/agent/v1/deployments/{deployment_id}/logs", "GET", scopes=("deployments.logs.read",)),
-    _contract("/agent/v1/deployments/{deployment_id}/logs/export", "GET", scopes=("deployments.logs.export",),
-)    # Messenger — standard, server-readable chats only.
+    _contract("/agent/v1/deployments/{deployment_id}/logs/export", "GET", scopes=("deployments.logs.export",)),
+
+    # Messenger — standard, server-readable chats only.
     _contract("/agent/v1/messenger/users/search", "GET", scopes=("messenger.users.search",)),
     _contract("/agent/v1/messenger/contacts", "GET", scopes=("messenger.contacts.read",)),
     _contract("/agent/v1/messenger/contacts", "POST", scopes=("messenger.contacts.write",), mutating=True, idempotent=True, throttle_scope="mutation"),
