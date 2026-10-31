@@ -19,6 +19,10 @@ MESSENGER_SCOPES=(
     "messenger.groups.search","messenger.groups.join",
     "messenger.members.read","messenger.members.manage","messenger.permissions.manage",
     "messenger.join_requests.read","messenger.join_requests.manage",
+    "messenger.join_requests.own.read","messenger.join_requests.own.cancel",
+    "messenger.invites.join","messenger.invites.create","messenger.invites.revoke",
+    "messenger.messages.forward",
+    "messenger.conversations.delete","messenger.conversations.history.clear",
 )
 TICKET_SCOPES=(
     "tickets.departments.read","tickets.context.read","tickets.read",
@@ -33,10 +37,12 @@ DESTRUCTIVE_SCOPES=frozenset({
     "deployments.rollback","shell.execute","shell.developer","shell.replace","shell.files.write",
     "service_secrets.write","service_volumes.write","service_networks.write",
     "messenger.blocks.write","messenger.messages.delete","messenger.members.manage",
-    "messenger.permissions.manage","messenger.join_requests.manage","tickets.close",
+    "messenger.permissions.manage","messenger.join_requests.manage",
+    "messenger.join_requests.own.cancel","messenger.invites.revoke",
+    "messenger.conversations.delete","messenger.conversations.history.clear","tickets.close",
 })
 
-HIGH_RISK_SCOPES=frozenset({"agent.manifest.generate","service_database_credentials.read","services.delete","services.purge","deployments.cancel","deployments.rebuild","deployments.rollback","deployments.delete","shell.developer","service_secrets.write","service_volumes.write","service_networks.write","shell.execute","shell.replace","shell.files.write","messenger.blocks.write","messenger.messages.delete","messenger.members.manage","messenger.permissions.manage","messenger.join_requests.manage","tickets.close"})
+HIGH_RISK_SCOPES=frozenset({"agent.manifest.generate","service_database_credentials.read","services.delete","services.purge","deployments.cancel","deployments.rebuild","deployments.rollback","deployments.delete","shell.developer","service_secrets.write","service_volumes.write","service_networks.write","shell.execute","shell.replace","shell.files.write","messenger.blocks.write","messenger.messages.delete","messenger.members.manage","messenger.permissions.manage","messenger.join_requests.manage","messenger.invites.create","messenger.invites.revoke","messenger.messages.forward","messenger.conversations.delete","messenger.conversations.history.clear","tickets.close"})
 
 def validate_scopes(scopes):
     values=sorted({str(s).strip() for s in (scopes or []) if str(s).strip()})
