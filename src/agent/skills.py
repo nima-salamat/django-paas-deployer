@@ -971,19 +971,79 @@ user's visibility. A successful DM response includes the conversation id.
 - POST {{base}}/messenger/messages/{message_id}/forward with conversation_id
 - POST {{base}}/messenger/messages/{message_id}/cancel-schedule
 
-Message body is plain UTF-8 text. Unicode emoji and line breaks are
-supported and should be preserved. The API does not define a rich-text or
-Markdown rendering contract, so do not rely on Markdown syntax or HTML tags to
-produce visual styling; use readable plain text, line breaks and emoji.
-Use reply_to for a reply, emoji for reactions, and scheduled_for as an
-ISO-8601 datetime with timezone when sending a future message. Scheduled sends
-require both messenger.messages.send and messenger.messages.schedule. A
-scheduled message is private to its sender until delivery. Use
-client_message_id to safely retry a message-send request.
+Message body is plain UTF-8 text. It is NOT a rich-text document:
+Markdown and HTML rendering are not part of the API contract. Preserve normal
+Unicode characters, punctuation and internal line breaks. Use \n inside a JSON
+string for a line break. Do not send Markdown/HTML tags to create formatting,
+and do not send an object, array or nested JSON string as body.
 
-A message may include reply metadata, reactions and attachment metadata in its
-serialized representation. The message endpoint applies the existing
-participant, send-permission, group posting mode, rate, event, and cache rules.
+### Exact text-send request
+
+Send one message as JSON (not form data) with the body field:
+
+~~~http
+POST {{base}}/messenger/conversations/{conversation_id}/messages
+Content-Type: application/json
+~~~
+
+~~~json
+{
+  "body": "سلام، پیام اول.\\nاین خط دوم همان پیام است.",
+  "client_message_id": "agent-550e8400-e29b-41d4-a716-446655440000"
+}
+~~~
+
+Rules for sending:
+- body must be one string. Use the field name body, not text, message or content.
+- Keep each message at or below 4,000 characters. The current API splits longer text-only bodies into multiple separate messages; do not let one intended message turn into several messages accidentally.
+- The API trims whitespace at the beginning and end of the body. Keep meaningful line breaks inside the text.
+- client_message_id is optional but recommended: generate a unique value (UUID is suitable) for each logical send. When retrying the same request after a timeout, reuse the exact same id. Never reuse it for a different message. The API uses it to avoid duplicate sends.
+- To reply, add reply_to: an integer message id from this same conversation. Do not guess ids or use a message id from another conversation.
+- To schedule, add scheduled_for as a future ISO-8601 datetime with an explicit timezone/offset, for example 2030-01-15T15:30:00+01:00. Scheduling needs both messenger.messages.send and messenger.messages.schedule; do not silently turn a scheduled request into an immediate send.
+- Attachments are not JSON/base64 fields. Use multipart/form-data with files (or file) and at most 10 files. Check the participant's media permission first. Do not claim an attachment was sent unless the API accepted it.
+
+### Reactions: exact format and safe behavior
+
+A reaction request uses a single emoji string in JSON:
+
+~~~http
+POST {{base}}/messenger/messages/{message_id}/react
+Content-Type: application/json
+~~~
+
+~~~json
+{ "emoji": "👍" }
+~~~
+
+There is no server-side emoji allow-list: the backend stores a non-empty string up to 32 characters and does not prove that the value is a displayable emoji. For predictable UI rendering, send exactly ONE standard Unicode emoji per reaction, not a word, shortcode or sentence. Common choices include:
+👍, ❤️, 😂, 😮, 😢, 🙏, 🎉, 🔥, ✅, 👀.
+This is a practical suggested set, not an enforced or exhaustive server list. When removing a reaction, copy the exact same emoji string (including variation selectors) that was originally used.
+
+Important: POST is a TOGGLE. If the caller already has that emoji on the message, another POST removes it. Before adding, inspect the message's reactions and its mine flag; do not POST if mine is true. After a timeout, read the message/reactions first. Never blindly retry POST because it can undo the reaction.
+
+To remove the Agent user's own reaction explicitly and safely:
+
+~~~http
+DELETE {{base}}/messenger/messages/{message_id}/react
+Content-Type: application/json
+~~~
+
+~~~json
+{ "emoji": "👍" }
+~~~
+
+DELETE is idempotent and only removes the caller's matching reaction. It does not remove another participant's reaction. Use messenger.messages.react for POST and the separate messenger.messages.reactions.remove scope for DELETE.
+
+### Pinning
+
+Use explicit, retry-safe methods; do not use toggle semantics:
+- PUT {{base}}/messenger/messages/{message_id}/pin pins (no request body).
+- DELETE {{base}}/messenger/messages/{message_id}/pin unpins (no request body).
+- GET {{base}}/messenger/conversations/{conversation_id}/pinned-messages lists visible pinned messages.
+
+In groups, pinning requires owner/admin role or can_pin_messages=true. The Agent must have the matching operation scope. Verify state from the response; PUT and DELETE are idempotent.
+
+The message endpoint applies the existing participant, send-permission, group posting mode, rate, event, cache and media-validation rules. A message response may include reply metadata, grouped reactions (emoji, count, mine) and attachment metadata.
 
 ## Groups
 
