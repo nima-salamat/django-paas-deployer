@@ -4,7 +4,15 @@
 
 The `logs` app owns persisted deployment/runtime log data, retention and usage reconciliation.
 
-In Swarm mode the collector discovers managed Swarm Services and consumes `docker service logs`, which is service-level and survives task movement between nodes.
+Deployment lifecycle events use the `DeploymentLogger` / event sink / outbox path and remain independent of container stdout/stderr.
+
+For Docker Swarm workloads, Docker's Fluentd logging driver forwards stdout/stderr to a host-local Unix socket. One bounded Fluent Bit agent per node batches the records and sends them to the authenticated Django ingestion endpoint. Django validates service ownership, redacts secrets, applies each service's quota/rate/retention policy, bulk-writes the dedicated log database and publishes realtime Channels batches. The agent does not mount the Docker socket and does not write directly to PostgreSQL.
+
+On a single-node installation, Compose starts the Fluent Bit agent with the `runtime-logs` profile. Multi-node Swarm uses the optional global stack in `deploy/fluent-bit/swarm-stack.yaml`; each node must have the configured host socket directory prepared first. See [Runtime log transport](apps/deployments/execution/12-runtime-log-transport.md) for rollout and rollback procedures.
+
+Existing Swarm services are not changed automatically: preview with `./scripts/migrate-runtime-log-driver.sh`, then use `--apply` to roll their task generation onto Fluent Bit. For standalone Docker mode, the legacy Python Docker log collector remains available through the `docker-logs` Compose profile.
+
+Docker's `service logs` API only supports `json-file` and `journald`. PassDeployer therefore reads persisted service-log rows for services using Fluentd rather than trying to call `docker service logs` on them.
 
 ## Runtime state
 

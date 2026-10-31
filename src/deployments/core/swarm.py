@@ -1238,53 +1238,158 @@ class SwarmRuntime:
         )
 
     def _service_logs_for_failure(self, name: str, *, tail: int = 200) -> str:
-        """Best-effort collection of the failing Swarm service stdout/stderr."""
+        """Best-effort failure logs from Docker or the persistent Fluent Bit store."""
+        service = None
+        labels = {}
         try:
             service = self.client.services.get(_validate_service_name(name))
-            raw_logs = service.logs(
-                stdout=True,
-                stderr=True,
-                timestamps=True,
-                tail=tail,
-            )
-            if isinstance(raw_logs, bytes):
-                return raw_logs.decode("utf-8", errors="replace")
-            if not raw_logs:
-                return ""
-            return "".join(
-                chunk.decode("utf-8", errors="replace")
-                if isinstance(chunk, bytes)
-                else str(chunk)
-                for chunk in raw_logs
-            )
+            attrs = service.attrs or {}
+            spec = attrs.get("Spec") or {}
+            labels = dict(spec.get("Labels") or {})
+            task_template = spec.get("TaskTemplate") or {}
+            log_driver = dict(task_template.get("LogDriver") or {})
+            if str(log_driver.get("Name") or "").lower() != "fluentd":
+                raw_logs = service.logs(
+                    stdout=True,
+                    stderr=True,
+                    timestamps=True,
+                    tail=tail,
+                )
+                if isinstance(raw_logs, bytes):
+                    return raw_logs.decode("utf-8", errors="replace")
+                if raw_logs:
+                    return "".join(
+                        chunk.decode("utf-8", errors="replace")
+                        if isinstance(chunk, bytes)
+                        else str(chunk)
+                        for chunk in raw_logs
+                    )
         except Exception as exc:
-            return f"<unable to collect Swarm service logs: {exc}>"
+            logger.debug(
+                "Native Swarm service log retrieval unavailable for %s: %s",
+                name,
+                exc,
+            )
 
-    def _task_logs_for_failure(self, task: SwarmTaskState, *, tail: int = 200) -> str:
-        """Read logs from the exact failed task container, not other service generations."""
-        if not task.container_id:
+        # Docker's Service.logs API only supports json-file/journald. With the
+        # Fluentd driver, the durable log database is the canonical source.
+        service_id = str(labels.get("passdeployer.service") or "").strip()
+        if not service_id:
             return ""
         try:
-            container = self.client.containers.get(task.container_id)
-            raw_logs = container.logs(
-                stdout=True,
-                stderr=True,
-                timestamps=True,
-                tail=tail,
+            from django.conf import settings
+            from logs.models import ServiceLogEntry
+
+            alias = getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", None) or "default"
+            query = ServiceLogEntry.objects.using(alias).filter(service_id=service_id)
+            deployment_id = str(labels.get("passdeployer.deployment") or "").strip()
+            if deployment_id:
+                query = query.filter(deploy_id=deployment_id)
+            rows = list(
+                query.order_by("-ts", "-id")
+                .values("ts", "stream", "message")[: max(1, min(int(tail), 1000))]
             )
-            if isinstance(raw_logs, bytes):
-                return raw_logs.decode("utf-8", errors="replace")
-            if not raw_logs:
-                return ""
+            rows.reverse()
             return "".join(
-                chunk.decode("utf-8", errors="replace")
-                if isinstance(chunk, bytes)
-                else str(chunk)
-                for chunk in raw_logs
+                f"{row['ts'].isoformat() if row.get('ts') else ''} "
+                f"[{row.get('stream') or 'stdout'}] {row.get('message') or ''}\n"
+                for row in rows
             )
         except Exception as exc:
             logger.debug(
-                "Unable to collect task-specific logs for task=%s container=%s: %s",
+                "Persistent log lookup failed for Swarm service %s: %s",
+                name,
+                exc,
+            )
+            return ""
+
+    def _task_logs_for_failure(self, task: SwarmTaskState, *, tail: int = 200) -> str:
+        """Read exact task logs from Docker or the Fluent Bit PostgreSQL store."""
+        if not task.container_id:
+            return ""
+        container = None
+        labels = {}
+        driver = ""
+        try:
+            container = self.client.containers.get(task.container_id)
+            attrs = container.attrs or {}
+            config = attrs.get("Config") or {}
+            labels = dict(config.get("Labels") or {})
+            host_config = attrs.get("HostConfig") or {}
+            log_config = host_config.get("LogConfig") or {}
+            driver = str(log_config.get("Type") or "").lower()
+            if driver != "fluentd":
+                raw_logs = container.logs(
+                    stdout=True,
+                    stderr=True,
+                    timestamps=True,
+                    tail=tail,
+                )
+                if isinstance(raw_logs, bytes):
+                    return raw_logs.decode("utf-8", errors="replace")
+                if not raw_logs:
+                    return ""
+                return "".join(
+                    chunk.decode("utf-8", errors="replace")
+                    if isinstance(chunk, bytes)
+                    else str(chunk)
+                    for chunk in raw_logs
+                )
+        except Exception as exc:
+            logger.debug(
+                "Native task log retrieval unavailable for task=%s container=%s: %s",
+                task.task_id,
+                task.container_id,
+                exc,
+            )
+            # We still try the persistent store below. The task container may
+            # have exited and the Docker SDK may no longer expose its config.
+
+        service_id = str(
+            labels.get("passdeployer.service")
+            or labels.get("service.id")
+            or labels.get("io.passdeployer.service")
+            or ""
+        ).strip()
+        deployment_id = str(
+            labels.get("passdeployer.deployment")
+            or labels.get("deployment.id")
+            or labels.get("io.passdeployer.deployment")
+            or ""
+        ).strip()
+        try:
+            from django.conf import settings
+            from logs.models import ServiceLogEntry, ServiceLogStream
+
+            alias = getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", None) or "default"
+            stream_query = ServiceLogStream.objects.using(alias).filter(
+                container_id=task.container_id
+            )
+            if service_id:
+                stream_query = stream_query.filter(service_id=service_id)
+            if deployment_id:
+                stream_query = stream_query.filter(deploy_id=deployment_id)
+            stream_ids = stream_query.values_list("id", flat=True)
+            query = ServiceLogEntry.objects.using(alias).filter(
+                stream_id__in=stream_ids,
+            )
+            if service_id:
+                query = query.filter(service_id=service_id)
+            if deployment_id:
+                query = query.filter(deploy_id=deployment_id)
+            rows = list(
+                query.order_by("-ts", "-id")
+                .values("ts", "stream", "message")[: max(1, min(int(tail), 1000))]
+            )
+            rows.reverse()
+            return "".join(
+                f"{row['ts'].isoformat() if row.get('ts') else ''} "
+                f"[{row.get('stream') or 'stdout'}] {row.get('message') or ''}\\n"
+                for row in rows
+            )
+        except Exception as exc:
+            logger.debug(
+                "Persistent task log lookup failed task=%s container=%s: %s",
                 task.task_id,
                 task.container_id,
                 exc,
@@ -2045,6 +2150,10 @@ class SwarmRuntime:
         )
 
     def _create_kwargs(self, config, *, image_ref: str, compose_spec: dict[str, Any]):
+        from deployments.common.runtime_logging import (
+            fluentd_log_driver_options,
+            runtime_log_ingestion_enabled,
+        )
         from docker.types import (
             EndpointSpec,
             Healthcheck,
@@ -2224,7 +2333,7 @@ class SwarmRuntime:
         )
         swarm_args = service_doc.get("args")
 
-        return {
+        result = {
             "name": name,
             "command": swarm_command,
             "args": swarm_args,
@@ -2257,6 +2366,10 @@ class SwarmRuntime:
             "endpoint_spec": endpoint_spec,
             "constraints": constraints,
         }
+        if runtime_log_ingestion_enabled():
+            result["log_driver"] = "fluentd"
+            result["log_driver_options"] = fluentd_log_driver_options()
+        return result
 
     def apply_processes(self, config, *, image_ref: str, operation_key: str | None = None, cancel_check: Callable[[], bool] | None = None, prepared_image_ref: str | None = None) -> dict[str, SwarmServiceState]:
         """Apply the ServiceProcess graph as independent Swarm services."""
@@ -3414,12 +3527,42 @@ class SwarmRuntime:
         return result
 
     def service_logs(self, name: str, *, tail: int | str = 200):
+        """Read logs through Docker for local drivers or PostgreSQL for Fluent Bit."""
         try:
-            raw = self.client.services.get(_validate_service_name(name)).logs(
+            service = self.client.services.get(_validate_service_name(name))
+        except docker.errors.NotFound:
+            return b""
+        try:
+            try:
+                limit = max(1, min(int(tail), 1000))
+            except (TypeError, ValueError):
+                limit = 200
+            # Docker SDK service objects normally expose attrs, but keep
+            # the log API usable with lightweight adapters and partially
+            # materialized service objects that only implement logs().
+            attrs = getattr(service, "attrs", None) or {}
+            task_template = attrs.get("Spec", {}).get("TaskTemplate") or {}
+            driver = (task_template.get("LogDriver") or {}).get("Name") or ""
+            if str(driver).lower() == "fluentd":
+                return self._service_logs_for_failure(name, tail=limit).encode(
+                    "utf-8", "replace"
+                )
+
+            raw = service.logs(
                 stdout=True, stderr=True, timestamps=True, tail=tail, stream=False
             )
         except docker.errors.NotFound:
             return b""
+        except Exception:
+            # A logging driver may not expose the Engine logs API. The
+            # PostgreSQL fallback remains the canonical source for managed apps.
+            try:
+                return self._service_logs_for_failure(
+                    name,
+                    tail=limit,
+                ).encode("utf-8", "replace")
+            except Exception:
+                return b""
 
         if isinstance(raw, (bytes, bytearray)):
             return bytes(raw)

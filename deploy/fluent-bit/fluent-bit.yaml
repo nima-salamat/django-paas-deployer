@@ -1,0 +1,42 @@
+# Fluent Bit YAML configuration (the standard configuration format in v3.2+).
+# The agent is a transport/buffer only; PostgreSQL remains the source of truth.
+env:
+  LOG_FORWARD_SOCKET_CONTAINER_PATH: /run/passdeployer-logs/forward.sock
+
+service:
+  flush: 1
+  grace: 30
+  log_level: warn
+  storage.path: /var/fluent-bit/state
+  storage.sync: normal
+  storage.checksum: off
+  storage.max_chunks_up: 32
+  storage.backlog.mem_limit: 32M
+
+pipeline:
+  inputs:
+    - name: forward
+      unix_path: ${LOG_FORWARD_SOCKET_CONTAINER_PATH}
+      unix_perm: "0660"
+      buffer_chunk_size: 256K
+      buffer_max_size: 8M
+      storage.type: filesystem
+
+  outputs:
+    - name: http
+      match: '*'
+      host: ${LOG_INGEST_HOST}
+      port: ${LOG_INGEST_PORT}
+      tls: ${LOG_INGEST_TLS}
+      uri: /services/internal/logs/ingest/
+      format: json_lines
+      json_date_key: timestamp
+      json_date_format: iso8601
+      header:
+        - Content-Type application/x-ndjson
+        - X-PassDeployer-Token ${LOG_INGEST_SHARED_TOKEN}
+        - X-PassDeployer-Collector ${HOSTNAME}
+      compress: gzip
+      workers: 1
+      retry_limit: false
+      storage.total_limit_size: ${LOG_COLLECTOR_DISK_LIMIT}

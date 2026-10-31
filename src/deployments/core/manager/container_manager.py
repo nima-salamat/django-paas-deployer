@@ -174,13 +174,10 @@ class Container(Client):
         can apply progressive fallbacks when a specific Docker engine
         version rejects one of the options.
         """
-        kwargs: dict[str, Any] = {
-            "binds": self.volumes or None,
-            "port_bindings": self.port_bindings or None,
-            "read_only": self.read_only,
-            "restart_policy": self.restart_policy,
-        }
-
+        # Keep one-off Docker helper containers on Docker's local log
+        # backend: several internal operations need container.logs() after
+        # wait/remove. Fluent Bit's fluentd driver is applied to Swarm
+        # application services in SwarmRuntime instead.
         # CPU limit.  Docker accepts EITHER ``cpu_period`` + ``cpu_quota``
         # (cgroup v1 style) OR ``nano_cpus`` (cgroup v2 style) — setting
         # BOTH causes HTTP 400:

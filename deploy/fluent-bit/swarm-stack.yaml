@@ -1,0 +1,64 @@
+version: "3.9"
+
+# Optional multi-node mode. Deploy once from a Swarm manager after preparing
+# /run/passdeployer-logs on every node. One Fluent Bit task runs per node.
+services:
+  fluent-bit:
+    image: ${FLUENT_BIT_IMAGE}
+    user: "0:0"
+    hostname: "{{.Node.Hostname}}"
+    command:
+      - /fluent-bit/bin/fluent-bit
+      - -c
+      - /fluent-bit/etc/fluent-bit.yaml
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=8m,noexec,nosuid
+    configs:
+      - source: fluent-bit-config
+        target: /fluent-bit/etc/fluent-bit.yaml
+        mode: 0444
+    volumes:
+      - type: bind
+        source: ${LOG_FORWARD_SOCKET_DIR}
+        target: /run/passdeployer-logs
+      - type: volume
+        source: fluentbit_state
+        target: /var/fluent-bit/state
+    environment:
+      LOG_INGEST_SHARED_TOKEN: ${LOG_INGEST_SHARED_TOKEN}
+      LOG_FORWARD_SOCKET_PATH: ${LOG_FORWARD_SOCKET_PATH}
+      LOG_FORWARD_SOCKET_CONTAINER_PATH: /run/passdeployer-logs/forward.sock
+      LOG_INGEST_HOST: deploy-web
+      LOG_INGEST_PORT: "8000"
+      LOG_INGEST_TLS: "off"
+      LOG_COLLECTOR_DISK_LIMIT: ${LOG_COLLECTOR_DISK_LIMIT}
+    networks:
+      - log-ingest-network
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          - node.platform.os == linux
+      resources:
+        limits:
+          cpus: ${LOG_COLLECTOR_CPU_LIMIT}
+          memory: ${LOG_COLLECTOR_MEMORY_LIMIT}
+      restart_policy:
+        condition: any
+        delay: 2s
+        window: 30s
+
+configs:
+  fluent-bit-config:
+    file: ./deploy/fluent-bit/fluent-bit.yaml
+
+volumes:
+  fluentbit_state:
+
+networks:
+  log-ingest-network:
+    external: true
+    name: ${LOG_INGEST_NETWORK}

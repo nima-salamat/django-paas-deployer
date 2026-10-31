@@ -90,7 +90,19 @@ not alternate sources of Service authority.
 
 Read this README first, then the execution document matching the change. For cross-app ownership, also read [services](../services/README.md) and [deploy](../deploy/README.md).
 
+## Additional runtime logging modules
+
+- `src/deployments/common/runtime_logging.py` — the shared Docker Fluentd driver configuration and operator-controlled Fluent Bit switch.
+- `src/deployments/management/commands/migrate_runtime_log_driver.py` — dry-run-first migration of existing owned Swarm services to Fluent Bit, with a `json-file` rollback option.
+- The operational rollout, single-node/multi-node topology and rollback procedure are documented in [Runtime log transport](execution/12-runtime-log-transport.md).
+
 ## Management commands
+
+### migrate_runtime_log_driver
+
+Source: `src/deployments/management/commands/migrate_runtime_log_driver.py`.
+
+The command defaults to a dry run and lists PassDeployer-owned Swarm services that need the selected logging driver. `--apply` updates the service TaskTemplate using Docker's version check and increments ForceUpdate so Swarm replaces the task generation. `--driver json-file --apply` is the rollback path. It refuses Fluentd migration while `LOG_INGEST_ENABLED=0`.
 
 ### consume_docker_events
 

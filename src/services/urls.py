@@ -1,4 +1,5 @@
 from logs.admin_api import logging_health_apiview
+from logs.ingest_api import runtime_logs_ingest_apiview
 from django.urls import path
 from rest_framework.routers import DefaultRouter
 
@@ -107,6 +108,9 @@ urlpatterns = (
         path("services/<uuid:service_id>/shell/history/", shell_history_apiview, name="service_shell_history"),
         path("services/<uuid:service_id>/shell/env/", shell_env_apiview, name="service_shell_env"),
         path("services/<uuid:service_id>/shell/health/", shell_health_apiview, name="service_shell_health"),
+        # Machine-to-machine endpoint. Authentication is the per-installation
+        # shared secret checked by logs.ingest_api; it is not a user API.
+        path("internal/logs/ingest/", runtime_logs_ingest_apiview, name="internal_runtime_logs_ingest"),
         path("service/<uuid:pk>/logs/", service_logs_apiview, name="service_logs"),
         path("service/<uuid:pk>/logs/export/", service_logs_export_apiview, name="service_logs_export"),
         path("admin/logging/health/", logging_health_apiview, name="logging_health"),
