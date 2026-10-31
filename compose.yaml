@@ -570,6 +570,7 @@ services:
       - .env
     environment:
       LOG_INGEST_SHARED_TOKEN: ${LOG_INGEST_SHARED_TOKEN:-}
+      LOG_FORWARD_SOCKET_PATH: ${LOG_FORWARD_SOCKET_PATH:-/run/passdeployer-logs/forward.sock}
 
     depends_on:
       web:
