@@ -219,6 +219,148 @@ class AgentCollaborationContractTests(TestCase):
             ).exists()
         )
 
+    def test_persian_message_and_reaction_round_trip_as_utf8(self):
+        import json
+
+        from messenger.models import Message, MessageReaction
+
+        self.agent.scopes = [
+            "messenger.messages.read",
+            "messenger.messages.send",
+            "messenger.messages.react",
+        ]
+        self.agent.save(update_fields=["scopes", "updated_at"])
+
+        conv = Conversation.objects.create(
+            type=Conversation.Type.PRIVATE,
+            created_by=self.user,
+        )
+        ConversationParticipant.objects.create(
+            conversation=conv,
+            user=self.user,
+            role=ConversationParticipant.Role.OWNER,
+        )
+
+        body = "سلام دنیا 👋\nخط دوم؛ متن فارسی باید دقیق ذخیره شود."
+        client_message_id = str(uuid4())
+        idempotency_key = f"messenger-unicode-{uuid4()}"
+        url = f"/agent/v1/messenger/conversations/{conv.pk}/messages"
+        payload = {
+            "body": body,
+            "client_message_id": client_message_id,
+        }
+
+        response = self.client.post(
+            url,
+            payload,
+            format="json",
+            HTTP_IDEMPOTENCY_KEY=idempotency_key,
+            **self.auth(),
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["data"]["body"], body)
+
+        stored = Message.objects.get(
+            conversation=conv,
+            sender=self.user,
+            client_message_id=client_message_id,
+        )
+        self.assertEqual(stored.body, body)
+
+        # Assert the actual HTTP bytes are valid UTF-8 and contain the original
+        # Unicode, not replacement question marks or an ASCII-only fallback.
+        self.assertIn("charset=utf-8", response["Content-Type"].lower())
+        raw_response = response.content
+        self.assertIn("سلام".encode("utf-8"), raw_response)
+        decoded_response = json.loads(raw_response.decode("utf-8"))
+        self.assertEqual(decoded_response["data"]["body"], body)
+
+        # The Agent idempotency replay path stores/reloads the response via
+        # JSONField and must preserve the exact Persian text too.
+        replay = self.client.post(
+            url,
+            payload,
+            format="json",
+            HTTP_IDEMPOTENCY_KEY=idempotency_key,
+            **self.auth(),
+        )
+        self.assertEqual(replay.status_code, 201)
+        self.assertEqual(replay.data["data"]["body"], body)
+        self.assertEqual(
+            Message.objects.filter(
+                conversation=conv,
+                sender=self.user,
+                client_message_id=client_message_id,
+            ).count(),
+            1,
+        )
+
+        # The normal history endpoint must return the same stored text.
+        history = self.client.get(url, **self.auth())
+        self.assertEqual(history.status_code, 200)
+        history_message = next(
+            item for item in history.data["data"]["results"]
+            if item["id"] == stored.pk
+        )
+        self.assertEqual(history_message["body"], body)
+
+        # Unicode emoji reactions must also survive request parsing, DB storage
+        # and response rendering byte-for-byte.
+        reaction_url = f"/agent/v1/messenger/messages/{stored.pk}/react"
+        reaction = self.client.post(
+            reaction_url,
+            {"emoji": "❤️"},
+            format="json",
+            **self.auth(),
+        )
+        self.assertEqual(reaction.status_code, 200)
+        self.assertEqual(reaction.data["data"]["emoji"], "❤️")
+        self.assertEqual(
+            MessageReaction.objects.get(
+                message=stored,
+                user=self.user,
+            ).emoji,
+            "❤️",
+        )
+        self.assertIn("❤️".encode("utf-8"), reaction.content)
+        self.assertEqual(
+            json.loads(reaction.content.decode("utf-8"))["data"]["emoji"],
+            "❤️",
+        )
+
+    def test_messenger_json_rejects_non_utf8_declared_charset(self):
+        import json
+
+        from messenger.models import Message
+
+        self.agent.scopes = ["messenger.messages.send"]
+        self.agent.save(update_fields=["scopes", "updated_at"])
+        conv = Conversation.objects.create(
+            type=Conversation.Type.PRIVATE,
+            created_by=self.user,
+        )
+        ConversationParticipant.objects.create(
+            conversation=conv,
+            user=self.user,
+            role=ConversationParticipant.Role.OWNER,
+        )
+
+        payload = json.dumps(
+            {"body": "سلام؛ این متن نباید با charset اشتباه parse شود."},
+            ensure_ascii=False,
+        ).encode("utf-8")
+        response = self.client.generic(
+            "POST",
+            f"/agent/v1/messenger/conversations/{conv.pk}/messages",
+            data=payload,
+            content_type="application/json; charset=iso-8859-1",
+            **self.auth(),
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["code"], "INVALID_REQUEST")
+        self.assertIn("UTF-8", response.data["detail"])
+        self.assertFalse(Message.objects.filter(conversation=conv).exists())
+
     def test_reaction_delete_removes_only_the_agent_users_reaction(self):
         from messenger.models import Message, MessageReaction
 
