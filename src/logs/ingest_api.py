@@ -206,7 +206,7 @@ def _parse_record(record: dict):
         if timestamp_text.endswith("Z"):
             timestamp_text = timestamp_text[:-1] + "+00:00"
         match = re.match(
-            r"^(.*?\\.\\d{6})\\d+([+-]\\d{2}:?\\d{2})$",
+            r"^(.*?\.\d{6})\d+([+-]\d{2}:?\d{2})$",
             timestamp_text,
         )
         if match:
