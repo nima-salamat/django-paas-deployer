@@ -132,6 +132,29 @@ class AgentCollaborationContractTests(TestCase):
             enabled,
         )
 
+    def test_new_messenger_operations_are_denied_without_their_scopes(self):
+        response = self.client.get(
+            "/agent/v1/messenger/me/join-requests",
+            **self.auth(),
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "INSUFFICIENT_SCOPE")
+        self.assertIn(
+            "messenger.join_requests.own.read",
+            response.data["missing_scopes"],
+        )
+
+        response = self.client.delete(
+            "/agent/v1/messenger/conversations/999",
+            **self.auth(),
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "INSUFFICIENT_SCOPE")
+        self.assertIn(
+            "messenger.conversations.delete",
+            response.data["missing_scopes"],
+        )
+
     def test_encrypted_conversations_are_excluded_from_agent_chat_list(self):
         normal = Conversation.objects.create(
             type=Conversation.Type.PRIVATE,
