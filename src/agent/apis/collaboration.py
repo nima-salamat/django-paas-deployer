@@ -432,7 +432,7 @@ class AgentMessengerMessageReactView(AgentMessengerView):
         if error:
             return error
         return _call_messenger(
-            "MessageReactionDeleteAPIView", "delete", request, message_id
+            "MessageReactAPIView", "delete", request, message_id
         )
 
 
