@@ -538,54 +538,51 @@ services:
 
 
   # ============================================================
-  # RUNTIME LOG COLLECTOR
-  # Continuous Docker log follow → persistent ServiceLogEntry.
-  # Independent of Celery (retention/reconcile only).
-  # Same Docker socket + backend image pattern as the deployment workers.
+  # ============================================================
+  # RUNTIME LOG AGENT (Fluent Bit)
+  # Docker's fluentd driver forwards each managed container's stdout/stderr
+  # to this local Unix socket. No Docker socket or Python polling is needed.
   # ============================================================
   log-collector:
-    image: ${BACKEND_IMAGE:-passdeployer-backend:local}
-
+    image: ${FLUENT_BIT_IMAGE:-fluent/fluent-bit:5.1.5-2}
     container_name: deploy-log-collector
     restart: unless-stopped
-    command: python manage.py run_log_collector
+    user: "0:0"
+    command:
+      - /fluent-bit/bin/fluent-bit
+      - -c
+      - /fluent-bit/etc/fluent-bit.conf
+
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=8m,noexec,nosuid
+    mem_limit: ${LOG_COLLECTOR_MEMORY_LIMIT:-128m}
+    cpus: ${LOG_COLLECTOR_CPU_LIMIT:-0.50}
 
     volumes:
-      - .:/app
-      - /var/run/docker.sock:/var/run/docker.sock
-
-    depends_on:
-      db:
-        condition: service_healthy
-      deployment-log-db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - ./deploy/fluent-bit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+      - ${LOG_FORWARD_SOCKET_DIR:-/run/passdeployer-logs}:/run/passdeployer-logs
+      - fluentbit_state:/var/fluent-bit/state
 
     env_file:
       - .env
-
     environment:
-      DB_NAME: ${DB_NAME:-passdb}
-      DB_USER: ${DB_USER:-psguser}
-      DB_PASSWORD: ${DB_PASSWORD:-}
-      DEPLOYMENT_LOG_DB_NAME: ${DEPLOYMENT_LOG_DB_NAME:-deployment_logs}
-      DEPLOYMENT_LOG_DB_USER: ${DEPLOYMENT_LOG_DB_USER:-deployment_logs_user}
-      DEPLOYMENT_LOG_DB_PASSWORD: ${DEPLOYMENT_LOG_DB_PASSWORD:-}
-      DB_HOST: ${DB_HOST:-db}
-      DB_PORT: ${DB_PORT:-5432}
-      DEPLOYMENT_LOG_DB_HOST: ${DEPLOYMENT_LOG_DB_HOST:-deployment-log-db}
-      DEPLOYMENT_LOG_DB_PORT: ${DEPLOYMENT_LOG_DB_PORT:-5432}
-      REDIS_URL: redis://redis:6379
-      CHANNEL_REDIS_URL: redis://redis:6379
-      # Optional tuning (defaults in command)
-      LOG_COLLECTOR_WORKERS: ${LOG_COLLECTOR_WORKERS:-8}
-      LOG_COLLECTOR_BUFFER_BYTES: ${LOG_COLLECTOR_BUFFER_BYTES:-8388608}
-      API_DOMAIN_NAME: ${API_DOMAIN_NAME}
-      DEPLOYMENT_DOMAIN: ${DEPLOYMENT_DOMAIN}
+      LOG_INGEST_SHARED_TOKEN: ${LOG_INGEST_SHARED_TOKEN:-}
+
+    depends_on:
+      web:
+        condition: service_started
 
     networks:
       - app-network
+
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "2"
 
 
 # ==============================================================
