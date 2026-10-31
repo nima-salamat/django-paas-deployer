@@ -18,10 +18,10 @@ dotenv_value() {
             if (name == wanted) {
                 value = substr($0, index($0, "=") + 1)
                 sub(/\r$/, "", value)
-                print value
-                exit
+                found = 1
             }
         }
+        END { if (found) print value }
     ' .env
 }
 
@@ -182,7 +182,19 @@ prepare_runtime_log_ingestion() {
             echo "ERROR: Could not generate LOG_INGEST_SHARED_TOKEN." >&2
             return 2
         }
-        printf '\nLOG_INGEST_SHARED_TOKEN=%s\n' "$LOG_INGEST_SHARED_TOKEN" >> .env
+        token_file=$(mktemp)
+        awk -v token="$LOG_INGEST_SHARED_TOKEN" '
+            /^LOG_INGEST_SHARED_TOKEN=/ {
+                print "LOG_INGEST_SHARED_TOKEN=" token
+                replaced = 1
+                next
+            }
+            { print }
+            END {
+                if (!replaced) print "LOG_INGEST_SHARED_TOKEN=" token
+            }
+        ' .env > "$token_file"
+        mv "$token_file" .env
         chmod 600 .env
         echo "Generated LOG_INGEST_SHARED_TOKEN in .env."
     fi
