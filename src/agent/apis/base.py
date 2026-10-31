@@ -84,7 +84,7 @@ def idempotent(fn):
 
 
 def _audit_resource_id(kwargs, data):
-    for key in ("service_id", "deployment_id", "revision_id", "volume_id", "network_id", "plan_id"):
+    for key in ("service_id", "deployment_id", "revision_id", "volume_id", "network_id", "plan_id", "conversation_id", "message_id", "ticket_id", "user_id", "request_id"):
         value = kwargs.get(key)
         if value:
             return str(value)
