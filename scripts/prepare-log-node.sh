@@ -11,6 +11,9 @@ esac
 case "/$SOCKET_DIR/" in
     */../*) echo "Invalid log socket directory." >&2; exit 2 ;;
 esac
+case "$SOCKET_DIR" in
+    *[!A-Za-z0-9_./-]*) echo "Invalid characters in log socket directory." >&2; exit 2 ;;
+esac
 RULE=/etc/tmpfiles.d/passdeployer-logs.conf
 
 if [ "$(id -u)" -ne 0 ]; then
