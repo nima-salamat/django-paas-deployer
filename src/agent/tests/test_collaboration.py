@@ -57,6 +57,14 @@ class AgentCollaborationContractTests(TestCase):
         expected = {
             ("GET", "/agent/v1/messenger/users/search"),
             ("POST", "/agent/v1/messenger/conversations"),
+            ("DELETE", "/agent/v1/messenger/conversations/{conversation_id}"),
+            ("POST", "/agent/v1/messenger/conversations/{conversation_id}/clear-history"),
+            ("POST", "/agent/v1/messenger/conversations/{conversation_id}/invite-links"),
+            ("DELETE", "/agent/v1/messenger/conversations/{conversation_id}/invite-links/{link_id}"),
+            ("POST", "/agent/v1/messenger/join"),
+            ("GET", "/agent/v1/messenger/me/join-requests"),
+            ("DELETE", "/agent/v1/messenger/join-requests/{request_id}"),
+            ("POST", "/agent/v1/messenger/messages/{message_id}/forward"),
             ("GET", "/agent/v1/messenger/conversations/{conversation_id}/messages"),
             ("POST", "/agent/v1/messenger/conversations/{conversation_id}/messages"),
             ("PATCH", "/agent/v1/messenger/conversations/{conversation_id}/members/{user_id}/permissions"),
@@ -76,6 +84,53 @@ class AgentCollaborationContractTests(TestCase):
         self.assertIn(("GET", "/agent/v1/messenger/conversations/{conversation_id}/messages"), enabled)
         self.assertIn(("POST", "/agent/v1/tickets/{ticket_id}/messages"), enabled)
         self.assertNotIn(("DELETE", "/agent/v1/messenger/messages/{message_id}"), enabled)
+
+    def test_new_messenger_operations_have_separate_least_privilege_scopes(self):
+        expected = {
+            ("POST", "/agent/v1/messenger/join"): ("messenger.invites.join",),
+            ("GET", "/agent/v1/messenger/me/join-requests"): ("messenger.join_requests.own.read",),
+            ("DELETE", "/agent/v1/messenger/join-requests/{request_id}"): ("messenger.join_requests.own.cancel",),
+            ("POST", "/agent/v1/messenger/messages/{message_id}/forward"): (
+                "messenger.messages.read", "messenger.messages.send", "messenger.messages.forward",
+            ),
+            ("DELETE", "/agent/v1/messenger/conversations/{conversation_id}"): (
+                "messenger.conversations.delete",
+            ),
+            ("POST", "/agent/v1/messenger/conversations/{conversation_id}/clear-history"): (
+                "messenger.conversations.history.clear",
+            ),
+            ("POST", "/agent/v1/messenger/conversations/{conversation_id}/invite-links"): (
+                "messenger.invites.create",
+            ),
+            ("DELETE", "/agent/v1/messenger/conversations/{conversation_id}/invite-links/{link_id}"): (
+                "messenger.invites.revoke",
+            ),
+        }
+        for (method, path), scopes in expected.items():
+            contract = contract_for(path, method)
+            self.assertIsNotNone(contract, (method, path))
+            self.assertEqual(contract.scopes, scopes)
+        all_new_scopes = {scope for scopes in expected.values() for scope in scopes}
+        self.assertTrue(all_new_scopes.issubset(set(validate_scopes(all_new_scopes))))
+
+    def test_high_impact_chat_cleanup_requires_explicit_dedicated_scope(self):
+        self.assertEqual(
+            contract_for("/agent/v1/messenger/conversations/{conversation_id}", "DELETE").scopes,
+            ("messenger.conversations.delete",),
+        )
+        self.assertEqual(
+            contract_for("/agent/v1/messenger/conversations/{conversation_id}/clear-history", "POST").scopes,
+            ("messenger.conversations.history.clear",),
+        )
+        enabled = {(item.method, item.path) for item in contracts_for_agent(self.agent)}
+        self.assertNotIn(
+            ("DELETE", "/agent/v1/messenger/conversations/{conversation_id}"),
+            enabled,
+        )
+        self.assertNotIn(
+            ("POST", "/agent/v1/messenger/conversations/{conversation_id}/clear-history"),
+            enabled,
+        )
 
     def test_encrypted_conversations_are_excluded_from_agent_chat_list(self):
         normal = Conversation.objects.create(
