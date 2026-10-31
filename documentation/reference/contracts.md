@@ -33,6 +33,13 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `agent` | `src/agent/urls.py` | explicit | `v1/messenger/blocks/<int:user_id>` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/messenger/conversations` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/messenger/conversations/<int:conversation_id>` | [app API docs](../apps/agent/api.md) |
+| `agent` | `src/agent/urls.py` | explicit | `v1/messenger/conversations/<int:conversation_id>/clear-history` | [app API docs](../apps/agent/api.md) |
+| `agent` | `src/agent/urls.py` | explicit | `v1/messenger/conversations/<int:conversation_id>/invite-links` | [app API docs](../apps/agent/api.md) |
+| `agent` | `src/agent/urls.py` | explicit | `v1/messenger/conversations/<int:conversation_id>/invite-links/<int:link_id>` | [app API docs](../apps/agent/api.md) |
+| `agent` | `src/agent/urls.py` | explicit | `v1/messenger/join` | [app API docs](../apps/agent/api.md) |
+| `agent` | `src/agent/urls.py` | explicit | `v1/messenger/join-requests/<int:request_id>` | [app API docs](../apps/agent/api.md) |
+| `agent` | `src/agent/urls.py` | explicit | `v1/messenger/me/join-requests` | [app API docs](../apps/agent/api.md) |
+| `agent` | `src/agent/urls.py` | explicit | `v1/messenger/messages/<int:message_id>/forward` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/messenger/conversations/<int:conversation_id>/messages` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/messenger/conversations/<int:conversation_id>/messages/search` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/messenger/conversations/<int:conversation_id>/scheduled` | [app API docs](../apps/agent/api.md) |
