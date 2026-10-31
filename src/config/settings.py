@@ -359,6 +359,9 @@ SIMPLE_JWT = {
 }
 
 # Internationalization
+# JSON, form text fields and HTTP responses use UTF-8 by default.
+DEFAULT_CHARSET = "utf-8"
+
 LANGUAGE_CODE = 'en-us'
 LANGUAGES = (("en-us", "English"), ("fa", "فارسی"))
 LOCALE_PATHS = (BASE_DIR / "locale",)
